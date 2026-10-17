@@ -1,0 +1,45 @@
+    Blocking waiting for file lock on build directory
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+error[E0609]: no field `goal` on type `std::sync::Arc<goal_runtime::model_control::ModelControl>`
+   --> apps/bitrouter/src/goal_runtime/model_control/tests.rs:802:39
+    |
+802 |         snapshot(&goals, &interrupted.goal.id)
+    |                                       ^^^^ unknown field
+    |
+help: a field with a similar name exists
+    |
+802 |         snapshot(&goals, &interrupted.goals.id)
+    |                                           +
+
+error[E0609]: no field `goal` on type `std::sync::Arc<goal_runtime::model_control::ModelControl>`
+   --> apps/bitrouter/src/goal_runtime/model_control/tests.rs:814:47
+    |
+814 |     let saved = snapshot(&goals, &interrupted.goal.id).await?;
+    |                                               ^^^^ unknown field
+    |
+help: a field with a similar name exists
+    |
+814 |     let saved = snapshot(&goals, &interrupted.goals.id).await?;
+    |                                                   +
+
+error[E0609]: no field `goal` on type `std::sync::Arc<goal_runtime::model_control::ModelControl>`
+   --> apps/bitrouter/src/goal_runtime/model_control/tests.rs:822:46
+    |
+822 |     assert_eq!(snapshot(&goals, &interrupted.goal.id).await?, saved);
+    |                                              ^^^^ unknown field
+    |
+help: a field with a similar name exists
+    |
+822 |     assert_eq!(snapshot(&goals, &interrupted.goals.id).await?, saved);
+    |                                                  +
+
+error[E0063]: missing field `id` in initializer of `bitrouter_orchestrator::goal::workflow::Change`
+    --> apps/bitrouter/src/goal_runtime/model_control/tests.rs:1481:29
+     |
+1481 | ...                   Change::ClaimCoordinator {
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^ missing `id`
+
+Some errors have detailed explanations: E0063, E0609.
+For more information about an error, try `rustc --explain E0063`.
+error: could not compile `bitrouter` (lib test) due to 4 previous errors
+error: command `/Users/kelsen/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo test --no-run --message-format json-render-diagnostics --package bitrouter --package bitrouter-sdk --lib --all-features` exited with code 101

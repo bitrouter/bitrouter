@@ -1,0 +1,6 @@
+remote: 
+remote: GitHub found 2 vulnerabilities on bitrouter/bitrouter's default branch (1 moderate, 1 low). To find out more, visit:        
+remote:      https://github.com/bitrouter/bitrouter/security/dependabot        
+remote: 
+To github.com:bitrouter/bitrouter.git
+   8a44c6b1..d1c9074e  HEAD -> codex/bro-goal-workflow-mvp

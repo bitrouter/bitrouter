@@ -1,0 +1,265 @@
+﻿2026-10-17T03:01:19.3462088Z Current runner version: '2.337.0'
+2026-10-17T03:01:19.3485376Z ##[group]Runner Image Provisioner
+2026-10-17T03:01:19.3486312Z Hosted Compute Agent
+2026-10-17T03:01:19.3486822Z Version: 20261012.601
+2026-10-17T03:01:19.3487368Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-17T03:01:19.3488225Z Build Date: 2026-10-12T17:48:21Z
+2026-10-17T03:01:19.3488794Z Worker ID: {978bd6ab-b1e0-4ffa-8eb5-4fc37fbf0e96}
+2026-10-17T03:01:19.3489360Z Region: centralus
+2026-10-17T03:01:19.3489813Z Cloud: Azure
+2026-10-17T03:01:19.3490355Z ##[endgroup]
+2026-10-17T03:01:19.3491529Z ##[group]Operating System
+2026-10-17T03:01:19.3492030Z Ubuntu
+2026-10-17T03:01:19.3492428Z 24.04.5
+2026-10-17T03:01:19.3492867Z LTS
+2026-10-17T03:01:19.3493272Z ##[endgroup]
+2026-10-17T03:01:19.3493743Z ##[group]Runner Image
+2026-10-17T03:01:19.3494285Z Image: ubuntu-24.04
+2026-10-17T03:01:19.3494724Z Version: 20261012.334.1
+2026-10-17T03:01:19.3495837Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-17T03:01:19.3497063Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-17T03:01:19.3498149Z ##[endgroup]
+2026-10-17T03:01:19.3499172Z ##[group]GITHUB_TOKEN Permissions
+2026-10-17T03:01:19.3501402Z Contents: read
+2026-10-17T03:01:19.3501863Z Metadata: read
+2026-10-17T03:01:19.3502364Z ##[endgroup]
+2026-10-17T03:01:19.3504435Z Secret source: Actions
+2026-10-17T03:01:19.3505226Z Cache mode: write
+2026-10-17T03:01:19.3505952Z Prepare workflow directory
+2026-10-17T03:01:19.3819041Z Prepare all required actions
+2026-10-17T03:01:19.3862293Z Getting action download info
+2026-10-17T03:01:19.6134329Z Download action repository 'actions/checkout@v6' (SHA:d23441a48e516b6c34aea4fa41551a30e30af803)
+2026-10-17T03:01:19.7131221Z Download action repository 'actions/setup-node@v4' (SHA:49933ea5288caeca8642d1e84afbd3f7d6820020)
+2026-10-17T03:01:19.8969059Z Complete job name: agent-plugin
+2026-10-17T03:01:19.9565959Z ##[group]Run actions/checkout@v6
+2026-10-17T03:01:19.9566698Z with:
+2026-10-17T03:01:19.9567130Z   repository: bitrouter/bitrouter
+2026-10-17T03:01:19.9570548Z   token: ***
+2026-10-17T03:01:19.9571016Z   ssh-strict: true
+2026-10-17T03:01:19.9571466Z   ssh-user: git
+2026-10-17T03:01:19.9571902Z   persist-credentials: true
+2026-10-17T03:01:19.9572516Z   clean: true
+2026-10-17T03:01:19.9573023Z   sparse-checkout-cone-mode: true
+2026-10-17T03:01:19.9573651Z   fetch-depth: 1
+2026-10-17T03:01:19.9574073Z   fetch-tags: false
+2026-10-17T03:01:19.9574489Z   show-progress: true
+2026-10-17T03:01:19.9574933Z   lfs: false
+2026-10-17T03:01:19.9575329Z   submodules: false
+2026-10-17T03:01:19.9575767Z   set-safe-directory: true
+2026-10-17T03:01:19.9576280Z   allow-unsafe-pr-checkout: false
+2026-10-17T03:01:19.9576944Z env:
+2026-10-17T03:01:19.9577375Z   CARGO_TERM_COLOR: always
+2026-10-17T03:01:19.9578059Z ##[endgroup]
+2026-10-17T03:01:20.0476352Z Syncing repository: bitrouter/bitrouter
+2026-10-17T03:01:20.0478452Z ##[group]Getting Git version info
+2026-10-17T03:01:20.0479138Z Working directory is '/home/runner/work/bitrouter/bitrouter'
+2026-10-17T03:01:20.0480183Z [command]/usr/bin/git version
+2026-10-17T03:01:20.0533372Z git version 2.55.0
+2026-10-17T03:01:20.0558543Z ##[endgroup]
+2026-10-17T03:01:20.0570380Z Temporarily overriding HOME='/home/runner/work/_temp/caa16bac-b88e-421b-bf22-1003c7af1df1' before making global git config changes
+2026-10-17T03:01:20.0578792Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T03:01:20.0580958Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitrouter/bitrouter
+2026-10-17T03:01:20.0633183Z Deleting the contents of '/home/runner/work/bitrouter/bitrouter'
+2026-10-17T03:01:20.0636161Z ##[group]Determining repository object format
+2026-10-17T03:01:20.0637404Z ##[endgroup]
+2026-10-17T03:01:20.0638710Z ##[group]Initializing the repository
+2026-10-17T03:01:20.0642127Z [command]/usr/bin/git init /home/runner/work/bitrouter/bitrouter
+2026-10-17T03:01:20.0732705Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-17T03:01:20.0733566Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-17T03:01:20.0734464Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-17T03:01:20.0735112Z hint: call:
+2026-10-17T03:01:20.0735504Z hint:
+2026-10-17T03:01:20.0736019Z hint: 	git config --global init.defaultBranch <name>
+2026-10-17T03:01:20.0736561Z hint:
+2026-10-17T03:01:20.0737091Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-17T03:01:20.0738171Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-17T03:01:20.0738865Z hint:
+2026-10-17T03:01:20.0739295Z hint: 	git branch -m <name>
+2026-10-17T03:01:20.0739737Z hint:
+2026-10-17T03:01:20.0740314Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-17T03:01:20.0744415Z Initialized empty Git repository in /home/runner/work/bitrouter/bitrouter/.git/
+2026-10-17T03:01:20.0755479Z [command]/usr/bin/git remote add origin https://github.com/bitrouter/bitrouter
+2026-10-17T03:01:20.0941325Z ##[endgroup]
+2026-10-17T03:01:20.0942652Z ##[group]Disabling automatic garbage collection
+2026-10-17T03:01:20.0943793Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-17T03:01:20.0973120Z ##[endgroup]
+2026-10-17T03:01:20.0974093Z ##[group]Setting up auth
+2026-10-17T03:01:20.0974891Z Removing SSH command configuration
+2026-10-17T03:01:20.0981841Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T03:01:20.1013544Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T03:01:20.1308615Z Removing HTTP extra header
+2026-10-17T03:01:20.1314815Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T03:01:20.1341781Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T03:01:20.1503913Z Removing includeIf entries pointing to credentials config files
+2026-10-17T03:01:20.1510519Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T03:01:20.1536813Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T03:01:20.1702784Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-17T03:01:20.1735177Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path /home/runner/work/_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:20.1763166Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:20.1840365Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:20.1843902Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:20.1858704Z ##[endgroup]
+2026-10-17T03:01:20.1859542Z ##[group]Fetching the repository
+2026-10-17T03:01:20.1867984Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +05c67acbe9b530dbd5ecffbaf329bfa3239ebe3e:refs/remotes/pull/981/merge
+2026-10-17T03:01:21.7864762Z From https://github.com/bitrouter/bitrouter
+2026-10-17T03:01:21.7865958Z  * [new ref]         05c67acbe9b530dbd5ecffbaf329bfa3239ebe3e -> pull/981/merge
+2026-10-17T03:01:21.7869940Z ##[endgroup]
+2026-10-17T03:01:21.7870628Z ##[group]Determining the checkout info
+2026-10-17T03:01:21.7871372Z ##[endgroup]
+2026-10-17T03:01:21.7877682Z [command]/usr/bin/git sparse-checkout disable
+2026-10-17T03:01:21.7928863Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-17T03:01:21.7955324Z ##[group]Checking out the ref
+2026-10-17T03:01:21.7959228Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/981/merge
+2026-10-17T03:01:21.9350633Z Note: switching to 'refs/remotes/pull/981/merge'.
+2026-10-17T03:01:21.9351090Z 
+2026-10-17T03:01:21.9351319Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-17T03:01:21.9352004Z changes and commit them, and you can discard any commits you make in this
+2026-10-17T03:01:21.9352618Z state without impacting any branches by switching back to a branch.
+2026-10-17T03:01:21.9352916Z 
+2026-10-17T03:01:21.9353263Z If you want to create a new branch to retain commits you create, you may
+2026-10-17T03:01:21.9353763Z do so (now or later) by using -c with the switch command. Example:
+2026-10-17T03:01:21.9354056Z 
+2026-10-17T03:01:21.9354201Z   git switch -c <new-branch-name>
+2026-10-17T03:01:21.9354419Z 
+2026-10-17T03:01:21.9354565Z Or undo this operation with:
+2026-10-17T03:01:21.9354774Z 
+2026-10-17T03:01:21.9354924Z   git switch -
+2026-10-17T03:01:21.9355081Z 
+2026-10-17T03:01:21.9355463Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-17T03:01:21.9355913Z 
+2026-10-17T03:01:21.9356397Z HEAD is now at 05c67ac Merge d1c9074e9e6654fe77474571d7dc5e078a857c0a into 54c822a34d4dbfd75d484ca35e108b497048efef
+2026-10-17T03:01:21.9361716Z ##[endgroup]
+2026-10-17T03:01:21.9400795Z [command]/usr/bin/git log -1 --format=%H
+2026-10-17T03:01:21.9423163Z 05c67acbe9b530dbd5ecffbaf329bfa3239ebe3e
+2026-10-17T03:01:21.9666004Z ##[group]Run actions/setup-node@v4
+2026-10-17T03:01:21.9666445Z with:
+2026-10-17T03:01:21.9666802Z   node-version: 22
+2026-10-17T03:01:21.9667159Z   always-auth: false
+2026-10-17T03:01:21.9667472Z   check-latest: false
+2026-10-17T03:01:21.9669976Z   token: ***
+2026-10-17T03:01:21.9670267Z env:
+2026-10-17T03:01:21.9670570Z   CARGO_TERM_COLOR: always
+2026-10-17T03:01:21.9670883Z ##[endgroup]
+2026-10-17T03:01:22.0916339Z Found in cache @ /opt/hostedtoolcache/node/22.23.3/x64
+2026-10-17T03:01:22.0919903Z (node:2093) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-17T03:01:22.0920718Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-17T03:01:22.0921924Z ##[group]Environment details
+2026-10-17T03:01:22.4233202Z node: v22.23.3
+2026-10-17T03:01:22.4233690Z npm: 10.9.9
+2026-10-17T03:01:22.4234017Z yarn: 1.22.22
+2026-10-17T03:01:22.4234981Z ##[endgroup]
+2026-10-17T03:01:22.4349670Z ##[group]Run npm install -g @anthropic-ai/claude-code
+2026-10-17T03:01:22.4350342Z [36;1mnpm install -g @anthropic-ai/claude-code[0m
+2026-10-17T03:01:22.4350701Z [36;1mclaude plugin validate . --strict[0m
+2026-10-17T03:01:22.4623982Z shell: /usr/bin/bash -e {0}
+2026-10-17T03:01:22.4624355Z env:
+2026-10-17T03:01:22.4624808Z   CARGO_TERM_COLOR: always
+2026-10-17T03:01:22.4625124Z ##[endgroup]
+2026-10-17T03:01:25.8780183Z 
+2026-10-17T03:01:25.8788611Z added 2 packages in 3s
+2026-10-17T03:01:26.1071920Z Validating marketplace manifest: /home/runner/work/bitrouter/bitrouter/.claude-plugin/marketplace.json
+2026-10-17T03:01:26.1072541Z 
+2026-10-17T03:01:26.1073200Z ℹ Advice (does not change the verdict):
+2026-10-17T03:01:26.1073407Z 
+2026-10-17T03:01:26.1074271Z   ❯ /home/runner/work/bitrouter/bitrouter/README.md: This README has no line that installs "bitrouter" from a marketplace. Add the install line, which works in one step on Claude Code 2.1.275 or later.
+2026-10-17T03:01:26.1075301Z       /plugin install bitrouter --marketplace bitrouter/bitrouter
+2026-10-17T03:01:26.1075549Z 
+2026-10-17T03:01:26.1081324Z ✔ Validation passed
+2026-10-17T03:01:26.2133468Z ##[group]Run npm install -g @openai/codex
+2026-10-17T03:01:26.2133945Z [36;1mnpm install -g @openai/codex[0m
+2026-10-17T03:01:26.2134286Z [36;1mexport CODEX_HOME="$(mktemp -d)"[0m
+2026-10-17T03:01:26.2134767Z [36;1mcodex plugin marketplace add "$PWD"[0m
+2026-10-17T03:01:26.2135237Z [36;1mcodex plugin add bitrouter@bitrouter[0m
+2026-10-17T03:01:26.2135817Z [36;1mcodex plugin list --json | tee /tmp/codex-plugins.json[0m
+2026-10-17T03:01:26.2136517Z [36;1mjq -e '.installed[] | select(.name == "bitrouter")' /tmp/codex-plugins.json[0m
+2026-10-17T03:01:26.2180832Z shell: /usr/bin/bash -e {0}
+2026-10-17T03:01:26.2181413Z env:
+2026-10-17T03:01:26.2181846Z   CARGO_TERM_COLOR: always
+2026-10-17T03:01:26.2182234Z ##[endgroup]
+2026-10-17T03:01:31.3931850Z 
+2026-10-17T03:01:31.3932488Z added 2 packages in 5s
+2026-10-17T03:01:31.4405919Z WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/tmp" (codex_home: AbsolutePathBuf("/tmp/tmp.8LZRWElw32"))
+2026-10-17T03:01:31.4513279Z Added marketplace `bitrouter` from /home/runner/work/bitrouter/bitrouter.
+2026-10-17T03:01:31.4514419Z Installed marketplace root: /home/runner/work/bitrouter/bitrouter
+2026-10-17T03:01:31.4867908Z WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/tmp" (codex_home: AbsolutePathBuf("/tmp/tmp.8LZRWElw32"))
+2026-10-17T03:01:31.6451563Z Added plugin `bitrouter` from marketplace `bitrouter`.
+2026-10-17T03:01:31.6454579Z Installed plugin root: /tmp/tmp.8LZRWElw32/plugins/cache/bitrouter/bitrouter/0.1.0
+2026-10-17T03:01:31.6812920Z WARNING: proceeding, even though we could not create PATH aliases: Refusing to create helper binaries under temporary dir "/tmp" (codex_home: AbsolutePathBuf("/tmp/tmp.8LZRWElw32"))
+2026-10-17T03:01:31.6914785Z {
+2026-10-17T03:01:31.6915715Z   "installed": [
+2026-10-17T03:01:31.6916401Z     {
+2026-10-17T03:01:31.6917243Z       "pluginId": "bitrouter@bitrouter",
+2026-10-17T03:01:31.6918478Z       "name": "bitrouter",
+2026-10-17T03:01:31.6932627Z       "marketplaceName": "bitrouter",
+2026-10-17T03:01:31.6933267Z       "version": "0.1.0",
+2026-10-17T03:01:31.6933865Z       "installed": true,
+2026-10-17T03:01:31.6934863Z       "enabled": true,
+2026-10-17T03:01:31.6935482Z       "source": {
+2026-10-17T03:01:31.6935867Z         "source": "local",
+2026-10-17T03:01:31.6936378Z         "path": "/home/runner/work/bitrouter/bitrouter"
+2026-10-17T03:01:31.6936954Z       },
+2026-10-17T03:01:31.6937313Z       "marketplaceSource": {
+2026-10-17T03:01:31.6938124Z         "sourceType": "local",
+2026-10-17T03:01:31.6938607Z         "source": "/home/runner/work/bitrouter/bitrouter"
+2026-10-17T03:01:31.6939115Z       },
+2026-10-17T03:01:31.6939510Z       "installPolicy": "AVAILABLE",
+2026-10-17T03:01:31.6940893Z       "authPolicy": "ON_INSTALL"
+2026-10-17T03:01:31.6941465Z     }
+2026-10-17T03:01:31.6941830Z   ],
+2026-10-17T03:01:31.6942230Z   "available": []
+2026-10-17T03:01:31.6942613Z }
+2026-10-17T03:01:31.6991146Z {
+2026-10-17T03:01:31.6991727Z   "pluginId": "bitrouter@bitrouter",
+2026-10-17T03:01:31.6992147Z   "name": "bitrouter",
+2026-10-17T03:01:31.6992483Z   "marketplaceName": "bitrouter",
+2026-10-17T03:01:31.6992771Z   "version": "0.1.0",
+2026-10-17T03:01:31.6993015Z   "installed": true,
+2026-10-17T03:01:31.6993293Z   "enabled": true,
+2026-10-17T03:01:31.6993556Z   "source": {
+2026-10-17T03:01:31.6993848Z     "source": "local",
+2026-10-17T03:01:31.6994158Z     "path": "/home/runner/work/bitrouter/bitrouter"
+2026-10-17T03:01:31.6994461Z   },
+2026-10-17T03:01:31.6994733Z   "marketplaceSource": {
+2026-10-17T03:01:31.6995021Z     "sourceType": "local",
+2026-10-17T03:01:31.6995753Z     "source": "/home/runner/work/bitrouter/bitrouter"
+2026-10-17T03:01:31.6996134Z   },
+2026-10-17T03:01:31.6996377Z   "installPolicy": "AVAILABLE",
+2026-10-17T03:01:31.6996705Z   "authPolicy": "ON_INSTALL"
+2026-10-17T03:01:31.6996966Z }
+2026-10-17T03:01:31.7668846Z Post job cleanup.
+2026-10-17T03:01:31.8682704Z (node:2228) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-17T03:01:31.8683386Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-17T03:01:31.8853861Z Post job cleanup.
+2026-10-17T03:01:31.9615204Z [command]/usr/bin/git version
+2026-10-17T03:01:31.9647353Z git version 2.55.0
+2026-10-17T03:01:31.9677341Z Temporarily overriding HOME='/home/runner/work/_temp/ecacd023-5ff6-47f2-9797-91d0a70634f5' before making global git config changes
+2026-10-17T03:01:31.9679367Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T03:01:31.9681041Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitrouter/bitrouter
+2026-10-17T03:01:31.9712089Z Removing SSH command configuration
+2026-10-17T03:01:31.9717423Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T03:01:31.9744950Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T03:01:31.9924048Z Removing HTTP extra header
+2026-10-17T03:01:31.9930251Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T03:01:31.9958474Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T03:01:32.0139469Z Removing includeIf entries pointing to credentials config files
+2026-10-17T03:01:32.0148609Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T03:01:32.0168047Z includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path
+2026-10-17T03:01:32.0170984Z includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-17T03:01:32.0171710Z includeif.gitdir:/github/workspace/.git.path
+2026-10-17T03:01:32.0172216Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T03:01:32.0179576Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path
+2026-10-17T03:01:32.0199949Z /home/runner/work/_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:32.0211891Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path /home/runner/work/_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:32.0244962Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-17T03:01:32.0263973Z /home/runner/work/_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:32.0272165Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:32.0308245Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-17T03:01:32.0327504Z /github/runner_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:32.0334615Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:32.0363636Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T03:01:32.0381091Z /github/runner_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:32.0388232Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config
+2026-10-17T03:01:32.0422972Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T03:01:32.0578895Z Removing credentials config '/home/runner/work/_temp/git-credentials-50e19a0c-daa9-4108-9b90-9d9b64e12510.config'
+2026-10-17T03:01:32.0709679Z Cleaning up orphan processes
+2026-10-17T03:01:32.0946071Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/setup-node@v4. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

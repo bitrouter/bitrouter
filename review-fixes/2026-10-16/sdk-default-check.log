@@ -1,0 +1,29 @@
+    Checking libc v0.2.186
+   Compiling serde_core v1.0.228
+   Compiling serde v1.0.228
+    Checking bitflags v2.13.0
+    Checking mio v1.2.1
+    Checking socket2 v0.6.4
+    Checking security-framework-sys v2.17.0
+    Checking core-foundation v0.10.1
+    Checking cpufeatures v0.3.0
+    Checking getrandom v0.4.3
+    Checking sha2 v0.11.0
+    Checking security-framework v3.7.0
+    Checking tokio v1.52.3
+    Checking rustls-platform-verifier v0.7.0
+    Checking serde_json v1.0.150
+    Checking uuid v1.23.4
+    Checking serde_urlencoded v0.7.1
+    Checking schemars v1.2.1
+    Checking hyper v1.10.1
+    Checking tower v0.5.3
+    Checking tokio-rustls v0.26.4
+    Checking tokio-util v0.7.18
+    Checking tower-http v0.6.11
+    Checking hyper-util v0.1.20
+    Checking hyper-rustls v0.27.9
+    Checking reqwest v0.13.4
+    Checking bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+    Checking bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+    Finished `dev` profile [unoptimized] target(s) in 6.84s

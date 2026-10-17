@@ -1,0 +1,27 @@
+{
+  "recordedAt": "2026-10-17T02:43:09.967Z",
+  "scope": "Local immutable Cargo-produced executable files. Not process/memory images or hosted filesystem snapshots.",
+  "files": [
+    {
+      "source": "target/debug/bitrouter-fixture-images/goal_acp_fixture-6adb21af7fe4a6045acf14bb9eeff6a6ddfa81f54ff37e71043543762ff987e8",
+      "path": "fixture-files/goal_acp_fixture-6adb21af7fe4a6045acf14bb9eeff6a6ddfa81f54ff37e71043543762ff987e8",
+      "sha256": "6adb21af7fe4a6045acf14bb9eeff6a6ddfa81f54ff37e71043543762ff987e8",
+      "bytes": 1958768,
+      "mode": "755"
+    },
+    {
+      "source": "target/debug/bitrouter-fixture-images/harness_mcp_fixture-09b9d2c193f38c9bb98d233fe4531e22ae72edd6be07dae5ef8e6676a6305a55",
+      "path": "fixture-files/harness_mcp_fixture-09b9d2c193f38c9bb98d233fe4531e22ae72edd6be07dae5ef8e6676a6305a55",
+      "sha256": "09b9d2c193f38c9bb98d233fe4531e22ae72edd6be07dae5ef8e6676a6305a55",
+      "bytes": 1098080,
+      "mode": "755"
+    },
+    {
+      "source": "target/debug/bitrouter-fixture-images/pty_acp_fixture-2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31",
+      "path": "fixture-files/pty_acp_fixture-2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31",
+      "sha256": "2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31",
+      "bytes": 1367072,
+      "mode": "755"
+    }
+  ]
+}

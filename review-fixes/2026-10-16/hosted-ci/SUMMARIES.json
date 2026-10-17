@@ -1,0 +1,227 @@
+{
+  "head": "d1c9074e9e6654fe77474571d7dc5e078a857c0a",
+  "reports": [
+    {
+      "job": 117292136220,
+      "name": "repository-hygiene",
+      "path": "jobs/117292136220.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292135999,
+      "name": "validate title",
+      "path": "jobs/117292135999.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292236229,
+      "name": "validate title",
+      "path": "jobs/117292236229.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136226,
+      "name": "clippy (windows-latest)",
+      "path": "jobs/117292136226.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136249,
+      "name": "doc",
+      "path": "jobs/117292136249.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136225,
+      "name": "msrv",
+      "path": "jobs/117292136225.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136268,
+      "name": "test (ubuntu-latest, bitrouter integration optimization)",
+      "path": "jobs/117292136268.log",
+      "summaries": [
+        "2026-10-17T03:04:27.6202225Z      Summary [   0.387s] 9 tests run: 9 passed, 0 skipped"
+      ],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136252,
+      "name": "clippy (macos-latest)",
+      "path": "jobs/117292136252.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136295,
+      "name": "test (windows-latest)",
+      "path": "jobs/117292136295.log",
+      "summaries": [
+        "2026-10-17T03:27:43.4140995Z      Summary [1130.110s] 4565 tests run: 4565 passed (9 slow), 3 skipped\r"
+      ],
+      "typedCancellationRegression": [
+        "2026-10-17T03:09:43.5765379Z         PASS [   2.023s] ( 774/4565) bitrouter goal_runtime::model_control::tests::typed_input_cancels_stale_sources_settles_usage_and_remains_available_while_paused\r"
+      ]
+    },
+    {
+      "job": 117292136306,
+      "name": "sdk-public-api",
+      "path": "jobs/117292136306.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136320,
+      "name": "doctest",
+      "path": "jobs/117292136320.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136323,
+      "name": "fmt",
+      "path": "jobs/117292136323.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136333,
+      "name": "agent-plugin",
+      "path": "jobs/117292136333.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136360,
+      "name": "test (ubuntu-latest, bitrouter integration observability)",
+      "path": "jobs/117292136360.log",
+      "summaries": [
+        "2026-10-17T03:03:47.3002060Z      Summary [   0.796s] 64 tests run: 64 passed, 9 skipped"
+      ],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136327,
+      "name": "clippy (ubuntu-latest)",
+      "path": "jobs/117292136327.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136421,
+      "name": "test (ubuntu-latest, bitrouter integration control-plane)",
+      "path": "jobs/117292136421.log",
+      "summaries": [
+        "2026-10-17T03:03:51.4083824Z      Summary [   7.134s] 53 tests run: 53 passed, 0 skipped"
+      ],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136366,
+      "name": "test (ubuntu-latest, bitrouter integration native-goals)",
+      "path": "jobs/117292136366.log",
+      "summaries": [
+        "2026-10-17T03:06:51.2115897Z      Summary [ 174.054s] 212 tests run: 212 passed, 6 skipped"
+      ],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136399,
+      "name": "feature-isolation",
+      "path": "jobs/117292136399.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136462,
+      "name": "test (ubuntu-latest, bitrouter integration interfaces)",
+      "path": "jobs/117292136462.log",
+      "summaries": [
+        "2026-10-17T03:04:32.5420519Z      Summary [  32.165s] 149 tests run: 149 passed, 0 skipped"
+      ],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136456,
+      "name": "dist",
+      "path": "jobs/117292136456.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292136486,
+      "name": "test (ubuntu-latest, workspace)",
+      "path": "jobs/117292136486.log",
+      "summaries": [
+        "2026-10-17T03:25:22.0703210Z      Summary [1295.068s] 2372 tests run: 2372 passed (9 slow), 2 skipped"
+      ],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117293259745,
+      "name": "test (ubuntu-latest, bitrouter bin)",
+      "path": "jobs/117293259745.log",
+      "summaries": [
+        "2026-10-17T03:10:06.1646423Z      Summary [   0.830s] 67 tests run: 67 passed, 0 skipped"
+      ],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117293259739,
+      "name": "test (ubuntu-latest, bitrouter lib)",
+      "path": "jobs/117293259739.log",
+      "summaries": [
+        "2026-10-17T03:18:36.0100998Z      Summary [ 514.993s] 1830 tests run: 1830 passed, 7 skipped"
+      ],
+      "typedCancellationRegression": [
+        "2026-10-17T03:10:26.4583179Z         PASS [   1.855s] ( 731/1830) bitrouter goal_runtime::model_control::tests::typed_input_cancels_stale_sources_settles_usage_and_remains_available_while_paused"
+      ]
+    },
+    {
+      "job": 117292136560,
+      "name": "test (macos-latest)",
+      "path": "jobs/117292136560.log",
+      "summaries": [
+        "2026-10-17T03:36:14.1420030Z      Summary [1245.706s] 4758 tests run: 4758 passed (5 slow), 24 skipped"
+      ],
+      "typedCancellationRegression": [
+        "2026-10-17T03:16:01.6961680Z         PASS [   1.833s] ( 731/4758) bitrouter goal_runtime::model_control::tests::typed_input_cancels_stale_sources_settles_usage_and_remains_available_while_paused"
+      ]
+    },
+    {
+      "job": 117296890469,
+      "name": "test (ubuntu-latest)",
+      "path": "jobs/117296890469.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292135807,
+      "name": "plan",
+      "path": "jobs/117292135807.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292132805,
+      "name": "Analyze (rust)",
+      "path": "jobs/117292132805.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    },
+    {
+      "job": 117292133019,
+      "name": "Analyze (actions)",
+      "path": "jobs/117292133019.log",
+      "summaries": [],
+      "typedCancellationRegression": []
+    }
+  ]
+}

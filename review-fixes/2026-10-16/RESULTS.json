@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "recordedAt": "2026-10-17T03:01:10.897Z",
+  "sourceCommit": "d1c9074e9e6654fe77474571d7dc5e078a857c0a",
+  "sourceParent": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+  "sourceManifest": "source-manifest.json",
+  "sourceManifestSha256": "70c49f6ecf71312e1ae078f19d30a9e6ebfb28593af0d1b8d13b2958d21f7177",
+  "local": {
+    "qualified": true,
+    "focusedPassed": 33,
+    "protocolAndPtyPassed": 5,
+    "workspacePassed": 4758,
+    "workspaceSkipped": 24,
+    "reportedLeaks": 0,
+    "sourceDrift": [],
+    "strictClippy": "passed",
+    "fmt": "passed",
+    "doctests": {
+      "passed": 6,
+      "ignored": 1
+    },
+    "generatedArtifacts": "passed",
+    "sdkDefaultFeatures": "passed",
+    "orchestratorWithoutAcp": "passed"
+  },
+  "hosted": {
+    "status": "passed",
+    "sourceCommit": "d1c9074e9e6654fe77474571d7dc5e078a857c0a",
+    "checks": 36,
+    "successfulChecks": 29,
+    "skippedChecks": 7,
+    "allChecksTerminalAllowed": true,
+    "workflowRuns": 6,
+    "jobRecords": 35,
+    "rawLogs": 28,
+    "index": "hosted-ci/INDEX.json",
+    "summaries": "hosted-ci/SUMMARIES.json",
+    "qualification": "Exact source head; actual vendor/provider gate remains separate"
+  },
+  "liveVendorProviderGate": "unpassed",
+  "merge": false,
+  "completedAt": "2026-10-17T03:38:30.597Z"
+}

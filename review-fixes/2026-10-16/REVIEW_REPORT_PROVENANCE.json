@@ -1,0 +1,6 @@
+{
+  "file": "implementation-review.md",
+  "originalSha256": "6be0b3be1ac0c999cb5294292dd15934c765e32afd9bc40ddf9cf80de6897688",
+  "publishedSha256": "650864a87c45dae451972ff7d333471fbc7616987bec746cd16ca285128446c0",
+  "omission": "One internal memory-provenance paragraph omitted from publication; review findings unchanged. Original report retained locally."
+}

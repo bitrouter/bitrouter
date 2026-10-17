@@ -1,0 +1,10 @@
+{
+  "sourceCommit": "d1c9074e9e6654fe77474571d7dc5e078a857c0a",
+  "base": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+  "restoredTree": "d80c69e1300006dfa07f299e01f0b1e39fc17838",
+  "expectedTree": "d80c69e1300006dfa07f299e01f0b1e39fc17838",
+  "patchSha256": "3ef97b95c74dd4ae7dbb8afdc4b1aee445a5466b2bf1f132a3611e7b90fb8986",
+  "match": true,
+  "scope": "Independent temporary-index reconstruction of committed file bytes/modes, not a process restore.",
+  "recordedAt": "2026-10-17T03:27:53.886Z"
+}

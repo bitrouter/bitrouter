@@ -1,0 +1,20 @@
+{
+  "recordedAt": "2026-10-17T02:38:02.742Z",
+  "sourceManifestSha256": "70c49f6ecf71312e1ae078f19d30a9e6ebfb28593af0d1b8d13b2958d21f7177",
+  "focused": {
+    "log": "focused-04.log",
+    "passed": 33
+  },
+  "protocolAndTerminal": {
+    "log": "pty-acp-01.log",
+    "passed": 5,
+    "acpMatrixCases": 5,
+    "ptyScenarios": 4
+  },
+  "sourceDrift": [],
+  "earlierRuns": {
+    "focused-01.log": "compilation failed",
+    "focused-02.log": "compilation failed",
+    "focused-03.log": "31 passed, 2 failed; unqualified"
+  }
+}

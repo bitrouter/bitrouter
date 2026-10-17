@@ -1,0 +1,778 @@
+﻿2026-10-17T03:01:18.6375475Z Current runner version: '2.337.0'
+2026-10-17T03:01:18.6389520Z ##[group]Runner Image Provisioner
+2026-10-17T03:01:18.6389999Z Hosted Compute Agent
+2026-10-17T03:01:18.6390310Z Version: 20261012.601
+2026-10-17T03:01:18.6390658Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-17T03:01:18.6391053Z Build Date: 2026-10-12T17:48:21Z
+2026-10-17T03:01:18.6391419Z Worker ID: {fde3881c-7c61-4f62-b0af-19471b21b928}
+2026-10-17T03:01:18.6391792Z Region: centralus
+2026-10-17T03:01:18.6392092Z Cloud: Azure
+2026-10-17T03:01:18.6392391Z ##[endgroup]
+2026-10-17T03:01:18.6393198Z ##[group]Operating System
+2026-10-17T03:01:18.6393505Z Ubuntu
+2026-10-17T03:01:18.6393815Z 22.04.5
+2026-10-17T03:01:18.6394081Z LTS
+2026-10-17T03:01:18.6394353Z ##[endgroup]
+2026-10-17T03:01:18.6394666Z ##[group]Runner Image
+2026-10-17T03:01:18.6394983Z Image: ubuntu-22.04
+2026-10-17T03:01:18.6395304Z Version: 20261012.322.1
+2026-10-17T03:01:18.6395955Z Included Software: https://github.com/actions/runner-images/blob/ubuntu22/20261012.322/images/ubuntu/Ubuntu2204-Readme.md
+2026-10-17T03:01:18.6396762Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu22%2F20261012.322
+2026-10-17T03:01:18.6397255Z ##[endgroup]
+2026-10-17T03:01:18.6397856Z ##[group]GITHUB_TOKEN Permissions
+2026-10-17T03:01:18.6399177Z Contents: write
+2026-10-17T03:01:18.6399513Z Metadata: read
+2026-10-17T03:01:18.6399808Z ##[endgroup]
+2026-10-17T03:01:18.6401045Z Secret source: Actions
+2026-10-17T03:01:18.6401539Z Cache mode: write
+2026-10-17T03:01:18.6401994Z Prepare workflow directory
+2026-10-17T03:01:18.6670527Z Prepare all required actions
+2026-10-17T03:01:18.6698406Z Getting action download info
+2026-10-17T03:01:18.8873610Z Download action repository 'actions/checkout@v6' (SHA:d23441a48e516b6c34aea4fa41551a30e30af803)
+2026-10-17T03:01:18.9634934Z Download action repository 'actions/upload-artifact@v6' (SHA:b7c566a772e6b6bfb58ed0dc250532a479d7789f)
+2026-10-17T03:01:19.2784842Z Complete job name: plan
+2026-10-17T03:01:19.3101046Z ##[group]Run actions/checkout@v6
+2026-10-17T03:01:19.3101432Z with:
+2026-10-17T03:01:19.3101662Z   persist-credentials: false
+2026-10-17T03:01:19.3101931Z   submodules: recursive
+2026-10-17T03:01:19.3102186Z   repository: bitrouter/bitrouter
+2026-10-17T03:01:19.3104205Z   token: ***
+2026-10-17T03:01:19.3104431Z   ssh-strict: true
+2026-10-17T03:01:19.3104661Z   ssh-user: git
+2026-10-17T03:01:19.3104881Z   clean: true
+2026-10-17T03:01:19.3105118Z   sparse-checkout-cone-mode: true
+2026-10-17T03:01:19.3105388Z   fetch-depth: 1
+2026-10-17T03:01:19.3105617Z   fetch-tags: false
+2026-10-17T03:01:19.3105851Z   show-progress: true
+2026-10-17T03:01:19.3106086Z   lfs: false
+2026-10-17T03:01:19.3106315Z   set-safe-directory: true
+2026-10-17T03:01:19.3106583Z   allow-unsafe-pr-checkout: false
+2026-10-17T03:01:19.3106917Z env:
+2026-10-17T03:01:19.3108920Z   GH_TOKEN: ***
+2026-10-17T03:01:19.3109145Z ##[endgroup]
+2026-10-17T03:01:19.3664106Z Syncing repository: bitrouter/bitrouter
+2026-10-17T03:01:19.3665613Z ##[group]Getting Git version info
+2026-10-17T03:01:19.3666199Z Working directory is '/home/runner/work/bitrouter/bitrouter'
+2026-10-17T03:01:19.3667060Z [command]/usr/bin/git version
+2026-10-17T03:01:19.3667477Z git version 2.55.0
+2026-10-17T03:01:19.3681039Z ##[endgroup]
+2026-10-17T03:01:19.3688434Z Temporarily overriding HOME='/home/runner/work/_temp/58b4a173-0b5f-4565-b158-152f31cf22e9' before making global git config changes
+2026-10-17T03:01:19.3689818Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T03:01:19.3690952Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitrouter/bitrouter
+2026-10-17T03:01:19.3709641Z Deleting the contents of '/home/runner/work/bitrouter/bitrouter'
+2026-10-17T03:01:19.3711622Z ##[group]Determining repository object format
+2026-10-17T03:01:19.3712853Z ##[endgroup]
+2026-10-17T03:01:19.3713468Z ##[group]Initializing the repository
+2026-10-17T03:01:19.3715083Z [command]/usr/bin/git init /home/runner/work/bitrouter/bitrouter
+2026-10-17T03:01:19.3918234Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-17T03:01:19.3918949Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-17T03:01:19.3919438Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-17T03:01:19.3919857Z hint: call:
+2026-10-17T03:01:19.3920148Z hint:
+2026-10-17T03:01:19.3920462Z hint: 	git config --global init.defaultBranch <name>
+2026-10-17T03:01:19.3920819Z hint:
+2026-10-17T03:01:19.3921124Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-17T03:01:19.3921691Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-17T03:01:19.3922072Z hint:
+2026-10-17T03:01:19.3922296Z hint: 	git branch -m <name>
+2026-10-17T03:01:19.3922544Z hint:
+2026-10-17T03:01:19.3922871Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-17T03:01:19.3923646Z Initialized empty Git repository in /home/runner/work/bitrouter/bitrouter/.git/
+2026-10-17T03:01:19.3927566Z [command]/usr/bin/git remote add origin https://github.com/bitrouter/bitrouter
+2026-10-17T03:01:19.3963178Z ##[endgroup]
+2026-10-17T03:01:19.3963867Z ##[group]Disabling automatic garbage collection
+2026-10-17T03:01:19.3974665Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-17T03:01:19.4074742Z ##[endgroup]
+2026-10-17T03:01:19.4075332Z ##[group]Setting up auth
+2026-10-17T03:01:19.4075893Z Removing SSH command configuration
+2026-10-17T03:01:19.4080688Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T03:01:19.4098953Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T03:01:19.4245570Z Removing HTTP extra header
+2026-10-17T03:01:19.4248987Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T03:01:19.4264175Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T03:01:19.4354344Z Removing includeIf entries pointing to credentials config files
+2026-10-17T03:01:19.4358419Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T03:01:19.4374314Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T03:01:19.4467963Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-17T03:01:19.4487678Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:19.4502956Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:19.4537817Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:19.4553032Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:19.4566345Z ##[endgroup]
+2026-10-17T03:01:19.4566920Z ##[group]Fetching the repository
+2026-10-17T03:01:19.4570756Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +05c67acbe9b530dbd5ecffbaf329bfa3239ebe3e:refs/remotes/pull/981/merge
+2026-10-17T03:01:20.9716617Z From https://github.com/bitrouter/bitrouter
+2026-10-17T03:01:20.9718119Z  * [new ref]         05c67acbe9b530dbd5ecffbaf329bfa3239ebe3e -> pull/981/merge
+2026-10-17T03:01:20.9721159Z ##[endgroup]
+2026-10-17T03:01:20.9722117Z ##[group]Determining the checkout info
+2026-10-17T03:01:20.9723199Z ##[endgroup]
+2026-10-17T03:01:20.9723895Z [command]/usr/bin/git sparse-checkout disable
+2026-10-17T03:01:20.9747529Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-17T03:01:20.9762920Z ##[group]Checking out the ref
+2026-10-17T03:01:20.9764543Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/981/merge
+2026-10-17T03:01:21.0697059Z Note: switching to 'refs/remotes/pull/981/merge'.
+2026-10-17T03:01:21.0697777Z 
+2026-10-17T03:01:21.0698385Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-17T03:01:21.0700090Z changes and commit them, and you can discard any commits you make in this
+2026-10-17T03:01:21.0701647Z state without impacting any branches by switching back to a branch.
+2026-10-17T03:01:21.0702540Z 
+2026-10-17T03:01:21.0703173Z If you want to create a new branch to retain commits you create, you may
+2026-10-17T03:01:21.0704555Z do so (now or later) by using -c with the switch command. Example:
+2026-10-17T03:01:21.0705365Z 
+2026-10-17T03:01:21.0705731Z   git switch -c <new-branch-name>
+2026-10-17T03:01:21.0706296Z 
+2026-10-17T03:01:21.0706684Z Or undo this operation with:
+2026-10-17T03:01:21.0707336Z 
+2026-10-17T03:01:21.0707726Z   git switch -
+2026-10-17T03:01:21.0708135Z 
+2026-10-17T03:01:21.0708945Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-17T03:01:21.0709799Z 
+2026-10-17T03:01:21.0710751Z HEAD is now at 05c67ac Merge d1c9074e9e6654fe77474571d7dc5e078a857c0a into 54c822a34d4dbfd75d484ca35e108b497048efef
+2026-10-17T03:01:21.0713998Z ##[endgroup]
+2026-10-17T03:01:21.0715229Z ##[group]Setting up auth for fetching submodules
+2026-10-17T03:01:21.0717831Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-17T03:01:21.0734103Z [command]/usr/bin/git config --global include.path /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.0752573Z [command]/usr/bin/git config --global --unset-all url.https://github.com/.insteadOf
+2026-10-17T03:01:21.0767940Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf git@github.com:
+2026-10-17T03:01:21.0785720Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf org-193405925@github.com:
+2026-10-17T03:01:21.0802638Z ##[endgroup]
+2026-10-17T03:01:21.0805536Z ##[group]Fetching submodules
+2026-10-17T03:01:21.0806506Z [command]/usr/bin/git submodule sync --recursive
+2026-10-17T03:01:21.0910843Z [command]/usr/bin/git -c protocol.version=2 submodule update --init --force --depth=1 --recursive
+2026-10-17T03:01:21.1008419Z [command]/usr/bin/git submodule foreach --recursive git config --local gc.auto 0
+2026-10-17T03:01:21.1101738Z ##[endgroup]
+2026-10-17T03:01:21.1120206Z [command]/usr/bin/git log -1 --format=%H
+2026-10-17T03:01:21.1132022Z 05c67acbe9b530dbd5ecffbaf329bfa3239ebe3e
+2026-10-17T03:01:21.1137601Z ##[group]Removing auth
+2026-10-17T03:01:21.1138485Z Removing SSH command configuration
+2026-10-17T03:01:21.1139904Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T03:01:21.1154989Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T03:01:21.1253251Z Removing HTTP extra header
+2026-10-17T03:01:21.1255010Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T03:01:21.1269718Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T03:01:21.1365645Z Removing includeIf entries pointing to credentials config files
+2026-10-17T03:01:21.1367012Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T03:01:21.1379841Z includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path
+2026-10-17T03:01:21.1381372Z includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-17T03:01:21.1382544Z includeif.gitdir:/github/workspace/.git.path
+2026-10-17T03:01:21.1383657Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T03:01:21.1386027Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path
+2026-10-17T03:01:21.1394198Z /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.1399868Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.1415505Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-17T03:01:21.1425865Z /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.1431477Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.1447128Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-17T03:01:21.1508214Z /github/runner_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.1512095Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.1515767Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T03:01:21.1517387Z /github/runner_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.1520609Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config
+2026-10-17T03:01:21.1523936Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T03:01:21.1611906Z Removing credentials config '/home/runner/work/_temp/git-credentials-19c383b4-52b4-4437-8247-ce39a0af302c.config'
+2026-10-17T03:01:21.1617636Z ##[endgroup]
+2026-10-17T03:01:21.1763867Z ##[group]Run curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh
+2026-10-17T03:01:21.1766294Z [36;1mcurl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh[0m
+2026-10-17T03:01:21.2110419Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T03:01:21.2111275Z env:
+2026-10-17T03:01:21.2117005Z   GH_TOKEN: ***
+2026-10-17T03:01:21.2117529Z ##[endgroup]
+2026-10-17T03:01:21.5103334Z downloading cargo-dist 0.31.0 x86_64-unknown-linux-gnu
+2026-10-17T03:01:22.1650678Z installing to /home/runner/.cargo/bin
+2026-10-17T03:01:22.1685613Z   dist
+2026-10-17T03:01:22.1698433Z everything's installed!
+2026-10-17T03:01:22.1762228Z ##[group]Run actions/upload-artifact@v6
+2026-10-17T03:01:22.1762413Z with:
+2026-10-17T03:01:22.1762552Z   name: cargo-dist-cache
+2026-10-17T03:01:22.1762712Z   path: ~/.cargo/bin/dist
+2026-10-17T03:01:22.1762864Z   if-no-files-found: warn
+2026-10-17T03:01:22.1763015Z   compression-level: 6
+2026-10-17T03:01:22.1763158Z   overwrite: false
+2026-10-17T03:01:22.1763304Z   include-hidden-files: false
+2026-10-17T03:01:22.1763462Z env:
+2026-10-17T03:01:22.1765140Z   GH_TOKEN: ***
+2026-10-17T03:01:22.1765399Z ##[endgroup]
+2026-10-17T03:01:22.2685827Z With the provided path, there will be 1 file uploaded
+2026-10-17T03:01:22.2686802Z Artifact name is valid!
+2026-10-17T03:01:22.2687105Z Root directory input is valid!
+2026-10-17T03:01:22.5599181Z Beginning upload of artifact content to blob storage
+2026-10-17T03:01:23.4838234Z Uploaded bytes 8388608
+2026-10-17T03:01:23.5555713Z Uploaded bytes 9612738
+2026-10-17T03:01:23.5956646Z Finished uploading artifact content to blob storage!
+2026-10-17T03:01:23.5957196Z SHA256 digest of uploaded artifact zip is f3005139e4448923b8e4f98c2e82f912d5f715e96f7deb753eee2914e0c4b6d2
+2026-10-17T03:01:23.5972964Z Finalizing artifact upload
+2026-10-17T03:01:23.9519160Z Artifact cargo-dist-cache.zip successfully finalized. Artifact ID 12087446825
+2026-10-17T03:01:23.9519809Z Artifact cargo-dist-cache has been successfully uploaded! Final size is 9612738 bytes. Artifact ID is 12087446825
+2026-10-17T03:01:23.9520463Z Artifact download URL: https://github.com/bitrouter/bitrouter/actions/runs/38997164653/artifacts/12087446825
+2026-10-17T03:01:23.9587938Z ##[group]Run dist plan --output-format=json > plan-dist-manifest.json
+2026-10-17T03:01:23.9588231Z [36;1mdist plan --output-format=json > plan-dist-manifest.json[0m
+2026-10-17T03:01:23.9588426Z [36;1mecho "dist ran successfully"[0m
+2026-10-17T03:01:23.9588609Z [36;1mcat plan-dist-manifest.json[0m
+2026-10-17T03:01:23.9589019Z [36;1mecho "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"[0m
+2026-10-17T03:01:23.9619603Z shell: /usr/bin/bash -e {0}
+2026-10-17T03:01:23.9619741Z env:
+2026-10-17T03:01:23.9621354Z   GH_TOKEN: ***
+2026-10-17T03:01:23.9621471Z ##[endgroup]
+2026-10-17T03:01:32.2723367Z  WARN The Homebrew publish job is enabled but no homepage was specified
+2026-10-17T03:01:32.2723840Z   consider adding `homepage = ` to package in Cargo.toml
+2026-10-17T03:01:32.5294032Z  WARN The Homebrew publish job is enabled but no homepage was specified
+2026-10-17T03:01:32.5294330Z   consider adding `homepage = ` to package in Cargo.toml
+2026-10-17T03:01:32.5304773Z dist ran successfully
+2026-10-17T03:01:32.5310079Z {
+2026-10-17T03:01:32.5310236Z   "dist_version": "0.31.0",
+2026-10-17T03:01:32.5310450Z   "announcement_tag": "v1.0.0-alpha.33",
+2026-10-17T03:01:32.5310687Z   "announcement_tag_is_implicit": true,
+2026-10-17T03:01:32.5310911Z   "announcement_is_prerelease": true,
+2026-10-17T03:01:32.5311132Z   "announcement_title": "1.0.0-alpha.33",
+2026-10-17T03:01:32.5313371Z   "announcement_changelog": "### ⛰️ Features\n\n- *(code)* Make slash launcher the primary control ([#935](https://github.com/bitrouter/bitrouter/pull/935)) - ([343d8f9](https://github.com/bitrouter/bitrouter/commit/343d8f984838d0eee3699910ad9a4a5cc4012f1b))\n- *(extensions)* [**breaking**] Add native request-check host ([#923](https://github.com/bitrouter/bitrouter/pull/923)) - ([750d618](https://github.com/bitrouter/bitrouter/commit/750d618ad4235adefaaa33e4d864ef61169440fd))\n\n### ⚙️ Miscellaneous Tasks\n\n- Sync registry catalog ([#937](https://github.com/bitrouter/bitrouter/pull/937)) - ([27574c5](https://github.com/bitrouter/bitrouter/commit/27574c5fea312035cacea5ad2db6a5081bc007ec))",
+2026-10-17T03:01:32.5321545Z   "announcement_github_body": "## Release Notes\n\n### ⛰️ Features\n\n- *(code)* Make slash launcher the primary control ([#935](https://github.com/bitrouter/bitrouter/pull/935)) - ([343d8f9](https://github.com/bitrouter/bitrouter/commit/343d8f984838d0eee3699910ad9a4a5cc4012f1b))\n- *(extensions)* [**breaking**] Add native request-check host ([#923](https://github.com/bitrouter/bitrouter/pull/923)) - ([750d618](https://github.com/bitrouter/bitrouter/commit/750d618ad4235adefaaa33e4d864ef61169440fd))\n\n### ⚙️ Miscellaneous Tasks\n\n- Sync registry catalog ([#937](https://github.com/bitrouter/bitrouter/pull/937)) - ([27574c5](https://github.com/bitrouter/bitrouter/commit/27574c5fea312035cacea5ad2db6a5081bc007ec))\n\n## Install bitrouter 1.0.0-alpha.33\n\n### Install prebuilt binaries via shell script\n\n```sh\ncurl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.sh | sh\n```\n\n### Install prebuilt binaries via powershell script\n\n```sh\npowershell -ExecutionPolicy Bypass -c \"irm https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.ps1 | iex\"\n```\n\n### Install prebuilt binaries via Homebrew\n\n```sh\nbrew install bitrouter/tap/bitrouter\n```\n\n### Install prebuilt binaries into your npm project\n\n```sh\nnpm install bitrouter@1.0.0-alpha.33\n```\n\n## Download bitrouter 1.0.0-alpha.33\n\n|  File  | Platform | Checksum |\n|--------|----------|----------|\n| [bitrouter-aarch64-apple-darwin.tar.xz](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-aarch64-apple-darwin.tar.xz) | Apple Silicon macOS | [checksum](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-aarch64-apple-darwin.tar.xz.sha256) |\n| [bitrouter-x86_64-apple-darwin.tar.xz](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-x86_64-apple-darwin.tar.xz) | Intel macOS | [checksum](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-x86_64-apple-darwin.tar.xz.sha256) |\n| [bitrouter-x86_64-pc-windows-msvc.zip](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-x86_64-pc-windows-msvc.zip) | x64 Windows | [checksum](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-x86_64-pc-windows-msvc.zip.sha256) |\n| [bitrouter-aarch64-unknown-linux-gnu.tar.xz](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-aarch64-unknown-linux-gnu.tar.xz) | ARM64 Linux | [checksum](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-aarch64-unknown-linux-gnu.tar.xz.sha256) |\n| [bitrouter-x86_64-unknown-linux-gnu.tar.xz](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-x86_64-unknown-linux-gnu.tar.xz) | x64 Linux | [checksum](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-x86_64-unknown-linux-gnu.tar.xz.sha256) |\n| [bitrouter-x86_64-unknown-linux-musl.tar.xz](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-x86_64-unknown-linux-musl.tar.xz) | x64 MUSL Linux | [checksum](https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-x86_64-unknown-linux-musl.tar.xz.sha256) |\n\n",
+2026-10-17T03:01:32.5516155Z   "releases": [
+2026-10-17T03:01:32.5516264Z     {
+2026-10-17T03:01:32.5516373Z       "app_name": "bitrouter",
+2026-10-17T03:01:32.5516512Z       "app_version": "1.0.0-alpha.33",
+2026-10-17T03:01:32.5516650Z       "env": {
+2026-10-17T03:01:32.5516780Z         "install_dir_env_var": "BITROUTER_INSTALL_DIR",
+2026-10-17T03:01:32.5516975Z         "unmanaged_dir_env_var": "BITROUTER_UNMANAGED_INSTALL",
+2026-10-17T03:01:32.5517179Z         "disable_update_env_var": "BITROUTER_DISABLE_UPDATE",
+2026-10-17T03:01:32.5517383Z         "no_modify_path_env_var": "BITROUTER_NO_MODIFY_PATH",
+2026-10-17T03:01:32.5517568Z         "print_quiet_env_var": "BITROUTER_PRINT_QUIET",
+2026-10-17T03:01:32.5517748Z         "print_verbose_env_var": "BITROUTER_PRINT_VERBOSE",
+2026-10-17T03:01:32.5517933Z         "download_url_env_var": "BITROUTER_DOWNLOAD_URL",
+2026-10-17T03:01:32.5518138Z         "github_base_url_env_var": "BITROUTER_INSTALLER_GITHUB_BASE_URL",
+2026-10-17T03:01:32.5518359Z         "ghe_base_url_env_var": "BITROUTER_INSTALLER_GHE_BASE_URL",
+2026-10-17T03:01:32.5518558Z         "github_token_env_var": "BITROUTER_GITHUB_TOKEN"
+2026-10-17T03:01:32.5518837Z       },
+2026-10-17T03:01:32.5518950Z       "display_name": "bitrouter",
+2026-10-17T03:01:32.5519092Z       "display": true,
+2026-10-17T03:01:32.5519208Z       "artifacts": [
+2026-10-17T03:01:32.5519324Z         "source.tar.gz",
+2026-10-17T03:01:32.5519450Z         "source.tar.gz.sha256",
+2026-10-17T03:01:32.5519588Z         "bitrouter-installer.sh",
+2026-10-17T03:01:32.5519776Z         "bitrouter-installer.ps1",
+2026-10-17T03:01:32.5519912Z         "bitrouter.rb",
+2026-10-17T03:01:32.5520042Z         "bitrouter-npm-package.tar.gz",
+2026-10-17T03:01:32.5520190Z         "sha256.sum",
+2026-10-17T03:01:32.5520326Z         "bitrouter-aarch64-apple-darwin.tar.xz",
+2026-10-17T03:01:32.5520516Z         "bitrouter-aarch64-apple-darwin.tar.xz.sha256",
+2026-10-17T03:01:32.5520712Z         "bitrouter-aarch64-unknown-linux-gnu.tar.xz",
+2026-10-17T03:01:32.5520919Z         "bitrouter-aarch64-unknown-linux-gnu.tar.xz.sha256",
+2026-10-17T03:01:32.5521111Z         "bitrouter-x86_64-apple-darwin.tar.xz",
+2026-10-17T03:01:32.5521286Z         "bitrouter-x86_64-apple-darwin.tar.xz.sha256",
+2026-10-17T03:01:32.5521459Z         "bitrouter-x86_64-pc-windows-msvc.zip",
+2026-10-17T03:01:32.5521636Z         "bitrouter-x86_64-pc-windows-msvc.zip.sha256",
+2026-10-17T03:01:32.5521813Z         "bitrouter-x86_64-unknown-linux-gnu.tar.xz",
+2026-10-17T03:01:32.5521997Z         "bitrouter-x86_64-unknown-linux-gnu.tar.xz.sha256",
+2026-10-17T03:01:32.5522247Z         "bitrouter-x86_64-unknown-linux-musl.tar.xz",
+2026-10-17T03:01:32.5522433Z         "bitrouter-x86_64-unknown-linux-musl.tar.xz.sha256"
+2026-10-17T03:01:32.5522593Z       ],
+2026-10-17T03:01:32.5522694Z       "hosting": {
+2026-10-17T03:01:32.5522799Z         "github": {
+2026-10-17T03:01:32.5522928Z           "artifact_base_url": "https://github.com",
+2026-10-17T03:01:32.5523164Z           "artifact_download_path": "/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33",
+2026-10-17T03:01:32.5523384Z           "owner": "bitrouter",
+2026-10-17T03:01:32.5523515Z           "repo": "bitrouter"
+2026-10-17T03:01:32.5523635Z         }
+2026-10-17T03:01:32.5523736Z       }
+2026-10-17T03:01:32.5523829Z     }
+2026-10-17T03:01:32.5523922Z   ],
+2026-10-17T03:01:32.5524019Z   "artifacts": {
+2026-10-17T03:01:32.5524157Z     "bitrouter-aarch64-apple-darwin.tar.xz": {
+2026-10-17T03:01:32.5524343Z       "name": "bitrouter-aarch64-apple-darwin.tar.xz",
+2026-10-17T03:01:32.5524512Z       "kind": "executable-zip",
+2026-10-17T03:01:32.5524645Z       "target_triples": [
+2026-10-17T03:01:32.5524788Z         "aarch64-apple-darwin"
+2026-10-17T03:01:32.5525013Z       ],
+2026-10-17T03:01:32.5525114Z       "assets": [
+2026-10-17T03:01:32.5525219Z         {
+2026-10-17T03:01:32.5525326Z           "name": "CHANGELOG.md",
+2026-10-17T03:01:32.5525462Z           "path": "CHANGELOG.md",
+2026-10-17T03:01:32.5525592Z           "kind": "changelog"
+2026-10-17T03:01:32.5525711Z         },
+2026-10-17T03:01:32.5525811Z         {
+2026-10-17T03:01:32.5525912Z           "name": "LICENSE",
+2026-10-17T03:01:32.5526038Z           "path": "LICENSE",
+2026-10-17T03:01:32.5526163Z           "kind": "license"
+2026-10-17T03:01:32.5526278Z         },
+2026-10-17T03:01:32.5526376Z         {
+2026-10-17T03:01:32.5526476Z           "name": "README.md",
+2026-10-17T03:01:32.5526614Z           "path": "README.md",
+2026-10-17T03:01:32.5526739Z           "kind": "readme"
+2026-10-17T03:01:32.5526856Z         },
+2026-10-17T03:01:32.5526952Z         {
+2026-10-17T03:01:32.5527084Z           "id": "bitrouter-aarch64-apple-darwin-exe-bro",
+2026-10-17T03:01:32.5527249Z           "name": "bro",
+2026-10-17T03:01:32.5527367Z           "path": "bro",
+2026-10-17T03:01:32.5527488Z           "kind": "executable"
+2026-10-17T03:01:32.5527607Z         }
+2026-10-17T03:01:32.5527699Z       ],
+2026-10-17T03:01:32.5527842Z       "checksum": "bitrouter-aarch64-apple-darwin.tar.xz.sha256"
+2026-10-17T03:01:32.5528022Z     },
+2026-10-17T03:01:32.5528157Z     "bitrouter-aarch64-apple-darwin.tar.xz.sha256": {
+2026-10-17T03:01:32.5528363Z       "name": "bitrouter-aarch64-apple-darwin.tar.xz.sha256",
+2026-10-17T03:01:32.5528538Z       "kind": "checksum",
+2026-10-17T03:01:32.5528778Z       "target_triples": [
+2026-10-17T03:01:32.5528911Z         "aarch64-apple-darwin"
+2026-10-17T03:01:32.5529034Z       ]
+2026-10-17T03:01:32.5529129Z     },
+2026-10-17T03:01:32.5529260Z     "bitrouter-aarch64-unknown-linux-gnu.tar.xz": {
+2026-10-17T03:01:32.5529467Z       "name": "bitrouter-aarch64-unknown-linux-gnu.tar.xz",
+2026-10-17T03:01:32.5529687Z       "kind": "executable-zip",
+2026-10-17T03:01:32.5529816Z       "target_triples": [
+2026-10-17T03:01:32.5529946Z         "aarch64-unknown-linux-gnu"
+2026-10-17T03:01:32.5530105Z       ],
+2026-10-17T03:01:32.5530206Z       "assets": [
+2026-10-17T03:01:32.5530309Z         {
+2026-10-17T03:01:32.5530411Z           "name": "CHANGELOG.md",
+2026-10-17T03:01:32.5530549Z           "path": "CHANGELOG.md",
+2026-10-17T03:01:32.5530679Z           "kind": "changelog"
+2026-10-17T03:01:32.5530796Z         },
+2026-10-17T03:01:32.5530892Z         {
+2026-10-17T03:01:32.5530995Z           "name": "LICENSE",
+2026-10-17T03:01:32.5531120Z           "path": "LICENSE",
+2026-10-17T03:01:32.5531243Z           "kind": "license"
+2026-10-17T03:01:32.5531360Z         },
+2026-10-17T03:01:32.5531453Z         {
+2026-10-17T03:01:32.5531557Z           "name": "README.md",
+2026-10-17T03:01:32.5531682Z           "path": "README.md",
+2026-10-17T03:01:32.5531806Z           "kind": "readme"
+2026-10-17T03:01:32.5531922Z         },
+2026-10-17T03:01:32.5532055Z         {
+2026-10-17T03:01:32.5532197Z           "id": "bitrouter-aarch64-unknown-linux-gnu-exe-bro",
+2026-10-17T03:01:32.5532373Z           "name": "bro",
+2026-10-17T03:01:32.5532491Z           "path": "bro",
+2026-10-17T03:01:32.5532615Z           "kind": "executable"
+2026-10-17T03:01:32.5532735Z         }
+2026-10-17T03:01:32.5532830Z       ],
+2026-10-17T03:01:32.5532986Z       "checksum": "bitrouter-aarch64-unknown-linux-gnu.tar.xz.sha256"
+2026-10-17T03:01:32.5533174Z     },
+2026-10-17T03:01:32.5533322Z     "bitrouter-aarch64-unknown-linux-gnu.tar.xz.sha256": {
+2026-10-17T03:01:32.5533549Z       "name": "bitrouter-aarch64-unknown-linux-gnu.tar.xz.sha256",
+2026-10-17T03:01:32.5533736Z       "kind": "checksum",
+2026-10-17T03:01:32.5533856Z       "target_triples": [
+2026-10-17T03:01:32.5533989Z         "aarch64-unknown-linux-gnu"
+2026-10-17T03:01:32.5534121Z       ]
+2026-10-17T03:01:32.5534215Z     },
+2026-10-17T03:01:32.5534328Z     "bitrouter-installer.ps1": {
+2026-10-17T03:01:32.5534479Z       "name": "bitrouter-installer.ps1",
+2026-10-17T03:01:32.5534625Z       "kind": "installer",
+2026-10-17T03:01:32.5534746Z       "target_triples": [
+2026-10-17T03:01:32.5534875Z         "aarch64-pc-windows-msvc",
+2026-10-17T03:01:32.5535014Z         "x86_64-pc-windows-gnu",
+2026-10-17T03:01:32.5535149Z         "x86_64-pc-windows-msvc"
+2026-10-17T03:01:32.5535271Z       ],
+2026-10-17T03:01:32.5535607Z       "install_hint": "powershell -ExecutionPolicy Bypass -c \"irm https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.ps1 | iex\"",
+2026-10-17T03:01:32.5536016Z       "description": "Install prebuilt binaries via powershell script"
+2026-10-17T03:01:32.5536198Z     },
+2026-10-17T03:01:32.5536304Z     "bitrouter-installer.sh": {
+2026-10-17T03:01:32.5536448Z       "name": "bitrouter-installer.sh",
+2026-10-17T03:01:32.5536592Z       "kind": "installer",
+2026-10-17T03:01:32.5536717Z       "target_triples": [
+2026-10-17T03:01:32.5536847Z         "aarch64-apple-darwin",
+2026-10-17T03:01:32.5536984Z         "aarch64-unknown-linux-gnu",
+2026-10-17T03:01:32.5537124Z         "x86_64-apple-darwin",
+2026-10-17T03:01:32.5537255Z         "x86_64-pc-windows-gnu",
+2026-10-17T03:01:32.5537388Z         "x86_64-unknown-linux-gnu",
+2026-10-17T03:01:32.5537534Z         "x86_64-unknown-linux-musl-dynamic",
+2026-10-17T03:01:32.5537693Z         "x86_64-unknown-linux-musl-static"
+2026-10-17T03:01:32.5537833Z       ],
+2026-10-17T03:01:32.5538141Z       "install_hint": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.sh | sh",
+2026-10-17T03:01:32.5538518Z       "description": "Install prebuilt binaries via shell script"
+2026-10-17T03:01:32.5538795Z     },
+2026-10-17T03:01:32.5538911Z     "bitrouter-npm-package.tar.gz": {
+2026-10-17T03:01:32.5539074Z       "name": "bitrouter-npm-package.tar.gz",
+2026-10-17T03:01:32.5539227Z       "kind": "installer",
+2026-10-17T03:01:32.5539390Z       "target_triples": [
+2026-10-17T03:01:32.5539518Z         "aarch64-apple-darwin",
+2026-10-17T03:01:32.5539658Z         "aarch64-pc-windows-msvc",
+2026-10-17T03:01:32.5539798Z         "aarch64-unknown-linux-gnu",
+2026-10-17T03:01:32.5539938Z         "x86_64-apple-darwin",
+2026-10-17T03:01:32.5540066Z         "x86_64-pc-windows-gnu",
+2026-10-17T03:01:32.5540200Z         "x86_64-pc-windows-msvc",
+2026-10-17T03:01:32.5540335Z         "x86_64-unknown-linux-gnu",
+2026-10-17T03:01:32.5540481Z         "x86_64-unknown-linux-musl-dynamic",
+2026-10-17T03:01:32.5540638Z         "x86_64-unknown-linux-musl-static"
+2026-10-17T03:01:32.5540776Z       ],
+2026-10-17T03:01:32.5540872Z       "assets": [
+2026-10-17T03:01:32.5540975Z         {
+2026-10-17T03:01:32.5541077Z           "name": ".gitignore",
+2026-10-17T03:01:32.5541206Z           "path": ".gitignore",
+2026-10-17T03:01:32.5541335Z           "kind": "unknown"
+2026-10-17T03:01:32.5541451Z         },
+2026-10-17T03:01:32.5541546Z         {
+2026-10-17T03:01:32.5541695Z           "name": "CHANGELOG.md",
+2026-10-17T03:01:32.5541831Z           "path": "CHANGELOG.md",
+2026-10-17T03:01:32.5541961Z           "kind": "changelog"
+2026-10-17T03:01:32.5542081Z         },
+2026-10-17T03:01:32.5542176Z         {
+2026-10-17T03:01:32.5542280Z           "name": "LICENSE",
+2026-10-17T03:01:32.5542404Z           "path": "LICENSE",
+2026-10-17T03:01:32.5542528Z           "kind": "license"
+2026-10-17T03:01:32.5542642Z         },
+2026-10-17T03:01:32.5542748Z         {
+2026-10-17T03:01:32.5542850Z           "name": "README.md",
+2026-10-17T03:01:32.5542976Z           "path": "README.md",
+2026-10-17T03:01:32.5543104Z           "kind": "readme"
+2026-10-17T03:01:32.5543216Z         },
+2026-10-17T03:01:32.5543310Z         {
+2026-10-17T03:01:32.5543416Z           "name": "binary-install.js",
+2026-10-17T03:01:32.5543562Z           "path": "binary-install.js",
+2026-10-17T03:01:32.5543696Z           "kind": "unknown"
+2026-10-17T03:01:32.5543812Z         },
+2026-10-17T03:01:32.5543907Z         {
+2026-10-17T03:01:32.5544008Z           "name": "binary.js",
+2026-10-17T03:01:32.5544137Z           "path": "binary.js",
+2026-10-17T03:01:32.5544260Z           "kind": "unknown"
+2026-10-17T03:01:32.5544375Z         },
+2026-10-17T03:01:32.5544468Z         {
+2026-10-17T03:01:32.5544573Z           "name": "install.js",
+2026-10-17T03:01:32.5544700Z           "path": "install.js",
+2026-10-17T03:01:32.5544824Z           "kind": "unknown"
+2026-10-17T03:01:32.5544943Z         },
+2026-10-17T03:01:32.5545035Z         {
+2026-10-17T03:01:32.5545145Z           "name": "npm-shrinkwrap.json",
+2026-10-17T03:01:32.5545292Z           "path": "npm-shrinkwrap.json",
+2026-10-17T03:01:32.5545430Z           "kind": "unknown"
+2026-10-17T03:01:32.5545544Z         },
+2026-10-17T03:01:32.5545641Z         {
+2026-10-17T03:01:32.5545742Z           "name": "package.json",
+2026-10-17T03:01:32.5545875Z           "path": "package.json",
+2026-10-17T03:01:32.5546004Z           "kind": "unknown"
+2026-10-17T03:01:32.5546125Z         },
+2026-10-17T03:01:32.5546220Z         {
+2026-10-17T03:01:32.5546320Z           "name": "run.js",
+2026-10-17T03:01:32.5546440Z           "path": "run.js",
+2026-10-17T03:01:32.5546559Z           "kind": "unknown"
+2026-10-17T03:01:32.5546676Z         }
+2026-10-17T03:01:32.5546769Z       ],
+2026-10-17T03:01:32.5546901Z       "install_hint": "npm install bitrouter@1.0.0-alpha.33",
+2026-10-17T03:01:32.5547113Z       "description": "Install prebuilt binaries into your npm project"
+2026-10-17T03:01:32.5547292Z     },
+2026-10-17T03:01:32.5547409Z     "bitrouter-x86_64-apple-darwin.tar.xz": {
+2026-10-17T03:01:32.5547583Z       "name": "bitrouter-x86_64-apple-darwin.tar.xz",
+2026-10-17T03:01:32.5547745Z       "kind": "executable-zip",
+2026-10-17T03:01:32.5547878Z       "target_triples": [
+2026-10-17T03:01:32.5548002Z         "x86_64-apple-darwin"
+2026-10-17T03:01:32.5548123Z       ],
+2026-10-17T03:01:32.5548219Z       "assets": [
+2026-10-17T03:01:32.5548320Z         {
+2026-10-17T03:01:32.5548424Z           "name": "CHANGELOG.md",
+2026-10-17T03:01:32.5548589Z           "path": "CHANGELOG.md",
+2026-10-17T03:01:32.5548830Z           "kind": "changelog"
+2026-10-17T03:01:32.5548950Z         },
+2026-10-17T03:01:32.5549047Z         {
+2026-10-17T03:01:32.5549148Z           "name": "LICENSE",
+2026-10-17T03:01:32.5549274Z           "path": "LICENSE",
+2026-10-17T03:01:32.5549396Z           "kind": "license"
+2026-10-17T03:01:32.5549511Z         },
+2026-10-17T03:01:32.5549607Z         {
+2026-10-17T03:01:32.5549705Z           "name": "README.md",
+2026-10-17T03:01:32.5549830Z           "path": "README.md",
+2026-10-17T03:01:32.5549955Z           "kind": "readme"
+2026-10-17T03:01:32.5550072Z         },
+2026-10-17T03:01:32.5550165Z         {
+2026-10-17T03:01:32.5550287Z           "id": "bitrouter-x86_64-apple-darwin-exe-bro",
+2026-10-17T03:01:32.5550444Z           "name": "bro",
+2026-10-17T03:01:32.5550563Z           "path": "bro",
+2026-10-17T03:01:32.5550681Z           "kind": "executable"
+2026-10-17T03:01:32.5550798Z         }
+2026-10-17T03:01:32.5550892Z       ],
+2026-10-17T03:01:32.5551066Z       "checksum": "bitrouter-x86_64-apple-darwin.tar.xz.sha256"
+2026-10-17T03:01:32.5564958Z     },
+2026-10-17T03:01:32.5565128Z     "bitrouter-x86_64-apple-darwin.tar.xz.sha256": {
+2026-10-17T03:01:32.5565335Z       "name": "bitrouter-x86_64-apple-darwin.tar.xz.sha256",
+2026-10-17T03:01:32.5565514Z       "kind": "checksum",
+2026-10-17T03:01:32.5565640Z       "target_triples": [
+2026-10-17T03:01:32.5565770Z         "x86_64-apple-darwin"
+2026-10-17T03:01:32.5565897Z       ]
+2026-10-17T03:01:32.5565991Z     },
+2026-10-17T03:01:32.5566109Z     "bitrouter-x86_64-pc-windows-msvc.zip": {
+2026-10-17T03:01:32.5566288Z       "name": "bitrouter-x86_64-pc-windows-msvc.zip",
+2026-10-17T03:01:32.5566451Z       "kind": "executable-zip",
+2026-10-17T03:01:32.5566583Z       "target_triples": [
+2026-10-17T03:01:32.5566711Z         "x86_64-pc-windows-msvc"
+2026-10-17T03:01:32.5566838Z       ],
+2026-10-17T03:01:32.5566935Z       "assets": [
+2026-10-17T03:01:32.5567043Z         {
+2026-10-17T03:01:32.5567149Z           "name": "CHANGELOG.md",
+2026-10-17T03:01:32.5567283Z           "path": "CHANGELOG.md",
+2026-10-17T03:01:32.5567418Z           "kind": "changelog"
+2026-10-17T03:01:32.5567536Z         },
+2026-10-17T03:01:32.5567631Z         {
+2026-10-17T03:01:32.5567732Z           "name": "LICENSE",
+2026-10-17T03:01:32.5567859Z           "path": "LICENSE",
+2026-10-17T03:01:32.5567983Z           "kind": "license"
+2026-10-17T03:01:32.5568099Z         },
+2026-10-17T03:01:32.5568194Z         {
+2026-10-17T03:01:32.5568295Z           "name": "README.md",
+2026-10-17T03:01:32.5568427Z           "path": "README.md",
+2026-10-17T03:01:32.5568554Z           "kind": "readme"
+2026-10-17T03:01:32.5568795Z         },
+2026-10-17T03:01:32.5568902Z         {
+2026-10-17T03:01:32.5569033Z           "id": "bitrouter-x86_64-pc-windows-msvc-exe-bro",
+2026-10-17T03:01:32.5569197Z           "name": "bro",
+2026-10-17T03:01:32.5569317Z           "path": "bro.exe",
+2026-10-17T03:01:32.5569441Z           "kind": "executable"
+2026-10-17T03:01:32.5569565Z         }
+2026-10-17T03:01:32.5569661Z       ],
+2026-10-17T03:01:32.5569799Z       "checksum": "bitrouter-x86_64-pc-windows-msvc.zip.sha256"
+2026-10-17T03:01:32.5569969Z     },
+2026-10-17T03:01:32.5570095Z     "bitrouter-x86_64-pc-windows-msvc.zip.sha256": {
+2026-10-17T03:01:32.5570290Z       "name": "bitrouter-x86_64-pc-windows-msvc.zip.sha256",
+2026-10-17T03:01:32.5570455Z       "kind": "checksum",
+2026-10-17T03:01:32.5570577Z       "target_triples": [
+2026-10-17T03:01:32.5570702Z         "x86_64-pc-windows-msvc"
+2026-10-17T03:01:32.5570829Z       ]
+2026-10-17T03:01:32.5570921Z     },
+2026-10-17T03:01:32.5571041Z     "bitrouter-x86_64-unknown-linux-gnu.tar.xz": {
+2026-10-17T03:01:32.5571226Z       "name": "bitrouter-x86_64-unknown-linux-gnu.tar.xz",
+2026-10-17T03:01:32.5571397Z       "kind": "executable-zip",
+2026-10-17T03:01:32.5571525Z       "target_triples": [
+2026-10-17T03:01:32.5571650Z         "x86_64-unknown-linux-gnu"
+2026-10-17T03:01:32.5571852Z       ],
+2026-10-17T03:01:32.5571950Z       "assets": [
+2026-10-17T03:01:32.5572058Z         {
+2026-10-17T03:01:32.5572160Z           "name": "CHANGELOG.md",
+2026-10-17T03:01:32.5572294Z           "path": "CHANGELOG.md",
+2026-10-17T03:01:32.5572424Z           "kind": "changelog"
+2026-10-17T03:01:32.5572544Z         },
+2026-10-17T03:01:32.5572637Z         {
+2026-10-17T03:01:32.5572736Z           "name": "LICENSE",
+2026-10-17T03:01:32.5572860Z           "path": "LICENSE",
+2026-10-17T03:01:32.5572983Z           "kind": "license"
+2026-10-17T03:01:32.5573098Z         },
+2026-10-17T03:01:32.5573192Z         {
+2026-10-17T03:01:32.5573291Z           "name": "README.md",
+2026-10-17T03:01:32.5573418Z           "path": "README.md",
+2026-10-17T03:01:32.5573545Z           "kind": "readme"
+2026-10-17T03:01:32.5573658Z         },
+2026-10-17T03:01:32.5573753Z         {
+2026-10-17T03:01:32.5573881Z           "id": "bitrouter-x86_64-unknown-linux-gnu-exe-bro",
+2026-10-17T03:01:32.5574051Z           "name": "bro",
+2026-10-17T03:01:32.5574170Z           "path": "bro",
+2026-10-17T03:01:32.5574320Z           "kind": "executable"
+2026-10-17T03:01:32.5574442Z         }
+2026-10-17T03:01:32.5574534Z       ],
+2026-10-17T03:01:32.5574683Z       "checksum": "bitrouter-x86_64-unknown-linux-gnu.tar.xz.sha256"
+2026-10-17T03:01:32.5574859Z     },
+2026-10-17T03:01:32.5574991Z     "bitrouter-x86_64-unknown-linux-gnu.tar.xz.sha256": {
+2026-10-17T03:01:32.5575196Z       "name": "bitrouter-x86_64-unknown-linux-gnu.tar.xz.sha256",
+2026-10-17T03:01:32.5575373Z       "kind": "checksum",
+2026-10-17T03:01:32.5575492Z       "target_triples": [
+2026-10-17T03:01:32.5575616Z         "x86_64-unknown-linux-gnu"
+2026-10-17T03:01:32.5575743Z       ]
+2026-10-17T03:01:32.5575838Z     },
+2026-10-17T03:01:32.5575960Z     "bitrouter-x86_64-unknown-linux-musl.tar.xz": {
+2026-10-17T03:01:32.5576152Z       "name": "bitrouter-x86_64-unknown-linux-musl.tar.xz",
+2026-10-17T03:01:32.5576321Z       "kind": "executable-zip",
+2026-10-17T03:01:32.5576450Z       "target_triples": [
+2026-10-17T03:01:32.5576581Z         "x86_64-unknown-linux-musl"
+2026-10-17T03:01:32.5576711Z       ],
+2026-10-17T03:01:32.5576806Z       "assets": [
+2026-10-17T03:01:32.5576909Z         {
+2026-10-17T03:01:32.5577013Z           "name": "CHANGELOG.md",
+2026-10-17T03:01:32.5577144Z           "path": "CHANGELOG.md",
+2026-10-17T03:01:32.5577276Z           "kind": "changelog"
+2026-10-17T03:01:32.5577394Z         },
+2026-10-17T03:01:32.5577493Z         {
+2026-10-17T03:01:32.5577591Z           "name": "LICENSE",
+2026-10-17T03:01:32.5577716Z           "path": "LICENSE",
+2026-10-17T03:01:32.5577838Z           "kind": "license"
+2026-10-17T03:01:32.5577953Z         },
+2026-10-17T03:01:32.5578050Z         {
+2026-10-17T03:01:32.5578150Z           "name": "README.md",
+2026-10-17T03:01:32.5578276Z           "path": "README.md",
+2026-10-17T03:01:32.5578400Z           "kind": "readme"
+2026-10-17T03:01:32.5578516Z         },
+2026-10-17T03:01:32.5578609Z         {
+2026-10-17T03:01:32.5578866Z           "id": "bitrouter-x86_64-unknown-linux-musl-exe-bro",
+2026-10-17T03:01:32.5579035Z           "name": "bro",
+2026-10-17T03:01:32.5579154Z           "path": "bro",
+2026-10-17T03:01:32.5579275Z           "kind": "executable"
+2026-10-17T03:01:32.5579392Z         }
+2026-10-17T03:01:32.5579484Z       ],
+2026-10-17T03:01:32.5579629Z       "checksum": "bitrouter-x86_64-unknown-linux-musl.tar.xz.sha256"
+2026-10-17T03:01:32.5579809Z     },
+2026-10-17T03:01:32.5579942Z     "bitrouter-x86_64-unknown-linux-musl.tar.xz.sha256": {
+2026-10-17T03:01:32.5580152Z       "name": "bitrouter-x86_64-unknown-linux-musl.tar.xz.sha256",
+2026-10-17T03:01:32.5580329Z       "kind": "checksum",
+2026-10-17T03:01:32.5580450Z       "target_triples": [
+2026-10-17T03:01:32.5580576Z         "x86_64-unknown-linux-musl"
+2026-10-17T03:01:32.5580703Z       ]
+2026-10-17T03:01:32.5580792Z     },
+2026-10-17T03:01:32.5580885Z     "bitrouter.rb": {
+2026-10-17T03:01:32.5581005Z       "name": "bitrouter.rb",
+2026-10-17T03:01:32.5581131Z       "kind": "installer",
+2026-10-17T03:01:32.5581288Z       "target_triples": [
+2026-10-17T03:01:32.5581415Z         "aarch64-apple-darwin",
+2026-10-17T03:01:32.5581558Z         "aarch64-unknown-linux-gnu",
+2026-10-17T03:01:32.5581699Z         "x86_64-apple-darwin",
+2026-10-17T03:01:32.5581827Z         "x86_64-pc-windows-gnu",
+2026-10-17T03:01:32.5581961Z         "x86_64-unknown-linux-gnu",
+2026-10-17T03:01:32.5582112Z         "x86_64-unknown-linux-musl-dynamic",
+2026-10-17T03:01:32.5582272Z         "x86_64-unknown-linux-musl-static"
+2026-10-17T03:01:32.5582409Z       ],
+2026-10-17T03:01:32.5582540Z       "install_hint": "brew install bitrouter/tap/bitrouter",
+2026-10-17T03:01:32.5582742Z       "description": "Install prebuilt binaries via Homebrew"
+2026-10-17T03:01:32.5582903Z     },
+2026-10-17T03:01:32.5583002Z     "sha256.sum": {
+2026-10-17T03:01:32.5583112Z       "name": "sha256.sum",
+2026-10-17T03:01:32.5583239Z       "kind": "unified-checksum"
+2026-10-17T03:01:32.5583365Z     },
+2026-10-17T03:01:32.5583461Z     "source.tar.gz": {
+2026-10-17T03:01:32.5583582Z       "name": "source.tar.gz",
+2026-10-17T03:01:32.5583743Z       "kind": "source-tarball",
+2026-10-17T03:01:32.5583882Z       "checksum": "source.tar.gz.sha256"
+2026-10-17T03:01:32.5584019Z     },
+2026-10-17T03:01:32.5584123Z     "source.tar.gz.sha256": {
+2026-10-17T03:01:32.5584260Z       "name": "source.tar.gz.sha256",
+2026-10-17T03:01:32.5584394Z       "kind": "checksum"
+2026-10-17T03:01:32.5584503Z     }
+2026-10-17T03:01:32.5584593Z   },
+2026-10-17T03:01:32.5584687Z   "systems": {
+2026-10-17T03:01:32.5584796Z     "plan:all:": {
+2026-10-17T03:01:32.5584905Z       "id": "plan:all:",
+2026-10-17T03:01:32.5585057Z       "cargo_version_line": "cargo 1.99.0 (5f94df478 2026-08-27)",
+2026-10-17T03:01:32.5585229Z       "build_environment": {
+2026-10-17T03:01:32.5585352Z         "linux": {
+2026-10-17T03:01:32.5585460Z           "glibc_version": {
+2026-10-17T03:01:32.5585579Z             "major": 2,
+2026-10-17T03:01:32.5585691Z             "series": 35
+2026-10-17T03:01:32.5585799Z           }
+2026-10-17T03:01:32.5585898Z         }
+2026-10-17T03:01:32.5585991Z       }
+2026-10-17T03:01:32.5586079Z     }
+2026-10-17T03:01:32.5586170Z   },
+2026-10-17T03:01:32.5586274Z   "publish_prereleases": true,
+2026-10-17T03:01:32.5586403Z   "force_latest": false,
+2026-10-17T03:01:32.5586514Z   "ci": {
+2026-10-17T03:01:32.5586608Z     "github": {
+2026-10-17T03:01:32.5586716Z       "artifacts_matrix": {
+2026-10-17T03:01:32.5586837Z         "include": [
+2026-10-17T03:01:32.5586941Z           {
+2026-10-17T03:01:32.5587044Z             "runner": "macos-14",
+2026-10-17T03:01:32.5587183Z             "host": "aarch64-apple-darwin",
+2026-10-17T03:01:32.5587329Z             "install_dist": {
+2026-10-17T03:01:32.5587452Z               "shell": "sh",
+2026-10-17T03:01:32.5587773Z               "run": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
+2026-10-17T03:01:32.5588089Z             },
+2026-10-17T03:01:32.5588248Z             "dist_args": "--artifacts=local --target=aarch64-apple-darwin",
+2026-10-17T03:01:32.5588435Z             "targets": [
+2026-10-17T03:01:32.5588558Z               "aarch64-apple-darwin"
+2026-10-17T03:01:32.5588739Z             ],
+2026-10-17T03:01:32.5588851Z             "cache_provider": "github"
+2026-10-17T03:01:32.5588981Z           },
+2026-10-17T03:01:32.5589076Z           {
+2026-10-17T03:01:32.5589183Z             "runner": "ubuntu-22.04-arm",
+2026-10-17T03:01:32.5589337Z             "host": "aarch64-unknown-linux-gnu",
+2026-10-17T03:01:32.5589500Z             "install_dist": {
+2026-10-17T03:01:32.5589625Z               "shell": "sh",
+2026-10-17T03:01:32.5589925Z               "run": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
+2026-10-17T03:01:32.5590233Z             },
+2026-10-17T03:01:32.5590388Z             "dist_args": "--artifacts=local --target=aarch64-unknown-linux-gnu",
+2026-10-17T03:01:32.5590577Z             "targets": [
+2026-10-17T03:01:32.5590764Z               "aarch64-unknown-linux-gnu"
+2026-10-17T03:01:32.5590898Z             ],
+2026-10-17T03:01:32.5591006Z             "cache_provider": "github"
+2026-10-17T03:01:32.5591139Z           },
+2026-10-17T03:01:32.5591234Z           {
+2026-10-17T03:01:32.5591337Z             "runner": "macos-15-intel",
+2026-10-17T03:01:32.5591484Z             "host": "x86_64-apple-darwin",
+2026-10-17T03:01:32.5591624Z             "install_dist": {
+2026-10-17T03:01:32.5591746Z               "shell": "sh",
+2026-10-17T03:01:32.5592042Z               "run": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
+2026-10-17T03:01:32.5592352Z             },
+2026-10-17T03:01:32.5592496Z             "dist_args": "--artifacts=local --target=x86_64-apple-darwin",
+2026-10-17T03:01:32.5592675Z             "targets": [
+2026-10-17T03:01:32.5592796Z               "x86_64-apple-darwin"
+2026-10-17T03:01:32.5592922Z             ],
+2026-10-17T03:01:32.5593031Z             "cache_provider": "github"
+2026-10-17T03:01:32.5593192Z           },
+2026-10-17T03:01:32.5593286Z           {
+2026-10-17T03:01:32.5593392Z             "runner": "windows-2022",
+2026-10-17T03:01:32.5593538Z             "host": "x86_64-pc-windows-msvc",
+2026-10-17T03:01:32.5593683Z             "install_dist": {
+2026-10-17T03:01:32.5593809Z               "shell": "pwsh",
+2026-10-17T03:01:32.5594065Z               "run": "irm https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.ps1 | iex"
+2026-10-17T03:01:32.5594325Z             },
+2026-10-17T03:01:32.5594474Z             "dist_args": "--artifacts=local --target=x86_64-pc-windows-msvc",
+2026-10-17T03:01:32.5594655Z             "targets": [
+2026-10-17T03:01:32.5594775Z               "x86_64-pc-windows-msvc"
+2026-10-17T03:01:32.5594904Z             ],
+2026-10-17T03:01:32.5595009Z             "cache_provider": "github"
+2026-10-17T03:01:32.5595136Z           },
+2026-10-17T03:01:32.5595229Z           {
+2026-10-17T03:01:32.5595338Z             "runner": "ubuntu-22.04",
+2026-10-17T03:01:32.5595483Z             "host": "x86_64-unknown-linux-gnu",
+2026-10-17T03:01:32.5595631Z             "install_dist": {
+2026-10-17T03:01:32.5595752Z               "shell": "sh",
+2026-10-17T03:01:32.5596049Z               "run": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
+2026-10-17T03:01:32.5596355Z             },
+2026-10-17T03:01:32.5596508Z             "dist_args": "--artifacts=local --target=x86_64-unknown-linux-gnu",
+2026-10-17T03:01:32.5596690Z             "targets": [
+2026-10-17T03:01:32.5596813Z               "x86_64-unknown-linux-gnu"
+2026-10-17T03:01:32.5596943Z             ],
+2026-10-17T03:01:32.5597047Z             "cache_provider": "github"
+2026-10-17T03:01:32.5597173Z           },
+2026-10-17T03:01:32.5597268Z           {
+2026-10-17T03:01:32.5597372Z             "runner": "ubuntu-22.04",
+2026-10-17T03:01:32.5597516Z             "host": "x86_64-unknown-linux-gnu",
+2026-10-17T03:01:32.5597663Z             "install_dist": {
+2026-10-17T03:01:32.5597784Z               "shell": "sh",
+2026-10-17T03:01:32.5598078Z               "run": "curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.31.0/cargo-dist-installer.sh | sh"
+2026-10-17T03:01:32.5598380Z             },
+2026-10-17T03:01:32.5598532Z             "dist_args": "--artifacts=local --target=x86_64-unknown-linux-musl",
+2026-10-17T03:01:32.5598861Z             "targets": [
+2026-10-17T03:01:32.5598985Z               "x86_64-unknown-linux-musl"
+2026-10-17T03:01:32.5599115Z             ],
+2026-10-17T03:01:32.5599284Z             "packages_install": "sudo apt-get update\nsudo apt-get install musl-tools",
+2026-10-17T03:01:32.5599493Z             "cache_provider": "github"
+2026-10-17T03:01:32.5599622Z           }
+2026-10-17T03:01:32.5599713Z         ]
+2026-10-17T03:01:32.5599803Z       },
+2026-10-17T03:01:32.5599902Z       "pr_run_mode": "plan"
+2026-10-17T03:01:32.5600062Z     }
+2026-10-17T03:01:32.5600152Z   },
+2026-10-17T03:01:32.5600245Z   "linkage": [],
+2026-10-17T03:01:32.5600351Z   "upload_files": []
+2026-10-17T03:01:32.5600461Z }
+2026-10-17T03:01:32.5914694Z ##[group]Run actions/upload-artifact@v6
+2026-10-17T03:01:32.5914924Z with:
+2026-10-17T03:01:32.5915117Z   name: artifacts-plan-dist-manifest
+2026-10-17T03:01:32.5915361Z   path: plan-dist-manifest.json
+2026-10-17T03:01:32.5915573Z   if-no-files-found: warn
+2026-10-17T03:01:32.5915771Z   compression-level: 6
+2026-10-17T03:01:32.5915957Z   overwrite: false
+2026-10-17T03:01:32.5916141Z   include-hidden-files: false
+2026-10-17T03:01:32.5916339Z env:
+2026-10-17T03:01:32.5918878Z   GH_TOKEN: ***
+2026-10-17T03:01:32.5919048Z ##[endgroup]
+2026-10-17T03:01:32.6771113Z With the provided path, there will be 1 file uploaded
+2026-10-17T03:01:32.6784938Z Artifact name is valid!
+2026-10-17T03:01:32.6785194Z Root directory input is valid!
+2026-10-17T03:01:32.9449755Z Beginning upload of artifact content to blob storage
+2026-10-17T03:01:33.1395551Z Uploaded bytes 2812
+2026-10-17T03:01:33.1860475Z Finished uploading artifact content to blob storage!
+2026-10-17T03:01:33.1861116Z SHA256 digest of uploaded artifact zip is 8972bd286174a26fad107bb417482de7d635eb767a0b9f478298a575a3cd6cd6
+2026-10-17T03:01:33.1862345Z Finalizing artifact upload
+2026-10-17T03:01:33.4876661Z Artifact artifacts-plan-dist-manifest.zip successfully finalized. Artifact ID 12087152408
+2026-10-17T03:01:33.4877306Z Artifact artifacts-plan-dist-manifest has been successfully uploaded! Final size is 2812 bytes. Artifact ID is 12087152408
+2026-10-17T03:01:33.4879652Z Artifact download URL: https://github.com/bitrouter/bitrouter/actions/runs/38997164653/artifacts/12087152408
+2026-10-17T03:01:33.4987642Z Post job cleanup.
+2026-10-17T03:01:33.5445817Z [command]/usr/bin/git version
+2026-10-17T03:01:33.5468993Z git version 2.55.0
+2026-10-17T03:01:33.5491665Z Temporarily overriding HOME='/home/runner/work/_temp/fb3eb885-bd44-4b12-a25f-811b75d8a053' before making global git config changes
+2026-10-17T03:01:33.5492560Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T03:01:33.5495199Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitrouter/bitrouter
+2026-10-17T03:01:33.5511254Z Removing SSH command configuration
+2026-10-17T03:01:33.5515280Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T03:01:33.5532341Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T03:01:33.5639768Z Removing HTTP extra header
+2026-10-17T03:01:33.5643887Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T03:01:33.5665538Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T03:01:33.5776384Z Removing includeIf entries pointing to credentials config files
+2026-10-17T03:01:33.5782405Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T03:01:33.5802399Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T03:01:33.6013913Z Evaluate and set job outputs
+2026-10-17T03:01:33.6057142Z Set output 'val'
+2026-10-17T03:01:33.6057939Z Set output 'publishing'
+2026-10-17T03:01:33.6058546Z Cleaning up orphan processes

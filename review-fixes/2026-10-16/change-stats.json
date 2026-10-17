@@ -1,0 +1,79 @@
+{
+  "groups": {
+    "implementation": {
+      "added": 142,
+      "removed": 156
+    },
+    "tests": {
+      "added": 473,
+      "removed": 293
+    }
+  },
+  "files": [
+    {
+      "path": "apps/bitrouter/src/goal_code/projection.rs",
+      "added": 6,
+      "removed": 8
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code/tests.rs",
+      "added": 86,
+      "removed": 142
+    },
+    {
+      "path": "apps/bitrouter/src/goal_permission_material.rs",
+      "added": 27,
+      "removed": 15
+    },
+    {
+      "path": "apps/bitrouter/src/goal_permission_material/native.rs",
+      "added": 0,
+      "removed": 6
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime.rs",
+      "added": 2,
+      "removed": 40
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/model_control.rs",
+      "added": 13,
+      "removed": 11
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/model_control/activity.rs",
+      "added": 1,
+      "removed": 1
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/model_control/quote_wait.rs",
+      "added": 3,
+      "removed": 3
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/model_control/tests.rs",
+      "added": 291,
+      "removed": 27
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs",
+      "added": 4,
+      "removed": 11
+    },
+    {
+      "path": "apps/bitrouter/tests/goal_tui_pty.rs",
+      "added": 92,
+      "removed": 113
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/decision_model/mod.rs",
+      "added": 84,
+      "removed": 1
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/routing/preparation.rs",
+      "added": 6,
+      "removed": 71
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "id": 117292136366,
+  "run_id": 38997164699,
+  "workflow_name": "CI",
+  "head_branch": "codex/bro-goal-workflow-mvp",
+  "run_url": "https://api.github.com/repos/bitrouter/bitrouter/actions/runs/38997164699",
+  "run_attempt": 1,
+  "node_id": "CR_kwDORgVa388AAAAbTyf3rg",
+  "head_sha": "d1c9074e9e6654fe77474571d7dc5e078a857c0a",
+  "url": "https://api.github.com/repos/bitrouter/bitrouter/actions/jobs/117292136366",
+  "html_url": "https://github.com/bitrouter/bitrouter/actions/runs/38997164699/job/117292136366",
+  "status": "completed",
+  "conclusion": "success",
+  "created_at": "2026-10-17T03:01:16Z",
+  "started_at": "2026-10-17T03:01:18Z",
+  "completed_at": "2026-10-17T03:06:53Z",
+  "name": "test (ubuntu-latest, bitrouter integration native-goals)",
+  "steps": [
+    {
+      "name": "Set up job",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 1,
+      "started_at": "2026-10-17T03:01:19Z",
+      "completed_at": "2026-10-17T03:01:20Z"
+    },
+    {
+      "name": "Run actions/checkout@v6",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 2,
+      "started_at": "2026-10-17T03:01:20Z",
+      "completed_at": "2026-10-17T03:01:22Z"
+    },
+    {
+      "name": "Run actions-rust-lang/setup-rust-toolchain@v1",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 3,
+      "started_at": "2026-10-17T03:01:22Z",
+      "completed_at": "2026-10-17T03:01:47Z"
+    },
+    {
+      "name": "Run taiki-e/install-action@nextest",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 4,
+      "started_at": "2026-10-17T03:01:47Z",
+      "completed_at": "2026-10-17T03:01:48Z"
+    },
+    {
+      "name": "run integration shard",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 5,
+      "started_at": "2026-10-17T03:01:48Z",
+      "completed_at": "2026-10-17T03:06:51Z"
+    },
+    {
+      "name": "Post Run actions-rust-lang/setup-rust-toolchain@v1",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 9,
+      "started_at": "2026-10-17T03:06:51Z",
+      "completed_at": "2026-10-17T03:06:51Z"
+    },
+    {
+      "name": "Post Run actions/checkout@v6",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 10,
+      "started_at": "2026-10-17T03:06:51Z",
+      "completed_at": "2026-10-17T03:06:51Z"
+    },
+    {
+      "name": "Complete job",
+      "status": "completed",
+      "conclusion": "success",
+      "number": 11,
+      "started_at": "2026-10-17T03:06:51Z",
+      "completed_at": "2026-10-17T03:06:51Z"
+    }
+  ],
+  "check_run_url": "https://api.github.com/repos/bitrouter/bitrouter/check-runs/117292136366",
+  "labels": [
+    "ubuntu-latest"
+  ],
+  "runner_id": 1000068033,
+  "runner_name": "GitHub Actions 1000068033",
+  "runner_group_id": 0,
+  "runner_group_name": "GitHub Actions"
+}

@@ -1,0 +1,9 @@
+{
+  "recordedAt": "2026-10-17T03:02:39.371Z",
+  "sourceCommit": "d1c9074e9e6654fe77474571d7dc5e078a857c0a",
+  "sourceFilesVerified": 999,
+  "fixtureFilesVerified": 3,
+  "sourceDrift": [],
+  "workingTreeClean": true,
+  "bundlePrerequisite": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76"
+}

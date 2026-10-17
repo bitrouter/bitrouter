@@ -1,0 +1,4003 @@
+{
+  "schema": 1,
+  "baseCommit": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+  "recordedAt": "2026-10-17T02:35:21.758Z",
+  "paths": [
+    {
+      "path": ".config/nextest.toml",
+      "sha256": "9244847c31c887cadeb8cd081013396d4b15482aee68be0dc47cb1ec4552424d"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/bug_report.yml",
+      "sha256": "a6302abd64ca6eead3878e965dbc9f2777d8050d137eff95e5e4c23c6baaa9c7"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/config.yml",
+      "sha256": "d668a65c3bf2f9367226020dbddf645b39ccd1e4e9d01ee2a15e454bdfa17bd7"
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/feature_request.yml",
+      "sha256": "5aa00c754e651d1c9f4e33e57d04a4d706ef429ddfa008b30b251de9af9932b5"
+    },
+    {
+      "path": ".github/copilot-instructions.md",
+      "sha256": "ce132bc582bc5bc3b422031e5fe7b4b8a0ef253c3eaae3be2d12839e4defb6bd"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "d6b5575db01a9caac6fcc7680512653a29e328a0def5b0bfce7fdb1c503ad914"
+    },
+    {
+      "path": ".github/workflows/notify-release.yml",
+      "sha256": "0e405e4cdd7d3696799579935f294e63173c4d7a105300fcfc3874e02c7ea9b4"
+    },
+    {
+      "path": ".github/workflows/package.yml",
+      "sha256": "970cfa2ea54c1ab56b4da901292ce816894bd89caf5e56b0941f4fcf37e68618"
+    },
+    {
+      "path": ".github/workflows/pr.yml",
+      "sha256": "568eff7993775ac83d5b54f66b67b567edb7c64e8a602beda88ef2d8a9679105"
+    },
+    {
+      "path": ".github/workflows/registry-chart.yml",
+      "sha256": "df624ba8e7aee172158f9d3321a3ce5b7f1e6576b03713bee5741028aef3e143"
+    },
+    {
+      "path": ".github/workflows/registry-sync.yml",
+      "sha256": "a02fb0a0d35eec944e9877be1b1c2f6db853e6fff70675c52aed14c882830884"
+    },
+    {
+      "path": ".github/workflows/release-plz.yml",
+      "sha256": "ae2e8c83f68fd690f6514792e583fef8dd8d88382fdd37e5338527777cfc669b"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "sha256": "e2a954e28caec065e2bf9952b8e2468874046a6891f8902d1525856789c958b4"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "f2169ee2b31c12d2d84069102ae9d61fc852d97f4d2c343775fbfd5722f9642c"
+    },
+    {
+      "path": "Cargo.toml",
+      "sha256": "f627c6d835e2c86f974da813e8fb355bda0c486f70a06a64aaac378539448299"
+    },
+    {
+      "path": "apps/bitrouter/Cargo.toml",
+      "sha256": "1e072b752ca732dd8cecac98c6e3023917ec65616e6539147c5c7667af19b1d6"
+    },
+    {
+      "path": "apps/bitrouter/build.rs",
+      "sha256": "b5a75ce25caf0a2c60f50e6d54c97824c14f7414379313553f0a56f0536532a6"
+    },
+    {
+      "path": "apps/bitrouter/examples/checkpoint_ts_publication.rs",
+      "sha256": "7f2cb1c4b48f00f3ef113a8ca537a9d8641cad58f92213b49abbb06feab9f646"
+    },
+    {
+      "path": "apps/bitrouter/examples/checkpoint_ts_simulation.rs",
+      "sha256": "45d32d25e8b83fe5942515baa81d8b69842aaf469aab1d1f7cff03e6fc16985d"
+    },
+    {
+      "path": "apps/bitrouter/examples/native_regex_checker.rs",
+      "sha256": "df6d2d0bf6ac6c1d0d791a5f716e3c9fc21e3ee821151fb51d92e85f1f8b8593"
+    },
+    {
+      "path": "apps/bitrouter/policy/default.yaml",
+      "sha256": "e0c5c7d73f6cd482bc9f1e2362add2607e45dc33be7016c2e5727803bb84e0e6"
+    },
+    {
+      "path": "apps/bitrouter/providers/bitrouter.toml",
+      "sha256": "e01d96f0be6e0fea86436db7aaf99843bd796e445d80d1ef054fdc5b10d69ad3"
+    },
+    {
+      "path": "apps/bitrouter/registry-dist/agents.json",
+      "sha256": "bcc8892eb2cc9fb578cf07c7c56ac3aadaca2a8360427a1e5be6161d8f318301"
+    },
+    {
+      "path": "apps/bitrouter/registry-dist/models.json",
+      "sha256": "8b00f5dd9a8a2b81862d7765a2b0a7e3cb1be35bd08a13a9985ae2d229a54c69"
+    },
+    {
+      "path": "apps/bitrouter/registry-dist/providers.json",
+      "sha256": "c3e72b38b74e232de84f393e5b0c8f2be2e8f2b88bf7bf3e13043cd474fb879c"
+    },
+    {
+      "path": "apps/bitrouter/registry-dist/runtimes.json",
+      "sha256": "130cf7f5f79232201ee33930c101f61f81c4d2e981f35733e45f5dbb1640f735"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_cli.rs",
+      "sha256": "49d44b9af916670bf01a8a70fddf78c45d8fb5dfbe15e4b4fc62613f13f31451"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_cli/evolution_acceptance.rs",
+      "sha256": "2f32a5a1bb7af1b582918af3eaf4ddb598f5aea560552d77a4910626c4928ec6"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_cli/evolution_acceptance/publication.rs",
+      "sha256": "975c954aed21a752d8884cc3e34495d0bcff1662568420a16ac03cbef51eb501"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_runtime.rs",
+      "sha256": "d37517532c71cbc6478768e53316dee23a7b21273c62eab74c34305d15f9470a"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/checkpoint/assessment.rs",
+      "sha256": "ed1680d5ac3581852c63f4779c92adbcaa2821d8de2c4bb9bd6de3f895d93817"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/checkpoint/entities.rs",
+      "sha256": "ee0a8901d2d3eefe015bd61a11f6328ee64ffaaac6f53b9551cc3ee25304b3a1"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/checkpoint/mod.rs",
+      "sha256": "63c6994901e3285a8ac08eaae696acd56a46d25448fb63463623564ad2fadf75"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/checkpoint/resource.rs",
+      "sha256": "7d5ab4555dad2f6326cee64d984efe71f4e4c142b1ed17e07f98d061b0e101db"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/checkpoint/resource/coverage.rs",
+      "sha256": "1be8ae95ba1e9cfd26a890823e3ef19a1e689e4a74913830fb5fee1af0b797df"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/checkpoint/tests.rs",
+      "sha256": "f0596e8723f15b7413270e6bfa10de031b664db7aa1c48c869eb62b09c0f5333"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/checkpoint/types.rs",
+      "sha256": "7d6e44f35546361d0fe6240d9be07be6fbce85cb1d7b0d3ae66a2c3daaf86cbe"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/entities.rs",
+      "sha256": "aaa3ae63a7de7a78dc8b452a91a2cae6f85117726fc3a88a7d9df9a9f9e43c62"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/mod.rs",
+      "sha256": "e514cf21403acdaab2d58550eb2400a7c6bd0fcc74c50dae3fb2986f438b7132"
+    },
+    {
+      "path": "apps/bitrouter/src/acp_trajectory/tests.rs",
+      "sha256": "34dbf97cd1b737ae4a6a1a35271bf39775061b74200d275840ddd74c89a604f9"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/administration.rs",
+      "sha256": "c67e12ce8c062550694498e5b1a959497956c3874fb173410225ba9f990cdfd9"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/code.rs",
+      "sha256": "19edee054a1528ec25fb30831101ff0bf2104bb49ba168670d4fd725bc43b555"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/code/evolution.rs",
+      "sha256": "70447b2b152071c4cd45dd2d57280a0796ad2d2f7535efc3d6ea9bb5da433ac7"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/code/evolution/candidate.rs",
+      "sha256": "0f1d7d8a3aba149b9a0b18d34c26f7f4ffe23e90f818696a4b3b855289258db6"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/code/evolution/manual.rs",
+      "sha256": "ceffe204c76c64046b8eb00a4bd6ad29317ecb0190b2f031b17521fb669c2c55"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/code/evolution/tests.rs",
+      "sha256": "b7adbe16b5f7795e86fcd64016e904b72bd538e29cac1312d70fb1ac83bb3e11"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/code/evolution/tests/candidates.rs",
+      "sha256": "6edafa93c1170dfeab484532bb6012ac44c18442e4baf6bb2c5d4967af3e6e1b"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/code/evolution/tests/history.rs",
+      "sha256": "4316842fbfb0ece694463e7cd4b66d922a42fc9256b7bd56ae9eac1a44e7e94b"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/commands.rs",
+      "sha256": "787beef34726a4eb1f8672ee41c5a40a75f61f5239883bf88afa59fe7f9a8fbb"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/mod.rs",
+      "sha256": "703c6ddb046ed27030b8e7cc85d503a75a4630f80cdb1e4739e496b0250450fd"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/models.rs",
+      "sha256": "a5dfbf0f672b86c81a1ef086f2b1214d0cd2120a895f0919f5c3c547fef68dfb"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/requests.rs",
+      "sha256": "5c7d1ef29ea2f22efa0f15618a8400c8d74f71c1276d0faa3171337f57bbc4f6"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/route.rs",
+      "sha256": "5aa4bc211a5cd9d24529b492b25504095bcf4e0e2f5d47d34dfa4db61999ff8b"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/session.rs",
+      "sha256": "f4166d5935ecf0fc2b6293fecb098083254341c81ae21278315b9994a89e80d9"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/skills.rs",
+      "sha256": "30911c8974fbacf232677271f4323f18d337d7f7d6be611df4bb7e269503b32c"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/status.rs",
+      "sha256": "c765dea3c41dec83446daf7095063c84a496b003d3b7c10f7280ece6e3d07cb3"
+    },
+    {
+      "path": "apps/bitrouter/src/actions/supervised.rs",
+      "sha256": "ce1b73901f2dd01597c899b2cf1a59d974b9c4ec19fd792a7718326e0e4abb7b"
+    },
+    {
+      "path": "apps/bitrouter/src/adequacy/mod.rs",
+      "sha256": "63850b849079aef59e7f61d469a3eb0b2a942e893576a5e7bd8c50ea3afbcbca"
+    },
+    {
+      "path": "apps/bitrouter/src/adequacy/reliability.rs",
+      "sha256": "f2317fed0d37a61eae239336fbdd24d634046d60a1b626128b7f8e24d5566a44"
+    },
+    {
+      "path": "apps/bitrouter/src/adequacy/report.rs",
+      "sha256": "c6d8c7956ed928eed4fe1a736beb794f37cd16444fb4f27b8cdce2afe0ebe6bb"
+    },
+    {
+      "path": "apps/bitrouter/src/adequacy/store.rs",
+      "sha256": "6ea02e7404aac7ed3205ec7ddb73392292451507a70c4ef9e1ab2a5f4fc6e006"
+    },
+    {
+      "path": "apps/bitrouter/src/administration_target.rs",
+      "sha256": "8e515266b298de581dcd47ade2f1d79a807ea12381ca6e0be3c9a776cb3e4380"
+    },
+    {
+      "path": "apps/bitrouter/src/agent_api.rs",
+      "sha256": "c06341c835e75bb6997a214e95052712da02c651ef2321e091f8dc0b419f3d39"
+    },
+    {
+      "path": "apps/bitrouter/src/agent_local.rs",
+      "sha256": "f64641f10b582439e12cff201cb046b501cf713beec9f21fc842281280de0adc"
+    },
+    {
+      "path": "apps/bitrouter/src/agent_registry.rs",
+      "sha256": "e6af82ee9a99e646743a3a524812183185cfe4c1544fce28f3ee201ffe3cf3e0"
+    },
+    {
+      "path": "apps/bitrouter/src/agent_sessions.rs",
+      "sha256": "50598cc24e1aef8abfcf869560ca570d0743ffc1958adf9c9f31854f3b1b534c"
+    },
+    {
+      "path": "apps/bitrouter/src/agent_store.rs",
+      "sha256": "107ad708ce5f150a7c4053e1abf8baad627d25dd37a085de254d53d71a643603"
+    },
+    {
+      "path": "apps/bitrouter/src/agent_store/codec.rs",
+      "sha256": "34f1ac7d5a33c944803ded33505121588cd8660f92b0e15ed0cbbda473c20c96"
+    },
+    {
+      "path": "apps/bitrouter/src/agents.rs",
+      "sha256": "127ea1bed1d55cf390d880b749381510dc43a67cd12e19839e675ca5528bf5c9"
+    },
+    {
+      "path": "apps/bitrouter/src/assemble.rs",
+      "sha256": "fa15a7fb37b7fb3907d062f46bcde94abd8a38bdc2e168bb1f1fce08e01e15f3"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/db.rs",
+      "sha256": "23d618799b7bf728030eda1dcabccba7da8dd6d497a4e27ed2c7185aaa7e4c8a"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/entities/api_keys.rs",
+      "sha256": "e9b89b07c0fac292ec1dc5864f8891c2d2b9420d27726b3063ea3567cf144707"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/entities/mod.rs",
+      "sha256": "a5b3a0ec1765fbbec84935eabd8d7c81dda99cf8ceebdb05b2a373a25f8d03cf"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/entities/users.rs",
+      "sha256": "836a580022d3235bdff3956a522e52a29fef94ec091773cd3e237655ed784256"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/events.rs",
+      "sha256": "c9f1c6958fcfdbb4d6b2c4b174e2e7d0a1fcaf45c220401a15ee1a5fa78b7415"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/hook.rs",
+      "sha256": "422a99062d32d8a949f11419ea8e3bc1849ba6e3fa26845d0935c0e4c5320b66"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/keys.rs",
+      "sha256": "058a93fe060f38d025ae76c676215c98ea1dc502aa5da606fa69f45ab71f1ad4"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/mod.rs",
+      "sha256": "d5c848ee35559f104f1d41f6b64ddec32a6544c9bf3d632dc9d98b8d8821ad3d"
+    },
+    {
+      "path": "apps/bitrouter/src/auth/tests.rs",
+      "sha256": "10e08fce81810512fbd593cf698f9ea8ba49ea2467808e7d02c5eadb4965e4c1"
+    },
+    {
+      "path": "apps/bitrouter/src/bundled_registry.rs",
+      "sha256": "fb4db70955c11fceaef7cafa78ecda76a4545c6ba58baa4f3de9c02794918986"
+    },
+    {
+      "path": "apps/bitrouter/src/catalog.rs",
+      "sha256": "2835910f6da47088700533e3dc929fff3d3f15692a28daa2b4dbd20e5d3970b3"
+    },
+    {
+      "path": "apps/bitrouter/src/catalog/tests.rs",
+      "sha256": "b7c6570ddc5c7511ce00f46513d4150235d80e7ba7bf9057fbfec3d7bad514cf"
+    },
+    {
+      "path": "apps/bitrouter/src/chat/code.rs",
+      "sha256": "f4bbccd3d3c0c7536d394a22e26c0df86f426f776c81ea334546f574bc4625b8"
+    },
+    {
+      "path": "apps/bitrouter/src/chat/code_controls.rs",
+      "sha256": "00fb2c2e7a50dd5ab89998b4549f54271310961eccc3f0dd845434df89caeb69"
+    },
+    {
+      "path": "apps/bitrouter/src/chat/code_wire.rs",
+      "sha256": "2f4bffe207a9a0c8145984fc2ae454c1200aa320a252fdcfa60fe5de6290b45f"
+    },
+    {
+      "path": "apps/bitrouter/src/chat/editor.rs",
+      "sha256": "fac97710930734f974bed61418bad25914030a244744b2f0874e88e12993cf41"
+    },
+    {
+      "path": "apps/bitrouter/src/chat/effects.rs",
+      "sha256": "346a885e9587667876c4f4334a2626193abb4a535db728f87282d6c376e7d20c"
+    },
+    {
+      "path": "apps/bitrouter/src/chat/mod.rs",
+      "sha256": "958257f2272aa9ac26aad7d4f4a90a760a728c953b5d9cfb7c63f978b016f9ea"
+    },
+    {
+      "path": "apps/bitrouter/src/chat/session.rs",
+      "sha256": "1c0c6cc98311cdc06c68c5d1a0db982086538de440e512fbf078bc0ddb95b8fe"
+    },
+    {
+      "path": "apps/bitrouter/src/chat/signals.rs",
+      "sha256": "5ec52dca41158b42c5db8496665d2da3d9b029ae6d238046662fdb49ed1d81f5"
+    },
+    {
+      "path": "apps/bitrouter/src/claude_code.rs",
+      "sha256": "2ecf1482aab01fe92f55fe6ea13016bf5708066eb062dd785fb4c4a62bb3bed1"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/account/credentials.rs",
+      "sha256": "41dbef551738052b2013d84c513c9d1269f5597f395d65d063c1a54505096dee"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/account/manager.rs",
+      "sha256": "6bc90a3bf68ef40ff21f67509c69459ed88ed93a492144bde4af05b85d5b07dd"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/account/manager/transaction_tests.rs",
+      "sha256": "737cd02f418fa65646cbfa54dff2c53e5e928e3a377b40ce5e1a4883b30ba10b"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/account/mod.rs",
+      "sha256": "b67ff6ecbaefa7d6acd594aae1cc46374a67f786d17090475f12145af694eb5a"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/account/settings.rs",
+      "sha256": "d957e49d3d646ad775fbadd95a61e9fbe3f59c3e454c41c24dcdde65ffc59f75"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/account/transaction.rs",
+      "sha256": "a172423bf400a103dd728d235d7316a33c2f44821865cb473877e9884e94f8d6"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/api.rs",
+      "sha256": "3e2cb07241527fdac78717e5e9c0bf8355dbbd19a4295387b29c159b8e8e3074"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/api_client.rs",
+      "sha256": "55aea76fd438ff5805dcc1f92f6a402deac34ec9ab8aaa430c1aa1afa2aa44c7"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/auth.rs",
+      "sha256": "ddc432cad9f022ddbb30435a5589db987cd41aa29462d6aa46aebdff167256cb"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/cli.rs",
+      "sha256": "4fcb10d57ec878292a6fc26b3462bc9da566c77d8083efba1599b08523e0e638"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/billing.rs",
+      "sha256": "fee1614b9b172db39325c964e1d5df52caaae7354f6af4458d5d386133902f38"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/budgets.rs",
+      "sha256": "fbeb54ae3f81384f53e24ada44c86b09ffa43c27b905be32d64b9c39a8966c2b"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/byok.rs",
+      "sha256": "a0d26690aa8a3205e9aad0d6be0e4ea60fdcb80012eeea31f3bd60b254120fb1"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/error.rs",
+      "sha256": "8e7a61a8b875548093b39c76b088e577ca1dd0d2529870f0b91a65c12cb61826"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/keys.rs",
+      "sha256": "ae7f18fddd468b04ceca00570d2449c3c73c5c84d4e3100eadc602664e1e4b85"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/mod.rs",
+      "sha256": "1e1e5d5b8fb7ee86f269a01ce87e1948ecf2e72b974759005e322f7d3807c7bd"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/namespaces.rs",
+      "sha256": "ead2486654655167de6c04a5046c406d9a3849196e78ed4f956105ddee03c243"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/oauth_clients.rs",
+      "sha256": "f15d1ce8a7093b3f3e48f8fb63ae4d3113cd02d61fbdb391b64b8c4d80613eee"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/policies.rs",
+      "sha256": "1af56c5f5413b3da463ade68f1fb3f1ca3771eeb3375e94b6905aeb9b8a582b6"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/presets.rs",
+      "sha256": "85a46eec4457f194a9231f1bafcb4686248daae19efc2dc0f5baf34646b48670"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/tests.rs",
+      "sha256": "64dd00a12ffb06231df93a524997bc62960408d9837acb74fe2540192b288306"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/types.rs",
+      "sha256": "36697f56e8a00ecb358b44473a4219d8f41d376c61fab48b36418f6dd72e2eee"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/management/usage.rs",
+      "sha256": "4c3c48a3d023d91652c29f0f1ae4c57258d227e9287494de01021190b0d44973"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/mod.rs",
+      "sha256": "12281cb76abaf52eafd655eb9bbcb51a8f58132b13c169b61ba09775237a048d"
+    },
+    {
+      "path": "apps/bitrouter/src/cloud/settlement.rs",
+      "sha256": "153045f16bbc8b33b70b83efd752afc4e5b00d9fe7680cfbc5e3a5f84cfe960e"
+    },
+    {
+      "path": "apps/bitrouter/src/codex_router.rs",
+      "sha256": "28ebd87411e77431a59305b247cddb691c0a45c06324a56da2615856228a9a2f"
+    },
+    {
+      "path": "apps/bitrouter/src/commands.rs",
+      "sha256": "b1c4a0be4f9812cb3956c105f5f5b6cacb3b479f7c8945190f4a9ce4aa95a140"
+    },
+    {
+      "path": "apps/bitrouter/src/config_synthesis.rs",
+      "sha256": "21bade88c251b3bcd9bb1b599e0dc2b84a96002ef3437405614e8f14481ce5b2"
+    },
+    {
+      "path": "apps/bitrouter/src/conformance.rs",
+      "sha256": "a66aa75e937d769e6fa13fb764eb4c41b5adf3173280adab499648bc6b84cad9"
+    },
+    {
+      "path": "apps/bitrouter/src/contexts.rs",
+      "sha256": "f8e431f06a81b4807d6f05996ffd16b960cff38c934ece811cd490ebd70bb78a"
+    },
+    {
+      "path": "apps/bitrouter/src/continuation.rs",
+      "sha256": "d8c9d7dcd99857de234f2c3afb56af9d2e8b3c432588f63938855c83c878c6c6"
+    },
+    {
+      "path": "apps/bitrouter/src/continuation/native_context.rs",
+      "sha256": "a326a7163b8fbf6423a7950fd73cee09f5e775a7e010a95903e0093309a11095"
+    },
+    {
+      "path": "apps/bitrouter/src/continuation/native_context/continuation.rs",
+      "sha256": "122522230acd0840f5b5273431a8a404a533770684d58c993e0b375c0ffcd280"
+    },
+    {
+      "path": "apps/bitrouter/src/daemon.rs",
+      "sha256": "1d0d3fd5e7b040968ed28a9695b56029d79670093bc52edc1c7a89b3b8ded126"
+    },
+    {
+      "path": "apps/bitrouter/src/daemon/goal_tests.rs",
+      "sha256": "d8530be81fc1976f6bcfb87220a43738bffd45fc7a470eee10d947d43a27b34d"
+    },
+    {
+      "path": "apps/bitrouter/src/daemon_handoff.rs",
+      "sha256": "e8401fb5255be830e8bb392bb09dc46ef91bbe752bf193a3c65f60645a176e60"
+    },
+    {
+      "path": "apps/bitrouter/src/daemon_locator.rs",
+      "sha256": "3a08528a8bb341843841cb5448be0419b0884da7473b1598f77e631e15553922"
+    },
+    {
+      "path": "apps/bitrouter/src/dashboard.rs",
+      "sha256": "9a678c498f593e3c06a81c662a7af97d6de693000566d8f9673999b63a04fb63"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000001_create_auth_tables.rs",
+      "sha256": "56e9d8c8fd199930d84a120149936bc9ff6f40d4b19edb66de9a82cf795a4fab"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000002_create_metering_tables.rs",
+      "sha256": "b03785c4a2acc10d2b94fae3078d73f942a57361a6ae331a5e5c73a9860d16fa"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000003_rename_legacy_charge_column.rs",
+      "sha256": "d4334b7fb99aa7d635590d8dc9d7d751a759b7c9bcdb3a7a71f70dccbf45c85b"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000004_create_adequacy_table.rs",
+      "sha256": "dc46afb67c434e7aff446c40bd0b8eead2bf6a39277247aef9233927b984bb1c"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000005_create_adequacy_exploration_table.rs",
+      "sha256": "63bf4ddadc0bd6ba664e5b3305c1dc766c562c79cc7b7723cb92cb87e951aea5"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000006_create_adequacy_semantic_success_table.rs",
+      "sha256": "9fdb2b599102029c7aa34d4d171eda8912040258e55412035bbb00b98c79a996"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000007_add_metering_evidence.rs",
+      "sha256": "e1f033a8eead0a35a53bbf1c456a1b2fb3b3413cf46288805e9a6af9b243fd93"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000008_add_metering_reconciliation.rs",
+      "sha256": "8bee795899a045903c6ba2f44e17f8cccd85be9c61012ddc683b41302ac854bf"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000009_create_adequacy_reliability_events.rs",
+      "sha256": "93362c5c7afcf5faada18c0c7fc61f421042249c723d505fffe8f8a108450073"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000010_create_eval_exchange.rs",
+      "sha256": "5ef04396dadf92163e65e472f391342b24ad2d16b3748369efe645b9fc99379c"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000011_scope_eval_exchange.rs",
+      "sha256": "0b0605e4a169ac506f6119d7586d67ceb6f67082270ed06b501fe7c1bd50df1d"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000012_create_trajectory_ledger.rs",
+      "sha256": "f5e0d2488893908d2e82c146856a187dd36f39857a9f20aeb675504196a2d278"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000013_create_continuation_registry.rs",
+      "sha256": "6711d0a15be907ac71d401df8ccaaf0d4e367d3ab85765c84ec7e73a9cb8d06f"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000015_add_metering_launch_id.rs",
+      "sha256": "3ef30cffd3602977861e32a66d487372ccb033ec6c7446d98e8154e178319915"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000016_add_acp_metering_identity.rs",
+      "sha256": "6d60cd0c7505d58288faf803b960bf0c7c444f02ee3c78df8b6df726ad3c913f"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000017_add_metering_route_scope.rs",
+      "sha256": "d52d94b9123a41e0e067eeabd61fe46bd04eabf3abf6aad9209d7b16c17dd6fa"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000018_create_acp_capture.rs",
+      "sha256": "c4d00b9719dd6de385bdd5201b19355114a60d1b6468fdf6a0104aae27acd063"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000019_create_acp_checkpoints.rs",
+      "sha256": "69aae6e67ad6d80db8e0dff8d1bd4a1ae790358dcf43115ec4842686d3599a28"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000020_create_checkpoint_evolution.rs",
+      "sha256": "d4213d5509356b10fcd2df5aceb3c6162b64e8a794a7f313853482c3761f4747"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000021_add_router_request_identity.rs",
+      "sha256": "d0d5951ad6e9027b6271e40e716ef9390dde97a4ddc27a66d69e738e295e35d6"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000022_create_bro_execution_records.rs",
+      "sha256": "34391020e628468d2d7686c294530db3b1c9756060110ea55aab993632e02e5d"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000023_create_bro_acceptance_keys.rs",
+      "sha256": "cae51feb75f311053c6fb90f6453587d8a328146591df585cd807f27e5d3d8d5"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000024_create_bro_runtime_ownership.rs",
+      "sha256": "fef604a455689acc33aee122e2919cdfb9d24c3fc99c03d759b108325aeaa32b"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000025_create_bro_execution_index.rs",
+      "sha256": "ad65e5f8d16ee8676a60f82b4f064c4c5df09840c9159715b6a41afba44e2ab6"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000026_bro_runtime_format.rs",
+      "sha256": "3dcc3062d27fd37ab633b22664e51c10d7996e67053cb6dd5a9edc1cbb0278e0"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000027_bro_managed_sessions.rs",
+      "sha256": "7b7b2d4a78bd46ba7510c90c728f482c9dec202e01ebd692d5480122ad0c5bbc"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000028_create_bro_goals.rs",
+      "sha256": "b4f30512275248513f966d467986c6c8182bfe8ac5cb918ec592ad08a1d5b853"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000029_index_acp_resource_head.rs",
+      "sha256": "863ac4b0d462921442a7bbac97fa3e02d47550a618764965f0714c9bbf9bb9ea"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000030_bro_goal_execution_format.rs",
+      "sha256": "c46e8c836e443d12ab9a916500f9b472ef8f5e49a042fb48818e6165ca76ac4a"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000031_bro_worker_source_format.rs",
+      "sha256": "0a2083054821911f6282d05415f8c4faa076067094fe3ffc49fe394f24120847"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000032_bro_admission_verdict.rs",
+      "sha256": "fbf4fade1a0a547ac05c8bd53ee9e97a79aaffb40958c8b1ed0ddaf74a929c05"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/m20240101_000033_bro_resource_wait.rs",
+      "sha256": "ff5fd4e5425224f5cee1b6f7f8c0ef8b4ee183bfaf4055535d40ddfd953030e9"
+    },
+    {
+      "path": "apps/bitrouter/src/db/migration/mod.rs",
+      "sha256": "f5198e1c8c57b9033b7fe70d84af95e782fb729cc5f05390bcda27c881105db5"
+    },
+    {
+      "path": "apps/bitrouter/src/db/mod.rs",
+      "sha256": "048929ac4beca7c17e42e2bc281d1dbcebdc63b105f46d98ec94e6579998d9df"
+    },
+    {
+      "path": "apps/bitrouter/src/error_report.rs",
+      "sha256": "57a859393012977c82de8172a282a8cebc6f6f1b15259a4259a31d99548aaf6d"
+    },
+    {
+      "path": "apps/bitrouter/src/eval/admission.rs",
+      "sha256": "41af1e16b0a3301ff2c902b9c480cb645e029a2e6b3b94bfd63b636c926d0c9e"
+    },
+    {
+      "path": "apps/bitrouter/src/eval/api.rs",
+      "sha256": "b8af9ae9d19f1733e3f35e0c275764e4051af600af9d49be6cc275019a9012f2"
+    },
+    {
+      "path": "apps/bitrouter/src/eval/compiler.rs",
+      "sha256": "b5f156ba39d03f2777f925ebe92be33922cb4238f38c5fca4fecb2dac86664ff"
+    },
+    {
+      "path": "apps/bitrouter/src/eval/mod.rs",
+      "sha256": "0fe02f1b35a9e290bd65c43505ea228693bcc0716811448b8f3170ade883ec59"
+    },
+    {
+      "path": "apps/bitrouter/src/eval/settlement.rs",
+      "sha256": "975b31e8a18b3d0ba6a0077a8439dd17438f908a67c79914a3ed07dd87af554f"
+    },
+    {
+      "path": "apps/bitrouter/src/eval/store.rs",
+      "sha256": "6208643ec5554fcf7d72d51949147bb3879d832f0af86a30cedd663ac3a80446"
+    },
+    {
+      "path": "apps/bitrouter/src/eval/types.rs",
+      "sha256": "43d6ac2d434d8367591d0aea5f78c9d1b2e141cabbdb803ead5826f4792d6d44"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/bandit.rs",
+      "sha256": "3d7d3bdbcaac3d9492cb01fc148b95bd097b89dc687feb3400a5de82e66cae97"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/catalog.rs",
+      "sha256": "43195cd1b343bf296315caf2da584ab7bfd947f2d6a99c12ef6e50685f4c6033"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/control.rs",
+      "sha256": "9d09442d61d8f1247a26b36e3d3b1119fff440dd890d313e89a6846167b5ddc6"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/control/restoration.rs",
+      "sha256": "4872644fd5784953bb5933cd2d3b6200d22dd11ad661ddf82f1b0dc3f625052c"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/control/revisions.rs",
+      "sha256": "9d3c1c9e7c9b8bbf5da1cb019473d38107b55d32907e2c9e4725090dabdce534"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/costs.rs",
+      "sha256": "b51d08d82bbd3fa6f9ac664f3754fe102cf61b0000cdf90b38347918a3f76161"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/costs/report.rs",
+      "sha256": "7e1324876681219db780a7ffc3aeef089c6c83208f5bdd1e52d9ec27fc6d7545"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/costs/tests.rs",
+      "sha256": "1d6e8dd57eecc7bfb3a3cf9a55fcfc5339f2ede054936d566b96a86aabaed461"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/evidence.rs",
+      "sha256": "5f9a4f5c393eedefd1c69127e95ce292da6c9ea2f12db08ab36f5128e946e4d4"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/inventory.rs",
+      "sha256": "aa5717006f19ee50f3d92035994fbe196b8627138b1b8d4c334188ecfc5e675e"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/jobs.rs",
+      "sha256": "99cb38b3cf423296da3fc732c110ff12fdf2e54100da91c8d19572952a1204d0"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/jobs/tests.rs",
+      "sha256": "e8e136090387730d82029d6927feb748e99ad7bfc5feaf5e380036c5d6cc6e26"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/judge.rs",
+      "sha256": "4adaf9f4e3459e91cd021b3edf8408d3b09e73c836e795738aead1f3d36c54d1"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/learning.rs",
+      "sha256": "5b90539bc2caf7c36620b078b4abc8f48ef74d81d0399f0c0cdb50edebe5cf19"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/learning/tests.rs",
+      "sha256": "714ca92139ca00711064742c97e10465cecbb59d8d31c8828a59a2fe7aa3fecb"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/mod.rs",
+      "sha256": "0705245118a9efe63050509fb141185197c1209c838d3e31bfe0cdd48f17618c"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/operator.rs",
+      "sha256": "3ad192bbc5aa8196cc50ff36e090146408686b072d1148ed6bae164339cb3b55"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/operator/checkpoint.rs",
+      "sha256": "26c98521c0e74c132d8e2fca7e8e95c011cd6d39fa9d543774351558f584bec4"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/rubric.rs",
+      "sha256": "c29a415bd86438c1ebce38213ac05cfe71e32b28654f84bb2a79722e539192f7"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/runtime.rs",
+      "sha256": "268e73b7d522f9cac2f71961c5884e6b8b59b5d6cacfa7e877670721dc355009"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/runtime/candidates.rs",
+      "sha256": "b73f3627118f1dd895978df3eca374dcd7982858367c40b34ad9c3a0fce3154d"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/runtime/tests.rs",
+      "sha256": "9dabd167719c80b7a7001c2e7945c5cd4530096e441647fb6978160fc24ff96f"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/runtime/tests/execution_guards.rs",
+      "sha256": "9caa157e2ad15474e45657b3a609a3b6792ff288fdc715af65ca6143a8a6559b"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/runtime/tests/judge_costs.rs",
+      "sha256": "14ee1c1c0c5a882a659e09acae2b26f6ffdb73b007d42dd8c778f8b4e9b57c9a"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/runtime/tests/resource_coverage.rs",
+      "sha256": "f56928a3ff5744e9b89667999ea1c71d89c7202d742cb6f6003c8fb9f5631ce9"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/runtime/tests/revisions.rs",
+      "sha256": "1bb1a8722c93475324308574fa26d0c1f9c9f546e6607c196d53b8b3cdf193d5"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/scheduler.rs",
+      "sha256": "f2371901c40765585b96f60a5491e9a2003bc3f883c2cdaad86b1e2cc5c498f4"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/scheduler/tests.rs",
+      "sha256": "b6e9b4eec37c1df14c4d31a77cb6ce3f0f688ff7fcace0f7869c25c1944fa2b5"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/scoring.rs",
+      "sha256": "a0eea128be4ded54761bdbe1bbf283c90f1bcaf3f4c29efa89ef8d6656894063"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/service.rs",
+      "sha256": "4a140e6098663d2c656a992e704c29f82bce8a76d3054c7792cc64da28c71563"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/service/revisions.rs",
+      "sha256": "0ff3116f7a17c9c7856938ae1241fd70da9a48a14e48cb490875ab8c4a825a4b"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/service/tests.rs",
+      "sha256": "7ab668e2eb87aed6803016cb9aa42760bc98551961d89c0316c8a99527693f20"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/service/tests/revisions.rs",
+      "sha256": "457b712077d624f6ecfe0c6ea9a492a23db158281c2b498fe42c6470c998ec51"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/store.rs",
+      "sha256": "090b0febb883b6ec0598866187f74b5a98822cea644017964fdc5d3df3cdf922"
+    },
+    {
+      "path": "apps/bitrouter/src/evolution/tests.rs",
+      "sha256": "19bb1099ac0e62bf38967f834cdb57bb9f1250344b28e521f2eca52a5092a39a"
+    },
+    {
+      "path": "apps/bitrouter/src/gateways.rs",
+      "sha256": "80197ef4f8dfd58a234845dff8229d165608f8f7c6e6d5a6883ea1737d1dd9c0"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_archive.rs",
+      "sha256": "c838f4259ae5f5e292565757a2cb20bdf13addd80d9ab7226aeb839e3fc58a50"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_artifacts.rs",
+      "sha256": "f38960315bbe01e080fe73af72e67b49ab3f64c14d52c67dae784a22b6017ab1"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_artifacts/tests.rs",
+      "sha256": "160b0dc77e6243a2b71032bb664078325df0ccf102d16749625a39f384b2e98d"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code.rs",
+      "sha256": "a2bba2b1ee6bf916fad6000cb0b702943e0e4d788b0dbe4a7ea2e525ba4a0e51"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code/client.rs",
+      "sha256": "740f7bf674c6d92829fe938b15d55307596c4b39d8ea9891a1f5bd00c0290a02"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code/evidence.rs",
+      "sha256": "7ec3301b63fee81aa030e0701545c509aab66328ac77bdc23478354fae677860"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code/evidence/tests.rs",
+      "sha256": "913c09b1f271859ed35aba6448581c3eff5f7074104ede031488357617d22df6"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code/outbox.rs",
+      "sha256": "7aff07f476e5f52c3651340752102db3f3eb0fe532536f62087e4c39bb71c5ac"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code/projection.rs",
+      "sha256": "ede7d40082714878bba595b303f332314e72d5c8dd77ea3b94ec8f5cf03f6b95"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code/submissions.rs",
+      "sha256": "e07eaf62f4bce527e2d725ab4ac8a09cac9b8705ab82838e51a2a4ea9bc9444b"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_code/tests.rs",
+      "sha256": "af695e583b5cc57cb0a56391f8ca86fad99f81a6693ed7189d80060ba5d9a0e4"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_permission_material.rs",
+      "sha256": "f4064f0e7efc0c68381af93fd1ee467da1d7c53270b147bb8b736c5a0aa47a8b"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_permission_material/failures.rs",
+      "sha256": "92a694a0b7a539705b53de26d24cc6c96897d93ffc6d22742b0d0f50fbc44979"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_permission_material/native.rs",
+      "sha256": "a5dadd2949e3845a1966305e4690fb54ada474630e41b5e36908f935bf6a0e3d"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime.rs",
+      "sha256": "dde87e33d0c88e590514413b37134ce4a43c358b49a447e97370cdacf461fc81"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/acp.rs",
+      "sha256": "80ca20c092fee9aabb9e4d03234548568394e8dc8e8893624b17045586354d3b"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/checks.rs",
+      "sha256": "405ca068d487046d4304d1f687cdf0f5fb35812ffc268da8f4e8c345997c90d7"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/completion.rs",
+      "sha256": "5433300a78eb8a6f28c0fdf7e5bf2c68b5b58986b3fcc0f3af08f1b85ec3122f"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/completion/evidence.rs",
+      "sha256": "8983dee1f067d14e18b5c2c7d4e33172ca99db3a09a313ae64275a28ddee5d4d"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/dependencies.rs",
+      "sha256": "b9d0d2aeadc183222f8d1c3cfcfe7d3a0dd70215dd6def0379f638a00db7f6c0"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/input_scope.rs",
+      "sha256": "4f229045cb8063eb2eec18c7388ab37303b2e8173bf2487c76a2791ddefb7d1f"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/model_control.rs",
+      "sha256": "0c33893ace32a00bab1ab1ca71de8c1688a8ee308fa5f49133023064ca833bf9"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/model_control/activity.rs",
+      "sha256": "b4acf478d908f04f85d4321341addd71dfb4cba05f4331cddb7ab68e88de15e9"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/model_control/quote_wait.rs",
+      "sha256": "cad8c99f056fa3c57fa405e2e89c3f97938f8a2783c48e5f58567508ff291c70"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/model_control/tests.rs",
+      "sha256": "19915c552e84cce49ace2470c1a398b9d65f47ed86690566654b6f71d5869b08"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/native.rs",
+      "sha256": "8ca057b3225d6e9b8d84de539c3832ec9ea01e888a680dc0528d7cd3769250b6"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/native_evidence.rs",
+      "sha256": "7779505cfc79e147917b113078e1989bb28a8d72be966de44d581d15594c0ee3"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/permissions.rs",
+      "sha256": "930d1493a3cdeee9d592e65ad5a7f463ac730a2ddcd8123adb8ae69034f9723e"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/permissions/native.rs",
+      "sha256": "d21550048135b66462ce1d3a55965aee39d44ba035e8479c8d962569a0002e1d"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/permissions/tests.rs",
+      "sha256": "ea0cd54d5e8ebb40efec77c100136e0416adc7031657608507fbcd94407bef1d"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/recovery.rs",
+      "sha256": "32b0035da29b94a285cd2af05894a191a3de163466d27f1e5906ebc0ab636ce8"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/recovery/native.rs",
+      "sha256": "768c0460dca81c3fc16671e9716050bf951fd177c8222181b25161873008a8c9"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/recovery/native/tests.rs",
+      "sha256": "cd80374cbc780db1b1dbaee66003c29be48e75e3289bf8f88ae80afe9a246ef8"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/repair.rs",
+      "sha256": "4bdc7f426ea116b58bbafd58dca34be06ba2d866896541832b0c666a3e02efc3"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/resources.rs",
+      "sha256": "4ec43dc1110934f5b6669d349d41c577aebf32e9d7721cab2de3b57f83e9f7eb"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/resources/tests.rs",
+      "sha256": "819094c59a4acf415bedda459859f3bc804e775c540e93ea023d80cbfce21d0c"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/review_inputs.rs",
+      "sha256": "257d2f100ef8b1c101da68c5309751f053607adaa65c6f8efe24ff7c301737f0"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/runtime_evidence.rs",
+      "sha256": "b2eb0700f3dd98ea8f3eed831e351c723c27af347df4471bc6bd161339a0baeb"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/runtime_evidence/historical.rs",
+      "sha256": "1d8f6ce8221675f0fad0d6ae26e4b7d9a8742b54b1be1f99605667165f3017e9"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/runtime_evidence/tests.rs",
+      "sha256": "0d477277f510114fbb90cad68bd86eee42ec0d9cc8a526b853440f135a403b8b"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/stop_boundary.rs",
+      "sha256": "99fd53c3d64832c1661911c79414a52499e72f21be1ed84457f28dfcd9697d4d"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests.rs",
+      "sha256": "75113dcfca4aee5f3bc0a6789b356cb8962a9ddbc103bf3c4584cf06822c6a13"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs",
+      "sha256": "bd0c3676d28e7dca30445d678601a7b5f3c2ad757e9ff922de50d9ec10bc5034"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/fixture.rs",
+      "sha256": "3266b1a2b2a27656b4bb018d4a8cc95765ed6e7e6af37f09edfec4543e074512"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/live_input.rs",
+      "sha256": "90b3c472e8f3ef704a37ef29d8a7e801f8aa94acd229468b5786a1fd18d03496"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/live_input/corpus.rs",
+      "sha256": "05629f887a3ae9866c450c2d6562b3463aaeaf5a9fc401304273246c36c50fe7"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/live_input/offline_faults.rs",
+      "sha256": "49a5b07e7c2ca58dbd5a82376ef38f08ef48b49866f4e2050f9db7dd8dd88a28"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/live_input/sequences.rs",
+      "sha256": "519c5b75223fae56d0def07c17b957de4d47a80b7ee1378a1e21bbdeedfebc9a"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/managed_acp.rs",
+      "sha256": "75c4d8aebe7053c4ecebb329212544ab847457c1a6fe6cc901ceb6d0d19ae418"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/native.rs",
+      "sha256": "8dba242fc47ae628e4c09ca48291a33468411c99508d3fcf3e9a543ce3611e41"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs",
+      "sha256": "ccfaef9857dcd97f4e5c76908a7a8a9d2a88ada9a2122c82bd891d282e338475"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/native_recovery.rs",
+      "sha256": "2f19d1a4bdd3a3633200aeb2ae631b9f9e223ea8a025179929f954206e54fd18"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/review_barrier.rs",
+      "sha256": "6f97b458bdbbb57ec7e4d3811cee62dfc0bc57c6753d4002836cacb6cd4f47b2"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/start_recovery.rs",
+      "sha256": "7e944f5427413728bba78831fb663e452a5adf6a3d699f081a059c547481bb4e"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/threads.rs",
+      "sha256": "fbf7c4aac4d4de79a594e41b9c2b715e1bc6ec7f9b6868f4ff3bb1cd7391adc1"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/workflow_edits.rs",
+      "sha256": "f216ee6cb23fb19e53f3e993d0857bdaf520e7f21f78ae7e6dee6e8b0afb689d"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/workflow_permissions.rs",
+      "sha256": "aff79f90a1c466f9cd70366e9deca8a83cdba33cbca31bce52c61942029a90db"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/tests/workflow_recovery.rs",
+      "sha256": "cc283ddd08e3226c5c7bfdbd089e4b9ef5545c14697cab092ee78a18bce4e840"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/threads.rs",
+      "sha256": "86fd63afb614fa9549b9de4353fc92e90718e33a346f7f3513bd8627d4414cb0"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_runtime/worker_handoff.rs",
+      "sha256": "cfad527446ca4108f2322433cbb990867499e7b5e4c016434d720cd7340e7a73"
+    },
+    {
+      "path": "apps/bitrouter/src/goal_store.rs",
+      "sha256": "65a2e882ec0d9dda9a694e3eeed78b403add218437501a33210dc185e3748da6"
+    },
+    {
+      "path": "apps/bitrouter/src/harness.rs",
+      "sha256": "101efab34c67b718396e1adb9bf4ea21bd940f095069a9a5ca5eb87d093842ba"
+    },
+    {
+      "path": "apps/bitrouter/src/host.rs",
+      "sha256": "0dd7c83b91adef4425e1e178de3b3167ef366817df4627f977ea3b6c6ff7f7e2"
+    },
+    {
+      "path": "apps/bitrouter/src/lib.rs",
+      "sha256": "5dac184788387d7a4a56afd2a867749745ad34082a1aeec21936bcc95ae6d523"
+    },
+    {
+      "path": "apps/bitrouter/src/local_cli.rs",
+      "sha256": "588109aca4c98df942bd761f4242357beca938c76e9673a8f0574c976e2edb09"
+    },
+    {
+      "path": "apps/bitrouter/src/main.rs",
+      "sha256": "99f8796dcffb01d72e8dc3b3f860aa8ca9bd4e9ab5212830b5ca477bab48f124"
+    },
+    {
+      "path": "apps/bitrouter/src/managed_store.rs",
+      "sha256": "a21c5de15f524b8f2b8a1ca77c8bb2dfba157697c8209dacb05db9f713233838"
+    },
+    {
+      "path": "apps/bitrouter/src/managed_task.rs",
+      "sha256": "11d195bfd10cb7db71b3bce139445a17b84d1fe41abf0d8dda5dbc1aacc90b91"
+    },
+    {
+      "path": "apps/bitrouter/src/mcp_registry.rs",
+      "sha256": "f0546c1540ee0a81cc1e7c18cd383104664ad4f2e2b599118b17c5eb280f001e"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/db.rs",
+      "sha256": "f71d9dea44be92889bb70521d64d3984e512c980d0f4985fd9e23d9252466f0e"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/decisions_tests.rs",
+      "sha256": "6456ca6ba0d287fd652b6f52573e733cb1dbf12b7b274c146a4253a95753aa08"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/entities/mod.rs",
+      "sha256": "31b577058f65904a8b4d7ca58d6d43489a3b1d4f070c4420e901b9fc2a69e7e5"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/entities/requests.rs",
+      "sha256": "ddc9c464f2d21ea17a7ca7cdfabdd79da27de3d938ca972f49697030ca210760"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/mod.rs",
+      "sha256": "f4a84519b8d1432f38b6b997f6ee659c356e796cbaa4514dfce9dab7881fe50c"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/native_cost.rs",
+      "sha256": "f7e33716f5f0d86726ebbe77df3a4eaacfe3125bf60d0bb429c0e4827a548af7"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/native_settlement.rs",
+      "sha256": "93d24e454eac0c3859c6549a4bb4f01bc6282d96a8792128bda668de2d2220dc"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/pricing.rs",
+      "sha256": "3b0d4c46f100638ab48b0b53e4cbc1b9a85c1bf0654e0b2782f727cc2c4b57ff"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/reader.rs",
+      "sha256": "5cb7ed7d1e0f862dea2424899cca579cefb6ba5bf69c474092b072bbaece432b"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/reconciliation.rs",
+      "sha256": "5f075cc726def6c33e16d08fe5f5d37bbdd7bb94069b6596d3ab63af6ab1299a"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/recorder.rs",
+      "sha256": "a78735c524a0dc13f288239340c31cf9f012250951a801aec8ea2e203de1dfb0"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/store.rs",
+      "sha256": "e5b58ec717154e06ba62581adee0055749029c2d32e1d5e044c81f3baa62f115"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/tariff.rs",
+      "sha256": "5fb18f4a9626aa53553c43f5325679412701674ad9505a0cc718777bd47ab55a"
+    },
+    {
+      "path": "apps/bitrouter/src/metering/tests.rs",
+      "sha256": "8aa5d9ea012a29d25c509fd9cc82e9e7c238a430780f6721f2a2be25669a119d"
+    },
+    {
+      "path": "apps/bitrouter/src/native_acp.rs",
+      "sha256": "ced69d28117d7eb2d31243d66403aa55fe16277a5c60492c7c3c80947019e7cc"
+    },
+    {
+      "path": "apps/bitrouter/src/native_code.rs",
+      "sha256": "ca2dc1b438ae4cf408e6fc9526f13bef4ee43cf729ebe58d35482d38d9d831f0"
+    },
+    {
+      "path": "apps/bitrouter/src/native_code/presentation.rs",
+      "sha256": "4de024fab0bd5df55c743de69e260d1915b7a728560cce6b58729115b25b67dd"
+    },
+    {
+      "path": "apps/bitrouter/src/onboarding.rs",
+      "sha256": "5831e4caa352beabb51d810b8b14cae819398179f4d0a3cfefc8d3cc0dc029fd"
+    },
+    {
+      "path": "apps/bitrouter/src/optimization/cohort.rs",
+      "sha256": "521bdb82a04cc5acbee874566ab91407e574e84ca357809f14997d4c2535bf60"
+    },
+    {
+      "path": "apps/bitrouter/src/optimization/controller.rs",
+      "sha256": "4c157eed19733b6df41b13c178a7c73cd206c5d5f32daa0681cabd5f7f13458c"
+    },
+    {
+      "path": "apps/bitrouter/src/optimization/exploration.rs",
+      "sha256": "529ed464e44524b519d0d8fe7bd8baa01a3065548c49647a1e5891767692d708"
+    },
+    {
+      "path": "apps/bitrouter/src/optimization/identity.rs",
+      "sha256": "53e8c8522c3a873f4c825d62872f13f01326a5113f7ba5c1114abf4205347435"
+    },
+    {
+      "path": "apps/bitrouter/src/optimization/mod.rs",
+      "sha256": "541b7eedfb5f7a1312a7011c4cfb126080732f6666bcabd64465f3b8c63d2676"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/auth.rs",
+      "sha256": "807d0021e1355ec2f6399401836a6c3a73e4f867eb53eedb0be0b7d27a1f9dc6"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/channel.rs",
+      "sha256": "37752a4ea7c170d48839f35b8fc2c2d112b27826a07139680381491dbef849ac"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/channel/authority_tests.rs",
+      "sha256": "079d7c328a47c4b0ebe3ad35a650f13fe07a868f644596ee32d8d6c47de6b1b9"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/mod.rs",
+      "sha256": "32cc454076a06ed9ebef34c809d4014b73371b91dd7a79700e5708323ed8f181"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/output.rs",
+      "sha256": "f6d96018b52e4700f25c41b83a0c57d7a358d7cfa0df99d775fedd79b6e6077d"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/responses.rs",
+      "sha256": "7b92af86d38cef1e578a23b6ed78b0497846ed0e31940d8e0fd8db16fb6b193a"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/responses/authority_tests.rs",
+      "sha256": "a09e5adf1bf7d5a391048d11c2ade8b6b74ec4c518ab5b453a9dacabe563dc6d"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/responses/projection.rs",
+      "sha256": "8906806b8066c97a0fb93cb3446650046afd520e6ab954c4ca5a45d36b05b5c4"
+    },
+    {
+      "path": "apps/bitrouter/src/orchestrator_api/responses/stream.rs",
+      "sha256": "e5601f453b389a58c63b2cab7fcf45bcc49eddd40de32d4550315b74689b3b2f"
+    },
+    {
+      "path": "apps/bitrouter/src/output/error.rs",
+      "sha256": "fe37ca8c1c3a80469168d7b42c52171a8bbe985b1937dc29eab40761b9186fa1"
+    },
+    {
+      "path": "apps/bitrouter/src/output/human.rs",
+      "sha256": "6218a351206c07350cb8e39cc1d07a56851285422a8ed086c8bba23595106639"
+    },
+    {
+      "path": "apps/bitrouter/src/output/mod.rs",
+      "sha256": "652dd0ec66ea707a0396697d521ea9d46ea82349ba20de31eddafefe447dcc86"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/admin.rs",
+      "sha256": "82673d209178beec38ecd8aebfbbdb52497db65b0d219845f46bdacb44bf470f"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/administration.rs",
+      "sha256": "50920cbfd5277a608bb18c53185e00d7e7fad4bfb0536fba5754a2d330348087"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/agents.rs",
+      "sha256": "080e1a0a2ab81910f84bcc82b2c13938d3c01e537c5d79e4eab37a3f73beae14"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/commands.rs",
+      "sha256": "0fba7b448bdc1ee01a13cf68a14332a098feb7e76ea55f5246e418f5aa75a040"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/config.rs",
+      "sha256": "09766c4ffaa7867218ad12200620675ca7b9100ecce1f0991733f2c3000e18e8"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/daemon.rs",
+      "sha256": "7bac4cbd40b7b71ad3aa67a35b438af292eabf7d22c1f07a817311e8ddf6ade0"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/eval.rs",
+      "sha256": "99f4d0f80e31d7c4f8fc9ff8e213fa5c1c7ee54fbc24cc10c2bbf4d8598bafb4"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/mcp.rs",
+      "sha256": "7d231caa83d862b748ec1ac57066df2aef9cc26ae9ef72766fc53915432052d2"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/mod.rs",
+      "sha256": "19b97ff15884d7470e381a646aa0ef067771976d77759a7f7c2400e0985b89d0"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/observe.rs",
+      "sha256": "2f564b1756e222c445074f16267a7f848684201eebbb8679317a547fd6c290a0"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/operations.rs",
+      "sha256": "cc57cda49c09da9445fe307de78a48cc5be3897f5a37b3f54187df78833604ae"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/optimization.rs",
+      "sha256": "09766e3fc1f941f495355b08389b08fe40ef03397dede59515db37ddfdb16b73"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/policy.rs",
+      "sha256": "9ca3b6f134196382d16ae3b6dc7809995eb743c20f310137e8a5806875d0f892"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/requests.rs",
+      "sha256": "c77e609c425be412f2fc285f3627946cab3ec7db77bb2cf971a3272b579ea9ac"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/routing.rs",
+      "sha256": "c89de894f54cb2ed263c7e1cf266c9dfe567fae928d5e936a0b582d496bf1cfb"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/skills.rs",
+      "sha256": "e338ee9699c24df3e9e95fb9ac33ed0767c7976f1fa2d3edebc278f9e1f4d5cb"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/tools.rs",
+      "sha256": "34a623584c0b699522f8e6f72a45b8e017876cb231a0b5b090b262f7990c103e"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/trajectory.rs",
+      "sha256": "51f6384446580961e92d3d0164586c48466932fd2f0554185d3d30ace30fe9da"
+    },
+    {
+      "path": "apps/bitrouter/src/output/reports/update.rs",
+      "sha256": "9e50c75520c41843fad530ae13ffbfd0dcebbca37434f80cb6b529bc8a77f162"
+    },
+    {
+      "path": "apps/bitrouter/src/paths.rs",
+      "sha256": "1d8fe1c486de4d48501c38e0a3f161e55fe72cc589cdde9396c9e779d597ff32"
+    },
+    {
+      "path": "apps/bitrouter/src/policy/hook.rs",
+      "sha256": "96872fbf34dfeecc343f1b9980920a2c7f4d76ec438ba74b67f9578ddbfc0027"
+    },
+    {
+      "path": "apps/bitrouter/src/policy/mod.rs",
+      "sha256": "8104760008feb6fb6c3695d3f2359df994526ba78b7583999041e320929e5a2d"
+    },
+    {
+      "path": "apps/bitrouter/src/policy/policy.rs",
+      "sha256": "96024397b917e406fb3cac062fe4ac04aa9be3cd170c491cfbea3a7e1b335207"
+    },
+    {
+      "path": "apps/bitrouter/src/policy/store.rs",
+      "sha256": "2d7d6ce21c603fa3cebb6ad0b7150c0609b1874da436f98695a194b1c0ca352b"
+    },
+    {
+      "path": "apps/bitrouter/src/policy/tests.rs",
+      "sha256": "ec58ce1ed99632d3ad239cd8017e8dd1c460498d6c9ed011f4a5afef3a9bf67c"
+    },
+    {
+      "path": "apps/bitrouter/src/policy_compile.rs",
+      "sha256": "b5cc68aec18fa1ed95ab9489cce904b1547f159f5bbe86b4bbc3223a772bbea9"
+    },
+    {
+      "path": "apps/bitrouter/src/policy_lock.rs",
+      "sha256": "f0daddef3a1fcdf7d0a8431fd219a844856153df3e0dfdc1b05a208c03e0bd12"
+    },
+    {
+      "path": "apps/bitrouter/src/policy_table_router.rs",
+      "sha256": "75d555b255b3913f78e100b0753301cd66120aea6cd043df154d8ae3961f9c46"
+    },
+    {
+      "path": "apps/bitrouter/src/prompt.rs",
+      "sha256": "5b2a0e57d46eaddf0ae33bf390a47391d855ad8581e820c6ced82a5d080b1071"
+    },
+    {
+      "path": "apps/bitrouter/src/provider_credentials.rs",
+      "sha256": "01c571600659dde8d82ea1b51e9fcb9186af9ad1576c1bb7d1c8c4ecee882453"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/apply.rs",
+      "sha256": "6b809afdb595cde4c53bedf6755b68be2322e9d93315807a0800f0355bf46d9b"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/builtin.rs",
+      "sha256": "8d2626c0a6a0ec618320d92871435eb215a5305fd2c54bd3adb3905e146b4753"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/claude_code.rs",
+      "sha256": "18bcc734952bbb5fc4f228dd9640a63640d5f8fa5c541297f1ce81d7d61f1dc9"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/claude_code/store.rs",
+      "sha256": "3523c562b09432c9c151e6c2bb6ec2bdbb772a5241586297500a3f5387858283"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/entry.rs",
+      "sha256": "5abbc47fa49678f8d637b2dc95cf923514fc0b5e6332bdd9e00e2fc03c9e5ef0"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/import/claude_code.rs",
+      "sha256": "8d55136e806629632d1538f83400a6ba7475b9bd18028b1fbecdddbbb3bf499d"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/import/codex.rs",
+      "sha256": "55eb0224ccf3fe309be88a5d9a8077694742d302dd8d9de91d03d8b90957375d"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/import/grok.rs",
+      "sha256": "cdcbd6bb7a9b6b02b594ad4e3fb346772c64145f234e4b4e69e349fb3d5fc291"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/import/keychain.rs",
+      "sha256": "d12225d10b7508a6994ecc26909d6fa14857fff6729752d4c38930a2dafbf90d"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/import/mod.rs",
+      "sha256": "3158e6ca86a7479264d8dc217441b7c5cebe187dc32e0fc1a3389abadd0c122e"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/mod.rs",
+      "sha256": "5ff0450d8f8c76a9005009ef9cf7e22b799ac530c233eea76b1ae9b656744e5a"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/registry/apply.rs",
+      "sha256": "0de60eee586f5766d23a0625b641feb2e1386f1ec193bddeb2c0ead18cdc648a"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/registry/mod.rs",
+      "sha256": "8c9b198b3179fd12416ddb6530005d90e1471892f58d85dafe7910d5dae05563"
+    },
+    {
+      "path": "apps/bitrouter/src/providers/test_env.rs",
+      "sha256": "2446d5fa034d33bceaed816a080e74126a84df453ca3afd46f65646c3142e826"
+    },
+    {
+      "path": "apps/bitrouter/src/reload.rs",
+      "sha256": "75a40bdb734e59f54cf192f2e99470d2475f38205a344c00e22991bc51b32035"
+    },
+    {
+      "path": "apps/bitrouter/src/remote_control.rs",
+      "sha256": "f2918d87e72f29765c12c196556e75cb6e3f6fa66bd5e0ab34bc01aa259c1a86"
+    },
+    {
+      "path": "apps/bitrouter/src/remote_control/auth.rs",
+      "sha256": "355e9619745b84ce1e71018c7a3c79c1e70537e9105763998867ef1157e3b515"
+    },
+    {
+      "path": "apps/bitrouter/src/remote_control/inventory.rs",
+      "sha256": "3eaa2938f6686f6db21cd73f8519ab90265befd90ed53a7dd93ba2c8f55ab11e"
+    },
+    {
+      "path": "apps/bitrouter/src/remote_control/operations.rs",
+      "sha256": "bfacb472206aaaed1b4e757b260e171a8cced39218a47ef1204a6fc1d6578c92"
+    },
+    {
+      "path": "apps/bitrouter/src/remote_control/reads.rs",
+      "sha256": "3db07ea46087c284db77046ec7c7d7afc31300d9f9ef5af97162dead2b0a0b12"
+    },
+    {
+      "path": "apps/bitrouter/src/request_checks.rs",
+      "sha256": "979878944b31ad7fedb67882dfdb802782ccdc7074056f9a61e5e0d782a98c69"
+    },
+    {
+      "path": "apps/bitrouter/src/result_contract.rs",
+      "sha256": "3923ad1d34264ff8db55fad56bc13708f469892b8bbc04bbfbb3511ca8b96a92"
+    },
+    {
+      "path": "apps/bitrouter/src/router_migration.rs",
+      "sha256": "c5ed142626b7425ceb5a864e23e04bf88a69368e7ceb927ad3e7e847c4da09c7"
+    },
+    {
+      "path": "apps/bitrouter/src/session_identity.rs",
+      "sha256": "f08ef4ecfa9a2a351986a9339a5dbaa0356adb439fe3e0760c98e8aa59c1c4d4"
+    },
+    {
+      "path": "apps/bitrouter/src/skills/cli.rs",
+      "sha256": "bf2f356e821e8254aa032bed14fe21b8929fb0a3c04c94232d1d8bcd8ec905d2"
+    },
+    {
+      "path": "apps/bitrouter/src/skills/mod.rs",
+      "sha256": "c49d4f980feec4d727a0f63b09a4c4119e9caf2b11061060cbecff1e17b8c5c2"
+    },
+    {
+      "path": "apps/bitrouter/src/skills/root.rs",
+      "sha256": "9a053be166fb84ce5bb40ff0df2e71d3837da05eae39165992c051f77324b892"
+    },
+    {
+      "path": "apps/bitrouter/src/spawn.rs",
+      "sha256": "71f0c12f989eb2b73463078aa16a014e4e3bf070bfe2032fbbf36e728aa97dac"
+    },
+    {
+      "path": "apps/bitrouter/src/style.rs",
+      "sha256": "64f1b60665eda976599f726efa31da94afc9f1cf00355166e9f7947e8f60d04e"
+    },
+    {
+      "path": "apps/bitrouter/src/supervisor.rs",
+      "sha256": "46032953bdfa9b2e2c076852f01658b1eb362a3c97051a59af236a2e3cbcc64b"
+    },
+    {
+      "path": "apps/bitrouter/src/supervisor/managed.rs",
+      "sha256": "89e54e5c9a0cab10d9b14ad3948d83bce2613d2b553b9fe47517cebd196bfd57"
+    },
+    {
+      "path": "apps/bitrouter/src/tools.rs",
+      "sha256": "718866f3c9f0f813eb18e6c25caf9980ecdd84aa9ee2c6246a5a19dce59b4fe6"
+    },
+    {
+      "path": "apps/bitrouter/src/tracing_filter.rs",
+      "sha256": "721c2639e3aa3c628e549d9c5b320ffff292c5740693adced52feb71fa53cdf7"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/canonical.rs",
+      "sha256": "b0a6ee1255ac50b680960f13d70cd657ec7c5f66eabe5a7ec2609c56423b0910"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/correlation.rs",
+      "sha256": "f424a32fb09058da08be465bba56ea0dd996ea006d2d6cc6e3eadb75bfa499c5"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/evaluation.rs",
+      "sha256": "f4f6d659fc6f6207baecfb4b0b8d0b6af362bb2eb06af246570a10d032b5359c"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/guard.rs",
+      "sha256": "bd8e4b58561d60a53e11f569e3193bf1f90be2cf190208f1b8d9d5e8944b2e51"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/health.rs",
+      "sha256": "f0d44a60f0bb302a6ecf01fe72e25bc84426f38cddf4d292e154f24e9eda6def"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/mod.rs",
+      "sha256": "beb029e15bd2be915bd87d46d5f81069c5b877c8ad0efc7557b3c90f681c74c5"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/publisher.rs",
+      "sha256": "7a5ed46c0eb797f96bc6df364ba0f35301e308456714d2cb4dd664d36fa9cbba"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/replay.rs",
+      "sha256": "0a073f5265a14430b4f7671d656dfe31948ab25ffd9fd4e503c5ecd7251998af"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/settlement.rs",
+      "sha256": "74332d441e2965d33fe65cd5a581cf40bce7c3e9259e3a02a73f72b1be4eebab"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/store.rs",
+      "sha256": "e0746b8855c30a0756745f32e009cf496561d35fd7323c0e85d4b086e4156974"
+    },
+    {
+      "path": "apps/bitrouter/src/trajectory/types.rs",
+      "sha256": "65c6095350774916d187469af20581816b2d7581c79d56780be496ec313b4bac"
+    },
+    {
+      "path": "apps/bitrouter/src/update.rs",
+      "sha256": "0d86b26db9ce9d75a1365c676648acfe754cbaf3be438dfdd1f418a34898a4e2"
+    },
+    {
+      "path": "apps/bitrouter/src/upgrade.rs",
+      "sha256": "46319384ebb811c3a72937c92b2052b1f172238f3bcff84f58f1eb5ff23e86d3"
+    },
+    {
+      "path": "apps/bitrouter/src/upgrade_preflight.rs",
+      "sha256": "10baa7f20817788bc1c27c6fa4c4ec104c532451c44a0434bb27620c415e6aec"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/archive.rs",
+      "sha256": "3aedad3f34f8a72b25b34fa3fd4eec27dfe6ca7d27c41b6eedb668f39fecb414"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/classifier_bakeoff.rs",
+      "sha256": "9b53fd35ab3dbed8e8e444b842d29b4b1c31095f1b8478bcb6314a622318bd12"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/classifier_baseline.rs",
+      "sha256": "4d5610e3b54f46c70e36740ca374967b242a5a5ae4fc044b599bc90906bff0b9"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/counterfactual.rs",
+      "sha256": "1aa5ac3adcfccd975c021c0316ceecb99df1020ae0e60a3046b583ed618962f8"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/decision.rs",
+      "sha256": "91c58cac38e431cf9a1aceb7124cb52d9614d80047fff27aeb2c7915260e0098"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/extractors.rs",
+      "sha256": "b551d6cb6baf13b2e1a18add9ea286ba700e4b55920b81fd5dcd9a04c1dfc732"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/extractors/claude_code.rs",
+      "sha256": "3375a4d60a9b9eb5a14e9d67ee0ad6333fc883452c9d15002c7fb406f0784419"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/extractors/codex.rs",
+      "sha256": "439f8f2f3d953f2abde66e0654087800d6f1450f3e6bd1d62caf8a3e20d6fe12"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/extractors/generic.rs",
+      "sha256": "3024a50982a7385d0f651b288cdf3cc06cc4728f69b27cd3d9c1a779cc856f67"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/extractors/hermes.rs",
+      "sha256": "8fb7bb042ddebd5b8fd9a0c1ba3d669b710bcc17d5152de738adc07ad49f8778"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/extractors/openclaw.rs",
+      "sha256": "b01dd8855568dfbfe91bb96842dee1007261a6f134ec0ceb58b9c1279c179ed3"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/extractors/smithers.rs",
+      "sha256": "df17e9acc9cbc87337b645cb002be7803dd9dc2b6f3e339e4dc85fc1cfecb597"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/extractors/terminus_2.rs",
+      "sha256": "3517ff13352076e203828384c5a876b4fd82ef7007ae6176230d6c35d2ba9e5c"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/fixture.rs",
+      "sha256": "513e806e5bfc897aefa8304fc7baaac61b8db05fdf96879398ea62f973894eea"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/ir.rs",
+      "sha256": "17b79002b6752a1b53a07b340380dd5ad7556c7872a6921412ac9111d9ca0319"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/measurement.rs",
+      "sha256": "c519f4ff09d163c10ee24094ab9be5a29ed04f7956d3495dd7d6e1b113742674"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/mod.rs",
+      "sha256": "485d7167ef069aa294d7910bfced01454de505cf6dc05d772ca0655d90713b05"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/online.rs",
+      "sha256": "c6ed0b470612034732e8112caac61db3c59deb9235826c1277309381ab542af0"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/predictive.rs",
+      "sha256": "f0fa41e8a157cd06222100a6438f80146c87b2a25dd328c6078009409233424e"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/real_trace.rs",
+      "sha256": "ea57cd8e2f6d9420da008663bcc71a0b962b093fbde5c44ba1d367479291866d"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/replay.rs",
+      "sha256": "b128d842c056ca1291ec533e4a2d83ac778b1e956086af24764fbe6885ca9053"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/response_observer.rs",
+      "sha256": "6dccb222be577caded6b7bc9bbaf8f509b0edfe3359182305321af8900f6661b"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/reward.rs",
+      "sha256": "46b75336860e4c807b433d96ebd281e2cdba3e67141d6ebcafd444044f0977fc"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/reward_feedback.rs",
+      "sha256": "d007d448e5fce3a0b9ebad4e878f39b055d4b81a2f91930b752125125002132d"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/session.rs",
+      "sha256": "55d33d9dce6a4cc8c4e08382b401cc7bb696fe8d82466045cf38cde3261d67c3"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/shadow_classifier.rs",
+      "sha256": "38930433d2ba30909dc4b1665711eb94e65490664dddcb3315fd0c01ff7918af"
+    },
+    {
+      "path": "apps/bitrouter/src/workflow_state/shadow_policy.rs",
+      "sha256": "4ad52e20aa19515909d7d33b1207c03302cbaf285bb3ea8c876ed348e56edbff"
+    },
+    {
+      "path": "apps/bitrouter/tests/acp.rs",
+      "sha256": "abed5978e64db1eaec858eeb4b7cc94b1ce697e36b269b17bbf021547a007845"
+    },
+    {
+      "path": "apps/bitrouter/tests/acp_checkpoints.rs",
+      "sha256": "c0fb2daf3e420eca0bf8f0dafd233ce23c6c9a893ae5c8e96d6f0a5d0e4272c1"
+    },
+    {
+      "path": "apps/bitrouter/tests/agent_trace_generalization.rs",
+      "sha256": "b0f4c0f176ffe4bfc1fede92cc800bb1e108c748c1bfc79f4b85d538f00fecf3"
+    },
+    {
+      "path": "apps/bitrouter/tests/cloud_api.rs",
+      "sha256": "a23e88a25cc8f3e1f5eceda1305b7882c2f2787dd01428d9e1c95ed82bc5625c"
+    },
+    {
+      "path": "apps/bitrouter/tests/code_tui_pty.rs",
+      "sha256": "ae8e01f3af8fb3ba060b3ad6dc2322979334358d410f7c09bc013b1d84e1aa20"
+    },
+    {
+      "path": "apps/bitrouter/tests/code_tui_pty/background.rs",
+      "sha256": "4e15bf10705db48d692341b436c1f5a7c640e24a962ded6e732c1491a3ab7fa6"
+    },
+    {
+      "path": "apps/bitrouter/tests/code_tui_pty/evolution.rs",
+      "sha256": "abc82f5d0b7d321900e4ccf86580f684b09ce61af78b488265f1727618aa8bf0"
+    },
+    {
+      "path": "apps/bitrouter/tests/code_tui_pty/evolution/native.rs",
+      "sha256": "1dc70ccb3e7b3c60db8dc581b762f41dcb08516f2377aec2c98515aed2bd41a8"
+    },
+    {
+      "path": "apps/bitrouter/tests/code_tui_pty/evolution/native/coding.rs",
+      "sha256": "7286b1ecfc6873647e9aede1a01fdf651f950324e0784f620e433962616a4ef4"
+    },
+    {
+      "path": "apps/bitrouter/tests/code_tui_pty/evolution/native/coding/publication.rs",
+      "sha256": "14133ebcc1a454f0ac1273151f47a0211b27692c7d1043f52894f2736d3554c9"
+    },
+    {
+      "path": "apps/bitrouter/tests/code_tui_pty/evolution/native/responses.rs",
+      "sha256": "3b929da820980dbff25d9088a7b2efb58250062a4df714794c3f6473d57c3734"
+    },
+    {
+      "path": "apps/bitrouter/tests/code_tui_pty/evolution/native/session.rs",
+      "sha256": "5c6b4f232a7d3b522ae9aab7e9d7c54acad03c1cb2ec063dae9b0b5bf4e944d1"
+    },
+    {
+      "path": "apps/bitrouter/tests/configuration_state.rs",
+      "sha256": "9a73b5538115d66cbd9bbaa71c70bb15781b0c2d291865f6d20327e6e73d5ead"
+    },
+    {
+      "path": "apps/bitrouter/tests/daemon.rs",
+      "sha256": "88db51558dddb2de2719867f25c93a844b6460f3c74dc8530303ecad88df8a85"
+    },
+    {
+      "path": "apps/bitrouter/tests/e2e.rs",
+      "sha256": "344f589df78d0656533e3a2f660f94342354cb72f164f09ab3ebff55d1d764e0"
+    },
+    {
+      "path": "apps/bitrouter/tests/eval_exchange_equivalence.rs",
+      "sha256": "36cfe21d4aacf00840280c6a58aa16175bc98139a05a522df518a32554a7015d"
+    },
+    {
+      "path": "apps/bitrouter/tests/extension_host.rs",
+      "sha256": "c2a481e28575ace84da387ba1eb0fd06799f80acd67af8c017265cb1fb421f69"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/acp-permission-context.json",
+      "sha256": "2dccd724e95f3d0ef155616ae1063b2656e5359bf681538ff8d4e33abbce7cce"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/acp_adapters/claude-agent-acp-0.75.1.json",
+      "sha256": "a69782e32701ed85e0682c365953d9dddee8835f62855e3b07ec496178057e1b"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/acp_adapters/codex-acp-1.10.0.json",
+      "sha256": "3b2e15cdbc1742f8d1debeed08c5d082c66889e28382e8d9d1e2f9b962c59018"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/hermes-acp-empty.json",
+      "sha256": "93270fb522fbbb5c585b989d968be4d87cfe3011a44d8e29e4d8fcd126ea04fb"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/hermes-acp-full.json",
+      "sha256": "dde5d77482c50c04c48de4129480e5ca85f1ed868bd66c910af42cc7864ccd9b"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/hermes-acp-pinned-outside-catalog.json",
+      "sha256": "fadf45e9a0884ca65184f796045577d26acae09fd4e3a475c80b80a490613733"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/openclaw-empty.json",
+      "sha256": "8b7b7252fe025aa42d50ed64a546edb9d6d049925f1619b858b6a0dd995bd2e0"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/openclaw-full.json",
+      "sha256": "ae42bc8fd161ba7622978daaf28de790c67011fd4521896a2fe36b42f6bd8f1b"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/openclaw-pinned-outside-catalog.json",
+      "sha256": "1fdf6f1609841fe27902b339043e28f48ebe639a32b3d326e9807b1a702c21cb"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/opencode-empty.json",
+      "sha256": "159f9fb646df1f1621532290478c9ab4b8a7d76061be661cbb2b908f0f57504f"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/opencode-full.json",
+      "sha256": "083a4b7a66461a59f37681edcb75c02a0d89a79b44be03b0fe98cef70262ab3a"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/opencode-pinned-outside-catalog.json",
+      "sha256": "6718e69f75087ef66eb7c82ac48c84f25c3214c68521802cc3e6faf106c69ed0"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/pi-acp-empty.json",
+      "sha256": "aa9733d8870ba08f19cc7af34a30b2fb11e372ced083c13ed74c65df6860dc95"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/pi-acp-full.json",
+      "sha256": "48f8a4c3a85e7441b06374c6de694d01af3eb0b68aa8d2f52484665e167c724d"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/config_synthesis/pi-acp-pinned-outside-catalog.json",
+      "sha256": "5775848c025cf8241ecc99a8540eb1f5e98b77bd8da1aae528fbc356ae2e55a0"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/session_compatibility/pure_model_api_sessions.json",
+      "sha256": "923da30c4b0c4033da55285e861fbbf2f62af407cd6ea9150535c5fb4c433cfd"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/trajectory/complete_chat.jsonl",
+      "sha256": "259e0b151e1f6ae20fbf7aaaf4651a15dbb9ed5b101618456022c4282ee2c169"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/trajectory/complete_messages.jsonl",
+      "sha256": "1b84391b2ae06a2793334f893193f096ac3620c975a54960266ab982046e25f8"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/trajectory/complete_responses.jsonl",
+      "sha256": "1f286cb97c295156cc947f7d48db0d9b339d0370ace0b31991722438a0c0ac28"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/trajectory/recovery_then_repeat.jsonl",
+      "sha256": "bc0d0c50c14fc9ae2df3f637cb598b1a48242762a58fd478ae97949350a95310"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/en-completion-finalize.json",
+      "sha256": "6d76cd5e53c4bc03b529cdf5046c98e1541f0bfeb55ead0e2f876b2138cdd7f6"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/en-opening-plan.json",
+      "sha256": "7f2ea02b8e6a7a4e183c918f71a69974ba969c8f101c1cfcf45d912f20e41f32"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/mixed-opening-review.json",
+      "sha256": "b654c7d5413e49760e4466f6b19b2f00055d67138bc7fba9d417da1eedb9da11"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/mixed-post-mutation-verify.json",
+      "sha256": "7e3e5800f7e59a9e469f79f2ed6008b9777922d856bb193192cccbe5cf7230e7"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/ood-opening-prose.json",
+      "sha256": "621db912247ca193306b0607d039d62b4ce279d45dde0a46814423cebf9b19df"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/short-opening-fix.json",
+      "sha256": "86ba385ef1a1fcc7e12d84887196e6f93746c4370c5584a2e374c79c9cf88471"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/short-post-read.json",
+      "sha256": "301cba19c5f8deef259ac9f985fbb110b807c0631444f723e4b2f9008fb0e317"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/zh-failure-replan.json",
+      "sha256": "35ed13862993f7b56c6747a12d66b6af92168f9346ed92b1ee265af95c1a2854"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/zh-opening-implement.json",
+      "sha256": "5496041546358d650e73454dcf19cdf39bd23a5f420c0ebbc2cba050af2eb7fa"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/classifier_baseline/zh-post-read-implement.json",
+      "sha256": "9c32435844c5c26aa37d3cc60701cbb95e0bb9e57e5bdba848afe6b62a059d2a"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/claude_code/edit_tool.json",
+      "sha256": "057313e6fa0f4a1073c4c0ac34d8c467e85cf07c5ac82db1aecf9837a8e5f09a"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/claude_code/opening.json",
+      "sha256": "2736fceca6bf11ece4103cf0126dd54213075b12289ff881e7faf384568535f2"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/claude_code/test_tool.json",
+      "sha256": "8c1cfe55ca2125558caf030d2e60692f16e0e8909e7be1b1b5d6e3e82f4b12be"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/claude_code/tool_followup.json",
+      "sha256": "96842b52be6a65fb69e6d267b89880c38d659c578d62f9d90221a927ac668ea5"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/codex/previous_response.json",
+      "sha256": "be085b0139c627a546cf0477a55303d639d579af76f0d9f796dd69725affc40a"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/hermes/midstream_planning.json",
+      "sha256": "ff19f640708b7b81d94a134fe6fb761b6b4f8e45fc0bc120217ae226d911c0a7"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/hermes/opening.json",
+      "sha256": "6c641292b10edc3bdc52ca9386ef1f7466774185492ed3cf39ef0634f9c7ed72"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/hermes/real_session_opening_20260703.json",
+      "sha256": "9c5e70b9d7fca13f0f43e92ded3fb3a5b2dfc912f037b08e534ed97ce504f7c0"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/hermes/tool_followup.json",
+      "sha256": "51a6ec6e9279393a03b777533f36aebc5b1269df5e3fabf1765b24537254434d"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/openclaw/runtime_stub.json",
+      "sha256": "ee52ed28f72bc3181953e395acddb62a4e8f0ca73ea6421d311e294232e51c56"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/predictive/near-done-finalize.json",
+      "sha256": "3ab5d9c087a176677f85ecb5873d2e71e2e1891b9371588bad42a25db1a1b86d"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/predictive/opening-plan.json",
+      "sha256": "9ab7453f65aa64f92221fa37f9fff7341dc2db0b0590035a5b032086bc0a2b5a"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/predictive/post-edit-verify.json",
+      "sha256": "473079d6a1df939074850b51ed4fe75643f464d2194123a614907c0baaf40289"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/predictive/post-read-implement.json",
+      "sha256": "8a1d735c07944364e9f8c34210c99723e28f888ca93d18bf80999b27823136f5"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state/predictive/repeated-failure-replan.json",
+      "sha256": "2370d3ca20910ee85647a9d7e0f92c858747916029ca6a6a79d067aa18fee01d"
+    },
+    {
+      "path": "apps/bitrouter/tests/fixtures/workflow_state_bundle_smoke.sh",
+      "sha256": "92e9f616f1948e234ba9eff80729ae364c07213bd3a7459a2edfd1d6f8a2b021"
+    },
+    {
+      "path": "apps/bitrouter/tests/full_stack.rs",
+      "sha256": "f0c1bf8347d63159fcae05fe10f162f000682b0efce5ba6e14a1b4cae667e4eb"
+    },
+    {
+      "path": "apps/bitrouter/tests/goal_tui_pty.rs",
+      "sha256": "8ece2ce514aaf94171a078bae35c3d1215fa903307ef088e04ed564a729d8ae3"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals.rs",
+      "sha256": "6d07c1d7dd753b8a356d8debdfc74b080c1f9695ba1b11b82a7cf1a04608f957"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/accounting.rs",
+      "sha256": "5525ed392461d7d5eb79442341457b77b0a55e4ebb4183203b2c5a30d33e046e"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/archive.rs",
+      "sha256": "dfe7d7a9d469c1bea61f1d9cd443dadb19eab6b2db8251649de92a5c3707330a"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/budget.rs",
+      "sha256": "a83217a13a1fe028ec7d6f386e1db52edfb77d6e14ad157758a5cc0b7db1a7bd"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/completion.rs",
+      "sha256": "2293607633abf5815cc6dbc5348b07474ca1fafac37a71c40da7963e2f018449"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/decision.rs",
+      "sha256": "e6daf87f358452e83f383763c15bcc4eda24429a97ee41f288c5e37becb69800"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/input.rs",
+      "sha256": "870c42a7688ee0ec2513e8d2185b839c2fc2647a8489991aa168774ef28f5fa6"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/native.rs",
+      "sha256": "536311ddffe8563c709c6e5243ccdc5cccc5a59b5f5b34472b7c13526cb98e56"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/permission_input.rs",
+      "sha256": "0f61790233e0c66b48e9043c237cea306eb1f9b8f92379310a213783f57b1978"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/recovery.rs",
+      "sha256": "6269ffbfd6e5014e9d4310676e17f7c8bbc20c9a85535ae23db4df516ad62ca0"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/resources.rs",
+      "sha256": "407acfdbef5ef7359faca2bfce52a76e4fc0ea422854f7d9d2cad1977fd4dca4"
+    },
+    {
+      "path": "apps/bitrouter/tests/goals/verification.rs",
+      "sha256": "45462031555836aaf3d7cef0decefce98b74ec61d267b29241436778a955ee9f"
+    },
+    {
+      "path": "apps/bitrouter/tests/guardrails_migration.rs",
+      "sha256": "5850ae54f989fcd8a9641fad2ccc11f0267c891f9f64873aabe23a763759e44e"
+    },
+    {
+      "path": "apps/bitrouter/tests/harness_mcp_check.rs",
+      "sha256": "5ae42a78c6ae22fd6fd49bafbbb7e77f7d4abfc11b8ae5e72013dba66a1f9649"
+    },
+    {
+      "path": "apps/bitrouter/tests/invocation.rs",
+      "sha256": "99f08f2c1944c2938ab5587867a6827af4203f7ca699d6aecd86044af9fa9136"
+    },
+    {
+      "path": "apps/bitrouter/tests/managed_native.rs",
+      "sha256": "682e25d227339593c069a0dcab4f06bbec9b6fa4982148d3231bbda0716d9181"
+    },
+    {
+      "path": "apps/bitrouter/tests/native_acp.rs",
+      "sha256": "f37404fe0904590b236c78cf899d6c0dbe73dabf11150e894b7bac8b82cc44b2"
+    },
+    {
+      "path": "apps/bitrouter/tests/native_agent_process.rs",
+      "sha256": "d746f54427267886a2517937b992af0c301b8318b663c60dcde79eb5f66043b4"
+    },
+    {
+      "path": "apps/bitrouter/tests/native_agent_tui.rs",
+      "sha256": "634f1107bd7003b5b0b1e47b1f161b6db6c9a349b4a6a5d79927ece303fefe49"
+    },
+    {
+      "path": "apps/bitrouter/tests/native_harness_resources.rs",
+      "sha256": "d90de3105b8b473fd36e5ceb73bed45fe05f724b8873b908bcbae9f386bb27ca"
+    },
+    {
+      "path": "apps/bitrouter/tests/observe_hierarchy.rs",
+      "sha256": "6c8523ba8ce0c4816f36f2cd1cc66e96d0aa01b291430c838e95e98acf9b352d"
+    },
+    {
+      "path": "apps/bitrouter/tests/onboarding.rs",
+      "sha256": "7a6f05d5ea285ae02418ca9a5c3baad8d08700da8e92e50d9500b2d5fb48c637"
+    },
+    {
+      "path": "apps/bitrouter/tests/optimization_output.rs",
+      "sha256": "e363e3caec53ec4bcee4375fda4162d09f2c2479b3f5bfb700772bcd906db89c"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core.rs",
+      "sha256": "be5e1d927420c940281f1d581c309b06d12626dd49f8f3403740b773049fafaa"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/auth_scope.rs",
+      "sha256": "03d33ebe795a4d8520c295c72e288404bb11c3620910ebf77e3d1268b69c0344"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api.rs",
+      "sha256": "8bb36b7f9aaeaa28d6772ec90b761e415e107319b2fbb3eb0936f546ce34e8b9"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api/authentication.rs",
+      "sha256": "fe09d54749fc2a4e43b4197bd51cc51dd95ea2bd823e4f8e503bb96945b48373"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api/collaboration.rs",
+      "sha256": "8a60715b3ec3f3d45c43626da1cece0cf4fab5ca112ee59cd49e7deaaa5cf319"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api/pressure.rs",
+      "sha256": "115b7956eefc1bc3218bbfca193a8886e5ffb7fde4777bb9741078d01e136990"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api/provider_limits.rs",
+      "sha256": "c31ec7656b6fae2cbb74d17aaad35a74dddb21c3418916f9d872a51ea1188e10"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api/recovery.rs",
+      "sha256": "8f333980203f58af1f9b0e6e2ac3790b243265d54307582ca976ca2e0e18b420"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api/recovery/control.rs",
+      "sha256": "094fe1c65399401b5aa6ce820818dc817103d309154c72fc49caca9d3ce383e7"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api/recovery/process.rs",
+      "sha256": "8eba6134f2446be0d9cf7fbbea299cc58a9909fc8d23758460b381741615e21b"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/managed_api/recovery/process/inflight.rs",
+      "sha256": "1cfe1176303fccc5439f46bb9f9d1fead20acc2e871929d0a3b7d7f314fe108e"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/native_http.rs",
+      "sha256": "5550a67a5b4f8656dfffb04ccf9da3845db718b5ad1de1cb777a0aeb9bfe4259"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/native_http/costs.rs",
+      "sha256": "40a14480c9695d435f5a5e310d6f5882da597168669c41e43789441f10e4cda7"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/native_http/private_context.rs",
+      "sha256": "573cd9397c2140651285944f706f6fae7f9d3002f97ed0e79ae3495c6124ed01"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/native_http/private_context/continuation.rs",
+      "sha256": "68b24456180072bc0c33d639d3f680463c02efbb520256b7b3aa97a9646a767c"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/native_http/private_context/continuation/collaboration.rs",
+      "sha256": "7eeb3f7abdba50cd3c5b8593b3b420e4119b1b79479ee3bed8b5c311fe8fb6f5"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/native_http/private_context/stream_bridge.rs",
+      "sha256": "e8752c60a577e5fce313bc143e0548b826f97cb47f0e54c5392ff7d8a6cbd2c4"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/native_http/private_context/stream_bridge/failures.rs",
+      "sha256": "a0acf1c86144c2de285738395d4df5808a5603b57c57c59f2fdcd94dd6438beb"
+    },
+    {
+      "path": "apps/bitrouter/tests/orchestrator_core/native_http/protocol_matrix.rs",
+      "sha256": "c90906e4af60336d9bdf0d55c2052037aa90afef7aa70f70602207e7e6c6f3d7"
+    },
+    {
+      "path": "apps/bitrouter/tests/policy_eval_control_plane.rs",
+      "sha256": "9db4882a59ba6cf80d2795175f646606d999869c2e43396d83c2046e060e4524"
+    },
+    {
+      "path": "apps/bitrouter/tests/request_checks.rs",
+      "sha256": "9e3099d6628e78362f0afd10b68ad835de1d7eef2150e506a9ece08c8974a48f"
+    },
+    {
+      "path": "apps/bitrouter/tests/router_continuation.rs",
+      "sha256": "c8f66c891a64a8282dfea7c98a5b2fbf2a690f54321c75f53a09e06b778a3b2b"
+    },
+    {
+      "path": "apps/bitrouter/tests/router_migration_cli.rs",
+      "sha256": "dbee90bfd881926f4e1a4e7f8db82a2c71414e1bacc9adb7d3f604197a0afd85"
+    },
+    {
+      "path": "apps/bitrouter/tests/skill_cli_contract.rs",
+      "sha256": "a205291f53c12a667c623c8513902145640d50da4a76b78eb3cac44b938954f8"
+    },
+    {
+      "path": "apps/bitrouter/tests/smithers_reward_loop.rs",
+      "sha256": "fb160389ef5abd9926203386e81927efefa7560704788472459417c64ff4fd46"
+    },
+    {
+      "path": "apps/bitrouter/tests/subscription.rs",
+      "sha256": "1baa99c3bbf0e842d9adf70d8094fe77ecf5ad4a5af29c16454dd3998abcaa2b"
+    },
+    {
+      "path": "apps/bitrouter/tests/subscription/anthropic.rs",
+      "sha256": "39e69e9cfb02178e1ca351756223ce01c9c2f964a9a7662ebcaf839d7f303da3"
+    },
+    {
+      "path": "apps/bitrouter/tests/subscription/claude_code.rs",
+      "sha256": "c4bb20b4c43a8948e767e982e811f12fadcbe6eae8345437fbf92f21af49d755"
+    },
+    {
+      "path": "apps/bitrouter/tests/subscription/codex.rs",
+      "sha256": "2234c76b088b80de38d7bdaba9bb2b07fb70099ad962239f197d9bc37f970077"
+    },
+    {
+      "path": "apps/bitrouter/tests/subscription/copilot.rs",
+      "sha256": "974b366d768070d56912dd6b76a351c09353f2f0c31177e3621dad87ff1c5578"
+    },
+    {
+      "path": "apps/bitrouter/tests/subscription/hosted.rs",
+      "sha256": "5ac25d432d65f3973da135bde7f6b8d7c3e119c8daa38a38eee5cdd49da5feb2"
+    },
+    {
+      "path": "apps/bitrouter/tests/subscription/supergrok.rs",
+      "sha256": "db2ddf18d9398daf2c3c85e270cc6ab99968837a8aa4b6c6235e7344dae81ba8"
+    },
+    {
+      "path": "apps/bitrouter/tests/support/decision.rs",
+      "sha256": "f2773d813b52a23bfd94a15211f8d0b7571e32a152041f7f54d17bb5608136c4"
+    },
+    {
+      "path": "apps/bitrouter/tests/support/goal_provider.rs",
+      "sha256": "22a48b995c60067f5d836df52773e075bb7cb61f5799bcf55673790ee90e574c"
+    },
+    {
+      "path": "apps/bitrouter/tests/terminus_2_workflow_state.rs",
+      "sha256": "e348f276a49498162c61a134236d99a6f1ba413e61a0f2488d48adbd3ca171fa"
+    },
+    {
+      "path": "apps/bitrouter/tests/trajectory_progress_control.rs",
+      "sha256": "3a28f92641ab973d085eca132b0d3e3b393c7f61c5372af3edba638566009935"
+    },
+    {
+      "path": "apps/bitrouter/tests/workflow_state_real_agent_e2e.rs",
+      "sha256": "5e50e3cb6a50a0565d517abe223bdc3a985dad11275fb520680393d4bfcc5d6e"
+    },
+    {
+      "path": "apps/bitrouter/tests/workflow_state_replay.rs",
+      "sha256": "9d63ca6f77646950e17156b43bb25482c3af31a21ca799fc46d3c31555f4ea81"
+    },
+    {
+      "path": "crates/bitrouter-ai/Cargo.toml",
+      "sha256": "15f97f87876e3c69548bd88882231043d0795902b8d04d80bb6b7ab68b108ecf"
+    },
+    {
+      "path": "crates/bitrouter-ai/README.md",
+      "sha256": "55d3059a73bc843ddac2b0cad17f7d390ce119dc62f32f6482c5aef53e53f27a"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/auth_code.rs",
+      "sha256": "4354d889774e875dd67068ad62a8397bde0276e2dcabd8871a7fd47e6bc904f6"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/credentials.rs",
+      "sha256": "2294935920cd1c76f8e65a38cccf13d22563e8ae7455ff416e42ab041d9f40df"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/device_code.rs",
+      "sha256": "c7be6065534f34e4c1d33b14d66c8fce4cd99212cc247c3c4d5e13e3bdaa0263"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/file/backend.rs",
+      "sha256": "31c0f17217524de04a917d52b489cb895c6a6887d36bef872030c012350c1d67"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/file/mod.rs",
+      "sha256": "7b843f05de3c864aa4867773ca579529265d8385edf4b3df0de183d9010ccacd"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/file/snapshot.rs",
+      "sha256": "8c56dcb15f660ad51fc69a5c13de625733d0d781b6e9f1f356ba38bd3ed5a2b4"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/listener.rs",
+      "sha256": "9fb87cabb0a7a07d7655c92ef6aa3266e297b1a0569957eb8464c5f4bfc285ea"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/login.rs",
+      "sha256": "a6da634072d30d7cab275d527fb51f6f201891c2491eafa1616d071ee09aaacb"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/mod.rs",
+      "sha256": "423de9e396c717975d730160b1a328dd5148e7feb8ff287c2fe2b79bee24e96d"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/oauth.rs",
+      "sha256": "7316a69e121ae77a4a4b23f7133a6be3f4c1428923d171fdd9b1cb297d2e1ad7"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/pkce.rs",
+      "sha256": "b317897bc8d54a91d1129080a2aa59ef1f01458cb06cbc01d163870b5b387a32"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/auth/store.rs",
+      "sha256": "af48bc5ef3dc85f061f6d5f5655b267540c6c873f563b9282e8a3ae14a55b329"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/catalog/fetch.rs",
+      "sha256": "9d82559b4f2b5a3ed448c6f22c14e2bafd5c682b7ff0f6584dd2f29caeb142e6"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/catalog/mod.rs",
+      "sha256": "0ec87ea340326e11b593f3cd2ca13fcbd8c7b61f15cb2cc5c306ef8955d0b998"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/catalog/store.rs",
+      "sha256": "dfbf8d5302c5f7818c9578e584b88dac53f5731cfb104bb9ffd12b04711ed6d2"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/catalog/tests.rs",
+      "sha256": "cd9a269c151d5d406d8b3319f74c6e7f4e37a1c93af107c76df5325e483a745e"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/catalog/types.rs",
+      "sha256": "24ff1069cbe12f617d2fc26fb56b2d7cf7b08c7ba69151744cc9ba6df69466cd"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/client.rs",
+      "sha256": "0ce393c1b83e777d6fe13f2b06bf6111ba77ba445a3bbec460b3fd0a7dc8e1ea"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/conversion.rs",
+      "sha256": "d796938ab8f8a42e4dd1e4091c90915215c5734f9c5887ed865d96b45dcf25ee"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/decisions.rs",
+      "sha256": "5200ad3945355035a227c40613e654e6d1e97f0fb0df2f96f230a98652f9c1c3"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/diagnostics.rs",
+      "sha256": "5dd73a663daf37fb89bfed52126758ef71c23583981078c91aa43cc9152737b2"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/error.rs",
+      "sha256": "031093094ad11522c8714c0343b1ef1bbdacee1b256d328c881992ba793d9471"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/lib.rs",
+      "sha256": "22fcab3cdb587daa712e7e39bd6d8c87173dd3f1b1d54465c06536f2849a5888"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/chat_completions.rs",
+      "sha256": "07dbce0aa0dd2c664c7a4c41a7a3ff9c1c0189a027557c4af0ca4266793d1036"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/decisions.rs",
+      "sha256": "b609648db496b3436c6c71a154d247ec863d3b12fa88eb1156245ce5376d0995"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/managed.rs",
+      "sha256": "aa36d26539a67a168ec9d33563d59a38ab4d4c45cf105331dd00ac4b52e3c008"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/messages.rs",
+      "sha256": "bddb26f23ac12185e42d0ba1639f7ecda82d21125395080d9c6593f4b4fcb961"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/mod.rs",
+      "sha256": "745a294b6783c63f73d049cf8b5d1ab13cb154342fbb8e6347f0a091e133895d"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/responses.rs",
+      "sha256": "5125c30beda07d17a35f71bfcdf2d0bef695b491f271c97e87203a5d3b5c0bbc"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/responses/reasoning_tests.rs",
+      "sha256": "614c23f0e7e14460e374c78843853fb5ae947a69742c5e06214c04ac56627bdc"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/snapshots/chat_completions_request.json",
+      "sha256": "aac6ba5bc0bd7bb0cabd52890ba8bb0263667861cd0a0b70189431e090b84138"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/snapshots/messages_request.json",
+      "sha256": "8c21b4b361f0479654cb3aeab65c96ce464448f932e1b284be16fa2cc100e7b5"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/snapshots/responses_request.json",
+      "sha256": "08ab8eac4e36cf342739c16270074b8c0aab92d6998649ae0422447fdccc42e5"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/protocol/tests.rs",
+      "sha256": "f9eb473f35c2fcee4aaabc6a99c3dea785c7611317e39b79f70852331fa886d7"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/anthropic/headers.rs",
+      "sha256": "a32027de0f575c6d40735fae101e001ea813859b256a5d63db7185e0eeb932a4"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/anthropic/mod.rs",
+      "sha256": "4b04288d2b9bece6d38f17ad953a7c502c32819586d26628602e2c04e900f5f1"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/claude_code.rs",
+      "sha256": "ad646c4334c9e738b3d032118c0bbfff47ed05c385b31823a12ba8ad8f1d1cce"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/codex/headers.rs",
+      "sha256": "1fcfc36b596494ff6309889d8aea9e5200dcd895f312da427dca058f472875cc"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/codex/jwt.rs",
+      "sha256": "62005fba31ca32ab7ddfecb1316ff4228438ccdb6deb7f5e93513fbff4b8a8c8"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/codex/mod.rs",
+      "sha256": "508c36757c81db0aeb7215201b6beb75eeb10cff59c0c7fa961d09ddfc1460a3"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/copilot/exchange.rs",
+      "sha256": "2fe1a036e70a4174eb36548fae6964eec76bf712e5dc3e57b7054ada6872a9e6"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/copilot/headers.rs",
+      "sha256": "3340ac67da13ddd94cab947e67b625c7565f7b58aa8a5df423a1c4ff3cbc8db6"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/copilot/mod.rs",
+      "sha256": "19d09fa57d90a1347b3c5d752990c2be30a0911b338931c3e4345cae7e823639"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/google_chat.rs",
+      "sha256": "e732dd8068e2405bc0a3bf6373f2bc1e7f8e10a813b20ad3511b2ead2e2dcd02"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/hosted/applier.rs",
+      "sha256": "8b623a0e626c52c85aa227b06b7e1979606d6af4faebb32e6bac938425b0fdeb"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/hosted/credentials.rs",
+      "sha256": "e265bcbbf8553b60f9a81fa83b37f273ae1a0487f6ac4dc1a463cabba7a5de29"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/hosted/flow.rs",
+      "sha256": "f3d7425c0ad212b2079b950849bf5ffdb9660720226cc2329fe3012b6f59274e"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/hosted/metadata.rs",
+      "sha256": "9ed51e13934c9c6ea8af0ecc4dbe7cebc17dc23042d30b246db2a9f2e7df3ee8"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/hosted/mod.rs",
+      "sha256": "0f804b0e5aaf417ee73cc04d82b5ad4d55aebf321a66aaac7b50f13763b719d6"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/hosted/session.rs",
+      "sha256": "832d662b48b70f27aab39f2f754c2f45cab196b161bf25d2dc022a09bc25e161"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/hosted/tokens.rs",
+      "sha256": "ce249a42d4969509b635378adb92dc89bc1f4e0448182760195508f779255a09"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/login.rs",
+      "sha256": "e9cf2cd04ccce9fa6a46e5800acdd615af661aa4bc735479afdb6d3921fb8fcd"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/mod.rs",
+      "sha256": "fd25ecc779fbc9107ee9113227605afb1b3485b9ca0259c40df37a13294801ec"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/retired.rs",
+      "sha256": "72ad9e843832ab14fe08b6a4924c08f3c713a8cc787e77d170740eb3cae481cb"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/providers/supergrok/mod.rs",
+      "sha256": "fee570077a2b5c81849d93d5de55df4ce61c7f04a5d10ae50020254750c2a932"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/stream.rs",
+      "sha256": "e77e28dcfc501a99c79219b2ff0d53b0021383e41a13ef019ccaf5fc5b310be6"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/stream/collect.rs",
+      "sha256": "7adc97ba002e2a76fe76e522908d42b621ff699ddfcef05df20026d5b61626a4"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/stream/collect/tests.rs",
+      "sha256": "83a722b958987d50119b6a5adc4050e0825a0a85d5165570632b412eefd47ac2"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/target.rs",
+      "sha256": "6c16669e043a793c95e11190fcf6291dc4f4a6fe1ae89c17aecf64d00a086b26"
+    },
+    {
+      "path": "crates/bitrouter-ai/src/types.rs",
+      "sha256": "38ad89311ae93601170f0db69ed9024f1b50048ed53d5f33dc2773ccd5c87fdc"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/admitted_conversions.rs",
+      "sha256": "39de9f95fbda6f1e471f5cf5d9cd771bdc80dc37aa7fd856d30d1bbafc338054"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/anthropic.rs",
+      "sha256": "ffb912fbc8bbacba4eae0afcde29eb4d2b08f3b6f46a5ede5f80c0f2acb89a77"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/auth.rs",
+      "sha256": "dac80fb0a030b861cf7cebd2b3e4c86a9f66004f725234a36249b26f0cb32cd4"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/content_boundaries.rs",
+      "sha256": "f1ae6829e95c3ab674a579af85c420366ba9f8674e2b8d9afb2ccc2141db1a8a"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/decisions.rs",
+      "sha256": "c0ae77c86e5d33d913cf91de647a3e59198a85eaf2057d324f327e4f7ab46e9b"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/explicit_login.rs",
+      "sha256": "aae9f14a180cc48da68bcc5193e8b1cbedc4ba167ddfce812fbb09695333e30f"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/file_store.rs",
+      "sha256": "f8166ee698dd2ef6535d3a5caa093245ec6016906fa83158e5478408d7e4e856"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/fixtures/responses-completed-done.sse",
+      "sha256": "eb3a234ff4edbcf976d5e5644815a19f3f04d43a16bf84ea38ab80f9917dad39"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/google_chat.rs",
+      "sha256": "34106c215cc06c9cc559db2938c7bdbf227f8b67cc76ab19c0634dd723308731"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/hosted.rs",
+      "sha256": "5e64186719d32498275883a03d3d2f5ddd49d663f3ec2c6767c19367480d40f9"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/hosted_login.rs",
+      "sha256": "f310143502b8a6816f5461fb7f7de61a296750c295984937e211ead3839fe198"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/ingress_admission.rs",
+      "sha256": "0210072886d50dd9092787c9457a76c1cec54682009c82a4859cb3b3e51cb6b1"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/invocation.rs",
+      "sha256": "da5811ad0389ffe149e923ece13abdd1ecc554b13dec1cd0013c2ee7f1743d9f"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/projection_admission.rs",
+      "sha256": "f2271cf12df4bfda47ff6a7244918422ff1b97edb0ae532471ca6ebd0fa433ad"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/projection_attributes.rs",
+      "sha256": "cdfc00aa64a0e9aa24fdc90d2f07e40ab1008f807696fa3c1ea574a53bae77c2"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/providers.rs",
+      "sha256": "c2c11398e446ed4a0a9617765e08786f89ca90087d5b79038bd93f6efb91123d"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/responses_reasoning.rs",
+      "sha256": "98e2ef437630d79fc7c4b527f5802b8933da0377906bccfa9262d2c23f683d17"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/retirement.rs",
+      "sha256": "c032b933f00facff6f345a5b9d289b8ef11aa5581ac3204af79dcbe6b7c37f09"
+    },
+    {
+      "path": "crates/bitrouter-ai/tests/support/conversion.rs",
+      "sha256": "1531d5699e3e118b3ef0fcdde5cb5189738fbcea66bdc25daa95eb74b817cb31"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/Cargo.toml",
+      "sha256": "2c0ca2c025686f1f1597bd623e5bab1568771c13a101952c5fdbd582b3a6906f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/README.md",
+      "sha256": "952fc60df9786e7147f9b49a176c73135d299175c9fddda111bf642657b993f3"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/capture.rs",
+      "sha256": "26fc8a0dc9b0cce3618375afaaf2c27be1706776ddca94530ece5473467015f2"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/client.rs",
+      "sha256": "2dddfd54a6dc6e8cfe27870cbfb76327fbec5db10deeb1481d4b8d549d818b68"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/controller.rs",
+      "sha256": "3eec0925df2a6c86b48a8b20fad709a519569f68ff1c5794e1499dd71b66a207"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/mod.rs",
+      "sha256": "c0448f402482fa84498a16bd1c8685cba4465435ef8def5242a22815ba1f7ffb"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/native/flow.rs",
+      "sha256": "e973dfdf5959f5f44e8066fd469f68ff6f10f7016d8d18b24da5c4310daa6169"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/native/mod.rs",
+      "sha256": "94657c08d7845fe495f2277218e4f5b4f40df4a06b800cd63155586bc805601f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/native/project.rs",
+      "sha256": "8f453cc861dd875c0fe69b93402084a804ef3ce99ef66a261481d185a3ae4a55"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/native/wire.rs",
+      "sha256": "410a9213c128f5b4348fc0867082687fe388241f82b47c6dbf990830c044b652"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/telemetry.rs",
+      "sha256": "cdcf1b45e89230410eb15fb13b9b1b104863cd4ab8ebb00507b7f6d6c273c965"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/translate.rs",
+      "sha256": "967f7adabf66696009132bcd48f1033207ead2ab81a1a67b2599949ccfcf6a2a"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/acp/up.rs",
+      "sha256": "ba56793e77cd9a4abfa82b81bb76eb4e53b522d34eb01a0699271e842587bdbe"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent.rs",
+      "sha256": "203dfb425ab03a80b2f0779e082a614775a8315ad948e170e2c368b369c8f159"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/native.rs",
+      "sha256": "5f1d89b24ef0444fe0357ac7594f12edd455676afba2819a4af06c643f7c429c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/native/artifact.rs",
+      "sha256": "f8375f6e53b789ab81a0e103346902a1e71bddae251c4296d35c56dc140e73f3"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/native/budget.rs",
+      "sha256": "9b0601cca66a5c9f1cfa279c3785758cdbab70372a0dd1702ea95cad84393357"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/native/journal.rs",
+      "sha256": "590b32d7e1e3a28a5514a7defdb419939122aa5113b3cce20da5fa71cd365d9f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/native/port.rs",
+      "sha256": "156ff61cdef862e1142ac8c2a96e6ea7f84433cb8015a2ad417a844c1a425d66"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/native/projection.rs",
+      "sha256": "a8e32163a13b45cd56cf33f3c1eb3c712ecee6f5ede64bac0936e85f1a773129"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/native/scheduling.rs",
+      "sha256": "93176607d3b4aa0845fe140b3d21c6f7526b2cce4b3ef95991512df0f0329a37"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/native/tools.rs",
+      "sha256": "af0fb34df9dfa80c03c693389f19144d4a6e6468035927631700c674be0d7a02"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/tests.rs",
+      "sha256": "f16a35199c3c1b153895d4ddcf50ea408b829140a10dee2ffecdf9a4d28c3a48"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/agent/tests_native.rs",
+      "sha256": "881eae9e9f6732d2888ea8c90a14d5f6a8bbddc79f0bc7f277a81f399d6937b2"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/context.rs",
+      "sha256": "17cb3ecef15d891e651caa66391a51d55d73c424546e8b5409b7174bd65e22e4"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/control.rs",
+      "sha256": "25a79b29f48f05c332e8eb8585e44777c47bad81aa9a452ad66510f09853489f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/accounting.rs",
+      "sha256": "d02fb03638aaa58197373bf60deb8f01a2976fae076b98a8653696d9c8452ff6"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/accounting/claims.rs",
+      "sha256": "fb9048c23e5fb13f9beb8f28ba9c201bc41228556971167e8c926b1f6eac8c19"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/accounting/work.rs",
+      "sha256": "9f18531b4c58839c28f7d24cd3afaf3ca62abcccd47c05ae0914679024258a40"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/activity.rs",
+      "sha256": "f5cf7e45f647a0e512cd224021d5cdbd21e4825c0910e23d29511711fbc76ff0"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/allocation.rs",
+      "sha256": "15ce52fd0a81c4fac1f0fe9c209a45c988a199908f8af965a0b4264c12c1c47a"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/checkpoint.rs",
+      "sha256": "b747e6f356945a9bde1ea2200fdd1882c4cf2a6c75775672095cf8061a2af1c0"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/collaboration.rs",
+      "sha256": "74afb3083f248e512bae387b7b02a637e8718e8dee8255b6fe779a82af7c01f2"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/context_router/evidence.rs",
+      "sha256": "d7d718c27bb03104c3db00ceb2d7e98e226b64e77d3450f88e1e290e5521141e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/context_router/inspection.rs",
+      "sha256": "e30cf8d83a8b19b5f1c81c7b2f4a9104dba6962ed44120fb42e7f48667084fee"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/context_router/mod.rs",
+      "sha256": "a8cfdd1f43faa04f5ace9aaef07fc350f45de657139505451810757828a63420"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/context_router/models.rs",
+      "sha256": "bc24559bc1bb2aec3708967855f5212a9ee13d35e685a1065b603c6c27480610"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/context_router/planner.rs",
+      "sha256": "6627667509485f76e86d860085d14335964eb65b5d5682a0260cbd18e0b4e121"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/context_router/tasks.rs",
+      "sha256": "f4a9253bd7a494cbf01f8e665c9d4322a49d240091335add8f11ae1f029c9e27"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/context_router/tools.rs",
+      "sha256": "d31bd7c95664d88e93b0af4860b38d967cca5b5cd52659efe801b4a7157fb20c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/context_router/validation.rs",
+      "sha256": "ae801d5394113c1df65c776fce2a659bf4ff43b1c8af302499c5293d56e331e9"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/mod.rs",
+      "sha256": "f626b93590896f586d75e380f1e016338ae196dc6666dce3332f8d618ba5c340"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/protocol.rs",
+      "sha256": "a4aa01dde371263e4a0c021928bf7e1b1435550191d936cf501af3c6c814b4c9"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/reconstruction.rs",
+      "sha256": "317f5dbc264cb3315612a1169e4406352603784ea90c805377bd4d44ac494ef1"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/routing.rs",
+      "sha256": "fbfe4e760b71fcbd9ed4320563ced571c960296bba4bf72b92fb9bc49fd5ce7b"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session.rs",
+      "sha256": "7f8338b6be07d126111c80a93732ac29a2e32f042a77ffcfdbe4e9974ca0a021"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/archive.rs",
+      "sha256": "3a62d02219a10578aaee0b800c5e29a73fc68c89d53b47ac2298d0e40b10bed1"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/artifact_storage.rs",
+      "sha256": "d912105065ba717f539e8fa14fc5bc9229aa4d26465b6969263f59289d356a90"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/auxiliary_output.rs",
+      "sha256": "cce16c54b65b6186d4e0bf032686eb5b19f21acd61864b122139c80a8f032740"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/budget.rs",
+      "sha256": "bf8cbec0593f4bb7e126508c7aad4558991f499f67d1185dd80c5dfa900a4b3c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/capacity.rs",
+      "sha256": "f0fa11b680b5ab875d47fa75ae192adafcfa36eb80737a2c34583f99c32927da"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/context_decisions.rs",
+      "sha256": "11172fbf4ba8f1898652d971e5333cc36eda93818e0c3f0f4dc253bdd0faf85c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/model_output.rs",
+      "sha256": "a5b62f90e1937f26a3274ba9a917f523e800f1b966c1ec5607583e025410a628"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/pairing.rs",
+      "sha256": "0d05b48c32e0aa756feac2d856b6931b71fde627e9ef7536df011d603982f5f5"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/preparation_work.rs",
+      "sha256": "f7ab18e51a80972ac09d0d87ced23c46dbfd28fcbf1076705e9fc18c6e5dad31"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/provider_work.rs",
+      "sha256": "2b29f38e3b1ed68e0426fd8b06056c66097240c9ad0207fcd2aaa5260fa269bf"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/reconnect.rs",
+      "sha256": "e61d736a7a50bc395f45febe16e3353418b317255ccb868f007ca8ae6e7d18db"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/recovery.rs",
+      "sha256": "82f619a8a47f5f8b907c700d1a024be3354a876927d04c5dd279a7a819e8ae0a"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/recovery_time.rs",
+      "sha256": "45045e4560566f81892063cf80393e92273227d51d52ce699eef629e4d30e225"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/release.rs",
+      "sha256": "a58a6ad53be76deec2986fb2d4a2768e4b695ad5623b90f1d6180e8f87d4312e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/responses.rs",
+      "sha256": "5baa0ee65ed7c05ea87efdf62e20fbacd957775211bea5cd6dc1cbba7e63f76c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/restoration_activity.rs",
+      "sha256": "1477b6c345489dbe5a9c19315d25fe795df4de5e4bb1e71e76f6d7f59ddc81cf"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/root_queue.rs",
+      "sha256": "48a85ea05b18845f728eb7bd90b955be55c7bda434800265f797840df836890e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/steering.rs",
+      "sha256": "6692c7dd8f672d7ac1eb692c47314fa88eded82d2221c5183e2bef8ea745a860"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/tool_payloads.rs",
+      "sha256": "dbc32b373428f548f8fd5b1b4a2dcfd5bf25f6865da56136f09b6abd706eb683"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/tool_status.rs",
+      "sha256": "de6ba82cabb61296e91d5032c2cf73f39e5c316e12a99a5250926830cddcc5c2"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/session/wait_output.rs",
+      "sha256": "fddc02461ee5a3e95af33f6f4da56e2302de0c297c4d64ed6b9a876bc7b871c7"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/core/signals.rs",
+      "sha256": "569348b128065559b9aed203f5af1b8c98fd48dd7559484d75c2697033ce6bc6"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal.rs",
+      "sha256": "6eb07a9c0127f8aa97f3ec05d94116ef4dd8433764fc0df70157b80dc9c9d7ec"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/accounting.rs",
+      "sha256": "c1eda3d4b137d8968eaf4249302df05dfa475fecebd3c02eccfc599dda4530de"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/budget.rs",
+      "sha256": "686dfc802fee400caf311807f3d179c6ca19895194cf179c43eb559ba2ed72bb"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/completion.rs",
+      "sha256": "76eb5cbb89d5d3c59e71ee54fc77b8f224e5183bb4d44a9482ab3258243f3714"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/decision.rs",
+      "sha256": "04143fea6fab1bc55f26f00426dcc022a6f095b21f282e0dfc206e21f2388a10"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/input.rs",
+      "sha256": "30334fd9530208390e8da98876c7bf80fc503c8ec27f5b9aa966ba1ce7281f0b"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/input/scope.rs",
+      "sha256": "4afc099ba57ea0800253a1707a6708653bb6b1aa2813c59348cb0d0f3d8c8a73"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/resources.rs",
+      "sha256": "6ffde6573dfffcab28b1e8ded7f6931169f7ea2b929bde3fc1dad5c5345f73a0"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/verification.rs",
+      "sha256": "5d9609a486ecc120c35adc80def2aa7fc633ad9cbb09d2695841679cc42a3897"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/verification/tests.rs",
+      "sha256": "bdc34b605157c2ba00bae989f83008e9a8deaf6dc58411365e0922127fc68c7f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/goal/workflow.rs",
+      "sha256": "0bdc6125b985fc0587543619f91b9d08b18227c965c979be66c68263bd32a9b8"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/instructions.rs",
+      "sha256": "aa9d38a7e4e1330602851738b62c28e39f7ac499b132ba4b000b232dcdceea9c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/managed.rs",
+      "sha256": "4e43625172e206a0bf8c526cde9d1469434e994fe6e47338d63012c38213037f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/managed/session.rs",
+      "sha256": "445306bc042bb4d1d303869d59ed9626df42551cd593fbf09840ef6f74d74e6e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/managed/store.rs",
+      "sha256": "28b023a3c5fef8099cd64c661a12d71dbc2bb106e6e74b98c0a6fdc033c20f9f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/mcp.rs",
+      "sha256": "45e00ce5f467f41e80e8fd00c06b8104ae7a390b9a4d61428e2b1af5fcf0757b"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/mcp/process.rs",
+      "sha256": "e4ae6d49cf5729108dc677b3e11c454af214c82ff28c7e7a07dd172ddc44f837"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/mod.rs",
+      "sha256": "b1f956a3f9dfa9ed3330592e95b7b169e69086b0858c30e8eba198284b3f5872"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/skills/format.rs",
+      "sha256": "579428ea2080da4495cfc06e1edc1548975ee32bac74b845324aad21c56a211b"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/harness/skills/mod.rs",
+      "sha256": "c8eedd65552fb63015fc11070806d12e3c933f945195857795ff6b3d88e0807e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/item.rs",
+      "sha256": "6a5627088486e0273de22a2c42f381747925eee02216ccc2a651ab59207e229c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/lib.rs",
+      "sha256": "7e62a631c587f6cd72f6913710ef53a5603958938102997080a45fcda5c68c59"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service.rs",
+      "sha256": "79252d3b7dac51205a159c681368fcda8ea09177f787112c61bf2494690a9710"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/admission.rs",
+      "sha256": "557ccd79bca898d9740456775e4aad816aaf6b82864b143c7c15234799852cf0"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/approval.rs",
+      "sha256": "e4b9ee0bef90ca4b44f13f81e4a4a795fa78d7b8c68397c2cf7746923b0e2966"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/checkpoint_pages.rs",
+      "sha256": "3332199f152342850f4db91ecd10e6099d43d9a7a2469463488c4f0af682c2b1"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/close.rs",
+      "sha256": "178f0825c044df9f2f3876ff8c3c06011de838e2ab4ad11e6a9e76abdd86b547"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/commit.rs",
+      "sha256": "db0b0720ef160daa6c927ad9832f232868e717cd63b961751d82c06cd4858395"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/generation.rs",
+      "sha256": "416135ee50d55c6c34c3c9ce78dafee3e05d144659292f03617bb1375c7ecdd8"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/observation.rs",
+      "sha256": "ccb704b6e80d9152f931956ebcffb4ed7fe5ac66b73e1079590603c4fe546404"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/ownership.rs",
+      "sha256": "ca8d1205e9d849a9ea8094529e3c882fd0ee9832170fb9d6b8a3f40bc3005634"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/queue.rs",
+      "sha256": "29cd320d929dbe9d92a1f2219a2340c423e02dbe79d37418f2db0936a7e31294"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/recovery.rs",
+      "sha256": "470431e030bea1c759f255dea9ed7da48f57139e3def4132761666f661fdc9ec"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/recovery/acp.rs",
+      "sha256": "e1084ce4b3fdad4a58238e32955bc748c700cb4d7d67857b309aa3f4185bfab5"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/recovery/native.rs",
+      "sha256": "954a11ea90419e1cd5a60fc37bac08cb9ef381b0d01110c5f072a31c83cae72e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/recovery/tests.rs",
+      "sha256": "a186d031f823c1fd6aa9bad3bf732e771b19ac792c4e3d07fcae53ead8bfbd3e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/runner.rs",
+      "sha256": "f6345d0696f24fc9a0fa6545ce75b8d78bed6a4d35a063c3549c6f6ce70f4df6"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/startup.rs",
+      "sha256": "469c8817e006faccc499126509ca04fec9e4df55a73f59f55f7d09237cdb258c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/state.rs",
+      "sha256": "ef58fe42a13fac269aa453971c6f1a14106ecd839f3406387910f3cf69dfabdc"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/steering.rs",
+      "sha256": "c1d4937b5da0882e7e3e464f4e73c40555c4ab7274c75f40685ac480149b5ae8"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests.rs",
+      "sha256": "5112fc21f897e6d12c34c00412f9182c83b371c688f2bed7bf280a4b3a012bf2"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/close.rs",
+      "sha256": "7135dcb25a55f6345c177030a41cc0f89b66f7eba03ff5189b9764094a35b79f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/generation.rs",
+      "sha256": "07076687140fc9de43ec8d461f2a8931e09f293713761a57c307fef234ecfb78"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/generation/routing.rs",
+      "sha256": "2de26bf940bae0cc2b441c6030f9e02509a918aafe49fcc6a1a66291df708257"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/generation/waiting.rs",
+      "sha256": "ca935eff9e2f65e8f8a3668746037171f8c9397ca59f585e83e23f6400a39372"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/goals.rs",
+      "sha256": "f1759a3541d53ca5801c7d086840e08cd04a62fb77892590aa333ca3b5e01cc1"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/harness.rs",
+      "sha256": "6046da2379a096378a612826c17879e24e8a530bc8e6fb53b3039fa32f6ddced"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/instructions.rs",
+      "sha256": "6ea343da022a630cef93f608e99f0de4fdcdf706084b877278003e7652b4c119"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/lifecycle.rs",
+      "sha256": "3aa7a2249d0e5d4232ed77dd18bef15fb70810938dbf657d9a2b5ca979fa39d7"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/native_acp.rs",
+      "sha256": "0a8ef806f562a1db81562be9deb882829085ecdf8eb0100f7da0eb99699cdf55"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/observation.rs",
+      "sha256": "4714e8f8f00fe472f206f6bce02476d4b8fc9962177e5a2907e69339f4e43a51"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/ownership.rs",
+      "sha256": "e49df58a5ad07156c28fcaf430d94cc5d25ae49f8037c7eb57ebc0c4de7494fc"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/process_recovery.rs",
+      "sha256": "3ef24c6b348443d1be5736a5ff3be6cab1b90dee810c513b4c848d946565d85f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/recovery.rs",
+      "sha256": "ba88395437729be1a74f726bb886b9b6f9cfeea00bc9e4ee80d97929fa57ac8b"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/startup.rs",
+      "sha256": "6f70dd618d7ab6cb175852d28a8dff415c4057baec9c39da8e09ebd5b5632d0e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/steering.rs",
+      "sha256": "d409c995a3a9667e4b9db89485663eeb7044d388538652c8f6c940d8d53f268e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/support.rs",
+      "sha256": "c8ed0676aeb016e4ba3f724c0de218fe68e16f30da6a335c9273baed68dc54d5"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/thread.rs",
+      "sha256": "c14f4e2be8e11842c22401b8caf9b5beafc4e856e5dc83d4270a0cc8fea1e907"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/unification.rs",
+      "sha256": "516a99e010235257e4dcf9ec025d080baef1328037d2ee81e97d45eccc188859"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/worker.rs",
+      "sha256": "9328d14999332aa9b31e21e1a5de0d32abee5ab24049bd9425a4f53e5c32a9b6"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/worker/acp.rs",
+      "sha256": "7192941431428e801c9672f5b56992befa62ac7a778a5c77eeef983989b50976"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/worker/decisions.rs",
+      "sha256": "502cc46193bfee5b60112ccd7dd7e9291f38086bf0b5394395e5a88eff6747a4"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/tests/worker/waiting.rs",
+      "sha256": "a7efd9a4fa90596ec71ae56e551bd5b11f00f8cc52affa6972d79933e77633bd"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/threads.rs",
+      "sha256": "e40543a7b351811ab59cc6c1e446ad603423627d0c6df0f68cf9d215d306170f"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/verification.rs",
+      "sha256": "c4134e4c4303ecc2eed53cf0ad6ed072978e6564b09484e8cb9b80b7b75dca16"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/waiting.rs",
+      "sha256": "cc09d29963fad765f65c746e4b1410b5fffcdc6b129b7ad1fbe3ca65820e3eda"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/worker.rs",
+      "sha256": "5076a94dce0be32110da90ebea1195363e8b596dddf9ece819e11cecf0c946ca"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/worker/acp.rs",
+      "sha256": "95621a6265a1305125fb35c93e182e7e2ed303ee59b11a189cfac7978f263e21"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/worker/acp/execution.rs",
+      "sha256": "4f63682940211b7fec2b3cab41ca355c8e56e216e49824ebd05132da0ffe3a83"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/worker/acp/permission.rs",
+      "sha256": "653b8df60edaec46366639d21d7efb18e787671ef0d45cf82a1bec5a48e76e86"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/workspace.rs",
+      "sha256": "69126cefc895d25f493b8a61be033986bf3e1a57d4c41c5ecb684d4366add265"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/service/workspace/tests.rs",
+      "sha256": "23d7196ff5d6dce51dcf0d57e2af233fca859d88c5b3e67b5c957c1553a62d98"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/store.rs",
+      "sha256": "854acaa1e683789a420b430b8356392d53148be0c3a178debc529d5904e6ee5c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/store/discovery_tests.rs",
+      "sha256": "b95cba6646b3e99b9d58ade754cf594e7d3006f83d2f853efccb7e28ce96a622"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/store/tests.rs",
+      "sha256": "87fdeb63af74bfbc3e3997807289528890ca01ba6a792817b948ce37ae14aca2"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/thread.rs",
+      "sha256": "f75dba33d2a4a8031d6505d424a4d7b93ff18b1c657ce6a67dcf8beec9c76e76"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/thread/executor.rs",
+      "sha256": "64984774e7a60efb2c87644941aaa1eef52073ef26a443564783893ab65b4e23"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/tools.rs",
+      "sha256": "dbcbd60894aba7604a96eaf63048771ccc9d661a90f606895f2b4272d2b25b39"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/tools/edit.rs",
+      "sha256": "11718384369baee1d5764f5d5c9273227bbebc892c444d0aea33c7e6ed83f696"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/tools/glob.rs",
+      "sha256": "a6a630b8f765815d007f412f486999eca71ae457b45915af3043fb6fdf9e6e04"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/tools/grep.rs",
+      "sha256": "1eca438b54482132e4b863255df4c89d042ac050984a25d8feb5737f2a37b17c"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/tools/read.rs",
+      "sha256": "d5c677e14de23402b5dbd140108eed9a44fd47e60f8540b88ff771318aead488"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/tools/shell.rs",
+      "sha256": "af23f419c191eec5c2de50d1a545aa9cdc155c9780f6700eb8dce252d9bc6e25"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/tools/tests/mod.rs",
+      "sha256": "6e3da590aca757be79a93cb1743173ff5d6c7765e858fe026f060735b511c54d"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/tools/write.rs",
+      "sha256": "ae93504b4e019ca424b89d668ad45bb225de74a755b5d70121fbb51e864c60b3"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/src/turn.rs",
+      "sha256": "9bdcdc38976a7a3c655c762a8d3e01fe42dc036dc369a7a8ca6aa95b2cb1a0e5"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_contract.rs",
+      "sha256": "170a136de9e07d482c9efb9ab87b7ba2e9406c85e3a7dd99116911f3c8074245"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution.rs",
+      "sha256": "2b9f75bb1c0184693f740fb8870798a04b1152950eb2cb9e0fb00f35330ecb0e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/accounting.rs",
+      "sha256": "316d7ba48c688f86bfa289063299b5e02194488047787431f4ff43390f3674da"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/artifact_storage.rs",
+      "sha256": "9f8f61cb61c3f79ace5f20f24b4dea4b9befa5e4606ebaf9610f5afe1e19054d"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/artifact_storage/repeated_restore.rs",
+      "sha256": "a7f60d19f2bdc79286ecac8166e7735fe7ad4f8cf70676c5a6a59b74e55329fd"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/artifact_storage/storage_faults.rs",
+      "sha256": "a2a2e39e649222dafa5ab9cf56afe79280b423e076e8b86d2b03b7285ee6cc28"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/artifact_storage/unknown_order.rs",
+      "sha256": "8e79d03d2419a041cc3a9816d44ea4caae74dfaad486992626238165abb57d2a"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/authority.rs",
+      "sha256": "0c91b77dbe46ff51955f8cfcda382659f724ded5486f3439a322b8d7801139c0"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/auxiliary_admission.rs",
+      "sha256": "934270a4346c25f3cedbf8e372c1ae57be152c3a0be3407b6567297ee61f01fa"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/budget.rs",
+      "sha256": "46be38b630496ee063680086a50f25e1759b5ba360fdf812d0c0f93eae2e09eb"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/cancellation.rs",
+      "sha256": "f7610f4b27650cfed49d261b783b065324aece0b008d26a0ed18d02d419e9fd3"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/cancellation/start_fences.rs",
+      "sha256": "9defdfc70990cafc52418c2eb3404e9aea0451649abd09c7ed74d83b34345b89"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/capacity.rs",
+      "sha256": "4dc738b873dc003f129d549dea4732d1c785c50646e0b52f6fc0fa61a7ded52d"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/capacity/later_prompt.rs",
+      "sha256": "18a87e24c31c62ee018bf4691b57e34424a62f80ea6f03a7fe56b3d294cfb6f3"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/capacity/later_prompt/expanded.rs",
+      "sha256": "620446e9173fc3dd0d493da5b0f2f1fd4d26f3a96360c82b9728f75df5bdaa3e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/capacity/tool_intents.rs",
+      "sha256": "67fa6152dbca6c4e644de2eddd7375c338e96d8b469639bb5dd58703284f5de0"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/capacity/tree_limits.rs",
+      "sha256": "8a6300598acebcc8cead31939dc904f53524c7bbe7e5ef081824a851725ff760"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/context_decisions.rs",
+      "sha256": "a30b49a6cad38f27b62172af47422f1ab7bc3c97da2472fa23979982fc2e953d"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/host_admission.rs",
+      "sha256": "c1b1101e3ebfa3655f7a7f2d6200d44c91a30191a3579ec94db685ad7128f1cb"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/input_count.rs",
+      "sha256": "c61ab6838baa6de59a6168d842558ce5a845fcc322c7f9bd243bef93cc12efab"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/material_work.rs",
+      "sha256": "107dc3c94aa3e0ba33b5fedf79677819a99911037b1a4ef8755ea0d7dac45e84"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/output_admission.rs",
+      "sha256": "60a1a53be1eb5b97a642c580ae7a91700e1bc5b36c2ec110a0797409297c3b85"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/preparation_work.rs",
+      "sha256": "017d1774a70ef669385867ee584b3a0985648499224255ba52c7afa79b2fb5ab"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/provider_work.rs",
+      "sha256": "f8059b0806fbf0ae9982f0a6802fd070b58497d3af454a036c27da70bf040b95"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/reconnect.rs",
+      "sha256": "992416a0620e9c7093a52d378fa75e7891452de85c16baabb424444e72bafc14"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/reconstruction.rs",
+      "sha256": "283f24a2f1f16ac02d11f2ec96cd45ceefb52ad89671641db91fa2faccb8ea08"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/recovery.rs",
+      "sha256": "97948481d1f824feb999c9f24c6d1090223d5c5a2586df64c3373da66ed8cd01"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/recovery/definite_confirmation.rs",
+      "sha256": "630671d6234645fb66d59c7b6b5d8c8f0a6d4fde4ee4d65edc4b6ce1faaab791"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/recovery_time.rs",
+      "sha256": "8eb16fbb0861e3ba449e846627b77fe4867389ede3898e8a3a9c07a7e6c6e4ea"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/release.rs",
+      "sha256": "462955df5c9ccaacf9408adc539ebe17e5b60a98d69970c9017181a5e94e4262"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/responses.rs",
+      "sha256": "44bf4bacd9874532d0c4ca901d0b1c0b1f074e0f61ab078511714575781efcb0"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/restore_decode.rs",
+      "sha256": "77a2c8123ecc2b2d5fd3e3d0d7e3aa34283e87caff037907782e0ee76d3614de"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/root_queue.rs",
+      "sha256": "11e05ce5c3e5f65c43d3285d6758155eb6fc1fd5e3b87b65ecc11ae51e8952a2"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/routing_identity.rs",
+      "sha256": "c8761472611364f1ef617e79d1ef72c33934e35ec8d6e16f488d5ff9bcc25206"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/steering.rs",
+      "sha256": "be5bcb9cf6e8fd74dc889314cb62b9d9e4d3bf070e7ab890d5bed6632a24c5b8"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/tool_payloads.rs",
+      "sha256": "e83bc616177ffad5fc6dfc0d974c031075341e4cf2cebea5cae51d67185aabe6"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/core_execution/tool_status.rs",
+      "sha256": "2cba34adc8660168bb8bd875569e4b6f0c8b8dd574dd243ce5bd4ac65d5f4990"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/harness_resources/mcp_fixture.rs",
+      "sha256": "3696f072d6d2ac45d4472cd6ae83bda12e42869bc32b05f0bc98913d22e1104e"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/support/fixture_binary.rs",
+      "sha256": "7cfa812ab305d5f2d524865af52cb14e5d36aebaf7944bc49ad3a7d48748a4ad"
+    },
+    {
+      "path": "crates/bitrouter-orchestrator/tests/support/mod.rs",
+      "sha256": "a76134baab6a33ab05ee7d22f3e073e88c41caf58317d651b2f38ae2a7fe71b4"
+    },
+    {
+      "path": "crates/bitrouter-sdk/Cargo.toml",
+      "sha256": "7b11a51c610596e639bab7af6dadc98848c7eaa25bba0ef514e81084052b0ac2"
+    },
+    {
+      "path": "crates/bitrouter-sdk/public-api-deps.txt",
+      "sha256": "b1efeb8ec171a536fa3de260a2f8c17f6ab3aec96ae65f9511aa074dc133d0fb"
+    },
+    {
+      "path": "crates/bitrouter-sdk/public-api.pins",
+      "sha256": "a75d9e459bf72031e4b12160fd9e161c3ce6e139b31bd512044e7354e2996bb5"
+    },
+    {
+      "path": "crates/bitrouter-sdk/span-schema.json",
+      "sha256": "0b316b6afd7098e62db397000f2f725f4c9c88408ad73e58e08f65b03604ac0b"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/app.rs",
+      "sha256": "740980b56e3ca8f92c5ea5f902ff3eef50165f12dc9faeff28a3f925bb9ddeab"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/caller.rs",
+      "sha256": "e75f01109dac102ad4be29e653bbfea759db71d71ec623dbf898d548876d11b3"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/agent.rs",
+      "sha256": "5768a64a36764dfbe31627bfa0fde06b8b20af7f6525f55959dcf490b4c01fe3"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/checker.rs",
+      "sha256": "6d54058a8034e8bfbd40b8c1928180fbad8ae957a107fc75c0e4f4f4b929b208"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/decision.rs",
+      "sha256": "86d1b9e742c059b40c5eb9b74c16b5ee556f8c2d03e12e5dced1fce1570f4f24"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/mod.rs",
+      "sha256": "fb999b2c8c93959934f75d2e13f5467bd4ed87ad7404a1ac75592fec4206026f"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/pattern.rs",
+      "sha256": "d423003151443d4f40789c15321fca772d9e4b5dfa23ae430f2672c4eacff016"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/presets.rs",
+      "sha256": "789b3843ca1f0dd92f7837a4a03fb7ef0d8ed5ce055ba6198d649f1cc24c5794"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/router.rs",
+      "sha256": "c16bcbcaad2b3f1bbcb549c92c5099deefb04554c35aeb8031d9220e78f4d95c"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/routing_table.rs",
+      "sha256": "e715deba8e2fa041a7d12b769d45854b87c34dd735d2e65068901f7e64be8ced"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/config/tests.rs",
+      "sha256": "f2a451b8d2f74b27eed24ee10132debf4256d55fab4d8559ed1f05c53be17e45"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/decision_model/mod.rs",
+      "sha256": "6951bfb8792872072d8b654dd416a1fc791a8df9f2f396389b1d4b885274884d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/decision_model/policy.rs",
+      "sha256": "008d95ccf2c980e77083fdab0590f7db41ed1507783253b0f1702af1c8c2e4a5"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/decision_model/types.rs",
+      "sha256": "8d3c327630246894d6bd7fd44e1bfa7639c1518f6804c8c11542960309f9eb6c"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/decision_model/typesafe.rs",
+      "sha256": "b291bfe0656c29d4e88dff2df0b2581b5e23790ce55a6e80414e40b1d2d12a65"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/error.rs",
+      "sha256": "1dd5dffa4fa8a93c8f11c7019d64af20ba67ea518f77c9842355166ceebbc9dc"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/event.rs",
+      "sha256": "faad93ec25bdef81eb80903c6841f74b1369d62a91428cc27149bfc809b5e945"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/extension/mod.rs",
+      "sha256": "658f649dbdd34f77827546f441a675eb3404adcdf2842d806af8ac44fa32e56e"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/extension/request_check.rs",
+      "sha256": "85c4d0f8cd9cbfeda586bb2a59871af84122d882119767440aa17ce406cd2f97"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/invocation.rs",
+      "sha256": "a89be03ef80a79e69cd46dd971285a33cd50d98766cfc105114c101c5eba20a4"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/builder.rs",
+      "sha256": "b0b8b973b8698605123ea15836b6a842e69b4f22abc56d6f16b29d0cabe954a6"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/context.rs",
+      "sha256": "70f390cb355bef651e9a5ec2e74f97401387aeed13334e9ddf13a3e997070ff3"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/executor.rs",
+      "sha256": "d57066c749d6fe79ac565c00266ae9be5df6decca8e84d386dbf2a17e824692a"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/executor/input_count.rs",
+      "sha256": "ffad458c8e89b5093c7d1ac2a11a07266864860b55a4f353a414ae52c988915c"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/executor/response_body.rs",
+      "sha256": "ade811938c8c18092e424877d772170c46c6a5490b45e921f9176c138dce979c"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/executor/stream_bridge.rs",
+      "sha256": "c543f74981834bb6635600213e9e984e82d240334a4f6954dd5b1d364bd46760"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/hooks.rs",
+      "sha256": "995c089b8728cc50d57711282233e91aade56e3483fa5be5d12bf3c8f4c33753"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/mod.rs",
+      "sha256": "00e90fcdcf66e2c9f852d7fe19038c546c253027eeb06e0195dd3b64d523c81a"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native.rs",
+      "sha256": "636290c88facd9889b18a4008300235925254c26f088723d3884bf6f8501648a"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_accounting.rs",
+      "sha256": "570d46812422156a4e3789244ee083cb9e55db9bad9af9c0d3c876968e19a275"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_auth.rs",
+      "sha256": "87205256d11c9360a5938381ad2089559c8b172943b74df4666f6ea847e3f770"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_auxiliary.rs",
+      "sha256": "490274973dd85d2eae568708d42d6a91efcf95d1ff7c4d35d1939884b08637bd"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_context.rs",
+      "sha256": "6e5eb9ba952aec53a95c273077bb332b7a67d1f0fe29e5c0bfe8eb76c879c2a5"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_context/tests.rs",
+      "sha256": "78f6593cbfba46b74a49cbe7538d2fa28cc0aa94c45b381638e237d411dc431d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_continuation.rs",
+      "sha256": "4bb812e4f5a5cc0300cc0839cb3919f784801cc303aec02633a6bc3dcfdfd01e"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_output.rs",
+      "sha256": "78812214b7846b7346faf9772da0f42402e9ba44e153fa916f0ab09b96eb7dd3"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_preparation.rs",
+      "sha256": "ebb60ff2ce1f8a7d504d334feca22500fd1139c095bc5cae2dbf720d40d65e0e"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_projection.rs",
+      "sha256": "01a8d470a8894e7d141329b99b979f060f2cfd51325c6a742e98dd93d2ea4584"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_report.rs",
+      "sha256": "02bd3b51dad274bb0d70cbac424add227044f0a88b8c4733bf722d622688a43a"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_stream.rs",
+      "sha256": "f00413f2a5fb5898267069c367f0dd35d1f4d526b2f3b5f6ee269badeccea3cf"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/native_work.rs",
+      "sha256": "f601dc4cb4d53a927e9077ee230386c771d00ff84901135e24fe50f31efc3d8e"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/operations.rs",
+      "sha256": "c78028415f9d1b3d3d02a4ae5c9fd31fc606fbb9b460e95aa29af9eabe75fd3d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/pipeline.rs",
+      "sha256": "d5e363cd2e094ba642d1698c3fd1d88c0a4bc8af78e5efd93d594210af2342ab"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/request_checks.rs",
+      "sha256": "a9f19de8d3566d571ae2d8f44f4b815e3f921341ed73eb56b4b00a4201ede895"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/routing.rs",
+      "sha256": "0921b9fe7440dcb066e9fe4767a06f50cd84e4d6f94b09e97b8fa18676fb2926"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/advisor.rs",
+      "sha256": "2fb87aad49893d7f118d85c94823475eff78f029042979a429eef3584dda838d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/approval.rs",
+      "sha256": "7f508b6056c1131e3a622338c00ba5d533f099694f85f70ed9fb22bdd1058206"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/classify.rs",
+      "sha256": "a661439ec02392d4759bcccf70a892651332c2d04bab63fbbf4e412e1f4f34de"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/config.rs",
+      "sha256": "39097d6e8988a98cc3c4f2ba754371764a55a56209e12ec8e9e0a567ee13013d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/declarations.rs",
+      "sha256": "55aa5f9eb684fa54257ba661a635f32a8a0fe5c98145e297fe7e96b0e2ec3e82"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/fusion/alias.rs",
+      "sha256": "68a34e0d1a41ad4a30abe905194db49a635a455317a3563d83f392569a478361"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/fusion/config.rs",
+      "sha256": "44cc83cc050699c4830585ac71759a9e4fc0511977ddbea26d4d4548471867d8"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/fusion/engine.rs",
+      "sha256": "b11b9f1d59d37e8006f47d5fb3b55e29475a063f1a2a9a6009cebcb0d95b6f2a"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/fusion/judge.rs",
+      "sha256": "a326dd685ed5620b03839d33e10150199e7d52ae817e65a5b4897739c45e9d6a"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/fusion/mod.rs",
+      "sha256": "78f7b8816f0106348654ef1cbc53805b6541591c3961dae9c89d1c8f5c41a71d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/loop_controller.rs",
+      "sha256": "8124344ff574869e6df817f3b7f1bc2dea01494334f78033b72a54ef2d2712d6"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/mcp_toolset.rs",
+      "sha256": "7eab8e98362910710986d279c57c8f87525d227d00d1d4ae574648301b366b83"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/mod.rs",
+      "sha256": "4c04b99bc4445fc4516c8c4dd0257fb7cf1b2d7d5ecf26ded339fc303befddd6"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/nested.rs",
+      "sha256": "f6c2ef791d799981a4024fedd04cd8709b2f57c5db48bdf08d10e0d3558f44ed"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/stream.rs",
+      "sha256": "bb521e795dba4f337efebfd6a1e4aa7e19ce7fd3be99fd3ac8a3ad07b17d1536"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/sub_agent.rs",
+      "sha256": "4340d18fd609cdbab2c3c52f01d07cb001fae0befb378eaa933468d52a88c22d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/toolset.rs",
+      "sha256": "f9d45627247502a9889b1c9c60b44baa57d944e854c15785f990fc2634e98f7f"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_fetch/backend.rs",
+      "sha256": "1631f7f5ec4fbecb8ab632e0a1586896f068824dda787e173b3406b6637ef586"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_fetch/config.rs",
+      "sha256": "ccd39f30a3f6bd4923ea057b69f463be4cb900d83ad10950c8334657fca74a45"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_fetch/http.rs",
+      "sha256": "ecc3620077ce4035687a5bf601d79ea325e46a947cb2296b2a5af2d36038f6cf"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_fetch/mod.rs",
+      "sha256": "24f9f7b1c042f23210e1e51c5144f38760956816661853142a102feb47fbc3b1"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_fetch/toolset.rs",
+      "sha256": "0599373bb930757560fd4e64a03866c335a7718bc43155ab2712720aee4ce9d4"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_search/backend.rs",
+      "sha256": "796908b8f93064a3d3a5ebede6ea699a322b36f57ddfcc84b1735a1f12de09ae"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_search/config.rs",
+      "sha256": "fd746973197babc4b281ce774af84400c66ad28ec8c7e8b0c549af0930f9c666"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_search/http.rs",
+      "sha256": "c20a70217fadc88b1ac4cdfc3a63a72486cb8a1c550f1d62c4680475ecd4d5d6"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_search/mod.rs",
+      "sha256": "19b8598ebbf9e985ee4292bd468498ea93df60911f7fc2d0911c4ffcb299d39d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_search/nested.rs",
+      "sha256": "cea9549a8369b8d86e27a7919bc7bb0307f448218b57ef9c7a9d2bff76995521"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/server_tools/web_search/toolset.rs",
+      "sha256": "0751b2fd338fb7a45a6b9f2566f29035bc7bab4c47f09339c46b1b69d1b1efa3"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/settlement.rs",
+      "sha256": "c768e56500c36e2552a88e7a81a4702fb45f98b77aaceaf4353ee085ca5393b2"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/stream.rs",
+      "sha256": "7a635e055b45f4b33a1eb42f583f4128ff82153902db8469fde7195536b49e30"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/tests.rs",
+      "sha256": "1dd9ad2fd438777411bee7e0df34e4f32ec25a3001a63449aaf201e9e74d42d8"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/tests_managed_protocol.rs",
+      "sha256": "416887971eb47aa51cad0209f355c161cace34c88ef13248a2978aacf9f57b7b"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/tests_native_output.rs",
+      "sha256": "137833fd4a066eda772a69f2afa833d6f02ba637d2100c382d887d40e59fe797"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/tests_native_stream.rs",
+      "sha256": "4ad02e4537f0c6f650e90bef86df1900c9bc24484d0c37725c6b8bc2c4789bd1"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/tests_provider_body.rs",
+      "sha256": "21fb97def01f364fe3ac210315cba83df7daa7c3dbe487452e38a40b3250cb06"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/tests_reconstruction.rs",
+      "sha256": "d5c4fef811d246580df06411822543e0163f4844854d797f4228bf55ad8fb261"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/tests_unified_routing.rs",
+      "sha256": "3351429b818be8806e7300442b5fff912cc594794fb8a67848ecb270ede63ee2"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/tests_unified_routing/typed_routing.rs",
+      "sha256": "cdceb831ce4a1301ac641c954d4fc0b341c2640e0e07cebfc4c05b40de381797"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/timing.rs",
+      "sha256": "c019860564ee87dc821c1b5e28a15cda708643f0560ba37261fffabf64a19265"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/language_model/types.rs",
+      "sha256": "c8181a264950b377333abd39749a610bec6b8305ee38655596c50e5f93b03313"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/lib.rs",
+      "sha256": "08a1d300e1de60594d3979c4aebc73dad9fa18262843e458c1a7a41ddb3cdd36"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/mcp/aggregating_executor.rs",
+      "sha256": "8419f4d5a7f577bad7353c122737fa79fc63b07083da5867fbee5a673375842b"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/mcp/caching_executor.rs",
+      "sha256": "e53e9ca06f448ab365ba0e6dc7606c7e57d4437f4ade0af2bce8dd665247e701"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/mcp/config_routing.rs",
+      "sha256": "836370b18d51c2e21e14381d2e4cd926bf669d12f82404b1a33c618e116d3188"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/mcp/mod.rs",
+      "sha256": "61f932d1c6e235600b5f882c8c11ff0fe5e94cb2b3d65726fdef9bc96cdc930d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/mcp/rmcp_executor.rs",
+      "sha256": "f4c9c2b6bf52d53e48f2fc2cd52c0472e07f365f633add73c24b57d3f5f393c5"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/mcp/skills.rs",
+      "sha256": "2a636e350efc748688eda3946a0b02e779a9e80b00e8ddb327b7c8df839fdb39"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/mcp/transport.rs",
+      "sha256": "fa98d94bb04d4b7fda056b8601e3870492d2908371fe3403a5e1ef0e1a7f96ff"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/metrics.rs",
+      "sha256": "1fb2b6328eb90cd92594cd07246b5a9d975c969573cd68a7bf33a844c312dfae"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/observe/mod.rs",
+      "sha256": "4ab8c49ac277e991548752826f304c3ae8d262164d71fca67fb51e2afa7fc912"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/observe/schema.rs",
+      "sha256": "55a8feb0724163969fbdb52c2d234b6cadbd23072e742efe6578ae755a63e446"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/observe/span_attributes.rs",
+      "sha256": "d4d2193e41f5621526fa0bc74fb6287fd5e68829e34176ab4c2934f86b4d6b96"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/plugin.rs",
+      "sha256": "7a55c73f7ba127d3a121c3037fc15edd85ffec8f7594218308c9ef1c53f63916"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/routing/assessment.rs",
+      "sha256": "cdabdf5e7f37d14a8293b081839b25ff4d05c53f366690041aa0213e9417b940"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/routing/input.rs",
+      "sha256": "8692fcb4d19b2e353b1523c1b1446b764814fc5d55c467b7e6fe696a412e8e96"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/routing/mod.rs",
+      "sha256": "e1546018cfa3703af921cd4cc97a22271a77b8e6b04549e9d96da223a910bfd8"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/routing/plan.rs",
+      "sha256": "c4c2427146f71c8eca6b2b2b234a5ff9d0c235daff24dba7f8101ff3668ddcd1"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/routing/preparation.rs",
+      "sha256": "499709bd994f6b7d6ae8e151cafeb5896a4eca23883d58253caf63c29a9377a7"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/routing/signals.rs",
+      "sha256": "e8fb1cb5441cc7ae1c0de2e30f82b5aa306459a26dce7a38a8567025ea6833a9"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/server.rs",
+      "sha256": "2f039535bcbd1c6083c8f8517935a4351d1f4a8822c0723b82d1ae890f6552e4"
+    },
+    {
+      "path": "crates/bitrouter-sdk/src/url_validator.rs",
+      "sha256": "99eea65e61181f0b8bab9aef07fa814683a2f50ff87edbe82f1a94b6e11082b7"
+    },
+    {
+      "path": "crates/bitrouter-sdk/tests/anthropic_authority.rs",
+      "sha256": "49593f11497eb763b6684040f2c447f85808e51fc378dbb800fe51151bb591d5"
+    },
+    {
+      "path": "crates/bitrouter-sdk/tests/decision_model.rs",
+      "sha256": "956c01afcc642178dffcb6691b5d12db40a0bb69a4639da7566a961745e45f73"
+    },
+    {
+      "path": "crates/bitrouter-sdk/tests/decisions.rs",
+      "sha256": "b5820cc4294d727fe40dd8ba479f4aebc845495e89b561d647f07517092e0e8d"
+    },
+    {
+      "path": "crates/bitrouter-sdk/tests/model_boundary.rs",
+      "sha256": "21bf353cc7e67ecb7bc5e0a710133bf6a49b51291cc34e7f96fa0f34bbee27ee"
+    },
+    {
+      "path": "crates/bitrouter-sdk/tests/routing_assessment.rs",
+      "sha256": "dfec9762d1fa0ffd0eb296d71a9ac5b3637611ea5a3f70a35418c043e3cf7f83"
+    },
+    {
+      "path": "crates/bitrouter-sdk/tests/routing_plan.rs",
+      "sha256": "c2f95bd912ec8d12bed14bfebe968f73a19757fc7f080efce8ff278942146c43"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/Cargo.toml",
+      "sha256": "2a6a751bc51bb98328f2ed22bd6efcef43af702cceadc6dd23ef3d4b67a8251a"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/benches/observe_overhead.rs",
+      "sha256": "b59d3112adb86d0913f3947f44709caf92c9057b770c77e0b1f266e3f2d58e88"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/lib.rs",
+      "sha256": "4f32717b8e9f926427d7406243ff11717f0e95030bfcf6560b7607effc9bdcc8"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/acp.rs",
+      "sha256": "8de8ff14664135b620ddf89b70ff5032a0eb31de3aedc348655f745ac28b2d21"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/auth_client.rs",
+      "sha256": "a0b8985050a312b96a32f48e38a3be1beb6a71a608faf7ac5d19ecb21b83fd89"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/bearer.rs",
+      "sha256": "6e87548be493208df38a0847852817dd3398bf34143c028199e3facff0430f70"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/cardinality.rs",
+      "sha256": "afb06f0f22d36098a073a783256762568840e5673c941ce9c099347a0bb90d06"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/config.rs",
+      "sha256": "7f1a7d34b82b48cc9f27f230ba3231cd38731011c737564cc5563dc38a52a41c"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/exporter.rs",
+      "sha256": "28cd5183a07f7b1a39953c08758c0caa6e3051cb956820837336b5e6bb00fe1a"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/http_layer.rs",
+      "sha256": "d3ef171eb5ea8f7b21368e0debb9e96f90bdbb7ef5bbf143655453e0a99cc263"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/metrics.rs",
+      "sha256": "4d2c25f351a160ca89da6c45ff7864690900ecc656ff588b9545935e1f57f42a"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/mod.rs",
+      "sha256": "6b492d1de4cfe27d15f2f1d03c2f5ce88606ff83efb61035e262177741a97025"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/processor_runtime.rs",
+      "sha256": "84779ec3514bd548eb2eef5f420ae52ba0e69acb05882a1b26d3e2b63e235f67"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/subscriber.rs",
+      "sha256": "8c42e499eba9ece5289a8e7e47ec2b0a943718158e7587e4c145ed718a4eff0e"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/src/otel/transport.rs",
+      "sha256": "eb29d67ddc2bdfaf983799cbfe9a4a6536e6fb02121e398b7b5f4134c47ea092"
+    },
+    {
+      "path": "crates/bitrouter-telemetry/tests/ingress_log_target.rs",
+      "sha256": "c9625f43e19b07528075d04c4df0e10b786d1d9e9b7c74a31d55241566a33e6e"
+    },
+    {
+      "path": "crates/bitrouter-tui/Cargo.toml",
+      "sha256": "b44bb50525e91a4853a75bd35bf294822d8e06b7ee6e93967514d8c04ff8878f"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/agents.rs",
+      "sha256": "f19088f88231a9497f333d0fe37b2a59dda4acfc54298b3c642e43e0e8e23a25"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/agents_menu.rs",
+      "sha256": "8d7d7211f2dec902bc674320ae570da185cc3591aa4e0c7fbd4e5cd36c860475"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/code.rs",
+      "sha256": "41d7aa1880d96b589f4b6ac2653039cd08eb6d9dd351602d6871843a7f573a98"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/composer.rs",
+      "sha256": "968aec33f2216aaccb5721fca4b09476da48649c8893364b88be91ef131adee1"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/cost.rs",
+      "sha256": "98f8415ab7075dffa29e05392e2b222154ae050c153c6486976c6279beacc2ba"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/editor.rs",
+      "sha256": "06ba81b8b162fb011cad4d0e7783998747cb6419095915fc78775cb66e55bda0"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/goals.rs",
+      "sha256": "a83aca001e2955b320f2807e412bbc8076957e487d82cbf9679dd4d4ef3224da"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/goals/budget.rs",
+      "sha256": "1e379951521391f849746cfa66ad76325b8a4528b48f72f9b6f3bc9e8b327e05"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/goals/decision.rs",
+      "sha256": "2572c2afdd3143cc83724d5da3cc15e754e36cab441a1818e063e59c0946de5c"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/goals/history.rs",
+      "sha256": "7c7e133100f14476e02a396728960d5225b9ace836a159e1815ef1f6320bcda6"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/goals/render.rs",
+      "sha256": "332af254c969c62030a01b1c2f1a8b4fb8ea2d6a9fcc265c1da32b7a648e6ab1"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/goals/tests.rs",
+      "sha256": "cdee258249d2c1df6a552d74d568d3fa57406f010f230cc14ef3e45c7a560a6d"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/goals/view.rs",
+      "sha256": "2b4a2b5c21023b082b79ed6466ad0b62f8dca709c265fa1321f0d3c8466fa449"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/journal.rs",
+      "sha256": "279aa514186dd331fbb885c0993e9cf106340056f34137757a7e679468ef282e"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/lib.rs",
+      "sha256": "368aad35cc300df18d7e15d7b0777b642c38275ba67545cabdebb10da6d5369b"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/lifecycle.rs",
+      "sha256": "bf4a30b9bbf2296062fa6d3586cfdd16465fdfc89e0c38c107c46ce8ebedd0c4"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/log_tail.rs",
+      "sha256": "ed35c372c9e0b67abd56197df80c0acb5341304f9f70f0cf2c3c5620e42f237e"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/machine.rs",
+      "sha256": "5e2a2b77f1374f8e607895e7d26fe93b18c6e888e00b6cdd15a592484624a1c9"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/native_agent.rs",
+      "sha256": "32c687226174f35c115bcd2120c7107342edcb9daee47053f25afb64837a21a1"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/permission.rs",
+      "sha256": "3a9c27b337922ba83022e888021a6a4c66ecf18064a177d3d663d4b324154777"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/picker.rs",
+      "sha256": "623b42b4cd700180762adf827bb09b28b31590acd8335f6ddb65f5f3ba1fbb89"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/plain.rs",
+      "sha256": "b4b93ffbd028c2099752d1c6b58e404ec9ce3f80aa7301c0200f897c260a24d8"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/render/content.rs",
+      "sha256": "ce2298273c456ab3b4d67c705d7569f9fe222885343c8376a0a445e2064830c9"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/render/diff.rs",
+      "sha256": "a1ed1595045742da98327b9faa4a45908d23ead9cfb89f691ee527898fb62200"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/render/markdown.rs",
+      "sha256": "d5d5397f9c5a594f4de3bdcd3ebba2543eab66524dbcbcba4f0e099fa4cdb9f7"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/render/mod.rs",
+      "sha256": "b7aeff87321e67bbb2fa0e416ac5c317cc1a964b0f67e3c1fccbb605feb04b58"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/render/session.rs",
+      "sha256": "a6d33cbec69670887d129b37da81e66ecede22ee2a733cd02aecc5185037d499"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/select.rs",
+      "sha256": "83f09f179478d8b0cc55a518f4c8cfdd91ab62bda36c80c1a083a75c26d4bf53"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/view.rs",
+      "sha256": "ccd95e108d94fea31c162dfab382252ed6bb178848f9acd3fb3b3b28a9de1a6a"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/wrap.rs",
+      "sha256": "a549d573b949095857f49dc24c0b2798103a50e6b5b2a89e5267642321a6ff9f"
+    },
+    {
+      "path": "crates/bitrouter-tui/src/writer.rs",
+      "sha256": "a124af8771c8a052da42c835f9f9a85ac1ac07d04b44744f7c14db96e8fd5075"
+    },
+    {
+      "path": "extensions/README.md",
+      "sha256": "58e304b25322f80dad5e4d9b6bce6dadfcb6fcaea290453ab36a132355e5e9e9"
+    },
+    {
+      "path": "extensions/regex-checker/README.md",
+      "sha256": "870fb7bb054b40c6129976d0130767e775cc9a076c9c3a1e863a4fbe3cf5be1f"
+    },
+    {
+      "path": "extensions/regex-checker/matcher/Cargo.toml",
+      "sha256": "a4e700785af3ceb6f4cee53352f166b38c5275e84ef6036abeecdf3c4287802a"
+    },
+    {
+      "path": "extensions/regex-checker/matcher/src/checker.rs",
+      "sha256": "af0a0e7ebbf5bdabe82ef27b73d271f49ed669a1e7c131d58b11c4ef8cdf26d8"
+    },
+    {
+      "path": "extensions/regex-checker/matcher/src/config.rs",
+      "sha256": "20c6b230db3bf2a9cf5fe6719740387c92ff293d33d811d66a38ed57ba633bd5"
+    },
+    {
+      "path": "extensions/regex-checker/matcher/src/hooks.rs",
+      "sha256": "3485cc694e6e089ed310f3fde90a5103081f02470b16aae7da4ca66df22f0600"
+    },
+    {
+      "path": "extensions/regex-checker/matcher/src/lib.rs",
+      "sha256": "8f047c624599751fe88c010eb937675ce852f532b194440274c8366a9ef7d453"
+    },
+    {
+      "path": "extensions/regex-checker/matcher/src/plugin.rs",
+      "sha256": "6dcc98f165313e6c68bb49905bd7cc4fb9a33373e8423a761bf3f3d60607626d"
+    },
+    {
+      "path": "extensions/regex-checker/matcher/src/rules.rs",
+      "sha256": "b7127f6a894ca07a7328e99109c5217fb937026c9f1b5f2793d0b1c5203cedcf"
+    },
+    {
+      "path": "extensions/regex-checker/matcher/src/tests.rs",
+      "sha256": "751c2051c922a5c6b94fed124960e2aa6774268aa735f63330194cae1bd90fbd"
+    },
+    {
+      "path": "helpers/bitrouter-test-fixtures/Cargo.toml",
+      "sha256": "7ad7a0e69ec4dce62d54993bc9ee2c7699d92501acaa59ad049ea61367f4c5ca"
+    },
+    {
+      "path": "helpers/bitrouter-test-fixtures/src/goal_acp_fixture.rs",
+      "sha256": "a193fe5963e431831f3008c91f7750204a461086f3e282a058701dae4a8c6767"
+    },
+    {
+      "path": "helpers/bitrouter-test-fixtures/src/harness_mcp_fixture.rs",
+      "sha256": "cd21417806edd9ef1af2e034597a8b0260b0ff804f44c2eaa7b5e62daa712c67"
+    },
+    {
+      "path": "helpers/bitrouter-test-fixtures/src/pty_acp_fixture.rs",
+      "sha256": "4cefa93547364e4e368df95a93fd95ce11355d3635ecf1ae928ac6a4fe141139"
+    },
+    {
+      "path": "helpers/dist-helper/Cargo.toml",
+      "sha256": "a403d7d928e508d39f43b6c6066d9b615bf9d658b064c943b0a7745b4fe42aac"
+    },
+    {
+      "path": "helpers/dist-helper/src/chart.rs",
+      "sha256": "4424a0bda5774f4ad2f7863b3c3c64aab79c7a4f4f72d69008f01bf77f5204b3"
+    },
+    {
+      "path": "helpers/dist-helper/src/main.rs",
+      "sha256": "0f5796000615488153668771fa286a4e068ac254323b4e6f05accc34a7a683f0"
+    },
+    {
+      "path": "helpers/dist-helper/src/registry.rs",
+      "sha256": "63aebdee02978ba3bb8674cd8d92ae776d8a4a221614b3da74aad2922be157da"
+    },
+    {
+      "path": "helpers/dist-helper/src/schema.rs",
+      "sha256": "8a2178c1056b992d318375dd385f5dd8eab077be215498b6bc002cd7dfb014dc"
+    }
+  ]
+}

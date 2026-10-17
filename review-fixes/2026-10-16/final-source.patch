@@ -1,0 +1,1739 @@
+diff --git a/apps/bitrouter/src/goal_code/projection.rs b/apps/bitrouter/src/goal_code/projection.rs
+index 90926dac..8f7a6b8c 100644
+--- a/apps/bitrouter/src/goal_code/projection.rs
++++ b/apps/bitrouter/src/goal_code/projection.rs
+@@ -693,7 +693,8 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
+ pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
+     let material = crate::goal_permission_material::checked_value(bytes, None)?;
+     if material.get("native").is_some() {
+-        let request = crate::goal_permission_material::native::Request::decode(bytes)?;
++        let request: crate::goal_permission_material::native::Request =
++            serde_json::from_value(material)?;
+         return Ok(format!(
+             "Requested native operation: {}\nThread: {}\nTurn: {}\nRequest: {}\nTool: {}\n\nOriginal arguments:\n{}\n\nThis is a permission request, not consent or evidence that the tool ran.",
+             request.input.tool_name,
+@@ -704,8 +705,9 @@ pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
+             request.input.arguments
+         ));
+     }
+-    let permission: crate::supervisor::PendingPermissionSnapshot = serde_json::from_slice(bytes)
+-        .context("permission evidence is not a supported actual request")?;
++    let permission: crate::supervisor::PendingPermissionSnapshot =
++        serde_json::from_value(material.clone())
++            .context("permission evidence is not a supported actual request")?;
+     let tool = serde_json::to_value(&permission.tool_call)?;
+     let mut text = format!(
+         "Requested operation (harness reported): {}\nKind (harness reported): {}\nDeclared locations: {}\n\nActual request:\n{}",
+@@ -732,11 +734,7 @@ pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
+         );
+     }
+     if let Some(context) = material.get("earlier_tool_context") {
+-        let run_id = context
+-            .get("run_id")
+-            .and_then(serde_json::Value::as_str)
+-            .context("permission context has no run")?;
+-        let summary = match crate::goal_permission_material::effective_tool(bytes, run_id)? {
++        let summary = match crate::goal_permission_material::effective_tool_from_checked(&material)? {
+             Some(tool) => format!(
+                 "Earlier tool declarations: kind {} · locations {} · arguments {}\nOriginal permission request remains unchanged. These are declarations, not execution evidence.\n\n",
+                 tool["kind"], tool["locations"], tool["rawInput"],
+diff --git a/apps/bitrouter/src/goal_code/tests.rs b/apps/bitrouter/src/goal_code/tests.rs
+index d928eed9..7d8111ee 100644
+--- a/apps/bitrouter/src/goal_code/tests.rs
++++ b/apps/bitrouter/src/goal_code/tests.rs
+@@ -30,6 +30,69 @@ fn pending_input(goal_id: &str, operation_id: &str) -> Pending {
+     }
+ }
+ 
++struct ClientFixture {
++    client: Client,
++    service: std::sync::Arc<GoalService>,
++    running: tokio::task::JoinHandle<Result<()>>,
++}
++
++async fn client_fixture(socket: &Path) -> Result<ClientFixture> {
++    use crate::daemon::{AcpControlPlane, LocalControlOptions, NoopObserveStatus, NoopReloader};
++    use std::sync::Arc;
++    let db = crate::db::connect("sqlite::memory:").await?;
++    crate::db::run_migrations(&db).await?;
++    let service = Arc::new(GoalService::new(Arc::new(DatabaseGoalStore::new(
++        db.clone(),
++    ))));
++    let bound = crate::daemon::bind_control_socket(socket).await?;
++    let running = tokio::spawn(crate::daemon::run_bound_control_socket(
++        bound,
++        Arc::new(bitrouter_sdk::App::builder().build()?),
++        "127.0.0.1:0".into(),
++        Arc::new(NoopReloader),
++        Arc::new(NoopObserveStatus { compiled_in: false }),
++        AcpControlPlane {
++            runtime: Arc::new(crate::acp_runtime::AcpRuntime::new()),
++            metering: crate::metering::MeteringStore::new(db),
++            inventory: None,
++            evolution: None,
++        },
++        LocalControlOptions {
++            administration: None,
++            threads: None,
++            goals: Some(service.clone()),
++            gate: crate::daemon_handoff::HandoffGate::default(),
++            cli_owned: false,
++        },
++    ));
++    Ok(ClientFixture {
++        client: Client::new(socket.into()),
++        service,
++        running,
++    })
++}
++
++// Pure presentation seed: no store, model or worker execution is claimed.
++fn projection_snapshot(workspace: &Path) -> GoalSnapshot {
++    GoalSnapshot {
++        id: "projection-goal".into(),
++        owner: "local".into(),
++        title: "Projection Goal".into(),
++        workspace: workspace.into(),
++        objective: "Display the recorded state".into(),
++        revision: 1,
++        requirements_revision: 1,
++        run_intent: RunIntent::Run,
++        created_at_ms: 100,
++        updated_at_ms: 100,
++        workflow: Default::default(),
++        inputs: Default::default(),
++        control_source_revision: 1,
++        accounting: Default::default(),
++        budget: Default::default(),
++    }
++}
++
+ #[test]
+ fn unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop() -> Result<()> {
+     let mut admissions = submissions::Submissions::default();
+@@ -259,40 +322,14 @@ async fn actual_database_receipt_must_match_the_original_client_payload() -> Res
+ #[tokio::test]
+ async fn real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates()
+ -> Result<()> {
+-    use crate::daemon::{
+-        AcpControlPlane, DaemonCommand, DaemonResponse, LocalControlOptions, NoopObserveStatus,
+-        NoopReloader,
+-    };
+-    use std::sync::Arc;
++    use crate::daemon::{DaemonCommand, DaemonResponse};
+     let temporary = tempfile::tempdir()?;
+     let socket = temporary.path().join("goal-client.sock");
+-    let db = crate::db::connect("sqlite::memory:").await?;
+-    crate::db::run_migrations(&db).await?;
+-    let service = Arc::new(GoalService::new(Arc::new(DatabaseGoalStore::new(
+-        db.clone(),
+-    ))));
+-    let bound = crate::daemon::bind_control_socket(&socket).await?;
+-    let running = tokio::spawn(crate::daemon::run_bound_control_socket(
+-        bound,
+-        Arc::new(bitrouter_sdk::App::builder().build()?),
+-        "127.0.0.1:0".into(),
+-        Arc::new(NoopReloader),
+-        Arc::new(NoopObserveStatus { compiled_in: false }),
+-        AcpControlPlane {
+-            runtime: Arc::new(crate::acp_runtime::AcpRuntime::new()),
+-            metering: crate::metering::MeteringStore::new(db),
+-            inventory: None,
+-            evolution: None,
+-        },
+-        LocalControlOptions {
+-            administration: None,
+-            threads: None,
+-            goals: Some(service),
+-            gate: crate::daemon_handoff::HandoffGate::default(),
+-            cli_owned: false,
+-        },
+-    ));
+-    let client = Client::new(socket.clone());
++    let ClientFixture {
++        client,
++        service: _,
++        running,
++    } = client_fixture(&socket).await?;
+     let original = pending(temporary.path(), &uuid::Uuid::new_v4().to_string());
+     let GoalReply::Accepted { operation } = client.request(original.command).await? else {
+         anyhow::bail!("missing creation receipt");
+@@ -363,42 +400,16 @@ async fn real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_
+ 
+ #[tokio::test]
+ async fn exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt() -> Result<()> {
+-    use crate::daemon::{
+-        AcpControlPlane, DaemonCommand, DaemonResponse, LocalControlOptions, NoopObserveStatus,
+-        NoopReloader,
+-    };
++    use crate::daemon::{DaemonCommand, DaemonResponse};
+     use bitrouter_orchestrator::goal::input::{Event as InputEvent, Interpretation, Stage};
+     use bitrouter_orchestrator::goal::workflow::{Change, OWNER_LEASE_MS, WorkflowActor};
+-    use std::sync::Arc;
+     let temporary = tempfile::tempdir()?;
+     let socket = temporary.path().join("withdraw-client.sock");
+-    let db = crate::db::connect("sqlite::memory:").await?;
+-    crate::db::run_migrations(&db).await?;
+-    let service = Arc::new(GoalService::new(Arc::new(DatabaseGoalStore::new(
+-        db.clone(),
+-    ))));
+-    let bound = crate::daemon::bind_control_socket(&socket).await?;
+-    let running = tokio::spawn(crate::daemon::run_bound_control_socket(
+-        bound,
+-        Arc::new(bitrouter_sdk::App::builder().build()?),
+-        "127.0.0.1:0".into(),
+-        Arc::new(NoopReloader),
+-        Arc::new(NoopObserveStatus { compiled_in: false }),
+-        AcpControlPlane {
+-            runtime: Arc::new(crate::acp_runtime::AcpRuntime::new()),
+-            metering: crate::metering::MeteringStore::new(db),
+-            inventory: None,
+-            evolution: None,
+-        },
+-        LocalControlOptions {
+-            administration: None,
+-            threads: None,
+-            goals: Some(service.clone()),
+-            gate: crate::daemon_handoff::HandoffGate::default(),
+-            cli_owned: false,
+-        },
+-    ));
+-    let client = Client::new(socket.clone());
++    let ClientFixture {
++        client,
++        service,
++        running,
++    } = client_fixture(&socket).await?;
+     let GoalReply::Accepted { operation } = client
+         .request(pending(temporary.path(), "withdraw-goal").command)
+         .await?
+@@ -561,35 +572,11 @@ async fn exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt
+     Ok(())
+ }
+ 
+-#[tokio::test]
+-async fn projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer() -> Result<()> {
++#[test]
++fn projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer() -> Result<()> {
+     use bitrouter_orchestrator::goal::input::{ClarificationKind, UnresolvedInput};
+-    let db = crate::db::connect("sqlite::memory:").await?;
+-    crate::db::run_migrations(&db).await?;
+-    let service = GoalService::new(std::sync::Arc::new(DatabaseGoalStore::new(db)));
+     let workspace = tempfile::tempdir()?;
+-    let GoalReply::Accepted { operation } = service
+-        .execute(
+-            "local",
+-            pending(workspace.path(), "projection-clarification").command,
+-            100,
+-        )
+-        .await?
+-    else {
+-        anyhow::bail!("missing creation");
+-    };
+-    let GoalReply::Snapshot { mut goal } = service
+-        .execute(
+-            "local",
+-            GoalCommand::Get {
+-                goal_id: operation.goal_id,
+-            },
+-            110,
+-        )
+-        .await?
+-    else {
+-        anyhow::bail!("missing snapshot");
+-    };
++    let mut goal = projection_snapshot(workspace.path());
+     goal.inputs.unresolved.push(UnresolvedInput {
+         input_id: "original-change".into(),
+         source_requirements_revision: 1,
+@@ -627,30 +614,11 @@ async fn projection_keeps_an_unresolved_question_visible_after_an_unrelated_answ
+     Ok(())
+ }
+ 
+-#[tokio::test]
+-async fn projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions()
+--> Result<()> {
+-    let db = crate::db::connect("sqlite::memory:").await?;
+-    crate::db::run_migrations(&db).await?;
+-    let service = GoalService::new(std::sync::Arc::new(DatabaseGoalStore::new(db)));
++#[test]
++fn projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions() -> Result<()>
++{
+     let temporary = tempfile::tempdir()?;
+-    let original = pending(temporary.path(), &uuid::Uuid::new_v4().to_string());
+-    let GoalReply::Accepted { operation } = service.execute("local", original.command, 100).await?
+-    else {
+-        anyhow::bail!("missing creation");
+-    };
+-    let GoalReply::Snapshot { mut goal } = service
+-        .execute(
+-            "local",
+-            GoalCommand::Get {
+-                goal_id: operation.goal_id,
+-            },
+-            110,
+-        )
+-        .await?
+-    else {
+-        anyhow::bail!("missing snapshot");
+-    };
++    let mut goal = projection_snapshot(temporary.path());
+     goal.budget.resume_required = true;
+     goal.budget.halt = Some("Budget reached; execution confirmation is separate".into());
+     let mut artifacts = projection::Artifacts::new();
+@@ -935,35 +903,11 @@ async fn retry_admission_matches_durable_commit_and_projection_at_recovery_bound
+     Ok(())
+ }
+ 
+-#[tokio::test]
+-async fn quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion()
+--> Result<()> {
+-    let db = crate::db::connect("sqlite::memory:").await?;
+-    crate::db::run_migrations(&db).await?;
+-    let service = GoalService::new(std::sync::Arc::new(DatabaseGoalStore::new(db)));
++#[test]
++fn quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion() -> Result<()>
++{
+     let directory = tempfile::tempdir()?;
+-    let GoalReply::Accepted { operation } = service
+-        .execute(
+-            "local",
+-            pending(directory.path(), "quote-view").command,
+-            100,
+-        )
+-        .await?
+-    else {
+-        anyhow::bail!("fixture Goal missing")
+-    };
+-    let GoalReply::Snapshot { mut goal } = service
+-        .execute(
+-            "local",
+-            GoalCommand::Get {
+-                goal_id: operation.goal_id,
+-            },
+-            101,
+-        )
+-        .await?
+-    else {
+-        anyhow::bail!("fixture snapshot missing")
+-    };
++    let mut goal = projection_snapshot(directory.path());
+     // Presentation fixture only: no worker, Thread, provider or tool ran here.
+     goal.workflow.owner_thread_id = Some("owner".into());
+     goal.workflow.tasks.push(serde_json::from_value(serde_json::json!({
+diff --git a/apps/bitrouter/src/goal_permission_material.rs b/apps/bitrouter/src/goal_permission_material.rs
+index 0088b007..18d5d0c5 100644
+--- a/apps/bitrouter/src/goal_permission_material.rs
++++ b/apps/bitrouter/src/goal_permission_material.rs
+@@ -18,12 +18,12 @@ pub(crate) fn decision_value(
+ ) -> Result<Value> {
+     match decision.run_id.as_deref() {
+         Some(run_id) => {
+-            let request: PendingPermissionSnapshot = serde_json::from_slice(bytes)?;
++            let material = checked_value(bytes, Some(run_id))?;
+             anyhow::ensure!(
+-                request.permission_id == decision.permission_id,
++                material["permission_id"].as_str() == Some(decision.permission_id.as_str()),
+                 "permission material has a different request identity"
+             );
+-            checked_value(bytes, Some(run_id))
++            Ok(material)
+         }
+         None => {
+             let request = native::Request::decode(bytes)?;
+@@ -40,10 +40,17 @@ pub(crate) fn decision_tool(
+     bytes: &[u8],
+     decision: &bitrouter_orchestrator::goal::decision::PermissionDecision,
+ ) -> Result<Option<Value>> {
+-    decision_value(bytes, decision)?;
++    let material = decision_value(bytes, decision)?;
+     match decision.run_id.as_deref() {
+-        Some(run_id) => effective_tool(bytes, run_id),
+-        None => Ok(native::Request::decode(bytes)?.tool()),
++        Some(_) => effective_tool_from_checked(&material),
++        None => Ok(native::tool_scope(
++            material["input"]["tool_name"]
++                .as_str()
++                .context("native tool name missing")?,
++            material["input"]["arguments"]
++                .as_str()
++                .context("native arguments missing")?,
++        )),
+     }
+ }
+ 
+@@ -253,18 +260,23 @@ pub(crate) fn checked_value(bytes: &[u8], run_id: Option<&str>) -> Result<Value>
+     Ok(value)
+ }
+ 
+-pub(crate) fn effective_tool(bytes: &[u8], run_id: &str) -> Result<Option<Value>> {
+-    tool_scope(bytes, run_id, false)
++#[cfg(test)]
++fn effective_tool(bytes: &[u8], run_id: &str) -> Result<Option<Value>> {
++    effective_tool_from_checked(&checked_value(bytes, Some(run_id))?)
+ }
+ 
+ /// Inspect a denied operation's declared scope after a failed terminal update.
+ /// This never admits permission; recovery separately requires failure evidence.
+ pub(crate) fn denied_tool_scope(bytes: &[u8], run_id: &str) -> Result<Option<Value>> {
+-    tool_scope(bytes, run_id, true)
++    tool_scope(&checked_value(bytes, Some(run_id))?, true)
++}
++
++/// Project only material already validated by checked_value or decision_value.
++pub(crate) fn effective_tool_from_checked(material: &Value) -> Result<Option<Value>> {
++    tool_scope(material, false)
+ }
+ 
+-fn tool_scope(bytes: &[u8], run_id: &str, failed_terminal: bool) -> Result<Option<Value>> {
+-    let material = checked_value(bytes, Some(run_id))?;
++fn tool_scope(material: &Value, failed_terminal: bool) -> Result<Option<Value>> {
+     if material.get("tool_context_unavailable").is_some() {
+         return Ok(None);
+     }
+@@ -394,16 +406,16 @@ pub(crate) fn validate_current(saved: &[u8], current: &[u8], run_id: &str) -> Re
+         original_bytes(saved)? == original_bytes(current)?,
+         "original permission request changed before delivery"
+     );
+-    let saved_tool = effective_tool(saved, run_id)?;
+-    let current_tool = effective_tool(current, run_id)?;
++    let mut saved = checked_value(saved, Some(run_id))?;
++    let mut current = checked_value(current, Some(run_id))?;
++    let saved_tool = effective_tool_from_checked(&saved)?;
++    let current_tool = effective_tool_from_checked(&current)?;
+     if saved_tool.is_some() {
+         anyhow::ensure!(
+             saved_tool == current_tool,
+             "declared tool scope or arguments changed before permission delivery"
+         );
+     } else {
+-        let mut saved = checked_value(saved, Some(run_id))?;
+-        let mut current = checked_value(current, Some(run_id))?;
+         for value in [&mut saved, &mut current] {
+             if let Some(context) = value.get_mut(CONTEXT_FIELD).and_then(Value::as_object_mut) {
+                 context.remove("snapshot_seq");
+diff --git a/apps/bitrouter/src/goal_permission_material/native.rs b/apps/bitrouter/src/goal_permission_material/native.rs
+index 65ce2ba7..6fe2bd66 100644
+--- a/apps/bitrouter/src/goal_permission_material/native.rs
++++ b/apps/bitrouter/src/goal_permission_material/native.rs
+@@ -36,12 +36,6 @@ impl Request {
+         );
+         Ok(value)
+     }
+-
+-    /// Known built-in operations can reuse the existing local-file policy.
+-    /// Shell and MCP calls receive no local-file classification.
+-    pub(crate) fn tool(&self) -> Option<Value> {
+-        tool_scope(&self.input.tool_name, &self.input.arguments)
+-    }
+ }
+ 
+ /// Scope comes from the built-in tool contract, never an arbitrary MCP name.
+diff --git a/apps/bitrouter/src/goal_runtime.rs b/apps/bitrouter/src/goal_runtime.rs
+index 7a7d6ba1..1e365e3d 100644
+--- a/apps/bitrouter/src/goal_runtime.rs
++++ b/apps/bitrouter/src/goal_runtime.rs
+@@ -667,46 +667,8 @@ impl Coordinator {
+                 ]),
+             };
+             let typed_control = model_control::ModelControl::new(self, goal, true);
+-            typed_control
+-                .begin_typed(&attempt_id, &request, runtime.pricing.as_ref())
+-                .await?;
+-            let outcome = if serde_json::to_vec(&request)?.len() > runtime.policy.max_request_bytes
+-            {
+-                Err(
+-                    bitrouter_sdk::decision_model::types::DecisionError::invalid_request(
+-                        "Goal input exceeds typed request bound; reasoning is required",
+-                    ),
+-                )
+-            } else {
+-                let token = CancellationToken::new();
+-                runtime
+-                    .executor
+-                    .execute(&request, &token)
+-                    .await
+-                    .and_then(|response| {
+-                        response.validate(&request)?;
+-                        Ok(response)
+-                    })
+-            };
+-            let usage = match &outcome {
+-                Ok(response) => Some(response.usage),
+-                Err(error) => error.usage,
+-            };
+-            let estimate = usage
+-                .and_then(|usage| {
+-                    runtime
+-                        .pricing
+-                        .as_ref()
+-                        .map(|pricing| pricing.estimate(usage))
+-                })
+-                .filter(|value| value.is_finite() && *value >= 0.0)
+-                .and_then(|value| {
+-                    format!("{:.0}", (value * 1_000_000.0).ceil())
+-                        .parse::<u64>()
+-                        .ok()
+-                });
+-            typed_control
+-                .observe_typed(&attempt_id, &outcome, estimate)
++            let outcome = runtime
++                .execute_controlled(&attempt_id, &request, typed_control.as_ref())
+                 .await?;
+             // Keep native distributions, reported usage and sanitized errors.
+             // There is no calibrated direct-control threshold yet: every typed
+diff --git a/apps/bitrouter/src/goal_runtime/model_control.rs b/apps/bitrouter/src/goal_runtime/model_control.rs
+index 4e428a70..7bce13f0 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control.rs
+@@ -16,7 +16,8 @@ mod quote_wait;
+ 
+ pub(super) struct ModelControl {
+     goals: Arc<GoalService>,
+-    goal: GoalSnapshot,
++    goal_id: String,
++    requirements_revision: u64,
+     coordinator_id: String,
+     root: PathBuf,
+     explicit_input: bool,
+@@ -62,7 +63,8 @@ impl ModelControl {
+     fn base(coordinator: &Coordinator, goal: &GoalSnapshot, explicit_input: bool) -> Self {
+         Self {
+             goals: coordinator.goals.clone(),
+-            goal: goal.clone(),
++            goal_id: goal.id.clone(),
++            requirements_revision: goal.requirements_revision,
+             coordinator_id: coordinator.id.clone(),
+             root: crate::goal_artifacts::root(&coordinator.workspaces, &goal.id),
+             explicit_input,
+@@ -176,7 +178,7 @@ impl ModelControl {
+             .execute(
+                 "local",
+                 GoalCommand::Get {
+-                    goal_id: self.goal.id.clone(),
++                    goal_id: self.goal_id.clone(),
+                 },
+                 now().map_err(|_| unavailable())?,
+             )
+@@ -200,10 +202,10 @@ impl ModelControl {
+                 "the originating worker attempt is no longer current",
+             ));
+         }
+-        if self.worker.is_none() && goal.requirements_revision != self.goal.requirements_revision {
++        if self.worker.is_none() && goal.requirements_revision != self.requirements_revision {
+             return Err(diagnostic(&format!(
+                 "requirements changed from {} to {}",
+-                self.goal.requirements_revision, goal.requirements_revision
++                self.requirements_revision, goal.requirements_revision
+             )));
+         }
+         if let Err(error) = goal.budget.admission(goal.created_at_ms, time) {
+@@ -260,7 +262,7 @@ impl ModelControl {
+             Err(bitrouter_orchestrator::goal::GoalError::NotFound) => return Ok(None),
+             _ => return Err(unavailable()),
+         };
+-        if operation.goal_id != self.goal.id {
++        if operation.goal_id != self.goal_id {
+             return Err(unavailable());
+         }
+         let bitrouter_orchestrator::goal::OperationKind::Workflow { change } = operation.kind
+@@ -292,7 +294,7 @@ impl ModelControl {
+         let requirements_revision = self
+             .intent(&id)
+             .await?
+-            .map_or(self.goal.requirements_revision, |work| {
++            .map_or(self.requirements_revision, |work| {
+                 work.requirements_revision
+             });
+         let intent = crate::goal_artifacts::put(
+@@ -382,7 +384,7 @@ impl ModelControl {
+             && self.worker.is_none()
+         {
+             let _ = self.goals.workflow_change(WorkflowActor { owner: "local", coordinator_id: &self.coordinator_id },
+-                &self.goal.id, &format!("{operation}-budget"), self.goal.requirements_revision,
++                &self.goal_id, &format!("{operation}-budget"), self.requirements_revision,
+                 Change::Budget { event: bitrouter_orchestrator::goal::budget::Event::Halt { reason: "A provider attempt no longer fits the shared Goal budget; no dispatch occurred".into() } },
+                 now().map_err(|_| unavailable())?).await;
+         }
+@@ -580,7 +582,7 @@ impl NativeExecutionControl for ModelControl {
+             .execute(
+                 "local",
+                 GoalCommand::Get {
+-                    goal_id: self.goal.id.clone(),
++                    goal_id: self.goal_id.clone(),
+                 },
+                 now().map_err(|_| unavailable())?,
+             )
+@@ -627,7 +629,7 @@ impl NativeExecutionControl for ModelControl {
+                 ));
+             }
+             self.goals.workflow_change(WorkflowActor { owner: "local", coordinator_id: &self.coordinator_id },
+-                &self.goal.id, &format!("{}-budget", key_id(&key)), goal.requirements_revision,
++                &self.goal_id, &format!("{}-budget", key_id(&key)), goal.requirements_revision,
+                 Change::Budget { event: bitrouter_orchestrator::goal::budget::Event::Halt { reason: "No frozen model route has a bounded token-price reservation fitting the Goal cap".into() } }, now().map_err(|_| unavailable())?).await.map_err(|_| unavailable())?;
+             return Err(unavailable());
+         }
+@@ -735,7 +737,7 @@ impl NativeExecutionControl for ModelControl {
+             .execute(
+                 "local",
+                 GoalCommand::Get {
+-                    goal_id: self.goal.id.clone(),
++                    goal_id: self.goal_id.clone(),
+                 },
+                 time,
+             )
+diff --git a/apps/bitrouter/src/goal_runtime/model_control/activity.rs b/apps/bitrouter/src/goal_runtime/model_control/activity.rs
+index 8478c0af..f96f0604 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control/activity.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control/activity.rs
+@@ -92,7 +92,7 @@ impl ModelControl {
+             .await;
+         let operation = match reply {
+             Err(bitrouter_orchestrator::goal::GoalError::NotFound) => return Ok(false),
+-            Ok(GoalReply::Accepted { operation }) if operation.goal_id == self.goal.id => operation,
++            Ok(GoalReply::Accepted { operation }) if operation.goal_id == self.goal_id => operation,
+             _ => return Err(unavailable()),
+         };
+         let bitrouter_orchestrator::goal::OperationKind::Workflow { change } = operation.kind
+diff --git a/apps/bitrouter/src/goal_runtime/model_control/quote_wait.rs b/apps/bitrouter/src/goal_runtime/model_control/quote_wait.rs
+index cf7166fd..e8beb0dc 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control/quote_wait.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control/quote_wait.rs
+@@ -23,7 +23,7 @@ impl ModelControl {
+                         owner: "local",
+                         coordinator_id: &self.coordinator_id,
+                     },
+-                    &self.goal.id,
++                    &self.goal_id,
+                     operation,
+                     revision,
+                     change.clone(),
+@@ -66,7 +66,7 @@ impl ModelControl {
+             while matches!(&result, Err(GoalError::BudgetExceeded { .. })) {
+                 self.gate().await?;
+                 let GoalReply::Snapshot { goal } = self.goals.execute("local",
+-                    GoalCommand::Get { goal_id: self.goal.id.clone() }, now().map_err(|_| unavailable())?
++                    GoalCommand::Get { goal_id: self.goal_id.clone() }, now().map_err(|_| unavailable())?
+                 ).await.map_err(|_| unavailable())? else { return Err(unavailable()) };
+                 match bitrouter_orchestrator::goal::budget::waiting_on_workers(&goal, work.token_reservation.as_ref()) {
+                     Ok(true) => {
+@@ -195,7 +195,7 @@ impl ModelControl {
+         else {
+             return Err(unavailable());
+         };
+-        if operation.goal_id != self.goal.id || id != key_id(key) {
++        if operation.goal_id != self.goal_id || id != key_id(key) {
+             return Err(unavailable());
+         }
+         let bytes = crate::goal_artifacts::read(&self.root, &report)
+diff --git a/apps/bitrouter/src/goal_runtime/model_control/tests.rs b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+index f5de0480..05736ed6 100644
+--- a/apps/bitrouter/src/goal_runtime/model_control/tests.rs
++++ b/apps/bitrouter/src/goal_runtime/model_control/tests.rs
+@@ -164,7 +164,7 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
+     };
+     let directory = tempfile::tempdir()?;
+     let (mut control, store, goals) = control(directory.path()).await?;
+-    let id = control.goal.id.clone();
++    let id = control.goal_id.clone();
+     // Domain transitions only: no Git work, provider request or execution
+     // adoption is claimed by this source/accounting concurrency regression.
+     worker_change(
+@@ -234,7 +234,7 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
+         )
+         .await?;
+     }
+-    let control_source_revision = control.goal.control_source_revision;
++    let control_source_revision = snapshot(&goals, &id).await?.control_source_revision;
+     let source = |task: &str| bitrouter_orchestrator::thread::GoalWork {
+         goal_id: id.clone(),
+         owner_thread_id: "owner-thread".into(),
+@@ -299,7 +299,7 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
+     )
+     .await?;
+     let edited = snapshot(&goals, &id).await?;
+-    assert!(edited.requirements_revision > control.goal.requirements_revision);
++    assert!(edited.requirements_revision > control.requirements_revision);
+     control
+         .begin(
+             WorkKind::Preparation,
+@@ -322,7 +322,7 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
+     let work_started = active.accounting.work_started;
+     Arc::get_mut(&mut control)
+         .context("fixture control unexpectedly shared")?
+-        .goal = edited;
++        .requirements_revision = edited.requirements_revision;
+     control
+         .begin(
+             WorkKind::Preparation,
+@@ -701,7 +701,8 @@ async fn control(root: &Path) -> Result<(Arc<ModelControl>, Arc<FaultStore>, Arc
+     let goal = snapshot(&goals, &operation.goal_id).await?;
+     let control = Arc::new(ModelControl {
+         goals: goals.clone(),
+-        goal,
++        goal_id: goal.id,
++        requirements_revision: goal.requirements_revision,
+         coordinator_id: "model-test".into(),
+         root: root.join("artifacts"),
+         explicit_input: false,
+@@ -745,7 +746,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
+     control
+         .before_typed_decision("original-native-decision", &request, Some(&pricing))
+         .await?;
+-    let admitted = snapshot(&goals, &control.goal.id).await?;
++    let admitted = snapshot(&goals, &control.goal_id).await?;
+     assert_eq!(admitted.accounting.in_flight.len(), 1);
+     assert_eq!(admitted.budget.reserved_micro_usd()?, 100);
+     goals
+@@ -798,7 +799,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
+             .is_err()
+     );
+     assert_eq!(
+-        snapshot(&goals, &interrupted.goal.id)
++        snapshot(&goals, &interrupted.goal_id)
+             .await?
+             .budget
+             .reserved_micro_usd()?,
+@@ -810,7 +811,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
+     interrupted
+         .after_typed_decision("paused-intent", &not_dispatched, Some(&pricing))
+         .await?;
+-    let saved = snapshot(&goals, &interrupted.goal.id).await?;
++    let saved = snapshot(&goals, &interrupted.goal_id).await?;
+     assert_eq!(saved.run_intent, RunIntent::Pause);
+     assert!(saved.accounting.in_flight.is_empty());
+     assert_eq!(saved.budget.reserved_micro_usd()?, 0);
+@@ -818,7 +819,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
+     interrupted
+         .after_typed_decision("never-admitted", &not_dispatched, Some(&pricing))
+         .await?;
+-    assert_eq!(snapshot(&goals, &interrupted.goal.id).await?, saved);
++    assert_eq!(snapshot(&goals, &interrupted.goal_id).await?, saved);
+ 
+     // A backend's no-dispatch flag cannot erase usage it also reports.
+     let usage_root = tempfile::tempdir()?;
+@@ -841,7 +842,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
+             Some(&pricing),
+         )
+         .await?;
+-    let charged = snapshot(&goals, &usage_control.goal.id).await?;
++    let charged = snapshot(&goals, &usage_control.goal_id).await?;
+     assert_eq!(charged.accounting.estimated_model_tokens_micro_usd, 13);
+     assert_eq!(charged.budget.reserved_micro_usd()?, 0);
+     Ok(())
+@@ -882,7 +883,7 @@ async fn typed_quotes_share_goal_budget_and_preserve_unknown_or_excess_usage() -
+     ] {
+         let root = tempfile::tempdir()?;
+         let (control, _, goals) = control(root.path()).await?;
+-        let current = snapshot(&goals, &control.goal.id).await?;
++        let current = snapshot(&goals, &control.goal_id).await?;
+         goals
+             .execute(
+                 "local",
+@@ -984,7 +985,7 @@ async fn bounded_accounting_conflicts_do_not_poison_model_admission() -> Result<
+     store.inject(Fault::Conflict, 5)?;
+     control.before_context_validation("same-work").await?;
+     assert!(control.acknowledged());
+-    let before = snapshot(&goals, &control.goal.id).await?;
++    let before = snapshot(&goals, &control.goal_id).await?;
+     assert_eq!(before.accounting.work_started, 1);
+     assert_eq!(before.accounting.provider_attempts, 0);
+     assert_eq!(before.accounting.in_flight.len(), 1);
+@@ -995,7 +996,7 @@ async fn bounded_accounting_conflicts_do_not_poison_model_admission() -> Result<
+             None,
+         )
+         .await?;
+-    let after = snapshot(&goals, &control.goal.id).await?;
++    let after = snapshot(&goals, &control.goal_id).await?;
+     assert_eq!(after.accounting.work_observed, 1);
+     assert!(after.accounting.in_flight.is_empty());
+     Ok(())
+@@ -1008,7 +1009,7 @@ async fn lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work(
+     store.inject(Fault::LostAcknowledgement, 1)?;
+     control.before_context_validation("lost-reply").await?;
+     assert!(control.acknowledged());
+-    let head = snapshot(&goals, &control.goal.id).await?;
++    let head = snapshot(&goals, &control.goal_id).await?;
+     assert_eq!(head.accounting.work_started, 1);
+     assert_eq!(head.accounting.in_flight.len(), 1);
+     assert_eq!(head.accounting.provider_attempts, 0);
+@@ -1020,7 +1021,7 @@ async fn lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work(
+             None,
+         )
+         .await?;
+-    let head = snapshot(&goals, &control.goal.id).await?;
++    let head = snapshot(&goals, &control.goal_id).await?;
+     assert_eq!(head.accounting.work_observed, 1);
+     assert_eq!(head.accounting.unpriced_outcomes, 1);
+     assert!(head.accounting.in_flight.is_empty());
+@@ -1092,7 +1093,7 @@ async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -
+     control.after_attempt(report.clone()).await;
+     assert!(control.acknowledged());
+     assert!(control.activity.lock().await.is_empty());
+-    let observed = snapshot(&goals, &control.goal.id).await?;
++    let observed = snapshot(&goals, &control.goal_id).await?;
+     assert_eq!(observed.accounting.provider_attempts, 1);
+     assert!(observed.accounting.in_flight.is_empty());
+     let GoalReply::Accepted { operation } = goals
+@@ -1128,17 +1129,17 @@ async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -
+             "local",
+             GoalCommand::Control {
+                 operation_id: "pause-before-outcome-replay".into(),
+-                goal_id: control.goal.id.clone(),
++                goal_id: control.goal_id.clone(),
+                 expected_revision: observed.revision,
+                 intent: RunIntent::Pause,
+             },
+             now()?,
+         )
+         .await?;
+-    let paused = snapshot(&goals, &control.goal.id).await?;
++    let paused = snapshot(&goals, &control.goal_id).await?;
+     control.after_attempt(report.clone()).await;
+     assert!(control.acknowledged());
+-    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
++    assert_eq!(snapshot(&goals, &control.goal_id).await?, paused);
+     assert_eq!(
+         crate::goal_artifacts::read(&control.root, &reference).await?,
+         original
+@@ -1147,7 +1148,7 @@ async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -
+     changed.error = Some("different outcome cannot reuse the original key".into());
+     control.after_attempt(changed).await;
+     assert!(!control.acknowledged());
+-    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
++    assert_eq!(snapshot(&goals, &control.goal_id).await?, paused);
+     Ok(())
+ }
+ 
+@@ -1176,7 +1177,7 @@ async fn persistent_accounting_failure_retains_its_cause_and_fences_new_work() -
+             .await
+             .is_err()
+     );
+-    let head = snapshot(&goals, &control.goal.id).await?;
++    let head = snapshot(&goals, &control.goal_id).await?;
+     assert_eq!(head.accounting.work_started, 0);
+     assert_eq!(head.accounting.provider_attempts, 0);
+     assert!(head.accounting.in_flight.is_empty());
+@@ -1194,7 +1195,7 @@ async fn recovered_intent_receipt_does_not_authorize_work_after_pause() -> Resul
+         .err()
+         .context("expected paused admission")?;
+     assert!(error.to_string().contains("paused or stopped"));
+-    let head = snapshot(&goals, &control.goal.id).await?;
++    let head = snapshot(&goals, &control.goal_id).await?;
+     assert_eq!(head.run_intent, RunIntent::Pause);
+     assert_eq!(head.accounting.work_started, 1);
+     assert_eq!(head.accounting.provider_attempts, 0);
+@@ -1205,7 +1206,7 @@ async fn recovered_intent_receipt_does_not_authorize_work_after_pause() -> Resul
+             .is_err()
+     );
+     assert_eq!(
+-        snapshot(&goals, &control.goal.id)
++        snapshot(&goals, &control.goal_id)
+             .await?
+             .accounting
+             .work_started,
+@@ -1225,7 +1226,7 @@ async fn model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability()
+                 owner: "local",
+                 coordinator_id: "model-test",
+             },
+-            &control.goal.id,
++            &control.goal_id,
+             "shorten-owner",
+             1,
+             Change::ClaimCoordinator {
+@@ -1243,7 +1244,7 @@ async fn model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability()
+                 owner: "local",
+                 coordinator_id: "different-owner",
+             },
+-            &control.goal.id,
++            &control.goal_id,
+             "transfer-owner",
+             1,
+             Change::ClaimCoordinator {
+@@ -1260,7 +1261,7 @@ async fn model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability()
+         .context("expected ownership fence")?;
+     assert!(error.to_string().contains("different owner"));
+     assert_eq!(
+-        snapshot(&goals, &control.goal.id)
++        snapshot(&goals, &control.goal_id)
+             .await?
+             .accounting
+             .work_started,
+@@ -1276,7 +1277,7 @@ async fn frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_
+     use bitrouter_sdk::language_model::native::NativeRoute;
+     let directory = tempfile::tempdir()?;
+     let (control, _, goals) = control(directory.path()).await?;
+-    let id = control.goal.id.clone();
++    let id = control.goal_id.clone();
+     let quote = NativeTokenReservation {
+         micro_usd: 10,
+         pricing_version: "frozen".into(),
+@@ -1381,3 +1382,266 @@ async fn frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_
+     assert_eq!(snapshot(&goals, &id).await?, stopped);
+     Ok(())
+ }
++
++struct HeldInputDecision {
++    entered: tokio::sync::Notify,
++    release: CancellationToken,
++    cancelled: AtomicBool,
++}
++
++#[async_trait::async_trait]
++impl bitrouter_sdk::decision_model::DecisionExecutor for HeldInputDecision {
++    async fn execute(
++        &self,
++        request: &bitrouter_sdk::decision_model::types::DecisionRequest,
++        cancellation: &CancellationToken,
++    ) -> std::result::Result<
++        bitrouter_sdk::decision_model::types::DecisionResponse,
++        bitrouter_sdk::decision_model::types::DecisionError,
++    > {
++        use bitrouter_sdk::decision_model::types::{
++            Answer, DecisionError, DecisionFailure, DecisionResponse, DecisionUsage,
++        };
++        self.entered.notify_one();
++        let usage = DecisionUsage {
++            input_tokens: 11,
++            output_tokens: 2,
++        };
++        tokio::select! {
++            biased;
++            () = cancellation.cancelled() => {
++                self.cancelled.store(true, Ordering::Release);
++                Err(DecisionError {
++                    kind: DecisionFailure::Cancelled,
++                    message: "input source invalidated after dispatch".into(),
++                    usage: Some(usage),
++                    may_have_run: true,
++                })
++            },
++            () = self.release.cancelled() => Ok(DecisionResponse {
++                model: request.model.clone(),
++                usage,
++                answers: BTreeMap::from([("query".into(), Answer::Noul { noul: 1.0 })]),
++            }),
++        }
++    }
++}
++
++#[tokio::test]
++async fn typed_input_cancels_stale_sources_settles_usage_and_remains_available_while_paused()
++-> Result<()> {
++    use bitrouter_orchestrator::goal::input::{Event as InputEvent, Interpretation, Stage};
++    use bitrouter_sdk::decision_model::{
++        DecisionRuntime,
++        policy::DecisionPricing,
++        types::{DecisionFailure, DecisionRequest, Question},
++    };
++    for case in ["lease", "budget", "requirements", "pause"] {
++        let root = tempfile::tempdir()?;
++        let (mut control, _, goals) = control(root.path()).await?;
++        Arc::get_mut(&mut control)
++            .context("control already shared")?
++            .explicit_input = true;
++        let backend = Arc::new(HeldInputDecision {
++            entered: tokio::sync::Notify::new(),
++            release: CancellationToken::new(),
++            cancelled: AtomicBool::new(false),
++        });
++        let runtime = DecisionRuntime {
++            model: "input-fixture".into(),
++            executor: backend.clone(),
++            policy: Default::default(),
++            pricing: Some(DecisionPricing {
++                input_usd_per_million: 1.0,
++                output_usd_per_million: 1.0,
++                max_input_tokens: Some(100),
++                max_output_tokens: Some(100),
++            }),
++        };
++        let request = DecisionRequest {
++            model: runtime.model.clone(),
++            state: serde_json::json!({"input":"What is the current progress?"}),
++            questions: BTreeMap::from([(
++                "query".into(),
++                Question::Noul {
++                    instructions: None,
++                    criteria: None,
++                },
++            )]),
++        };
++        let invalidate = async {
++            backend.entered.notified().await;
++            let goal = snapshot(&goals, &control.goal_id).await?;
++            match case {
++                "lease" => {
++                    goals
++                        .workflow_change(
++                            WorkflowActor {
++                                owner: "local",
++                                coordinator_id: "next-owner",
++                            },
++                            &goal.id,
++                            "transfer-owner",
++                            goal.requirements_revision,
++                            Change::ClaimCoordinator {
++                                id: "next-owner".into(),
++                                expires_at_ms: goal
++                                    .workflow
++                                    .coordinator
++                                    .as_ref()
++                                    .context("lease missing")?
++                                    .expires_at_ms
++                                    + 1
++                                    + OWNER_LEASE_MS,
++                            },
++                            goal.workflow
++                                .coordinator
++                                .as_ref()
++                                .context("lease missing")?
++                                .expires_at_ms
++                                + 1,
++                        )
++                        .await?;
++                }
++                "budget" => {
++                    goals
++                        .execute(
++                            "local",
++                            GoalCommand::SetBudget {
++                                operation_id: "exhaust-time".into(),
++                                goal_id: goal.id,
++                                expected_revision: goal.revision,
++                                limits: bitrouter_orchestrator::goal::budget::Limits {
++                                    elapsed_ms: Some(0),
++                                    managed_token_estimates_micro_usd: None,
++                                },
++                            },
++                            now()?,
++                        )
++                        .await?;
++                }
++                "requirements" => {
++                    let GoalReply::Accepted { operation } = goals
++                        .execute(
++                            "local",
++                            GoalCommand::Input {
++                                operation_id: "change-requirements".into(),
++                                goal_id: goal.id.clone(),
++                                expected_revision: goal.revision,
++                                text: "Also deliver compatibility evidence".into(),
++                                task_reference: None,
++                            },
++                            now()?,
++                        )
++                        .await?
++                    else {
++                        anyhow::bail!("input receipt missing")
++                    };
++                    worker_change(
++                        &goals,
++                        &goal.id,
++                        "begin-change",
++                        Change::Input {
++                            event: InputEvent::Begin {
++                                operation: Box::new(operation),
++                                attempt_id: "change".into(),
++                                stage: Stage::Reasoning,
++                            },
++                        },
++                    )
++                    .await?;
++                    worker_change(
++                        &goals,
++                        &goal.id,
++                        "finish-change",
++                        Change::Input {
++                            event: InputEvent::Finish {
++                                attempt_id: "change".into(),
++                                reasoning_request_id: Some("change-model".into()),
++                                interpretation: Interpretation {
++                                    objective: Some("Deliver compatibility evidence too".into()),
++                                    ..Default::default()
++                                },
++                            },
++                        },
++                    )
++                    .await?;
++                }
++                _ => {
++                    goals
++                        .execute(
++                            "local",
++                            GoalCommand::Control {
++                                operation_id: "pause-input".into(),
++                                goal_id: goal.id,
++                                expected_revision: goal.revision,
++                                intent: RunIntent::Pause,
++                            },
++                            now()?,
++                        )
++                        .await?;
++                    control.gate().await?;
++                    backend.release.cancel();
++                }
++            }
++            Ok::<_, anyhow::Error>(())
++        };
++        let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
++            tokio::try_join!(
++                async {
++                    Ok::<_, anyhow::Error>(
++                        runtime
++                            .execute_controlled("input-classification", &request, control.as_ref())
++                            .await,
++                    )
++                },
++                invalidate
++            )
++        })
++        .await
++        .with_context(|| format!("typed input ignored source invalidation: {case}"))??;
++        let goal = snapshot(&goals, &control.goal_id).await?;
++        anyhow::ensure!(
++            backend.cancelled.load(Ordering::Acquire) == (case != "pause"),
++            "unexpected cancellation: {case}"
++        );
++        if case == "lease" {
++            // An old coordinator may cancel I/O but cannot commit after takeover.
++            // Keep the original unknown-cost hold until its owner reconciles it.
++            anyhow::ensure!(
++                outcome.is_err() && !control.acknowledged(),
++                "old owner committed its outcome"
++            );
++            anyhow::ensure!(
++                goal.accounting.work_started == 1
++                    && goal.accounting.work_observed == 0
++                    && goal.accounting.in_flight.len() == 1
++                    && goal.budget.held.len() == 1,
++                "owner loss erased the unsettled attempt"
++            );
++            continue;
++        }
++        let outcome = outcome?;
++        anyhow::ensure!(
++            if case == "pause" {
++                outcome.is_ok()
++            } else {
++                matches!(&outcome, Err(error) if error.kind == DecisionFailure::Cancelled)
++            },
++            "unexpected typed outcome for {case}: {outcome:?}"
++        );
++        anyhow::ensure!(
++            goal.accounting.work_started == 1 && goal.accounting.work_observed == 1,
++            "typed attempt was not settled exactly once: {case}"
++        );
++        anyhow::ensure!(
++            goal.accounting.in_flight.is_empty() && goal.budget.held.is_empty(),
++            "cancelled usage was left unsettled: {case}"
++        );
++        anyhow::ensure!(
++            goal.accounting.estimated_model_tokens_micro_usd == 13,
++            "observed usage was lost: {case}"
++        );
++    }
++    Ok(())
++}
+diff --git a/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs b/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
+index 84b076ec..87bde589 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/acp_recovery.rs
+@@ -340,17 +340,6 @@ async fn acp_pre_prompt_recovery_loads_only_the_original_stopped_session() -> Re
+                         .as_str()
+                         .context("nonce missing")?
+                 );
+-                tokio::time::timeout(Duration::from_secs(10), async {
+-                    loop {
+-                        let state: serde_json::Value =
+-                            serde_json::from_slice(&tokio::fs::read(&private).await?)?;
+-                        if state["prompts"] == 1 {
+-                            break Ok::<_, anyhow::Error>(());
+-                        }
+-                        tokio::time::sleep(Duration::from_millis(10)).await;
+-                    }
+-                })
+-                .await??;
+                 let permission = tokio::time::timeout(Duration::from_secs(10), async {
+                     loop {
+                         let turn = current.threads.read_stored_turn(&target, &CallerContext::local(), &link.turn_id).await?;
+@@ -361,6 +350,10 @@ async fn acp_pre_prompt_recovery_loads_only_the_original_stopped_session() -> Re
+                         tokio::time::sleep(Duration::from_millis(10)).await;
+                     }
+                 }).await??;
++                // The peer writes its private state before requesting permission.
++                let state: serde_json::Value =
++                    serde_json::from_slice(&tokio::fs::read(&private).await?)?;
++                anyhow::ensure!(state["prompts"] == 1, "restored prompt was not submitted exactly once");
+                 let invalid = current.threads.answer_acp_permission(&target, &CallerContext::local(),
+                     bitrouter_orchestrator::service::worker::acp::Approval {
+                         turn_id: link.turn_id.clone(), request_id: permission.request_id.clone(),
+diff --git a/apps/bitrouter/tests/goal_tui_pty.rs b/apps/bitrouter/tests/goal_tui_pty.rs
+index f3e3ae66..f2da2b3f 100644
+--- a/apps/bitrouter/tests/goal_tui_pty.rs
++++ b/apps/bitrouter/tests/goal_tui_pty.rs
+@@ -2,7 +2,7 @@
+ #![cfg(unix)]
+ 
+ use std::io::{Read, Write};
+-use std::path::Path;
++use std::path::{Path, PathBuf};
+ use std::sync::mpsc::{self, Receiver};
+ use std::time::{Duration, Instant};
+ 
+@@ -17,6 +17,73 @@ mod fixture_binary;
+ #[path = "support/goal_provider.rs"]
+ mod provider;
+ 
++// This file owns real daemon processes; protocol/model fixtures stay explicit.
++struct Daemon {
++    socket: PathBuf,
++    child: tokio::process::Child,
++}
++
++impl Daemon {
++    async fn start(config: &Path, home: &Path, env: &[(&str, &str)]) -> Result<Self> {
++        let source = bitrouter::paths::ConfigSource::File(config.into());
++        let cfg = bitrouter::paths::load_config(&source).await?;
++        let socket = bitrouter::daemon::socket_path_for(&source, &cfg);
++        let child = Command::new(env!("CARGO_BIN_EXE_bro"))
++            .args(["serve", "--config"])
++            .arg(config)
++            .env("HOME", home)
++            .env("BITROUTER_HOME", home)
++            .envs(env.iter().copied())
++            .current_dir(home)
++            .stdout(std::process::Stdio::null())
++            .stderr(std::process::Stdio::null())
++            .kill_on_drop(true)
++            .spawn()?;
++        let mut daemon = Self { socket, child };
++        let ready = async {
++            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
++            while directory(&daemon.socket).await.is_err() {
++                ensure!(daemon.child.try_wait()?.is_none(), "fixture daemon exited");
++                ensure!(
++                    tokio::time::Instant::now() < deadline,
++                    "fixture daemon not ready"
++                );
++                tokio::time::sleep(Duration::from_millis(20)).await;
++            }
++            Ok::<_, anyhow::Error>(())
++        }
++        .await;
++        if let Err(error) = ready {
++            let _ = daemon.child.kill().await;
++            let _ = daemon.child.wait().await;
++            return Err(error);
++        }
++        Ok(daemon)
++    }
++
++    async fn stop(mut self, seconds: u64) -> Result<()> {
++        let reply = send_command(&self.socket, &DaemonCommand::Stop).await;
++        if !matches!(&reply, Ok(DaemonResponse::Ok)) {
++            self.child.kill().await?;
++        }
++        let status =
++            match tokio::time::timeout(Duration::from_secs(seconds), self.child.wait()).await {
++                Ok(status) => status?,
++                Err(error) => {
++                    self.child.kill().await?;
++                    self.child.wait().await?;
++                    return Err(error).context("fixture daemon did not stop before its deadline");
++                }
++            };
++        ensure!(
++            matches!(reply?, DaemonResponse::Ok),
++            "fixture daemon rejected shutdown"
++        );
++        ensure!(status.success(), "fixture daemon exited with {status}");
++        Ok(())
++    }
++}
++
+ struct Terminal {
+     writer: Box<dyn Write + Send>,
+     output: Receiver<Vec<u8>>,
+@@ -655,27 +722,14 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
+                 "env":{"BRO_GOAL_FIXTURE_CONTROL":controls,"BRO_GOAL_FIXTURE_CAPTURE":captures,"BRO_GOAL_FIXTURE_RIGHT_MANUAL":"1","BRO_GOAL_FIXTURE_RIGHT_GATE":"1","BRO_GOAL_FIXTURE_RIGHT_OVERLAP":"1"}}}}
+         }))?,
+     )?;
+-    let source = bitrouter::paths::ConfigSource::File(config_path.clone());
+-    let config = bitrouter::paths::load_config(&source).await?;
+-    let socket = bitrouter::daemon::socket_path_for(&source, &config);
+-    let mut server = Command::new(env!("CARGO_BIN_EXE_bro"))
+-        .args(["serve", "--config"])
+-        .arg(&config_path)
+-        .env("HOME", home.path())
+-        .env("BITROUTER_HOME", home.path())
+-        .env("BRO_GOAL_FIXTURE_DECISION_KEY", "fixture-decision-key")
+-        .current_dir(home.path())
+-        .stdout(std::process::Stdio::null())
+-        .stderr(std::process::Stdio::null())
+-        .kill_on_drop(true)
+-        .spawn()?;
++    let server = Daemon::start(
++        &config_path,
++        home.path(),
++        &[("BRO_GOAL_FIXTURE_DECISION_KEY", "fixture-decision-key")],
++    )
++    .await?;
++    let socket = server.socket.clone();
+     let result = async {
+-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+-        while directory(&socket).await.is_err() {
+-            ensure!(server.try_wait()?.is_none(), "fixture daemon exited");
+-            ensure!(tokio::time::Instant::now() < deadline, "fixture daemon not ready");
+-            tokio::time::sleep(Duration::from_millis(20)).await;
+-        }
+         let mut terminal = Terminal::open(home.path(),true)?;
+         terminal.wait("No matching Goals")?;
+         ensure!(backend.received_requests().await.is_some_and(|requests| requests.is_empty()));
+@@ -914,16 +968,11 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
+         terminal.detach()?;
+         Ok::<_,anyhow::Error>(())
+     }.await;
+-    let stop = send_command(&socket, &DaemonCommand::Stop).await;
+-    if stop.is_err() {
+-        server.kill().await?;
+-    }
+-    let ended = tokio::time::timeout(Duration::from_secs(15), server.wait()).await;
+-    ensure!(ended.is_ok(), "fixture daemon did not finish cleanup");
+-    if result.is_ok() {
++    let shutdown = server.stop(15).await;
++    if result.is_ok() && shutdown.is_ok() {
+         home.disable_cleanup(false);
+     }
+-    result
++    result.and(shutdown)
+ }
+ 
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+@@ -948,30 +997,13 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
+             "database":{"url":format!("sqlite://{}?mode=rwc",home.path().join("bitrouter.db").display())}
+         }))?,
+     )?;
+-    let source = bitrouter::paths::ConfigSource::File(config.clone());
+-    let cfg = bitrouter::paths::load_config(&source).await?;
+-    let socket = bitrouter::daemon::socket_path_for(&source, &cfg);
+-    let mut server = Command::new(env!("CARGO_BIN_EXE_bro"))
+-        .args(["serve", "--config"])
+-        .arg(&config)
+-        .env("HOME", home.path())
+-        .env("BITROUTER_HOME", home.path())
+-        .current_dir(home.path())
+-        .stdout(std::process::Stdio::null())
+-        .stderr(std::process::Stdio::null())
+-        .kill_on_drop(true)
+-        .spawn()?;
++    let server = Daemon::start(&config, home.path(), &[]).await?;
++    let socket = server.socket.clone();
+     let editor = format!(
+         "'{}' --editor",
+         binary.to_string_lossy().replace('\'', "'\\''")
+     );
+     let result = async {
+-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+-        while directory(&socket).await.is_err() {
+-            ensure!(server.try_wait()?.is_none(), "editor fixture daemon exited");
+-            ensure!(tokio::time::Instant::now() < deadline, "editor fixture daemon not ready");
+-            tokio::time::sleep(Duration::from_millis(20)).await;
+-        }
+         for fail in [false, true] {
+             let original = "original draft 中文 👩‍💻\nsecond original line  ";
+             let edited = "replacement 中文 👩‍💻\nsecond edited line  ";
+@@ -1095,23 +1127,15 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
+         ensure!(directory(&socket).await? == 2, "signal exit delegated a draft");
+         Ok::<_,anyhow::Error>(())
+     }.await;
+-    let release_result = std::fs::write(&release, "release");
+-    let stop = send_command(&socket, &DaemonCommand::Stop).await;
+-    let status = tokio::time::timeout(Duration::from_secs(10), server.wait()).await;
++    let release_result = std::fs::write(&release, "release").map_err(anyhow::Error::from);
++    let shutdown = server.stop(10).await;
++    let result = result.and(release_result).and(shutdown);
+     if result.is_err() {
+         let retained = home.keep();
+         return result
+             .with_context(|| format!("editor fixture retained at {}", retained.display()));
+     }
+-    result?;
+-    release_result?;
+-    ensure!(matches!(stop?, DaemonResponse::Ok));
+-    ensure!(
+-        status
+-            .context("external editor fixture daemon did not stop")??
+-            .success()
+-    );
+-    Ok(())
++    result
+ }
+ 
+ #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+@@ -1137,29 +1161,9 @@ async fn goal_directory_resize_defers_backlog_and_isolates_native_inspection() -
+             }}}}
+         }))?,
+     )?;
+-    let source = bitrouter::paths::ConfigSource::File(config.clone());
+-    let cfg = bitrouter::paths::load_config(&source).await?;
+-    let socket = bitrouter::daemon::socket_path_for(&source, &cfg);
+-    let mut server = Command::new(env!("CARGO_BIN_EXE_bro"))
+-        .args(["serve", "--config"])
+-        .arg(&config)
+-        .env("HOME", home.path())
+-        .env("BITROUTER_HOME", home.path())
+-        .current_dir(home.path())
+-        .stdout(std::process::Stdio::null())
+-        .stderr(std::process::Stdio::null())
+-        .kill_on_drop(true)
+-        .spawn()?;
++    let server = Daemon::start(&config, home.path(), &[]).await?;
++    let socket = server.socket.clone();
+     let result = async {
+-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+-        while directory(&socket).await.is_err() {
+-            ensure!(server.try_wait()?.is_none(), "isolation daemon exited");
+-            ensure!(
+-                tokio::time::Instant::now() < deadline,
+-                "isolation daemon unavailable"
+-            );
+-            tokio::time::sleep(Duration::from_millis(20)).await;
+-        }
+         let GoalReply::Accepted { operation } = request(
+             &socket,
+             GoalCommand::Create {
+@@ -1406,12 +1410,8 @@ async fn goal_directory_resize_defers_backlog_and_isolates_native_inspection() -
+         Ok::<_, anyhow::Error>(())
+     }
+     .await;
+-    let stop = send_command(&socket, &DaemonCommand::Stop).await;
+-    if stop.is_err() {
+-        server.kill().await?;
+-    }
+-    tokio::time::timeout(Duration::from_secs(15), server.wait()).await??;
+-    result
++    let shutdown = server.stop(15).await;
++    result.and(shutdown)
+ }
+ 
+ async fn verify_goal_entries_with_defaults(inherit_defaults: bool) -> Result<()> {
+@@ -1426,29 +1426,9 @@ async fn verify_goal_entries_with_defaults(inherit_defaults: bool) -> Result<()>
+             "database":{"url":format!("sqlite://{}?mode=rwc",home.path().join("bitrouter.db").display())}
+         }))?,
+     )?;
+-    let source = bitrouter::paths::ConfigSource::File(config.clone());
+-    let cfg = bitrouter::paths::load_config(&source).await?;
+-    let socket = bitrouter::daemon::socket_path_for(&source, &cfg);
+-    let mut server = Command::new(env!("CARGO_BIN_EXE_bro"))
+-        .args(["serve", "--config"])
+-        .arg(&config)
+-        .env("HOME", home.path())
+-        .env("BITROUTER_HOME", home.path())
+-        .current_dir(home.path())
+-        .stdout(std::process::Stdio::null())
+-        .stderr(std::process::Stdio::null())
+-        .kill_on_drop(true)
+-        .spawn()?;
++    let server = Daemon::start(&config, home.path(), &[]).await?;
++    let socket = server.socket.clone();
+     let result = async {
+-        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+-        while directory(&socket).await.is_err() {
+-            ensure!(server.try_wait()?.is_none(), "fixture daemon exited");
+-            ensure!(
+-                tokio::time::Instant::now() < deadline,
+-                "fixture daemon not ready"
+-            );
+-            tokio::time::sleep(Duration::from_millis(50)).await;
+-        }
+         for code in [false, true] {
+             let mut terminal = Terminal::open(home.path(), code)?;
+             terminal.wait("No matching Goals")?;
+@@ -1598,7 +1578,6 @@ async fn verify_goal_entries_with_defaults(inherit_defaults: bool) -> Result<()>
+         Result::<()>::Ok(())
+     }
+     .await;
+-    server.kill().await?;
+-    let _ = server.wait().await?;
+-    result
++    let shutdown = server.stop(15).await;
++    result.and(shutdown)
+ }
+diff --git a/crates/bitrouter-sdk/src/decision_model/mod.rs b/crates/bitrouter-sdk/src/decision_model/mod.rs
+index bcdf0d46..1cc4bc5e 100644
+--- a/crates/bitrouter-sdk/src/decision_model/mod.rs
++++ b/crates/bitrouter-sdk/src/decision_model/mod.rs
+@@ -12,7 +12,8 @@ use std::sync::Arc;
+ use async_trait::async_trait;
+ use tokio_util::sync::CancellationToken;
+ 
+-use self::types::{DecisionError, DecisionRequest, DecisionResponse};
++use self::types::{DecisionError, DecisionFailure, DecisionRequest, DecisionResponse};
++use crate::language_model::native::NativeExecutionControl;
+ 
+ /// One cancellable decision attempt. A validated response retains provider usage.
+ #[async_trait]
+@@ -37,3 +38,85 @@ pub struct DecisionRuntime {
+     /// Optional declared prices used only for token estimates.
+     pub pricing: Option<policy::DecisionPricing>,
+ }
++
++impl DecisionRuntime {
++    /// Execute one typed request through the host's admission and outcome barriers.
++    /// Host failures abort the call; provider failures remain recorded outcomes.
++    pub async fn execute_controlled(
++        &self,
++        attempt_id: &str,
++        request: &DecisionRequest,
++        control: &dyn NativeExecutionControl,
++    ) -> crate::Result<Result<DecisionResponse, DecisionError>> {
++        let admission = control
++            .before_typed_decision(attempt_id, request, self.pricing.as_ref())
++            .await;
++        let token = CancellationToken::new();
++        let outcome = match &admission {
++            Err(error) => Err(DecisionError::invalid_request(error.to_string())),
++            Ok(()) => {
++                let call = self.execute_bounded(request, &token);
++                tokio::pin!(call);
++                tokio::select! {
++                    biased;
++                    () = control.provider_cancelled() => {
++                        token.cancel();
++                        // Retain usage already observed instead of dropping the attempt.
++                        call.await
++                    },
++                    outcome = &mut call => outcome,
++                }
++            }
++        };
++        control
++            .after_typed_decision(attempt_id, &outcome, self.pricing.as_ref())
++            .await?;
++        admission?;
++        Ok(outcome)
++    }
++
++    pub(crate) async fn execute_bounded(
++        &self,
++        request: &DecisionRequest,
++        token: &CancellationToken,
++    ) -> Result<DecisionResponse, DecisionError> {
++        let policy = &self.policy;
++        let outcome = match serde_json::to_vec(request) {
++            Ok(bytes)
++                if bytes.len() <= policy.max_request_bytes
++                    && policy.validate().is_ok()
++                    && request.validate().is_ok() =>
++            {
++                self.executor.execute(request, token).await
++            }
++            _ => Err(DecisionError::invalid_request(
++                "typed decision request exceeds its admitted bound",
++            )),
++        };
++        let outcome = outcome.and_then(|response| {
++            response.validate(request)?;
++            Ok(response)
++        });
++        let limit = policy
++            .max_request_bytes
++            .saturating_mul(2)
++            .saturating_add(8192);
++        if serde_json::to_vec(&outcome).is_ok_and(|bytes| bytes.len() <= limit) {
++            return outcome;
++        }
++        let usage = match &outcome {
++            Ok(response) => Some(response.usage),
++            Err(error) => error.usage,
++        };
++        let may_have_run = match &outcome {
++            Ok(_) => true,
++            Err(error) => error.may_have_run,
++        };
++        Err(DecisionError {
++            kind: DecisionFailure::ResponseTooLarge,
++            message: "typed decision outcome exceeds its admitted bound".into(),
++            usage,
++            may_have_run,
++        })
++    }
++}
+diff --git a/crates/bitrouter-sdk/src/routing/preparation.rs b/crates/bitrouter-sdk/src/routing/preparation.rs
+index ad7a7f7b..e99a345a 100644
+--- a/crates/bitrouter-sdk/src/routing/preparation.rs
++++ b/crates/bitrouter-sdk/src/routing/preparation.rs
+@@ -9,7 +9,7 @@ use super::{
+ use crate::decision_model::{
+     DecisionRuntime,
+     policy::DecisionPolicy,
+-    types::{DecisionError, DecisionFailure, DecisionRequest, DecisionResponse, DecisionUsage},
++    types::{DecisionError, DecisionRequest, DecisionResponse, DecisionUsage},
+ };
+ use crate::language_model::native::{NativeExecutionControl, NativePlan};
+ use bitrouter_ai::types::Prompt;
+@@ -87,7 +87,9 @@ impl Prepared {
+             .unwrap_or_default();
+         let receipt = if let Some(runtime) = runtime {
+             let request = assessment_request(prompt, runtime);
+-            let outcome = execute_decision(runtime, &request, &CancellationToken::new()).await;
++            let outcome = runtime
++                .execute_bounded(&request, &CancellationToken::new())
++                .await;
+             Some(receipt(id, &request, &policy, outcome))
+         } else {
+             None
+@@ -122,31 +124,9 @@ impl Prepared {
+         prepared.policy = runtime.policy.clone();
+         let attempt_id = format!("{id}/routing-assessment");
+         let request = assessment_request(prompt, runtime);
+-        let admission = control
+-            .before_typed_decision(&attempt_id, &request, runtime.pricing.as_ref())
+-            .await;
+-        let token = CancellationToken::new();
+-        let outcome = match &admission {
+-            Err(error) => Err(DecisionError::invalid_request(error.to_string())),
+-            Ok(()) => {
+-                let call = execute_decision(runtime, &request, &token);
+-                tokio::pin!(call);
+-                tokio::select! {
+-                    biased;
+-                    () = control.provider_cancelled() => {
+-                        token.cancel();
+-                        // The executor returns any usage already observed;
+-                        // dropping it would erase that settlement evidence.
+-                        call.await
+-                    },
+-                    outcome = &mut call => outcome,
+-                }
+-            }
+-        };
+-        control
+-            .after_typed_decision(&attempt_id, &outcome, runtime.pricing.as_ref())
++        let outcome = runtime
++            .execute_controlled(&attempt_id, &request, control)
+             .await?;
+-        admission?;
+         prepared.receipt = Some(receipt(&attempt_id, &request, &prepared.policy, outcome));
+         Ok(prepared)
+     }
+@@ -157,51 +137,6 @@ fn assessment_request(prompt: &Prompt, runtime: &DecisionRuntime) -> DecisionReq
+     assessment::request(&runtime.model, &input)
+ }
+ 
+-async fn execute_decision(
+-    runtime: &DecisionRuntime,
+-    request: &DecisionRequest,
+-    token: &CancellationToken,
+-) -> Result<DecisionResponse, DecisionError> {
+-    let policy = &runtime.policy;
+-    let outcome = match serde_json::to_vec(request) {
+-        Ok(bytes)
+-            if bytes.len() <= policy.max_request_bytes
+-                && policy.validate().is_ok()
+-                && request.validate().is_ok() =>
+-        {
+-            runtime.executor.execute(request, token).await
+-        }
+-        _ => Err(DecisionError::invalid_request(
+-            "routing classifier request exceeds its admitted bound",
+-        )),
+-    };
+-    let outcome = outcome.and_then(|response| {
+-        response.validate(request)?;
+-        Ok(response)
+-    });
+-    let limit = policy
+-        .max_request_bytes
+-        .saturating_mul(2)
+-        .saturating_add(8192);
+-    if serde_json::to_vec(&outcome).is_ok_and(|bytes| bytes.len() <= limit) {
+-        return outcome;
+-    }
+-    let usage = match &outcome {
+-        Ok(response) => Some(response.usage),
+-        Err(error) => error.usage,
+-    };
+-    let may_have_run = match &outcome {
+-        Ok(_) => true,
+-        Err(error) => error.may_have_run,
+-    };
+-    Err(DecisionError {
+-        kind: DecisionFailure::ResponseTooLarge,
+-        message: "routing classifier outcome exceeds its admitted bound".into(),
+-        usage,
+-        may_have_run,
+-    })
+-}
+-
+ fn receipt(
+     id: &str,
+     request: &DecisionRequest,
+diff --git a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+index a75eb1ab..36e3baf7 100644
+--- a/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
++++ b/docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md
+@@ -2,6 +2,8 @@
+ 
+ 本轮依据 [重构 spec v0.2](BRO_ORCHESTRATOR_REFACTOR_SPEC.md)，统一 BRO 的执行接纳与控制，保留现有存储职责。**本轮 BRO 执行重构已完成本地实现与最终源码回归。** [验收映射](evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md)逐项说明 RF01–RF12 / A01–A22 的本地证明与范围；[最终摘要](evidence/bro-goal-workflow/2026-10-16-refactor-summary.json)记录源码绑定、归档发布和 CI 的分层状态。真实厂商 harness/provider 在本轮源码上的复验仍为未通过 gate。
+ 
++后续两份独立 review 的取消、竞态、退出检查与局部简化已落实；最新 4,758 项本地回归及源码适用范围见 [review 修正验收](evidence/bro-goal-workflow/2026-10-16-review-fixes.md)。下文既有阶段记录继续绑定各自原始源码。
++
+ BRO 面向 Goal 和长期并行工作流。它负责理解、规划、委派、协调和验收；实际工作统一交给 ThreadService。内置执行器可独立完成 Goal，外部 ACP harness 是可选 worker。未来 core persistent workflow state、状态权威迁移、通用动态图和 Goal owner handoff 不进入本轮。
+ 
+ 此前的逐轮排查记录已完整保存在独立归档；本文只保留当前实现、必要复现入口、验收范围和剩余工作。
+diff --git a/docs/evidence/bro-goal-workflow/2026-10-16-review-fixes.md b/docs/evidence/bro-goal-workflow/2026-10-16-review-fixes.md
+new file mode 100644
+index 00000000..438fcdb7
+--- /dev/null
++++ b/docs/evidence/bro-goal-workflow/2026-10-16-review-fixes.md
+@@ -0,0 +1,48 @@
++# BRO review corrections and simplification
++
++Follow-up to source `8a44c6b1fc8a7d580de82412ab821e46c07c5d76` and the two independent implementation/testing reviews. The approved v0.2 scope and existing storage/execution authority remain unchanged. Workflow remains read-only.
++
++## Changes
++
++- Input classification and routing assessment construct their own questions, then use the same `DecisionRuntime::execute_controlled` admission, cancellation, bounded-outcome and acknowledgement path. Cancellation retains the executor's usage outcome; the input path no longer duplicates cost conversion. A paused Goal can still process explicit input.
++- `ModelControl` retains only the original Goal ID and requirements revision. Current source, lease, authorization and budget are still reread at the existing gates.
++- Permission projection reuses the same checked JSON within one operation, retaining raw optional fields. Run/request/hash validation, late-change rejection and checks across asynchronous delivery boundaries remain separate.
++- ACP recovery waits for the restored prompt's existing permission observation before reading the private prompt counter. The peer writes that file before emitting the request, so no new file protocol, ignored parse errors or retry is needed.
++- Four PTY scenarios share a concrete daemon start/stop helper. Normal shutdown requires an OK response, successful wait and exit 0. Failed readiness and shutdown timeouts still kill/reap the owned process; the original scenario failure takes precedence.
++- Two real client IPC setups share a local fixture. Three pure projection tests use an explicit snapshot instead of opening/migrating SQLite. Actual database receipt tests, durable commit/projection comparisons, all entry combinations and complete terminal journeys remain.
++
++## Current local proof
++
++| Check | Result |
++| --- | --- |
++| Model-control, permission, UI/client and SDK controlled-decision regression | 33 passed |
++| ACP pre-prompt recovery matrix plus actual Goal PTY | 5 tests passed: one five-case ACP matrix and four PTY scenarios |
++| Workspace/all-feature nextest, two outer slots, no retries | 4,758 passed, 24 skipped; 1,037.049 seconds; no reported LEAK |
++| Workspace/all-target/all-feature Clippy with `-D warnings`, fmt and generated artifacts | Passed |
++| Workspace doctests | 6 passed, 1 ignored |
++| SDK default features and orchestrator without ACP features | Both builds passed |
++
++The new typed regression changes actual GoalStore state while a controlled executor is in flight. Requirement/budget invalidation cancels and settles reported usage once. Owner transfer cancels the call but refuses the old owner's outcome commit, retaining the original unknown-cost hold. A paused Goal's explicit input completes normally. The backend is a fixture; no actual vendor billing is attested.
++
++The source manifest covers 999 executable, test, build and CI inputs. Its SHA-256 is `70c49f6ecf71312e1ae078f19d30a9e6ebfb28593af0d1b8d13b2958d21f7177`; no input drift occurred between focused checks, full regression and final static/default-feature checks. Exact-head hosted CI is recorded separately in the final delivery evidence.
++
++Implementation files have a net reduction of 14 physical lines. Test setup cleanup is offset by the new cancellation regression; all Rust changes together are +166 lines. These counts include comments/blank lines and do not claim measured performance improvement.
++
++## Evidence and limits
++
++Original compile failures, the failed intermediate projection/cancellation fixture run, available source patches, passing command logs, the verification runner and three immutable Cargo-produced Rust fixture files belong to the independent archive. The [existing PR acceptance comment](https://github.com/bitrouter/bitrouter/pull/981#issuecomment-6224234670) pins the latest immutable annex and hosted results. Previous archives remain available at their original commits.
++
++The private-file race was identified from the concurrent read/write paths; this correction does not claim reproduction or explain an earlier ENOENT/CI failure. Retained executable files are local file snapshots, not process/memory images or hosted temporary filesystem exports.
++
++Actual vendor harness/provider requalification remains unpassed. Future core persistence, complete Turn-fixed routing, graph editing and Goal owner handoff remain deferred. Admission-wait predicate refactoring, entry-journey reduction and global test-pressure changes are outside this follow-up.
++
++Reproduce the full suite with the existing [instructions](REPRODUCE.md). Focused checks use:
++
++```sh
++CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
++  cargo nextest run -p bitrouter -p bitrouter-sdk --lib --all-features --test-threads 2 \
++  -E 'test(goal_runtime::model_control::tests::) | test(goal_code::tests::) | test(goal_permission_material::) | test(app_routing_decision_requires_) | test(routing_cancellation_settles_)'
++CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
++  cargo nextest run -p bitrouter --lib --test goal_tui_pty --all-features --test-threads 2 \
++  -E 'test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session) | binary(goal_tui_pty)'
++```

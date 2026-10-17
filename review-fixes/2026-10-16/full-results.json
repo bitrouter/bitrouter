@@ -1,0 +1,10 @@
+{
+  "recordedAt": "2026-10-17T02:58:40.872Z",
+  "log": "full-01.log",
+  "passed": 4758,
+  "skipped": 24,
+  "elapsedSeconds": 1037.049,
+  "reportedLeaks": 0,
+  "sourceDrift": [],
+  "sourceManifestSha256": "70c49f6ecf71312e1ae078f19d30a9e6ebfb28593af0d1b8d13b2958d21f7177"
+}
