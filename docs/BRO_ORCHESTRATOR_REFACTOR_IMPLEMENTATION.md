@@ -178,7 +178,7 @@ Goal 默认交付经过验证、可 review 的结果即完成；人工验收只�
 | 当前 native 历史 checkpoint | 86 项 Goal runtime 检查、6 项证据检查、归档矩阵 3 次重复、严格全 workspace Clippy 与 fmt |
 | 前一预算 checkpoint | 735 项 SDK 检查、4 项 Goal PTY、编辑器 10 次重复、6 个 doctest（1 ignored）；源码适用性单独核对 |
 
-完整 Rust / 测试源码的 macOS final77 结果：**Summary [1145.745s] 4757 tests run: 4757 passed (5 slow), 24 skipped**。严格全 workspace / all-target / all-feature Clippy、fmt、6 个 doctest（1 ignored）与 dist-helper check 通过，源码无漂移，nextest 未报告 LEAK。完整 coordinator / TUI / SQLite-resource 夹具预留全局测试资源；场景内部并行、栈与产品上限保持原值；native 并行交付测试将原单个 45 秒等待拆为 worker handoff 与根验收两个各 45 秒的阶段，总允许等待因此增加。大型测试 future 使用堆分配，缺失的正向阶段收据仍按未知处理。原始超时、栈溢出、过强断言、初始化断开、LEAK 和中断运行均保留；真实 harness/provider 与 hosted CI 另列，不由本地 fixture 代替。
+当前完整源码结果：**Summary [1146.178s] 4757 tests run: 4757 passed (5 slow), 24 skipped**。严格全 workspace / all-target / all-feature Clippy、fmt、6 个 doctest（1 ignored）与 dist-helper check 通过，源码无漂移，nextest 未报告 LEAK。完整 coordinator / TUI / SQLite-resource 夹具预留全局测试资源；场景内部并行、栈与产品上限保持原值；native 并行交付测试按左右分支交接、join 交接与根验收三个各 45 秒的阶段等待，总允许等待由 90 增至 135 秒。大型测试 future 使用堆分配，缺失的正向阶段收据仍按未知处理。原始超时、栈溢出、过强断言、初始化断开、LEAK 和中断运行均保留；真实 harness/provider 与 hosted CI 另列，不由本地 fixture 代替。
 
 必要的 Rust fixtures、输入评测案例与测试驱动保留在仓库。执行与测试夹具不要求 Python。常用本地入口：
 
@@ -196,15 +196,19 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
 
 首轮 hosted CI 暴露了全特性构建未覆盖的可选 ACP 依赖引用，以及新 Rust stable 对测试中旧原子 API 的弃用错误。本轮修正后，native 默认依赖图不含 ACP crate，关闭/开启 ACP 与 Rust 1.93 构建通过；共享执行仅保存原始权限材料，适配器解释协议类型，未提供的选项被拒绝且不产生选择记录。
 
-Linux 还证明三个 worker 已完成但根验收未结束时，总 45 秒的测试等待偏短；现在分别等待交接与根验收，每阶段仍为 45 秒，整条测试的允许时间增加。实际并行/隔离/依赖与验收断言均保留，产品预算不变。
+首轮 Linux 证明三个 worker 已完成但根验收未结束时，总 45 秒的测试等待偏短；初次修正分别等待交接与根验收，每阶段仍为 45 秒，整条测试的允许时间增加。实际并行/隔离/依赖与验收断言均保留，产品预算不变。
 
-先前源码的 full final31 在 help 用例报告一次输出 LEAK；同源码、两个外层测试槽的 final36 全量通过且未报告 LEAK。两轮均保留，未声称已证明旧管道报告的原因。当前最终源码由 `terminal-continue-final77` 重新验证，工作流内部并行与严格检测器保持原值。
+先前源码的 full final31 在 help 用例报告一次输出 LEAK；同源码、两个外层测试槽的 final36 全量通过且未报告 LEAK。两轮均保留，未声称已证明旧管道报告的原因。当前最终源码由 `fixture-image-final123` 重新验证，工作流内部并行与严格检测器保持原值。
 
 Linux 清单现覆盖全部 36 个集成目标，新增 native-goals 分片运行此前遗漏的 10 个，串行编译且不自动重试。首次运行暴露 Goal PTY 夹具的 shell 后台输入问题：部分 shell 在处理显式重定向前把后台 stdin 设为 /dev/null，`<&0` 不能保住原终端。夹具现在先保存 FD3，再从它连接 BRO 的 stdin，并在父子进程关闭备用描述符；BRO 仍要求真实终端，测试断言和等待界限不变。当前源码的四个 Goal PTY 用例与全 workspace 在本机通过；扩展后的 Linux 和其他平台结果另看最终 CI。
 
 后续 Linux CI 中，活跃 Goal 场景已通过，但挂起场景发现共享 helper 在进程实际继续前可能返回并重新开启 raw mode。现在先订阅 `SIGCONT`，再发送 `SIGSTOP`，收到继续信号后才允许四个 UI 入口重新接管终端；PTY 另断言显式继续前不得重新开启键盘输入。未放宽终端状态、等待或产品预算。Linux 分片启用 `--no-fail-fast` 以收集全部失败，选择与重试规则不变。原始失败与中间编译失败均留在独立归档。
 
-随后 Linux d0da 分片完整运行 212 项：210 通过、2 失败、6 跳过；挂起状态断言通过，但缩放时键盘输入滞留，另一个场景等待权限提交超时。crossterm 0.28 的 Mio source 在 resize 先返回时可能丢弃尚未读取的 TTY edge。现将已有 macOS pollfd/libc 配置扩展为 Unix，共用原 event API，未改 Rust 实现或测试。macOS 特性图前后逐字节一致；`unix-tty-focused88` 完成四个 PTY、功能隔离、MSRV、严格检查和文档检查。4,757 项全量仍明确绑定 final77，未冒称 focused88 新跑全量；Linux 生效由后续 exact-head CI 验证，断言、超时和重试不变。
+随后 Linux d0da 分片完整运行 212 项：210 通过、2 失败、6 跳过；挂起状态断言通过，但缩放时键盘输入滞留，另一个场景等待权限提交超时。crossterm 0.28 的 Mio source 在 resize 先返回时可能丢弃尚未读取的 TTY edge。现将已有 macOS pollfd/libc 配置扩展为 Unix，共用原 event API，未改 Rust 实现或测试。macOS 特性图前后逐字节一致；`unix-tty-focused88` 完成四个 PTY、功能隔离、MSRV、严格检查和文档检查。该轮聚焦材料引用此前 final77 的 4,757 项全量，并非 focused88 新跑全量；最新当前源码的完整证明见上文 full123，Linux 结果另看 exact-head CI，断言、超时和重试不变。
+
+全量 local99 曾出现一项 ACP 夹具启动前 ENOENT（4,756 pass / 1 fail），不算通过；中间 local111 的摘要编码编译失败也保留。受控采样观察到 160 次 Cargo 缓存构建期间公开可执行路径有 921 次不存在、161 个 inode，但启动探针未直接复现 errno，原始因果仍为推断。共享测试 builder 现把构建与发布加锁，按实际字节摘要原子发布不可变镜像并校验字节；测试仍执行 Cargo 构建的 Rust。修复后 160 次公开路径刷新期间镜像路径保持同一 inode、无缺失，OS spawn 未报错。当前完整 local123 包含全部修正，未增加重试或放宽断言。
+
+Linux b32fc 的 native-goals 212 项全部通过（6 skipped、无重试），随后库测试在 join Turn 已结束、尚未检查交接时用尽首个 45 秒等待。此前它把并行分支和依赖 join 合在同一阶段。该测试现按三段等待：左右分支检查交接、join 检查交接、根验收，每段 45 秒；总允许等待由 90 增至 135 秒。全部实际重叠、隔离、依赖和交付断言保留，产品预算不变。Linux lib/bin 同样收集全部失败，未增加重试。`fixture-image-final123` 包含三次 ACP 聚焦回归、四个 Goal PTY 场景、启动保护、一项并行工作流聚焦检查及新的完整源码全量/严格检查，取代先前仅聚焦的当前验收；旧记录及适用源码继续保留。
 
 ## 8 阶段结论与后续边界
 
