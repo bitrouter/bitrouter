@@ -1,5 +1,7 @@
 # PR #981 BRO refactor evidence
 
+Final hosted CI: [exact-head results and raw logs](hosted-ci/HOSTED_CI_INDEX.md), [provenance](HOSTED_CI_PROVENANCE.json), [additional original file manifest](HOSTED_CI_PAYLOAD.json). Prior local/source archives remain unchanged at their pinned commits. SHA256SUMS covers this complete tree.
+
 Latest local source: [Fixture image and complete source acceptance](fixture-image/FIXTURE_IMAGE_INDEX.md), [provenance](FIXTURE_IMAGE_PROVENANCE.json), [additional original files](FIXTURE_IMAGE_PAYLOAD.json). Earlier archives stay pinned at their own commits. SHA256SUMS covers this whole tree.
 
 Latest local source: [Unix input-source selection and verification](unix-tty/UNIX_TTY_INDEX.md), [provenance](UNIX_TTY_PROVENANCE.json), [additional original files](UNIX_TTY_PAYLOAD.json). Earlier archives stay pinned at their own commits. SHA256SUMS covers this whole tree.

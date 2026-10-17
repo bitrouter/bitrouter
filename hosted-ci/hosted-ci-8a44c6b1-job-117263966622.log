@@ -1,0 +1,507 @@
+﻿2026-10-17T00:48:17.7382682Z Current runner version: '2.337.0'
+2026-10-17T00:48:17.7419793Z ##[group]Runner Image Provisioner
+2026-10-17T00:48:17.7421118Z Hosted Compute Agent
+2026-10-17T00:48:17.7422191Z Version: 20261012.601
+2026-10-17T00:48:17.7423386Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-17T00:48:17.7424746Z Build Date: 2026-10-12T17:48:21Z
+2026-10-17T00:48:17.7426118Z Worker ID: {2b9a332a-f728-47a8-b740-2f5c28364d9f}
+2026-10-17T00:48:17.7427426Z Region: eastus
+2026-10-17T00:48:17.7428314Z Cloud: Azure
+2026-10-17T00:48:17.7429395Z ##[endgroup]
+2026-10-17T00:48:17.7431941Z ##[group]Operating System
+2026-10-17T00:48:17.7433129Z Ubuntu
+2026-10-17T00:48:17.7434028Z 24.04.5
+2026-10-17T00:48:17.7434958Z LTS
+2026-10-17T00:48:17.7435857Z ##[endgroup]
+2026-10-17T00:48:17.7436817Z ##[group]Runner Image
+2026-10-17T00:48:17.7438017Z Image: ubuntu-24.04
+2026-10-17T00:48:17.7439042Z Version: 20261012.334.1
+2026-10-17T00:48:17.7441633Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-17T00:48:17.7444658Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-17T00:48:17.7446546Z ##[endgroup]
+2026-10-17T00:48:17.7448620Z ##[group]GITHUB_TOKEN Permissions
+2026-10-17T00:48:17.7451916Z Contents: read
+2026-10-17T00:48:17.7453094Z Metadata: read
+2026-10-17T00:48:17.7454060Z ##[endgroup]
+2026-10-17T00:48:17.7457033Z Secret source: Actions
+2026-10-17T00:48:17.7458828Z Cache mode: write
+2026-10-17T00:48:17.7460812Z Prepare workflow directory
+2026-10-17T00:48:17.8045102Z Prepare all required actions
+2026-10-17T00:48:17.8118578Z Getting action download info
+2026-10-17T00:48:18.0085951Z Download action repository 'actions/checkout@v6' (SHA:d23441a48e516b6c34aea4fa41551a30e30af803)
+2026-10-17T00:48:18.1039221Z Download action repository 'actions-rust-lang/setup-rust-toolchain@v1' (SHA:166cdcfd11aee3cb47222f9ddb555ce30ddb9659)
+2026-10-17T00:48:18.2985099Z Getting action download info
+2026-10-17T00:48:18.3684197Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-10-17T00:48:18.6283075Z Complete job name: msrv
+2026-10-17T00:48:18.7086699Z ##[group]Run actions/checkout@v6
+2026-10-17T00:48:18.7087593Z with:
+2026-10-17T00:48:18.7088049Z   repository: bitrouter/bitrouter
+2026-10-17T00:48:18.7092315Z   token: ***
+2026-10-17T00:48:18.7092828Z   ssh-strict: true
+2026-10-17T00:48:18.7093336Z   ssh-user: git
+2026-10-17T00:48:18.7093844Z   persist-credentials: true
+2026-10-17T00:48:18.7094404Z   clean: true
+2026-10-17T00:48:18.7094918Z   sparse-checkout-cone-mode: true
+2026-10-17T00:48:18.7095507Z   fetch-depth: 1
+2026-10-17T00:48:18.7096003Z   fetch-tags: false
+2026-10-17T00:48:18.7096506Z   show-progress: true
+2026-10-17T00:48:18.7097021Z   lfs: false
+2026-10-17T00:48:18.7097502Z   submodules: false
+2026-10-17T00:48:18.7098025Z   set-safe-directory: true
+2026-10-17T00:48:18.7098601Z   allow-unsafe-pr-checkout: false
+2026-10-17T00:48:18.7099417Z env:
+2026-10-17T00:48:18.7100103Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:18.7100591Z ##[endgroup]
+2026-10-17T00:48:18.8192643Z Syncing repository: bitrouter/bitrouter
+2026-10-17T00:48:18.8195168Z ##[group]Getting Git version info
+2026-10-17T00:48:18.8196324Z Working directory is '/home/runner/work/bitrouter/bitrouter'
+2026-10-17T00:48:18.8197957Z [command]/usr/bin/git version
+2026-10-17T00:48:18.8317274Z git version 2.55.0
+2026-10-17T00:48:18.8347644Z ##[endgroup]
+2026-10-17T00:48:18.8362662Z Temporarily overriding HOME='/home/runner/work/_temp/28a1e84f-043b-4fd6-a89d-76341fc96ecc' before making global git config changes
+2026-10-17T00:48:18.8364418Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T00:48:18.8368912Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitrouter/bitrouter
+2026-10-17T00:48:18.8423150Z Deleting the contents of '/home/runner/work/bitrouter/bitrouter'
+2026-10-17T00:48:18.8434704Z ##[group]Determining repository object format
+2026-10-17T00:48:18.8436651Z ##[endgroup]
+2026-10-17T00:48:18.8437978Z ##[group]Initializing the repository
+2026-10-17T00:48:18.8439085Z [command]/usr/bin/git init /home/runner/work/bitrouter/bitrouter
+2026-10-17T00:48:18.8547105Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-17T00:48:18.8548825Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-17T00:48:18.8550694Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-17T00:48:18.8552249Z hint: call:
+2026-10-17T00:48:18.8553470Z hint:
+2026-10-17T00:48:18.8554905Z hint: 	git config --global init.defaultBranch <name>
+2026-10-17T00:48:18.8557665Z hint:
+2026-10-17T00:48:18.8559188Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-17T00:48:18.8561481Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-17T00:48:18.8563301Z hint:
+2026-10-17T00:48:18.8564787Z hint: 	git branch -m <name>
+2026-10-17T00:48:18.8566093Z hint:
+2026-10-17T00:48:18.8567692Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-17T00:48:18.8570100Z Initialized empty Git repository in /home/runner/work/bitrouter/bitrouter/.git/
+2026-10-17T00:48:18.8574157Z [command]/usr/bin/git remote add origin https://github.com/bitrouter/bitrouter
+2026-10-17T00:48:18.8622579Z ##[endgroup]
+2026-10-17T00:48:18.8624072Z ##[group]Disabling automatic garbage collection
+2026-10-17T00:48:18.8625961Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-17T00:48:18.8658153Z ##[endgroup]
+2026-10-17T00:48:18.8659381Z ##[group]Setting up auth
+2026-10-17T00:48:18.8660903Z Removing SSH command configuration
+2026-10-17T00:48:18.8666765Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T00:48:18.8700890Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T00:48:18.9082955Z Removing HTTP extra header
+2026-10-17T00:48:18.9091325Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T00:48:18.9205221Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T00:48:18.9368606Z Removing includeIf entries pointing to credentials config files
+2026-10-17T00:48:18.9375570Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T00:48:18.9412688Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T00:48:18.9642382Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-17T00:48:18.9683869Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path /home/runner/work/_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:48:18.9719026Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:48:18.9756935Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:48:18.9791030Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:48:18.9829045Z ##[endgroup]
+2026-10-17T00:48:18.9830323Z ##[group]Fetching the repository
+2026-10-17T00:48:18.9836900Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +e8c6bbe7a9b98739edb1227001e1bb526b2b41de:refs/remotes/pull/981/merge
+2026-10-17T00:48:20.4201297Z From https://github.com/bitrouter/bitrouter
+2026-10-17T00:48:20.4203493Z  * [new ref]         e8c6bbe7a9b98739edb1227001e1bb526b2b41de -> pull/981/merge
+2026-10-17T00:48:20.4207520Z ##[endgroup]
+2026-10-17T00:48:20.4208789Z ##[group]Determining the checkout info
+2026-10-17T00:48:20.4210552Z ##[endgroup]
+2026-10-17T00:48:20.4212741Z [command]/usr/bin/git sparse-checkout disable
+2026-10-17T00:48:20.4266031Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-17T00:48:20.4297621Z ##[group]Checking out the ref
+2026-10-17T00:48:20.4300245Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/981/merge
+2026-10-17T00:48:20.7410466Z Note: switching to 'refs/remotes/pull/981/merge'.
+2026-10-17T00:48:20.7411026Z 
+2026-10-17T00:48:20.7411424Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-17T00:48:20.7412193Z changes and commit them, and you can discard any commits you make in this
+2026-10-17T00:48:20.7412888Z state without impacting any branches by switching back to a branch.
+2026-10-17T00:48:20.7413313Z 
+2026-10-17T00:48:20.7413619Z If you want to create a new branch to retain commits you create, you may
+2026-10-17T00:48:20.7414253Z do so (now or later) by using -c with the switch command. Example:
+2026-10-17T00:48:20.7414608Z 
+2026-10-17T00:48:20.7414803Z   git switch -c <new-branch-name>
+2026-10-17T00:48:20.7415062Z 
+2026-10-17T00:48:20.7415249Z Or undo this operation with:
+2026-10-17T00:48:20.7415494Z 
+2026-10-17T00:48:20.7415644Z   git switch -
+2026-10-17T00:48:20.7415890Z 
+2026-10-17T00:48:20.7416191Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-17T00:48:20.7416633Z 
+2026-10-17T00:48:20.7417103Z HEAD is now at e8c6bbe Merge 8a44c6b1fc8a7d580de82412ab821e46c07c5d76 into 54c822a34d4dbfd75d484ca35e108b497048efef
+2026-10-17T00:48:20.7428987Z ##[endgroup]
+2026-10-17T00:48:20.7476213Z [command]/usr/bin/git log -1 --format=%H
+2026-10-17T00:48:20.7503300Z e8c6bbe7a9b98739edb1227001e1bb526b2b41de
+2026-10-17T00:48:20.7959798Z ##[group]Run actions-rust-lang/setup-rust-toolchain@v1
+2026-10-17T00:48:20.7960402Z with:
+2026-10-17T00:48:20.7960776Z   toolchain: 1.93
+2026-10-17T00:48:20.7961155Z   cache: true
+2026-10-17T00:48:20.7961527Z   cache-on-failure: true
+2026-10-17T00:48:20.7961920Z   cache-bin: true
+2026-10-17T00:48:20.7962294Z   cache-provider: github
+2026-10-17T00:48:20.7962719Z   cache-all-crates: false
+2026-10-17T00:48:20.7963151Z   cache-workspace-crates: false
+2026-10-17T00:48:20.7963570Z   cache-save-if: true
+2026-10-17T00:48:20.7963949Z   cache-targets: true
+2026-10-17T00:48:20.7964320Z   matcher: true
+2026-10-17T00:48:20.7964699Z   rustflags: -D warnings
+2026-10-17T00:48:20.7965087Z   override: true
+2026-10-17T00:48:20.7965446Z env:
+2026-10-17T00:48:20.7965794Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:20.7966191Z ##[endgroup]
+2026-10-17T00:48:20.8029427Z ##[start-action display=Unbork mac;id=__actions-rust-lang_setup-rust-toolchain.__run]
+2026-10-17T00:48:20.8050860Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-17T00:48:20.8087991Z ##[start-action display=Run : construct rustup command line;id=__actions-rust-lang_setup-rust-toolchain.flags]
+2026-10-17T00:48:20.8138265Z ##[group]Run : construct rustup command line
+2026-10-17T00:48:20.8138879Z [36;1m: construct rustup command line[0m
+2026-10-17T00:48:20.8139850Z [36;1mecho "targets=$(for t in ${_srt_targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:20.8140794Z [36;1mecho "components=$(for c in ${_srt_components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:20.8141537Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:20.8404755Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:20.8405356Z env:
+2026-10-17T00:48:20.8405966Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:20.8406407Z   _srt_targets: 
+2026-10-17T00:48:20.8406806Z   _srt_components: 
+2026-10-17T00:48:20.8407213Z ##[endgroup]
+2026-10-17T00:48:20.8549037Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=45]
+2026-10-17T00:48:20.8555900Z ##[start-action display=Setting Environment Variables;id=__actions-rust-lang_setup-rust-toolchain.__run_2]
+2026-10-17T00:48:20.8587332Z ##[group]Run if [[ ! -v CARGO_INCREMENTAL ]]; then
+2026-10-17T00:48:20.8587933Z [36;1mif [[ ! -v CARGO_INCREMENTAL ]]; then[0m
+2026-10-17T00:48:20.8588468Z [36;1m  echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV[0m
+2026-10-17T00:48:20.8588955Z [36;1mfi[0m
+2026-10-17T00:48:20.8589387Z [36;1mif [[ ! -v CARGO_PROFILE_DEV_DEBUG ]]; then[0m
+2026-10-17T00:48:20.8590286Z [36;1m  echo "CARGO_PROFILE_DEV_DEBUG=0" >> $GITHUB_ENV[0m
+2026-10-17T00:48:20.8590816Z [36;1mfi[0m
+2026-10-17T00:48:20.8591229Z [36;1mif [[ ! -v CARGO_TERM_COLOR ]]; then[0m
+2026-10-17T00:48:20.8591790Z [36;1m  echo "CARGO_TERM_COLOR=always" >> $GITHUB_ENV[0m
+2026-10-17T00:48:20.8592285Z [36;1mfi[0m
+2026-10-17T00:48:20.8592696Z [36;1mif [[ ! -v RUST_BACKTRACE ]]; then[0m
+2026-10-17T00:48:20.8593217Z [36;1m  echo "RUST_BACKTRACE=short" >> $GITHUB_ENV[0m
+2026-10-17T00:48:20.8593708Z [36;1mfi[0m
+2026-10-17T00:48:20.8594172Z [36;1mif [[ ( ! -v RUSTFLAGS ) && $_srt_NEW_RUSTFLAGS != "" ]]; then[0m
+2026-10-17T00:48:20.8594804Z [36;1m  echo "RUSTFLAGS=$_srt_NEW_RUSTFLAGS" >> $GITHUB_ENV[0m
+2026-10-17T00:48:20.8595323Z [36;1mfi[0m
+2026-10-17T00:48:20.8595737Z [36;1m# Enable faster sparse index on nightly[0m
+2026-10-17T00:48:20.8596321Z [36;1m# The value is ignored on stable and causes no problems[0m
+2026-10-17T00:48:20.8597141Z [36;1m# https://internals.rust-lang.org/t/call-for-testing-cargo-sparse-registry/16862[0m
+2026-10-17T00:48:20.8597901Z [36;1mif [[ ! -v CARGO_UNSTABLE_SPARSE_REGISTRY ]]; then[0m
+2026-10-17T00:48:20.8598517Z [36;1m  echo "CARGO_UNSTABLE_SPARSE_REGISTRY=true" >> $GITHUB_ENV[0m
+2026-10-17T00:48:20.8599057Z [36;1mfi[0m
+2026-10-17T00:48:20.8599949Z [36;1mif [[ ! -v CARGO_REGISTRIES_CRATES_IO_PROTOCOL ]]; then[0m
+2026-10-17T00:48:20.8600680Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse" >> $GITHUB_ENV[0m
+2026-10-17T00:48:20.8601263Z [36;1mfi[0m
+2026-10-17T00:48:20.8658260Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:20.8658813Z env:
+2026-10-17T00:48:20.8659198Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:20.8659883Z   _srt_NEW_RUSTFLAGS: -D warnings
+2026-10-17T00:48:20.8660343Z ##[endgroup]
+2026-10-17T00:48:20.8750827Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=19]
+2026-10-17T00:48:20.8754117Z ##[start-action display=Install Rust Problem Matcher;id=__actions-rust-lang_setup-rust-toolchain.__run_3]
+2026-10-17T00:48:20.8789109Z ##[group]Run echo "::add-matcher::/home/runner/work/_actions/actions-rust-lang/setup-rust-toolchain/v1/rust.json"
+2026-10-17T00:48:20.8790487Z [36;1mecho "::add-matcher::/home/runner/work/_actions/actions-rust-lang/setup-rust-toolchain/v1/rust.json"[0m
+2026-10-17T00:48:20.8847823Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:20.8848392Z env:
+2026-10-17T00:48:20.8848778Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:20.8849216Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:20.8849918Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:20.8850378Z   RUST_BACKTRACE: short
+2026-10-17T00:48:20.8850803Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:20.8851249Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:20.8851748Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:20.8852223Z ##[endgroup]
+2026-10-17T00:48:20.8958933Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=20]
+2026-10-17T00:48:20.8963559Z ##[start-action display=Install rustup, if needed;id=__actions-rust-lang_setup-rust-toolchain.__run_4]
+2026-10-17T00:48:20.8994498Z ##[group]Run if ! command -v rustup &> /dev/null ; then
+2026-10-17T00:48:20.8995089Z [36;1mif ! command -v rustup &> /dev/null ; then[0m
+2026-10-17T00:48:20.8995945Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --default-toolchain none -y[0m
+2026-10-17T00:48:20.8996744Z [36;1m[0m
+2026-10-17T00:48:20.8997197Z [36;1m  # Resolve the correct CARGO_HOME path depending on OS[0m
+2026-10-17T00:48:20.8997764Z [36;1m  if [[ "$RUNNER_OS" == "Windows" ]]; then[0m
+2026-10-17T00:48:20.8998399Z [36;1m    echo "${CARGO_HOME:-$USERPROFILE/.cargo}/bin" | sed 's|/|\\|g' >> $GITHUB_PATH[0m
+2026-10-17T00:48:20.8999001Z [36;1m  else[0m
+2026-10-17T00:48:20.8999457Z [36;1m    echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH[0m
+2026-10-17T00:48:20.9000284Z [36;1m  fi[0m
+2026-10-17T00:48:20.9000643Z [36;1mfi[0m
+2026-10-17T00:48:20.9058132Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:20.9058687Z env:
+2026-10-17T00:48:20.9059053Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:20.9059461Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:20.9060242Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:20.9060668Z   RUST_BACKTRACE: short
+2026-10-17T00:48:20.9061077Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:20.9061503Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:20.9061988Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:20.9062455Z   RUNNER_OS: Linux
+2026-10-17T00:48:20.9062826Z ##[endgroup]
+2026-10-17T00:48:20.9151901Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=18]
+2026-10-17T00:48:20.9158557Z ##[start-action display=rustup toolchain install 1.93;id=__actions-rust-lang_setup-rust-toolchain.__run_5]
+2026-10-17T00:48:20.9214080Z ##[group]Run # Check if value is set
+2026-10-17T00:48:20.9214574Z [36;1m# Check if value is set[0m
+2026-10-17T00:48:20.9215028Z [36;1mif [[ -n "$_srt_rust_src_dir" ]][0m
+2026-10-17T00:48:20.9215476Z [36;1mthen[0m
+2026-10-17T00:48:20.9215884Z [36;1m  # If value is set the directory must exist[0m
+2026-10-17T00:48:20.9216557Z [36;1m  if [[ -d "$_srt_rust_src_dir" ]][0m
+2026-10-17T00:48:20.9217019Z [36;1m  then[0m
+2026-10-17T00:48:20.9217397Z [36;1m    cd "$_srt_rust_src_dir"[0m
+2026-10-17T00:48:20.9217816Z [36;1m  else[0m
+2026-10-17T00:48:20.9218315Z [36;1m    echo "'rust-src-dir' does not point to an existing directory" >&2[0m
+2026-10-17T00:48:20.9218991Z [36;1m    echo "The value of 'rust-src-dir' is: ${_srt_rust_src_dir}" >&2[0m
+2026-10-17T00:48:20.9219748Z [36;1m    exit 1[0m
+2026-10-17T00:48:20.9220182Z [36;1m  fi[0m
+2026-10-17T00:48:20.9220537Z [36;1mfi[0m
+2026-10-17T00:48:20.9221069Z [36;1mif [[ -z "$_srt_toolchain" && ( -f "rust-toolchain" || -f "rust-toolchain.toml") ]][0m
+2026-10-17T00:48:20.9221915Z [36;1mthen[0m
+2026-10-17T00:48:20.9222370Z [36;1m  # Install the toolchain as specified in the file[0m
+2026-10-17T00:48:20.9223009Z [36;1m  # rustup show is the old way that implicitly installed a toolchain[0m
+2026-10-17T00:48:20.9223661Z [36;1m  # rustup toolchain install is the new explicit way[0m
+2026-10-17T00:48:20.9224330Z [36;1m  # https://github.com/rust-lang/rustup/issues/3635#issuecomment-2343511297[0m
+2026-10-17T00:48:20.9225058Z [36;1m  rustup show active-toolchain || rustup toolchain install[0m
+2026-10-17T00:48:20.9225632Z [36;1m  if [[ -n $_srt_components ]]; then[0m
+2026-10-17T00:48:20.9226154Z [36;1m    rustup component add ${_srt_components//,/ }[0m
+2026-10-17T00:48:20.9226640Z [36;1m  fi[0m
+2026-10-17T00:48:20.9227027Z [36;1m  if [[ -n $_srt_targets ]]; then[0m
+2026-10-17T00:48:20.9227514Z [36;1m    rustup target add ${_srt_targets//,/ }[0m
+2026-10-17T00:48:20.9227972Z [36;1m  fi[0m
+2026-10-17T00:48:20.9228329Z [36;1melse[0m
+2026-10-17T00:48:20.9228716Z [36;1m  if [[ -z "$_srt_toolchain" ]][0m
+2026-10-17T00:48:20.9229162Z [36;1m  then[0m
+2026-10-17T00:48:20.9229800Z [36;1m    _srt_toolchain=stable[0m
+2026-10-17T00:48:20.9230427Z [36;1m  fi[0m
+2026-10-17T00:48:20.9231004Z [36;1m  rustup toolchain install ${_srt_toolchain//,/ }  --profile minimal --no-self-update[0m
+2026-10-17T00:48:20.9231677Z [36;1m  # Take the last element from the list[0m
+2026-10-17T00:48:20.9232184Z [36;1m  if [[ "$_srt_override" == "true" ]][0m
+2026-10-17T00:48:20.9232648Z [36;1m  then[0m
+2026-10-17T00:48:20.9233076Z [36;1m    rustup override set ${_srt_toolchain//*,/ }[0m
+2026-10-17T00:48:20.9233551Z [36;1m  fi[0m
+2026-10-17T00:48:20.9233911Z [36;1mfi[0m
+2026-10-17T00:48:20.9291493Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:20.9292039Z env:
+2026-10-17T00:48:20.9292422Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:20.9292844Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:20.9293250Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:20.9293668Z   RUST_BACKTRACE: short
+2026-10-17T00:48:20.9294066Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:20.9294491Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:20.9294990Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:20.9295465Z   _srt_toolchain: 1.93
+2026-10-17T00:48:20.9295854Z   _srt_targets: 
+2026-10-17T00:48:20.9296237Z   _srt_components: 
+2026-10-17T00:48:20.9296623Z   _srt_override: true
+2026-10-17T00:48:20.9297005Z   _srt_rust_src_dir: 
+2026-10-17T00:48:20.9297378Z ##[endgroup]
+2026-10-17T00:48:20.9801274Z info: syncing channel updates for 1.93-x86_64-unknown-linux-gnu
+2026-10-17T00:48:21.1188313Z info: latest update on 2026-02-12 for version 1.93.1 (01f6ddf75 2026-02-11)
+2026-10-17T00:48:21.1189373Z info: downloading 3 components
+2026-10-17T00:48:28.3446508Z 
+2026-10-17T00:48:28.3515925Z   1.93-x86_64-unknown-linux-gnu installed - rustc 1.93.1 (01f6ddf75 2026-02-11)
+2026-10-17T00:48:28.3516576Z 
+2026-10-17T00:48:28.3601470Z info: override toolchain for /home/runner/work/bitrouter/bitrouter set to 1.93-x86_64-unknown-linux-gnu
+2026-10-17T00:48:28.3624325Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=7446]
+2026-10-17T00:48:28.3628622Z ##[start-action display=Print installed versions;id=__actions-rust-lang_setup-rust-toolchain.versions]
+2026-10-17T00:48:28.3667251Z ##[group]Run echo "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT
+2026-10-17T00:48:28.3667751Z [36;1mecho "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:28.3668120Z [36;1mrustc --version --verbose[0m
+2026-10-17T00:48:28.3668457Z [36;1mecho "cargo-version=$(cargo --version)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:28.3668819Z [36;1mcargo --version --verbose[0m
+2026-10-17T00:48:28.3669171Z [36;1mecho "rustup-version=$(rustup --version)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:28.3669942Z [36;1mrustup --version[0m
+2026-10-17T00:48:28.3670232Z [36;1m[0m
+2026-10-17T00:48:28.3670700Z [36;1m_srt_DATE=$(rustc --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-17T00:48:28.3671381Z [36;1m_srt_HASH=$(rustc --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-17T00:48:28.3671909Z [36;1mecho "cachekey=$(echo $_srt_DATE$_srt_HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:28.3738752Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:28.3739119Z env:
+2026-10-17T00:48:28.3739327Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:28.3739767Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:28.3740006Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:28.3740255Z   RUST_BACKTRACE: short
+2026-10-17T00:48:28.3740480Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:28.3740741Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:28.3741059Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:28.3741346Z ##[endgroup]
+2026-10-17T00:48:28.4036022Z rustc 1.93.1 (01f6ddf75 2026-02-11)
+2026-10-17T00:48:28.4036689Z binary: rustc
+2026-10-17T00:48:28.4037224Z commit-hash: 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf
+2026-10-17T00:48:28.4037875Z commit-date: 2026-02-11
+2026-10-17T00:48:28.4038204Z host: x86_64-unknown-linux-gnu
+2026-10-17T00:48:28.4038804Z release: 1.93.1
+2026-10-17T00:48:28.4039155Z LLVM version: 21.1.8
+2026-10-17T00:48:28.4293705Z cargo 1.93.1 (083ac5135 2025-12-15)
+2026-10-17T00:48:28.4294243Z release: 1.93.1
+2026-10-17T00:48:28.4294747Z commit-hash: 083ac5135f967fd9dc906ab057a2315861c7a80d
+2026-10-17T00:48:28.4295358Z commit-date: 2025-12-15
+2026-10-17T00:48:28.4295792Z host: x86_64-unknown-linux-gnu
+2026-10-17T00:48:28.4296279Z libgit2: 1.9.1 (sys:0.20.2 vendored)
+2026-10-17T00:48:28.4296965Z libcurl: 8.15.0-DEV (sys:0.4.83+curl-8.15.0 vendored ssl:OpenSSL/3.5.4)
+2026-10-17T00:48:28.4297677Z ssl: OpenSSL 3.5.4 30 Sep 2025
+2026-10-17T00:48:28.4298079Z os: Ubuntu 24.4.0 (noble) [64-bit]
+2026-10-17T00:48:28.4328171Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-10-17T00:48:28.4408622Z info: the currently active `rustc` version is `rustc 1.93.1 (01f6ddf75 2026-02-11)`
+2026-10-17T00:48:28.4445525Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-10-17T00:48:28.4446082Z rustup 1.29.1 (d95a37b6a 2026-08-13)
+2026-10-17T00:48:28.4525357Z info: the currently active `rustc` version is `rustc 1.93.1 (01f6ddf75 2026-02-11)`
+2026-10-17T00:48:28.4788155Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.versions;outcome=success;conclusion=success;duration_ms=115]
+2026-10-17T00:48:28.4791647Z ##[start-action display=Downgrade registry access protocol when needed;id=__actions-rust-lang_setup-rust-toolchain.__run_6]
+2026-10-17T00:48:28.4824773Z ##[group]Run # Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-10-17T00:48:28.4825356Z [36;1m# Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL[0m
+2026-10-17T00:48:28.4825902Z [36;1m# On versions 1.66, 1.67, and 1.68.0-nightly the value "sparse" is still unstable.[0m
+2026-10-17T00:48:28.4826476Z [36;1m# https://github.com/dtolnay/rust-toolchain/pull/69#discussion_r1107268108[0m
+2026-10-17T00:48:28.4827043Z [36;1m# If we detect an incompatible value, set it to "git" which is always supported.[0m
+2026-10-17T00:48:28.4827975Z [36;1mif [[ "rustc 1.93.1 (01f6ddf75 2026-02-11)" =~ ^rustc\ (1\.6[67]\.|1\.68\.0-nightly) && "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL}" == "sparse" ]]; then[0m
+2026-10-17T00:48:28.4828626Z [36;1m  echo "Downgrade cargo registry protocol to git"[0m
+2026-10-17T00:48:28.4829060Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git" >> $GITHUB_ENV[0m
+2026-10-17T00:48:28.4829420Z [36;1mfi[0m
+2026-10-17T00:48:28.4896921Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:28.4897283Z env:
+2026-10-17T00:48:28.4897490Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:28.4897745Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:28.4897973Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:28.4898213Z   RUST_BACKTRACE: short
+2026-10-17T00:48:28.4898436Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:28.4898688Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:28.4898988Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:28.4899285Z ##[endgroup]
+2026-10-17T00:48:28.4993434Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=20]
+2026-10-17T00:48:28.4995801Z ##[start-action display=Setup Rust Caching;id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache]
+2026-10-17T00:48:28.5134784Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-10-17T00:48:28.5135187Z with:
+2026-10-17T00:48:28.5135391Z   cache-on-failure: true
+2026-10-17T00:48:28.5135628Z   cache-bin: true
+2026-10-17T00:48:28.5135845Z   cache-provider: github
+2026-10-17T00:48:28.5136080Z   cache-all-crates: false
+2026-10-17T00:48:28.5136329Z   cache-workspace-crates: false
+2026-10-17T00:48:28.5136585Z   cache-targets: true
+2026-10-17T00:48:28.5136797Z   save-if: true
+2026-10-17T00:48:28.5137006Z   prefix-key: v0-rust
+2026-10-17T00:48:28.5137225Z   add-job-id-key: true
+2026-10-17T00:48:28.5137477Z   add-rust-environment-hash-key: true
+2026-10-17T00:48:28.5137936Z   lookup-only: false
+2026-10-17T00:48:28.5138148Z   cmd-format: {0}
+2026-10-17T00:48:28.5138348Z env:
+2026-10-17T00:48:28.5138548Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:28.5138784Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:28.5139008Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:28.5139244Z   RUST_BACKTRACE: short
+2026-10-17T00:48:28.5139469Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:28.5140036Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:28.5140340Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:28.5140625Z ##[endgroup]
+2026-10-17T00:48:28.7934631Z (node:2400) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-17T00:48:28.7936257Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-17T00:48:29.6844729Z ##[group]Cache Configuration
+2026-10-17T00:48:29.6846608Z Cache Provider:
+2026-10-17T00:48:29.6847612Z     github
+2026-10-17T00:48:29.6848346Z Workspaces:
+2026-10-17T00:48:29.6849052Z     /home/runner/work/bitrouter/bitrouter
+2026-10-17T00:48:29.6850009Z Cache Paths:
+2026-10-17T00:48:29.6850605Z     /home/runner/.cargo/bin
+2026-10-17T00:48:29.6851296Z     /home/runner/.cargo/.crates.toml
+2026-10-17T00:48:29.6852016Z     /home/runner/.cargo/.crates2.json
+2026-10-17T00:48:29.6852721Z     /home/runner/.cargo/registry
+2026-10-17T00:48:29.6853376Z     /home/runner/.cargo/git
+2026-10-17T00:48:29.6854068Z     /home/runner/work/bitrouter/bitrouter/target
+2026-10-17T00:48:29.6854769Z Restore Key:
+2026-10-17T00:48:29.6855366Z     v0-rust-msrv-Linux-x64-522e2827
+2026-10-17T00:48:29.6856036Z Cache Key:
+2026-10-17T00:48:29.6856659Z     v0-rust-msrv-Linux-x64-522e2827-c017af6b
+2026-10-17T00:48:29.6857410Z .. Prefix:
+2026-10-17T00:48:29.6857994Z   - v0-rust-msrv-Linux-x64
+2026-10-17T00:48:29.6858667Z .. Environment considered:
+2026-10-17T00:48:29.6859327Z   - Rust Versions:
+2026-10-17T00:48:29.6860421Z     - 1.93.1 x86_64-unknown-linux-gnu 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf
+2026-10-17T00:48:29.6861665Z     - 1.99.0 x86_64-unknown-linux-gnu b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+2026-10-17T00:48:29.6863306Z     - 1.93.1 x86_64-unknown-linux-gnu 01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf
+2026-10-17T00:48:29.6864699Z   - CARGO_INCREMENTAL
+2026-10-17T00:48:29.6865582Z   - CARGO_PROFILE_DEV_DEBUG
+2026-10-17T00:48:29.6866485Z   - CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-10-17T00:48:29.6867338Z   - CARGO_TERM_COLOR
+2026-10-17T00:48:29.6868183Z   - CARGO_UNSTABLE_SPARSE_REGISTRY
+2026-10-17T00:48:29.6869068Z   - RUST_BACKTRACE
+2026-10-17T00:48:29.6870086Z   - RUSTFLAGS
+2026-10-17T00:48:29.6870888Z .. Lockfiles considered:
+2026-10-17T00:48:29.6872020Z   - /home/runner/work/bitrouter/bitrouter/apps/bitrouter/Cargo.toml
+2026-10-17T00:48:29.6873156Z   - /home/runner/work/bitrouter/bitrouter/Cargo.lock
+2026-10-17T00:48:29.6874283Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-ai/Cargo.toml
+2026-10-17T00:48:29.6875594Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-orchestrator/Cargo.toml
+2026-10-17T00:48:29.6877006Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-sdk/Cargo.toml
+2026-10-17T00:48:29.6878369Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-telemetry/Cargo.toml
+2026-10-17T00:48:29.6879868Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-tui/Cargo.toml
+2026-10-17T00:48:29.6881144Z   - /home/runner/work/bitrouter/bitrouter/extensions/regex-checker/matcher/Cargo.toml
+2026-10-17T00:48:29.6882413Z   - /home/runner/work/bitrouter/bitrouter/helpers/bitrouter-test-fixtures/Cargo.toml
+2026-10-17T00:48:29.6883588Z   - /home/runner/work/bitrouter/bitrouter/helpers/dist-helper/Cargo.toml
+2026-10-17T00:48:29.6884737Z ##[endgroup]
+2026-10-17T00:48:29.6885152Z 
+2026-10-17T00:48:29.6885506Z ... Restoring cache ...
+2026-10-17T00:48:29.7521399Z Cache hit for: v0-rust-msrv-Linux-x64-522e2827-c017af6b
+2026-10-17T00:48:30.7881033Z Received 226492416 of 354351375 (63.9%), 214.9 MBs/sec
+2026-10-17T00:48:31.2531590Z Received 354351375 of 354351375 (100.0%), 229.9 MBs/sec
+2026-10-17T00:48:31.2533478Z Cache Size: ~338 MB (354351375 B)
+2026-10-17T00:48:31.2606980Z [command]/usr/bin/tar -xf /home/runner/work/_temp/e0b0088e-32e4-4aa1-a05a-8a41fb6e3042/cache.tzst -P -C /home/runner/work/bitrouter/bitrouter --use-compress-program unzstd
+2026-10-17T00:48:33.1882006Z Cache restored successfully
+2026-10-17T00:48:33.2035578Z Restored from cache key "v0-rust-msrv-Linux-x64-522e2827-c017af6b" full match: true.
+2026-10-17T00:48:33.2184603Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=4718]
+2026-10-17T00:48:33.2381769Z ##[group]Run cargo check --workspace --all-features
+2026-10-17T00:48:33.2382197Z [36;1mcargo check --workspace --all-features[0m
+2026-10-17T00:48:33.2456694Z shell: /usr/bin/bash -e {0}
+2026-10-17T00:48:33.2457000Z env:
+2026-10-17T00:48:33.2457202Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:33.2457458Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:33.2457689Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:33.2457953Z   RUST_BACKTRACE: short
+2026-10-17T00:48:33.2458184Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:33.2458430Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:33.2458734Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:33.2459039Z   CACHE_ON_FAILURE: true
+2026-10-17T00:48:33.2459271Z ##[endgroup]
+2026-10-17T00:48:33.4509873Z [1m[92m    Updating[0m crates.io index
+2026-10-17T00:48:35.5984101Z [1m[92m    Checking[0m bitrouter-ai v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-ai)
+2026-10-17T00:48:35.6092516Z [1m[92m   Compiling[0m bitrouter v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/apps/bitrouter)
+2026-10-17T00:48:35.6110072Z [1m[92m    Checking[0m bitrouter-tui v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-tui)
+2026-10-17T00:48:35.6191896Z [1m[92m    Checking[0m bitrouter-test-fixtures v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/helpers/bitrouter-test-fixtures)
+2026-10-17T00:48:39.7336380Z [1m[92m    Checking[0m bitrouter-sdk v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-sdk)
+2026-10-17T00:48:46.6430827Z [1m[92m    Checking[0m bitrouter-telemetry v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-telemetry)
+2026-10-17T00:48:46.6432735Z [1m[92m    Checking[0m bitrouter-orchestrator v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-orchestrator)
+2026-10-17T00:48:46.6434080Z [1m[92m    Checking[0m dist-helper v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/helpers/dist-helper)
+2026-10-17T00:48:46.6435025Z [1m[92m    Checking[0m bitrouter-guardrails v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/extensions/regex-checker/matcher)
+2026-10-17T00:49:36.8698987Z [1m[92m    Finished[0m `dev` profile [unoptimized] target(s) in 1m 03s
+2026-10-17T00:49:36.9355030Z Post job cleanup.
+2026-10-17T00:49:36.9360046Z ##[start-action display=Setup Rust Caching;id=__4eb41634-d707-46a4-84d8-a66c93928ef6.__Swatinem_rust-cache]
+2026-10-17T00:49:36.9417779Z Post job cleanup.
+2026-10-17T00:49:37.2163061Z Cache up-to-date.
+2026-10-17T00:49:37.2165544Z (node:2592) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-17T00:49:37.2167074Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-17T00:49:37.2318140Z ##[end-action id=__4eb41634-d707-46a4-84d8-a66c93928ef6.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=295]
+2026-10-17T00:49:37.2393863Z Post job cleanup.
+2026-10-17T00:49:37.3319232Z [command]/usr/bin/git version
+2026-10-17T00:49:37.3364625Z git version 2.55.0
+2026-10-17T00:49:37.3406028Z Temporarily overriding HOME='/home/runner/work/_temp/57256012-c253-4af4-a5f2-7c98edde7f6c' before making global git config changes
+2026-10-17T00:49:37.3407350Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T00:49:37.3412446Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitrouter/bitrouter
+2026-10-17T00:49:37.3452379Z Removing SSH command configuration
+2026-10-17T00:49:37.3452838Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T00:49:37.3511086Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T00:49:37.3737423Z Removing HTTP extra header
+2026-10-17T00:49:37.3744077Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T00:49:37.3785904Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T00:49:37.4029973Z Removing includeIf entries pointing to credentials config files
+2026-10-17T00:49:37.4038734Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T00:49:37.4071497Z includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path
+2026-10-17T00:49:37.4085819Z includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-17T00:49:37.4095757Z includeif.gitdir:/github/workspace/.git.path
+2026-10-17T00:49:37.4096572Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T00:49:37.4113992Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path
+2026-10-17T00:49:37.4114902Z /home/runner/work/_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:49:37.4132086Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path /home/runner/work/_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:49:37.4170838Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-17T00:49:37.4197923Z /home/runner/work/_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:49:37.4212854Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:49:37.4263037Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-17T00:49:37.4293314Z /github/runner_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:49:37.4303186Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:49:37.4343533Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T00:49:37.4371153Z /github/runner_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:49:37.4381123Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config
+2026-10-17T00:49:37.4424960Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T00:49:37.4644573Z Removing credentials config '/home/runner/work/_temp/git-credentials-057fc3f1-110e-465c-8e37-000bb23b5084.config'
+2026-10-17T00:49:37.4786226Z Cleaning up orphan processes

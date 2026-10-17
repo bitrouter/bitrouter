@@ -1,0 +1,10 @@
+{
+  "number": 981,
+  "head": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+  "headRef": "codex/bro-goal-workflow-mvp",
+  "base": "54c822a34d4dbfd75d484ca35e108b497048efef",
+  "baseRef": "main",
+  "mergeCommit": "e8c6bbe7a9b98739edb1227001e1bb526b2b41de",
+  "url": "https://github.com/bitrouter/bitrouter/pull/981",
+  "state": "open"
+}

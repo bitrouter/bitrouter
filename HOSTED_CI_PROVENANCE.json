@@ -1,0 +1,10 @@
+{
+  "createdAt": "2026-10-17T01:29:02.204Z",
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "previousArchive": "a5b49254addd8d75e61ac915b6a3e9f69a23258e",
+  "featureSource": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+  "finalLocalRun": "fixture-image-final123",
+  "originalAddedFiles": 43,
+  "originalAddedBytes": 5135838,
+  "scope": "Final exact-head hosted CI logs, original per-job summaries/retry/leak markers, source binding and reviewed-head recovery bundle. Prior raw evidence remains unchanged, and the live vendor/provider gate remains unpassed."
+}

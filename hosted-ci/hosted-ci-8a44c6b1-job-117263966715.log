@@ -1,0 +1,818 @@
+﻿2026-10-17T00:48:18.5436844Z Current runner version: '2.337.0'
+2026-10-17T00:48:18.5462398Z ##[group]Runner Image Provisioner
+2026-10-17T00:48:18.5463248Z Hosted Compute Agent
+2026-10-17T00:48:18.5463928Z Version: 20261012.601
+2026-10-17T00:48:18.5464552Z Commit: f3dc54e1fb89da6852db922499a0233137369e1d
+2026-10-17T00:48:18.5465349Z Build Date: 2026-10-12T17:48:21Z
+2026-10-17T00:48:18.5466376Z Worker ID: {c257c3ca-00a2-460e-80a2-6c49a336cdc2}
+2026-10-17T00:48:18.5467099Z Region: westus2
+2026-10-17T00:48:18.5467715Z Cloud: Azure
+2026-10-17T00:48:18.5468244Z ##[endgroup]
+2026-10-17T00:48:18.5469950Z ##[group]Operating System
+2026-10-17T00:48:18.5470620Z Ubuntu
+2026-10-17T00:48:18.5471131Z 24.04.5
+2026-10-17T00:48:18.5471781Z LTS
+2026-10-17T00:48:18.5472290Z ##[endgroup]
+2026-10-17T00:48:18.5472856Z ##[group]Runner Image
+2026-10-17T00:48:18.5473498Z Image: ubuntu-24.04
+2026-10-17T00:48:18.5474056Z Version: 20261012.334.1
+2026-10-17T00:48:18.5475410Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20261012.334/images/ubuntu/Ubuntu2404-Readme.md
+2026-10-17T00:48:18.5477346Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20261012.334
+2026-10-17T00:48:18.5478399Z ##[endgroup]
+2026-10-17T00:48:18.5479490Z ##[group]GITHUB_TOKEN Permissions
+2026-10-17T00:48:18.5481461Z Contents: read
+2026-10-17T00:48:18.5482091Z Metadata: read
+2026-10-17T00:48:18.5482773Z ##[endgroup]
+2026-10-17T00:48:18.5484942Z Secret source: Actions
+2026-10-17T00:48:18.5486203Z Cache mode: write
+2026-10-17T00:48:18.5486974Z Prepare workflow directory
+2026-10-17T00:48:18.5892973Z Prepare all required actions
+2026-10-17T00:48:18.5944165Z Getting action download info
+2026-10-17T00:48:18.9751978Z Download action repository 'actions/checkout@v6' (SHA:d23441a48e516b6c34aea4fa41551a30e30af803)
+2026-10-17T00:48:19.0807663Z Download action repository 'actions-rust-lang/setup-rust-toolchain@v1' (SHA:166cdcfd11aee3cb47222f9ddb555ce30ddb9659)
+2026-10-17T00:48:19.2350145Z Download action repository 'taiki-e/install-action@nextest' (SHA:9252097d36d2d3618ad98f5d873696a962b6897c)
+2026-10-17T00:48:19.5891111Z Getting action download info
+2026-10-17T00:48:19.7165640Z Download action repository 'Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4' (SHA:c19371144df3bb44fab255c43d04cbc2ab54d1c4)
+2026-10-17T00:48:20.1707405Z Complete job name: test (ubuntu-latest, bitrouter integration native-goals)
+2026-10-17T00:48:20.2775426Z ##[group]Run actions/checkout@v6
+2026-10-17T00:48:20.2777015Z with:
+2026-10-17T00:48:20.2777819Z   repository: bitrouter/bitrouter
+2026-10-17T00:48:20.2786627Z   token: ***
+2026-10-17T00:48:20.2787409Z   ssh-strict: true
+2026-10-17T00:48:20.2788188Z   ssh-user: git
+2026-10-17T00:48:20.2788987Z   persist-credentials: true
+2026-10-17T00:48:20.2789869Z   clean: true
+2026-10-17T00:48:20.2790660Z   sparse-checkout-cone-mode: true
+2026-10-17T00:48:20.2791613Z   fetch-depth: 1
+2026-10-17T00:48:20.2792363Z   fetch-tags: false
+2026-10-17T00:48:20.2793160Z   show-progress: true
+2026-10-17T00:48:20.2793961Z   lfs: false
+2026-10-17T00:48:20.2794742Z   submodules: false
+2026-10-17T00:48:20.2795560Z   set-safe-directory: true
+2026-10-17T00:48:20.2796700Z   allow-unsafe-pr-checkout: false
+2026-10-17T00:48:20.2797943Z env:
+2026-10-17T00:48:20.2798682Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:20.2799541Z ##[endgroup]
+2026-10-17T00:48:20.3961627Z Syncing repository: bitrouter/bitrouter
+2026-10-17T00:48:20.3965760Z ##[group]Getting Git version info
+2026-10-17T00:48:20.3968258Z Working directory is '/home/runner/work/bitrouter/bitrouter'
+2026-10-17T00:48:20.3971448Z [command]/usr/bin/git version
+2026-10-17T00:48:20.4024848Z git version 2.55.0
+2026-10-17T00:48:20.4050904Z ##[endgroup]
+2026-10-17T00:48:20.4075196Z Temporarily overriding HOME='/home/runner/work/_temp/9d696abe-5eaf-4982-bf8e-83d76fbfae7e' before making global git config changes
+2026-10-17T00:48:20.4080334Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T00:48:20.4084249Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitrouter/bitrouter
+2026-10-17T00:48:20.4144916Z Deleting the contents of '/home/runner/work/bitrouter/bitrouter'
+2026-10-17T00:48:20.4149626Z ##[group]Determining repository object format
+2026-10-17T00:48:20.4152287Z ##[endgroup]
+2026-10-17T00:48:20.4154390Z ##[group]Initializing the repository
+2026-10-17T00:48:20.4156987Z [command]/usr/bin/git init /home/runner/work/bitrouter/bitrouter
+2026-10-17T00:48:20.4293808Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-17T00:48:20.4297558Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-17T00:48:20.4300480Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-17T00:48:20.4302035Z hint: call:
+2026-10-17T00:48:20.4302838Z hint:
+2026-10-17T00:48:20.4303806Z hint: 	git config --global init.defaultBranch <name>
+2026-10-17T00:48:20.4305010Z hint:
+2026-10-17T00:48:20.4306625Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-17T00:48:20.4308981Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-17T00:48:20.4310398Z hint:
+2026-10-17T00:48:20.4311142Z hint: 	git branch -m <name>
+2026-10-17T00:48:20.4312001Z hint:
+2026-10-17T00:48:20.4313146Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-17T00:48:20.4315052Z Initialized empty Git repository in /home/runner/work/bitrouter/bitrouter/.git/
+2026-10-17T00:48:20.4320181Z [command]/usr/bin/git remote add origin https://github.com/bitrouter/bitrouter
+2026-10-17T00:48:20.4367038Z ##[endgroup]
+2026-10-17T00:48:20.4368642Z ##[group]Disabling automatic garbage collection
+2026-10-17T00:48:20.4371503Z [command]/usr/bin/git config --local gc.auto 0
+2026-10-17T00:48:20.4410155Z ##[endgroup]
+2026-10-17T00:48:20.4412792Z ##[group]Setting up auth
+2026-10-17T00:48:20.4414311Z Removing SSH command configuration
+2026-10-17T00:48:20.4419188Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T00:48:20.4458172Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T00:48:20.4872581Z Removing HTTP extra header
+2026-10-17T00:48:20.4881724Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T00:48:20.4932780Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T00:48:20.5162635Z Removing includeIf entries pointing to credentials config files
+2026-10-17T00:48:20.5167101Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T00:48:20.5208725Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T00:48:20.5439864Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-17T00:48:20.5483595Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path /home/runner/work/_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:48:20.5520917Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:48:20.5568631Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:48:20.5605291Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:48:20.5637307Z ##[endgroup]
+2026-10-17T00:48:20.5639753Z ##[group]Fetching the repository
+2026-10-17T00:48:20.5648458Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +e8c6bbe7a9b98739edb1227001e1bb526b2b41de:refs/remotes/pull/981/merge
+2026-10-17T00:48:22.1259500Z From https://github.com/bitrouter/bitrouter
+2026-10-17T00:48:22.1261473Z  * [new ref]         e8c6bbe7a9b98739edb1227001e1bb526b2b41de -> pull/981/merge
+2026-10-17T00:48:22.1264963Z ##[endgroup]
+2026-10-17T00:48:22.1265749Z ##[group]Determining the checkout info
+2026-10-17T00:48:22.1266922Z ##[endgroup]
+2026-10-17T00:48:22.1272530Z [command]/usr/bin/git sparse-checkout disable
+2026-10-17T00:48:22.1328878Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-17T00:48:22.1361121Z ##[group]Checking out the ref
+2026-10-17T00:48:22.1364753Z [command]/usr/bin/git checkout --progress --force refs/remotes/pull/981/merge
+2026-10-17T00:48:22.3071869Z Note: switching to 'refs/remotes/pull/981/merge'.
+2026-10-17T00:48:22.3072510Z 
+2026-10-17T00:48:22.3073226Z You are in 'detached HEAD' state. You can look around, make experimental
+2026-10-17T00:48:22.3074124Z changes and commit them, and you can discard any commits you make in this
+2026-10-17T00:48:22.3075064Z state without impacting any branches by switching back to a branch.
+2026-10-17T00:48:22.3075692Z 
+2026-10-17T00:48:22.3076378Z If you want to create a new branch to retain commits you create, you may
+2026-10-17T00:48:22.3077397Z do so (now or later) by using -c with the switch command. Example:
+2026-10-17T00:48:22.3077834Z 
+2026-10-17T00:48:22.3077981Z   git switch -c <new-branch-name>
+2026-10-17T00:48:22.3078200Z 
+2026-10-17T00:48:22.3078345Z Or undo this operation with:
+2026-10-17T00:48:22.3078553Z 
+2026-10-17T00:48:22.3078670Z   git switch -
+2026-10-17T00:48:22.3078858Z 
+2026-10-17T00:48:22.3079138Z Turn off this advice by setting config variable advice.detachedHead to false
+2026-10-17T00:48:22.3079566Z 
+2026-10-17T00:48:22.3079975Z HEAD is now at e8c6bbe Merge 8a44c6b1fc8a7d580de82412ab821e46c07c5d76 into 54c822a34d4dbfd75d484ca35e108b497048efef
+2026-10-17T00:48:22.3090214Z ##[endgroup]
+2026-10-17T00:48:22.3136548Z [command]/usr/bin/git log -1 --format=%H
+2026-10-17T00:48:22.3164963Z e8c6bbe7a9b98739edb1227001e1bb526b2b41de
+2026-10-17T00:48:22.3631258Z ##[group]Run actions-rust-lang/setup-rust-toolchain@v1
+2026-10-17T00:48:22.3631700Z with:
+2026-10-17T00:48:22.3632014Z   cache-shared-key: ubuntu-bitrouter-tests-v1
+2026-10-17T00:48:22.3632391Z   cache-save-if: false
+2026-10-17T00:48:22.3632702Z   cache-workspace-crates: true
+2026-10-17T00:48:22.3633019Z   cache: true
+2026-10-17T00:48:22.3633282Z   cache-on-failure: true
+2026-10-17T00:48:22.3633606Z   cache-bin: true
+2026-10-17T00:48:22.3633878Z   cache-provider: github
+2026-10-17T00:48:22.3634179Z   cache-all-crates: false
+2026-10-17T00:48:22.3634473Z   cache-targets: true
+2026-10-17T00:48:22.3634744Z   matcher: true
+2026-10-17T00:48:22.3635050Z   rustflags: -D warnings
+2026-10-17T00:48:22.3635334Z   override: true
+2026-10-17T00:48:22.3635583Z env:
+2026-10-17T00:48:22.3636089Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:22.3636389Z ##[endgroup]
+2026-10-17T00:48:22.3696638Z ##[start-action display=Unbork mac;id=__actions-rust-lang_setup-rust-toolchain.__run]
+2026-10-17T00:48:22.3709797Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-17T00:48:22.3745392Z ##[start-action display=Run : construct rustup command line;id=__actions-rust-lang_setup-rust-toolchain.flags]
+2026-10-17T00:48:22.3839839Z ##[group]Run : construct rustup command line
+2026-10-17T00:48:22.3840352Z [36;1m: construct rustup command line[0m
+2026-10-17T00:48:22.3840934Z [36;1mecho "targets=$(for t in ${_srt_targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:22.3841702Z [36;1mecho "components=$(for c in ${_srt_components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:22.3842540Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:22.4133060Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:22.4133606Z env:
+2026-10-17T00:48:22.4133922Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:22.4134268Z   _srt_targets: 
+2026-10-17T00:48:22.4134600Z   _srt_components: 
+2026-10-17T00:48:22.4134919Z ##[endgroup]
+2026-10-17T00:48:22.4292980Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=54]
+2026-10-17T00:48:22.4300090Z ##[start-action display=Setting Environment Variables;id=__actions-rust-lang_setup-rust-toolchain.__run_2]
+2026-10-17T00:48:22.4333186Z ##[group]Run if [[ ! -v CARGO_INCREMENTAL ]]; then
+2026-10-17T00:48:22.4333645Z [36;1mif [[ ! -v CARGO_INCREMENTAL ]]; then[0m
+2026-10-17T00:48:22.4334041Z [36;1m  echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV[0m
+2026-10-17T00:48:22.4334394Z [36;1mfi[0m
+2026-10-17T00:48:22.4334696Z [36;1mif [[ ! -v CARGO_PROFILE_DEV_DEBUG ]]; then[0m
+2026-10-17T00:48:22.4335129Z [36;1m  echo "CARGO_PROFILE_DEV_DEBUG=0" >> $GITHUB_ENV[0m
+2026-10-17T00:48:22.4335495Z [36;1mfi[0m
+2026-10-17T00:48:22.4336163Z [36;1mif [[ ! -v CARGO_TERM_COLOR ]]; then[0m
+2026-10-17T00:48:22.4336685Z [36;1m  echo "CARGO_TERM_COLOR=always" >> $GITHUB_ENV[0m
+2026-10-17T00:48:22.4337063Z [36;1mfi[0m
+2026-10-17T00:48:22.4337336Z [36;1mif [[ ! -v RUST_BACKTRACE ]]; then[0m
+2026-10-17T00:48:22.4337719Z [36;1m  echo "RUST_BACKTRACE=short" >> $GITHUB_ENV[0m
+2026-10-17T00:48:22.4338070Z [36;1mfi[0m
+2026-10-17T00:48:22.4338411Z [36;1mif [[ ( ! -v RUSTFLAGS ) && $_srt_NEW_RUSTFLAGS != "" ]]; then[0m
+2026-10-17T00:48:22.4338883Z [36;1m  echo "RUSTFLAGS=$_srt_NEW_RUSTFLAGS" >> $GITHUB_ENV[0m
+2026-10-17T00:48:22.4339260Z [36;1mfi[0m
+2026-10-17T00:48:22.4339545Z [36;1m# Enable faster sparse index on nightly[0m
+2026-10-17T00:48:22.4339983Z [36;1m# The value is ignored on stable and causes no problems[0m
+2026-10-17T00:48:22.4340610Z [36;1m# https://internals.rust-lang.org/t/call-for-testing-cargo-sparse-registry/16862[0m
+2026-10-17T00:48:22.4341206Z [36;1mif [[ ! -v CARGO_UNSTABLE_SPARSE_REGISTRY ]]; then[0m
+2026-10-17T00:48:22.4341677Z [36;1m  echo "CARGO_UNSTABLE_SPARSE_REGISTRY=true" >> $GITHUB_ENV[0m
+2026-10-17T00:48:22.4342087Z [36;1mfi[0m
+2026-10-17T00:48:22.4342641Z [36;1mif [[ ! -v CARGO_REGISTRIES_CRATES_IO_PROTOCOL ]]; then[0m
+2026-10-17T00:48:22.4343166Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse" >> $GITHUB_ENV[0m
+2026-10-17T00:48:22.4343593Z [36;1mfi[0m
+2026-10-17T00:48:22.4413047Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:22.4413465Z env:
+2026-10-17T00:48:22.4413730Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:22.4414062Z   _srt_NEW_RUSTFLAGS: -D warnings
+2026-10-17T00:48:22.4414376Z ##[endgroup]
+2026-10-17T00:48:22.4523045Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_2;outcome=success;conclusion=success;duration_ms=22]
+2026-10-17T00:48:22.4526572Z ##[start-action display=Install Rust Problem Matcher;id=__actions-rust-lang_setup-rust-toolchain.__run_3]
+2026-10-17T00:48:22.4563093Z ##[group]Run echo "::add-matcher::/home/runner/work/_actions/actions-rust-lang/setup-rust-toolchain/v1/rust.json"
+2026-10-17T00:48:22.4563965Z [36;1mecho "::add-matcher::/home/runner/work/_actions/actions-rust-lang/setup-rust-toolchain/v1/rust.json"[0m
+2026-10-17T00:48:22.4636262Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:22.4636686Z env:
+2026-10-17T00:48:22.4636953Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:22.4637261Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:22.4637555Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:22.4637864Z   RUST_BACKTRACE: short
+2026-10-17T00:48:22.4638154Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:22.4638472Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:22.4638838Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:22.4639195Z ##[endgroup]
+2026-10-17T00:48:22.4795582Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=26]
+2026-10-17T00:48:22.4800749Z ##[start-action display=Install rustup, if needed;id=__actions-rust-lang_setup-rust-toolchain.__run_4]
+2026-10-17T00:48:22.4834096Z ##[group]Run if ! command -v rustup &> /dev/null ; then
+2026-10-17T00:48:22.4834599Z [36;1mif ! command -v rustup &> /dev/null ; then[0m
+2026-10-17T00:48:22.4835367Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused -fsSL "https://sh.rustup.rs" | sh -s -- --default-toolchain none -y[0m
+2026-10-17T00:48:22.4836242Z [36;1m[0m
+2026-10-17T00:48:22.4836595Z [36;1m  # Resolve the correct CARGO_HOME path depending on OS[0m
+2026-10-17T00:48:22.4837052Z [36;1m  if [[ "$RUNNER_OS" == "Windows" ]]; then[0m
+2026-10-17T00:48:22.4837593Z [36;1m    echo "${CARGO_HOME:-$USERPROFILE/.cargo}/bin" | sed 's|/|\\|g' >> $GITHUB_PATH[0m
+2026-10-17T00:48:22.4838105Z [36;1m  else[0m
+2026-10-17T00:48:22.4838442Z [36;1m    echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> $GITHUB_PATH[0m
+2026-10-17T00:48:22.4838842Z [36;1m  fi[0m
+2026-10-17T00:48:22.4839088Z [36;1mfi[0m
+2026-10-17T00:48:22.4910442Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:22.4910869Z env:
+2026-10-17T00:48:22.4911137Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:22.4911457Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:22.4911755Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:22.4912057Z   RUST_BACKTRACE: short
+2026-10-17T00:48:22.4912351Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:22.4912665Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:22.4913037Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:22.4913386Z   RUNNER_OS: Linux
+2026-10-17T00:48:22.4913661Z ##[endgroup]
+2026-10-17T00:48:22.5022971Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=22]
+2026-10-17T00:48:22.5030449Z ##[start-action display=rustup toolchain install stable;id=__actions-rust-lang_setup-rust-toolchain.__run_5]
+2026-10-17T00:48:22.5065630Z ##[group]Run # Check if value is set
+2026-10-17T00:48:22.5066376Z [36;1m# Check if value is set[0m
+2026-10-17T00:48:22.5066743Z [36;1mif [[ -n "$_srt_rust_src_dir" ]][0m
+2026-10-17T00:48:22.5067087Z [36;1mthen[0m
+2026-10-17T00:48:22.5067417Z [36;1m  # If value is set the directory must exist[0m
+2026-10-17T00:48:22.5068026Z [36;1m  if [[ -d "$_srt_rust_src_dir" ]][0m
+2026-10-17T00:48:22.5068375Z [36;1m  then[0m
+2026-10-17T00:48:22.5068652Z [36;1m    cd "$_srt_rust_src_dir"[0m
+2026-10-17T00:48:22.5068961Z [36;1m  else[0m
+2026-10-17T00:48:22.5069355Z [36;1m    echo "'rust-src-dir' does not point to an existing directory" >&2[0m
+2026-10-17T00:48:22.5069915Z [36;1m    echo "The value of 'rust-src-dir' is: ${_srt_rust_src_dir}" >&2[0m
+2026-10-17T00:48:22.5070347Z [36;1m    exit 1[0m
+2026-10-17T00:48:22.5070607Z [36;1m  fi[0m
+2026-10-17T00:48:22.5070859Z [36;1mfi[0m
+2026-10-17T00:48:22.5071270Z [36;1mif [[ -z "$_srt_toolchain" && ( -f "rust-toolchain" || -f "rust-toolchain.toml") ]][0m
+2026-10-17T00:48:22.5071753Z [36;1mthen[0m
+2026-10-17T00:48:22.5072083Z [36;1m  # Install the toolchain as specified in the file[0m
+2026-10-17T00:48:22.5072591Z [36;1m  # rustup show is the old way that implicitly installed a toolchain[0m
+2026-10-17T00:48:22.5073115Z [36;1m  # rustup toolchain install is the new explicit way[0m
+2026-10-17T00:48:22.5073679Z [36;1m  # https://github.com/rust-lang/rustup/issues/3635#issuecomment-2343511297[0m
+2026-10-17T00:48:22.5074262Z [36;1m  rustup show active-toolchain || rustup toolchain install[0m
+2026-10-17T00:48:22.5074727Z [36;1m  if [[ -n $_srt_components ]]; then[0m
+2026-10-17T00:48:22.5075136Z [36;1m    rustup component add ${_srt_components//,/ }[0m
+2026-10-17T00:48:22.5075501Z [36;1m  fi[0m
+2026-10-17T00:48:22.5076014Z [36;1m  if [[ -n $_srt_targets ]]; then[0m
+2026-10-17T00:48:22.5076427Z [36;1m    rustup target add ${_srt_targets//,/ }[0m
+2026-10-17T00:48:22.5076772Z [36;1m  fi[0m
+2026-10-17T00:48:22.5077207Z [36;1melse[0m
+2026-10-17T00:48:22.5077481Z [36;1m  if [[ -z "$_srt_toolchain" ]][0m
+2026-10-17T00:48:22.5077805Z [36;1m  then[0m
+2026-10-17T00:48:22.5078082Z [36;1m    _srt_toolchain=stable[0m
+2026-10-17T00:48:22.5078393Z [36;1m  fi[0m
+2026-10-17T00:48:22.5078854Z [36;1m  rustup toolchain install ${_srt_toolchain//,/ }  --profile minimal --no-self-update[0m
+2026-10-17T00:48:22.5079407Z [36;1m  # Take the last element from the list[0m
+2026-10-17T00:48:22.5079797Z [36;1m  if [[ "$_srt_override" == "true" ]][0m
+2026-10-17T00:48:22.5080139Z [36;1m  then[0m
+2026-10-17T00:48:22.5080480Z [36;1m    rustup override set ${_srt_toolchain//*,/ }[0m
+2026-10-17T00:48:22.5080842Z [36;1m  fi[0m
+2026-10-17T00:48:22.5081093Z [36;1mfi[0m
+2026-10-17T00:48:22.5153372Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:22.5153792Z env:
+2026-10-17T00:48:22.5154064Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:22.5154377Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:22.5154696Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:22.5155027Z   RUST_BACKTRACE: short
+2026-10-17T00:48:22.5155329Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:22.5155654Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:22.5156290Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:22.5156652Z   _srt_toolchain: 
+2026-10-17T00:48:22.5156926Z   _srt_targets: 
+2026-10-17T00:48:22.5157189Z   _srt_components: 
+2026-10-17T00:48:22.5157456Z   _srt_override: true
+2026-10-17T00:48:22.5157731Z   _srt_rust_src_dir: 
+2026-10-17T00:48:22.5158003Z ##[endgroup]
+2026-10-17T00:48:22.7529613Z info: syncing channel updates for stable-x86_64-unknown-linux-gnu
+2026-10-17T00:48:23.1828236Z info: latest update on 2026-10-15 for version 1.99.1 (58cf8f9c3 2026-10-13)
+2026-10-17T00:48:23.1981017Z info: removing previous version of component rustfmt
+2026-10-17T00:48:23.2003698Z info: removing previous version of component clippy
+2026-10-17T00:48:23.2015737Z info: removing previous version of component cargo
+2026-10-17T00:48:23.2070735Z info: removing previous version of component rust-std
+2026-10-17T00:48:23.2122109Z info: removing previous version of component rustc
+2026-10-17T00:48:23.2180594Z info: downloading 5 components
+2026-10-17T00:48:31.3297641Z 
+2026-10-17T00:48:31.3367337Z   stable-x86_64-unknown-linux-gnu updated - rustc 1.99.1 (58cf8f9c3 2026-10-13) (from rustc 1.99.0 (b940084d7 2026-09-28))
+2026-10-17T00:48:31.3367981Z 
+2026-10-17T00:48:31.3471325Z info: override toolchain for /home/runner/work/bitrouter/bitrouter set to stable-x86_64-unknown-linux-gnu
+2026-10-17T00:48:31.3494023Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=8846]
+2026-10-17T00:48:31.3497223Z ##[start-action display=Print installed versions;id=__actions-rust-lang_setup-rust-toolchain.versions]
+2026-10-17T00:48:31.3523519Z ##[group]Run echo "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT
+2026-10-17T00:48:31.3524012Z [36;1mecho "rustc-version=$(rustc --version)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:31.3524387Z [36;1mrustc --version --verbose[0m
+2026-10-17T00:48:31.3524709Z [36;1mecho "cargo-version=$(cargo --version)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:31.3525051Z [36;1mcargo --version --verbose[0m
+2026-10-17T00:48:31.3525387Z [36;1mecho "rustup-version=$(rustup --version)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:31.3525763Z [36;1mrustup --version[0m
+2026-10-17T00:48:31.3526318Z [36;1m[0m
+2026-10-17T00:48:31.3526764Z [36;1m_srt_DATE=$(rustc --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-10-17T00:48:31.3527393Z [36;1m_srt_HASH=$(rustc --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-10-17T00:48:31.3527898Z [36;1mecho "cachekey=$(echo $_srt_DATE$_srt_HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-10-17T00:48:31.3591262Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:31.3591612Z env:
+2026-10-17T00:48:31.3591813Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:31.3592296Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:31.3592524Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:31.3592768Z   RUST_BACKTRACE: short
+2026-10-17T00:48:31.3592997Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:31.3593251Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:31.3593564Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:31.3593865Z ##[endgroup]
+2026-10-17T00:48:31.3927447Z rustc 1.99.1 (58cf8f9c3 2026-10-13)
+2026-10-17T00:48:31.3928207Z binary: rustc
+2026-10-17T00:48:31.3928638Z commit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-17T00:48:31.3929006Z commit-date: 2026-10-13
+2026-10-17T00:48:31.3929276Z host: x86_64-unknown-linux-gnu
+2026-10-17T00:48:31.3929555Z release: 1.99.1
+2026-10-17T00:48:31.3929892Z LLVM version: 23.1.1
+2026-10-17T00:48:31.4220796Z cargo 1.99.1 (5f94df478 2026-08-27)
+2026-10-17T00:48:31.4221187Z release: 1.99.1
+2026-10-17T00:48:31.4221490Z commit-hash: 5f94df4789f005f9a352888e8355ffc645b7ed0e
+2026-10-17T00:48:31.4221922Z commit-date: 2026-08-27
+2026-10-17T00:48:31.4222233Z host: x86_64-unknown-linux-gnu
+2026-10-17T00:48:31.4222516Z libgit2: 1.9.6 (sys:0.21.0 vendored)
+2026-10-17T00:48:31.4222912Z libcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3)
+2026-10-17T00:48:31.4223371Z ssl: OpenSSL 3.6.3 9 Jun 2026
+2026-10-17T00:48:31.4223660Z os: Ubuntu 24.4.0 (noble) [64-bit]
+2026-10-17T00:48:31.4260232Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-10-17T00:48:31.4342494Z info: the currently active `rustc` version is `rustc 1.99.1 (58cf8f9c3 2026-10-13)`
+2026-10-17T00:48:31.4384659Z info: This is the version for the rustup toolchain manager, not the rustc compiler.
+2026-10-17T00:48:31.4385223Z rustup 1.29.1 (d95a37b6a 2026-08-13)
+2026-10-17T00:48:31.4469810Z info: the currently active `rustc` version is `rustc 1.99.1 (58cf8f9c3 2026-10-13)`
+2026-10-17T00:48:31.4760259Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.versions;outcome=success;conclusion=success;duration_ms=126]
+2026-10-17T00:48:31.4763026Z ##[start-action display=Downgrade registry access protocol when needed;id=__actions-rust-lang_setup-rust-toolchain.__run_6]
+2026-10-17T00:48:31.4786916Z ##[group]Run # Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-10-17T00:48:31.4787651Z [36;1m# Not all versions support setting CARGO_REGISTRIES_CRATES_IO_PROTOCOL[0m
+2026-10-17T00:48:31.4788193Z [36;1m# On versions 1.66, 1.67, and 1.68.0-nightly the value "sparse" is still unstable.[0m
+2026-10-17T00:48:31.4788764Z [36;1m# https://github.com/dtolnay/rust-toolchain/pull/69#discussion_r1107268108[0m
+2026-10-17T00:48:31.4789334Z [36;1m# If we detect an incompatible value, set it to "git" which is always supported.[0m
+2026-10-17T00:48:31.4790083Z [36;1mif [[ "rustc 1.99.1 (58cf8f9c3 2026-10-13)" =~ ^rustc\ (1\.6[67]\.|1\.68\.0-nightly) && "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL}" == "sparse" ]]; then[0m
+2026-10-17T00:48:31.4790716Z [36;1m  echo "Downgrade cargo registry protocol to git"[0m
+2026-10-17T00:48:31.4791131Z [36;1m  echo "CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git" >> $GITHUB_ENV[0m
+2026-10-17T00:48:31.4791487Z [36;1mfi[0m
+2026-10-17T00:48:31.4854547Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:31.4854892Z env:
+2026-10-17T00:48:31.4855101Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:31.4855352Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:31.4855576Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:31.4856139Z   RUST_BACKTRACE: short
+2026-10-17T00:48:31.4856437Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:31.4856681Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:31.4856972Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:31.4857251Z ##[endgroup]
+2026-10-17T00:48:31.4954371Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=19]
+2026-10-17T00:48:31.4957330Z ##[start-action display=Setup Rust Caching;id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache]
+2026-10-17T00:48:31.5012455Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-10-17T00:48:31.5012837Z with:
+2026-10-17T00:48:31.5013039Z   cache-on-failure: true
+2026-10-17T00:48:31.5013262Z   cache-bin: true
+2026-10-17T00:48:31.5013473Z   cache-provider: github
+2026-10-17T00:48:31.5013703Z   cache-all-crates: false
+2026-10-17T00:48:31.5013960Z   cache-workspace-crates: true
+2026-10-17T00:48:31.5014209Z   cache-targets: true
+2026-10-17T00:48:31.5014417Z   save-if: false
+2026-10-17T00:48:31.5014645Z   shared-key: ubuntu-bitrouter-tests-v1
+2026-10-17T00:48:31.5014916Z   prefix-key: v0-rust
+2026-10-17T00:48:31.5015126Z   add-job-id-key: true
+2026-10-17T00:48:31.5015362Z   add-rust-environment-hash-key: true
+2026-10-17T00:48:31.5015627Z   lookup-only: false
+2026-10-17T00:48:31.5016120Z   cmd-format: {0}
+2026-10-17T00:48:31.5016396Z env:
+2026-10-17T00:48:31.5016589Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:31.5016816Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:31.5017032Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:31.5017275Z   RUST_BACKTRACE: short
+2026-10-17T00:48:31.5017499Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:31.5017738Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:31.5018021Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:31.5018297Z ##[endgroup]
+2026-10-17T00:48:31.7903351Z (node:2449) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-17T00:48:31.7904293Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-17T00:48:32.0675073Z ##[group]Cache Configuration
+2026-10-17T00:48:32.0676463Z Cache Provider:
+2026-10-17T00:48:32.0677241Z     github
+2026-10-17T00:48:32.0678073Z Workspaces:
+2026-10-17T00:48:32.0679147Z     /home/runner/work/bitrouter/bitrouter
+2026-10-17T00:48:32.0679982Z Cache Paths:
+2026-10-17T00:48:32.0680650Z     /home/runner/.cargo/bin
+2026-10-17T00:48:32.0681323Z     /home/runner/.cargo/.crates.toml
+2026-10-17T00:48:32.0682080Z     /home/runner/.cargo/.crates2.json
+2026-10-17T00:48:32.0682981Z     /home/runner/.cargo/registry
+2026-10-17T00:48:32.0683754Z     /home/runner/.cargo/git
+2026-10-17T00:48:32.0684511Z     /home/runner/work/bitrouter/bitrouter/target
+2026-10-17T00:48:32.0685319Z Restore Key:
+2026-10-17T00:48:32.0686360Z     v0-rust-ubuntu-bitrouter-tests-v1-Linux-x64-8e2c72a2
+2026-10-17T00:48:32.0687732Z Cache Key:
+2026-10-17T00:48:32.0688623Z     v0-rust-ubuntu-bitrouter-tests-v1-Linux-x64-8e2c72a2-c017af6b
+2026-10-17T00:48:32.0689494Z .. Prefix:
+2026-10-17T00:48:32.0690095Z   - v0-rust-ubuntu-bitrouter-tests-v1-Linux-x64
+2026-10-17T00:48:32.0691067Z .. Environment considered:
+2026-10-17T00:48:32.0692012Z   - Rust Versions:
+2026-10-17T00:48:32.0693144Z     - 1.99.1 x86_64-unknown-linux-gnu 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-17T00:48:32.0694814Z     - 1.99.1 x86_64-unknown-linux-gnu 58cf8f9c35b355199727627d07ae34a4e2846d67
+2026-10-17T00:48:32.0696322Z   - CARGO_INCREMENTAL
+2026-10-17T00:48:32.0697191Z   - CARGO_PROFILE_DEV_DEBUG
+2026-10-17T00:48:32.0697740Z   - CARGO_REGISTRIES_CRATES_IO_PROTOCOL
+2026-10-17T00:48:32.0698279Z   - CARGO_TERM_COLOR
+2026-10-17T00:48:32.0698875Z   - CARGO_UNSTABLE_SPARSE_REGISTRY
+2026-10-17T00:48:32.0699367Z   - RUST_BACKTRACE
+2026-10-17T00:48:32.0699897Z   - RUSTFLAGS
+2026-10-17T00:48:32.0700353Z .. Lockfiles considered:
+2026-10-17T00:48:32.0700960Z   - /home/runner/work/bitrouter/bitrouter/apps/bitrouter/Cargo.toml
+2026-10-17T00:48:32.0701695Z   - /home/runner/work/bitrouter/bitrouter/Cargo.lock
+2026-10-17T00:48:32.0702401Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-ai/Cargo.toml
+2026-10-17T00:48:32.0703210Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-orchestrator/Cargo.toml
+2026-10-17T00:48:32.0703985Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-sdk/Cargo.toml
+2026-10-17T00:48:32.0704746Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-telemetry/Cargo.toml
+2026-10-17T00:48:32.0705567Z   - /home/runner/work/bitrouter/bitrouter/crates/bitrouter-tui/Cargo.toml
+2026-10-17T00:48:32.0707341Z   - /home/runner/work/bitrouter/bitrouter/extensions/regex-checker/matcher/Cargo.toml
+2026-10-17T00:48:32.0708661Z   - /home/runner/work/bitrouter/bitrouter/helpers/bitrouter-test-fixtures/Cargo.toml
+2026-10-17T00:48:32.0709737Z   - /home/runner/work/bitrouter/bitrouter/helpers/dist-helper/Cargo.toml
+2026-10-17T00:48:32.0726519Z ##[endgroup]
+2026-10-17T00:48:32.0726827Z 
+2026-10-17T00:48:32.0727013Z ... Restoring cache ...
+2026-10-17T00:48:32.3047780Z Cache hit for: v0-rust-ubuntu-bitrouter-tests-v1-Linux-x64-8e2c72a2-c017af6b
+2026-10-17T00:48:33.5860588Z Received 4194304 of 777348472 (0.5%), 4.0 MBs/sec
+2026-10-17T00:48:34.5959952Z Received 134217728 of 777348472 (17.3%), 63.6 MBs/sec
+2026-10-17T00:48:35.6007008Z Received 264241152 of 777348472 (34.0%), 83.6 MBs/sec
+2026-10-17T00:48:36.5979395Z Received 385875968 of 777348472 (49.6%), 91.7 MBs/sec
+2026-10-17T00:48:37.5984026Z Received 524288000 of 777348472 (67.4%), 99.7 MBs/sec
+2026-10-17T00:48:38.5990944Z Received 645922816 of 777348472 (83.1%), 102.4 MBs/sec
+2026-10-17T00:48:39.6225364Z Received 777348472 of 777348472 (100.0%), 105.3 MBs/sec
+2026-10-17T00:48:39.6226558Z Cache Size: ~741 MB (777348472 B)
+2026-10-17T00:48:39.6301515Z [command]/usr/bin/tar -xf /home/runner/work/_temp/f4c45dc9-0eb9-4d4b-bd1b-4ad044f8e0e3/cache.tzst -P -C /home/runner/work/bitrouter/bitrouter --use-compress-program unzstd
+2026-10-17T00:48:45.8500126Z Cache restored successfully
+2026-10-17T00:48:46.0649912Z Restored from cache key "v0-rust-ubuntu-bitrouter-tests-v1-Linux-x64-8e2c72a2-c017af6b" full match: true.
+2026-10-17T00:48:46.0782944Z ##[end-action id=__actions-rust-lang_setup-rust-toolchain.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=14582]
+2026-10-17T00:48:46.1585644Z ##[group]Run taiki-e/install-action@nextest
+2026-10-17T00:48:46.1586495Z with:
+2026-10-17T00:48:46.1586882Z   tool: nextest
+2026-10-17T00:48:46.1587301Z   checksum: true
+2026-10-17T00:48:46.1587774Z   fallback: cargo-binstall
+2026-10-17T00:48:46.1588250Z env:
+2026-10-17T00:48:46.1588682Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:46.1589219Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:46.1589677Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:46.1590092Z   RUST_BACKTRACE: short
+2026-10-17T00:48:46.1590484Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:46.1590890Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:46.1591406Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:46.1591886Z   CACHE_ON_FAILURE: true
+2026-10-17T00:48:46.1592332Z ##[endgroup]
+2026-10-17T00:48:46.1600408Z ##[start-action display=Run bail() {;id=__taiki-e_install-action.__run]
+2026-10-17T00:48:46.1633181Z ##[group]Run bail() {
+2026-10-17T00:48:46.1633613Z [36;1mbail() {[0m
+2026-10-17T00:48:46.1634085Z [36;1m  printf '::error::install-action: %s\n' "$*"[0m
+2026-10-17T00:48:46.1634617Z [36;1m  exit 1[0m
+2026-10-17T00:48:46.1634953Z [36;1m}[0m
+2026-10-17T00:48:46.1635576Z [36;1m# If /bin/sh is dash, environment variable containing % is not imported, but is fine[0m
+2026-10-17T00:48:46.1636760Z [36;1m# because it also means that it will not be exposed to subprocess.[0m
+2026-10-17T00:48:46.1637483Z [36;1mif /usr/bin/env | grep -Eq '^BASH_FUNC_'; then[0m
+2026-10-17T00:48:46.1638381Z [36;1m  bail 'bash function injection via BASH_FUNC_ environment variable is not allowed for security reasons'[0m
+2026-10-17T00:48:46.1639223Z [36;1mfi[0m
+2026-10-17T00:48:46.1639574Z [36;1mif ! command -v bash >/dev/null; then[0m
+2026-10-17T00:48:46.1640159Z [36;1m  if grep -Eq '^ID=alpine' /etc/os-release; then[0m
+2026-10-17T00:48:46.1640949Z [36;1m    printf '::group::Install packages required for install-action (bash)\n'[0m
+2026-10-17T00:48:46.1641732Z [36;1m    # NB: sync with apk_install in main.sh[0m
+2026-10-17T00:48:46.1642289Z [36;1m    if command -v sudo >/dev/null; then[0m
+2026-10-17T00:48:46.1642831Z [36;1m      sudo apk --no-cache add bash[0m
+2026-10-17T00:48:46.1643378Z [36;1m    elif command -v doas >/dev/null; then[0m
+2026-10-17T00:48:46.1643915Z [36;1m      doas apk --no-cache add bash[0m
+2026-10-17T00:48:46.1644580Z [36;1m    else[0m
+2026-10-17T00:48:46.1644952Z [36;1m      apk --no-cache add bash[0m
+2026-10-17T00:48:46.1645403Z [36;1m    fi[0m
+2026-10-17T00:48:46.1645763Z [36;1m    printf '::endgroup::\n'[0m
+2026-10-17T00:48:46.1646393Z [36;1m  else[0m
+2026-10-17T00:48:46.1646775Z [36;1m    bail 'this action requires bash'[0m
+2026-10-17T00:48:46.1647262Z [36;1m  fi[0m
+2026-10-17T00:48:46.1647579Z [36;1mfi[0m
+2026-10-17T00:48:46.1648058Z [36;1mbash --noprofile --norc "${GITHUB_ACTION_PATH:?}/main.sh"[0m
+2026-10-17T00:48:46.1649942Z shell: /usr/bin/env -u ENV -u BASH_ENV -u CDPATH -u SHELLOPTS -u BASHOPTS /bin/sh -eu {0}
+2026-10-17T00:48:46.1650661Z env:
+2026-10-17T00:48:46.1650989Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:46.1651397Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:46.1651781Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:46.1652202Z   RUST_BACKTRACE: short
+2026-10-17T00:48:46.1652589Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:46.1653005Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:46.1653498Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:46.1653961Z   CACHE_ON_FAILURE: true
+2026-10-17T00:48:46.1654333Z   INPUT_TOOL: nextest
+2026-10-17T00:48:46.1654701Z   INPUT_CHECKSUM: true
+2026-10-17T00:48:46.1655093Z   INPUT_FALLBACK: cargo-binstall
+2026-10-17T00:48:46.1660678Z   DEFAULT_GITHUB_TOKEN: ***
+2026-10-17T00:48:46.1661169Z   ACTION_USER_AGENT: taiki-e/install-action (nextest)
+2026-10-17T00:48:46.1661713Z   RUNNER_OS: Linux
+2026-10-17T00:48:46.1662064Z   RUNNER_ARCH: X64
+2026-10-17T00:48:46.1662405Z ##[endgroup]
+2026-10-17T00:48:46.8070711Z info: host platform: x86_64_linux
+2026-10-17T00:48:46.9667268Z info: installing cargo-nextest@latest
+2026-10-17T00:48:46.9879670Z info: downloading https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.148/cargo-nextest-0.9.148-x86_64-unknown-linux-gnu.tar.gz
+2026-10-17T00:48:47.1686952Z info: verifying sha256 checksum for cargo-nextest-0.9.148-x86_64-unknown-linux-gnu.tar.gz
+2026-10-17T00:48:47.4122029Z info: cargo-nextest installed at /home/runner/.cargo/bin/cargo-nextest
+2026-10-17T00:48:47.4124628Z + cargo-nextest nextest --version
+2026-10-17T00:48:47.4153590Z cargo-nextest 0.9.148 (cd1d6d546 2026-10-07)
+2026-10-17T00:48:47.4154069Z release: 0.9.148
+2026-10-17T00:48:47.4154399Z commit-hash: cd1d6d5467322dbc0d39a80cb671d000ac302798
+2026-10-17T00:48:47.4154794Z commit-date: 2026-10-07
+2026-10-17T00:48:47.4155080Z host: x86_64-unknown-linux-gnu
+2026-10-17T00:48:47.4158497Z 
+2026-10-17T00:48:47.4170359Z ##[end-action id=__taiki-e_install-action.__run;outcome=success;conclusion=success;duration_ms=1256]
+2026-10-17T00:48:47.4175108Z ##[start-action display=Run Set-StrictMode -Version Latest;id=__taiki-e_install-action.__run_2]
+2026-10-17T00:48:47.4179547Z ##[end-action id=__taiki-e_install-action.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-10-17T00:48:47.4209902Z ##[group]Run read -r -a test_targets <<< "$TEST_TARGETS"
+2026-10-17T00:48:47.4210359Z [36;1mread -r -a test_targets <<< "$TEST_TARGETS"[0m
+2026-10-17T00:48:47.4210914Z [36;1mcargo nextest run -p bitrouter --all-features --no-fail-fast --build-jobs "$TEST_BUILD_JOBS" \[0m
+2026-10-17T00:48:47.4211424Z [36;1m  --retries "$TEST_RETRIES" \[0m
+2026-10-17T00:48:47.4211716Z [36;1m  "${test_targets[@]}"[0m
+2026-10-17T00:48:47.4275021Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-10-17T00:48:47.4275371Z env:
+2026-10-17T00:48:47.4275569Z   CARGO_TERM_COLOR: always
+2026-10-17T00:48:47.4275946Z   CARGO_INCREMENTAL: 0
+2026-10-17T00:48:47.4276175Z   CARGO_PROFILE_DEV_DEBUG: 0
+2026-10-17T00:48:47.4276419Z   RUST_BACKTRACE: short
+2026-10-17T00:48:47.4276644Z   RUSTFLAGS: -D warnings
+2026-10-17T00:48:47.4276885Z   CARGO_UNSTABLE_SPARSE_REGISTRY: true
+2026-10-17T00:48:47.4277186Z   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
+2026-10-17T00:48:47.4277510Z   CACHE_ON_FAILURE: true
+2026-10-17T00:48:47.4277738Z   TEST_RETRIES: 0
+2026-10-17T00:48:47.4278633Z   TEST_TARGETS: --test code_tui_pty --test goal_tui_pty --test goals --test harness_mcp_check --test invocation --test native_agent_process --test native_agent_tui --test native_harness_resources --test orchestrator_core --test skill_cli_contract
+2026-10-17T00:48:47.4279767Z   TEST_BUILD_JOBS: 1
+2026-10-17T00:48:47.4279984Z ##[endgroup]
+2026-10-17T00:48:47.5203062Z [1m[92m    Updating[0m crates.io index
+2026-10-17T00:48:50.6490996Z [1m[92m   Compiling[0m bitrouter-ai v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-ai)
+2026-10-17T00:48:58.3437649Z [1m[92m   Compiling[0m bitrouter-sdk v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-sdk)
+2026-10-17T00:49:16.3643753Z [1m[92m   Compiling[0m bitrouter v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/apps/bitrouter)
+2026-10-17T00:49:16.6200535Z [1m[92m   Compiling[0m bitrouter-telemetry v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-telemetry)
+2026-10-17T00:49:18.3534046Z [1m[92m   Compiling[0m bitrouter-tui v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-tui)
+2026-10-17T00:49:20.9142171Z [1m[92m   Compiling[0m bitrouter-orchestrator v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/crates/bitrouter-orchestrator)
+2026-10-17T00:51:23.3914140Z [1m[92m   Compiling[0m bitrouter-guardrails v1.0.0-alpha.33 (/home/runner/work/bitrouter/bitrouter/extensions/regex-checker/matcher)
+2026-10-17T00:51:57.1206733Z [1m[92m    Finished[0m `test` profile [unoptimized] target(s) in 3m 06s
+2026-10-17T00:51:57.1220438Z [1m[33mwarning[0m: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+2026-10-17T00:51:57.1221685Z [1m[92mnote[0m: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+2026-10-17T00:51:57.2116353Z ────────────
+2026-10-17T00:51:57.2117855Z [32;1m Nextest run[0m ID [1m86886ca2-82f8-4c76-9916-60edf84b1cd1[0m with nextest profile: [1mdefault[0m
+2026-10-17T00:51:57.2119692Z [32;1m    Starting[0m [1m212[0m tests across [1m10[0m binaries ([1m6[0m tests [33;1mskipped[0m)
+2026-10-17T00:52:19.3503808Z [32;1m        PASS[0m [  22.138s] (  1/212) [35;1mbitrouter::code_tui_pty[0m [36mbackground[0m[36m::[0m[34;1mforeground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree[0m
+2026-10-17T00:52:19.4443432Z [32;1m        PASS[0m [  22.232s] (  2/212) [35;1mbitrouter::code_tui_pty[0m [36mbackground[0m[36m::[0m[34;1mfailed_run_stop_is_idempotent_and_remove_preserves_native_session[0m
+2026-10-17T00:52:20.5078317Z [32;1m        PASS[0m [  23.293s] (  3/212) [35;1mbitrouter::code_tui_pty[0m [36mbackground[0m[36m::[0m[34;1mbackground_load_and_resume_use_advertised_native_capabilities[0m
+2026-10-17T00:52:20.5766381Z [32;1m        PASS[0m [   0.071s] (  4/212) [35;1mbitrouter::code_tui_pty[0m [36mbackground[0m[36m::[0m[34;1mremote_context_rejects_background_and_session_mutations_before_local_start[0m
+2026-10-17T00:52:20.7318815Z [32;1m        PASS[0m [   1.382s] (  5/212) [35;1mbitrouter::code_tui_pty[0m [36mbackground[0m[36m::[0m[34;1mno_wait_is_rejected_and_non_tty_management_is_escape_free[0m
+2026-10-17T00:52:21.3864899Z [32;1m        PASS[0m [   0.809s] (  6/212) [35;1mbitrouter::code_tui_pty[0m [36mbackground[0m[36m::[0m[34;1mschema_failure_never_becomes_ready_for_review[0m
+2026-10-17T00:52:21.6585115Z [32;1m        PASS[0m [   2.214s] (  7/212) [35;1mbitrouter::code_tui_pty[0m [36mbackground[0m[36m::[0m[34;1mpermission_wait_counts_toward_background_turn_timeout[0m
+2026-10-17T00:52:21.9623824Z [32;1m        PASS[0m [   1.230s] (  8/212) [35;1mbitrouter::code_tui_pty[0m [34;1mbackground_cli_returns_before_settlement_and_run_survives_client_exit[0m
+2026-10-17T00:52:22.1623640Z [32;1m        PASS[0m [   0.200s] (  9/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution::native::coding[0m[36m::[0m[34;1mrust_coding_judge_uses_executed_pass_and_fail_results[0m
+2026-10-17T00:52:22.4229583Z [32;1m        PASS[0m [   0.764s] ( 10/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1mevolution_api_restore_reviews_current_identity_and_retains_publication[0m
+2026-10-17T00:52:22.5646674Z [32;1m        PASS[0m [   1.179s] ( 11/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1mevolution_api_checkpoint_history_keeps_current_reward_and_original_revisions[0m
+2026-10-17T00:52:22.7995671Z [32;1m        PASS[0m [   0.637s] ( 12/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution::native::session[0m[36m::[0m[34;1mheartbeat_preserves_lease_loss_without_reacquiring_or_dispatching[0m
+2026-10-17T00:52:23.0972472Z [32;1m        PASS[0m [   0.674s] ( 13/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution::native::session[0m[36m::[0m[34;1msession_operator_cli_and_fresh_prompt_keep_actual_identity_and_stop[0m
+2026-10-17T00:52:23.2846519Z [32;1m        PASS[0m [   0.720s] ( 14/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_client_loss_during_startup_keeps_daemon_ownership_until_explicit_stop[0m
+2026-10-17T00:52:23.6951487Z [32;1m        PASS[0m [   0.598s] ( 15/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_explicit_detach_keeps_accepted_turn_running_and_delivers_after_client_exit[0m
+2026-10-17T00:52:23.8703354Z [32;1m        PASS[0m [   0.585s] ( 16/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_failed_settings_retain_the_last_confirmed_value[0m
+2026-10-17T00:52:24.3924218Z [32;1m        PASS[0m [   0.522s] ( 17/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_late_adapter_failure_keeps_completed_transcript_and_native_identity[0m
+2026-10-17T00:52:25.1564623Z [32;1m        PASS[0m [   0.764s] ( 18/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_load_replays_history_and_resume_preserves_distinct_native_ids[0m
+2026-10-17T00:52:25.2387883Z [32;1m        PASS[0m [   1.544s] ( 19/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_fresh_session_preserves_direct_routing_and_turn_timeout[0m
+2026-10-17T00:52:25.6782824Z [32;1m        PASS[0m [   0.522s] ( 20/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_overlapping_permissions_keep_identity_and_require_explicit_answers[0m
+2026-10-17T00:52:25.8320974Z [32;1m        PASS[0m [   0.593s] ( 21/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_settings_apply_only_the_actual_confirmed_configuration[0m
+2026-10-17T00:52:26.0503331Z [32;1m        PASS[0m [   0.218s] ( 22/212) [35;1mbitrouter::code_tui_pty[0m [34;1mmock_acp_minimal_lifecycle_logs_exact_multiline_prompt_text[0m
+2026-10-17T00:52:26.2463072Z [32;1m        PASS[0m [   0.568s] ( 23/212) [35;1mbitrouter::code_tui_pty[0m [34;1mexplicit_socket_status_is_readonly_without_starting_an_agent[0m
+2026-10-17T00:52:26.2674445Z [32;1m        PASS[0m [   0.217s] ( 24/212) [35;1mbitrouter::code_tui_pty[0m [34;1mmock_acp_models_delayed_cancellation_and_overlapping_permissions[0m
+2026-10-17T00:52:26.4343147Z [32;1m        PASS[0m [   0.188s] ( 25/212) [35;1mbitrouter::code_tui_pty[0m [34;1mmock_acp_refusal_settles_the_original_prompt_without_replay[0m
+2026-10-17T00:52:26.4476613Z [32;1m        PASS[0m [   0.013s] ( 26/212) [35;1mbitrouter::code_tui_pty[0m [34;1mpty_runner_reads_writes_and_resizes_without_a_sleep[0m
+2026-10-17T00:52:26.4688574Z [32;1m        PASS[0m [   3.669s] ( 27/212) [35;1mbitrouter::code_tui_pty[0m [36mevolution[0m[36m::[0m[34;1msession_api_detach_preserves_pending_permissions_without_answering_or_stopping[0m
+2026-10-17T00:52:26.5241350Z [32;1m        PASS[0m [   0.076s] ( 28/212) [35;1mbitrouter::code_tui_pty[0m [34;1mremote_cli_failure_keeps_the_remote_error_without_local_model_fallback[0m
+2026-10-17T00:52:26.6870389Z [32;1m        PASS[0m [   0.218s] ( 29/212) [35;1mbitrouter::code_tui_pty[0m [34;1mremote_cli_read_actions_preserve_authentication_and_never_start_local_work[0m
+2026-10-17T00:52:27.6790881Z [32;1m        PASS[0m [  30.467s] ( 30/212) [35;1mbitrouter::code_tui_pty[0m [36mbackground[0m[36m::[0m[34;1mbackground_permissions_default_to_ask_and_explicit_modes_win[0m
+2026-10-17T00:52:27.8988548Z [32;1m        PASS[0m [   1.631s] ( 31/212) [35;1mbitrouter::code_tui_pty[0m [34;1mnative_attached_backlog_preserves_all_events_across_resize_and_reconnect[0m
+2026-10-17T00:52:28.2679781Z [32;1m        PASS[0m [   1.744s] ( 32/212) [35;1mbitrouter::code_tui_pty[0m [34;1mstandalone_agents_and_attach_restore_terminal_without_stopping_runs[0m
+2026-10-17T00:52:47.4470801Z [32;1m        PASS[0m [  19.179s] ( 33/212) [35;1mbitrouter::goal_tui_pty[0m [34;1mactive_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution[0m
+2026-10-17T00:53:09.2692471Z [32;1m        PASS[0m [  21.822s] ( 34/212) [35;1mbitrouter::goal_tui_pty[0m [34;1mbare_and_code_open_goals_without_work_and_preserve_unsent_drafts[0m
+2026-10-17T00:53:15.1123516Z [32;1m        PASS[0m [   5.843s] ( 35/212) [35;1mbitrouter::goal_tui_pty[0m [34;1mgoal_directory_resize_defers_backlog_and_isolates_native_inspection[0m
+2026-10-17T00:53:22.2608434Z [32;1m        PASS[0m [   7.148s] ( 36/212) [35;1mbitrouter::goal_tui_pty[0m [34;1mgoal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal[0m
+2026-10-17T00:53:22.3629348Z [32;1m        PASS[0m [   0.100s] ( 37/212) [35;1mbitrouter::goals[0m [36maccounting_tests[0m[36m::[0m[34;1mestimates_and_unpriced_work_remain_distinct_and_duplicates_do_not_add[0m
+2026-10-17T00:53:22.4448269Z [32;1m        PASS[0m [   0.183s] ( 38/212) [35;1mbitrouter::goals[0m [36marchive_tests[0m[36m::[0m[34;1marchive_receipt_failure_rolls_back_head_and_can_retry_original_identity[0m
+2026-10-17T00:53:22.4477896Z [32;1m        PASS[0m [   0.185s] ( 39/212) [35;1mbitrouter::goals[0m [36marchive_tests[0m[36m::[0m[34;1marchive_does_not_reset_current_version_retry_admission[0m
+2026-10-17T00:53:22.4716157Z [32;1m        PASS[0m [   0.210s] ( 40/212) [35;1mbitrouter::goals[0m [36marchive_tests[0m[36m::[0m[34;1marchive_keeps_unknown_effects_active_work_permissions_and_delivery_sources_in_head[0m
+2026-10-17T00:53:22.6898362Z [32;1m        PASS[0m [   0.216s] ( 41/212) [35;1mbitrouter::goals[0m [36marchive_tests[0m[36m::[0m[34;1mworker_change_preserves_legacy_archive_bytes_and_declared_worker_source[0m
+2026-10-17T00:53:22.7842977Z [32;1m        PASS[0m [   0.097s] ( 42/212) [35;1mbitrouter::goals[0m [36mbudget_tests[0m[36m::[0m[34;1mcompeting_reservations_cannot_exceed_one_goal_cap[0m
+2026-10-17T00:53:22.7943651Z [32;1m        PASS[0m [   0.349s] ( 43/212) [35;1mbitrouter::goals[0m [36marchive_tests[0m[36m::[0m[34;1mexecution_archive_is_atomic_idempotent_cold_and_owner_scoped[0m
+2026-10-17T00:53:22.8668007Z [32;1m        PASS[0m [   0.082s] ( 44/212) [35;1mbitrouter::goals[0m [36mbudget_tests[0m[36m::[0m[34;1mcreation_commits_limits_before_any_coordinator_work_can_be_admitted[0m
+2026-10-17T00:53:22.8811900Z [32;1m        PASS[0m [   0.088s] ( 45/212) [35;1mbitrouter::goals[0m [36mbudget_tests[0m[36m::[0m[34;1melapsed_limit_includes_waits_and_cannot_reset_with_clock_or_restart[0m
+2026-10-17T00:53:22.9620647Z [32;1m        PASS[0m [   0.095s] ( 46/212) [35;1mbitrouter::goals[0m [36mbudget_tests[0m[36m::[0m[34;1munknown_usage_retains_its_full_reservation_across_restart[0m
+2026-10-17T00:53:22.9795005Z [32;1m        PASS[0m [   0.533s] ( 47/212) [35;1mbitrouter::goals[0m [36marchive_tests[0m[36m::[0m[34;1mgoal_history_page_includes_envelope_in_byte_bound_and_advances_without_losing_inputs[0m
+2026-10-17T00:53:22.9953724Z [32;1m        PASS[0m [   0.114s] ( 48/212) [35;1mbitrouter::goals[0m [36mbudget_tests[0m[36m::[0m[34;1mverified_usage_releases_unused_reservation_but_deviations_seal_admission[0m
+2026-10-17T00:53:23.1440144Z [32;1m        PASS[0m [   0.181s] ( 49/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1maccepted_input_and_new_requirements_fence_old_completion[0m
+2026-10-17T00:53:23.1487980Z [32;1m        PASS[0m [   0.167s] ( 50/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1malready_verified_delivery_can_complete_at_the_budget_boundary[0m
+2026-10-17T00:53:23.1766086Z [32;1m        PASS[0m [   0.179s] ( 51/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1martifact_change_and_commit_storage_failure_preserve_unfinished_goal[0m
+2026-10-17T00:53:23.3007452Z [32;1m        PASS[0m [   0.156s] ( 52/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1mcompletion_is_autonomous_and_immutable_for_the_current_version[0m
+2026-10-17T00:53:23.3332355Z [32;1m        PASS[0m [   0.186s] ( 53/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1mexplicit_acceptance_is_bound_to_the_exact_delivery[0m
+2026-10-17T00:53:23.3671530Z [32;1m        PASS[0m [   0.191s] ( 54/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1mexplicit_withdrawal_allows_already_verified_completion_after_budget_exhaustion[0m
+2026-10-17T00:53:23.4692464Z [32;1m        PASS[0m [   0.169s] ( 55/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1min_flight_work_prevents_completion_until_its_outcome_is_observed[0m
+2026-10-17T00:53:23.5089871Z [32;1m        PASS[0m [   0.175s] ( 56/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1mmissing_required_check_and_false_success_cannot_reach_assessment[0m
+2026-10-17T00:53:23.5284654Z [32;1m        PASS[0m [   0.162s] ( 57/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1mno_admission_history_allows_verified_replacement_sources_but_unknown_history_does_not[0m
+2026-10-17T00:53:23.6538229Z [32;1m        PASS[0m [   0.184s] ( 58/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1mquery_only_clarification_is_retained_without_becoming_a_completion_condition[0m
+2026-10-17T00:53:23.7281584Z [32;1m        PASS[0m [   0.220s] ( 59/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1munresolved_change_survives_a_query_and_fences_ready_completion[0m
+2026-10-17T00:53:23.7656385Z [32;1m        PASS[0m [   0.112s] ( 60/212) [35;1mbitrouter::goals[0m [36mdecision_tests[0m[36m::[0m[34;1mactual_option_admission_is_idempotent_and_distinct_from_submission[0m
+2026-10-17T00:53:23.8318706Z [32;1m        PASS[0m [   0.102s] ( 61/212) [35;1mbitrouter::goals[0m [36mdecision_tests[0m[36m::[0m[34;1mautomatic_response_cannot_grant_a_persistent_permission[0m
+2026-10-17T00:53:23.8679731Z [32;1m        PASS[0m [   0.339s] ( 62/212) [35;1mbitrouter::goals[0m [36mcompletion_tests[0m[36m::[0m[34;1munverified_condition_or_original_requirement_prevents_completion[0m
+2026-10-17T00:53:23.8702584Z [32;1m        PASS[0m [   0.105s] ( 63/212) [35;1mbitrouter::goals[0m [36mdecision_tests[0m[36m::[0m[34;1mnewer_requirements_reject_stale_permission_response[0m
+2026-10-17T00:53:23.9360822Z [32;1m        PASS[0m [   0.106s] ( 64/212) [35;1mbitrouter::goals[0m [36mdecision_tests[0m[36m::[0m[34;1mpermission_cannot_select_an_unoffered_option_or_approve_while_paused[0m
+2026-10-17T00:53:23.9622320Z [32;1m        PASS[0m [   0.092s] ( 65/212) [35;1mbitrouter::goals[0m [34;1mgoals_competing_create_identity_does_not_leave_orphan_heads[0m
+2026-10-17T00:53:23.9722617Z [32;1m        PASS[0m [   0.104s] ( 66/212) [35;1mbitrouter::goals[0m [34;1mgoals_cold_queries_are_owner_scoped_and_membership_cutoff_is_stable[0m
+2026-10-17T00:53:24.0358323Z [32;1m        PASS[0m [   0.098s] ( 67/212) [35;1mbitrouter::goals[0m [34;1mgoals_concurrent_task_admission_persists_only_one_execution[0m
+2026-10-17T00:53:24.0658208Z [32;1m        PASS[0m [   0.101s] ( 68/212) [35;1mbitrouter::goals[0m [34;1mgoals_dispatch_receipt_failure_does_not_admit_start_or_run_mapping[0m
+2026-10-17T00:53:24.0713717Z [32;1m        PASS[0m [   0.099s] ( 69/212) [35;1mbitrouter::goals[0m [34;1mgoals_failed_receipt_insert_rolls_back_head_and_does_not_accept_input[0m
+2026-10-17T00:53:24.1574508Z [32;1m        PASS[0m [   0.093s] ( 70/212) [35;1mbitrouter::goals[0m [34;1mgoals_invalid_graph_never_replaces_committed_planning_attempt[0m
+2026-10-17T00:53:24.1698126Z [32;1m        PASS[0m [   0.134s] ( 71/212) [35;1mbitrouter::goals[0m [34;1mgoals_handoff_requires_exact_review_and_candidate_versions[0m
+2026-10-17T00:53:24.2468029Z [32;1m        PASS[0m [   0.090s] ( 72/212) [35;1mbitrouter::goals[0m [34;1mgoals_lost_response_replays_receipt_without_changing_later_state[0m
+2026-10-17T00:53:24.2613473Z [32;1m        PASS[0m [   0.189s] ( 73/212) [35;1mbitrouter::goals[0m [34;1mgoals_late_execution_facts_keep_original_requirements_version[0m
+2026-10-17T00:53:24.2639665Z [32;1m        PASS[0m [   0.096s] ( 74/212) [35;1mbitrouter::goals[0m [34;1mgoals_only_current_coordinator_can_admit_effects[0m
+2026-10-17T00:53:24.3577789Z [32;1m        PASS[0m [   0.111s] ( 75/212) [35;1mbitrouter::goals[0m [34;1mgoals_only_known_pre_dispatch_failures_have_bounded_automatic_retries[0m
+2026-10-17T00:53:24.3607417Z [32;1m        PASS[0m [   0.097s] ( 76/212) [35;1mbitrouter::goals[0m [34;1mgoals_operation_identity_cannot_be_reused_for_different_input[0m
+2026-10-17T00:53:24.4511808Z [32;1m        PASS[0m [   0.187s] ( 77/212) [35;1mbitrouter::goals[0m [34;1mgoals_pause_and_unverified_candidate_cannot_admit_dependents[0m
+2026-10-17T00:53:24.4667890Z [32;1m        PASS[0m [   0.108s] ( 78/212) [35;1mbitrouter::goals[0m [34;1mgoals_requirements_change_prevents_old_review_from_unlocking_dependents[0m
+2026-10-17T00:53:24.4707447Z [32;1m        PASS[0m [   0.108s] ( 79/212) [35;1mbitrouter::goals[0m [34;1mgoals_rejected_review_cannot_be_promoted_to_handoff[0m
+2026-10-17T00:53:24.5535042Z [32;1m        PASS[0m [   0.103s] ( 80/212) [35;1mbitrouter::goals[0m [34;1mgoals_revision_conflict_does_not_overwrite_concurrent_control[0m
+2026-10-17T00:53:24.6288287Z [32;1m        PASS[0m [   0.162s] ( 81/212) [35;1mbitrouter::goals[0m [34;1mgoals_stop_confirmation_does_not_overwrite_candidate_result[0m
+2026-10-17T00:53:24.6537885Z [32;1m        PASS[0m [   0.100s] ( 82/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mbranch_control_cannot_retarget_an_explicit_reference_or_missing_task[0m
+2026-10-17T00:53:24.7568198Z [32;1m        PASS[0m [   0.126s] ( 83/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mbranch_pause_seals_its_dependency_closure_and_keeps_independent_work_eligible[0m
+2026-10-17T00:53:24.7597429Z [32;1m        PASS[0m [   0.106s] ( 84/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mbranch_resume_does_not_resume_a_paused_goal[0m
+2026-10-17T00:53:24.8497029Z [32;1m        PASS[0m [   2.487s] ( 85/212) [35;1mbitrouter::goals[0m [36marchive_tests[0m[36m::[0m[34;1marchived_history_crosses_snapshot_bound_without_resetting_versions_or_budget[0m
+2026-10-17T00:53:24.8946507Z [32;1m        PASS[0m [   0.140s] ( 86/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mclarification_resolution_preserves_scope_and_rejects_false_or_stale_closure[0m
+2026-10-17T00:53:24.8977224Z [32;1m        PASS[0m [   0.138s] ( 87/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mdirect_withdrawal_works_without_model_or_budget_and_preserves_other_inputs[0m
+2026-10-17T00:53:24.9726467Z [32;1m        PASS[0m [   0.125s] ( 88/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mexplicit_clarification_reference_closes_only_that_request_and_never_another_goal[0m
+2026-10-17T00:53:24.9978866Z [32;1m        PASS[0m [   0.099s] ( 89/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mgoal_wide_requirement_change_invalidates_task_sources_without_instruction_rewrites[0m
+2026-10-17T00:53:25.0002778Z [32;1m        PASS[0m [   0.105s] ( 90/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mexplicit_task_reference_cannot_modify_another_task_or_control_goal[0m
+2026-10-17T00:53:25.0866773Z [32;1m        PASS[0m [   0.114s] ( 91/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mindependent_candidate_reopens_review_in_new_goal_context_without_worker_replay[0m
+2026-10-17T00:53:25.1008784Z [32;1m        PASS[0m [   0.101s] ( 92/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mnewer_explicit_pause_dominates_older_model_resume[0m
+2026-10-17T00:53:25.1048178Z [32;1m        PASS[0m [   0.107s] ( 93/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mlegacy_latest_only_question_retains_its_original_scope_after_query_and_reload[0m
+2026-10-17T00:53:25.1134380Z [32;1m        PASS[0m [   0.008s] ( 94/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1monly_an_exact_unquoted_withdrawal_uses_the_direct_path[0m
+2026-10-17T00:53:25.1550743Z [32;1m        PASS[0m [   0.689s] ( 95/212) [35;1mbitrouter::goals[0m [34;1mindependent_goal_receipts_commit_under_wal_write_contention[0m
+2026-10-17T00:53:25.2019412Z [32;1m        PASS[0m [   0.113s] ( 96/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mnewer_pause_supersedes_old_resume_but_keeps_its_valid_scoped_edit[0m
+2026-10-17T00:53:25.2109149Z [32;1m        PASS[0m [   0.109s] ( 97/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mobsolete_planning_is_retained_and_only_new_requirements_can_rearm_it[0m
+2026-10-17T00:53:25.2398353Z [32;1m        PASS[0m [   0.125s] ( 98/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mpaused_branch_edit_invalidates_dependents_and_preserves_execution_source[0m
+2026-10-17T00:53:25.3038159Z [32;1m        PASS[0m [   0.146s] ( 99/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mquery_clarification_preserves_explicit_pause_and_rejects_change_ambiguity[0m
+2026-10-17T00:53:25.3468486Z [32;1m        PASS[0m [   0.108s] (100/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mselected_modification_scope_rejects_widening_and_keeps_independent_tasks[0m
+2026-10-17T00:53:25.3948121Z [32;1m        PASS[0m [   0.192s] (101/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mquery_does_not_mutate_requirements_or_run_intent[0m
+2026-10-17T00:53:25.4037685Z [32;1m        PASS[0m [   0.099s] (102/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mtask_check_additions_are_atomic_bounded_and_preserve_original_checks[0m
+2026-10-17T00:53:25.4278056Z [32;1m        PASS[0m [   0.217s] (103/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mresource_edits_are_versioned_atomic_preserve_scope_and_do_not_resume[0m
+2026-10-17T00:53:25.4478507Z [32;1m        PASS[0m [   0.100s] (104/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mtyped_classification_cannot_directly_pause_execution[0m
+2026-10-17T00:53:25.4564882Z [32;1m        PASS[0m [   0.008s] (105/212) [35;1mbitrouter::goals[0m [36mnative_tests[0m[36m::[0m[34;1mlegacy_acp_task_keeps_its_serialized_identity[0m
+2026-10-17T00:53:25.5615008Z [32;1m        PASS[0m [   0.134s] (106/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1mworker_change_versions_work_without_relabeling_or_replaying_its_old_attempt[0m
+2026-10-17T00:53:25.5698011Z [32;1m        PASS[0m [   0.114s] (107/212) [35;1mbitrouter::goals[0m [36mnative_tests[0m[36m::[0m[34;1mnative_binding_survives_pause_without_an_acp_identity_or_replacement[0m
+2026-10-17T00:53:25.5752240Z [32;1m        PASS[0m [   0.174s] (108/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1munresolved_modification_scope_preserves_independent_explicit_goal_pause[0m
+2026-10-17T00:53:25.5837660Z [32;1m        PASS[0m [   0.191s] (109/212) [35;1mbitrouter::goals[0m [36minput_tests[0m[36m::[0m[34;1munderstanding_cannot_forge_or_reorder_original_input[0m
+2026-10-17T00:53:25.6731882Z [32;1m        PASS[0m [   0.111s] (110/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1masking_about_a_permission_does_not_choose_an_option[0m
+2026-10-17T00:53:25.6869502Z [32;1m        PASS[0m [   0.116s] (111/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1mchanged_requirements_finish_the_reply_without_granting_the_old_request[0m
+2026-10-17T00:53:25.6938929Z [32;1m        PASS[0m [   0.008s] (112/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1mpermission_scope_comes_from_the_original_explicit_reference[0m
+2026-10-17T00:53:25.7017940Z [32;1m        PASS[0m [   0.126s] (113/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1mexhausted_budget_rejects_late_allow_without_blocking_a_recorded_denial[0m
+2026-10-17T00:53:25.7842123Z [32;1m        PASS[0m [   0.111s] (114/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1mpermission_reply_persistence_failure_rolls_back_the_choice_and_input_result[0m
+2026-10-17T00:53:25.8108313Z [32;1m        PASS[0m [   0.108s] (115/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1mreply_is_saved_with_original_input_identity_before_permission_delivery[0m
+2026-10-17T00:53:25.8265141Z [32;1m        PASS[0m [   0.243s] (116/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1mpaused_goal_rejects_late_allow_but_can_save_an_explicit_denial[0m
+2026-10-17T00:53:25.8959366Z [32;1m        PASS[0m [   0.110s] (117/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1mtyped_classification_cannot_grant_permission_even_with_a_valid_reference[0m
+2026-10-17T00:53:26.0219922Z [32;1m        PASS[0m [   0.329s] (118/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1mpersistent_allow_requires_the_explicit_offered_option_identity[0m
+2026-10-17T00:53:26.0511029Z [32;1m        PASS[0m [   0.225s] (119/212) [35;1mbitrouter::goals[0m [36mrecovery_tests[0m[36m::[0m[34;1mlate_original_stop_confirmation_survives_reopen_without_reconciling_effects[0m
+2026-10-17T00:53:26.1418314Z [32;1m        PASS[0m [   0.118s] (120/212) [35;1mbitrouter::goals[0m [36mrecovery_tests[0m[36m::[0m[34;1mrecovering_unknown_dispatch_only_restores_a_mapping[0m
+2026-10-17T00:53:26.1746201Z [32;1m        PASS[0m [   0.124s] (121/212) [35;1mbitrouter::goals[0m [36mrecovery_tests[0m[36m::[0m[34;1mreplacement_requires_confirmed_stop_and_current_control_proof[0m
+2026-10-17T00:53:26.1863329Z [32;1m        PASS[0m [   0.008s] (122/212) [35;1mbitrouter::goals[0m [36mresource_tests[0m[36m::[0m[34;1mlegacy_task_serialization_does_not_change_empty_resource_receipt_payloads[0m
+2026-10-17T00:53:26.1958073Z [32;1m        PASS[0m [   0.008s] (123/212) [35;1mbitrouter::goals[0m [36mresource_tests[0m[36m::[0m[34;1mresource_material_cannot_expand_selection_or_omit_the_selected_bytes[0m
+2026-10-17T00:53:26.2622745Z [32;1m        PASS[0m [   0.453s] (124/212) [35;1mbitrouter::goals[0m [36mpermission_input_tests[0m[36m::[0m[34;1munscoped_foreign_unoffered_and_cross_scope_proposals_cannot_grant_permission[0m
+2026-10-17T00:53:26.3078425Z [32;1m        PASS[0m [   0.115s] (125/212) [35;1mbitrouter::goals[0m [36mresource_tests[0m[36m::[0m[34;1mselected_resources_must_be_frozen_before_dispatch_and_survive_reload[0m
+2026-10-17T00:53:26.3266309Z [32;1m        PASS[0m [   0.185s] (126/212) [35;1mbitrouter::goals[0m [36mrecovery_tests[0m[36m::[0m[34;1msuperseded_stop_wait_is_durable_bounded_and_not_stop_or_retry_authority[0m
+2026-10-17T00:53:26.3366475Z [32;1m        PASS[0m [   0.440s] (127/212) [35;1mbitrouter::goals[0m [36mrecovery_tests[0m[36m::[0m[34;1mmapped_failure_stop_is_separate_from_control_intent_and_retry_admission[0m
+2026-10-17T00:53:26.3788042Z [32;1m        PASS[0m [   0.116s] (128/212) [35;1mbitrouter::goals[0m [36mverification_tests[0m[36m::[0m[34;1mexact_successful_check_allows_the_bound_handoff[0m
+2026-10-17T00:53:26.4202816Z [32;1m        PASS[0m [   0.109s] (129/212) [35;1mbitrouter::goals[0m [36mverification_tests[0m[36m::[0m[34;1mnonzero_exit_and_changed_artifact_never_support_handoff[0m
+2026-10-17T00:53:26.4280667Z [32;1m        PASS[0m [   0.094s] (130/212) [35;1mbitrouter::harness_mcp_check[0m [34;1mcanonical_mcp_check_uses_harness_discovery_and_preserves_upstream_names[0m
+2026-10-17T00:53:26.4778192Z [32;1m        PASS[0m [   0.048s] (131/212) [35;1mbitrouter::invocation[0m [34;1mcanonical_help_is_bro_and_has_no_alias_warning[0m
+2026-10-17T00:53:26.4807809Z [32;1m        PASS[0m [   0.151s] (132/212) [35;1mbitrouter::goals[0m [36mverification_tests[0m[36m::[0m[34;1mpositive_exit_requires_the_exact_checked_workspace_version[0m
+2026-10-17T00:53:26.4813865Z [32;1m        PASS[0m [   0.099s] (133/212) [35;1mbitrouter::harness_mcp_check[0m [34;1mdefault_mcp_check_uses_modern_discovery_without_legacy_initialize[0m
+2026-10-17T00:53:26.4867443Z [32;1m        PASS[0m [   0.008s] (134/212) [35;1mbitrouter::native_agent_process[0m [34;1mlocal_contract_rejects_mismatched_server_version[0m
+2026-10-17T00:53:26.6128252Z [32;1m        PASS[0m [   0.196s] (135/212) [35;1mbitrouter::invocation[0m [34;1malias_preserves_help_and_structured_stdout[0m
+2026-10-17T00:53:31.2274455Z [32;1m        PASS[0m [   4.740s] (136/212) [35;1mbitrouter::native_agent_process[0m [34;1msimultaneous_local_clients_join_one_server[0m
+2026-10-17T00:53:31.3748175Z [32;1m        PASS[0m [   4.761s] (137/212) [35;1mbitrouter::native_agent_process[0m [34;1mverification_losing_declared_shell_records_no_effect_and_never_falls_back[0m
+2026-10-17T00:53:35.2613253Z [32;1m        PASS[0m [   8.784s] (138/212) [35;1mbitrouter::native_agent_process[0m [34;1mauthenticated_http_and_local_client_share_one_runtime[0m
+2026-10-17T00:53:45.1528587Z [32;1m        PASS[0m [  18.672s] (139/212) [35;1mbitrouter::native_agent_process[0m [34;1mseparate_process_client_and_server_finish_verified_coding_task[0m
+2026-10-17T00:53:53.8893345Z [32;1m        PASS[0m [  18.627s] (140/212) [35;1mbitrouter::native_agent_tui[0m [34;1mnative_api_cold_directory_history_and_open_preserve_context_without_execution[0m
+2026-10-17T00:53:55.6619030Z [32;1m        PASS[0m [  24.287s] (141/212) [35;1mbitrouter::native_agent_tui[0m [34;1mnative_api_cancel_pauses_fifo_until_explicit_resume_without_replay[0m
+2026-10-17T00:54:01.0068869Z [32;1m        PASS[0m [  29.781s] (142/212) [35;1mbitrouter::native_agent_tui[0m [34;1mnative_api_approvals_disconnect_queue_context_and_cancel_remain_durable[0m
+2026-10-17T00:54:03.5842315Z [32;1m        PASS[0m [   7.922s] (143/212) [35;1mbitrouter::native_agent_tui[0m [34;1mnative_api_reports_classifier_generation_and_final_routing_facts[0m
+2026-10-17T00:54:04.6182399Z [32;1m        PASS[0m [  10.729s] (144/212) [35;1mbitrouter::native_agent_tui[0m [34;1mnative_api_refusal_preserves_paused_fifo_without_replay_or_drain[0m
+2026-10-17T00:54:12.9229152Z [32;1m        PASS[0m [  27.773s] (145/212) [35;1mbitrouter::native_agent_tui[0m [34;1mnative_api_queue_drains_in_exact_fifo_order_after_normal_completion[0m
+2026-10-17T00:54:16.1623549Z [32;1m        PASS[0m [   3.238s] (146/212) [35;1mbitrouter::native_harness_resources[0m [34;1msqlite_reopen_retains_resource_inventory_and_known_result_without_connections[0m
+2026-10-17T00:54:17.2968354Z [32;1m        PASS[0m [   1.133s] (147/212) [35;1mbitrouter::orchestrator_core[0m [36mauth_scope[0m[36m::[0m[34;1mconfigured_scopes_support_first_response_and_bind_continuations[0m
+2026-10-17T00:54:18.0628848Z [32;1m        PASS[0m [   1.902s] (148/212) [35;1mbitrouter::orchestrator_core[0m [34;1mcore_uses_shared_semantics_named_policy_and_learn_receipts[0m
+2026-10-17T00:54:18.1488176Z [32;1m        PASS[0m [   1.985s] (149/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api[0m[36m::[0m[34;1mabandoned_sse_consumer_keeps_execution_and_replays_attributed_frames[0m
+2026-10-17T00:54:18.5328234Z [32;1m        PASS[0m [   1.236s] (150/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::authentication[0m[36m::[0m[34;1mbound_key_policy_rejects_the_model_before_upstream_preparation[0m
+2026-10-17T00:54:19.4419575Z [32;1m        PASS[0m [   3.278s] (151/212) [35;1mbitrouter::orchestrator_core[0m [34;1massembled_app_revalidates_rebuilt_context_before_fresh_count_and_execution[0m
+2026-10-17T00:54:19.6756842Z [32;1m        PASS[0m [   1.146s] (152/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::authentication[0m[36m::[0m[34;1mrevoked_or_expired_keys_cannot_accept_http_or_existing_channel_work[0m
+2026-10-17T00:54:20.4012267Z [32;1m        PASS[0m [   2.255s] (153/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::authentication[0m[36m::[0m[34;1mrevocation_during_upload_denies_new_input_and_completed_response_replay[0m
+2026-10-17T00:54:21.3618639Z [32;1m        PASS[0m [   1.685s] (154/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api[0m[36m::[0m[34;1mdisconnected_existing_session_restores_unstarted_tools_on_the_same_host[0m
+2026-10-17T00:54:21.5148639Z [32;1m        PASS[0m [   3.450s] (155/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::authentication[0m[36m::[0m[34;1mcontinuation_rechecks_the_live_key_policy_without_reopening_prior_responses[0m
+2026-10-17T00:54:21.8977382Z [32;1m        PASS[0m [   1.496s] (156/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api[0m[36m::[0m[34;1mmultipart_final_answer_is_not_duplicated_in_http_projection[0m
+2026-10-17T00:54:22.4138841Z [32;1m        PASS[0m [   0.515s] (157/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::pressure[0m[36m::[0m[34;1moversized_ingress_and_zero_output_capacity_do_not_accept_work[0m
+2026-10-17T00:54:22.9860235Z [32;1m        PASS[0m [   1.473s] (158/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::pressure[0m[36m::[0m[34;1mheld_http_output_does_not_block_head_queries_or_cancellation[0m
+2026-10-17T00:54:24.2346215Z [32;1m        PASS[0m [   2.873s] (159/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::pressure[0m[36m::[0m[34;1mconcurrent_json_and_sse_replays_preserve_output_above_the_byte_window[0m
+2026-10-17T00:54:24.5895175Z [32;1m        PASS[0m [   1.603s] (160/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::provider_limits[0m[36m::[0m[34;1munfinished_chunked_provider_body_is_rejected_without_waiting_for_eof[0m
+2026-10-17T00:54:26.1326352Z [32;1m        PASS[0m [   1.541s] (161/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery[0m[36m::[0m[34;1mhead_query_preserves_a_held_provider_attempt[0m
+2026-10-17T00:54:29.2978804Z [32;1m        PASS[0m [   3.164s] (162/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery[0m[36m::[0m[34;1minitial_bind_ack_loss_reconciles_the_exact_proposal[0m
+2026-10-17T00:54:31.3208480Z [32;1m        PASS[0m [   8.906s] (163/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::provider_limits[0m[36m::[0m[34;1moversized_provider_success_and_error_bodies_fail_with_unknown_spend[0m
+2026-10-17T00:54:42.6438130Z [32;1m        PASS[0m [  13.348s] (164/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery::process::inflight[0m[36m::[0m[34;1mprocess_crash_after_json_before_http_body_end_retains_unknown_attempt[0m
+2026-10-17T00:54:42.9799151Z [32;1m        PASS[0m [  11.659s] (165/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery::process::inflight[0m[36m::[0m[34;1mprocess_crash_during_partial_tool_json_retains_unknown_attempt[0m
+2026-10-17T00:54:48.2308514Z [32;1m        PASS[0m [  23.994s] (166/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery::control[0m[36m::[0m[34;1mqueue_steer_cancel_reconnect_preserves_receipts_and_paused_work[0m
+2026-10-17T00:54:49.3742968Z [32;1m        PASS[0m [   6.730s] (167/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery::process[0m[36m::[0m[34;1mprocess_crash_keeps_unknown_write_effect_blocked_until_restoration[0m
+2026-10-17T00:54:50.2453217Z [32;1m        PASS[0m [   0.871s] (168/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery[0m[36m::[0m[34;1mrelease_ack_loss_keeps_its_receipt_without_renewing_ownership[0m
+2026-10-17T00:54:53.8580533Z [32;1m        PASS[0m [   3.612s] (169/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery[0m[36m::[0m[34;1mreleased_epoch_requires_restoration_and_fences_both_transports[0m
+2026-10-17T00:54:54.1118796Z [32;1m        PASS[0m [   5.881s] (170/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery::process[0m[36m::[0m[34;1mprocess_crash_redelivers_an_unstarted_command_with_the_same_identity[0m
+2026-10-17T00:54:57.3098471Z [32;1m        PASS[0m [   3.199s] (171/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api[0m[36m::[0m[34;1mrestore_ack_loss_keeps_the_registered_replacement_and_exact_batch[0m
+2026-10-17T00:54:57.9599463Z [32;1m        PASS[0m [   0.649s] (172/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api[0m[36m::[0m[34;1munmanaged_inference_stays_available_and_unknown_extensions_fail_before_execution[0m
+2026-10-17T00:54:59.9243080Z [32;1m        PASS[0m [   6.066s] (173/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api[0m[36m::[0m[34;1mremote_api_binds_auth_and_normalizes_channel_http_results[0m
+2026-10-17T00:55:01.1178395Z [32;1m        PASS[0m [   1.192s] (174/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http[0m[36m::[0m[34;1mcore_retains_unknown_capabilities_without_inventing_unsupported[0m
+2026-10-17T00:55:01.4868742Z [32;1m        PASS[0m [   3.527s] (175/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api[0m[36m::[0m[34;1mverification_is_a_client_call_and_only_success_publishes_the_final_answer[0m
+2026-10-17T00:55:02.6977123Z [32;1m        PASS[0m [   1.212s] (176/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::costs[0m[36m::[0m[34;1mmonetary_claims_unknown_usage_and_conflicting_receipts_never_become_free[0m
+2026-10-17T00:55:03.4958519Z [32;1m        PASS[0m [  44.056s] (177/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::collaboration[0m[36m::[0m[34;1mlocal_and_remote_collaboration_preserve_concurrency_context_and_attribution[0m
+2026-10-17T00:55:03.6458514Z [32;1m        PASS[0m [   2.526s] (178/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::costs[0m[36m::[0m[34;1mmonetary_claims_retain_estimate_and_import_late_reconciled_bill_once[0m
+2026-10-17T00:55:03.8478870Z [32;1m        PASS[0m [   1.148s] (179/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::costs[0m[36m::[0m[34;1mmonetary_claims_usage_free_rate_limit_is_unknown_despite_legacy_zero[0m
+2026-10-17T00:55:04.1989791Z [32;1m        PASS[0m [   0.353s] (180/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http[0m[36m::[0m[34;1mnative_and_http_share_bound_denial_before_any_dispatch[0m
+2026-10-17T00:55:04.7149752Z [32;1m        PASS[0m [   1.072s] (181/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http[0m[36m::[0m[34;1mnative_and_http_preserve_constraints_fallback_and_accounting[0m
+2026-10-17T00:55:06.0173784Z [32;1m        PASS[0m [   2.521s] (182/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::costs[0m[36m::[0m[34;1mprovider_work_gate_wait_is_excluded_from_actual_metering_generation_time[0m
+2026-10-17T00:55:10.5848778Z [32;1m        PASS[0m [   6.385s] (183/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation::collaboration[0m[36m::[0m[34;1mnative_continuation_fallback_detaches_only_complete_history_and_seals_actual_source[0m
+2026-10-17T00:55:10.9460508Z [32;1m        PASS[0m [   0.362s] (184/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_cannot_detach_a_lossy_imported_branch[0m
+2026-10-17T00:55:15.6942243Z [32;1m        PASS[0m [   4.748s] (185/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_core_followups_persist_full_history_and_send_only_suffix[0m
+2026-10-17T00:55:16.4346204Z [32;1m        PASS[0m [   0.740s] (186/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_detaches_only_when_complete_replay_is_available[0m
+2026-10-17T00:55:17.1262250Z [32;1m        PASS[0m [   0.692s] (187/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_failed_seal_or_storage_preserves_billed_output_and_blocks_lossy_replay[0m
+2026-10-17T00:55:17.5043618Z [32;1m        PASS[0m [   0.377s] (188/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_identical_visible_outputs_cannot_exchange_hidden_state[0m
+2026-10-17T00:55:18.5678856Z [32;1m        PASS[0m [   1.063s] (189/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_key_rotation_and_unstored_responses_never_reuse_handles[0m
+2026-10-17T00:55:18.9514413Z [32;1m        PASS[0m [   0.384s] (190/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_never_replays_unrepresented_state_without_coverage[0m
+2026-10-17T00:55:19.3155067Z [32;1m        PASS[0m [   0.362s] (191/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_rejects_tampering_before_checker_or_upstream[0m
+2026-10-17T00:55:21.3549849Z [32;1m        PASS[0m [   2.041s] (192/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation[0m[36m::[0m[34;1mnative_continuation_uses_suffix_and_same_count_body_after_restart[0m
+2026-10-17T00:55:22.0848979Z [32;1m        PASS[0m [  16.065s] (193/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation::collaboration[0m[36m::[0m[34;1mnative_continuation_worker_reuse_resumes_worker_history_with_current_instructions[0m
+2026-10-17T00:55:24.1378747Z [32;1m        PASS[0m [   2.053s] (194/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context[0m[36m::[0m[34;1mprivate_history_model_key_and_installation_switch_never_send_generation[0m
+2026-10-17T00:55:24.5082467Z [32;1m        PASS[0m [   0.373s] (195/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context[0m[36m::[0m[34;1mprivate_history_redirect_is_not_followed_or_claimed_as_success[0m
+2026-10-17T00:55:25.9288844Z [32;1m        PASS[0m [   1.420s] (196/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context[0m[36m::[0m[34;1mprivate_history_roundtrip_preserves_parts_ids_receipts_and_checker_scope[0m
+2026-10-17T00:55:26.2949900Z [32;1m        PASS[0m [   0.365s] (197/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context[0m[36m::[0m[34;1mprivate_history_seal_failure_retains_real_output_usage_and_settlement[0m
+2026-10-17T00:55:26.9958546Z [32;1m        PASS[0m [   0.700s] (198/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context[0m[36m::[0m[34;1mprivate_history_tampering_and_owner_switch_stop_before_checkers_or_provider[0m
+2026-10-17T00:55:27.3685290Z [32;1m        PASS[0m [   0.374s] (199/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context[0m[36m::[0m[34;1mresponses_reasoning_http_blocks_unprojected_fields_and_preserves_continuation[0m
+2026-10-17T00:55:27.5266952Z [32;1m        PASS[0m [   0.157s] (200/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::stream_bridge::failures[0m[36m::[0m[34;1mnative_stream_bridge_seals_only_final_successful_retry_identity[0m
+2026-10-17T00:55:28.0538189Z [32;1m        PASS[0m [   0.526s] (201/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::stream_bridge::failures[0m[36m::[0m[34;1mnative_stream_bridge_terminal_before_truncated_or_timed_out_body_cannot_seal[0m
+2026-10-17T00:55:28.3968815Z [32;1m        PASS[0m [   0.340s] (202/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::stream_bridge[0m[36m::[0m[34;1mnative_stream_bridge_cannot_certify_delta_only_private_state[0m
+2026-10-17T00:55:29.2342224Z [32;1m        PASS[0m [   0.840s] (203/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::stream_bridge[0m[36m::[0m[34;1mnative_stream_bridge_core_retains_complete_history_and_private_receipts[0m
+2026-10-17T00:55:29.4716233Z [32;1m        PASS[0m [   0.237s] (204/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::stream_bridge[0m[36m::[0m[34;1mnative_stream_bridge_outbound_no_store_and_missing_terminal_output_remain_explicit[0m
+2026-10-17T00:55:30.1858653Z [32;1m        PASS[0m [   0.712s] (205/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::stream_bridge[0m[36m::[0m[34;1mnative_stream_bridge_preserves_private_order_and_stored_suffix_count_after_restart[0m
+2026-10-17T00:55:30.5158489Z [32;1m        PASS[0m [   0.331s] (206/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::stream_bridge[0m[36m::[0m[34;1mnative_stream_bridge_rejects_invalid_terminal_before_sealing[0m
+2026-10-17T00:55:30.7668766Z [32;1m        PASS[0m [   0.252s] (207/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::stream_bridge[0m[36m::[0m[34;1mnative_stream_bridge_retains_unknown_state_and_incomplete_usage[0m
+2026-10-17T00:55:31.9168911Z [32;1m        PASS[0m [   1.148s] (208/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::protocol_matrix[0m[36m::[0m[34;1mcommon_native_constraints_and_accounting_match_three_by_three_http_protocols[0m
+2026-10-17T00:55:32.1745475Z [32;1m        PASS[0m [   0.259s] (209/212) [35;1mbitrouter::skill_cli_contract[0m [34;1mskill_can_inspect_status_models_and_route_through_cli_alone[0m
+2026-10-17T00:55:42.9820652Z [33;1m        SLOW[0m [> 60.000s] (───────) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery::process[0m[36m::[0m[34;1mprocess_crash_reconciles_model_tool_and_terminal_boundaries[0m
+2026-10-17T00:55:44.1501161Z [32;1m        PASS[0m [  22.795s] (210/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context[0m[36m::[0m[34;1mprivate_history_core_changes_model_only_after_authorized_context_rebuild[0m
+2026-10-17T00:55:58.7199178Z [32;1m        PASS[0m [  75.742s] (211/212) [35;1mbitrouter::orchestrator_core[0m [36mmanaged_api::recovery::process[0m[36m::[0m[34;1mprocess_crash_reconciles_model_tool_and_terminal_boundaries[0m
+2026-10-17T00:56:04.7168067Z [33;1m        SLOW[0m [> 60.000s] (───────) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation::collaboration[0m[36m::[0m[34;1mnative_continuation_inherited_and_fresh_children_keep_their_selected_context[0m
+2026-10-17T00:56:20.1689644Z [32;1m        PASS[0m [  75.454s] (212/212) [35;1mbitrouter::orchestrator_core[0m [36mnative_http::private_context::continuation::collaboration[0m[36m::[0m[34;1mnative_continuation_inherited_and_fresh_children_keep_their_selected_context[0m
+2026-10-17T00:56:20.1690806Z ────────────
+2026-10-17T00:56:20.1691415Z [32;1m     Summary[0m [ 262.958s] [1m212[0m tests run: [1m212[0m [32;1mpassed[0m ([1m2[0m [33;1mslow[0m), [1m6[0m [33;1mskipped[0m
+2026-10-17T00:56:20.1943400Z Post job cleanup.
+2026-10-17T00:56:20.1947171Z ##[start-action display=Setup Rust Caching;id=__002356e8-405c-4b03-b124-88e9d3ee8261.__Swatinem_rust-cache]
+2026-10-17T00:56:20.1993603Z Post job cleanup.
+2026-10-17T00:56:20.4883058Z (node:5993) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-17T00:56:20.4887390Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-17T00:56:20.5151406Z ##[end-action id=__002356e8-405c-4b03-b124-88e9d3ee8261.__Swatinem_rust-cache;outcome=success;conclusion=success;duration_ms=320]
+2026-10-17T00:56:20.5287211Z Post job cleanup.
+2026-10-17T00:56:20.6280404Z [command]/usr/bin/git version
+2026-10-17T00:56:20.6336775Z git version 2.55.0
+2026-10-17T00:56:20.6399015Z Temporarily overriding HOME='/home/runner/work/_temp/58e147bd-b360-4623-9f92-50c60e019177' before making global git config changes
+2026-10-17T00:56:20.6400475Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-17T00:56:20.6401626Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bitrouter/bitrouter
+2026-10-17T00:56:20.6452450Z Removing SSH command configuration
+2026-10-17T00:56:20.6476735Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-17T00:56:20.6517918Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-17T00:56:20.6786590Z Removing HTTP extra header
+2026-10-17T00:56:20.6795272Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-17T00:56:20.6827648Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-17T00:56:20.7086376Z Removing includeIf entries pointing to credentials config files
+2026-10-17T00:56:20.7096798Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-17T00:56:20.7129579Z includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path
+2026-10-17T00:56:20.7130712Z includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-17T00:56:20.7131796Z includeif.gitdir:/github/workspace/.git.path
+2026-10-17T00:56:20.7132743Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T00:56:20.7144750Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path
+2026-10-17T00:56:20.7172265Z /home/runner/work/_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:56:20.7194977Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git.path /home/runner/work/_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:56:20.7239497Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path
+2026-10-17T00:56:20.7287961Z /home/runner/work/_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:56:20.7292862Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/bitrouter/bitrouter/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:56:20.7331082Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-17T00:56:20.7359006Z /github/runner_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:56:20.7368202Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:56:20.7408283Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-17T00:56:20.7435696Z /github/runner_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:56:20.7453988Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config
+2026-10-17T00:56:20.7493964Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-17T00:56:20.7722009Z Removing credentials config '/home/runner/work/_temp/git-credentials-352e382c-6113-4e19-8a42-fba0e1fa7257.config'
+2026-10-17T00:56:20.7880054Z Cleaning up orphan processes

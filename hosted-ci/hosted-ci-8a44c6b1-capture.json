@@ -1,0 +1,511 @@
+{
+  "createdAt": "2026-10-17T01:26:21.751Z",
+  "head": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+  "pr": 981,
+  "source": {
+    "localRun": "fixture-image-final123",
+    "evaluatedInputsSha256": "37216aa0c0b4b3a2bf2a13299baff2ac1267984c37c695776746646c5bc0760e",
+    "executableTestDrift": []
+  },
+  "checks": 36,
+  "runs": [
+    {
+      "id": "38988037552",
+      "name": "CI",
+      "head": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552"
+    },
+    {
+      "id": "38988126305",
+      "name": "PR",
+      "head": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988126305"
+    },
+    {
+      "id": "38988037401",
+      "name": "Release",
+      "head": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037401"
+    },
+    {
+      "id": "38988037446",
+      "name": "Package",
+      "head": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+      "status": "completed",
+      "conclusion": "skipped",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037446"
+    },
+    {
+      "id": "38988037431",
+      "name": "PR",
+      "head": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037431"
+    },
+    {
+      "id": "38988035282",
+      "name": "PR #981",
+      "head": "8a44c6b1fc8a7d580de82412ab821e46c07c5d76",
+      "status": "completed",
+      "conclusion": "success",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988035282"
+    }
+  ],
+  "jobs": [
+    {
+      "id": "117268560417",
+      "name": "test (ubuntu-latest)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117268560417",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117268560417.log",
+      "bytes": 2849,
+      "sha256": "7895b0a8edaee435044286a151ce0ac2b52676ef151ef02dc79b64ca571f82d9",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117265866850",
+      "name": "test (ubuntu-latest, bitrouter bin)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117265866850",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117265866850.log",
+      "bytes": 60636,
+      "sha256": "35d14584dfa42462983d01226ccabe15361566689a87b03fff3e4187b94d91ef",
+      "summaries": [
+        "2026-10-17T00:59:24.7328682Z      Summary [   0.953s] 67 tests run: 67 passed, 0 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117265866801",
+      "name": "test (ubuntu-latest, bitrouter lib)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117265866801",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117265866801.log",
+      "bytes": 428045,
+      "sha256": "6d61ca7bd9b2add4bfce956fb5f76503c70c010598d8376c9d64e1f28e69209f",
+      "summaries": [
+        "2026-10-17T01:07:45.0809349Z      Summary [ 504.161s] 1829 tests run: 1829 passed, 7 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117264242232",
+      "name": "validate title",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988126305/job/117264242232",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117264242232.log",
+      "bytes": 3381,
+      "sha256": "6aeef56926ff3dbb496b494c2d31f7b598564baf9ad699c30f2f26e17b51037e",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966715",
+      "name": "test (ubuntu-latest, bitrouter integration native-goals)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966715",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966715.log",
+      "bytes": 94827,
+      "sha256": "8c54b14bfb569e8978460523d998e2a512ef157ec3808e53aecf82b575465762",
+      "summaries": [
+        "2026-10-17T00:56:20.1691415Z      Summary [ 262.958s] 212 tests run: 212 passed (2 slow), 6 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966710",
+      "name": "test (ubuntu-latest, bitrouter integration optimization)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966710",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966710.log",
+      "bytes": 49408,
+      "sha256": "a60e5d0f07235838ddb9f8837fc533b9ce07f1de1203c53abfffc77d750df4af",
+      "summaries": [
+        "2026-10-17T00:50:46.6950556Z      Summary [   0.337s] 9 tests run: 9 passed, 0 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966642",
+      "name": "test (ubuntu-latest, bitrouter integration control-plane)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966642",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966642.log",
+      "bytes": 57915,
+      "sha256": "703dcf946960a121656e3dc2f7d6cfb16f9de8d15d852affa07c9ba047469f7a",
+      "summaries": [
+        "2026-10-17T00:50:19.5347218Z      Summary [   4.338s] 53 tests run: 53 passed, 0 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966622",
+      "name": "msrv",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966622",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966622.log",
+      "bytes": 40571,
+      "sha256": "be0e57a0072b4025b2f14949817cae9a2bf5b4794305819e55c5bfbfbbd80fad",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966618",
+      "name": "doc",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966618",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966618.log",
+      "bytes": 42928,
+      "sha256": "bdbe03172ed73716db82186f57e50e12de0e83c149151a593aea2059db50f6ec",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966606",
+      "name": "test (ubuntu-latest, bitrouter integration interfaces)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966606",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966606.log",
+      "bytes": 74890,
+      "sha256": "b6f5c0a5f915abfe0c2ba7d69e4ce86a8292af7d67dfead147867ba113d143cf",
+      "summaries": [
+        "2026-10-17T00:50:58.8648251Z      Summary [  20.707s] 149 tests run: 149 passed, 0 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966541",
+      "name": "agent-plugin",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966541",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966541.log",
+      "bytes": 21156,
+      "sha256": "189351ecc7237b8a89443198a209e21a076a69b5db61d0e1c513e661c7f5234f",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966536",
+      "name": "doctest",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966536",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966536.log",
+      "bytes": 44555,
+      "sha256": "d24ecb56ce2928d40d26d558c1c36e1c5f24fd3dbdda80a3ad5e7229538c9a30",
+      "summaries": [
+        "2026-10-17T00:50:34.3575633Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:35.2825661Z test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:35.3515445Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:37.1483199Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:38.5898996Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:38.7018466Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:38.8345335Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966534",
+      "name": "repository-hygiene",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966534",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966534.log",
+      "bytes": 15789,
+      "sha256": "994f5019aa6354256dd6b292e996c60b2a89aca54469dd8aa6994d670044f71e",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966527",
+      "name": "clippy (macos-latest)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966527",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966527.log",
+      "bytes": 42904,
+      "sha256": "bd2365758989905169f2144979ba420c64c78d90666b77113fab20f6dd0dd015",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966521",
+      "name": "dist",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966521",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966521.log",
+      "bytes": 47819,
+      "sha256": "7bfd2d9e157130ae1599ac07a70f39c97f70be447c14999bfced7dae63c31e5f",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966513",
+      "name": "sdk-public-api",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966513",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966513.log",
+      "bytes": 89849,
+      "sha256": "11a12f05465efe3c6b31c7c93b527829f0b5efd3b0a79127019fba7bc14f4d54",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966504",
+      "name": "test (macos-latest)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966504",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966504.log",
+      "bytes": 1040393,
+      "sha256": "c8767efb8942a8f5d65acb614706be52dc329e9d96b2708b79d822c6e410b191",
+      "summaries": [
+        "2026-10-17T01:20:07.3470410Z      Summary [1179.405s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966497",
+      "name": "clippy (ubuntu-latest)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966497",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966497.log",
+      "bytes": 41148,
+      "sha256": "cf57f655ddca4c3ecbcf066a09742af33cf88312af2520ba1f077c5799c684f0",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966494",
+      "name": "fmt",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966494",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966494.log",
+      "bytes": 39295,
+      "sha256": "ccea8a611e3c49421ef52f9996be12301403d6ba9f3b7484b758e1794e21ee22",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966492",
+      "name": "test (ubuntu-latest, bitrouter integration observability)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966492",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966492.log",
+      "bytes": 59956,
+      "sha256": "06abf9c165e30f707b42ae8ea8dd63f185edb7ffcf67b8c8be0da47289177126",
+      "summaries": [
+        "2026-10-17T00:50:51.9257774Z      Summary [   0.797s] 64 tests run: 64 passed, 9 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966491",
+      "name": "feature-isolation",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966491",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966491.log",
+      "bytes": 312103,
+      "sha256": "b060d1542d3f50f9f5e93994835c57128e657fe18a1b33dee5f393ee1f7bb75e",
+      "summaries": [
+        "2026-10-17T00:48:57.1341410Z test result: ok. 356 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.09s",
+        "2026-10-17T00:48:57.1714912Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:48:57.3568728Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "2026-10-17T00:48:57.3929322Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:48:57.3960574Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:48:57.8022031Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s",
+        "2026-10-17T00:48:57.8045577Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:48:57.8056596Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:48:57.8967328Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+        "2026-10-17T00:48:57.8987729Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:48:57.9002677Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:48:57.9035569Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:48:59.1360543Z test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s",
+        "2026-10-17T00:48:59.1395898Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:48:59.1418025Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:48:59.3195467Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "2026-10-17T00:48:59.3966508Z test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "2026-10-17T00:48:59.4325002Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:49:00.3631159Z test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:17.6678691Z test result: ok. 389 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.13s",
+        "2026-10-17T00:49:17.7049572Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:49:17.8927622Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "2026-10-17T00:49:17.9275467Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:49:17.9307790Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:18.3285785Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s",
+        "2026-10-17T00:49:18.4010643Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "2026-10-17T00:49:18.4027753Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:18.4916309Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+        "2026-10-17T00:49:18.4932256Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:18.4945096Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:18.4977076Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:19.7302391Z test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s",
+        "2026-10-17T00:49:19.7342368Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:19.7363120Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:19.9072303Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+        "2026-10-17T00:49:19.9830135Z test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "2026-10-17T00:49:20.0186361Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:49:20.9686794Z test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:39.1340961Z test result: ok. 376 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.09s",
+        "2026-10-17T00:49:39.1710760Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:49:39.3565517Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "2026-10-17T00:49:39.3929131Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:49:39.3965785Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:39.8045184Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s",
+        "2026-10-17T00:49:39.8068298Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:39.8082143Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:39.8973072Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+        "2026-10-17T00:49:40.1161949Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+        "2026-10-17T00:49:43.5174629Z test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.40s",
+        "2026-10-17T00:49:43.5211373Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:44.7606682Z test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s",
+        "2026-10-17T00:49:44.7643975Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:44.7671291Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:49:44.9382145Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+        "2026-10-17T00:49:45.0157306Z test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "2026-10-17T00:49:45.0514357Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:49:46.0145810Z test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:03.0904301Z test result: ok. 374 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.09s",
+        "2026-10-17T00:50:03.1268180Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:50:03.3102133Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "2026-10-17T00:50:03.3463119Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:50:03.3495211Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:03.7544665Z test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s",
+        "2026-10-17T00:50:03.7568180Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:03.7652210Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "2026-10-17T00:50:03.8533745Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+        "2026-10-17T00:50:03.8554583Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:03.8566371Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:03.8595143Z test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:05.0909863Z test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s",
+        "2026-10-17T00:50:05.0945511Z test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:05.0970346Z test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "2026-10-17T00:50:05.2653213Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+        "2026-10-17T00:50:05.3417219Z test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "2026-10-17T00:50:05.3776785Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "2026-10-17T00:50:06.2941431Z test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966473",
+      "name": "test (ubuntu-latest, workspace)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966473",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966473.log",
+      "bytes": 548164,
+      "sha256": "8d71830a7c084a16f50608c646b243cc434db29982f717265909f2dcd99e499b",
+      "summaries": [
+        "2026-10-17T01:07:14.1240133Z      Summary [1014.721s] 2372 tests run: 2372 passed (8 slow), 2 skipped"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966468",
+      "name": "clippy (windows-latest)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966468",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966468.log",
+      "bytes": 41118,
+      "sha256": "7f630d5641a3112675d6ed8bdc057f843f1cd7fb814f47347703dc306d64a974",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263966280",
+      "name": "test (windows-latest)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037552/job/117263966280",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263966280.log",
+      "bytes": 1007116,
+      "sha256": "576080e3872148de85fa718d44ba18b7011f17f59a555045c03e173aba3e1385",
+      "summaries": [
+        "2026-10-17T01:24:42.1598865Z      Summary [1633.148s] 4564 tests run: 4564 passed (13 slow), 3 skipped\r"
+      ],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263965743",
+      "name": "plan",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037401/job/117263965743",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263965743.log",
+      "bytes": 57027,
+      "sha256": "6745ecdf8dac3c20ce065231c0cf066b1de56ce8c02fdb0bae7442f1f7fc160c",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263965635",
+      "name": "validate title",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988037431/job/117263965635",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263965635.log",
+      "bytes": 3380,
+      "sha256": "d85b50d8437ed0e579788a38ac148b52a41eab3b6458c6052cd2f4836cafcd76",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263962239",
+      "name": "Analyze (rust)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988035282/job/117263962239",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263962239.log",
+      "bytes": 142582,
+      "sha256": "2004ad5e18f60e23fa44a65f79d4caeba737883d0455632843d951b717e7a1a9",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    },
+    {
+      "id": "117263962104",
+      "name": "Analyze (actions)",
+      "url": "https://github.com/bitrouter/bitrouter/actions/runs/38988035282/job/117263962104",
+      "conclusion": "success",
+      "file": "hosted-ci-8a44c6b1-job-117263962104.log",
+      "bytes": 119214,
+      "sha256": "2ee04256f8db805cf899fc45349668b61dedb205f1d2c45ab19f9685fb11a05b",
+      "summaries": [],
+      "outputLeaks": [],
+      "retryMarkers": []
+    }
+  ],
+  "deliveryBundle": {
+    "file": "refactor-final-delivery-8a44c6b1.bundle",
+    "base": "fe9df6f8157945d3559789926326a7effb468db1",
+    "sha256": "195feb727ee19e799039e13322ba2f3b4df9277a77b23d4893995bf38727797b",
+    "verified": true
+  },
+  "scope": "Configured hosted CI policies at the exact final PR head. All source/test and CI-selection inputs match full123 except explicit publication metadata. Linux covers all 36 integration targets; the PTY launcher preserves realstdin across shells and every UI awaits SIGCONT before restoring terminal modes. Current full local123 used two outer slots and strict output-leak rejection; hosted retry/output-leak markers are recorded separately, not hidden. Actual vendor/provider live gate remains unpassed."
+}

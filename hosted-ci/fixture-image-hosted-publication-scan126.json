@@ -1,0 +1,16 @@
+{
+  "createdAt": "2026-10-17T01:29:01.529Z",
+  "scope": "Incoming publication runners added after the complete raw payload scan; names/hashes only.",
+  "files": [
+    {
+      "file": "fixture-image-hosted-archive120-runner.mjs",
+      "sha256": "855e4e06aa2cc03664b2bd243e0d0222cb6f896c44837e050fc577beb4d6d273",
+      "hits": 0
+    },
+    {
+      "file": "fixture-image-publish121-runner.mjs",
+      "sha256": "bebe8684438c2c20bcc746d2c0b04d816064daa379bc66d2ea555ee404844d90",
+      "hits": 0
+    }
+  ]
+}
