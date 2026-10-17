@@ -3625,3 +3625,42 @@ false positive and its check returned success. See the
 [iteration evidence](evidence/service-refactor/pr-984-2026-10-18.json) for commands,
 source and log hashes. Hosted completion is tracked on PR #984 so recording the
 result does not introduce another untested documentation-only revision.
+
+## Windows full-suite follow-up (2026-10-18)
+
+Hosted revision `aedc5b17` passed 56 of the 57 CI jobs, including the macOS full
+suite (4,693 passed, 47 skipped), Linux shards, all six gateway archive targets,
+three independent core clients and strict platform linting. CodeQL also passed.
+The Windows full suite ran 4,537 tests: 4,535 passed, two failed and 23 were
+skipped. One passing checkpoint test required a retry. This run is not a passing
+cross-platform gate; its full log is retained by
+[job 117463512143](https://github.com/bitrouter/bitrouter/actions/runs/39055840475/job/117463512143).
+
+- ZIP entries created on Windows defaulted to the library's DOS system marker,
+  so readers interpreted their permissions as DOS attributes despite the stored
+  Unix modes. The packager now explicitly uses the Unix encoding for directory
+  and file entries. Existing content, mode, identity and hash assertions remain;
+  the test also checks the encoding marker.
+- The gateway ingress fixture now retains `SystemRoot`, matching the independent
+  SDK fixtures, while still clearing user/service environment. It also retains
+  child stdout/stderr and reports the exit status on early startup failure.
+  The original log discarded that child diagnostic, so the missing environment
+  variable is a candidate cause requiring confirmation on Windows.
+- The large native checkpoint case shares its three former 180-second waits as
+  one 540-second deadline, inside the existing ten-minute nextest limit. The
+  first Windows attempt exceeded a 180-second settlement wait; its retry completed
+  the whole case in 258 seconds. The six tool reads, multi-megabyte checkpoint,
+  warm continuation and cold recovery assertions are unchanged. Timeout errors
+  now identify the phase and turn.
+
+These corrections affect packaging metadata and acceptance fixtures, not the
+inference path or public contracts. The frozen `d233944` performance measurements
+retain their original identity. Local validation and review are recorded in the
+follow-up evidence; final hosted results remain recorded on PR #984.
+
+Local follow-up checks passed: 11 distribution cases, six full-feature and seven
+minimum-gateway ingress cases, and the unchanged large checkpoint workload
+(75.670 seconds, no retry). Strict workspace/all-feature/all-target Clippy on
+Rust 1.97, formatting and diff checks passed. Independent four-file review found
+no blocking issue. The [follow-up evidence](evidence/service-refactor/pr-984-windows-2026-10-18.json)
+records exact source/log hashes, commands and remaining hosted limitations.

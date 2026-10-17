@@ -287,6 +287,10 @@ fn archive_contents(
         let mut archive = zip::ZipArchive::new(File::open(path)?)?;
         for index in 0..archive.len() {
             let mut entry = archive.by_index(index)?;
+            ensure!(
+                entry.system() == zip::System::Unix,
+                "ZIP mode encoding changed"
+            );
             let mode = entry.unix_mode().context("missing ZIP mode")? & 0o777;
             if entry.is_dir() {
                 ensure!(entry.name()? == format!("{root}/") && mode == 0o755);

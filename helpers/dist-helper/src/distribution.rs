@@ -479,13 +479,14 @@ fn write_archive(
     let file = File::create(path).context("creating staged archive")?;
     if windows {
         let mut archive = ZipWriter::new(file);
-        archive.add_directory(
-            format!("{root}/"),
-            SimpleFileOptions::default().unix_permissions(0o755),
-        )?;
+        // Keep the stored Unix modes independent of the packaging host. The
+        // library otherwise tags Windows-created entries as DOS attributes.
+        // https://docs.rs/zip/9.0.3/zip/write/struct.FileOptions.html#method.system
+        let options = SimpleFileOptions::default().system(zip::System::Unix);
+        archive.add_directory(format!("{root}/"), options.unix_permissions(0o755))?;
         for (name, mode) in entries {
             let mut source = File::open(contents.join(name))?;
-            let options = SimpleFileOptions::default()
+            let options = options
                 .compression_method(zip::CompressionMethod::Deflated)
                 .unix_permissions(*mode)
                 .large_file(source.metadata()?.len() >= u32::MAX as u64);

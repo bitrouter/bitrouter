@@ -16,6 +16,11 @@ fn command(directory: &Path) -> tokio::process::Command {
         .env("USERPROFILE", directory)
         .env("BITROUTER_HOME", directory.join("runtime"))
         .kill_on_drop(true);
+    // Preserve the Windows runtime location while isolating user/service state.
+    #[cfg(windows)]
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        command.env("SystemRoot", root);
+    }
     command
 }
 
@@ -460,18 +465,23 @@ async fn gateway_serves_inference_with_only_its_enabled_local_listeners() -> Res
             std::fs::write(endpoint, "not a harness endpoint")?;
         }
     }
+    let stdout_path = directory.path().join("gateway.stdout");
+    let stderr_path = directory.path().join("gateway.stderr");
     let mut process = command(directory.path())
         .args(["serve", "--config"])
         .arg(&config_path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(std::fs::File::create(&stdout_path)?)
+        .stderr(std::fs::File::create(&stderr_path)?)
         .spawn()?;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            ensure!(
-                process.try_wait()?.is_none(),
-                "gateway exited before readiness"
-            );
+            if let Some(status) = process.try_wait()? {
+                anyhow::bail!(
+                    "gateway exited before readiness ({status})\nstdout: {}\nstderr: {}",
+                    std::fs::read_to_string(&stdout_path)?,
+                    std::fs::read_to_string(&stderr_path)?
+                );
+            }
             if let Ok(DaemonResponse::Status { .. }) =
                 daemon::send_command(&socket, &DaemonCommand::Status).await
             {

@@ -2671,10 +2671,10 @@ async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery(
     async fn settled(
         service: &ThreadService,
         turn_id: &str,
+        deadline: tokio::time::Instant,
+        phase: &str,
     ) -> Result<bitrouter_ai::harness::turn::TurnSnapshot, Box<dyn std::error::Error>> {
-        // Full checkpoint replay deliberately exercises multi-megabyte state;
-        // leave room for debug serialization under parallel CI load.
-        Ok(tokio::time::timeout(Duration::from_secs(180), async {
+        Ok(tokio::time::timeout_at(deadline, async {
             loop {
                 let snapshot = service.read(turn_id)?;
                 if snapshot.status.terminal() {
@@ -2683,8 +2683,15 @@ async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery(
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
-        .await??)
+        .await
+        .map_err(|error| {
+            format!("{phase} turn {turn_id} exceeded the checkpoint test budget: {error}")
+        })??)
     }
+    // Share nine minutes across all three turns, inside nextest's ten-minute
+    // deadline. Generating the initial multi-megabyte checkpoint can dominate
+    // debug builds; a separate per-turn deadline misclassifies that as a hang.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(540);
     let workspace = TempDir::new()?;
     std::fs::write(
         workspace.path().join("evidence"),
@@ -2724,7 +2731,7 @@ async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery(
             input(&"context ".repeat(5000), "first"),
         )
         .await?;
-    let first = settled(&source, &first.turn_id).await?;
+    let first = settled(&source, &first.turn_id, deadline, "initial").await?;
     assert_eq!(first.status, TurnStatus::Completed, "{:?}", first.detail);
     {
         let state = source.lock_state();
@@ -2749,7 +2756,7 @@ async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery(
             input("continue", "second"),
         )
         .await?;
-    let second = settled(&source, &second.turn_id).await?;
+    let second = settled(&source, &second.turn_id, deadline, "warm continuation").await?;
     assert_eq!(second.status, TurnStatus::Completed, "{:?}", second.detail);
     source.shutdown().await;
     let destination = ThreadService::with_store(
@@ -2790,7 +2797,7 @@ async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery(
             input("continue after restart", "third"),
         )
         .await?;
-    let third = settled(&destination, &third.turn_id).await?;
+    let third = settled(&destination, &third.turn_id, deadline, "cold recovery").await?;
     assert_eq!(third.status, TurnStatus::Completed, "{:?}", third.detail);
     destination.shutdown().await;
     Ok(())
