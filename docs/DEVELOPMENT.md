@@ -12,14 +12,21 @@ BitRouter is a Cargo workspace organized into `crates/` for shared libraries and
 | `crates/bitrouter-sdk`           | crate   | The SDK: three protocol pipelines, hook traits, staged AI executor integration, config loading, the axum HTTP server, and the observability contract (`observe`) |
 | `extensions/regex-checker/matcher` | extension library | Rules and native request-check callback; optional `sdk` retains legacy hooks |
 | `crates/bitrouter-telemetry`     | crate   | Optional telemetry egress: the OTLP exporter (traces + metrics, multi-tenant attribution), the inbound ingress span, and the `tracing` ↔ OTel bridge — all default-off |
-| `crates/bitrouter-orchestrator` | crate | Native model/tool loop, durable Thread/Turn facts and context, instance-owned workers, and the optional native and external-agent ACP runtime |
-| `crates/bitrouter-tui` | crate | Native-scrollback BRO and ACP Conversations, shared composer/writer and Agents navigation |
-| `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — turns a `Config` into a running `App`, owns management commands, ACP host adapters and durable storage |
+| `crates/bitrouter-orchestrator` | crate | Durable Goals, versioned workflow/input/verification contracts, retained native Thread/Turn runtime, and optional native/external ACP runtime |
+| `crates/bitrouter-tui` | crate | Goals, current Goal and read-only Workflow, plus shared terminal and retained native/ACP renderer components |
+| `apps/bitrouter`                 | app     | Assembly library + the `bro` CLI binary (package/lib stay `bitrouter`) — assembles `App`, management commands, ACP host adapters and durable storage |
 
 The `extensions/` directory expresses ownership and delivery boundaries; it does not create a loader or force a transport. Cargo packages remain ordinary Rust libraries or binaries. Custom hosts register native request checks through `bitrouter_sdk::extension::ExtensionApi` inside `assemble::build_app_with_extensions`; the SDK also retains legacy `Plugin`/hook interfaces for host assembly. See [the extension directory guide](../extensions/README.md) and [guardrails](../extensions/regex-checker/README.md).
 
 For the native runtime module map, execution reading order and test layout, see
 the [orchestrator source guide](../crates/bitrouter-orchestrator/README.md).
+
+Protocol/process tests build real peers from the unpublished
+[`bitrouter-test-fixtures`](../helpers/bitrouter-test-fixtures/Cargo.toml)
+helper package. These fixtures depend only on ACP types and JSON; they do not
+pull application/model/storage libraries into a test-time build. Fixture
+construction still uses Cargo's reported executable, with no interpreter or
+stale prebuilt-binary shortcut.
 
 ### External interfaces
 
@@ -29,11 +36,66 @@ Clients reach BitRouter through its external **interfaces** — the ways *in*. T
 | ------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------ |
 | **API** (HTTP LLM router) | `bitrouter-sdk` `server` feature (`crates/bitrouter-sdk/src/server.rs`) over the `language_model` pipeline | `bro serve`        |
 | **MCP gateway**           | `bitrouter-sdk` `mcp` feature plus app assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
-| **ACP**                   | `bitrouter-orchestrator` `acp` feature (`crates/bitrouter-orchestrator/src/acp/`): `controller` is the ACP-client-facing server, `client` the transport-generic ACP client, `up` the agent-process transport, and `translate` the typed view of `session/update` used by `run`. The client-facing stdio bridge, one-shot runner, and Code session all consume the same controller/client stack. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve <agent>`; `bro run` |
-| **Native ACP** | `bitrouter-orchestrator::acp::native`: negotiated v1/v2 handlers, projectors, approval delivery and native controls over the host's single ThreadService. `apps/bitrouter/src/native_acp.rs` owns the OS-local endpoint and stdio bridge; EOF detaches. | bare `bro acp serve` |
-| **ACP (interactive)**     | `crates/bitrouter-tui/src/code.rs` owns conversation state and rendering; `apps/bitrouter/src/chat/code.rs` drives asynchronous effects and ACP turns, with injected services in `actions/code.rs` and the shared `SessionHost` in `acp_cli.rs`. | `bro code <agent>` |
-| **BRO native agent** | `bitrouter-orchestrator::service::ThreadService` owns one Thread/Turn execution path, durable context, FIFO/steering, owner/workspace fencing and bounded observation. App owns the database and transport adapters. Safe hot unload/reload and cold public queries share the same authority. | Bare `bro code` (`--thread-id`); `bro task run` (create/start client); local v17 native socket (including cold Thread directory); opt-in `/agent/v2` HTTP API |
+| **ACP**                   | `bitrouter-orchestrator` `acp` feature (`crates/bitrouter-orchestrator/src/acp/`): controller, transport-generic client, agent-process transport and typed updates. The transparent stdio bridge, headless runner and Goal workers share these contracts. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve <agent>`; `bro run` |
+| **Native ACP** | `bitrouter-orchestrator::acp::native`: negotiated v1/v2 handlers over the host's ThreadService. App `native_acp.rs` owns the local endpoint and stdio bridge; EOF detaches. | bare `bro acp serve` |
+| **BRO Goals** | `bitrouter-tui::goals` draws Goals/current Goal/read-only Workflow; app `goal_code` submits identified local operations. Daemon `goal_runtime` coordinates Goal input and native/managed ACP workers through ThreadService; `GoalService` and app `goal_store` commit versioned requirements, arrangements and receipts. Superseded reconciled executions without active references move atomically to immutable operation history. | Bare `bro`; `bro code [--config PATH] [--workspace PATH]`; local Goal protocol v8 |
+| **Native harness interface** | App `spawn` injects per-process router settings and starts the harness's own interface. | `bro claude`; `bro codex`; `bro launch <agent>` |
+| **BRO native agent** | `bitrouter-orchestrator::service::ThreadService` owns retained Thread/Turn execution, durable context, FIFO/steering and owner/workspace fencing for standalone native work and linked Goal workers. Standalone native APIs do not automatically create Goals or bypass managed work controls. | `bro task run`; local v17 native socket; opt-in `/agent/v2` HTTP API |
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
+
+The [BRO refactor](BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md) has begun with
+Goal-owner/input Thread links over the daemon's existing ThreadService. Planning,
+input generation, review and completion evaluation now enter tool-free Turns
+through its shared admission, runner, writer fencing and shutdown authority,
+retaining the existing Goal model-control accounting. Native Goal workers now have an app dispatch path and explicit Thread/Turn
+links. Native permission replies use the shared approval transaction; stopped
+local effects use original-history/workspace reconciliation. Shared generation
+admission and native worker admission share bounded capacity waiting. Current native Goal
+sources can request continuation of an accepted checkpoint through the same recovery
+engine, retaining Thread/Turn identity and recorded budgets. Owner/effect uncertainty
+remains blocked. Native workers retain the same action and frozen quote while waiting
+for current workers' provider reservations; settled unknown-cost holds remain blocked.
+Wait begin/end facts drive the read-only projection. SDK cancellation before executor
+dispatch reconciles the original admission without inventing actual serving evidence.
+Never-started ACP metadata can retain its Thread after confirmed owner shutdown;
+its first session is still new. Confirmed pre-prompt ACP session loading can continue its original Thread/Turn; possibly submitted input or incomplete history remains blocked. Original elapsed duration, source owner, process stop and frozen MCP descriptors remain required.
+Managed ACP uses the same acceptance/control owner;
+the supervisor supplies protocol/process facts. Historical unbound runs retain
+their reconciliation path. Worker changes version the existing work and create
+a new Thread after old stop/effects are confirmed; known local results are
+transferred before dispatch. The ledger tracks remaining acceptance gates.
+Migrations 000030/000031/000032/000033 fence incompatible database writers for execution links,
+immutable requested-worker sources, no-admission verdicts and resource waits. They add no table and do not migrate
+persistence into core.
+
+Saved dispatch intent is distinct from acceptance. An uncertain unbound managed
+attempt first revokes its source; ThreadService reconciles its original keys
+under the admission lock, where new managed acceptance also rechecks the source.
+An existing Turn remains linked and subject to stop/effect recovery. Only a
+confirmed absence permits a durable `not_admitted` verdict and bounded new
+preparation. Earlier intent, frozen resources and history remain intact. A
+no-admission verdict does not satisfy the task or verify delivery; a later
+current handoff must still pass the normal completion barriers.
+
+Native Goal evidence now reads original Thread history and source-bound Goal
+accounting receipts for prepared inputs, router bindings and actual SDK/fallback
+reports. Bounded omissions and missing usage remain explicit. These read-only
+reads do not authorize work. Prepared configuration alone does not establish
+tool use, and commit times do not establish execution overlap. Actual received
+native content now carries bounded intervals in the existing accounting report.
+Only monotonic ticks with the same process clock identity support overlap;
+wall timestamps, admission and provider elapsed time are insufficient. This
+does not attest physical provider compute or a complete execution timeline.
+Receipt-verified native archives also use the production historical/UI readers.
+The historical 48 KiB limit is unchanged: native public display details may be
+explicitly omitted before discarding all identities/reports, while original
+Thread history and SDK reports remain. Completeness stays false, ACP timing
+events are untouched, and a still-oversized projection remains unavailable.
+Final live/provider, recovery and full-refactor qualification remain open.
+Before fresh native/ACP worker admission, selected MCP descriptors must match
+their saved preparation hash. ACP also checks the gap between accepted Thread
+metadata and Turn admission. Existing accepted receipts keep their original
+resource records when configuration later changes; these checks grant no tools.
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,
@@ -121,7 +183,7 @@ checkpoint recovery preserve identities and budgets without replaying completed
 effects; lost owners, unknown effects and uncertain accounting remain blocked.
 
 Use [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) for current
-requirements, including root format 2 and local v17/HTTP v2. The
+requirements, including root format 9 (reading formats 2–8) and local v17/HTTP v2. The
 [runtime acceptance index](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) separates local
 fixtures, historical provider/platform checks and remaining product gates.
 [Conversation UI](BRO_CONVERSATION_UI_SPEC.md) and
@@ -439,7 +501,7 @@ loopback exposure policy. It does not mount an MCP origin endpoint. See
 
 ## CLI Surface
 
-`bro <subcommand>` exposes lifecycle and reports plus agent-facing entries: `task run` (BRO headless), bare `code` (BRO interactive), `launch <agent>` (native interface), `code <agent>` (ACP UI), `run <agent>` (headless turn), and `acp serve` (native v1/v2 ingress) and `acp serve <agent>` (external manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp check [server]` inspects configured upstream MCP servers. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
+`bro <subcommand>` exposes lifecycle and reports plus agent-facing entries: `task run` (BRO headless), bare `bro` / `code` (Goals), `launch <agent>` (native interface), `run <agent>` (headless turn), and `acp serve` (native v1/v2 ingress) and `acp serve <agent>` (external manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp check [server]` inspects configured upstream MCP servers. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
 
 ### Observability surface (`bro requests`)
 

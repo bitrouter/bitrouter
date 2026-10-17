@@ -19,6 +19,7 @@ mod approval;
 mod checkpoint_pages;
 mod close;
 mod commit;
+pub mod generation;
 pub mod observation;
 mod ownership;
 mod queue;
@@ -29,6 +30,8 @@ mod state;
 mod steering;
 mod threads;
 mod verification;
+mod waiting;
+pub mod worker;
 pub(crate) mod workspace;
 
 const MAX_EVENT_PAGE: usize = 1000;

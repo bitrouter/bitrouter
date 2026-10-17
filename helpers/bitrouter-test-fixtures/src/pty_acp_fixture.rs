@@ -17,6 +17,7 @@ mod fixture {
         pending: Option<Value>,
         permissions: BTreeSet<String>,
         prompt_count: usize,
+        session_count: usize,
         session: String,
     }
 
@@ -151,7 +152,11 @@ mod fixture {
                         return Ok(());
                     }
                     if self.scenario == "fresh-sessions" {
-                        lock(&self.state)?.session = format!("pty-fresh-{}", std::process::id());
+                        let mut state = lock(&self.state)?;
+                        state.session_count = state.session_count.checked_add(1).ok_or_else(|| {
+                            std::io::Error::other("fixture session count overflow")
+                        })?;
+                        state.session = format!("pty-fresh-{}-{}", std::process::id(), state.session_count);
                     }
                     if matches!(self.scenario.as_str(), "settings-confirmed" | "settings-failure") {
                         self.respond(id, json!({"sessionId": "pty-native", "configOptions": settings("a12-old"), "_meta": {"agentSessionId": "agent-a12-settings"}}))?;
@@ -201,7 +206,6 @@ mod fixture {
                                 "delayed-normal" => Some(format!("FXW{count}")),
                                 "delayed-refusal" => Some("FXRF".into()),
                                 "overlapping-permissions" => Some(String::new()),
-                                "permission-during-inspector" => Some("FXPD".into()),
                                 "detached-backlog" => Some("FXBG".into()),
                                 _ => None,
                             }
@@ -250,6 +254,7 @@ mod fixture {
                 pending: None,
                 permissions: BTreeSet::new(),
                 prompt_count: 0,
+                session_count: 0,
                 session: "pty-native".into(),
             }),
             output: Mutex::new(()),
@@ -289,7 +294,55 @@ mod fixture {
 
 #[cfg(unix)]
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    fixture::run()
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--editor")) {
+        return editor_fixture();
+    }
+    diagnose("process_started", None);
+    let result = fixture::run();
+    match &result {
+        Ok(()) => diagnose("input_closed", None),
+        Err(error) => diagnose("failed", Some(&error.to_string())),
+    }
+    result
+}
+
+#[cfg(unix)]
+fn diagnose(phase: &str, error: Option<&str>) {
+    let Some(capture) = std::env::var_os("BITROUTER_PTY_CAPTURE") else {
+        return;
+    };
+    let path = std::path::PathBuf::from(capture)
+        .with_extension(format!("startup-{}.json", std::process::id()));
+    let value = serde_json::json!({"pid":std::process::id(),"phase":phase,"error":error,
+        "scope":"Fixture startup/EOF diagnosis only; not a session or execution verdict"});
+    if let Err(error) = std::fs::write(path, value.to_string()) {
+        eprintln!("PTY fixture could not preserve startup diagnosis: {error}");
+    }
+}
+
+#[cfg(unix)]
+fn editor_fixture() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let draft = std::env::args_os()
+        .nth(2)
+        .ok_or("editor draft path missing")?;
+    let capture =
+        std::env::var_os("BITROUTER_PTY_EDITOR_CAPTURE").ok_or("editor capture path missing")?;
+    std::fs::write(&capture, std::fs::read(&draft)?)?;
+    if let Some(path) = std::env::var_os("BITROUTER_PTY_EDITOR_PID") {
+        std::fs::write(path, std::process::id().to_string())?;
+    }
+    if let Some(path) = std::env::var_os("BITROUTER_PTY_EDITOR_HOLD") {
+        while !std::path::Path::new(&path).exists() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    let replacement = std::env::var_os("BITROUTER_PTY_EDITOR_CONTENT")
+        .ok_or("editor replacement path missing")?;
+    std::fs::write(draft, std::fs::read(replacement)?)?;
+    if std::env::var_os("BITROUTER_PTY_EDITOR_FAIL").is_some() {
+        return Err("fixture editor failed after writing a recoverable file".into());
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]

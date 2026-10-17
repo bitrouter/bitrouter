@@ -74,7 +74,15 @@ async fn wait(
 #[tokio::test]
 async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_connections()
 -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempfile::tempdir()?;
+    let mut directory = tempfile::tempdir()?;
+    let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
+    directory.disable_cleanup(keep);
+    if keep {
+        eprintln!(
+            "Failure-retention native resource fixture: {}",
+            directory.path().display()
+        );
+    }
     let workspace = directory.path().join("workspace");
     std::fs::create_dir(&workspace)?;
     std::fs::write(workspace.join("AGENTS.md"), "SQLITE_STARTUP_INSTRUCTIONS")?;
@@ -210,7 +218,10 @@ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_conne
     let inventory = completed.resources.ok_or("inventory")?;
     service.shutdown().await;
     let journal = store.load(&created.thread_id).await?.ok_or("journal")?;
-    assert_eq!(journal.format_version, 7);
+    assert_eq!(
+        journal.format_version,
+        bitrouter_orchestrator::store::RUNTIME_FORMAT_VERSION
+    );
     assert!(serde_json::to_string(&journal.records)?.contains("sqlite-evidence"));
     assert!(journal.records.iter().any(|record| matches!(
         record, ExecutionRecord::TurnRecord { fact, .. }
@@ -258,5 +269,6 @@ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_conne
     destination.shutdown().await;
     drop(destination);
     reopened.close().await?;
+    directory.disable_cleanup(false);
     Ok(())
 }

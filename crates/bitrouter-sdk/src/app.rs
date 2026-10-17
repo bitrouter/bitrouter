@@ -375,6 +375,31 @@ struct TransformCheckedControl {
 
 #[async_trait::async_trait]
 impl crate::language_model::native::NativeExecutionControl for TransformCheckedControl {
+    async fn before_typed_decision(
+        &self,
+        attempt_id: &str,
+        request: &crate::decision_model::types::DecisionRequest,
+        pricing: Option<&crate::decision_model::policy::DecisionPricing>,
+    ) -> Result<()> {
+        self.inner
+            .before_typed_decision(attempt_id, request, pricing)
+            .await
+    }
+
+    async fn after_typed_decision(
+        &self,
+        attempt_id: &str,
+        outcome: &std::result::Result<
+            crate::decision_model::types::DecisionResponse,
+            crate::decision_model::types::DecisionError,
+        >,
+        pricing: Option<&crate::decision_model::policy::DecisionPricing>,
+    ) -> Result<()> {
+        self.inner
+            .after_typed_decision(attempt_id, outcome, pricing)
+            .await
+    }
+
     async fn prepare_routing(
         &self,
         prompt: &Prompt,
@@ -439,6 +464,15 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
     ) -> Result<crate::language_model::native::NativePlanAdmission> {
         self.inner.plan(plan).await
     }
+    async fn plan_with_token_reservations(
+        &self,
+        plan: crate::language_model::native::NativePlan,
+        reservations: Vec<Option<crate::language_model::native_accounting::NativeTokenReservation>>,
+    ) -> Result<crate::language_model::native::NativePlanAdmission> {
+        self.inner
+            .plan_with_token_reservations(plan, reservations)
+            .await
+    }
     async fn before_input_count(
         &self,
         plan: &crate::language_model::native::NativePlan,
@@ -490,6 +524,19 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
     }
     async fn before_attempt(&self, request_id: &str, index: u32) -> Result<()> {
         self.inner.before_attempt(request_id, index).await
+    }
+    async fn before_attempt_with_token_reservation(
+        &self,
+        request_id: &str,
+        index: u32,
+        reservation: Option<&crate::language_model::native_accounting::NativeTokenReservation>,
+    ) -> Result<()> {
+        self.inner
+            .before_attempt_with_token_reservation(request_id, index, reservation)
+            .await
+    }
+    async fn admission_aborted(&self, request_id: &str, index: u32) {
+        self.inner.admission_aborted(request_id, index).await;
     }
     async fn after_attempt(&self, report: crate::language_model::native::NativeAttemptReport) {
         self.inner.after_attempt(report).await

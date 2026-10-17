@@ -115,6 +115,13 @@ impl ThreadService {
                     value: serde_json::json!({"not_executed":true,"error":"verification cannot start within the remaining execution budget"}),
                 }
             } else {
+                if let Some(control) = &budget.work_control
+                    && let Err(error) = control.authorize().await
+                {
+                    break 'verification ToolResultOutput::ErrorJson {
+                        value: serde_json::json!({"not_executed":true,"error":error.to_string()}),
+                    };
+                }
                 let allow_effects =
                     self.lock_state().turns.get(turn_id).is_some_and(|task| {
                         task.permission_profile == PermissionProfile::AllowEffects
@@ -169,6 +176,13 @@ impl ThreadService {
                                 value: serde_json::json!({"not_executed":true,"error":"verification stopped before execution"}),
                             }
                         } else {
+                            if let Some(control) = &budget.work_control
+                                && let Err(error) = control.authorize().await
+                            {
+                                break 'verification ToolResultOutput::ErrorJson {
+                                    value: serde_json::json!({"not_executed":true,"error":error.to_string()}),
+                                };
+                            }
                             let tools = tools.clone();
                             self.commit_records(
                                 turn_id,
@@ -178,6 +192,13 @@ impl ThreadService {
                                 }],
                             )
                             .await?;
+                            if let Some(control) = &budget.work_control
+                                && let Err(error) = control.authorize().await
+                            {
+                                break 'verification ToolResultOutput::ErrorJson {
+                                    value: serde_json::json!({"not_executed":true,"error":error.to_string()}),
+                                };
+                            }
                             if cancel.is_cancelled()
                                 || started.elapsed().saturating_sub(approval_wait)
                                     >= budget.duration
@@ -214,8 +235,17 @@ impl ThreadService {
                             let deadline = tokio::time::sleep(remaining);
                             tokio::pin!(deadline);
                             let mut storage_error = None;
+                            let source_stopped = async {
+                                match &budget.work_control {
+                                    Some(control) => control.provider_cancelled().await,
+                                    None => std::future::pending::<()>().await,
+                                }
+                            };
+                            tokio::pin!(source_stopped);
+                            let mut revoked = false;
                             let result = loop {
                                 tokio::select! {
+                                    _ = &mut source_stopped, if !revoked => { revoked = true; worker_cancel.cancel(); },
                                     result = &mut run => break result.unwrap_or_else(|error| (ToolResultOutput::ErrorJson {
                                         value: serde_json::json!({"error":format!("verification worker lost: {error}"),"worker_lost":true}),
                                     }, EffectStatus::Unknown)),

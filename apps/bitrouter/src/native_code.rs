@@ -285,7 +285,7 @@ pub async fn run(
                 crate::chat::signals::TerminalSignal::Shutdown => break,
                 crate::chat::signals::TerminalSignal::Suspend => {
                     drop(events.take()); view.suspend()?;
-                    crate::chat::signals::suspend_current_process()?;
+                    crate::chat::signals::suspend_current_process().await?;
                     view.resume()?; events = Some(EventStream::new());
                 }
             },
@@ -1026,6 +1026,11 @@ mod tests {
         };
         show_event(&mut state, &event);
         let snapshot = TurnSnapshot {
+            acp_permissions: Vec::new(),
+            acp_selected: Default::default(),
+            acp: None,
+            acp_stop: None,
+            generation: None,
             context_routing: None,
             resources: None,
             steering: vec![],

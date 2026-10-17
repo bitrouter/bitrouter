@@ -1026,7 +1026,7 @@ async fn run_deck(
                     crate::chat::signals::TerminalSignal::Suspend => {
                         drop(events.take());
                         view.finish()?;
-                        crate::chat::signals::suspend_current_process()?;
+                        crate::chat::signals::suspend_current_process().await?;
                         view = AgentDeckView::open().context("resuming the agent manager")?;
                         events = Some(EventStream::new());
                     }
@@ -1407,12 +1407,24 @@ fn map_history_event(event: &SessionEvent) -> AgentHistoryEvent {
             permission_id,
             option_id,
             automatic,
+            origin,
         } => (
             AgentHistoryKind::Permission,
             format!(
-                "Permission {permission_id} resolved as {}{}",
+                "Permission {permission_id} resolved as {}{}; source: {}",
                 option_id.as_deref().unwrap_or("cancelled"),
-                if *automatic { " automatically" } else { "" }
+                if *automatic { " automatically" } else { "" },
+                match origin {
+                    Some(crate::supervisor::PermissionResolutionOrigin::ControllerChoice) =>
+                        "controller choice",
+                    Some(crate::supervisor::PermissionResolutionOrigin::ConfiguredPolicy) =>
+                        "configured policy",
+                    Some(crate::supervisor::PermissionResolutionOrigin::Cancellation) =>
+                        "turn cancellation",
+                    Some(crate::supervisor::PermissionResolutionOrigin::Teardown) =>
+                        "controller teardown",
+                    None => "unrecorded",
+                },
             ),
         ),
         SessionEventKind::Activity { text } => (AgentHistoryKind::Status, text.clone()),

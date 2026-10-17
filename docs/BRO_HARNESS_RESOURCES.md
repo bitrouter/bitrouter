@@ -62,10 +62,10 @@ MCP tools during continuation. Committed results are reused, not executed again.
 Reconstructing or completing an already settled outcome does not reconnect or
 replace its original inventory, even when files/configuration have since changed.
 
-New roots and appended roots use runtime format **7**. Formats **2/3/4/5/6** remain
+New roots and appended roots use runtime format **8**. Formats **2/3/4/5/6/7** remain
 readable; a new append upgrades the root envelope in the same version-fenced
 transaction, without rewriting its history or identities. An older binary refuses
-format 7 before decoding new instruction/resource/close facts. Formats 0/1 and future versions remain
+format 8 before decoding new instruction/resource/close/Goal-owner facts. Formats 0/1 and future versions remain
 unsupported. There is no schema migration or automatic lost-owner retirement.
 Local protocol remains v17: inventories use optional fields in existing snapshot
 and context-advanced messages; no new public message variant is introduced.

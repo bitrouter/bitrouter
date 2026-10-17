@@ -6956,7 +6956,8 @@ mod tests {
                 "event: response.some_future_event\ndata: {}",
                 serde_json::json!({"type": "response.some_future_event"})
             ),
-            "data: [DONE]".to_string(),
+            format!("data: [DONE]\n\nevent: response.output_text.delta\ndata: {}",
+                serde_json::json!({"type":"response.output_text.delta","delta":"forbidden after transport termination"})),
             "data: malformed nonempty trailing data".to_string(),
         ]
         .into_iter()

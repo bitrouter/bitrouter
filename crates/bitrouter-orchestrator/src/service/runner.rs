@@ -19,6 +19,12 @@ struct TurnWorker {
     turn_id: String,
 }
 
+pub(super) enum Driver {
+    Native(Agent),
+    Generation(super::generation::Job),
+    Acp(super::worker::acp::Job),
+}
+
 impl Drop for TurnWorker {
     fn drop(&mut self) {
         self.service
@@ -33,7 +39,7 @@ impl ThreadService {
     pub(super) fn run_turn(
         &self,
         turn_id: String,
-        agent: Agent,
+        driver: Driver,
         prompt: RunInput,
         verification_command: Option<String>,
         cancel: CancellationToken,
@@ -51,9 +57,29 @@ impl ThreadService {
         };
         Box::pin(async move {
             let _worker = worker;
-            service
-                .run_turn_inner(turn_id, agent, prompt, verification_command, cancel)
-                .await
+            match driver {
+                Driver::Acp(job) => {
+                    service
+                        .run_acp_turn(turn_id, job, prompt.prompt, cancel)
+                        .await;
+                    service.drive_queues().await;
+                }
+                Driver::Native(agent) => {
+                    service
+                        .run_turn_inner(turn_id, agent, prompt, verification_command, cancel)
+                        .await
+                }
+                Driver::Generation(job) => {
+                    if let Err(error) = service
+                        .run_generation_inner(turn_id.clone(), job, cancel.clone())
+                        .await
+                    {
+                        cancel.cancel();
+                        tracing::warn!(%turn_id, %error, "managed generation could not settle");
+                    }
+                    service.drive_queues().await;
+                }
+            }
         })
     }
 
@@ -271,6 +297,7 @@ impl ThreadService {
                         (Some((verification, evidence)), _) => (verification, Some(evidence)),
                         (None, Some(command)) => {
                             let budget = VerificationBudget {
+                                work_control: agent.work_control(),
                                 duration: verification_limits.0.saturating_sub(
                                     Duration::from_millis(report.active_duration_ms),
                                 ),
@@ -406,7 +433,7 @@ impl ThreadService {
     ) {
         self.inner.workers.spawn(self.run_turn(
             entry.turn_id,
-            agent,
+            Driver::Native(agent),
             RunInput {
                 prompt: entry.prompt,
                 messages: context.0,

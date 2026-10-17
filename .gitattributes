@@ -22,6 +22,10 @@ docs/experiments/*.json linguist-generated=true
 # (= `-text -diff`) disables both normalisation and diffing.
 *.vt       binary
 
+# Captured SSE fixtures retain wire bytes, including keepalive spaces and
+# terminal empty records. Like PTY captures, checkout must not normalize them.
+*.sse      binary
+
 # Source files: LF everywhere. Avoids accidental CRLF creeping into the
 # repo via a Windows contributor's editor, which would otherwise confuse
 # rustfmt and a handful of macro span diagnostics.

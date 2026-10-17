@@ -114,6 +114,16 @@ pub struct TurnEvent {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acp_permissions: Vec<crate::service::worker::acp::Permission>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub acp_selected: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp: Option<crate::service::worker::acp::Binding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acp_stop: Option<crate::service::worker::acp::Stop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<GenerationProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_routing: Option<crate::core::context_router::inspection::Inspection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -140,8 +150,41 @@ pub struct TurnSnapshot {
     pub live: Option<LiveActivity>,
 }
 
-/// Complete approval metadata is available even when its event was evicted.
+/// Causal source of one managed generation. This is not an execution permission
+/// or evidence that the provider used the requested model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GenerationOrigin {
+    pub goal_id: String,
+    pub source_id: String,
+    pub requirements_revision: u64,
+    pub purpose: GenerationPurpose,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenerationProgress {
+    pub origin: GenerationOrigin,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationPurpose {
+    Planning,
+    InputScope,
+    Input,
+    Review,
+    Completion,
+}
+
+impl GenerationPurpose {
+    pub fn is_input(self) -> bool {
+        matches!(self, Self::InputScope | Self::Input)
+    }
+}
+
+/// Complete approval metadata is available even when its event was evicted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputRequest {
     pub request_id: String,
     pub tool_id: String,
@@ -159,6 +202,25 @@ impl TurnStatus {
 }
 
 impl TurnSnapshot {
+    pub(crate) fn refresh_acp_input_status(&mut self) {
+        if self.acp.is_some()
+            && matches!(
+                self.status,
+                TurnStatus::Running | TurnStatus::WaitingForInput
+            )
+        {
+            self.status = if self
+                .acp_permissions
+                .iter()
+                .any(|permission| !self.acp_selected.contains_key(&permission.request_id))
+            {
+                TurnStatus::WaitingForInput
+            } else {
+                TurnStatus::Running
+            };
+        }
+    }
+
     pub fn apply(&mut self, event: &TurnEvent) {
         if event.server_instance_id != self.server_instance_id
             || event.turn_id != self.turn_id
@@ -310,7 +372,7 @@ pub enum TurnLifecycle {
     },
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct TurnRequest {
     pub prompt: String,
     pub idempotency_key: String,

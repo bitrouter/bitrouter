@@ -8,7 +8,6 @@ use bitrouter_ai::types::{Message, Prompt, Usage};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::agent::AgentConfig;
 use crate::item::CallRecord;
 use crate::thread::{ThreadEvent, ThreadSnapshot};
 use crate::turn::{SteeringReceipt, VerificationEvidence};
@@ -57,6 +56,61 @@ pub struct SettlementOutcome {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 pub enum ExecutionRecord {
+    AcpDispatch {
+        owner: crate::service::worker::acp::Owner,
+        action: crate::service::worker::acp::Action,
+        action_id: String,
+    },
+    AcpDispatchGate {
+        owner: crate::service::worker::acp::Owner,
+        action_id: String,
+    },
+    AcpSession {
+        binding: Box<crate::service::worker::acp::Binding>,
+    },
+    AcpObservation {
+        observation: Box<crate::service::worker::acp::Observation>,
+    },
+    AcpPermissionChoice {
+        request_id: String,
+        option_id: String,
+        action_id: String,
+    },
+    AcpPermissionDispatch {
+        request_id: String,
+        option_id: String,
+        action_id: String,
+    },
+    AcpProcessStop {
+        observation: crate::service::worker::acp::Stop,
+    },
+    GenerationInput {
+        context_version: u64,
+        origin: crate::turn::GenerationOrigin,
+        prompt: Box<Prompt>,
+    },
+    GenerationDecisionIntent {
+        attempt_id: String,
+        request: Box<bitrouter_sdk::decision_model::types::DecisionRequest>,
+        pricing: Option<bitrouter_sdk::decision_model::policy::DecisionPricing>,
+    },
+    GenerationDecisionOutcome {
+        attempt_id: String,
+        outcome: Box<
+            Result<
+                bitrouter_sdk::decision_model::types::DecisionResponse,
+                bitrouter_sdk::decision_model::types::DecisionError,
+            >,
+        >,
+    },
+    GenerationAttempt {
+        report: Box<bitrouter_sdk::language_model::native::NativeAttemptReport>,
+    },
+    GenerationPlan {
+        plan: Box<bitrouter_sdk::language_model::native::NativePlan>,
+        /// The host's selected subset; actual calls are GenerationAttempt facts.
+        route_indices: Vec<u32>,
+    },
     /// Last-mile native workspace ownership check after model/tool queue waits.
     /// Execution authority and outcomes remain in the preceding Core facts.
     CoreDispatch,
@@ -103,7 +157,7 @@ pub enum ExecutionRecord {
     ThreadCreated {
         caller: bitrouter_sdk::caller::CallerContext,
         snapshot: ThreadSnapshot,
-        config: Box<AgentConfig>,
+        config: Box<crate::thread::executor::Config>,
         verification_command: Option<String>,
     },
     AcceptedKey {
@@ -235,10 +289,10 @@ pub enum EffectStatus {
     Unknown,
 }
 
-pub const RUNTIME_FORMAT_VERSION: u32 = 7;
+pub const RUNTIME_FORMAT_VERSION: u32 = 9;
 
 pub fn validate_runtime_format(version: u32) -> Result<(), String> {
-    if !matches!(version, 2 | 3 | 4 | 5 | 6 | RUNTIME_FORMAT_VERSION) {
+    if !matches!(version, 2 | 3 | 4 | 5 | 6 | 7 | 8 | RUNTIME_FORMAT_VERSION) {
         return Err(format!("unsupported_runtime_format: {version}"));
     }
     Ok(())

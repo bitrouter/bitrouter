@@ -100,13 +100,25 @@ impl ThreadService {
         let mut turn_ids = std::collections::HashSet::new();
         for record in records {
             if let Some(id) = launch_identity(record, execution_id) {
-                turn_ids.insert(id.to_string());
+                turn_ids.insert((id.0.to_string(), id.1));
             }
         }
-        for id in turn_ids {
+        for (id, tool_effect) in turn_ids {
             let fence = {
                 let state = self.lock_state();
                 let task = state.turns.get(&id).ok_or_else(unknown_turn)?;
+                // Explicit generation has no workspace tools. Its durable
+                // writer fence still applies, but a project lock would block
+                // input interpretation behind the work it needs to control.
+                if !tool_effect
+                    && task.snapshot.generation.is_some()
+                    && state
+                        .threads
+                        .get(&task.thread_id)
+                        .is_some_and(|thread| thread.snapshot.is_goal_coordination())
+                {
+                    continue;
+                }
                 let workspace = &task.snapshot.workspace;
                 if state.active_workspaces.get(workspace) != Some(&id) {
                     return Err(ServiceError::new(
@@ -162,12 +174,16 @@ fn uncertain_cleanup(record: &ExecutionRecord) -> bool {
     }
 }
 
-fn launch_identity<'a>(record: &'a ExecutionRecord, execution_id: &'a str) -> Option<&'a str> {
+fn launch_identity<'a>(
+    record: &'a ExecutionRecord,
+    execution_id: &'a str,
+) -> Option<(&'a str, bool)> {
     match record {
         ExecutionRecord::TurnRecord { turn_id, fact } => launch_identity(fact, turn_id),
-        ExecutionRecord::CoreDispatch
-        | ExecutionRecord::ModelRequest { .. }
-        | ExecutionRecord::ToolIntent { .. } => Some(execution_id),
+        ExecutionRecord::CoreDispatch | ExecutionRecord::ModelRequest { .. } => {
+            Some((execution_id, false))
+        }
+        ExecutionRecord::ToolIntent { .. } => Some((execution_id, true)),
         _ => None,
     }
 }

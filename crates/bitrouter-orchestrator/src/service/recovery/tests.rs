@@ -5,6 +5,51 @@ use crate::agent::AgentConfig;
 use crate::thread::{PermissionProfile, ThreadStatus};
 
 #[test]
+fn recovery_rejects_checkpoint_goal_ownership_changes() -> Result<(), Box<dyn std::error::Error>> {
+    for replacement in [None, Some("different-goal".to_string())] {
+        let snapshot = crate::thread::ThreadSnapshot {
+            server_instance_id: "writer".into(),
+            thread_id: "thread".into(),
+            owned_goal_id: Some("original-goal".into()),
+            input_for_thread_id: None,
+            goal_work: None,
+            status: ThreadStatus::Idle,
+            workspace: PathBuf::from("/workspace"),
+            model: "model".into(),
+            permission_profile: PermissionProfile::ReadOnly,
+            context_version: 0,
+            cursor: 0,
+            active_turn_id: None,
+            queued: Vec::new(),
+            pause_reason: None,
+            waiting_for_capacity: false,
+        };
+        let header = ExecutionRecord::ThreadCreated {
+            caller: CallerContext::local(),
+            snapshot: snapshot.clone(),
+            config: Box::new(AgentConfig::fixed("model", None).read_only().into()),
+            verification_command: None,
+        };
+        let mut rebuild = Rebuild::new(&header, "thread", RuntimeLimits::default())?;
+        let mut changed = snapshot;
+        changed.owned_goal_id = replacement;
+        rebuild.consume_page(vec![
+            header,
+            ExecutionRecord::ThreadCheckpoint {
+                snapshot: changed,
+                messages: Vec::new(),
+            },
+        ])?;
+        assert!(rebuild.blockers.iter().any(|blocker| matches!(
+            blocker,
+            RecoveryBlocker::InvalidRecord { detail }
+                if detail.contains("Goal ownership")
+        )));
+    }
+    Ok(())
+}
+
+#[test]
 fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_epoch()
 -> Result<(), Box<dyn std::error::Error>> {
     let limits = RuntimeLimits {
@@ -14,6 +59,9 @@ fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_ep
     let snapshot = crate::thread::ThreadSnapshot {
         server_instance_id: "first-writer".into(),
         thread_id: "thread".into(),
+        owned_goal_id: None,
+        input_for_thread_id: None,
+        goal_work: None,
         status: ThreadStatus::Idle,
         workspace: PathBuf::from("/workspace"),
         model: "model".into(),
@@ -28,7 +76,7 @@ fn failed_startup_reconstruction_stops_growing_context_but_tracks_later_owner_ep
     let header = ExecutionRecord::ThreadCreated {
         caller: CallerContext::local(),
         snapshot,
-        config: Box::new(AgentConfig::fixed("model", None).read_only()),
+        config: Box::new(AgentConfig::fixed("model", None).read_only().into()),
         verification_command: None,
     };
     let mut audit = StartupAudit::new(&header, "thread", limits.clone())?;
@@ -105,6 +153,8 @@ fn settlement_charges_native_fallback_attempts_and_legacy_requests()
         (false, 2, 0, 2, true),
     ] {
         let mut active = Active {
+            generation: None,
+            acp: acp::State::new(String::new()),
             native,
             native_runs: std::collections::BTreeMap::from([("run".into(), (attempts, 0))]),
             native_unknown_usage: Default::default(),

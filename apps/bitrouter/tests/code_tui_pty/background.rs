@@ -152,6 +152,9 @@ async fn background_permissions_default_to_ask_and_explicit_modes_win() -> Resul
         outcomes.len() == 1 && selected_option(&outcomes[0].1) == Some("allow-1"),
         "policy match did not approve exactly the named request: {outcomes:?}"
     );
+    for mock in [&ask, &denied, &reads, &mixed] {
+        mock.shutdown().await?;
+    }
     Ok(())
 }
 
@@ -167,6 +170,7 @@ async fn permission_wait_counts_toward_background_turn_timeout() -> Result<()> {
     .await?;
     assert_eq!(run.attention, bitrouter::supervisor::AttentionState::Error);
     assert!(run.pending_permissions.is_empty());
+    mock.shutdown().await?;
     Ok(())
 }
 
@@ -184,6 +188,7 @@ async fn schema_failure_never_becomes_ready_for_review() -> Result<()> {
         run.failure.as_deref(),
         Some("no JSON result found in the reply")
     );
+    mock.shutdown().await?;
     Ok(())
 }
 
@@ -232,6 +237,8 @@ async fn background_load_and_resume_use_advertised_native_capabilities() -> Resu
         "background resume changed its native session id: {resume_request}"
     );
     assert!(resumed.captured_request("session/load")?.is_none());
+    loaded.shutdown().await?;
+    resumed.shutdown().await?;
     Ok(())
 }
 
@@ -307,6 +314,7 @@ async fn no_wait_is_rejected_and_non_tty_management_is_escape_free() -> Result<(
         !attach.stdout.contains(&0x1b) && !attach.stderr.contains(&0x1b),
         "non-TTY attach emitted terminal control bytes"
     );
+    mock.shutdown().await?;
     Ok(())
 }
 
@@ -365,7 +373,8 @@ async fn remote_context_rejects_background_and_session_mutations_before_local_st
 }
 
 #[tokio::test]
-async fn foreground_claim_rejects_a_background_subdirectory_of_the_same_worktree() -> Result<()> {
+async fn foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree() -> Result<()>
+{
     let mock = MockAcp::new(MockScenario::DelayedNormal)?;
     let repository = mock._directory.path();
     let git = Command::new("git")
@@ -381,10 +390,70 @@ async fn foreground_claim_rejects_a_background_subdirectory_of_the_same_worktree
     let subdirectory = repository.join("nested-background");
     std::fs::create_dir_all(&subdirectory)?;
 
-    let mut code = CodeFixture::agent_with_mock(mock, None)?;
-    code.wait_for_agent_ready()?;
-    let output = code
-        .mock
+    let mut daemon = mock
+        .bro_command()?
+        .args(["serve", "--config"])
+        .arg(&mock.config_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let socket = mock.supervisor_socket().await?;
+    tokio::time::timeout(PTY_TIMEOUT, async {
+        loop {
+            if bitrouter::daemon::probe_status(&socket).await?.is_some() {
+                return Ok::<_, anyhow::Error>(());
+            }
+            if let Some(status) = daemon.try_wait()? {
+                bail!("fixture daemon exited before readiness: {status}");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    use bitrouter::supervisor::{
+        Presentation, SessionCommand, SessionResponse, SessionScope, StartRunRequest,
+    };
+    let grant = bitrouter::supervisor::authorize(
+        &socket,
+        "foreground-claim-fixture",
+        [SessionScope::Start].into_iter().collect(),
+    )
+    .await?;
+    let started = bitrouter::supervisor::request(
+        &socket,
+        &grant,
+        SessionCommand::Start(Box::new(StartRunRequest {
+            action_request_id: "foreground-claim-start".into(),
+            client_id: Some(grant.client_id.clone()),
+            label: Some("explicit foreground API session".into()),
+            agent_id: "stub".into(),
+            prompt: None,
+            cwd: repository.to_path_buf(),
+            routing: bitrouter::acp_cli::RoutingOptions {
+                direct: true,
+                ..Default::default()
+            },
+            launch: Default::default(),
+            session: Default::default(),
+            presentation: Presentation::Foreground,
+            parent_run_id: None,
+            allow_shared_directory: false,
+            permission_policy: Default::default(),
+            result_schema: None,
+        })),
+    )
+    .await?;
+    let SessionResponse::Started { snapshot, .. } = started else {
+        bail!("foreground API did not return an accepted run");
+    };
+    let foreground_id = snapshot.run_id.clone();
+    let ready = wait_for_run(&mock, &foreground_id, |run| {
+        run.process == bitrouter::supervisor::ProcessState::Running
+            && run.native_session_id.is_some()
+    })
+    .await?;
+    assert_eq!(ready.presentation, Presentation::Foreground);
+    let output = mock
         .bro_command()?
         .args([
             "run",
@@ -408,8 +477,34 @@ async fn foreground_claim_rejects_a_background_subdirectory_of_the_same_worktree
         error.contains("worktree") || error.contains("directory") || error.contains("claimed"),
         "claim conflict was not explained: {error}"
     );
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
+    let runs = mock.supervised_runs().await?;
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].run_id, foreground_id);
+    assert!(mock.captured_prompts()?.is_empty());
+    let captured = std::fs::read_to_string(&mock.capture_path)?;
+    let starts = captured
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        starts
+            .iter()
+            .filter(|request| request["method"] == "session/new")
+            .count(),
+        1,
+        "rejected background launch reached the harness"
+    );
+    match bitrouter::daemon::send_command(&socket, &bitrouter::daemon::DaemonCommand::Stop).await? {
+        bitrouter::daemon::DaemonResponse::Ok => {}
+        response => bail!("fixture daemon stop was not acknowledged: {response:?}"),
+    }
+    ensure!(
+        tokio::time::timeout(PTY_TIMEOUT, daemon.wait())
+            .await??
+            .success(),
+        "fixture daemon did not exit cleanly"
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -474,5 +569,6 @@ async fn failed_run_stop_is_idempotent_and_remove_preserves_native_session() -> 
     );
     assert!(mock.supervised_runs().await?.is_empty());
     assert!(mock.captured_request("session/delete")?.is_none());
+    mock.shutdown().await?;
     Ok(())
 }

@@ -2027,10 +2027,30 @@ impl SessionHost {
         cwd: PathBuf,
         cancel: &CancellationToken,
     ) -> Result<SessionHandle> {
+        self.open_controller(selection, cwd, cancel, false).await
+    }
+
+    pub(crate) async fn open_supervised_with_cancel(
+        self,
+        selection: &SessionSelection,
+        cwd: PathBuf,
+        cancel: &CancellationToken,
+    ) -> Result<SessionHandle> {
+        self.open_controller(selection, cwd, cancel, true).await
+    }
+
+    async fn open_controller(
+        self,
+        selection: &SessionSelection,
+        cwd: PathBuf,
+        cancel: &CancellationToken,
+        ordered_permissions: bool,
+    ) -> Result<SessionHandle> {
         if cancel.is_cancelled() {
             return Err(lifecycle_cancelled());
         }
         let mcp_servers = self.options.mcp_servers.clone();
+        let required_route = self.options.required_session_route.clone();
         let terminal_auth = self.options.terminal_auth;
         let mut session = launch_controlled_with_cancel(
             &self.config,
@@ -2041,11 +2061,48 @@ impl SessionHost {
             cancel,
         )
         .await
+        .map_err(|error| error.context(LifecycleBeforeSession))
         .with_context(|| format!("launching ACP session for agent '{}'", self.agent_id))?;
         // Subscribe before load: `session/load` replays history during the
         // request, and a later subscription would lose it.
-        let updates = session.client.subscribe_lifecycle_notifications();
+        let updates = if ordered_permissions {
+            match session.client.subscribe_lifecycle_with_permissions() {
+                Ok(updates) => updates,
+                Err(error) => {
+                    return if session.shutdown().await {
+                        Err(error)
+                    } else {
+                        Err(error.context(LifecycleTeardownUnconfirmed))
+                    };
+                }
+            }
+        } else {
+            session.client.subscribe_lifecycle_notifications()
+        };
         let permissions = session.client.subscribe_permissions();
+        let supported = mcp_servers.iter().all(|server| match server {
+            agent_client_protocol::schema::v1::McpServer::Stdio(_) => true,
+            agent_client_protocol::schema::v1::McpServer::Http(_) => {
+                session.client.agent_capabilities().mcp_capabilities.http
+            }
+            agent_client_protocol::schema::v1::McpServer::Sse(_) => {
+                session.client.agent_capabilities().mcp_capabilities.sse
+            }
+            _ => false,
+        });
+        if !supported {
+            let clean = session.shutdown().await;
+            return if clean {
+                Err(anyhow::anyhow!(
+                    "selected MCP transport is not supported by the negotiated ACP harness"
+                ))
+            } else {
+                Err(anyhow::anyhow!(
+                    "selected MCP transport is unsupported; startup cleanup did not confirm"
+                )
+                .context(LifecycleTeardownUnconfirmed))
+            };
+        }
         let opened = tokio::select! {
             biased;
             _ = cancel.cancelled() => None,
@@ -2068,6 +2125,29 @@ impl SessionHost {
                 };
             }
         };
+        if let Some(route) = required_route {
+            let confirmed = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => Err(lifecycle_cancelled()),
+                result = session.client.route_set(&ids.acp_session_id, &route) => result.map_err(anyhow::Error::new),
+            };
+            let result = confirmed.and_then(|confirmed| {
+                anyhow::ensure!(
+                    confirmed == route,
+                    "harness route confirmation differs from selected route"
+                );
+                Ok(())
+            });
+            if let Err(error) = result {
+                return if session.shutdown().await {
+                    Err(error.context(
+                        "selected BRO model route was not confirmed; no prompt dispatched",
+                    ))
+                } else {
+                    Err(error.context(LifecycleTeardownUnconfirmed))
+                };
+            }
+        }
         let client = session.client.clone();
         let capabilities = CapabilitySnapshot::from_client(&client, terminal_auth);
         let updates = updates.session_updates_sequenced(&ids);
@@ -2106,6 +2186,23 @@ impl std::error::Error for LifecycleCancelled {}
 #[derive(Debug)]
 struct LifecycleTeardownUnconfirmed;
 
+/// The controller launch ended before any session/new, load or resume request.
+/// This is a phase receipt, independent of the harness's error message.
+#[derive(Debug)]
+struct LifecycleBeforeSession;
+
+impl std::fmt::Display for LifecycleBeforeSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ACP controller failed before opening a session")
+    }
+}
+
+impl std::error::Error for LifecycleBeforeSession {}
+
+pub(crate) fn is_lifecycle_before_session(error: &anyhow::Error) -> bool {
+    error.is::<LifecycleBeforeSession>()
+}
+
 impl std::fmt::Display for LifecycleTeardownUnconfirmed {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(
@@ -2124,13 +2221,34 @@ pub(crate) fn lifecycle_cancelled() -> anyhow::Error {
 /// Context layers preserve this cause, so a caller can distinguish a clean
 /// user exit from an adapter failure without matching presentation text.
 pub(crate) fn is_lifecycle_cancelled(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| cause.is::<LifecycleCancelled>())
+    error.is::<LifecycleCancelled>()
 }
 
 pub(crate) fn is_lifecycle_teardown_unconfirmed(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.is::<LifecycleTeardownUnconfirmed>())
+    error.is::<LifecycleTeardownUnconfirmed>()
+}
+
+#[cfg(test)]
+mod lifecycle_receipt_tests {
+    use super::*;
+
+    #[test]
+    fn typed_lifecycle_receipts_survive_context_without_error_text_matching() {
+        let error = anyhow::anyhow!("arbitrary harness failure")
+            .context(LifecycleTeardownUnconfirmed)
+            .context(LifecycleBeforeSession)
+            .context("launching configured harness");
+        assert!(is_lifecycle_before_session(&error));
+        assert!(is_lifecycle_teardown_unconfirmed(&error));
+        assert!(!is_lifecycle_cancelled(&error));
+        let error =
+            anyhow::anyhow!("ACP controller failed before opening a session; teardown unconfirmed");
+        assert!(!is_lifecycle_before_session(&error));
+        assert!(!is_lifecycle_teardown_unconfirmed(&error));
+        assert!(is_lifecycle_cancelled(
+            &lifecycle_cancelled().context("outer context")
+        ));
+    }
 }
 
 /// Cancellation only counts as clean after the controller child and its
@@ -2765,13 +2883,14 @@ impl ControlledCleanup {
         // The connection is down; the child may not be. `kill_on_drop` reaches
         // the wrapper (`npx`) and not the `node` it spawned, so the group kill
         // has to be confirmed rather than assumed.
-        if tokio::time::timeout(
-            bitrouter_orchestrator::acp::up::REAP_CONFIRM,
-            self.reaped.clone(),
-        )
-        .await
-        .is_err()
-        {
+        if !matches!(
+            tokio::time::timeout(
+                bitrouter_orchestrator::acp::up::REAP_CONFIRM,
+                self.reaped.clone(),
+            )
+            .await,
+            Ok(Ok(()))
+        ) {
             tracing::warn!("harness child not confirmed reaped; a grandchild may have survived");
             clean = false;
         }
@@ -2953,6 +3072,7 @@ async fn launch_controlled_with_cancel(
             let clean = cleanup.abort().await;
             if !clean {
                 tracing::warn!("acp lifecycle failure left teardown unconfirmed");
+                return Err(error.context(LifecycleTeardownUnconfirmed));
             }
             Err(error)
         }
@@ -3724,6 +3844,10 @@ fn drain_telemetry_record(r: RequestCompleted) {
 /// one SDK type it belongs to.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct LaunchOptions {
+    /// Internal workflow admission requirement. Must be acknowledged by the
+    /// negotiated session route controller before a prompt may be submitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_session_route: Option<String>,
     /// Inherited environment names to remove before applying the explicit
     /// transport and launch overlays. This lets isolated callers prevent
     /// ambient credentials from crossing into an agent process while still

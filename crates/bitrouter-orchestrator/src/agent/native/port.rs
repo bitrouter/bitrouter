@@ -15,6 +15,7 @@ use crate::store::{CommitRequest, ExecutionRecord};
 use super::journal::Journal;
 
 pub(super) struct Port {
+    pub(super) work_control: Option<Arc<dyn crate::control::WorkControl>>,
     pub(super) journal: Mutex<Journal>,
     pub(super) budget: Mutex<super::budget::Budget>,
     pub(super) commits: Option<mpsc::Sender<CommitRequest>>,
@@ -51,6 +52,11 @@ impl Port {
         identity: ToolStartFence,
         start: impl FnOnce() -> T,
     ) -> Option<T> {
+        if let Some(control) = &self.work_control
+            && control.authorize().await.is_err()
+        {
+            return None;
+        }
         if self.budget.lock().await.admit().is_err() {
             return None;
         }
@@ -72,10 +78,44 @@ impl Port {
 
 #[async_trait]
 impl HarnessPort for Port {
+    fn model_control(
+        &self,
+    ) -> Option<Arc<dyn bitrouter_sdk::language_model::native::NativeExecutionControl>> {
+        self.work_control.clone().map(|control| {
+            control as Arc<dyn bitrouter_sdk::language_model::native::NativeExecutionControl>
+        })
+    }
+
+    async fn model_result_acknowledged(&self) -> Result<(), CoreError> {
+        if self
+            .work_control
+            .as_ref()
+            .is_some_and(|control| !control.outcome_acknowledged())
+        {
+            return Err(unavailable(
+                "host model outcome was not durably acknowledged",
+            ));
+        }
+        Ok(())
+    }
+
     async fn model_cancelled(&self) {
-        self.cancelled.cancelled().await;
+        tokio::select! {
+            () = self.cancelled.cancelled() => {},
+            () = async {
+                match &self.work_control {
+                    Some(control) => control.provider_cancelled().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {},
+        }
     }
     async fn admit_model_work(&self) -> Result<(), CoreError> {
+        if let Some(control) = &self.work_control {
+            control.authorize().await.map_err(|error| {
+                CoreError::rejected(ErrorCode::NoFeasibleRoute, error.to_string())
+            })?;
+        }
         self.budget.lock().await.admit()?;
         self.persist(ExecutionRecord::CoreDispatch).await
     }
@@ -84,7 +124,18 @@ impl HarnessPort for Port {
         true
     }
 
-    async fn model_stream_part(&self, agent_id: &str, step_id: &str, _: &str, part: &StreamPart) {
+    async fn model_stream_part(
+        &self,
+        agent_id: &str,
+        step_id: &str,
+        request_id: &str,
+        part: &StreamPart,
+    ) {
+        if let Some(control) = &self.work_control {
+            // Observe received content before lossy display delivery. These
+            // callbacks never authorize a tool or replace a settled outcome.
+            control.on_stream_part(request_id, part).await;
+        }
         if self.root_agent.get().is_none_or(|root| root != agent_id) {
             return;
         }

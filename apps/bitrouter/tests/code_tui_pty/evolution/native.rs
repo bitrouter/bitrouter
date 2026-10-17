@@ -1,4 +1,4 @@
-//! Opt-in terminal acceptance with maintained ACP adapters and real workers.
+//! Opt-in session/operator acceptance with maintained ACP adapters and real workers.
 //! Upstream replies and rubric labels are controlled fixtures, not calibration.
 
 use super::*;
@@ -14,6 +14,13 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers};
 #[path = "native/coding.rs"]
 mod coding;
 
+#[path = "native/session.rs"]
+mod session;
+use session::{NativeFixture, cli, create_candidate, inspect, mode};
+
+#[path = "native/responses.rs"]
+mod responses;
+
 struct NativeService {
     evolution: EvolutionRuntime,
     canonical: CanonicalStore,
@@ -22,6 +29,9 @@ struct NativeService {
 }
 
 fn reply(request: &Request) -> Result<ResponseTemplate> {
+    if request.url.path() == "/responses" {
+        return responses::reply(request, false);
+    }
     let body: Value = serde_json::from_slice(&request.body)?;
     let model = body["model"].as_str().context("model missing")?;
     let content = if model == "judge" {
@@ -159,9 +169,24 @@ async fn setup_with_reply(
         })
         .mount(&upstream)
         .await;
+    Mock::given(matchers::method("POST"))
+        .and(matchers::path("/responses"))
+        .respond_with(move |request: &Request| {
+            responder(request).unwrap_or_else(|error| {
+                eprintln!("native Responses fixture rejected the actual request: {error:#}");
+                ResponseTemplate::new(500).set_body_string(format!("fixture Responses: {error:#}"))
+            })
+        })
+        .mount(&upstream)
+        .await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let listen = listener.local_addr()?.to_string();
     let selector = selector(agent);
+    let worker_protocol = if agent == "codex-acp" {
+        "responses"
+    } else {
+        "chat_completions"
+    };
     let mut config_text = format!(
         r#"
 server:
@@ -179,7 +204,8 @@ providers:
     api_base: "{}"
     api_key: fixture-only
     api_protocol:
-      - "*": chat_completions
+      - "judge": chat_completions
+      - "*": {worker_protocol}
     models:
       - id: strong
         capabilities: [tools, reasoning]
@@ -306,31 +332,10 @@ models:
 
 fn selector(agent: &str) -> &'static str {
     if agent == "codex-acp" {
-        "gpt-5.2"
+        "gpt-6.1-sol"
     } else {
         "coding"
     }
-}
-
-fn choose(code: &mut CodeFixture, choice: &str, ready: &str) -> Result<()> {
-    choose_at(code, choice, 0, ready)
-}
-
-fn choose_at(code: &mut CodeFixture, choice: &str, index: usize, ready: &str) -> Result<()> {
-    let checkpoint = code.pty.checkpoint();
-    code.pty.paste(choice)?;
-    for _ in 0..index {
-        code.pty.send(b"\x1b[B")?;
-    }
-    code.pty.send(b"\r")?;
-    code.pty.wait_for_text_since(&checkpoint, ready)?;
-    Ok(())
-}
-
-fn open_evolution(code: &mut CodeFixture) -> Result<()> {
-    code.pty.send(b"/")?;
-    code.pty.wait_for_text("Commands")?;
-    choose(code, "evolution", "Checkpoint evaluation and evolution")
 }
 
 async fn read_effective(
@@ -379,93 +384,15 @@ async fn evaluated(service: &NativeService, agent: &str) -> Result<SessionIdenti
     .context("native terminal feedback did not settle")?
 }
 
-fn create_candidate(code: &mut CodeFixture, agent: &str) -> Result<()> {
-    open_evolution(code)?;
-    choose(code, "Evolution mode", " Evolution mode ─")?;
-    choose_at(code, "Automatic", 1, "Checkpoint evaluation and evolution")?;
-    choose(
-        code,
-        "Create a candidate experiment",
-        "Candidate policy experiment",
-    )?;
-    choose(code, "Experiment name", "Use a distinct name")?;
-    choose(code, "native-terminal-trial", "Candidate policy experiment")?;
-    choose(code, "Add a routing change", "Current route to improve")?;
-    choose(code, selector(agent), "Candidate route")?;
-    choose(code, "candidate", "Candidate policy experiment")?;
-    choose(code, "Why try this candidate?", "Reduce total session cost")?;
-    choose(
-        code,
-        "Reduce total session cost",
-        "Candidate policy experiment",
-    )?;
-    choose(
-        code,
-        "Relationship to other experiments",
-        "Related changes are in this block",
-    )?;
-    choose(
-        code,
-        "Related changes are in this block",
-        "Candidate policy experiment",
-    )?;
-    choose(code, "Review experiment", "Candidate experiment preview")?;
-    code.pty.send(b"\x1b")?;
-    code.pty.wait_for_text("Register candidate experiment")?;
-    choose(code, "Register this experiment", "Candidate registered")?;
-    code.close_to_composer()
-}
-
 fn trial_sessions(
-    code: &mut CodeFixture,
+    code: &NativeFixture,
     runtime: &tokio::runtime::Runtime,
     service: &NativeService,
     agent: &str,
 ) -> Result<(usize, SessionIdentity)> {
-    let mut known = runtime
-        .block_on(service.canonical.list("local", agent))?
-        .into_iter()
-        .map(|session| session.native_session_id)
-        .collect::<std::collections::BTreeSet<_>>();
     for count in 1..=64 {
-        code.pty.send(b"/")?;
-        code.pty.wait_for_text("Commands")?;
-        let checkpoint = code.pty.checkpoint();
-        code.pty.paste("new")?;
-        code.pty.send(b"\r")?;
-        code.pty.wait_for_screen_inner(
-            Some(&checkpoint),
-            "new empty native session ready",
-            |screen| {
-                screen.contains("activity: ready")
-                    && !screen.contains("NATIVE_TERMINAL_OK")
-                    && !screen.contains("Commands")
-            },
-        )?;
-        let identity = runtime.block_on(async {
-            tokio::time::timeout(PTY_TIMEOUT, async {
-                loop {
-                    for session in service.canonical.list("local", agent).await? {
-                        if !known.contains(&session.native_session_id) {
-                            return Ok::<_, anyhow::Error>(SessionIdentity {
-                                owner: "local".into(),
-                                source: agent.into(),
-                                native_session_id: session.native_session_id,
-                            });
-                        }
-                    }
-                    tokio::time::sleep(Duration::from_millis(25)).await;
-                }
-            })
-            .await
-            .context("new native session was not recorded")?
-        })?;
-        known.insert(identity.native_session_id.clone());
-        let checkpoint = code.pty.checkpoint();
-        code.pty.paste("Reply exactly NATIVE_TERMINAL_OK. Do not use tools, run tests, request review or create a PR.")?;
-        code.pty.send(b"\r")?;
-        code.pty
-            .wait_for_text_since(&checkpoint, "Turn completed")?;
+        let identity = runtime.block_on(code.fresh(agent))?;
+        runtime.block_on(code.prompt("Reply exactly NATIVE_TERMINAL_OK. Do not use tools, run tests, request review or create a PR.", "NATIVE_TERMINAL_OK", false))?;
         let learning = runtime.block_on(async {
             tokio::time::timeout(PTY_TIMEOUT, async {
                 loop {
@@ -477,6 +404,9 @@ fn trial_sessions(
                     {
                         Err(error)
                             if error.to_string().contains("changed while reading")
+                                || error.to_string().contains(
+                                    "resource observations use different gateway revisions",
+                                )
                                 || error.to_string().ends_with("; retry") =>
                         {
                             tokio::time::sleep(Duration::from_millis(25)).await;
@@ -517,7 +447,11 @@ fn trial_sessions(
                     "unavailable": report.unavailable.get(&key),
                     "observation": report.observations.sessions.get(&key),
                     "effective": runtime.block_on(read_effective(service, &identity))?,
-                    "screen": code.pty.screen.screen().contents(),
+                    "run": runtime.block_on(code.api.snapshot())?,
+                    "enrollment": runtime.block_on(service.evolution.service("local")?.enrollment(&identity))?,
+                    "block": report.block_status,
+                    "unavailable_sessions": report.unavailable,
+                    "known_observations": report.observations.sessions.keys().collect::<Vec<_>>(),
                 })
             );
             return Err(error);
@@ -540,35 +474,38 @@ fn trial_sessions(
     bail!("no candidate dispatch within 64 fresh sessions under the unmodified allocation policy")
 }
 
-fn restore_candidate(code: &mut CodeFixture) -> Result<()> {
-    open_evolution(code)?;
-    choose(code, "Policy block evidence", "Policy blocks")?;
-    choose(
-        code,
-        "native-terminal-trial",
-        "Original trial recommendation",
+fn restore_candidate(
+    code: &NativeFixture,
+    runtime: &tokio::runtime::Runtime,
+    service: &NativeService,
+) -> Result<()> {
+    inspect(code, runtime, "exploring")?;
+    let state = runtime.block_on(service.evolution.service("local")?.state())?;
+    let block = state
+        .blocks
+        .get("native-terminal-trial")
+        .context("candidate missing")?;
+    cli(
+        &code.mock,
+        runtime,
+        &[
+            "acp",
+            "evolution",
+            "restore",
+            "native-terminal-trial",
+            "--expected-experiment",
+            &block.experiment_id,
+            "--expected-revision",
+            &block.revision,
+            "--reason",
+            "End the controlled native terminal trial",
+        ],
     )?;
-    code.pty.wait_for_text("Current block state: Exploring")?;
-    code.pty.send(b"\x1b")?;
-    code.pty.wait_for_text("Policy block actions")?;
-    choose(
-        code,
-        "Restore supported baseline",
-        "Why restore this baseline?",
-    )?;
-    choose(
-        code,
-        "End the controlled native terminal trial",
-        "Review baseline restoration",
-    )?;
-    code.pty.send(b"\x1b")?;
-    code.pty.wait_for_text("Confirm baseline restoration")?;
-    choose(code, "Restore this baseline", "Withdrawal recorded:")?;
-    code.close_to_composer()
+    Ok(())
 }
 
 fn assert_restored_dispatch(
-    code: &mut CodeFixture,
+    code: &NativeFixture,
     runtime: &tokio::runtime::Runtime,
     service: &NativeService,
     identity: &SessionIdentity,
@@ -578,15 +515,11 @@ fn assert_restored_dispatch(
         .into_iter()
         .map(|execution| execution.request_id)
         .collect::<std::collections::BTreeSet<_>>();
-    let checkpoint = code.pty.checkpoint();
-    code.pty
-        .paste("Controlled follow-up after the trial. Reply briefly without tools.")?;
-    code.pty.send(b"\r")?;
-    code.pty.wait_for_screen_inner(
-        Some(&checkpoint),
-        "restored baseline reply and idle turn",
-        |screen| screen.contains("NATIVE_BASELINE_OK") && screen.contains("activity: ready"),
-    )?;
+    runtime.block_on(code.prompt(
+        "Controlled follow-up after the trial. Reply briefly without tools.",
+        "NATIVE_BASELINE_OK",
+        false,
+    ))?;
     runtime.block_on(async {
         tokio::time::timeout(PTY_TIMEOUT, async {
             loop {
@@ -621,48 +554,15 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
         .enable_all()
         .build()?;
     let service = runtime.block_on(setup(&mock, agent, adapter, worker))?;
-    let child_pid_path = mock._directory.path().join("code-child.pid");
-    let mut command = shell_command(&mock, None)?;
-    command.args([
-        "code",
-        agent,
-        "--model",
-        selector(agent),
-        "--no-start",
-        "--turn-timeout",
-        "30",
-        "--config",
-    ]);
-    command.arg(&mock.config_path);
-    let mut code = CodeFixture {
-        mock,
-        child_pid_path,
-        pty: PtyRunner::spawn(command, 120, 40)?,
-    };
-    code.pty.wait_for_text("activity: ready")?;
-    open_evolution(&mut code)?;
-    choose(&mut code, "Judge model", " Judge model ─")?;
-    choose(&mut code, "judge", "Checkpoint evaluation and evolution")?;
-    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
-    // Off also matches "automatic" in its explanatory text.
-    choose_at(
-        &mut code,
-        "Automatic",
-        1,
-        "Checkpoint evaluation and evolution",
-    )?;
+    let code = runtime.block_on(NativeFixture::start(mock, agent))?;
+    mode(&code, &runtime, "automatic")?;
     assert_eq!(
         runtime
             .block_on(service.evolution.service("local")?.state())?
             .mode,
         EvolutionMode::Automatic
     );
-    code.close_to_composer()?;
-    let before = code.pty.checkpoint();
-    code.pty.paste("Reply exactly NATIVE_TERMINAL_OK. Do not use tools, run tests, request review or create a PR.")?;
-    code.pty.send(b"\r")?;
-    code.pty.wait_for_text_since(&before, "Turn completed")?;
-    code.pty.wait_for_text("NATIVE_TERMINAL_OK")?;
+    runtime.block_on(code.prompt("Reply exactly NATIVE_TERMINAL_OK. Do not use tools, run tests, request review or create a PR.", "NATIVE_TERMINAL_OK", false))?;
     let identity = runtime.block_on(evaluated(&service, agent))?;
     let automatic = runtime.block_on(read_effective(&service, &identity))?;
     let prior = automatic
@@ -676,71 +576,114 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
             .source,
         AssessmentSource::Agentic
     );
-
-    // All changes below use the terminal's local control flow, without scoring
-    // or policy registration calls from the acceptance harness.
-    open_evolution(&mut code)?;
-    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
-    choose(&mut code, "Manual", "Checkpoint evaluation and evolution")?;
-    choose(
-        &mut code,
-        "Session checkpoints",
-        "Evaluate the current recorded prefix",
+    mode(&code, &runtime, "manual")?;
+    let checkpoint = automatic
+        .checkpoint
+        .context("automatic checkpoint missing")?
+        .checkpoint_id;
+    let prepared = cli(
+        &code.mock,
+        &runtime,
+        &[
+            "acp",
+            "checkpoints",
+            "--agent",
+            agent,
+            &identity.native_session_id,
+            "rubric",
+            "prepare",
+            &checkpoint,
+        ],
     )?;
-    choose(
-        &mut code,
-        "Evaluate the current recorded prefix",
-        "Manual checkpoint evaluation",
+    let packet: EvidencePacket = serde_json::from_value(prepared["data"]["evidence"].clone())?;
+    let citation = packet
+        .items
+        .iter()
+        .find(|item| item.kind == EvidenceKind::AgentMessage)
+        .context("recorded reply missing")?
+        .citation
+        .clone();
+    let submission = bitrouter::evolution::scoring::RubricSubmission {
+        submission_id: "native-cli-manual-correction".into(),
+        checkpoint_id: checkpoint,
+        expected_revision: Some(prior.clone()),
+        source: AssessmentSource::Human,
+        evaluator_id: "local-cli-reviewer".into(),
+        evaluator_version: "manual-cli-v1".into(),
+        evaluation: RubricEvaluation {
+            rubric_version: rubric::RUBRIC_VERSION.into(),
+            items: rubric::library()
+                .into_iter()
+                .map(|template| RubricItem {
+                    criterion_id: template.id.into(),
+                    applicability: if template.mandatory {
+                        Applicability::Applicable
+                    } else {
+                        Applicability::NotApplicable
+                    },
+                    selection_reason:
+                        "Controlled manual correction of the recorded reply; fixture score only."
+                            .into(),
+                    score: if template.id == "delivery" {
+                        CriterionScore::Scored { value_ppm: 500_000 }
+                    } else if template.mandatory {
+                        CriterionScore::Unknown
+                    } else {
+                        CriterionScore::NotApplicable
+                    },
+                    evidence: if template.id == "delivery" {
+                        vec![citation.clone()]
+                    } else {
+                        Vec::new()
+                    },
+                    explanation:
+                        "Controlled manual correction of the recorded reply; fixture score only."
+                            .into(),
+                })
+                .collect(),
+            diagnostics: Vec::new(),
+            severe_violation: false,
+            violation_evidence: Vec::new(),
+            summary: "Native CLI manual correction".into(),
+        },
+    };
+    let submission_path = code.mock._directory.path().join("manual-rubric.json");
+    std::fs::write(&submission_path, serde_json::to_vec(&submission)?)?;
+    cli(
+        &code.mock,
+        &runtime,
+        &[
+            "acp",
+            "checkpoints",
+            "--agent",
+            agent,
+            &identity.native_session_id,
+            "rubric",
+            "submit",
+            submission_path
+                .to_str()
+                .context("rubric path is not UTF-8")?,
+        ],
     )?;
-    choose(&mut code, "Delivery", "Score and applicability")?;
-    choose(&mut code, "Score and applicability", " Score Delivery ─")?;
-    choose(&mut code, "0.5", "Select supporting evidence")?;
-    choose(
-        &mut code,
-        "Explain applicability and score",
-        " Explain Delivery ─",
-    )?;
-    choose(
-        &mut code,
-        "Controlled manual correction of the recorded reply; fixture score only.",
-        "Select supporting evidence",
-    )?;
-    choose(
-        &mut code,
-        "Back to evaluation",
-        "Manual checkpoint evaluation",
-    )?;
-    choose(&mut code, "Overall feedback", " Overall feedback ─")?;
-    choose(
-        &mut code,
-        "Native terminal manual correction",
-        "Manual checkpoint evaluation",
-    )?;
-    choose(&mut code, "Review and submit", "Review before saving")?;
-    code.pty.send(b"\x1b")?;
-    code.pty.wait_for_text("Save manual evaluation")?;
-    choose(&mut code, "Save this evaluation", "Manual evaluation saved")?;
     let manual = runtime.block_on(read_effective(&service, &identity))?;
     assert_ne!(manual.current_revision.as_deref(), Some(prior.as_str()));
     let saved = manual.assessment.context("manual assessment missing")?;
     assert_eq!(saved.input.source, AssessmentSource::Human);
-    assert_eq!(saved.input.reason, "Native terminal manual correction");
+    assert_eq!(saved.input.reason, "Native CLI manual correction");
     assert_eq!(
         runtime
             .block_on(service.canonical.assessment_history(&identity))?
             .len(),
         2
     );
-    code.close_to_composer()?;
-
-    create_candidate(&mut code, agent)?;
-    let (trial_sessions, trial_identity) = trial_sessions(&mut code, &runtime, &service, agent)?;
-    restore_candidate(&mut code)?;
+    create_candidate(&code, &runtime, agent)?;
+    let (trial_sessions, trial_identity) = trial_sessions(&code, &runtime, &service, agent)?;
+    restore_candidate(&code, &runtime, &service)?;
     let state = runtime.block_on(service.evolution.service("local")?.state())?;
     let block = state
         .blocks
         .get("native-terminal-trial")
-        .context("TUI candidate missing")?;
+        .context("CLI candidate missing")?;
     assert_eq!(block.status, BlockStatus::RolledBack);
     assert_eq!(state.mode, EvolutionMode::Automatic);
     assert_eq!(
@@ -756,20 +699,15 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
         publication.operator_reason.as_deref(),
         Some("End the controlled native terminal trial")
     );
-    assert_restored_dispatch(&mut code, &runtime, &service, &trial_identity)?;
-
-    open_evolution(&mut code)?;
-    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
-    choose(&mut code, "Off", "Checkpoint evaluation and evolution")?;
+    assert_restored_dispatch(&code, &runtime, &service, &trial_identity)?;
+    mode(&code, &runtime, "off")?;
     assert_eq!(
         runtime
             .block_on(service.evolution.service("local")?.state())?
             .mode,
         EvolutionMode::Off
     );
-    code.close_to_composer()?;
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()?;
+    runtime.block_on(code.stop())?;
     let executions = runtime.block_on(service.evolution.executions(&identity))?;
     ensure!(
         !executions.is_empty(),
@@ -789,14 +727,18 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
     );
     println!(
         "{}",
-        json!({"agent":agent,"native_session":identity.native_session_id,"initial_coding_requests":executions.len(),"upstream_requests":requests.len(),"trial_sessions":trial_sessions,"manual_revisions":1,"initial_automatic_revisions":1,"terminal_restored":true,"candidate_dispatched":true,"candidate_withdrawn":true,"baseline_dispatched_after_withdrawal_while_automatic":true,"scope":"maintained worker TUI feedback, trial and operator withdrawal; fixed replies and labels, not calibration or adoption campaign"})
+        json!({"agent":agent,"native_session":identity.native_session_id,
+        "initial_coding_requests":executions.len(),"upstream_requests":requests.len(),"trial_sessions":trial_sessions,
+        "manual_revisions":1,"initial_automatic_revisions":1,"process_stopped":true,
+        "candidate_dispatched":true,"candidate_withdrawn":true,"baseline_dispatched_after_withdrawal_while_automatic":true,
+        "scope":"maintained worker session and operator CLI; fixed replies and labels, not calibration or adoption campaign"})
     );
     Ok(())
 }
 
 #[test]
 #[ignore = "requires the maintained Codex ACP adapter and isolated worker executable"]
-fn maintained_codex_tui_feedback_trial_withdrawal_and_off() -> Result<()> {
+fn maintained_codex_session_feedback_trial_withdrawal_and_off() -> Result<()> {
     run(
         "codex-acp",
         "BITROUTER_TEST_CODEX_ADAPTER",
@@ -806,7 +748,7 @@ fn maintained_codex_tui_feedback_trial_withdrawal_and_off() -> Result<()> {
 
 #[test]
 #[ignore = "requires the maintained Claude ACP adapter and isolated worker executable"]
-fn maintained_claude_tui_feedback_trial_withdrawal_and_off() -> Result<()> {
+fn maintained_claude_session_feedback_trial_withdrawal_and_off() -> Result<()> {
     run(
         "claude-acp",
         "BITROUTER_TEST_CLAUDE_ADAPTER",
