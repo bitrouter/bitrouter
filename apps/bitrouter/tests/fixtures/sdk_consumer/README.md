@@ -83,7 +83,9 @@ path, stream mode, interruption marker, model and provider credential **after
 the gateway exits**, so delayed replay cannot evade the count.
 
 All process waits are bounded (consumer: 90 seconds internally / 100 externally;
-startup: 30; key setup: 30; identity: 10; stop command: 15; graceful exit: 20).
+startup: 30; key setup: 30; identity: 10; stop command: 15; graceful exit: 20;
+each post-exit listener refusal: 10). Listener closure requires an explicit
+connection-refused error; a timeout or another transport error fails the check.
 The ephemeral port reservations must be released immediately before gateway bind;
 another local process winning that race causes a failure, not a retry against a
 different daemon. This test is portable Rust and has no Unix-only test gate.

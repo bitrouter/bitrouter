@@ -1,0 +1,150 @@
+{
+  "date": "2026-10-18",
+  "base_revision": "6e825ca8d89620668255c2151508df608310b19f",
+  "corrected_file_sha256": {
+    "apps/bitrouter/src/client/agent_local.rs": "92ee1fca66129f41d64e7385b154f46195a37cc5e6b6ebccb279d4df1ce0db1a",
+    "apps/bitrouter/src/upgrade.rs": "d6847ba734b2e58c3ae56acbbe0ee1627655f27268c82351432f7286d3814c6e",
+    "apps/bitrouter/tests/code_tui_pty.rs": "fb03b00b41463dc30c752bd4a5d851054af6da96992d46fb09a5e31e566b0b43",
+    "apps/bitrouter/tests/core_sdk.rs": "7081068d9e9d2e51c8c5821256897943b59e547f96064045e8cf6c617e3e02bd",
+    "apps/bitrouter/tests/packaged_gateway.rs": "97d24b872e9df3610abd883256f5e86f9571bd37702fc239b36e09d8168f94d4",
+    "apps/bitrouter/tests/fixtures/sdk_consumer/README.md": "6a5ea7a3764a9a131a1e1fe08b9093077a0e95a58481f7fcca7b6b1dd0a9bd99"
+  },
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2",
+    "RUST_TEST_THREADS": "2"
+  },
+  "local_checks": [
+    {
+      "name": "pty-resize",
+      "args": [
+        "cargo",
+        "+1.99.0",
+        "nextest",
+        "run",
+        "--locked",
+        "-p",
+        "bitrouter",
+        "--all-features",
+        "--test",
+        "code_tui_pty",
+        "-E",
+        "test(code_detached_backlog_catches_up_once_after_resizes)",
+        "--test-threads",
+        "1"
+      ],
+      "env": {
+      },
+      "passed": true,
+      "seconds": 260.3898929998977,
+      "log": "/tmp/bitrouter-pr984-iteration/pty-resize.log",
+      "log_sha256": "0c5f0030f5423bc75e114e8f1ddfe87c794c688628302fee67cb3b212f55ea2f",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 3m 02s",
+        "Summary [  75.618s] 1 test run: 1 passed (1 slow), 52 skipped"
+      ]
+    },
+    {
+      "name": "core-sdk-stop",
+      "args": [
+        "cargo",
+        "+1.99.0",
+        "test",
+        "--locked",
+        "-p",
+        "bitrouter",
+        "--no-default-features",
+        "--test",
+        "core_sdk",
+        "independent_core_sdk_preserves_harness_authority",
+        "--",
+        "--ignored",
+        "--exact"
+      ],
+      "env": {
+        "BITROUTER_TEST_CORE_BINARY": "/tmp/bitrouter-p0-final-d233944/core/bro",
+        "BITROUTER_TEST_CORE_SDK_CONSUMER_BINARY": "/tmp/bitrouter-p0-sdk-consumer-target/debug/bitrouter-core-sdk-consumer",
+        "BITROUTER_TEST_EXPECTED_REVISION": "d233944b0bb34f46ee3880dfed1af6939e8c293e"
+      },
+      "passed": true,
+      "seconds": 54.86432799999602,
+      "log": "/tmp/bitrouter-pr984-iteration/core-sdk-stop.log",
+      "log_sha256": "4dd781c9fb8a8d33e5765599eba16180c7379e68493363ba7b686bedd9e5b2ab",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 51.59s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.80s"
+      ]
+    },
+    {
+      "name": "gateway-sdk-stop",
+      "args": [
+        "cargo",
+        "+1.99.0",
+        "test",
+        "--locked",
+        "-p",
+        "bitrouter",
+        "--no-default-features",
+        "--test",
+        "packaged_gateway",
+        "packaged_gateway_independent_sdk_consumer",
+        "--",
+        "--ignored",
+        "--exact"
+      ],
+      "env": {
+        "BITROUTER_TEST_GATEWAY_BINARY": "/tmp/bitrouter-p0-d233944-packaged/unpacked/bitrouter-gateway-aarch64-apple-darwin/bro",
+        "BITROUTER_TEST_SDK_CONSUMER_BINARY": "/tmp/bitrouter-p0-sdk-consumer-target/debug/bitrouter-packaged-sdk-consumer"
+      },
+      "passed": true,
+      "seconds": 2.5094629999948665,
+      "log": "/tmp/bitrouter-pr984-iteration/gateway-sdk-stop.log",
+      "log_sha256": "735dc7bef3ea69ba7b64a4e65ba47b5d75ef6bbbf767345f348ceac15bb8cce0",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 0.94s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.07s"
+      ]
+    },
+    {
+      "name": "strict-clippy",
+      "args": [
+        "cargo",
+        "+1.97.0",
+        "clippy",
+        "--locked",
+        "--workspace",
+        "--all-features",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "env": {
+      },
+      "passed": true,
+      "seconds": 161.84764500008896,
+      "log": "/tmp/bitrouter-pr984-iteration/strict-clippy.log",
+      "log_sha256": "66d8f22e477e8fb56158e8cc0ac1397ba68bf0ca1649c911ae64b354d51ab5e6",
+      "summary": [
+        "Finished `dev` profile [unoptimized] target(s) in 2m 41s"
+      ]
+    }
+  ],
+  "pty_repeat": {
+    "command": "cargo +1.99.0 nextest run --locked -p bitrouter --all-features --test code_tui_pty -E test(code_detached_backlog_catches_up_once_after_resizes) --test-threads 1 --stress-count 10",
+    "passed": 10,
+    "log_sha256": "715cdea4d8cea8f6c8507da706923b8e1b920c4b65caa68e5aef9ee388fdfb31"
+  },
+  "review": "Independent six-file stage review approved; minor comment clarification applied. Explicit refusal, timeout failures and all 90 exactly-once backlog assertions retained.",
+  "codeql": {
+    "alert": 188,
+    "disposition": "false positive",
+    "sarif_analysis": 1970175135,
+    "sarif_sha256": "9c61151d2becd074c291e1ba9a680c493f1891e2ad3d17f4cdbb2ea7f2e3fcf5",
+    "rationale": "All four flows falsely connect the assembly result to an independent temporary Fixture.source; no_start=true also prevents reaching the sink. The sink prints a logfile pathname. No secret bytes flow there."
+  },
+  "scope": "Gateway inference logic and public contracts unchanged. Existing d233944 host artifacts used for local SDK checks; latest PR revision will be rebuilt on hosted platforms. No new performance measurement claimed.",
+  "hosted": "Pending final PR revision; results recorded on PR984."
+}

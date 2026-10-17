@@ -1781,14 +1781,23 @@ fn code_detached_backlog_catches_up_once_after_resizes() -> Result<()> {
     code.pty.send(b"/open transcript\r")?;
     let _ = code.pty.wait_for_text("Full transcript")?;
 
-    let narrow = code.pty.checkpoint();
-    code.pty.resize(40, 16)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code.pty.wait_for_text_since(&narrow, "Full transcript")?;
-    let wide = code.pty.checkpoint();
-    code.pty.resize(CODE_COLUMNS, CODE_ROWS)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code.pty.wait_for_text_since(&wide, "Full transcript")?;
+    for (columns, rows) in [(40, 16), (CODE_COLUMNS, CODE_ROWS)] {
+        let resizing = code.pty.checkpoint();
+        code.pty.resize(columns, rows)?;
+        code.pty.send(b"\x0c")?;
+        // Resizing the parser can leave the old title visible before the child
+        // redraws. Wait for the frame's bottom border at its new height so the
+        // child renders each requested size before issuing the next resize.
+        let _ = code
+            .pty
+            .wait_for_screen_inner(Some(&resizing), "Full transcript", |screen| {
+                screen.contains("Full transcript")
+                    && screen
+                        .lines()
+                        .nth(usize::from(rows - 1))
+                        .is_some_and(|line| line.starts_with('└') && line.ends_with('┘'))
+            })?;
+    }
 
     code.mock.release_backlog()?;
     let _ = code.pty.wait_for_text("BG010")?;

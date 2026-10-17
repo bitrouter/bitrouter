@@ -264,16 +264,17 @@ async fn independent_core_sdk_preserves_harness_authority() -> Result<()> {
         stop.success(15).await?;
         server.success(20).await?;
         for address in [inference_addr, control_addr] {
+            // Windows may take several seconds to report a refused loopback
+            // connection. Require that result; a timeout does not prove closure.
+            let result = tokio::time::timeout(
+                Duration::from_secs(10),
+                tokio::net::TcpStream::connect(address),
+            )
+            .await
+            .with_context(|| format!("timed out checking listener closure at {address}"))?;
             ensure!(
-                matches!(
-                    tokio::time::timeout(
-                        Duration::from_secs(2),
-                        tokio::net::TcpStream::connect(address)
-                    )
-                    .await,
-                    Ok(Err(_))
-                ),
-                "listener remained after stop"
+                matches!(&result, Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused),
+                "listener did not refuse connections after stop at {address}: {result:?}"
             );
         }
         let requests = upstream

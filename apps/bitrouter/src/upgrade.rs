@@ -454,6 +454,14 @@ fn process_is_alive(pid: u32) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+#[cfg(windows)]
+fn process_is_alive(pid: u32) -> bool {
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .output()
+        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\"")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -503,12 +511,4 @@ mod tests {
         assert!(decode_hello(reply).is_err());
         Ok(())
     }
-}
-
-#[cfg(windows)]
-fn process_is_alive(pid: u32) -> bool {
-    std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-        .output()
-        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\"")))
 }

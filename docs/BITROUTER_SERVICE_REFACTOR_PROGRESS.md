@@ -3578,3 +3578,50 @@ claimed. Independent review reran those static checks and found no actionable
 issue. Product sources, public manifests and measured artifact bytes did not
 change. Hosted jobs must run on the repaired PR revision before the remaining
 cross-platform gate can close.
+
+## PR cross-platform corrections (2026-10-18)
+
+The first executing hosted run on `6e825ca` passed the feature matrix, public
+contracts, database and telemetry jobs, macOS full tests, five gateway archive
+targets and Linux/macOS independent core clients. It exposed Windows-only lint
+errors, two Windows post-exit listener check failures and a Linux PTY resize
+race; the Linux aggregate and dependent library/binary suites remained blocked.
+Those failures are not counted as passing acceptance.
+
+- Gate the test-only `PermissionProfile` import on Unix, where its test is
+  compiled, and place the Windows upgrade helper before the test module.
+- Require explicit `ConnectionRefused` after the SDK hosts exit. Give the OS ten
+  seconds to report it and distinguish timeout from a successful connection;
+  timeout and every other transport error still fail the assertion.
+- After each transcript resize, await the bottom border at the new height.
+  Merely seeing the retained title after resizing the test parser did not prove
+  that the child had rendered the requested size before the next resize.
+  Preserve the exactly-once backlog assertions and normal deadline.
+
+Independent security review inspected all four SARIF paths for
+[CodeQL alert 188](https://github.com/bitrouter/bitrouter/security/code-scanning/188)
+at `6e825ca` (analysis `1970175135`). Each falsely connects the result of
+`build_app_with_path` to an independent temporary `Fixture.source`. That field
+is constructed before assembly and returned unchanged; the fixture also sets
+`no_start: true`, making the reported startup/logging sink unreachable. The
+flagged expression prints `source.home().join("bitrouter.log")`, not key bytes.
+The flows are through the test/Unix/core acceptance module. The reviewed
+disposition is false positive; production diagnostics and CodeQL remain enabled.
+
+These changes do not alter the gateway inference path or public contracts.
+The previous immutable-artifact performance results retain their stated source
+identity; no new performance measurement is claimed for these test/platform
+compilation corrections. Local targeted checks and hosted verification of the
+corrected PR head are recorded below once completed.
+
+The corrected PTY case passed locally and then passed ten consecutive stress
+iterations. Independent core and packaged-gateway SDK scenarios each passed
+with the stricter refusal checks; strict workspace/all-feature/all-target Clippy
+(Rust 1.97), formatting and diff checks passed. The local SDK checks use the
+previously identified immutable `d233944` hosts; hosted CI builds and checks the
+new PR head on each platform. The independent six-file review approved the fixes,
+with its minor wording clarification applied. CodeQL alert 188 is dismissed as
+false positive and its check returned success. See the
+[iteration evidence](evidence/service-refactor/pr-984-2026-10-18.json) for commands,
+source and log hashes. Hosted completion is tracked on PR #984 so recording the
+result does not introduce another untested documentation-only revision.

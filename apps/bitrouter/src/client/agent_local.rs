@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use bitrouter_ai::harness::agent::AgentConfig;
 use bitrouter_ai::harness::runtime::{ErrorCode, RuntimeCapabilities};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use bitrouter_ai::harness::thread::PermissionProfile;
 use bitrouter_ai::harness::thread::{
     ThreadHistoryPage, ThreadObservation, ThreadSnapshot, ThreadView,

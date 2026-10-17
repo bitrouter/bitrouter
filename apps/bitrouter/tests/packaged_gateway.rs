@@ -403,14 +403,17 @@ async fn ready(server: &mut OwnedChild, inference: &str, control: &str, token: &
 }
 
 async fn closed(address: SocketAddr) -> Result<()> {
+    // Windows may take several seconds to report a refused loopback connection.
+    // Neither a successful connection nor a timeout counts as a closed listener.
     let result = tokio::time::timeout(
-        Duration::from_secs(2),
+        Duration::from_secs(10),
         tokio::net::TcpStream::connect(address),
     )
-    .await;
+    .await
+    .with_context(|| format!("timed out checking listener closure at {address}"))?;
     ensure!(
-        matches!(result, Ok(Err(_))),
-        "listener remained reachable after graceful shutdown"
+        matches!(&result, Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused),
+        "listener did not refuse connections after graceful shutdown at {address}: {result:?}"
     );
     Ok(())
 }
