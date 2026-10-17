@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+use sha2::Digest;
+
 pub fn build(fixture: &str) -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let profile = executable
@@ -10,6 +12,19 @@ pub fn build(fixture: &str) -> Result<PathBuf, String> {
         .and_then(|deps| deps.parent())
         .ok_or("test executable has no Cargo profile directory")?;
     let target = profile.parent().ok_or("Cargo target directory missing")?;
+    // Cargo may unlink the public executable while refreshing a fresh build
+    // on macOS. Serialize our builds through publishing an immutable copy;
+    // a later test's build must not remove the path a caller will execute.
+    let cache = profile.join("bitrouter-fixture-images");
+    std::fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(cache.join("build.lock"))
+        .map_err(|error| error.to_string())?;
+    lock.lock().map_err(|error| error.to_string())?;
     let profile_name = profile
         .file_name()
         .and_then(|name| name.to_str())
@@ -51,7 +66,25 @@ pub fn build(fixture: &str) -> Result<PathBuf, String> {
             && artifact["target"]["name"] == fixture
             && let Some(path) = artifact["executable"].as_str()
         {
-            return Ok(PathBuf::from(path));
+            let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+            let digest = hex::encode(sha2::Sha256::digest(&bytes));
+            let image = cache.join(format!(
+                "{fixture}-{digest}{}",
+                std::env::consts::EXE_SUFFIX
+            ));
+            if !image.exists() {
+                let copy =
+                    tempfile::NamedTempFile::new_in(&cache).map_err(|error| error.to_string())?;
+                std::fs::copy(path, copy.path()).map_err(|error| error.to_string())?;
+                copy.persist(&image).map_err(|error| error.to_string())?;
+            }
+            if std::fs::read(&image).map_err(|error| error.to_string())? != bytes {
+                return Err(format!(
+                    "fixture image differs from Cargo artifact: {}",
+                    image.display()
+                ));
+            }
+            return Ok(image);
         }
     }
     Err(format!("Cargo did not return the {fixture} executable"))
