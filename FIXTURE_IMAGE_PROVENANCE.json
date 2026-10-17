@@ -1,0 +1,10 @@
+{
+  "createdAt": "2026-10-17T00:47:14.341Z",
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "previousArchive": "0aa96eaaa31d3c1cfd40982ef8f834780949b1dd",
+  "featureSource": "3de44d2c3baaf6618f9769da43d906514e9240bf",
+  "finalLocalRun": "fixture-image-final123",
+  "originalAddedFiles": 102,
+  "originalAddedBytes": 6592265,
+  "scope": "Complete current-source123 acceptance after test fixture image stabilization and three-stage DAG waits. Full99 ENOENT failure and111 compile failure remain unqualified. Public-path gaps observed; original cause inferred. Full4757 plus protocol/PTY/typed/DAG focus and strict checks passed; stability113 proves immutable image paths during160 Cargo refreshes. Assertions/retries/product limits unchanged; next-head hosted qualification separate. Prior raw evidence is unchanged; original failures and source applicability remain retained. Actual vendor/provider live gate is unpassed; expanded final hostedCI follows separately."
+}

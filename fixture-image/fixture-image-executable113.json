@@ -1,0 +1,12 @@
+{
+  "run": "fixture-image-final123",
+  "createdAt": "2026-10-17T00:44:24.699Z",
+  "source": "/Users/kelsen/.codex/worktrees/d91b/bitrouter/target/debug/bitrouter-fixture-images/pty_acp_fixture-2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31",
+  "file": "fixture-image-pty-2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31.macho",
+  "sha256": "2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31",
+  "bytes": 1367072,
+  "mode": 493,
+  "platform": "darwin",
+  "arch": "arm64",
+  "scope": "Exact local Cargo-built fixture file used by stability113. Not a process/memory image or hosted filesystem snapshot."
+}

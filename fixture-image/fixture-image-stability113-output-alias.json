@@ -1,0 +1,8 @@
+{
+  "createdAt": "2026-10-17T00:44:24.651Z",
+  "executedRunner": "/tmp/bro-fixture-image-stability113.mjs",
+  "originalOutput": "/tmp/bro-fixture-path-image-stability113-result.json",
+  "publishedOutput": "fixture-image-stability113-result.json",
+  "sha256": "fcf2939d866db7ed8252d33264729d91db2aad5f72ccaff7f36af55841f31a46",
+  "scope": "Exact byte alias of the executed runner output filename; no statuses/data changed. Runner is preserved exactly as executed."
+}

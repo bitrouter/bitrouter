@@ -1,0 +1,111 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index f72db98c..200041fe 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -145,7 +145,7 @@ jobs:
+         shell: bash
+         run: |
+           read -r -a target_flags <<< "$TEST_TARGET_FLAGS"
+-          cargo nextest run -p bitrouter --all-features \
++          cargo nextest run -p bitrouter --all-features --no-fail-fast \
+             --build-jobs "$TEST_BUILD_JOBS" \
+             "${target_flags[@]}"
+ 
+diff --git a/apps/bitrouter/src/goal_runtime/tests/native_parallel.rs b/apps/bitrouter/src/goal_runtime/tests/native_parallel.rs
+index f16a4400..0d363a67 100644
+--- a/apps/bitrouter/src/goal_runtime/tests/native_parallel.rs
++++ b/apps/bitrouter/src/goal_runtime/tests/native_parallel.rs
+@@ -242,8 +242,12 @@ async fn native_branches_overlap_isolate_conflicting_local_writes_and_read_check
+     let fixture = setup.start().await?;
+     let result=async {
+         let id=fixture.create_with("Deliver LEFT and RIGHT files with actual overlapping native branches in isolated workspaces, then read their checked contents and join them. Keep ignored branch-local scratch files isolated. Verify all delivery files; no external harness or human acceptance is needed.").await?;
+-        // Bound worker handoff and root acceptance separately. The full path
+-        // exceeded one shared 45s wait on Linux after every worker succeeded.
++        // Each dependency stage has its own 45s wait: concurrent branches,
++        // their dependent join, then root acceptance. Combining both worker
++        // stages exceeded 45s on Linux after the join Turn had completed.
++        wait_for(&fixture.socket,&id,|goal| goal.workflow.tasks.len() == 3
++            && goal.workflow.tasks.iter().filter(|task| task.spec.id != "join").all(|task|
++                task.executions.last().is_some_and(|execution| execution.handoff.is_some()))).await?;
+         wait_for(&fixture.socket,&id,|goal| goal.workflow.tasks.len() == 3
+             && goal.workflow.tasks.iter().all(|task| task.executions.last()
+                 .is_some_and(|execution| execution.handoff.is_some()))).await?;
+diff --git a/apps/bitrouter/tests/code_tui_pty.rs b/apps/bitrouter/tests/code_tui_pty.rs
+index b9f7a8e3..385f7dd3 100644
+--- a/apps/bitrouter/tests/code_tui_pty.rs
++++ b/apps/bitrouter/tests/code_tui_pty.rs
+@@ -259,7 +259,12 @@ impl MockAcp {
+             .stdin(Stdio::piped())
+             .stdout(Stdio::piped())
+             .stderr(Stdio::null());
+-        let mut child = command.spawn().context("starting mock ACP process")?;
++        let mut child = command.spawn().with_context(|| {
++            format!(
++                "starting mock ACP process {}",
++                self.fixture_binary.display()
++            )
++        })?;
+         let stdin = child.stdin.take().context("taking mock ACP stdin")?;
+         let stdout = child.stdout.take().context("taking mock ACP stdout")?;
+         MockProcess::new(child, stdin, stdout)
+diff --git a/crates/bitrouter-orchestrator/tests/support/fixture_binary.rs b/crates/bitrouter-orchestrator/tests/support/fixture_binary.rs
+index 91081685..0ff1463e 100644
+--- a/crates/bitrouter-orchestrator/tests/support/fixture_binary.rs
++++ b/crates/bitrouter-orchestrator/tests/support/fixture_binary.rs
+@@ -3,6 +3,8 @@
+ use std::path::PathBuf;
+ use std::process::Command;
+ 
++use sha2::Digest;
++
+ pub fn build(fixture: &str) -> Result<PathBuf, String> {
+     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+     let profile = executable
+@@ -10,6 +12,19 @@ pub fn build(fixture: &str) -> Result<PathBuf, String> {
+         .and_then(|deps| deps.parent())
+         .ok_or("test executable has no Cargo profile directory")?;
+     let target = profile.parent().ok_or("Cargo target directory missing")?;
++    // Cargo may unlink the public executable while refreshing a fresh build
++    // on macOS. Serialize our builds through publishing an immutable copy;
++    // a later test's build must not remove the path a caller will execute.
++    let cache = profile.join("bitrouter-fixture-images");
++    std::fs::create_dir_all(&cache).map_err(|error| error.to_string())?;
++    let lock = std::fs::OpenOptions::new()
++        .create(true)
++        .truncate(false)
++        .read(true)
++        .write(true)
++        .open(cache.join("build.lock"))
++        .map_err(|error| error.to_string())?;
++    lock.lock().map_err(|error| error.to_string())?;
+     let profile_name = profile
+         .file_name()
+         .and_then(|name| name.to_str())
+@@ -51,7 +66,26 @@ pub fn build(fixture: &str) -> Result<PathBuf, String> {
+             && artifact["target"]["name"] == fixture
+             && let Some(path) = artifact["executable"].as_str()
+         {
+-            return Ok(PathBuf::from(path));
++            let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
++            let digest = hex::encode(sha2::Sha256::digest(&bytes));
++            let image = cache.join(format!(
++                "{fixture}-{digest}{}",
++                std::env::consts::EXE_SUFFIX
++            ));
++            if !image.exists() {
++                let copy =
++                    tempfile::NamedTempFile::new_in(&cache).map_err(|error| error.to_string())?;
++                std::fs::copy(path, copy.path()).map_err(|error| error.to_string())?;
++                copy.persist(&image)
++                    .map_err(|error| error.to_string())?;
++            }
++            if std::fs::read(&image).map_err(|error| error.to_string())? != bytes {
++                return Err(format!(
++                    "fixture image differs from Cargo artifact: {}",
++                    image.display()
++                ));
++            }
++            return Ok(image);
+         }
+     }
+     Err(format!("Cargo did not return the {fixture} executable"))

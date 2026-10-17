@@ -1,0 +1,24 @@
+{
+  "run": "fixture-image-final123",
+  "evaluatedHead": "b32fc1174974c4bee06a7dcde203b096985d0743",
+  "changesSinceFocused88": [
+    ".github/workflows/ci.yml",
+    "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs",
+    "apps/bitrouter/tests/code_tui_pty.rs",
+    "crates/bitrouter-orchestrator/tests/support/fixture_binary.rs"
+  ],
+  "postTestMetadataDelta": [
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json"
+  ],
+  "finalFiles": {
+    ".github/workflows/ci.yml": "d6b5575db01a9caac6fcc7680512653a29e328a0def5b0bfce7fdb1c503ad914",
+    "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs": "ccfaef9857dcd97f4e5c76908a7a8a9d2a88ada9a2122c82bd891d282e338475",
+    "apps/bitrouter/tests/code_tui_pty.rs": "ae8e01f3af8fb3ba060b3ad6dc2322979334358d410f7c09bc013b1d84e1aa20",
+    "crates/bitrouter-orchestrator/tests/support/fixture_binary.rs": "7cfa812ab305d5f2d524865af52cb14e5d36aebaf7944bc49ad3a7d48748a4ad",
+    "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md": "a5590b56fbf0315ac7a7bfe918f0416ca07728e296c8b92088e55f071fb41806",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md": "4d581b5e56b17367847277d5b3d0d37a7e9eb80a93955247d386f6fced259175",
+    "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json": "938df3babdc48a0c6882a1935d1d894243b132aded0ea500e460eb7ed77930d7"
+  }
+}

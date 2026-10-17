@@ -1,0 +1,15 @@
+{
+  "exits": {
+    "1": 2000
+  },
+  "missingChecks": 0,
+  "artifactInodes": 1,
+  "createdAt": "2026-10-17T00:42:56.772Z",
+  "scope": "Post-fix immutable image stability while Cargo refreshes the public artifact; bounded160 builds,path/inode sampling and OS process starts. Fixture control env is intentionally absent, so exit1 is expected; zero spawn errors does not assert protocol success. Protocol behavior is tested separately. No provider/tools.",
+  "binary": "/Users/kelsen/.codex/worktrees/d91b/bitrouter/target/debug/bitrouter-fixture-images/pty_acp_fixture-2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31",
+  "builds": 160,
+  "started": 2000,
+  "completed": 2000,
+  "errors": [],
+  "buildErrors": []
+}

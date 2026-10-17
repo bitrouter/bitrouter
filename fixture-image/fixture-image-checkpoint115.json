@@ -1,0 +1,14 @@
+{
+  "createdAt": "2026-10-17T00:45:39.876Z",
+  "head": "3de44d2c3baaf6618f9769da43d906514e9240bf",
+  "base": "fe9df6f8157945d3559789926326a7effb468db1",
+  "bundle": "refactor-local-checkpoint-3de44d2c.bundle",
+  "bundleSha256": "f74a1c1e3b56868f191c48aaa2b93c48d4735a67e34f38cceb5be7aa5912859b",
+  "bundleVerification": "refactor-local-checkpoint-3de44d2c.bundle.verify.log",
+  "run": "fixture-image-final123",
+  "resultSha256": "0d1b1a75f192d06db287587e4fe8de7291998b4837f7f494d1b45a77d2bdc109",
+  "verifiedCommittedFiles": 7,
+  "workingTreeClean": true,
+  "pushed": false,
+  "scope": "Complete current-source123:repeated mock-ACP batches,GoalPTY,typed startup,native DAG,full4757 zero-LEAK/no-drift plus strict/features/MSRV/doc/dist. Full99 failure and111 compile failure remain unqualified. Controlled public-path absence observed; original ENOENT causality inferred. Shared test-only builder returns immutable verified images; post-probe113 verifies stability. DAG fixture allowance135vs90 explicit; assertions/product limits unchanged. Actual next-head hostedCI and vendor/provider live gate remain separate."
+}

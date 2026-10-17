@@ -1,0 +1,8 @@
+{
+  "head": "b32fc1174974c4bee06a7dcde203b096985d0743",
+  "dirtyFiles": [
+    ".github/workflows/ci.yml",
+    "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs"
+  ],
+  "scope": "Dirty files supplement the exact committed HEAD."
+}

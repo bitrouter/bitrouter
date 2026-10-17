@@ -1,0 +1,183 @@
+{
+  "source": "dag-phase-final99-source.json",
+  "scope": "Full current-source acceptance after aligning native_parallel fixture waits to its real DAG dependency stages: independent branch handoffs, dependent join handoff, root acceptance, each45s. Aggregate allowance increases from90s to135s explicitly; all overlap/isolation/dependency/delivery assertions and product budgets remain. Linux lib/bin jobs now collect all failures without changing retries. Includes verified Unix input-source activation and SIGCONT acknowledgment; original b32fc failure retained. Source frozen during run.",
+  "startedAt": "2026-10-16T23:39:30.285Z",
+  "runs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "dag-phase-final99-native-features.log",
+      "startedAt": "2026-10-16T23:39:30.285Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:39:30.695Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ],
+      "log": "dag-phase-final99-acp-features.log",
+      "startedAt": "2026-10-16T23:39:30.695Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:39:30.906Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ],
+      "log": "dag-phase-final99-native-tree.log",
+      "startedAt": "2026-10-16T23:39:30.906Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:39:31.013Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "dag-phase-final99-msrv-native.log",
+      "startedAt": "2026-10-16T23:39:31.013Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:39:31.413Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-parallel-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "dag-phase-final99-native-parallel-1.log",
+      "startedAt": "2026-10-16T23:39:31.413Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:41:03.542Z",
+      "summaries": [
+        "     Summary [  25.081s] 1 test run: 1 passed, 3665 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "native-parallel-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "dag-phase-final99-native-parallel-2.log",
+      "startedAt": "2026-10-16T23:41:03.543Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:41:28.766Z",
+      "summaries": [
+        "     Summary [  24.276s] 1 test run: 1 passed, 3665 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "native-parallel-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "dag-phase-final99-native-parallel-3.log",
+      "startedAt": "2026-10-16T23:41:28.766Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-16T23:41:53.534Z",
+      "summaries": [
+        "     Summary [  24.286s] 1 test run: 1 passed, 3665 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ],
+      "log": "dag-phase-final99-workspace.log",
+      "startedAt": "2026-10-16T23:41:53.534Z",
+      "status": "failed",
+      "code": 100,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:04:58.483Z",
+      "summaries": [
+        "     Summary [1383.875s] 4757 tests run: 4756 passed (7 slow), 1 failed, 24 skipped"
+      ],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-17T00:04:58.737Z",
+  "changed": [],
+  "passed": false
+}

@@ -1,0 +1,18 @@
+{
+  "createdAt": "2026-10-17T00:45:39.481Z",
+  "changes": [
+    {
+      "file": "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
+      "before": "ed10e21ab61cdd1206834593e8bbc71262d9bdc15cc09db1640ea4c40b9ac13b",
+      "after": "4d581b5e56b17367847277d5b3d0d37a7e9eb80a93955247d386f6fced259175",
+      "scope": "Metadata prose only; removes an obsolete qualification label without changing any original run result."
+    },
+    {
+      "file": "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+      "before": "155fbe63b00d14e18489c074d4d75fa994a66cb53d952edaaf73e14b627629b2",
+      "after": "a5590b56fbf0315ac7a7bfe918f0416ca07728e296c8b92088e55f071fb41806",
+      "scope": "Metadata prose only; removes an obsolete qualification label without changing any original run result."
+    }
+  ],
+  "compiledSourceDrift": []
+}

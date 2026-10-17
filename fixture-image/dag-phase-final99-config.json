@@ -1,0 +1,146 @@
+{
+  "id": "dag-phase-final99",
+  "scope": "Full current-source acceptance after aligning native_parallel fixture waits to its real DAG dependency stages: independent branch handoffs, dependent join handoff, root acceptance, each45s. Aggregate allowance increases from90s to135s explicitly; all overlap/isolation/dependency/delivery assertions and product budgets remain. Linux lib/bin jobs now collect all failures without changing retries. Includes verified Unix input-source activation and SIGCONT acknowledgment; original b32fc failure retained. Source frozen during run.",
+  "jobs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ]
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ]
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ]
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ]
+    },
+    {
+      "name": "native-parallel-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "native-parallel-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "native-parallel-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "createdAt": "2026-10-17T00:47:13.654Z",
+  "scope": "Incoming publication runners added after the complete raw payload scan; reports names/hashes only.",
+  "files": [
+    {
+      "file": "fixture-image-archive116-runner.mjs",
+      "sha256": "3824c9dc24a7fc72cead61435bedd7e37972a4c53c109eecfab2fcaed27db09d",
+      "hits": 0
+    },
+    {
+      "file": "fixture-image-pin117-runner.mjs",
+      "sha256": "c9bc330b854de76e5304dd9fd9f95377868c62c61e344e5c2b9d01afed4638d9",
+      "hits": 0
+    },
+    {
+      "file": "fixture-image-pr118-runner.mjs",
+      "sha256": "7c76e510b3e24a9f45eeceb1018f5703822c90ab6ff6a4cf8f598caa7551d035",
+      "hits": 0
+    }
+  ]
+}

@@ -1,0 +1,516 @@
+{
+  "initialArchive": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
+  "previousArchive": "0aa96eaaa31d3c1cfd40982ef8f834780949b1dd",
+  "files": {
+    "FIXTURE_IMAGE_INDEX.md": {
+      "bytes": 1960,
+      "sha256": "ed454c543cff71118b5af1ac325cb8fa27eeb1ef33c1d12789e8b50e2b3fbd87",
+      "mode": 420
+    },
+    "dag-phase-final99-acp-features.log": {
+      "bytes": 60,
+      "sha256": "6a981e4e2a0c9af6dead9afee0224555ade213f42082f62ec9b38c4d1fc0dd36",
+      "mode": 420
+    },
+    "dag-phase-final99-audit.json": {
+      "bytes": 89,
+      "sha256": "117a09cda1294edff43d86f34a8e3f0012acb575a77c35cd6e782daaa7b3ba62",
+      "mode": 420
+    },
+    "dag-phase-final99-config.json": {
+      "bytes": 3174,
+      "sha256": "fc72d93bfd72daec2702e1f6eee0b3fd3d3191c48ccda4e2c0b6b7556d9e53f7",
+      "mode": 420
+    },
+    "dag-phase-final99-files.tar.gz": {
+      "bytes": 14887,
+      "sha256": "5c6eb7b1581703a4081ece3e65c6696f5126882dff65736be7bef8a763719a53",
+      "mode": 420
+    },
+    "dag-phase-final99-msrv-native.log": {
+      "bytes": 60,
+      "sha256": "703e7eca104f790350e17d972e1a99183de1c7b70c586dad54684bf0b710ec76",
+      "mode": 420
+    },
+    "dag-phase-final99-native-features.log": {
+      "bytes": 60,
+      "sha256": "2447604722be766dc4e29325d52364dad83978b8633350c3ed30d280b609c7a1",
+      "mode": 420
+    },
+    "dag-phase-final99-native-parallel-1.log": {
+      "bytes": 1145,
+      "sha256": "9c5f674da766a9a70d5b6a90d2632fb9413a04ad5355cfe4f94e1b6c65b4a251",
+      "mode": 420
+    },
+    "dag-phase-final99-native-parallel-2.log": {
+      "bytes": 1042,
+      "sha256": "92e97aaca94ade622b0ef60766fceba34a0e3628d031fb3ff7e39023e0f05d80",
+      "mode": 420
+    },
+    "dag-phase-final99-native-parallel-3.log": {
+      "bytes": 1042,
+      "sha256": "6cf4f298f5f93b1169390ae6d128a05c0cc737eab1a3c18a8da80b779e435374",
+      "mode": 420
+    },
+    "dag-phase-final99-native-tree.log": {
+      "bytes": 9787,
+      "sha256": "c7a71886190cec61260cd4c75c3f6ddc3725e70bd3d20d88ec995fbef947e1cf",
+      "mode": 420
+    },
+    "dag-phase-final99-results.json": {
+      "bytes": 5091,
+      "sha256": "0a152f490e4676ace991e903d4edc5431e3ce990c661a28fb95e4569b4aad3aa",
+      "mode": 420
+    },
+    "dag-phase-final99-runner.mjs": {
+      "bytes": 4277,
+      "sha256": "5ee485524b531241cb884fb6e28e908ff851023f291d72021dac49979c637175",
+      "mode": 420
+    },
+    "dag-phase-final99-source-archive.json": {
+      "bytes": 238,
+      "sha256": "51b88fb3b69b53ca69140cf43283f65b90e0fca92f1ca5cda30939340ed9bef1",
+      "mode": 420
+    },
+    "dag-phase-final99-source.json": {
+      "bytes": 161101,
+      "sha256": "3ea9a5f64d8f88c9f92d304369b2f80c90fb4ac70535cacea780ff2e66b367bb",
+      "mode": 420
+    },
+    "dag-phase-final99-source.patch": {
+      "bytes": 2163,
+      "sha256": "5987ca0a111965d9f5b23bc5b90181ed510a4f1b705cbba81959372199e02530",
+      "mode": 420
+    },
+    "dag-phase-final99-workspace.log": {
+      "bytes": 620675,
+      "sha256": "f26650f2eb16e2cd4c9a2b43c32bc832d9a38e180e9c64a89337aafc8f145339",
+      "mode": 420
+    },
+    "dag-phase-original-linux-lib-b32fc.log": {
+      "bytes": 224508,
+      "sha256": "762dc09e4dbec2e96a95a74d77b5d868bbd39a997aed8e9c57cd846e27b31df1",
+      "mode": 420
+    },
+    "dag-phase-prior-b32-windows-117241559728.log": {
+      "bytes": 1018702,
+      "sha256": "e49fc64011998d15443bf42af71c9f0166226a08e2089ac06e0ea46d71ade7ee",
+      "mode": 420
+    },
+    "fixture-image-applicability114.json": {
+      "bytes": 1485,
+      "sha256": "ac5bc2261b0d296192d9cfd020bb920c2c3bc1a6933730e74fbdc32638980961",
+      "mode": 420
+    },
+    "fixture-image-archive116-runner.mjs": {
+      "bytes": 5880,
+      "sha256": "3824c9dc24a7fc72cead61435bedd7e37972a4c53c109eecfab2fcaed27db09d",
+      "mode": 420
+    },
+    "fixture-image-checkpoint115-runner.mjs": {
+      "bytes": 2464,
+      "sha256": "a0ff1c689db0ddc2926bc4a5ca0434cb707d87392be39959646e528b2f7ae75c",
+      "mode": 420
+    },
+    "fixture-image-checkpoint115.json": {
+      "bytes": 1118,
+      "sha256": "c02c385360340e5f2f09d7da25c53c20c1bc10aa9591294a3b471c500415c863",
+      "mode": 420
+    },
+    "fixture-image-editorial124.json": {
+      "bytes": 843,
+      "sha256": "f2e94ee506eaf4e920189ec63c6f48210320441b92dde721e79d2fcefc1237f4",
+      "mode": 420
+    },
+    "fixture-image-executable113.json": {
+      "bytes": 652,
+      "sha256": "c5bd79aaad15c59026df620f72decf66de42cabe67198714b1dea5a6c3ad80dc",
+      "mode": 420
+    },
+    "fixture-image-final111-acp-features.log": {
+      "bytes": 60,
+      "sha256": "bd78efc584786aedeff4a2938ba22269233ac68fe183a1ecbdd47ccc783b7a43",
+      "mode": 420
+    },
+    "fixture-image-final111-audit.json": {
+      "bytes": 94,
+      "sha256": "bb449bc24c28e9a38f4ab163a1349fd1fcb00d156feefd8c27c9292120703f7c",
+      "mode": 420
+    },
+    "fixture-image-final111-config.json": {
+      "bytes": 4023,
+      "sha256": "6ea862417d7803c1abd3b1b91e637dfa0dca374c8560c60af71590b76a0abb1b",
+      "mode": 420
+    },
+    "fixture-image-final111-files.tar.gz": {
+      "bytes": 32028,
+      "sha256": "aa37be173a20a25b77401ff7dfadb0298d59b0b8112755bc5da06d870cdfdd0a",
+      "mode": 420
+    },
+    "fixture-image-final111-mock-acp-1.log": {
+      "bytes": 5380,
+      "sha256": "3c02e25a67fee7883cbfab6a1b15a6884f667b9331c8c002a40d85160ab096b2",
+      "mode": 420
+    },
+    "fixture-image-final111-msrv-native.log": {
+      "bytes": 60,
+      "sha256": "158a7e90d711f5b4ea7049bdc68524feafa9e57f0ea9359a375775ceb2ad0db2",
+      "mode": 420
+    },
+    "fixture-image-final111-native-features.log": {
+      "bytes": 60,
+      "sha256": "970c742910792bfbe48abef0e530c79a74dbeaab153744556de13c44dbdb2074",
+      "mode": 420
+    },
+    "fixture-image-final111-native-tree.log": {
+      "bytes": 9787,
+      "sha256": "c7a71886190cec61260cd4c75c3f6ddc3725e70bd3d20d88ec995fbef947e1cf",
+      "mode": 420
+    },
+    "fixture-image-final111-results.json": {
+      "bytes": 3253,
+      "sha256": "cc65ce8967a29eb040ad2e158a23934fc9353504eb0d01f63731463ccd78c6c8",
+      "mode": 420
+    },
+    "fixture-image-final111-runner.mjs": {
+      "bytes": 4277,
+      "sha256": "5ee485524b531241cb884fb6e28e908ff851023f291d72021dac49979c637175",
+      "mode": 420
+    },
+    "fixture-image-final111-source-archive.json": {
+      "bytes": 351,
+      "sha256": "dd8a9e0516a0405d9b27148551ccaecd941b66bbf3ccc7663a15f0a770c61274",
+      "mode": 420
+    },
+    "fixture-image-final111-source.json": {
+      "bytes": 161101,
+      "sha256": "0fec5fc49f124642d49756123ea8b58fa502f2beba39120257aa73b66451865c",
+      "mode": 420
+    },
+    "fixture-image-final111-source.patch": {
+      "bytes": 5853,
+      "sha256": "14a9f5a822ea0a029495bfec8de38848dac8e8c0cd52880ede005101ef1d8748",
+      "mode": 420
+    },
+    "fixture-image-final112-acp-features.log": {
+      "bytes": 60,
+      "sha256": "6a981e4e2a0c9af6dead9afee0224555ade213f42082f62ec9b38c4d1fc0dd36",
+      "mode": 420
+    },
+    "fixture-image-final112-audit.json": {
+      "bytes": 94,
+      "sha256": "ec8653a0d1a9ce829d5d5c7062610ef4c7fe117d0e58e77ae11d2e44b5c411d9",
+      "mode": 420
+    },
+    "fixture-image-final112-config.json": {
+      "bytes": 4023,
+      "sha256": "be96d3480bcd8d21c32cd9597872c81280dfa3f0e1e38ec5303ce4159e53bded",
+      "mode": 420
+    },
+    "fixture-image-final112-files.tar.gz": {
+      "bytes": 32035,
+      "sha256": "6c1c28b2c4eb67c7d0f1b2c0ca59e8cf3115263169ccee57e0449842e58cd62d",
+      "mode": 420
+    },
+    "fixture-image-final112-goal-pty.log": {
+      "bytes": 1849,
+      "sha256": "7a6a4119f57a07cb345265fc02919e32262ffa67ae55cc0fc6703256bd9dc70e",
+      "mode": 420
+    },
+    "fixture-image-final112-mock-acp-1.log": {
+      "bytes": 1937,
+      "sha256": "aa92c49ec967a3b45f2042ebaf4a5cd9d5555df80cda6f5b122077d48ca525d0",
+      "mode": 420
+    },
+    "fixture-image-final112-mock-acp-2.log": {
+      "bytes": 1704,
+      "sha256": "8ff6c588e041532f319bd0e577c37058391bf7484bc4ec51370cd7b43e75161c",
+      "mode": 420
+    },
+    "fixture-image-final112-mock-acp-3.log": {
+      "bytes": 1704,
+      "sha256": "8433ffc776401df65d7dd24ac3cf7890d6e931735d1607f2f256a9e72eb07e12",
+      "mode": 420
+    },
+    "fixture-image-final112-msrv-native.log": {
+      "bytes": 60,
+      "sha256": "703e7eca104f790350e17d972e1a99183de1c7b70c586dad54684bf0b710ec76",
+      "mode": 420
+    },
+    "fixture-image-final112-native-features.log": {
+      "bytes": 60,
+      "sha256": "0c640d3e6056e973186018eb9b5813373e71f3ed6be436183c1506ae0042300e",
+      "mode": 420
+    },
+    "fixture-image-final112-native-parallel-1.log": {
+      "bytes": 1042,
+      "sha256": "31754f5142f497549fd3265b9ed5541997f68d9d522c0784f6a61174a7586633",
+      "mode": 420
+    },
+    "fixture-image-final112-native-tree.log": {
+      "bytes": 9787,
+      "sha256": "c7a71886190cec61260cd4c75c3f6ddc3725e70bd3d20d88ec995fbef947e1cf",
+      "mode": 420
+    },
+    "fixture-image-final112-results.json": {
+      "bytes": 6956,
+      "sha256": "34beb97faf19873b40fbd96dee49b02ae909caeddc81acb21dd25481114abc4a",
+      "mode": 420
+    },
+    "fixture-image-final112-runner.mjs": {
+      "bytes": 4277,
+      "sha256": "5ee485524b531241cb884fb6e28e908ff851023f291d72021dac49979c637175",
+      "mode": 420
+    },
+    "fixture-image-final112-source-archive.json": {
+      "bytes": 351,
+      "sha256": "dd8a9e0516a0405d9b27148551ccaecd941b66bbf3ccc7663a15f0a770c61274",
+      "mode": 420
+    },
+    "fixture-image-final112-source.json": {
+      "bytes": 161101,
+      "sha256": "869b46766ac3a1c7f52bb016a00663c82399338cd507f33c21988e81650066a9",
+      "mode": 420
+    },
+    "fixture-image-final112-source.patch": {
+      "bytes": 5864,
+      "sha256": "f27ad6abcbca30c2cfaca9bed9b81562db7873a657508086ed940f466ee0242f",
+      "mode": 420
+    },
+    "fixture-image-final112-typed-startup.log": {
+      "bytes": 1162,
+      "sha256": "1dc9568c3d6e001ea2f3abc8cc5bc034e0535e242a86c666ef2b059cd2beaf64",
+      "mode": 420
+    },
+    "fixture-image-final112-workspace.log": {
+      "bytes": 97232,
+      "sha256": "d3a67cbe5e8429a7fd2b0b4350610fc9eafc22b2e7f2bf957f63397109e88c4e",
+      "mode": 420
+    },
+    "fixture-image-final123-acp-features.log": {
+      "bytes": 60,
+      "sha256": "f694a9e074374d315f58b8a63ce849858b1b8708cf56b3d194218605bd2a9d6e",
+      "mode": 420
+    },
+    "fixture-image-final123-audit.json": {
+      "bytes": 94,
+      "sha256": "204be703b8333d0a4ef724e7a21fcc3540ddd18b65cbf5e7990b2c8e94b4d024",
+      "mode": 420
+    },
+    "fixture-image-final123-clippy.log": {
+      "bytes": 548,
+      "sha256": "173cb197ecd95630e1255ad82eaf47667100c8777f5615c2827456b5e9b0de5b",
+      "mode": 420
+    },
+    "fixture-image-final123-config.json": {
+      "bytes": 4406,
+      "sha256": "59575b9547cf8c5d6ba55ad43b2f2e84c03f0ab447ed6821ed684837dd741ea4",
+      "mode": 420
+    },
+    "fixture-image-final123-doctest.log": {
+      "bytes": 2054,
+      "sha256": "49de8dc43edbb53ec333f85dd0456e8961fa0e1b500a51ae6b93b275815bab4a",
+      "mode": 420
+    },
+    "fixture-image-final123-files.tar.gz": {
+      "bytes": 32028,
+      "sha256": "4fb0612faab6373da4951aa6b97a43fbc64727c53338cf2e4672bb40e1b83359",
+      "mode": 420
+    },
+    "fixture-image-final123-fmt-preflight.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 420
+    },
+    "fixture-image-final123-fmt.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 420
+    },
+    "fixture-image-final123-goal-pty.log": {
+      "bytes": 1849,
+      "sha256": "2cb76e961ef4815a37254cf15bff2797020a0514b8e0bacc7f56e1c7592b70c1",
+      "mode": 420
+    },
+    "fixture-image-final123-mock-acp-1.log": {
+      "bytes": 1937,
+      "sha256": "669f0ec2b27eda739ca42d1fdae8f9791300d76141cd3e095f62cf18aedb2387",
+      "mode": 420
+    },
+    "fixture-image-final123-mock-acp-2.log": {
+      "bytes": 1704,
+      "sha256": "f00abcb2e8030d6bdd5c2029377f49560fc17de048205e887e7a4243bceb9b54",
+      "mode": 420
+    },
+    "fixture-image-final123-mock-acp-3.log": {
+      "bytes": 1704,
+      "sha256": "cce8b02659b741093ab1d679fdf999204779b91c57d6db5068b3d38ffebf8046",
+      "mode": 420
+    },
+    "fixture-image-final123-msrv-native.log": {
+      "bytes": 60,
+      "sha256": "e7db2afc8e897632ef0fc418b8593aa427e974dd923dcc14c5e1d5d6e9cff786",
+      "mode": 420
+    },
+    "fixture-image-final123-native-features.log": {
+      "bytes": 60,
+      "sha256": "2447604722be766dc4e29325d52364dad83978b8633350c3ed30d280b609c7a1",
+      "mode": 420
+    },
+    "fixture-image-final123-native-parallel-1.log": {
+      "bytes": 1042,
+      "sha256": "a2ee5eb88e25c3aaf239da2837fd95ddc31d839676d383f017e3f64033fe315e",
+      "mode": 420
+    },
+    "fixture-image-final123-native-tree.log": {
+      "bytes": 9787,
+      "sha256": "c7a71886190cec61260cd4c75c3f6ddc3725e70bd3d20d88ec995fbef947e1cf",
+      "mode": 420
+    },
+    "fixture-image-final123-registry.log": {
+      "bytes": 300,
+      "sha256": "dfed4e27037fa529257d13d933f78d919cdf2289723b90052a1c94288eafb6ba",
+      "mode": 420
+    },
+    "fixture-image-final123-results.json": {
+      "bytes": 9933,
+      "sha256": "0d1b1a75f192d06db287587e4fe8de7291998b4837f7f494d1b45a77d2bdc109",
+      "mode": 420
+    },
+    "fixture-image-final123-runner.mjs": {
+      "bytes": 4277,
+      "sha256": "5ee485524b531241cb884fb6e28e908ff851023f291d72021dac49979c637175",
+      "mode": 420
+    },
+    "fixture-image-final123-source-archive.json": {
+      "bytes": 351,
+      "sha256": "dd8a9e0516a0405d9b27148551ccaecd941b66bbf3ccc7663a15f0a770c61274",
+      "mode": 420
+    },
+    "fixture-image-final123-source.json": {
+      "bytes": 161101,
+      "sha256": "33c339008c19252e62ab25fc752214c3afa41ae351aa29461e784405e41f4b6a",
+      "mode": 420
+    },
+    "fixture-image-final123-source.patch": {
+      "bytes": 5842,
+      "sha256": "9ba2082ae0f2bcb57bad79d6f2d8e97ed4dfacf0fdae76cdd4a0d91f8c6f79f4",
+      "mode": 420
+    },
+    "fixture-image-final123-typed-startup.log": {
+      "bytes": 1162,
+      "sha256": "17ec586aa5a53b3746283c298d51a36a86068bec2591f23adabc41cf23865167",
+      "mode": 420
+    },
+    "fixture-image-final123-workspace.log": {
+      "bytes": 619150,
+      "sha256": "e9784f9f58060d8a81d4291886a2a39559503d48302000df83bbb66643fe7acd",
+      "mode": 420
+    },
+    "fixture-image-finish114-runner.mjs": {
+      "bytes": 13283,
+      "sha256": "e8fd6817900603e6631c50211992c1c7d1eddba6c36168828d3783bf0870e952",
+      "mode": 420
+    },
+    "fixture-image-git-scan125.json": {
+      "bytes": 321,
+      "sha256": "dbdbbda34b284474e97485714dc14fd3bf5c22bee2718976112e95c94a5d33de",
+      "mode": 420
+    },
+    "fixture-image-interruption122.json": {
+      "bytes": 492,
+      "sha256": "248477f24dbc4111266c7a019acaa292151ddb7049dc41472f0e3b2594d69ecd",
+      "mode": 420
+    },
+    "fixture-image-pin117-runner.mjs": {
+      "bytes": 3203,
+      "sha256": "c9bc330b854de76e5304dd9fd9f95377868c62c61e344e5c2b9d01afed4638d9",
+      "mode": 420
+    },
+    "fixture-image-pr118-runner.mjs": {
+      "bytes": 7797,
+      "sha256": "7c76e510b3e24a9f45eeceb1018f5703822c90ab6ff6a4cf8f598caa7551d035",
+      "mode": 420
+    },
+    "fixture-image-prior-b32-checks.json": {
+      "bytes": 125560,
+      "sha256": "fb4c365c73f3eafc9817af7f3321d894fd32ccd740ad7bf7867f0e31d54fe166",
+      "mode": 420
+    },
+    "fixture-image-prior-b32-macos-117241559794.log": {
+      "bytes": 1045001,
+      "sha256": "a86c3802d2dfc36977498b1804e8d1fdcbd813cc669840bcd24d6233dcf74fe8",
+      "mode": 420
+    },
+    "fixture-image-pty-2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31.macho": {
+      "bytes": 1367072,
+      "sha256": "2e5b84afc6d399a3769444745e4aad5364925ee7867e25027fd46de51f6bce31",
+      "mode": 493
+    },
+    "fixture-image-publication-runner-scan125.json": {
+      "bytes": 665,
+      "sha256": "486dfa86362977298481f5eba870f5e326e7230b7cb60ba436988756cd3c3a08",
+      "mode": 420
+    },
+    "fixture-image-raw-scan125.json": {
+      "bytes": 380,
+      "sha256": "55c867737d2139d328852b1a47a289f003951317df9771fdf341a279696ddab3",
+      "mode": 420
+    },
+    "fixture-image-stability113-output-alias.json": {
+      "bytes": 466,
+      "sha256": "29c4fde203dab8a0d942d3b4e87f8a260c9f533d3560e60b11c1a150f8046473",
+      "mode": 420
+    },
+    "fixture-image-stability113-result.json": {
+      "bytes": 728,
+      "sha256": "fcf2939d866db7ed8252d33264729d91db2aad5f72ccaff7f36af55841f31a46",
+      "mode": 420
+    },
+    "fixture-image-stability113-runner.mjs": {
+      "bytes": 2332,
+      "sha256": "2fe91175f2281dcb9f10edcc0e932a1d93bd6fa28642604dd8fd2ec6b32edf06",
+      "mode": 420
+    },
+    "fixture-path-race108-result.json": {
+      "bytes": 399,
+      "sha256": "6278eccda4d04d73a46512cd0b69a1d5af8aa2c68f935ef4dfec19ecfc8025b3",
+      "mode": 420
+    },
+    "fixture-path-race108.mjs": {
+      "bytes": 1558,
+      "sha256": "1fc4100fd594bf00e873191330a7e55e52da8951b54f0796866c9c396f67757b",
+      "mode": 420
+    },
+    "fixture-path-race109-result.json": {
+      "bytes": 449,
+      "sha256": "5fe8a5a6e41ed45c06cb97abcc9f1572d45a4fb4bfcf254fb837de284e7068c6",
+      "mode": 420
+    },
+    "fixture-path-race109.mjs": {
+      "bytes": 1884,
+      "sha256": "819f0a1d658570494308880347d23ba7d341b8abac042e160b9a75c0970911df",
+      "mode": 420
+    },
+    "refactor-local-checkpoint-3de44d2c.bundle": {
+      "bytes": 423343,
+      "sha256": "f74a1c1e3b56868f191c48aaa2b93c48d4735a67e34f38cceb5be7aa5912859b",
+      "mode": 420
+    },
+    "refactor-local-checkpoint-3de44d2c.bundle.verify.log": {
+      "bytes": 340,
+      "sha256": "6d9de502b4861a1e7b4fc18a1eb6a91c1188001da16f2b782d583600548073fb",
+      "mode": 420
+    },
+    "unix-tty-linux-features97.log": {
+      "bytes": 2448,
+      "sha256": "06beb627615b78d3debae3ccda8f485306c61185a22672e9fb6a0fc15bff0d40",
+      "mode": 420
+    },
+    "unix-tty-linux-native-success97.log": {
+      "bytes": 94967,
+      "sha256": "d56b6471bbdb4b10cf1c6ef1558a9572be6d643a80dd8c3eee6e1a4ce582a9fb",
+      "mode": 420
+    }
+  }
+}

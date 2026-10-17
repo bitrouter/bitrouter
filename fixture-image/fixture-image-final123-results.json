@@ -1,0 +1,346 @@
+{
+  "source": "fixture-image-final123-source.json",
+  "scope": "Complete current-source acceptance after fixture startup isolation: Cargo builds and immutable content-addressed image publication share a file lock, atomic copy/rename, byte verification; executable fixtures remain Cargo-built Rust. Original full99 had4756pass1pre-protocolENOENT, no drift/LEAK; it is not a pass. Controlled public-path sampling observed921 missing checks across160fresh builds, while spawn probe itself did not reproduce errno; causality remains inferred. Production runtime unchanged. Includes3x45s DAG waits(total135vs90) and Unix input fixes. Current source frozen; no new retries, relaxed assertions or product limits. Intermediate112 was explicitly interrupted after an early formatting check found one wrapping change;749passed,1SIGINT,4007unrun,24skipped,no source drift/LEAK. Its focused stages passed but it is not a full pass. Formatting is corrected before current-source freeze.",
+  "startedAt": "2026-10-17T00:18:21.085Z",
+  "runs": [
+    {
+      "name": "fmt-preflight",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "fixture-image-final123-fmt-preflight.log",
+      "startedAt": "2026-10-17T00:18:21.086Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:18:41.501Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "fixture-image-final123-native-features.log",
+      "startedAt": "2026-10-17T00:18:41.501Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:18:41.908Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ],
+      "log": "fixture-image-final123-acp-features.log",
+      "startedAt": "2026-10-17T00:18:41.909Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:18:42.126Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ],
+      "log": "fixture-image-final123-native-tree.log",
+      "startedAt": "2026-10-17T00:18:42.126Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:18:42.243Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ],
+      "log": "fixture-image-final123-msrv-native.log",
+      "startedAt": "2026-10-17T00:18:42.243Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:18:42.670Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "mock-acp-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(code_tui_pty) & test(mock_acp_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "fixture-image-final123-mock-acp-1.log",
+      "startedAt": "2026-10-17T00:18:42.670Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:20:22.590Z",
+      "summaries": [
+        "     Summary [   0.457s] 3 tests run: 3 passed, 35 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "mock-acp-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(code_tui_pty) & test(mock_acp_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "fixture-image-final123-mock-acp-2.log",
+      "startedAt": "2026-10-17T00:20:22.591Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:20:23.730Z",
+      "summaries": [
+        "     Summary [   0.289s] 3 tests run: 3 passed, 35 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "mock-acp-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(code_tui_pty) & test(mock_acp_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "fixture-image-final123-mock-acp-3.log",
+      "startedAt": "2026-10-17T00:20:23.730Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:20:24.563Z",
+      "summaries": [
+        "     Summary [   0.290s] 3 tests run: 3 passed, 35 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "goal-pty",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(goal_tui_pty)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "fixture-image-final123-goal-pty.log",
+      "startedAt": "2026-10-17T00:20:24.563Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:21:19.766Z",
+      "summaries": [
+        "     Summary [  53.888s] 4 tests run: 4 passed, 0 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "fixture-image-final123-typed-startup.log",
+      "startedAt": "2026-10-17T00:21:19.766Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:21:25.509Z",
+      "summaries": [
+        "     Summary [   0.260s] 2 tests run: 2 passed, 3664 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "native-parallel-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
+        "--test-threads",
+        "2"
+      ],
+      "log": "fixture-image-final123-native-parallel-1.log",
+      "startedAt": "2026-10-17T00:21:25.509Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:21:50.856Z",
+      "summaries": [
+        "     Summary [  24.844s] 1 test run: 1 passed, 3665 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ],
+      "log": "fixture-image-final123-workspace.log",
+      "startedAt": "2026-10-17T00:21:50.857Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:40:57.776Z",
+      "summaries": [
+        "     Summary [1146.178s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "fixture-image-final123-clippy.log",
+      "startedAt": "2026-10-17T00:40:57.778Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:41:38.130Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ],
+      "log": "fixture-image-final123-fmt.log",
+      "startedAt": "2026-10-17T00:41:38.131Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:41:58.614Z",
+      "summaries": [],
+      "leaks": []
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ],
+      "log": "fixture-image-final123-doctest.log",
+      "startedAt": "2026-10-17T00:41:58.614Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:42:06.081Z",
+      "summaries": [
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ],
+      "leaks": []
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ],
+      "log": "fixture-image-final123-registry.log",
+      "startedAt": "2026-10-17T00:42:06.081Z",
+      "status": "passed",
+      "code": 0,
+      "signal": null,
+      "finishedAt": "2026-10-17T00:42:06.986Z",
+      "summaries": [],
+      "leaks": []
+    }
+  ],
+  "finishedAt": "2026-10-17T00:42:07.093Z",
+  "changed": [],
+  "passed": true
+}

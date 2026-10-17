@@ -1,0 +1,10 @@
+{
+  "head": "b32fc1174974c4bee06a7dcde203b096985d0743",
+  "dirtyFiles": [
+    ".github/workflows/ci.yml",
+    "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs",
+    "apps/bitrouter/tests/code_tui_pty.rs",
+    "crates/bitrouter-orchestrator/tests/support/fixture_binary.rs"
+  ],
+  "scope": "Dirty files supplement the exact committed HEAD."
+}

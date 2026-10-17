@@ -1,0 +1,184 @@
+{
+  "id": "fixture-image-final112",
+  "scope": "Complete current-source acceptance after fixture startup isolation: Cargo builds and immutable content-addressed image publication share a file lock, atomic copy/rename, byte verification; executable fixtures remain Cargo-built Rust. Original full99 had4756pass1pre-protocolENOENT, no drift/LEAK; it is not a pass. Controlled public-path sampling observed921 missing checks across160fresh builds, while spawn probe itself did not reproduce errno; causality remains inferred. Production runtime unchanged. Includes3x45s DAG waits(total135vs90) and Unix input fixes. Current source frozen; no new retries, relaxed assertions or product limits.",
+  "jobs": [
+    {
+      "name": "native-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ]
+    },
+    {
+      "name": "acp-features",
+      "args": [
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "--features",
+        "acp"
+      ]
+    },
+    {
+      "name": "native-tree",
+      "args": [
+        "tree",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none"
+      ]
+    },
+    {
+      "name": "msrv-native",
+      "args": [
+        "+1.93",
+        "check",
+        "--locked",
+        "-p",
+        "bitrouter-orchestrator",
+        "--no-default-features"
+      ]
+    },
+    {
+      "name": "mock-acp-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(code_tui_pty) & test(mock_acp_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "mock-acp-2",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(code_tui_pty) & test(mock_acp_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "mock-acp-3",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(code_tui_pty) & test(mock_acp_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "goal-pty",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "-E",
+        "binary(goal_tui_pty)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "typed-startup",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "native-parallel-1",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--lib",
+        "-E",
+        "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "workspace",
+      "args": [
+        "nextest",
+        "run",
+        "--workspace",
+        "--all-features",
+        "--no-fail-fast",
+        "--test-threads",
+        "2"
+      ]
+    },
+    {
+      "name": "clippy",
+      "args": [
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "name": "fmt",
+      "args": [
+        "fmt",
+        "--",
+        "--check"
+      ]
+    },
+    {
+      "name": "doctest",
+      "args": [
+        "test",
+        "--workspace",
+        "--all-features",
+        "--doc"
+      ]
+    },
+    {
+      "name": "registry",
+      "args": [
+        "run",
+        "-p",
+        "dist-helper",
+        "--",
+        "check"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "createdAt": "2026-10-17T00:18:20.865Z",
+  "run": "fixture-image-final112",
+  "reason": "Controlled SIGINT before source formatting; early fmt check showed copy.persist chain wrapping only. No source mutation until runner completed its no-drift audit.",
+  "workspace": {
+    "passed": 749,
+    "signalCases": 1,
+    "unrun": 4007,
+    "skipped": 24
+  },
+  "sourceDrift": [],
+  "leaks": [],
+  "qualification": "Incomplete, not a full pass; focused protocol/PTY/typed/DAG stages passed."
+}

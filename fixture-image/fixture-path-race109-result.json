@@ -1,0 +1,12 @@
+{
+  "missingChecks": 921,
+  "artifactInodes": 161,
+  "createdAt": "2026-10-17T00:08:33.144Z",
+  "scope": "Bounded concurrent Cargo fresh fixture builds and process starts against the shared public artifact path; stdin EOF, no provider/tools or production process.",
+  "binary": "/Users/kelsen/.codex/worktrees/d91b/bitrouter/target/debug/pty_acp_fixture",
+  "builds": 160,
+  "started": 151,
+  "completed": 151,
+  "errors": [],
+  "buildErrors": []
+}
