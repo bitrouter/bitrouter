@@ -693,7 +693,8 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
 pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
     let material = crate::goal_permission_material::checked_value(bytes, None)?;
     if material.get("native").is_some() {
-        let request = crate::goal_permission_material::native::Request::decode(bytes)?;
+        let request: crate::goal_permission_material::native::Request =
+            serde_json::from_value(material)?;
         return Ok(format!(
             "Requested native operation: {}\nThread: {}\nTurn: {}\nRequest: {}\nTool: {}\n\nOriginal arguments:\n{}\n\nThis is a permission request, not consent or evidence that the tool ran.",
             request.input.tool_name,
@@ -704,8 +705,9 @@ pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
             request.input.arguments
         ));
     }
-    let permission: crate::supervisor::PendingPermissionSnapshot = serde_json::from_slice(bytes)
-        .context("permission evidence is not a supported actual request")?;
+    let permission: crate::supervisor::PendingPermissionSnapshot =
+        serde_json::from_value(material.clone())
+            .context("permission evidence is not a supported actual request")?;
     let tool = serde_json::to_value(&permission.tool_call)?;
     let mut text = format!(
         "Requested operation (harness reported): {}\nKind (harness reported): {}\nDeclared locations: {}\n\nActual request:\n{}",
@@ -732,11 +734,7 @@ pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
         );
     }
     if let Some(context) = material.get("earlier_tool_context") {
-        let run_id = context
-            .get("run_id")
-            .and_then(serde_json::Value::as_str)
-            .context("permission context has no run")?;
-        let summary = match crate::goal_permission_material::effective_tool(bytes, run_id)? {
+        let summary = match crate::goal_permission_material::effective_tool_from_checked(&material)? {
             Some(tool) => format!(
                 "Earlier tool declarations: kind {} · locations {} · arguments {}\nOriginal permission request remains unchanged. These are declarations, not execution evidence.\n\n",
                 tool["kind"], tool["locations"], tool["rawInput"],

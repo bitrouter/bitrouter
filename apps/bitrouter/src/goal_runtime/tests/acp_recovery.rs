@@ -340,17 +340,6 @@ async fn acp_pre_prompt_recovery_loads_only_the_original_stopped_session() -> Re
                         .as_str()
                         .context("nonce missing")?
                 );
-                tokio::time::timeout(Duration::from_secs(10), async {
-                    loop {
-                        let state: serde_json::Value =
-                            serde_json::from_slice(&tokio::fs::read(&private).await?)?;
-                        if state["prompts"] == 1 {
-                            break Ok::<_, anyhow::Error>(());
-                        }
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                    }
-                })
-                .await??;
                 let permission = tokio::time::timeout(Duration::from_secs(10), async {
                     loop {
                         let turn = current.threads.read_stored_turn(&target, &CallerContext::local(), &link.turn_id).await?;
@@ -361,6 +350,10 @@ async fn acp_pre_prompt_recovery_loads_only_the_original_stopped_session() -> Re
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 }).await??;
+                // The peer writes its private state before requesting permission.
+                let state: serde_json::Value =
+                    serde_json::from_slice(&tokio::fs::read(&private).await?)?;
+                anyhow::ensure!(state["prompts"] == 1, "restored prompt was not submitted exactly once");
                 let invalid = current.threads.answer_acp_permission(&target, &CallerContext::local(),
                     bitrouter_orchestrator::service::worker::acp::Approval {
                         turn_id: link.turn_id.clone(), request_id: permission.request_id.clone(),
