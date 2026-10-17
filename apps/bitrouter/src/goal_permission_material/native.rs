@@ -36,12 +36,6 @@ impl Request {
         );
         Ok(value)
     }
-
-    /// Known built-in operations can reuse the existing local-file policy.
-    /// Shell and MCP calls receive no local-file classification.
-    pub(crate) fn tool(&self) -> Option<Value> {
-        tool_scope(&self.input.tool_name, &self.input.arguments)
-    }
 }
 
 /// Scope comes from the built-in tool contract, never an arbitrary MCP name.

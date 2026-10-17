@@ -667,46 +667,8 @@ impl Coordinator {
                 ]),
             };
             let typed_control = model_control::ModelControl::new(self, goal, true);
-            typed_control
-                .begin_typed(&attempt_id, &request, runtime.pricing.as_ref())
-                .await?;
-            let outcome = if serde_json::to_vec(&request)?.len() > runtime.policy.max_request_bytes
-            {
-                Err(
-                    bitrouter_sdk::decision_model::types::DecisionError::invalid_request(
-                        "Goal input exceeds typed request bound; reasoning is required",
-                    ),
-                )
-            } else {
-                let token = CancellationToken::new();
-                runtime
-                    .executor
-                    .execute(&request, &token)
-                    .await
-                    .and_then(|response| {
-                        response.validate(&request)?;
-                        Ok(response)
-                    })
-            };
-            let usage = match &outcome {
-                Ok(response) => Some(response.usage),
-                Err(error) => error.usage,
-            };
-            let estimate = usage
-                .and_then(|usage| {
-                    runtime
-                        .pricing
-                        .as_ref()
-                        .map(|pricing| pricing.estimate(usage))
-                })
-                .filter(|value| value.is_finite() && *value >= 0.0)
-                .and_then(|value| {
-                    format!("{:.0}", (value * 1_000_000.0).ceil())
-                        .parse::<u64>()
-                        .ok()
-                });
-            typed_control
-                .observe_typed(&attempt_id, &outcome, estimate)
+            let outcome = runtime
+                .execute_controlled(&attempt_id, &request, typed_control.as_ref())
                 .await?;
             // Keep native distributions, reported usage and sanitized errors.
             // There is no calibrated direct-control threshold yet: every typed

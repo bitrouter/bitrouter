@@ -164,7 +164,7 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
     };
     let directory = tempfile::tempdir()?;
     let (mut control, store, goals) = control(directory.path()).await?;
-    let id = control.goal.id.clone();
+    let id = control.goal_id.clone();
     // Domain transitions only: no Git work, provider request or execution
     // adoption is claimed by this source/accounting concurrency regression.
     worker_change(
@@ -234,7 +234,7 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
         )
         .await?;
     }
-    let control_source_revision = control.goal.control_source_revision;
+    let control_source_revision = snapshot(&goals, &id).await?.control_source_revision;
     let source = |task: &str| bitrouter_orchestrator::thread::GoalWork {
         goal_id: id.clone(),
         owner_thread_id: "owner-thread".into(),
@@ -299,7 +299,7 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
     )
     .await?;
     let edited = snapshot(&goals, &id).await?;
-    assert!(edited.requirements_revision > control.goal.requirements_revision);
+    assert!(edited.requirements_revision > control.requirements_revision);
     control
         .begin(
             WorkKind::Preparation,
@@ -322,7 +322,7 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
     let work_started = active.accounting.work_started;
     Arc::get_mut(&mut control)
         .context("fixture control unexpectedly shared")?
-        .goal = edited;
+        .requirements_revision = edited.requirements_revision;
     control
         .begin(
             WorkKind::Preparation,
@@ -701,7 +701,8 @@ async fn control(root: &Path) -> Result<(Arc<ModelControl>, Arc<FaultStore>, Arc
     let goal = snapshot(&goals, &operation.goal_id).await?;
     let control = Arc::new(ModelControl {
         goals: goals.clone(),
-        goal,
+        goal_id: goal.id,
+        requirements_revision: goal.requirements_revision,
         coordinator_id: "model-test".into(),
         root: root.join("artifacts"),
         explicit_input: false,
@@ -745,7 +746,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
     control
         .before_typed_decision("original-native-decision", &request, Some(&pricing))
         .await?;
-    let admitted = snapshot(&goals, &control.goal.id).await?;
+    let admitted = snapshot(&goals, &control.goal_id).await?;
     assert_eq!(admitted.accounting.in_flight.len(), 1);
     assert_eq!(admitted.budget.reserved_micro_usd()?, 100);
     goals
@@ -798,7 +799,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
             .is_err()
     );
     assert_eq!(
-        snapshot(&goals, &interrupted.goal.id)
+        snapshot(&goals, &interrupted.goal_id)
             .await?
             .budget
             .reserved_micro_usd()?,
@@ -810,7 +811,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
     interrupted
         .after_typed_decision("paused-intent", &not_dispatched, Some(&pricing))
         .await?;
-    let saved = snapshot(&goals, &interrupted.goal.id).await?;
+    let saved = snapshot(&goals, &interrupted.goal_id).await?;
     assert_eq!(saved.run_intent, RunIntent::Pause);
     assert!(saved.accounting.in_flight.is_empty());
     assert_eq!(saved.budget.reserved_micro_usd()?, 0);
@@ -818,7 +819,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
     interrupted
         .after_typed_decision("never-admitted", &not_dispatched, Some(&pricing))
         .await?;
-    assert_eq!(snapshot(&goals, &interrupted.goal.id).await?, saved);
+    assert_eq!(snapshot(&goals, &interrupted.goal_id).await?, saved);
 
     // A backend's no-dispatch flag cannot erase usage it also reports.
     let usage_root = tempfile::tempdir()?;
@@ -841,7 +842,7 @@ async fn native_typed_callback_settles_original_receipt_after_pause_and_lost_rep
             Some(&pricing),
         )
         .await?;
-    let charged = snapshot(&goals, &usage_control.goal.id).await?;
+    let charged = snapshot(&goals, &usage_control.goal_id).await?;
     assert_eq!(charged.accounting.estimated_model_tokens_micro_usd, 13);
     assert_eq!(charged.budget.reserved_micro_usd()?, 0);
     Ok(())
@@ -882,7 +883,7 @@ async fn typed_quotes_share_goal_budget_and_preserve_unknown_or_excess_usage() -
     ] {
         let root = tempfile::tempdir()?;
         let (control, _, goals) = control(root.path()).await?;
-        let current = snapshot(&goals, &control.goal.id).await?;
+        let current = snapshot(&goals, &control.goal_id).await?;
         goals
             .execute(
                 "local",
@@ -984,7 +985,7 @@ async fn bounded_accounting_conflicts_do_not_poison_model_admission() -> Result<
     store.inject(Fault::Conflict, 5)?;
     control.before_context_validation("same-work").await?;
     assert!(control.acknowledged());
-    let before = snapshot(&goals, &control.goal.id).await?;
+    let before = snapshot(&goals, &control.goal_id).await?;
     assert_eq!(before.accounting.work_started, 1);
     assert_eq!(before.accounting.provider_attempts, 0);
     assert_eq!(before.accounting.in_flight.len(), 1);
@@ -995,7 +996,7 @@ async fn bounded_accounting_conflicts_do_not_poison_model_admission() -> Result<
             None,
         )
         .await?;
-    let after = snapshot(&goals, &control.goal.id).await?;
+    let after = snapshot(&goals, &control.goal_id).await?;
     assert_eq!(after.accounting.work_observed, 1);
     assert!(after.accounting.in_flight.is_empty());
     Ok(())
@@ -1008,7 +1009,7 @@ async fn lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work(
     store.inject(Fault::LostAcknowledgement, 1)?;
     control.before_context_validation("lost-reply").await?;
     assert!(control.acknowledged());
-    let head = snapshot(&goals, &control.goal.id).await?;
+    let head = snapshot(&goals, &control.goal_id).await?;
     assert_eq!(head.accounting.work_started, 1);
     assert_eq!(head.accounting.in_flight.len(), 1);
     assert_eq!(head.accounting.provider_attempts, 0);
@@ -1020,7 +1021,7 @@ async fn lost_accounting_reply_confirms_the_same_receipt_without_duplicate_work(
             None,
         )
         .await?;
-    let head = snapshot(&goals, &control.goal.id).await?;
+    let head = snapshot(&goals, &control.goal_id).await?;
     assert_eq!(head.accounting.work_observed, 1);
     assert_eq!(head.accounting.unpriced_outcomes, 1);
     assert!(head.accounting.in_flight.is_empty());
@@ -1092,7 +1093,7 @@ async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -
     control.after_attempt(report.clone()).await;
     assert!(control.acknowledged());
     assert!(control.activity.lock().await.is_empty());
-    let observed = snapshot(&goals, &control.goal.id).await?;
+    let observed = snapshot(&goals, &control.goal_id).await?;
     assert_eq!(observed.accounting.provider_attempts, 1);
     assert!(observed.accounting.in_flight.is_empty());
     let GoalReply::Accepted { operation } = goals
@@ -1128,17 +1129,17 @@ async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -
             "local",
             GoalCommand::Control {
                 operation_id: "pause-before-outcome-replay".into(),
-                goal_id: control.goal.id.clone(),
+                goal_id: control.goal_id.clone(),
                 expected_revision: observed.revision,
                 intent: RunIntent::Pause,
             },
             now()?,
         )
         .await?;
-    let paused = snapshot(&goals, &control.goal.id).await?;
+    let paused = snapshot(&goals, &control.goal_id).await?;
     control.after_attempt(report.clone()).await;
     assert!(control.acknowledged());
-    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
+    assert_eq!(snapshot(&goals, &control.goal_id).await?, paused);
     assert_eq!(
         crate::goal_artifacts::read(&control.root, &reference).await?,
         original
@@ -1147,7 +1148,7 @@ async fn received_content_survives_lost_outcome_reply_and_replay_after_pause() -
     changed.error = Some("different outcome cannot reuse the original key".into());
     control.after_attempt(changed).await;
     assert!(!control.acknowledged());
-    assert_eq!(snapshot(&goals, &control.goal.id).await?, paused);
+    assert_eq!(snapshot(&goals, &control.goal_id).await?, paused);
     Ok(())
 }
 
@@ -1176,7 +1177,7 @@ async fn persistent_accounting_failure_retains_its_cause_and_fences_new_work() -
             .await
             .is_err()
     );
-    let head = snapshot(&goals, &control.goal.id).await?;
+    let head = snapshot(&goals, &control.goal_id).await?;
     assert_eq!(head.accounting.work_started, 0);
     assert_eq!(head.accounting.provider_attempts, 0);
     assert!(head.accounting.in_flight.is_empty());
@@ -1194,7 +1195,7 @@ async fn recovered_intent_receipt_does_not_authorize_work_after_pause() -> Resul
         .err()
         .context("expected paused admission")?;
     assert!(error.to_string().contains("paused or stopped"));
-    let head = snapshot(&goals, &control.goal.id).await?;
+    let head = snapshot(&goals, &control.goal_id).await?;
     assert_eq!(head.run_intent, RunIntent::Pause);
     assert_eq!(head.accounting.work_started, 1);
     assert_eq!(head.accounting.provider_attempts, 0);
@@ -1205,7 +1206,7 @@ async fn recovered_intent_receipt_does_not_authorize_work_after_pause() -> Resul
             .is_err()
     );
     assert_eq!(
-        snapshot(&goals, &control.goal.id)
+        snapshot(&goals, &control.goal_id)
             .await?
             .accounting
             .work_started,
@@ -1225,7 +1226,7 @@ async fn model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability()
                 owner: "local",
                 coordinator_id: "model-test",
             },
-            &control.goal.id,
+            &control.goal_id,
             "shorten-owner",
             1,
             Change::ClaimCoordinator {
@@ -1243,7 +1244,7 @@ async fn model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability()
                 owner: "local",
                 coordinator_id: "different-owner",
             },
-            &control.goal.id,
+            &control.goal_id,
             "transfer-owner",
             1,
             Change::ClaimCoordinator {
@@ -1260,7 +1261,7 @@ async fn model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability()
         .context("expected ownership fence")?;
     assert!(error.to_string().contains("different owner"));
     assert_eq!(
-        snapshot(&goals, &control.goal.id)
+        snapshot(&goals, &control.goal_id)
             .await?
             .accounting
             .work_started,
@@ -1276,7 +1277,7 @@ async fn frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_
     use bitrouter_sdk::language_model::native::NativeRoute;
     let directory = tempfile::tempdir()?;
     let (control, _, goals) = control(directory.path()).await?;
-    let id = control.goal.id.clone();
+    let id = control.goal_id.clone();
     let quote = NativeTokenReservation {
         micro_usd: 10,
         pricing_version: "frozen".into(),
@@ -1379,5 +1380,268 @@ async fn frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_
     assert!(stopped.accounting.in_flight.is_empty());
     control.admission_aborted(&plan.request_id, 0).await;
     assert_eq!(snapshot(&goals, &id).await?, stopped);
+    Ok(())
+}
+
+struct HeldInputDecision {
+    entered: tokio::sync::Notify,
+    release: CancellationToken,
+    cancelled: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl bitrouter_sdk::decision_model::DecisionExecutor for HeldInputDecision {
+    async fn execute(
+        &self,
+        request: &bitrouter_sdk::decision_model::types::DecisionRequest,
+        cancellation: &CancellationToken,
+    ) -> std::result::Result<
+        bitrouter_sdk::decision_model::types::DecisionResponse,
+        bitrouter_sdk::decision_model::types::DecisionError,
+    > {
+        use bitrouter_sdk::decision_model::types::{
+            Answer, DecisionError, DecisionFailure, DecisionResponse, DecisionUsage,
+        };
+        self.entered.notify_one();
+        let usage = DecisionUsage {
+            input_tokens: 11,
+            output_tokens: 2,
+        };
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => {
+                self.cancelled.store(true, Ordering::Release);
+                Err(DecisionError {
+                    kind: DecisionFailure::Cancelled,
+                    message: "input source invalidated after dispatch".into(),
+                    usage: Some(usage),
+                    may_have_run: true,
+                })
+            },
+            () = self.release.cancelled() => Ok(DecisionResponse {
+                model: request.model.clone(),
+                usage,
+                answers: BTreeMap::from([("query".into(), Answer::Noul { noul: 1.0 })]),
+            }),
+        }
+    }
+}
+
+#[tokio::test]
+async fn typed_input_cancels_stale_sources_settles_usage_and_remains_available_while_paused()
+-> Result<()> {
+    use bitrouter_orchestrator::goal::input::{Event as InputEvent, Interpretation, Stage};
+    use bitrouter_sdk::decision_model::{
+        DecisionRuntime,
+        policy::DecisionPricing,
+        types::{DecisionFailure, DecisionRequest, Question},
+    };
+    for case in ["lease", "budget", "requirements", "pause"] {
+        let root = tempfile::tempdir()?;
+        let (mut control, _, goals) = control(root.path()).await?;
+        Arc::get_mut(&mut control)
+            .context("control already shared")?
+            .explicit_input = true;
+        let backend = Arc::new(HeldInputDecision {
+            entered: tokio::sync::Notify::new(),
+            release: CancellationToken::new(),
+            cancelled: AtomicBool::new(false),
+        });
+        let runtime = DecisionRuntime {
+            model: "input-fixture".into(),
+            executor: backend.clone(),
+            policy: Default::default(),
+            pricing: Some(DecisionPricing {
+                input_usd_per_million: 1.0,
+                output_usd_per_million: 1.0,
+                max_input_tokens: Some(100),
+                max_output_tokens: Some(100),
+            }),
+        };
+        let request = DecisionRequest {
+            model: runtime.model.clone(),
+            state: serde_json::json!({"input":"What is the current progress?"}),
+            questions: BTreeMap::from([(
+                "query".into(),
+                Question::Noul {
+                    instructions: None,
+                    criteria: None,
+                },
+            )]),
+        };
+        let invalidate = async {
+            backend.entered.notified().await;
+            let goal = snapshot(&goals, &control.goal_id).await?;
+            match case {
+                "lease" => {
+                    goals
+                        .workflow_change(
+                            WorkflowActor {
+                                owner: "local",
+                                coordinator_id: "next-owner",
+                            },
+                            &goal.id,
+                            "transfer-owner",
+                            goal.requirements_revision,
+                            Change::ClaimCoordinator {
+                                id: "next-owner".into(),
+                                expires_at_ms: goal
+                                    .workflow
+                                    .coordinator
+                                    .as_ref()
+                                    .context("lease missing")?
+                                    .expires_at_ms
+                                    + 1
+                                    + OWNER_LEASE_MS,
+                            },
+                            goal.workflow
+                                .coordinator
+                                .as_ref()
+                                .context("lease missing")?
+                                .expires_at_ms
+                                + 1,
+                        )
+                        .await?;
+                }
+                "budget" => {
+                    goals
+                        .execute(
+                            "local",
+                            GoalCommand::SetBudget {
+                                operation_id: "exhaust-time".into(),
+                                goal_id: goal.id,
+                                expected_revision: goal.revision,
+                                limits: bitrouter_orchestrator::goal::budget::Limits {
+                                    elapsed_ms: Some(0),
+                                    managed_token_estimates_micro_usd: None,
+                                },
+                            },
+                            now()?,
+                        )
+                        .await?;
+                }
+                "requirements" => {
+                    let GoalReply::Accepted { operation } = goals
+                        .execute(
+                            "local",
+                            GoalCommand::Input {
+                                operation_id: "change-requirements".into(),
+                                goal_id: goal.id.clone(),
+                                expected_revision: goal.revision,
+                                text: "Also deliver compatibility evidence".into(),
+                                task_reference: None,
+                            },
+                            now()?,
+                        )
+                        .await?
+                    else {
+                        anyhow::bail!("input receipt missing")
+                    };
+                    worker_change(
+                        &goals,
+                        &goal.id,
+                        "begin-change",
+                        Change::Input {
+                            event: InputEvent::Begin {
+                                operation: Box::new(operation),
+                                attempt_id: "change".into(),
+                                stage: Stage::Reasoning,
+                            },
+                        },
+                    )
+                    .await?;
+                    worker_change(
+                        &goals,
+                        &goal.id,
+                        "finish-change",
+                        Change::Input {
+                            event: InputEvent::Finish {
+                                attempt_id: "change".into(),
+                                reasoning_request_id: Some("change-model".into()),
+                                interpretation: Interpretation {
+                                    objective: Some("Deliver compatibility evidence too".into()),
+                                    ..Default::default()
+                                },
+                            },
+                        },
+                    )
+                    .await?;
+                }
+                _ => {
+                    goals
+                        .execute(
+                            "local",
+                            GoalCommand::Control {
+                                operation_id: "pause-input".into(),
+                                goal_id: goal.id,
+                                expected_revision: goal.revision,
+                                intent: RunIntent::Pause,
+                            },
+                            now()?,
+                        )
+                        .await?;
+                    control.gate().await?;
+                    backend.release.cancel();
+                }
+            }
+            Ok::<_, anyhow::Error>(())
+        };
+        let (outcome, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::try_join!(
+                async {
+                    Ok::<_, anyhow::Error>(
+                        runtime
+                            .execute_controlled("input-classification", &request, control.as_ref())
+                            .await,
+                    )
+                },
+                invalidate
+            )
+        })
+        .await
+        .with_context(|| format!("typed input ignored source invalidation: {case}"))??;
+        let goal = snapshot(&goals, &control.goal_id).await?;
+        anyhow::ensure!(
+            backend.cancelled.load(Ordering::Acquire) == (case != "pause"),
+            "unexpected cancellation: {case}"
+        );
+        if case == "lease" {
+            // An old coordinator may cancel I/O but cannot commit after takeover.
+            // Keep the original unknown-cost hold until its owner reconciles it.
+            anyhow::ensure!(
+                outcome.is_err() && !control.acknowledged(),
+                "old owner committed its outcome"
+            );
+            anyhow::ensure!(
+                goal.accounting.work_started == 1
+                    && goal.accounting.work_observed == 0
+                    && goal.accounting.in_flight.len() == 1
+                    && goal.budget.held.len() == 1,
+                "owner loss erased the unsettled attempt"
+            );
+            continue;
+        }
+        let outcome = outcome?;
+        anyhow::ensure!(
+            if case == "pause" {
+                outcome.is_ok()
+            } else {
+                matches!(&outcome, Err(error) if error.kind == DecisionFailure::Cancelled)
+            },
+            "unexpected typed outcome for {case}: {outcome:?}"
+        );
+        anyhow::ensure!(
+            goal.accounting.work_started == 1 && goal.accounting.work_observed == 1,
+            "typed attempt was not settled exactly once: {case}"
+        );
+        anyhow::ensure!(
+            goal.accounting.in_flight.is_empty() && goal.budget.held.is_empty(),
+            "cancelled usage was left unsettled: {case}"
+        );
+        anyhow::ensure!(
+            goal.accounting.estimated_model_tokens_micro_usd == 13,
+            "observed usage was lost: {case}"
+        );
+    }
     Ok(())
 }

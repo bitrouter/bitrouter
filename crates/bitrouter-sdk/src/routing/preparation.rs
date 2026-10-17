@@ -9,7 +9,7 @@ use super::{
 use crate::decision_model::{
     DecisionRuntime,
     policy::DecisionPolicy,
-    types::{DecisionError, DecisionFailure, DecisionRequest, DecisionResponse, DecisionUsage},
+    types::{DecisionError, DecisionRequest, DecisionResponse, DecisionUsage},
 };
 use crate::language_model::native::{NativeExecutionControl, NativePlan};
 use bitrouter_ai::types::Prompt;
@@ -87,7 +87,9 @@ impl Prepared {
             .unwrap_or_default();
         let receipt = if let Some(runtime) = runtime {
             let request = assessment_request(prompt, runtime);
-            let outcome = execute_decision(runtime, &request, &CancellationToken::new()).await;
+            let outcome = runtime
+                .execute_bounded(&request, &CancellationToken::new())
+                .await;
             Some(receipt(id, &request, &policy, outcome))
         } else {
             None
@@ -122,31 +124,9 @@ impl Prepared {
         prepared.policy = runtime.policy.clone();
         let attempt_id = format!("{id}/routing-assessment");
         let request = assessment_request(prompt, runtime);
-        let admission = control
-            .before_typed_decision(&attempt_id, &request, runtime.pricing.as_ref())
-            .await;
-        let token = CancellationToken::new();
-        let outcome = match &admission {
-            Err(error) => Err(DecisionError::invalid_request(error.to_string())),
-            Ok(()) => {
-                let call = execute_decision(runtime, &request, &token);
-                tokio::pin!(call);
-                tokio::select! {
-                    biased;
-                    () = control.provider_cancelled() => {
-                        token.cancel();
-                        // The executor returns any usage already observed;
-                        // dropping it would erase that settlement evidence.
-                        call.await
-                    },
-                    outcome = &mut call => outcome,
-                }
-            }
-        };
-        control
-            .after_typed_decision(&attempt_id, &outcome, runtime.pricing.as_ref())
+        let outcome = runtime
+            .execute_controlled(&attempt_id, &request, control)
             .await?;
-        admission?;
         prepared.receipt = Some(receipt(&attempt_id, &request, &prepared.policy, outcome));
         Ok(prepared)
     }
@@ -155,51 +135,6 @@ impl Prepared {
 fn assessment_request(prompt: &Prompt, runtime: &DecisionRuntime) -> DecisionRequest {
     let input = Input::from_prompt(prompt, runtime.policy.max_request_bytes / 4);
     assessment::request(&runtime.model, &input)
-}
-
-async fn execute_decision(
-    runtime: &DecisionRuntime,
-    request: &DecisionRequest,
-    token: &CancellationToken,
-) -> Result<DecisionResponse, DecisionError> {
-    let policy = &runtime.policy;
-    let outcome = match serde_json::to_vec(request) {
-        Ok(bytes)
-            if bytes.len() <= policy.max_request_bytes
-                && policy.validate().is_ok()
-                && request.validate().is_ok() =>
-        {
-            runtime.executor.execute(request, token).await
-        }
-        _ => Err(DecisionError::invalid_request(
-            "routing classifier request exceeds its admitted bound",
-        )),
-    };
-    let outcome = outcome.and_then(|response| {
-        response.validate(request)?;
-        Ok(response)
-    });
-    let limit = policy
-        .max_request_bytes
-        .saturating_mul(2)
-        .saturating_add(8192);
-    if serde_json::to_vec(&outcome).is_ok_and(|bytes| bytes.len() <= limit) {
-        return outcome;
-    }
-    let usage = match &outcome {
-        Ok(response) => Some(response.usage),
-        Err(error) => error.usage,
-    };
-    let may_have_run = match &outcome {
-        Ok(_) => true,
-        Err(error) => error.may_have_run,
-    };
-    Err(DecisionError {
-        kind: DecisionFailure::ResponseTooLarge,
-        message: "routing classifier outcome exceeds its admitted bound".into(),
-        usage,
-        may_have_run,
-    })
 }
 
 fn receipt(
