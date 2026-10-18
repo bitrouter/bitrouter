@@ -6773,6 +6773,24 @@
             }
           },
           "provider_model_id": "google/gemini-4-argon"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "deepseek/deepseek-v4.1-flash-1017",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4.1-flash-1017"
         }
       ],
       "name": "openrouter",

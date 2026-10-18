@@ -11,3 +11,13 @@
   max_input_tokens: 1048576
   max_output_tokens: 384000
   release_date: 2026-09-10
+- id: deepseek/deepseek-v4.1-flash-1017
+  name: 'DeepSeek: DeepSeek V4.1 Flash 1017'
+  input_modalities:
+  - image
+  - text
+  output_modalities:
+  - text
+  max_input_tokens: 1048576
+  max_output_tokens: 393216
+  release_date: 2026-10-17
