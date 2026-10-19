@@ -3738,7 +3738,8 @@ PostgreSQL/MySQL, telemetry exports and strict platform linting passed.
 
 The unchanged suspend/resume PTY case had
 [one intermittent Linux failure](https://github.com/bitrouter/bitrouter/actions/runs/39059949981/job/117475668959).
-Its cause remains unresolved. Independent review confirmed that the test and
+At that checkpoint its cause remained unresolved. Independent review confirmed
+that the test and
 relevant signal/lifecycle code match the base branch. One
 [same-revision terminal-job rerun](https://github.com/bitrouter/bitrouter/actions/runs/39059949981/job/117484316579)
 passed all 50 tests with test retries disabled; the case also passed the full
@@ -3752,3 +3753,39 @@ dependencies or CI policy. Frozen local performance evidence remains tied to
 2.8125 MiB / 4.58%, below the accepted measured overhead, and the memory
 optimization follow-up remains open. No new performance run is claimed.
 P1 is not implemented by this PR.
+
+## Terminal continuation candidate (2026-10-20)
+
+After post-revert integration, PR head `effc842` failed the Ubuntu terminal
+shard: `standalone_agents_and_attach_restore_terminal_without_stopping_runs`
+timed out waiting for alternate-screen re-entry after SIGCONT. All other
+executed jobs in that CI run, including macOS/Windows full suites and gateway
+packaging, passed. The Ubuntu aggregate failed as a consequence of that shard.
+
+Candidate `6e8221738d10242fbc56e28486db84c5bb00c892` restores the generic SIGCONT
+wait from `bf51790`, which was removed with the Goals revert. Each of the three
+existing terminal callers now waits for explicit continuation after releasing
+terminal modes. No Goals feature or runtime is restored. PTY acceptance checks
+complete termios while the process is stopped and repeats three suspend/resume
+cycles. The CodeQL fixed-key finding in the settlement test is also addressed
+using randomly generated fixture bytes; production key handling is unchanged.
+
+- Terminal partition: **50 passed, six explicit skips, zero retries**, 166.190 s.
+- Settlement suite: **six passed**, 0.10 s, including both pending-decision races.
+- All-feature library/test strict Clippy on Rust 1.97 and format/diff checks passed.
+- Independent scoped review approved the signal lifecycle, platform handling,
+  strengthened assertions and test-key change without actionable findings.
+- Final independent acceptance review reconciled source scope, log and artifact
+  hashes, compiled identities, handoff IDs and all performance calculations;
+  approved pushing the follow-up, with hosted checks still required.
+- Full and minimum binaries rebuilt from the committed candidate; nine new
+  measurements retain every sample. Full idle RSS is 61.531 → 63.688 MiB
+  (**+2.15625 MiB / +3.50%**); minimum gateway is **42.000 MiB**. Full ordinary/SSE
+  throughput medians differ by +0.79% / +0.87%. The accepted memory overhead and
+  follow-up optimization remain recorded; no production performance claim is made.
+
+See the [follow-up evidence](evidence/service-refactor/README.md#terminal-continuation-follow-up-2026-10-20)
+for source/artifact identities, original failure, log hashes and complete ranges.
+Previous ownership, package, SDK, persistence and feature evidence remains
+separate; no new full-workspace local run is claimed. The follow-up PR head still
+requires fresh hosted platform, packaging and CodeQL results before merge ready.

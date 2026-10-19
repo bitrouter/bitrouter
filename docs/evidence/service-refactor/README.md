@@ -165,3 +165,48 @@ The existing proc-macro-error2 future warning and macOS development-linker
 compact-unwind warning remain visible in build logs. These builds and their
 process acceptance pass; exception-unwinding performance is not measured.
 Dependency counts retain the isolated normal/build name-version method above.
+
+## Terminal continuation follow-up (2026-10-20)
+
+The final candidate source is `6e8221738d10242fbc56e28486db84c5bb00c892`.
+The preceding PR head exposed the shared terminal-continuation race again on
+Ubuntu. Its failed job and log digest are retained in
+[validation-terminal-fix-2026-10-20.json](validation-terminal-fix-2026-10-20.json).
+The shared helper now subscribes to SIGCONT before SIGSTOP and awaits explicit
+continuation before any of the three existing terminal callers reacquires input.
+This restores the generic fix removed with the Goals revert, without restoring
+Goals. The fixed-key CodeQL finding was inside a settlement test; that fixture
+now generates random key bytes without changing its assertions.
+
+Local terminal acceptance passed **50/50**, with six existing explicit skips and
+zero retries. The two affected PTY cases now perform three suspension cycles and
+compare the stopped terminal's complete termios against its original state.
+All six settlement tests and strict all-feature library/test Clippy passed.
+Independent review approved the implementation. Fresh hosted checks on the
+follow-up PR head remain required; the earlier head's macOS/Windows and packaging
+results do not replace that gate.
+
+[gateway-terminal-fix-2026-10-20.json](gateway-terminal-fix-2026-10-20.json) retains
+all nine new samples and artifact hashes. The full and minimum executables were
+rebuilt from the candidate above; the baseline executable remains post-revert
+main `e972d5e`. The same Rust 1.99 development profile, isolated local provider,
+fresh SQLite, 4,096 ordinary plus 4,096 SSE requests, concurrency eight and three
+rotating sample orders apply. No build, test or lint ran during measurement.
+
+| Median | Baseline full | Candidate full | Minimum gateway |
+| --- | ---: | ---: | ---: |
+| Startup ms | 65.966 | 66.460 | 62.061 |
+| Idle RSS MiB | 61.531 | 63.688 | 42.000 |
+| After-load RSS MiB | 201.922 | 197.375 | 176.391 |
+| Ordinary requests/s | 4,147.676 | 4,180.606 | 4,174.293 |
+| SSE requests/s | 5,306.651 | 5,353.048 | 5,146.833 |
+| Ordinary p95 ms | 2.981 | 2.878 | 2.922 |
+| SSE p95 ms | 1.993 | 2.001 | 2.102 |
+
+Full idle overhead is **2.15625 MiB / 3.50%**, below the accepted earlier small
+increase; the memory optimization follow-up remains open. Full ordinary/SSE
+throughput medians differ by **+0.79% / +0.87%**. Minimum SSE samples span
+4,844–5,457 requests/s (median -3.01% from baseline); all samples are retained.
+These small local samples do not prove either an improvement or a regression in
+production throughput. Earlier performance records and their limitations remain
+available above rather than being overwritten.
