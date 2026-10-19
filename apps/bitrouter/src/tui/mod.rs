@@ -9,6 +9,7 @@ pub mod agents_menu;
 pub mod code;
 pub mod composer;
 pub mod editor;
+pub(crate) mod input;
 pub mod lifecycle;
 pub mod native_agent;
 pub mod permission;

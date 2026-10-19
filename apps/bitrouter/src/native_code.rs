@@ -11,6 +11,7 @@ use crate::presentation::native_agent::NativeEntryKind;
 use crate::presentation::native_agent::NativeLive;
 use crate::presentation::native_agent::ToolStatus;
 use crate::tui::editor::{Edit, Editor, press};
+use crate::tui::input::TerminalInput;
 use crate::tui::native_agent::NativeState;
 use crate::tui::native_agent::NativeView;
 use anyhow::Result;
@@ -23,8 +24,8 @@ use bitrouter_ai::harness::thread::ThreadView;
 use bitrouter_ai::harness::turn::TurnLifecycle;
 use bitrouter_ai::harness::turn::TurnSnapshot;
 use bitrouter_ai::types::Content;
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
-use futures::{FutureExt, StreamExt};
+use crossterm::event::{Event, KeyCode, KeyModifiers};
+use futures::FutureExt;
 use presentation::{tool_result, tool_title};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -229,11 +230,12 @@ pub async fn run(
         projection = Some(view);
     }
     let mut view = NativeView::open()?;
-    let mut events = Some(EventStream::new());
+    let mut events = Some(TerminalInput::new()?);
     let mut shutdown = crate::chat::signals::Shutdown::install();
     let mut ticker = tokio::time::interval(Duration::from_millis(500));
     let mut animation = tokio::time::interval(Duration::from_millis(100));
     animation.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let result = async {
     loop {
         view.draw(&mut state)?;
         tokio::select! {
@@ -292,9 +294,9 @@ pub async fn run(
             signal = shutdown.recv() => match signal {
                 crate::chat::signals::TerminalSignal::Shutdown => break,
                 crate::chat::signals::TerminalSignal::Suspend => {
-                    drop(events.take()); view.suspend()?;
+                    TerminalInput::stop(&mut events).await?; view.suspend()?;
                     crate::chat::signals::suspend_current_process().await?;
-                    view.resume()?; events = Some(EventStream::new());
+                    view.resume()?; events = Some(TerminalInput::new()?);
                 }
             },
             next = async { match events.as_mut() { Some(events) => events.next().await, None => std::future::pending().await } } => {
@@ -356,6 +358,9 @@ pub async fn run(
         }
     }
     Ok(())
+    }.await;
+    let stopped = TerminalInput::stop(&mut events).await;
+    result.and(stopped.map_err(Into::into))
 }
 
 async fn handle_event(

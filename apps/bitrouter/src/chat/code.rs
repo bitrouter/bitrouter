@@ -8,11 +8,11 @@ use crate::tui::code::{
     CodeAction, CodeEffect, CodeHotkey, CodeState, CodeStatus, CodeView, Command, CommandOwner,
     CommandTarget, Inspector, Selector, TurnOutcome,
 };
+use crate::tui::input::TerminalInput;
 use agent_client_protocol::schema::v1::{
     ConfigOptionUpdate, CurrentModeUpdate, SessionConfigOption, SessionUpdate, StopReason,
 };
 use anyhow::{Context, Result, ensure};
-use crossterm::event::EventStream;
 use futures::{FutureExt, StreamExt, future::LocalBoxFuture};
 use tokio_util::sync::CancellationToken;
 
@@ -177,7 +177,9 @@ pub(crate) async fn run(
         ));
     }
     let mut view = CodeView::open().context("opening Code terminal")?;
-    let result = runtime.drive(&mut view).await;
+    let mut events = Some(TerminalInput::new()?);
+    let result = runtime.drive(&mut view, &mut events).await;
+    let stopped = TerminalInput::stop(&mut events).await;
     // Restore terminal ownership before waiting on daemon cleanup: a slow or
     // unavailable supervisor must not leave the shell in raw/alternate mode.
     let restored = view.finish();
@@ -221,6 +223,7 @@ pub(crate) async fn run(
         client.release_all().await;
     }
     result?;
+    stopped?;
     restored?;
     if let Some(error) = session_job_error {
         return Err(error);
@@ -310,8 +313,11 @@ impl Runtime {
         }
     }
 
-    async fn drive(&mut self, view: &mut CodeView) -> Result<()> {
-        let mut events = Some(EventStream::new());
+    async fn drive(
+        &mut self,
+        view: &mut CodeView,
+        events: &mut Option<TerminalInput>,
+    ) -> Result<()> {
         let mut shutdown = super::signals::Shutdown::install();
         let mut dirty = true;
         let mut paint_due = None;
@@ -359,8 +365,7 @@ impl Runtime {
                 return Ok(());
             }
             if self.editing && events.is_some() {
-                // Drop the input stream before handing the terminal to the editor.
-                events = None;
+                TerminalInput::stop(events).await?;
                 view.suspend()?;
             }
             if dirty && !self.editing {
@@ -404,7 +409,7 @@ impl Runtime {
                     }
                     dirty = true;
                 }
-                event = next_input(&mut events) => {
+                event = next_input(events) => {
                     let Some(event) = event else { return Ok(()); };
                     self.effects.extend(self.state.step(CodeAction::Event(event?)));
                     dirty = true;
@@ -424,7 +429,7 @@ impl Runtime {
                     let mutation = self.mutation_selector.take();
                     if self.editing {
                         view.resume()?;
-                        events = Some(EventStream::new());
+                        *events = Some(TerminalInput::new()?);
                         self.editing = false;
                     }
                     match result {
@@ -456,11 +461,15 @@ impl Runtime {
                     super::signals::TerminalSignal::Suspend => {
                         // No input reader may retain buffered keys across the
                         // terminal ownership boundary.
-                        drop(events.take());
+                        TerminalInput::stop(events).await?;
                         view.suspend()?;
                         super::signals::suspend_current_process().await?;
-                        view.resume()?;
-                        events = Some(EventStream::new());
+                        // An external editor retains custody across our stop.
+                        // Its completed job, not SIGCONT, returns input to us.
+                        if !self.editing {
+                            view.resume()?;
+                            *events = Some(TerminalInput::new()?);
+                        }
                         dirty = true;
                     }
                 },
@@ -1482,7 +1491,7 @@ fn report_title(id: &str) -> &str {
 }
 
 async fn next_input(
-    events: &mut Option<EventStream>,
+    events: &mut Option<TerminalInput>,
 ) -> Option<std::io::Result<crossterm::event::Event>> {
     match events {
         Some(events) => events.next().await,

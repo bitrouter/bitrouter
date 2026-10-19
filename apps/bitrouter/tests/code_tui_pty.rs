@@ -392,13 +392,18 @@ impl MockAcp {
         Ok(())
     }
 
-    fn visual_editor(&self, text: &str) -> Result<VisualEditor> {
+    fn visual_editor(&self, text: &str, interactive: bool) -> Result<VisualEditor> {
         let content_path = self._directory.path().join("external-editor-content");
         let script_path = self._directory.path().join("external-editor.sh");
         std::fs::write(&content_path, text).context("writing external editor fixture text")?;
+        let input = if interactive {
+            "printf 'FXEDITORREADY\\n'\nIFS= read -r reply || exit 41\n[ \"$reply\" = 'editor-owned-input' ] || exit 42\n"
+        } else {
+            ""
+        };
         std::fs::write(
             &script_path,
-            "#!/bin/sh\ncat \"$BITROUTER_PTY_VISUAL_CONTENT\" > \"$1\"\n",
+            format!("#!/bin/sh\n{input}cat \"$BITROUTER_PTY_VISUAL_CONTENT\" > \"$1\"\n"),
         )
         .context("writing external editor fixture")?;
         let mut permissions = std::fs::metadata(&script_path)
@@ -1999,31 +2004,55 @@ fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
 
 #[test]
 fn code_external_editor_preserves_multiline_prompt_and_terminal() -> Result<()> {
+    external_editor_round_trips(false)
+}
+
+#[test]
+fn code_external_editor_exclusively_owns_input_until_return() -> Result<()> {
+    external_editor_round_trips(true)
+}
+
+fn external_editor_round_trips(interactive: bool) -> Result<()> {
     let mock = MockAcp::new(MockScenario::Minimal)?;
     let edited = "external-replacement 中文 👩‍💻\nsecond edited line  ";
-    let visual_editor = mock.visual_editor(edited)?;
+    let visual_editor = mock.visual_editor(edited, interactive)?;
     let mut code = CodeFixture::agent_with_mock(mock, Some(&visual_editor))?;
     code.wait_for_agent_ready()?;
-    code.pty.paste("draft that the editor replaces")?;
-    let editor_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/open external editor\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&editor_checkpoint, "external-replacement")?;
-    let submission_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&submission_checkpoint, "FXRP1")?;
-    let output = code
-        .pty
-        .wait_for_text_since(&submission_checkpoint, "Turn completed")?;
+    for turn in 1..=3 {
+        code.pty.paste("draft that the editor replaces")?;
+        let editor_checkpoint = code.pty.checkpoint();
+        code.pty.send(b"\x1b[1;5H/open external editor\r")?;
+        if interactive {
+            code.pty
+                .wait_for_raw_text_since(&editor_checkpoint, "FXEDITORREADY")?;
+            if turn == 2 {
+                code.signal_child("TSTP")?;
+                code.pty.assert_terminal_mode_restored()?;
+                code.signal_child("CONT")?;
+            }
+            code.pty.send(b"editor-owned-input\r")?;
+        }
+        // A prior submitted turn contains the same text. Only the composer
+        // below its Message heading proves this editor handoff completed.
+        code.pty.wait_for_screen_inner(
+            Some(&editor_checkpoint),
+            "external-replacement in composer",
+            |screen| {
+                screen
+                    .rsplit_once("┃ Message")
+                    .is_some_and(|(_, composer)| composer.contains("┃ external-replacement"))
+            },
+        )?;
+        let submission_checkpoint = code.pty.checkpoint();
+        code.pty.send(b"\r")?;
+        let reply = format!("FXRP{turn}");
+        code.pty
+            .wait_for_text_since(&submission_checkpoint, &reply)?;
+        code.pty
+            .wait_for_text_since(&submission_checkpoint, "Turn completed")?;
+    }
     ensure!(
-        output.contains("FXRP1"),
-        "external-editor prompt did not reach the minimal agent"
-    );
-    ensure!(
-        code.mock.captured_prompts()? == vec![edited.to_string()],
+        code.mock.captured_prompts()? == vec![edited.to_string(); 3],
         "external editor changed the submitted prompt bytes"
     );
     code.pty.send(b"\x04")?;

@@ -33,11 +33,11 @@ use crate::presentation::agents::NewAgentRunTarget;
 use crate::tui::agents::{AgentAction, AgentDeckMode, AgentDeckState, AgentDeckView};
 #[cfg(feature = "tui")]
 use crate::tui::code::{CodeEffect, CodeState};
+#[cfg(feature = "tui")]
+use crate::tui::input::TerminalInput;
 use anyhow::{Context, Result, bail};
 #[cfg(feature = "tui")]
-use crossterm::event::EventStream;
-#[cfg(feature = "tui")]
-use futures::{FutureExt as _, StreamExt as _};
+use futures::FutureExt as _;
 use tokio::sync::Mutex;
 #[cfg(feature = "tui")]
 use tokio::time::MissedTickBehavior;
@@ -1003,7 +1003,7 @@ async fn run_deck(
     new_run_target: Option<NewAgentRunTarget>,
 ) -> Result<()> {
     let mut view = AgentDeckView::open().context("opening the agent manager")?;
-    let mut events = Some(EventStream::new());
+    let mut events = Some(TerminalInput::new()?);
     let mut shutdown = crate::chat::signals::Shutdown::install();
     let mut refresh = tokio::time::interval(Duration::from_millis(500));
     refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -1065,11 +1065,11 @@ async fn run_deck(
                 signal = shutdown.recv() => match signal {
                     crate::chat::signals::TerminalSignal::Shutdown => break,
                     crate::chat::signals::TerminalSignal::Suspend => {
-                        drop(events.take());
+                        TerminalInput::stop(&mut events).await?;
                         view.finish()?;
                         crate::chat::signals::suspend_current_process().await?;
                         view = AgentDeckView::open().context("resuming the agent manager")?;
-                        events = Some(EventStream::new());
+                        events = Some(TerminalInput::new()?);
                     }
                 },
             }
@@ -1077,9 +1077,10 @@ async fn run_deck(
         Ok(())
     }
     .await;
+    let stopped = TerminalInput::stop(&mut events).await;
     let finish = view.finish().context("restoring the terminal");
     client.release_all().await;
-    result.and(finish)
+    result.and(stopped.map_err(Into::into)).and(finish)
 }
 
 #[cfg(feature = "tui")]
@@ -1106,7 +1107,7 @@ async fn next_deck_job(job: &mut Option<DeckJob>) -> Result<AgentResult> {
 
 #[cfg(feature = "tui")]
 async fn next_deck_input(
-    events: &mut Option<EventStream>,
+    events: &mut Option<TerminalInput>,
 ) -> Option<std::io::Result<crossterm::event::Event>> {
     match events {
         Some(events) => events.next().await,
