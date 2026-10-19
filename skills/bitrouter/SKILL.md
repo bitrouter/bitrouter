@@ -82,7 +82,7 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
 
 ### 5. Choose the work interface
 
-BRO orchestrates long-running, parallel workflows. Built-in Goal workers use native Thread/Turn execution and one-time permission replies; ACP workers remain available. Safe native checkpoints retain their original Thread/Turn after current-source, owner, effect and budget checks. Native workers record cancellable quote waits; settled unknown-cost holds remain blocked. See `references/cli.md` for evidence scope and remaining ACP recovery limits.
+BRO orchestrates long-running, parallel workflows. Built-in Goal workers use native Thread/Turn execution and one-time permission replies; ACP workers remain available. Safe native checkpoints retain their original Thread/Turn after current-source, owner, effect and budget checks. See `references/cli.md` for evidence scope, bounded admission waiting and remaining ACP recovery/budget-wait limits.
 The Goal directory, current Goal and read-only Workflow have separate navigation;
 viewing never creates work. Enter submits to the current Goal even while workers run.
 Queries and hypotheses do not modify requirements; accepted changes and actual
@@ -101,7 +101,7 @@ available. BRO requires controller confirmation before sending work; requested
 and confirmed routes remain distinct from an actual upstream model identity.
 Current-Goal input versions a task's requested worker/resources. BRO confirms old
 execution/effect boundaries before a new Thread adopts that selection.
-Unresolved input survives queries; `/input <id> <reply>` references it, and exact `/input <id> /withdraw` cancels only that uncommitted request without a model/budget increase. Query-only clarification adds no completion condition. Goal IPC v8 preserves older outboxes without replay. Superseded reconciled executions can leave the current snapshot; their complete records remain in immutable Goal history without resetting current attempts or budget.
+Unresolved input survives queries; `/input <id> <reply>` references it, and exact `/input <id> /withdraw` cancels only that uncommitted request without a model/budget increase. Query-only clarification adds no completion condition. Goal IPC v7 preserves older outboxes without replay. Superseded reconciled executions can leave the current snapshot; their complete records remain in immutable Goal history without resetting current attempts or budget.
 
 ```bash
 bro                         # Goals; no Goal or agent starts from a directory read

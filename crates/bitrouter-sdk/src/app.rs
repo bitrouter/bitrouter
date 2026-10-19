@@ -535,9 +535,6 @@ impl crate::language_model::native::NativeExecutionControl for TransformCheckedC
             .before_attempt_with_token_reservation(request_id, index, reservation)
             .await
     }
-    async fn admission_aborted(&self, request_id: &str, index: u32) {
-        self.inner.admission_aborted(request_id, index).await;
-    }
     async fn after_attempt(&self, report: crate::language_model::native::NativeAttemptReport) {
         self.inner.after_attempt(report).await
     }

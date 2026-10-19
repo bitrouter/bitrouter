@@ -360,22 +360,6 @@ async fn observe(
     report: Option<&ArtifactRef>,
 ) -> Result<serde_json::Value> {
     match work.kind {
-        WorkKind::ResourceWait => {
-            let _intent: serde_json::Value =
-                serde_json::from_slice(&read(root, &work.intent).await?)?;
-            if let Some(report) = report {
-                let value: serde_json::Value = serde_json::from_slice(&read(root, report).await?)?;
-                anyhow::ensure!(
-                    value["waiting_finished"] == true,
-                    "resource wait has no confirmed finish"
-                );
-            }
-            Ok(
-                serde_json::json!({"status":"observed", "stage":"token_reservation_wait",
-                "wait_finished":report.is_some(), "actual_provider":null,"actual_model":null,
-                "scope":"A pre-dispatch resource wait is not a provider attempt or evidence of execution."}),
-            )
-        }
         WorkKind::Preparation => {
             let value: serde_json::Value =
                 serde_json::from_slice(&read(root, &work.intent).await?)?;
@@ -433,21 +417,6 @@ async fn observe(
                 );
             };
             let value: serde_json::Value = serde_json::from_slice(&read(root, reference).await?)?;
-            if value == serde_json::json!({"sdk_admission_aborted":true}) {
-                let intent: serde_json::Value =
-                    serde_json::from_slice(&read(root, &work.intent).await?)?;
-                anyhow::ensure!(
-                    work.request_id
-                        .as_ref()
-                        .is_some_and(|id| intent["request_id"] == *id),
-                    "undispatched admission has a different request"
-                );
-                return Ok(
-                    serde_json::json!({"status":"observed", "stage":"sdk_admission_aborted",
-                    "provider_dispatched":false, "actual_provider":null, "actual_model":null,
-                    "scope":"The SDK did not poll this attempt's provider executor. No claim about earlier requests or external charges."}),
-                );
-            }
             let activity = value
                 .get("bro_stream_activity")
                 .and_then(|value| {
@@ -490,46 +459,5 @@ async fn observe(
             serde_json::json!({"status":if report.is_some() { "outcome_reference_retained" } else { "pending" },
             "scope":"Auxiliary work; this reference is not a generated model response or adoption proof"}),
         ),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn undispatched_admission_and_resource_wait_never_claim_a_serving_model() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let intent =
-            crate::goal_artifacts::put(root.path(), br#"{"request_id":"request"}"#).await?;
-        let report =
-            crate::goal_artifacts::put(root.path(), br#"{"sdk_admission_aborted":true}"#).await?;
-        let mut work = Work {
-            id: "fixture".into(),
-            kind: WorkKind::ProviderAttempt,
-            source: None,
-            requirements_revision: 1,
-            request_id: Some("request".into()),
-            intent,
-            token_reservation: None,
-        };
-        let value = observe(root.path(), &work, Some(&report)).await?;
-        assert_eq!(value["provider_dispatched"], false);
-        assert!(value["actual_model"].is_null());
-        assert!(value["actual_provider"].is_null());
-        work.kind = WorkKind::ResourceWait;
-        let pending = observe(root.path(), &work, None).await?;
-        assert_eq!(pending["wait_finished"], false);
-        assert!(pending["actual_model"].is_null());
-        assert!(observe(root.path(), &work, Some(&report)).await.is_err());
-        let finished =
-            crate::goal_artifacts::put(root.path(), br#"{"waiting_finished":true}"#).await?;
-        assert_eq!(
-            observe(root.path(), &work, Some(&finished)).await?["wait_finished"],
-            true
-        );
-        tokio::fs::write(&finished.path, b"changed").await?;
-        assert!(observe(root.path(), &work, Some(&finished)).await.is_err());
-        Ok(())
     }
 }

@@ -387,20 +387,11 @@ async fn session_api_fresh_session_preserves_direct_routing_and_turn_timeout() -
 async fn evolution_api_restore_reviews_current_identity_and_retains_publication() -> Result<()> {
     use bitrouter::evolution::control::restoration::RestoreRequest;
     use bitrouter::evolution::operator::{EvolutionOperation, EvolutionReport};
-    let mut mock = MockAcp::new(MockScenario::Minimal)?;
-    let retain = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
-    mock._directory.disable_cleanup(retain);
-    if retain {
-        eprintln!(
-            "Failure-retention PTY fixture: {}",
-            mock._directory.path().display()
-        );
-    }
-    let result = async {
-        let mut config_text =
-            std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
-        config_text.push_str(
-            r#"
+    let mock = MockAcp::new(MockScenario::Minimal)?;
+    let mut config_text =
+        std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
+    config_text.push_str(
+        r#"
 server:
   skip_auth: true
   control_socket: evolution.sock
@@ -419,113 +410,102 @@ models:
   candidate:
     endpoints: [{provider: fixture, service_id: cheap}]
 "#,
-        );
-        std::fs::write(&mock.config_path, &config_text)?;
-        let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
-        let (evolution, _, mut server) = serve_control(&mock, &config).await?;
-        let api = SessionApi::start(&mock, None).await?;
-        api.prompt("fixture-turn", "Complete this controlled coding turn")
-            .await?;
-        let registered = evolution_operation(
-            &api.socket,
-            EvolutionOperation::Register {
-                definition: Box::new(BlockDefinition {
-                    block_id: "terminal-trial".into(),
-                    source: "stub".into(),
-                    rationale: "Controlled withdrawal fixture".into(),
-                    rules: vec![BlockRule {
-                        selector: "coding".into(),
-                        fingerprint: None,
-                        baseline_route: "coding".into(),
-                        challenger_route: "candidate".into(),
-                    }],
-                    independence_rationale: "One isolated fixture block".into(),
-                    dependencies: Default::default(),
-                    measurement_contract: "api-fixture".into(),
-                    batch_sessions: 16,
-                    bandit: BanditConfig::default(),
-                }),
-            },
-        )
+    );
+    std::fs::write(&mock.config_path, &config_text)?;
+    let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+    let (evolution, _, mut server) = serve_control(&mock, &config).await?;
+    let api = SessionApi::start(&mock, None).await?;
+    api.prompt("fixture-turn", "Complete this controlled coding turn")
         .await?;
-        let EvolutionReport::Status(registered) = registered else {
-            bail!("registration omitted control state");
-        };
-        let block = registered
-            .control
+    let registered = evolution_operation(
+        &api.socket,
+        EvolutionOperation::Register {
+            definition: Box::new(BlockDefinition {
+                block_id: "terminal-trial".into(),
+                source: "stub".into(),
+                rationale: "Controlled withdrawal fixture".into(),
+                rules: vec![BlockRule {
+                    selector: "coding".into(),
+                    fingerprint: None,
+                    baseline_route: "coding".into(),
+                    challenger_route: "candidate".into(),
+                }],
+                independence_rationale: "One isolated fixture block".into(),
+                dependencies: Default::default(),
+                measurement_contract: "api-fixture".into(),
+                batch_sessions: 16,
+                bandit: BanditConfig::default(),
+            }),
+        },
+    )
+    .await?;
+    let EvolutionReport::Status(registered) = registered else {
+        bail!("registration omitted control state");
+    };
+    let block = registered
+        .control
+        .blocks
+        .get("terminal-trial")
+        .context("block missing")?;
+    let request = RestoreRequest {
+        block: block.definition.block_id.clone(),
+        expected_experiment: block.experiment_id.clone(),
+        expected_revision: block.revision.clone(),
+        reason: "Return to the baseline after my review".into(),
+    };
+    let generation = registered.control.generation;
+    let reviewed = evolution_operation(&api.socket, EvolutionOperation::Status).await?;
+    let EvolutionReport::Status(reviewed) = reviewed else {
+        bail!("review omitted control state");
+    };
+    assert_eq!(reviewed.control.generation, generation);
+    assert_eq!(mock.captured_prompts()?.len(), 1);
+    let stale = RestoreRequest {
+        expected_revision: "outdated-review".into(),
+        ..request.clone()
+    };
+    assert!(
+        evolution_operation(&api.socket, EvolutionOperation::Restore { request: stale })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        evolution.service("local")?.state().await?.generation,
+        generation
+    );
+    evolution_operation(
+        &api.socket,
+        EvolutionOperation::Restore {
+            request: request.clone(),
+        },
+    )
+    .await?;
+    evolution_operation(&api.socket, EvolutionOperation::Restore { request }).await?;
+    let state = evolution.service("local")?.state().await?;
+    assert_eq!(state.mode, EvolutionMode::Off);
+    assert_eq!(
+        state
             .blocks
             .get("terminal-trial")
-            .context("block missing")?;
-        let request = RestoreRequest {
-            block: block.definition.block_id.clone(),
-            expected_experiment: block.experiment_id.clone(),
-            expected_revision: block.revision.clone(),
-            reason: "Return to the baseline after my review".into(),
-        };
-        let generation = registered.control.generation;
-        let reviewed = evolution_operation(&api.socket, EvolutionOperation::Status).await?;
-        let EvolutionReport::Status(reviewed) = reviewed else {
-            bail!("review omitted control state");
-        };
-        assert_eq!(reviewed.control.generation, generation);
-        assert_eq!(mock.captured_prompts()?.len(), 1);
-        let stale = RestoreRequest {
-            expected_revision: "outdated-review".into(),
-            ..request.clone()
-        };
-        assert!(
-            evolution_operation(&api.socket, EvolutionOperation::Restore { request: stale })
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            evolution.service("local")?.state().await?.generation,
-            generation
-        );
-        evolution_operation(
-            &api.socket,
-            EvolutionOperation::Restore {
-                request: request.clone(),
-            },
-        )
-        .await?;
-        evolution_operation(&api.socket, EvolutionOperation::Restore { request }).await?;
-        let state = evolution.service("local")?.state().await?;
-        assert_eq!(state.mode, EvolutionMode::Off);
-        assert_eq!(
-            state
-                .blocks
-                .get("terminal-trial")
-                .context("block missing")?
-                .status,
-            BlockStatus::RolledBack
-        );
-        assert_eq!(state.generation, generation + 1);
-        assert_eq!(state.publications.len(), 1);
-        let receipt = state.publications.last().context("publication missing")?;
-        assert_eq!(receipt.action, "operator_restore");
-        assert_eq!(
-            receipt.operator_reason.as_deref(),
-            Some("Return to the baseline after my review")
-        );
-        assert!(receipt.evidence_digest.is_none());
-        assert_eq!(
-            mock.captured_prompts()?.len(),
-            1,
-            "review or restore dispatched another turn"
-        );
-        server.stop(&api.socket).await
-    }
-    .await;
-    if result.is_ok() {
-        mock._directory.disable_cleanup(false);
-    } else if retain {
-        eprintln!(
-            "Retained failed PTY fixture: {}",
-            mock._directory.path().display()
-        );
-    }
-    result
+            .context("block missing")?
+            .status,
+        BlockStatus::RolledBack
+    );
+    assert_eq!(state.generation, generation + 1);
+    assert_eq!(state.publications.len(), 1);
+    let receipt = state.publications.last().context("publication missing")?;
+    assert_eq!(receipt.action, "operator_restore");
+    assert_eq!(
+        receipt.operator_reason.as_deref(),
+        Some("Return to the baseline after my review")
+    );
+    assert!(receipt.evidence_digest.is_none());
+    assert_eq!(
+        mock.captured_prompts()?.len(),
+        1,
+        "review or restore dispatched another turn"
+    );
+    server.stop(&api.socket).await
 }
 
 async fn fixed_history_score(

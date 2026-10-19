@@ -175,18 +175,6 @@ impl Peer {
                 self.control.join(format!("completed-{task}")),
                 b"actual fixture write ended",
             )?;
-            // The unknown-effect scenarios pause only after both branches
-            // exist. A slow/retried right workspace must not consume the
-            // left branch's separate release-phase deadline during startup.
-            // The parent test owns this barrier and cancels it on teardown.
-            if self.omit_tool_completion && task == "left" {
-                while !self.control.join("started-right").exists() {
-                    if self.cancelled.load(Ordering::Acquire) {
-                        return self.respond(&prompt, json!({"stopReason":"cancelled"}));
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-            }
             let deadline = Instant::now() + Duration::from_secs(30);
             while !self.control.join("release").exists() {
                 if self.cancelled.load(Ordering::Acquire) {

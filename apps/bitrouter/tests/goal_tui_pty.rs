@@ -893,7 +893,7 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
         terminal.send(b"\r")?;
         terminal.wait("Verified delivery / requirements 1")?;
         terminal.wait("Satisfaction: complete")?;
-        terminal.wait("Generation attempts admitted:")?;
+        terminal.wait("Managed generation attempts:")?;
         terminal.detach()?;
         Ok::<_,anyhow::Error>(())
     }.await;
@@ -1010,33 +1010,14 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
                 for file in recovered { ensure!(std::fs::read_to_string(file.path())? == edited); }
             }
             let expected = if fail { goal_draft.as_str() } else { edited };
-            let mut resubmitted_after_rejection = false;
             terminal.send(b"\r")?;
             tokio::time::timeout(Duration::from_secs(15), async {
                 loop {
                     let current = head(&socket, &id).await?;
                     let inputs = history(&socket, &id, current.revision).await?;
-                    let input_count = inputs.iter().filter(|operation| matches!(&operation.kind, OperationKind::Input { .. })).count();
-                    if inputs.iter().any(|operation| matches!(&operation.kind, OperationKind::Input { text, task_reference:None } if text == expected)) {
-                        ensure!(input_count == 1, "editor draft was submitted more than once");
-                        break;
-                    }
+                    if inputs.iter().any(|operation| matches!(&operation.kind, OperationKind::Input { text, task_reference:None } if text == expected)) { break; }
                     terminal.receive();
                     ensure!(terminal.child.try_wait()?.is_none(), "Goal UI exited before submitting editor input");
-                    let screen = terminal.screen.screen().contents();
-                    if !resubmitted_after_rejection
-                        && screen.contains("Mutation rejected; draft retained: Goal revision changed")
-                        && screen.contains(&format!("Goal snapshot revision {}", current.revision))
-                    {
-                        ensure!(input_count == 0, "a rejected mutation already saved input");
-                        ensure!(screen.contains(if fail { "second original line" } else { "second edited line" }), "revision rejection lost the draft");
-                        // Initial coordinator facts may win the CAS race. The
-                        // user explicitly presses Enter again after a definite
-                        // rejection and refresh; uncertain acceptance is never
-                        // resubmitted by this test or by the production UI.
-                        terminal.send(b"\r")?;
-                        resubmitted_after_rejection = true;
-                    }
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
                 Ok::<_,anyhow::Error>(())

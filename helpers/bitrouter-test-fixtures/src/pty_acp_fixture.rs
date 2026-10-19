@@ -297,27 +297,7 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--editor")) {
         return editor_fixture();
     }
-    diagnose("process_started", None);
-    let result = fixture::run();
-    match &result {
-        Ok(()) => diagnose("input_closed", None),
-        Err(error) => diagnose("failed", Some(&error.to_string())),
-    }
-    result
-}
-
-#[cfg(unix)]
-fn diagnose(phase: &str, error: Option<&str>) {
-    let Some(capture) = std::env::var_os("BITROUTER_PTY_CAPTURE") else {
-        return;
-    };
-    let path = std::path::PathBuf::from(capture)
-        .with_extension(format!("startup-{}.json", std::process::id()));
-    let value = serde_json::json!({"pid":std::process::id(),"phase":phase,"error":error,
-        "scope":"Fixture startup/EOF diagnosis only; not a session or execution verdict"});
-    if let Err(error) = std::fs::write(path, value.to_string()) {
-        eprintln!("PTY fixture could not preserve startup diagnosis: {error}");
-    }
+    fixture::run()
 }
 
 #[cfg(unix)]

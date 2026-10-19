@@ -41,14 +41,9 @@ impl native_accounting::NativeCostEstimator for QuotedEstimator {
     }
 }
 
-#[derive(Default)]
 struct QuotedControl {
     reject: bool,
     attempts: AtomicUsize,
-    wait: bool,
-    deny_attempt: bool,
-    cancellation: CancellationToken,
-    aborted: AtomicUsize,
 }
 
 struct QuotedExecutor {
@@ -109,21 +104,7 @@ impl native::NativeExecutionControl for QuotedControl {
         assert_eq!(index, 0);
         assert_eq!(quote, Some(&fixture_quote()));
         self.attempts.fetch_add(1, Ordering::SeqCst);
-        if self.wait {
-            std::future::pending::<()>().await;
-        }
-        if self.deny_attempt {
-            return Err(BitrouterError::bad_request("fixture rejects admission"));
-        }
         Ok(())
-    }
-    async fn provider_cancelled(&self) {
-        self.cancellation.cancelled().await;
-    }
-    async fn admission_aborted(&self, request: &str, index: u32) {
-        assert!(!request.is_empty());
-        assert_eq!(index, 0);
-        self.aborted.fetch_add(1, Ordering::SeqCst);
     }
     async fn after_attempt(&self, _: native::NativeAttemptReport) {}
 }
@@ -145,7 +126,7 @@ async fn app_preserves_budget_quotes_for_plan_and_attempt_admission() -> Result<
             .build()?;
         let control = Arc::new(QuotedControl {
             reject,
-            ..Default::default()
+            attempts: AtomicUsize::new(0),
         });
         let result = app
             .execute_native_controlled(prompt(), CallerContext::local(), control.clone())
@@ -156,53 +137,6 @@ async fn app_preserves_budget_quotes_for_plan_and_attempt_admission() -> Result<
             usize::from(!reject)
         );
         assert_eq!(executor.calls.load(Ordering::SeqCst), usize::from(!reject));
-    }
-    Ok(())
-}
-
-#[tokio::test]
-async fn cancelled_or_refused_attempt_admission_reports_no_dispatch_without_polling_executor()
--> Result<()> {
-    for waiting in [false, true] {
-        let executor = Arc::new(QuotedExecutor {
-            inner: MockExecutor::always_text("must not run"),
-            calls: AtomicUsize::new(0),
-        });
-        let app = crate::App::builder()
-            .language_model(|builder| {
-                builder
-                    .routing_table(routing_table(&["first"]))
-                    .executor(executor.clone())
-                    .native_cost_estimator(Arc::new(QuotedEstimator));
-            })
-            .build()?;
-        let control = Arc::new(QuotedControl {
-            wait: waiting,
-            deny_attempt: !waiting,
-            ..Default::default()
-        });
-        let running_control = control.clone();
-        let task = tokio::spawn(async move {
-            app.execute_native_controlled(prompt(), CallerContext::local(), running_control)
-                .await
-        });
-        tokio::time::timeout(std::time::Duration::from_secs(3), async {
-            while control.attempts.load(Ordering::SeqCst) == 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .map_err(|_| BitrouterError::internal("admission did not start"))?;
-        if waiting {
-            control.cancellation.cancel();
-        }
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), task)
-            .await
-            .map_err(|_| BitrouterError::internal("admission cancellation did not settle"))?
-            .map_err(|error| BitrouterError::internal(error.to_string()))?;
-        assert!(result.is_err());
-        assert_eq!(control.aborted.load(Ordering::SeqCst), 1);
-        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
     }
     Ok(())
 }

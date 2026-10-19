@@ -20,8 +20,6 @@ pub struct Accounting {
 #[serde(rename_all = "snake_case")]
 pub enum WorkKind {
     Preparation,
-    /// Waiting for other current workers' quotes, before provider dispatch.
-    ResourceWait,
     InputCount,
     ContextValidation,
     ProviderAttempt,

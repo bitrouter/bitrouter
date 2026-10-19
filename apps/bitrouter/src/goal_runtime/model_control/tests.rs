@@ -145,25 +145,11 @@ async fn worker_change(goals: &GoalService, id: &str, key: &str, change: Change)
 #[tokio::test]
 async fn worker_accounting_survives_an_independent_edit_but_rejects_its_own_stale_scope()
 -> Result<()> {
-    for exit in [WaitExit::Release, WaitExit::Pause, WaitExit::SdkAbort] {
-        worker_budget_case(exit).await?;
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum WaitExit {
-    Release,
-    Pause,
-    SdkAbort,
-}
-
-async fn worker_budget_case(exit: WaitExit) -> Result<()> {
     use bitrouter_orchestrator::goal::input::{
         Event as InputEvent, Interpretation, Stage, TaskUpdate,
     };
     let directory = tempfile::tempdir()?;
-    let (mut control, store, goals) = control(directory.path()).await?;
+    let (mut control, _, goals) = control(directory.path()).await?;
     let id = control.goal.id.clone();
     // Domain transitions only: no Git work, provider request or execution
     // adoption is claimed by this source/accounting concurrency regression.
@@ -390,141 +376,24 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
             Some(quote.clone()),
         )
         .await?;
-    assert!(bitrouter_orchestrator::goal::budget::waiting_on_workers(
-        &snapshot(&goals, &id).await?,
-        Some(&quote)
-    )?);
-    store.inject(Fault::LostAcknowledgement, 1)?;
-    let waiting_control = control.clone();
-    let waiting_quote = quote.clone();
-    let waiter = tokio::spawn(async move {
-        waiting_control
+    assert!(
+        control
             .begin_with_reservation(
                 WorkKind::ProviderAttempt,
-                "waiting-request/attempt/0",
+                "waiting-worker-credit",
                 Some("waiting-request"),
                 serde_json::json!({"fixture":"admission only"}),
-                Some(waiting_quote),
+                Some(quote.clone())
             )
             .await
-    });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if snapshot(&goals, &id)
-                .await?
-                .accounting
-                .in_flight
-                .iter()
-                .any(|work| work.kind == WorkKind::ResourceWait)
-            {
-                return Ok::<_, anyhow::Error>(());
-            }
-            anyhow::ensure!(
-                !waiter.is_finished(),
-                "worker refused transient quote contention instead of waiting"
-            );
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await??;
-    assert!(!waiter.is_finished());
-    let waiting = snapshot(&goals, &id).await?;
-    assert_eq!(
-        waiting
-            .accounting
-            .in_flight
-            .iter()
-            .filter(|work| work.kind == WorkKind::ResourceWait)
-            .count(),
-        1
+            .is_err()
     );
+    let waiting = snapshot(&goals, &id).await?;
     assert!(waiting.budget.halt.is_none());
     assert!(
         control.acknowledged(),
         "a known budget rejection is not a lost write acknowledgement"
     );
-    if matches!(exit, WaitExit::SdkAbort) {
-        // Match the SDK's cancellation boundary: drop the admission future,
-        // then reconcile its exact canonical key without polling an executor.
-        waiter.abort();
-        assert!(waiter.await.err().is_some_and(|error| error.is_cancelled()));
-        control.admission_aborted("waiting-request", 0).await;
-        let aborted = snapshot(&goals, &id).await?;
-        assert!(
-            aborted
-                .accounting
-                .in_flight
-                .iter()
-                .all(|work| work.kind != WorkKind::ResourceWait)
-        );
-        assert_eq!(
-            aborted.accounting.provider_attempts,
-            waiting.accounting.provider_attempts
-        );
-        assert_eq!(aborted.budget.held, waiting.budget.held);
-        control
-            .observe_with_reservation(
-                "held-worker-credit",
-                serde_json::json!({"not_dispatched":true}),
-                Some(0),
-                true,
-            )
-            .await?;
-        control
-            .observe(
-                "right-after-left-edit",
-                serde_json::json!({"settled":true}),
-                None,
-            )
-            .await?;
-        assert!(snapshot(&goals, &id).await?.accounting.in_flight.is_empty());
-        assert!(control.acknowledged());
-        return Ok(());
-    }
-    if matches!(exit, WaitExit::Pause) {
-        goals
-            .execute(
-                "local",
-                GoalCommand::Control {
-                    operation_id: "pause-while-waiting".into(),
-                    goal_id: id.clone(),
-                    expected_revision: waiting.revision,
-                    intent: RunIntent::Pause,
-                },
-                now()?,
-            )
-            .await?;
-        assert!(
-            tokio::time::timeout(Duration::from_secs(3), waiter)
-                .await??
-                .is_err()
-        );
-        control
-            .observe_with_reservation(
-                "held-worker-credit",
-                serde_json::json!({"not_dispatched":true}),
-                Some(0),
-                true,
-            )
-            .await?;
-        control
-            .observe(
-                "right-after-left-edit",
-                serde_json::json!({"settled":true}),
-                None,
-            )
-            .await?;
-        let stopped = snapshot(&goals, &id).await?;
-        assert!(stopped.accounting.in_flight.is_empty());
-        assert_eq!(
-            stopped.accounting.provider_attempts,
-            waiting.accounting.provider_attempts
-        );
-        assert!(stopped.budget.held.is_empty());
-        assert!(stopped.budget.halt.is_none());
-        assert!(control.acknowledged());
-        return Ok(());
-    }
     // Both calls are domain-only admissions. No provider was dispatched, so
     // settling zero releases the exact held quote before retrying the same key.
     control
@@ -535,68 +404,23 @@ async fn worker_budget_case(exit: WaitExit) -> Result<()> {
             true,
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(5), waiter).await???;
-    let resumed = snapshot(&goals, &id).await?;
-    assert!(
-        resumed
-            .accounting
-            .in_flight
-            .iter()
-            .all(|work| work.kind != WorkKind::ResourceWait)
-    );
-    assert_eq!(
-        resumed.accounting.provider_attempts,
-        waiting.accounting.provider_attempts + 1
-    );
+    control
+        .begin_with_reservation(
+            WorkKind::ProviderAttempt,
+            "waiting-worker-credit",
+            Some("waiting-request"),
+            serde_json::json!({"fixture":"admission only"}),
+            Some(quote),
+        )
+        .await?;
     control
         .observe_with_reservation(
-            "waiting-request/attempt/0",
+            "waiting-worker-credit",
             serde_json::json!({"not_dispatched":true}),
             Some(0),
             true,
         )
         .await?;
-    // A settled outcome with missing usage keeps its full quote. It must
-    // refuse promptly rather than wait for an outcome that already arrived.
-    control
-        .begin_with_reservation(
-            WorkKind::ProviderAttempt,
-            "unknown-bill",
-            Some("unknown-request"),
-            serde_json::json!({"fixture":"no actual provider"}),
-            Some(quote.clone()),
-        )
-        .await?;
-    control
-        .observe_with_reservation(
-            "unknown-bill",
-            serde_json::json!({"usage_missing":true}),
-            None,
-            false,
-        )
-        .await?;
-    let unknown = snapshot(&goals, &id).await?;
-    assert!(
-        bitrouter_orchestrator::goal::budget::waiting_on_workers(&unknown, Some(&quote)).is_err()
-    );
-    assert!(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            control.begin_with_reservation(
-                WorkKind::ProviderAttempt,
-                "after-unknown-bill",
-                Some("refused-request"),
-                serde_json::json!({}),
-                Some(quote.clone())
-            )
-        )
-        .await?
-        .is_err()
-    );
-    assert_eq!(
-        snapshot(&goals, &id).await?.budget.held,
-        unknown.budget.held
-    );
     let current = snapshot(&goals, &id).await?;
     goals
         .execute(
@@ -1266,118 +1090,5 @@ async fn model_gate_reports_owner_transfer_instead_of_an_opaque_unavailability()
             .work_started,
         0
     );
-    Ok(())
-}
-
-#[tokio::test]
-async fn frozen_plan_replay_preserves_quotes_and_undispatched_admission_settles_once() -> Result<()>
-{
-    use bitrouter_ai::types::ApiProtocol;
-    use bitrouter_sdk::language_model::native::NativeRoute;
-    let directory = tempfile::tempdir()?;
-    let (control, _, goals) = control(directory.path()).await?;
-    let id = control.goal.id.clone();
-    let quote = NativeTokenReservation {
-        micro_usd: 10,
-        pricing_version: "frozen".into(),
-        provider: "fixture".into(),
-        model: "fixture-model".into(),
-        input_tokens_bound: 10,
-        output_tokens_bound: 10,
-        evidence: serde_json::json!({"fixture":"no provider dispatched"}),
-    };
-    let current = snapshot(&goals, &id).await?;
-    goals
-        .execute(
-            "local",
-            GoalCommand::SetBudget {
-                operation_id: "cap".into(),
-                goal_id: id.clone(),
-                expected_revision: current.revision,
-                limits: bitrouter_orchestrator::goal::budget::Limits {
-                    elapsed_ms: None,
-                    managed_token_estimates_micro_usd: Some(10),
-                },
-            },
-            now()?,
-        )
-        .await?;
-    let plan = NativePlan {
-        request_id: "frozen-request".into(),
-        original_model: "fixture-model".into(),
-        effective_model: "fixture-model".into(),
-        effort_source: Default::default(),
-        router: None,
-        prompt: Prompt {
-            model: "fixture-model".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![Message::text(Role::User, "fixture")],
-            tools: vec![],
-            params: Default::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        },
-        routes: vec![NativeRoute {
-            provider: "fixture".into(),
-            model: "fixture-model".into(),
-            protocol: ApiProtocol::ChatCompletions,
-            constraints: Default::default(),
-            output_token_limit_supported: None,
-            input_count: None,
-            protocol_validation: Default::default(),
-            continuation: Default::default(),
-        }],
-    };
-    let first = control
-        .plan_with_token_reservations(plan.clone(), vec![Some(quote.clone())])
-        .await?;
-    control
-        .begin_with_reservation(
-            WorkKind::ProviderAttempt,
-            "other-quote",
-            None,
-            serde_json::json!({}),
-            Some(quote.clone()),
-        )
-        .await?;
-    let replay = control
-        .plan_with_token_reservations(plan.clone(), vec![Some(quote.clone())])
-        .await?;
-    assert_eq!(first.route_indices, replay.route_indices);
-    assert!(snapshot(&goals, &id).await?.budget.halt.is_none());
-    let mut changed = quote.clone();
-    changed.micro_usd = 9;
-    assert!(
-        control
-            .before_attempt_with_token_reservation(&plan.request_id, 0, Some(&changed))
-            .await
-            .is_err()
-    );
-    assert!(
-        control
-            .plan_with_token_reservations(plan.clone(), vec![Some(changed)])
-            .await
-            .is_err()
-    );
-    control
-        .observe_with_reservation(
-            "other-quote",
-            serde_json::json!({"not_dispatched":true}),
-            Some(0),
-            true,
-        )
-        .await?;
-    control
-        .before_attempt_with_token_reservation(&plan.request_id, 0, Some(&quote))
-        .await?;
-    control.admission_aborted(&plan.request_id, 0).await;
-    let stopped = snapshot(&goals, &id).await?;
-    assert!(control.acknowledged());
-    assert!(stopped.budget.held.is_empty());
-    assert!(stopped.accounting.in_flight.is_empty());
-    control.admission_aborted(&plan.request_id, 0).await;
-    assert_eq!(snapshot(&goals, &id).await?, stopped);
     Ok(())
 }

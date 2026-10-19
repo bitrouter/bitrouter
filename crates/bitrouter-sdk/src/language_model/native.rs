@@ -658,11 +658,6 @@ pub trait NativeExecutionControl: Send + Sync {
         self.before_attempt(request_id, attempt_index).await
     }
 
-    /// The SDK did not poll the provider executor: attempt admission was
-    /// rejected or cancelled. Reconcile only this exact pre-dispatch intent;
-    /// this callback says nothing about earlier attempts or external charges.
-    async fn admission_aborted(&self, _request_id: &str, _attempt_index: u32) {}
-
     /// Persist integration work before any actual authentication or HTTP I/O.
     /// Implementations recheck live dispatch gates and reserve internal retries.
     async fn before_provider_work(

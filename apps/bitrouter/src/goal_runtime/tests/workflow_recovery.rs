@@ -251,58 +251,26 @@ async fn assert_known_repair(
         .find(|task| task.spec.id == "left")
         .context("left missing")?;
     assert_eq!(left.requirements_revision, 1);
-    let before_left = running
-        .workflow
-        .tasks
-        .iter()
-        .find(|task| task.spec.id == "left")
-        .context("running left missing")?;
-    let before_right = running
-        .workflow
-        .tasks
-        .iter()
-        .find(|task| task.spec.id == "right")
-        .context("running right missing")?;
-    let failed_id = &before_left
-        .executions
-        .last()
-        .context("started left missing")?
-        .id;
-    let failed = left
-        .executions
-        .iter()
-        .find(|execution| &execution.id == failed_id)
-        .context("actual failed left was discarded")?;
-    // A confirmed startup failure can precede the two actually running
-    // workers. Require one repair of that LEFT and retain RIGHT's exact
-    // accepted identity; do not confuse startup recovery with repeated work.
-    assert_eq!(left.executions.len(), before_left.executions.len() + 1);
-    assert!(failed.effects_reconciled());
-    assert!(failed.handoff.is_none());
-    let right = completed
-        .workflow
-        .tasks
-        .iter()
-        .find(|task| task.spec.id == "right")
-        .context("right missing")?;
-    assert_eq!(right.executions.len(), before_right.executions.len());
-    let original_right = before_right
-        .executions
-        .last()
-        .context("started right missing")?;
-    let current_right = right.executions.last().context("completed right missing")?;
-    assert_eq!(current_right.id, original_right.id);
-    assert_eq!(current_right.thread, original_right.thread);
-    assert!(current_right.thread.is_some());
-    let prepared = left
-        .executions
-        .last()
-        .context("repair missing")?
+    assert_eq!(left.executions.len(), 2);
+    assert!(left.executions[0].effects_reconciled());
+    assert!(left.executions[0].handoff.is_none());
+    assert_eq!(
+        completed
+            .workflow
+            .tasks
+            .iter()
+            .find(|task| task.spec.id == "right")
+            .context("right missing")?
+            .executions
+            .len(),
+        1
+    );
+    let prepared = left.executions[1]
         .resources
         .as_ref()
         .context("repair prompt missing")?;
     let prompt = String::from_utf8(crate::goal_artifacts::read(&root, &prepared.prompt).await?)?;
-    assert!(prompt.contains(failed_id));
+    assert!(prompt.contains(&left.executions[0].id));
     assert!(prompt.contains("failed_candidate_material") && prompt.contains("actual_checks"));
     assert!(prompt.contains(failure_marker));
     assert_eq!(completed.budget.limits, running.budget.limits);
@@ -327,7 +295,6 @@ fn is_left_review(request: &wiremock::Request) -> bool {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn known_check_failure_repairs_with_actual_evidence_and_same_requirements() -> Result<()> {
     let mut setup = Setup::new().await?;
-    setup.agent_env("BRO_GOAL_FIXTURE_FAIL_FIRST_INITIALIZE");
     setup.agent_env("BRO_GOAL_FIXTURE_FAIL_LEFT_ONCE");
     let fixture = setup.start().await?;
     let result = async {
