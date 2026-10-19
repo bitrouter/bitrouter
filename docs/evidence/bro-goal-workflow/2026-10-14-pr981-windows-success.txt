@@ -1,6 +1,0 @@
-Hosted Windows job success; head 5a18a35efe11a2b61654ef1f49e6120ba6622ffa
-Job: https://github.com/bitrouter/bitrouter/actions/runs/38532125993/job/115746223590
-
-2026-10-14T08:09:32.3342039Z  Nextest run ID c4725225-5c08-4e5f-a95f-c756eff8f3ff with nextest profile: default
-2026-10-14T08:09:32.3346521Z     Starting 4436 tests across 71 binaries (3 tests skipped)
-2026-10-14T08:36:19.2062806Z      Summary [1606.874s] 4436 tests run: 4436 passed (12 slow, 1 flaky), 3 skipped

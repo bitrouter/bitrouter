@@ -468,63 +468,6 @@ impl Plan {
 }
 
 impl GoalService {
-    /// Retrieve bounded original input receipts for this Goal only. A lexical
-    /// reference prioritizes context; it does not grant permission or effects.
-    pub async fn clarification_context(
-        &self,
-        owner: &str,
-        goal_id: &str,
-        reference: Option<&str>,
-    ) -> Result<Vec<super::input::ClarificationContext>, GoalError> {
-        identifier(owner)?;
-        identifier(goal_id)?;
-        let goal = self.store.get(owner, goal_id).await?;
-        let mut unresolved = goal.inputs.unresolved_inputs();
-        if let Some(id) = reference {
-            identifier(id)?;
-            let index = unresolved
-                .iter()
-                .position(|input| input.input_id == id)
-                .ok_or(GoalError::NotFound)?;
-            unresolved.swap(0, index);
-        }
-        let mut contexts = Vec::new();
-        let mut bytes = 0_usize;
-        for mut input in unresolved.into_iter().take(super::MAX_PAGE_ITEMS) {
-            let original = self
-                .store
-                .operation(owner, &input.input_id)
-                .await?
-                .ok_or(GoalError::NotFound)?;
-            let OperationKind::Input {
-                text,
-                task_reference,
-            } = &original.kind
-            else {
-                return Err(invalid("clarification did not reference an original input"));
-            };
-            if original.goal_id != goal_id {
-                return Err(GoalError::NotFound);
-            }
-            input.task_reference = task_reference.clone();
-            input.permission_decision = super::input::permission_reference(text)?
-                .map(|reference| reference.decision_id.to_owned());
-            let context = super::input::ClarificationContext {
-                unresolved: input,
-                original_input: original,
-            };
-            let size = serde_json::to_vec(&context)
-                .map_err(super::storage_error)?
-                .len();
-            if bytes.saturating_add(size) > 256 * 1024 {
-                break;
-            }
-            bytes += size;
-            contexts.push(context);
-        }
-        Ok(contexts)
-    }
-
     /// Inputs are visited in acceptance order, independently of worker turns.
     pub async fn next_input(
         &self,
@@ -584,45 +527,6 @@ impl GoalService {
         }
         for _ in 0..4 {
             let mut goal = self.store.get(owner, goal_id).await?;
-            if matches!(
-                &change,
-                Change::Input {
-                    event: super::input::Event::Finish { .. }
-                }
-            ) {
-                // Recover scope from immutable receipts for legacy latest-only
-                // questions before the domain validates their resolution.
-                let mut unresolved = goal.inputs.unresolved_inputs();
-                for input in &mut unresolved {
-                    if goal
-                        .inputs
-                        .unresolved
-                        .iter()
-                        .any(|stored| stored.input_id == input.input_id)
-                    {
-                        continue;
-                    }
-                    let original = self
-                        .store
-                        .operation(owner, &input.input_id)
-                        .await?
-                        .ok_or(GoalError::NotFound)?;
-                    let OperationKind::Input {
-                        text,
-                        task_reference,
-                    } = original.kind
-                    else {
-                        return Err(invalid("clarification did not reference an original input"));
-                    };
-                    if original.goal_id != goal_id {
-                        return Err(GoalError::NotFound);
-                    }
-                    input.task_reference = task_reference;
-                    input.permission_decision = super::input::permission_reference(&text)?
-                        .map(|reference| reference.decision_id.to_owned());
-                }
-                goal.inputs.unresolved = unresolved;
-            }
             if matches!(
                 &change,
                 Change::Completion {

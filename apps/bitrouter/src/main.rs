@@ -90,7 +90,8 @@ struct Cli {
     /// built-in `local` context keeps the normal local behavior.
     #[arg(long, global = true, hide = true, value_name = "NAME")]
     context: Option<String>,
-    /// No subcommand opens the Goals directory (`goal_code::run`).
+    /// No subcommand dispatches to the onboarding entry (`onboarding::entry`):
+    /// onboarding when no default ACP harness is saved, otherwise its TUI.
     #[command(subcommand)]
     command: Option<Command>,
 }

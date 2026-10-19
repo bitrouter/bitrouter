@@ -14,155 +14,6 @@ pub struct InputProgress {
     pub after_revision: u64,
     pub pending: Option<PendingInput>,
     pub latest: Option<InputResult>,
-    #[serde(default)]
-    pub unresolved: Vec<UnresolvedInput>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ClarificationKind {
-    #[default]
-    Unknown,
-    Query,
-    Change,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UnresolvedInput {
-    pub input_id: String,
-    pub source_requirements_revision: u64,
-    pub task_reference: Option<String>,
-    pub permission_decision: Option<String>,
-    pub question: String,
-    pub kind: ClarificationKind,
-}
-
-impl InputProgress {
-    /// Older snapshots kept only the latest question. Preserve it when the
-    /// next input is processed instead of losing it to the latest-result slot.
-    pub fn unresolved_inputs(&self) -> Vec<UnresolvedInput> {
-        let mut inputs = self.unresolved.clone();
-        if let Some(latest) = &self.latest
-            && let Some(question) = &latest.clarification
-            && !inputs.iter().any(|input| input.input_id == latest.input_id)
-        {
-            inputs.push(UnresolvedInput {
-                input_id: latest.input_id.clone(),
-                source_requirements_revision: latest.source_requirements_revision,
-                task_reference: None,
-                permission_decision: None,
-                question: question.clone(),
-                kind: latest.clarification_kind,
-            });
-        }
-        inputs
-    }
-
-    pub fn completion_waits_for_input(&self) -> bool {
-        self.unresolved
-            .iter()
-            .any(|input| input.kind != ClarificationKind::Query)
-            || self.latest.as_ref().is_some_and(|latest| {
-                latest.clarification.is_some()
-                    && latest.clarification_kind != ClarificationKind::Query
-                    && !self
-                        .unresolved
-                        .iter()
-                        .any(|input| input.input_id == latest.input_id)
-            })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResolutionKind {
-    Applied,
-    Answered,
-    Withdrawn,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Resolution {
-    pub input_id: String,
-    pub source_requirements_revision: u64,
-    pub kind: ResolutionKind,
-}
-
-/// Original user bytes come from the immutable operation receipt.
-#[derive(Debug, Clone, Serialize)]
-pub struct ClarificationContext {
-    pub unresolved: UnresolvedInput,
-    pub original_input: GoalOperation,
-}
-
-pub fn clarification_reference(text: &str) -> Result<Option<&str>, GoalError> {
-    let mut words = text.split_whitespace();
-    if words.next() != Some("/input") {
-        return Ok(None);
-    }
-    let id = words
-        .next()
-        .ok_or_else(|| invalid("/input requires an unresolved input id"))?;
-    identifier(id)?;
-    Ok(Some(id))
-}
-
-/// Only an exact finite command bypasses model understanding. Natural language,
-/// quotes and additional words keep the ordinary interpretation path.
-pub fn withdrawal_reference(text: &str) -> Result<Option<&str>, GoalError> {
-    let mut words = text.split_whitespace();
-    if words.next() != Some("/input") {
-        return Ok(None);
-    }
-    let id = words.next();
-    if words.next() != Some("/withdraw") || words.next().is_some() {
-        return Ok(None);
-    }
-    let id = id.ok_or_else(|| invalid("withdrawal requires an unresolved input id"))?;
-    identifier(id)?;
-    Ok(Some(id))
-}
-
-pub(super) fn withdraw(
-    goal: &mut GoalSnapshot,
-    id: &str,
-    source_revision: u64,
-    operation_id: &str,
-) -> Result<(), GoalError> {
-    let mut unresolved = goal.inputs.unresolved_inputs();
-    let index = unresolved
-        .iter()
-        .position(|input| input.input_id == id)
-        .ok_or(GoalError::NotFound)?;
-    if unresolved[index].source_requirements_revision != source_revision {
-        return Err(GoalError::Conflict);
-    }
-    unresolved.remove(index);
-    goal.inputs.unresolved = unresolved;
-    goal.inputs.latest = Some(InputResult {
-        input_id: operation_id.into(),
-        source_requirements_revision: goal.requirements_revision,
-        effective_requirements_revision: goal.requirements_revision,
-        answer: None,
-        clarification: None,
-        requirements_saved: false,
-        affected_tasks: Vec::new(),
-        control_saved: None,
-        controlled_tasks: Vec::new(),
-        control_superseded: false,
-        permission_response_saved: None,
-        classification: None,
-        reasoning_request_id: None,
-        clarification_kind: ClarificationKind::Unknown,
-        resolutions: vec![Resolution {
-            input_id: id.into(),
-            source_requirements_revision: source_revision,
-            kind: ResolutionKind::Withdrawn,
-        }],
-    });
-    // Do not advance the input cursor past other accepted or in-flight inputs.
-    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,7 +87,7 @@ pub fn permission_reference(text: &str) -> Result<Option<PermissionReference<'_>
 }
 
 /// A model proposal, never permission to mutate or dispatch by itself.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Interpretation {
     pub answer: Option<String>,
@@ -246,10 +97,6 @@ pub struct Interpretation {
     #[serde(default)]
     pub permission_response: Option<PermissionResponse>,
     pub clarification: Option<String>,
-    #[serde(default)]
-    pub clarification_kind: Option<ClarificationKind>,
-    #[serde(default)]
-    pub resolutions: Vec<Resolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,10 +115,6 @@ pub struct InputResult {
     pub permission_response_saved: Option<PermissionResponse>,
     pub classification: Option<ArtifactRef>,
     pub reasoning_request_id: Option<String>,
-    #[serde(default)]
-    pub clarification_kind: ClarificationKind,
-    #[serde(default)]
-    pub resolutions: Vec<Resolution>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,10 +199,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                     || !proposal.task_updates.is_empty()
                     || proposal.control.is_some()
                     || proposal.permission_response.is_some()
-                    || !proposal.resolutions.is_empty()
-                    || proposal
-                        .clarification_kind
-                        .is_some_and(|kind| kind != ClarificationKind::Unknown)
                     || proposal.clarification.is_none())
             {
                 return Err(invalid(
@@ -371,11 +210,7 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                     || proposal.objective.is_some()
                     || !proposal.task_updates.is_empty()
                     || proposal.control.is_some()
-                    || proposal.permission_response.is_some()
-                    || !proposal.resolutions.is_empty()
-                    || proposal
-                        .clarification_kind
-                        .is_some_and(|kind| kind != ClarificationKind::Unknown))
+                    || proposal.permission_response.is_some())
             {
                 return Err(invalid(
                     "semantic effects require a recorded reasoning request",
@@ -402,15 +237,12 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
             let changed = proposal.objective.is_some()
                 || !proposal.task_updates.is_empty()
                 || proposal.control.is_some()
-                || proposal.permission_response.is_some()
-                || !proposal.resolutions.is_empty();
+                || proposal.permission_response.is_some();
             if changed && pending.requirements_revision != goal.requirements_revision {
                 proposal.objective = None;
                 proposal.task_updates.clear();
                 proposal.control = None;
                 proposal.permission_response = None;
-                proposal.resolutions.clear();
-                proposal.clarification_kind = Some(ClarificationKind::Unknown);
                 proposal.clarification = Some(
                     "Requirements changed during understanding; no proposed effects were committed"
                         .into(),
@@ -423,70 +255,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
             else {
                 return Err(GoalError::Conflict);
             };
-            let unresolved = goal.inputs.unresolved_inputs();
-            let explicit_input = clarification_reference(text)?;
-            let mut resolved_ids = BTreeSet::new();
-            for resolution in &proposal.resolutions {
-                identifier(&resolution.input_id)?;
-                let original = unresolved
-                    .iter()
-                    .find(|input| input.input_id == resolution.input_id)
-                    .ok_or_else(|| invalid("resolution targets an input that is not unresolved"))?;
-                if !resolved_ids.insert(resolution.input_id.clone())
-                    || original.source_requirements_revision
-                        != resolution.source_requirements_revision
-                    || explicit_input.is_some_and(|id| id != resolution.input_id)
-                    || task_reference.as_ref().is_some_and(|id| {
-                        original
-                            .task_reference
-                            .as_ref()
-                            .is_some_and(|original| original != id)
-                    })
-                {
-                    return Err(invalid("resolution has a stale or different input scope"));
-                }
-                match resolution.kind {
-                    ResolutionKind::Applied => {
-                        let targets_original = if let Some(decision) = &original.permission_decision
-                        {
-                            proposal
-                                .permission_response
-                                .as_ref()
-                                .is_some_and(|response| &response.decision_id == decision)
-                        } else if let Some(task) = &original.task_reference {
-                            proposal
-                                .task_updates
-                                .iter()
-                                .any(|update| &update.task_id == task)
-                                || proposal.control.as_ref().is_some_and(|control| {
-                                    control.target.strip_prefix("task:") == Some(task.as_str())
-                                })
-                        } else {
-                            proposal.objective.is_some()
-                                || !proposal.task_updates.is_empty()
-                                || proposal.control.is_some()
-                                || proposal.permission_response.is_some()
-                        };
-                        if original.kind == ClarificationKind::Query || !targets_original {
-                            return Err(invalid(
-                                "an applied resolution requires an actual change in its original scope",
-                            ));
-                        }
-                    }
-                    ResolutionKind::Answered => {
-                        if original.kind == ClarificationKind::Change || proposal.answer.is_none() {
-                            return Err(invalid(
-                                "a requested change cannot be resolved by an answer alone",
-                            ));
-                        }
-                    }
-                    ResolutionKind::Withdrawn => {
-                        if proposal.answer.is_none() {
-                            return Err(invalid("withdrawal requires a recorded explanation"));
-                        }
-                    }
-                }
-            }
             if changed {
                 let reference = permission_reference(text)?;
                 if reference.is_some()
@@ -674,18 +442,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                 .unwrap_or(goal.control_source_revision);
             let control_superseded =
                 proposal.control.is_some() && control_source_revision > pending.operation.revision;
-            if control_superseded
-                && !requirements_saved
-                && proposal.permission_response.is_none()
-                && proposal
-                    .resolutions
-                    .iter()
-                    .any(|resolution| resolution.kind == ResolutionKind::Applied)
-            {
-                return Err(invalid(
-                    "a superseded control did not resolve the original request",
-                ));
-            }
             let control_saved = proposal
                 .control
                 .as_ref()
@@ -731,22 +487,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                     goal.control_source_revision = pending.operation.revision;
                 }
             }
-            let mut retained = unresolved
-                .into_iter()
-                .filter(|input| !resolved_ids.contains(&input.input_id))
-                .collect::<Vec<_>>();
-            if let Some(question) = &proposal.clarification {
-                retained.push(UnresolvedInput {
-                    input_id: pending.operation.id.clone(),
-                    source_requirements_revision: pending.requirements_revision,
-                    task_reference: task_reference.clone(),
-                    permission_decision: permission_reference(text)?
-                        .map(|reference| reference.decision_id.to_owned()),
-                    question: question.clone(),
-                    kind: proposal.clarification_kind.unwrap_or_default(),
-                });
-            }
-            goal.inputs.unresolved = retained;
             goal.inputs.after_revision = pending.operation.revision;
             goal.inputs.latest = Some(InputResult {
                 input_id: pending.operation.id,
@@ -762,8 +502,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                 permission_response_saved: proposal.permission_response,
                 classification: pending.classification,
                 reasoning_request_id: reasoning_request_id.clone(),
-                clarification_kind: proposal.clarification_kind.unwrap_or_default(),
-                resolutions: proposal.resolutions,
             });
             goal.inputs.pending = None;
         }

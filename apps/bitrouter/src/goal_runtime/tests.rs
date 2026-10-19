@@ -55,10 +55,8 @@ async fn wait_for(
         }
         anyhow::ensure!(
             tokio::time::Instant::now() < deadline,
-            "fixture Goal did not reach expected state: workflow {:?}; accounting {:?}; budget {:?}",
-            goal.workflow,
-            goal.accounting,
-            goal.budget
+            "fixture Goal did not reach expected state: {:?}",
+            goal.workflow
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
@@ -346,8 +344,6 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
                 let result = rejected.inputs.latest.as_ref().context("missing resource rejection")?;
                 assert!(result.clarification.as_ref().is_some_and(|text|text.contains("unavailable configured MCP")));
                 assert!(!result.requirements_saved && result.control_saved.is_none());
-                assert_eq!(rejected.inputs.unresolved_inputs().len(),1);
-                assert!(rejected.inputs.completion_waits_for_input());
                 assert_eq!(rejected.requirements_revision,1);
                 assert!(rejected.workflow.tasks.iter().all(|task|task.spec.resources.is_empty()));
                 assert_eq!(rejected.workflow.tasks.iter().map(|task|task.executions.len()).sum::<usize>(),2);
@@ -439,8 +435,6 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
         assert!(requests.iter().any(|request| request.url.path() == "/v1/systemone"));
         assert!(requests.iter().filter(|request| request.url.path() == "/v1/chat/completions").count() >= 6);
         if scenario == Scenario::ResourceEdit {
-            assert!(completed.inputs.unresolved_inputs().is_empty());
-            assert!(completed.inputs.latest.as_ref().is_some_and(|input| input.resolutions.iter().any(|resolution| resolution.input_id == "invalid-resource-change")));
             let left = completed.workflow.tasks.iter().find(|task|task.spec.id == "left").context("left task missing")?;
             assert_eq!(left.executions.len(),2);
             let old = &left.executions[0];

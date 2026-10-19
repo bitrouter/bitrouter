@@ -22,7 +22,7 @@ pub const MAX_PAGE_ITEMS: usize = 16;
 /// Bound on a serialized snapshot, operation or query page.
 pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
 /// Goal requests are a separate local protocol from native Thread operations.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,10 +77,6 @@ pub enum OperationKind {
         text: String,
         task_reference: Option<String>,
     },
-    InputWithdrawn {
-        input_id: String,
-        source_requirements_revision: u64,
-    },
     Control {
         intent: RunIntent,
     },
@@ -104,13 +100,6 @@ pub struct GoalOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum GoalCommand {
-    WithdrawInput {
-        operation_id: String,
-        goal_id: String,
-        expected_revision: u64,
-        input_id: String,
-        source_requirements_revision: u64,
-    },
     SetBudget {
         operation_id: String,
         goal_id: String,
@@ -307,8 +296,7 @@ impl GoalService {
             | GoalCommand::AcceptDelivery { operation_id, .. }
             | GoalCommand::Create { operation_id, .. }
             | GoalCommand::Input { operation_id, .. }
-            | GoalCommand::Control { operation_id, .. }
-            | GoalCommand::WithdrawInput { operation_id, .. } => operation_id.clone(),
+            | GoalCommand::Control { operation_id, .. } => operation_id.clone(),
             GoalCommand::RespondDecision { operation_id, .. } => operation_id.clone(),
             _ => return Err(invalid("expected a Goal mutation")),
         };
@@ -318,31 +306,6 @@ impl GoalService {
                 .map(|operation| GoalReply::Accepted { operation });
         }
         let (mut goal, expected_revision, kind) = match command {
-            GoalCommand::WithdrawInput {
-                goal_id,
-                expected_revision,
-                input_id,
-                source_requirements_revision,
-                ..
-            } => {
-                identifier(&goal_id)?;
-                identifier(&input_id)?;
-                let mut goal = self.store.get(owner, &goal_id).await?;
-                input::withdraw(
-                    &mut goal,
-                    &input_id,
-                    source_requirements_revision,
-                    &operation_id,
-                )?;
-                (
-                    goal,
-                    Some(expected_revision),
-                    OperationKind::InputWithdrawn {
-                        input_id,
-                        source_requirements_revision,
-                    },
-                )
-            }
             GoalCommand::SetBudget {
                 goal_id,
                 expected_revision,
@@ -503,15 +466,6 @@ impl GoalService {
                     identifier(reference)?;
                 }
                 let goal = self.store.get(owner, &goal_id).await?;
-                if let Some(id) = input::clarification_reference(&text)?
-                    && !goal
-                        .inputs
-                        .unresolved_inputs()
-                        .iter()
-                        .any(|input| input.input_id == id)
-                {
-                    return Err(GoalError::NotFound);
-                }
                 (
                     goal,
                     Some(expected_revision),

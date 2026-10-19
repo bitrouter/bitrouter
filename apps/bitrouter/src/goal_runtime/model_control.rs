@@ -18,7 +18,6 @@ pub(super) struct ModelControl {
     root: PathBuf,
     explicit_input: bool,
     failed_ack: AtomicBool,
-    failure: tokio::sync::Mutex<Option<String>>,
     plans: tokio::sync::Mutex<BTreeMap<String, NativePlan>>,
 }
 
@@ -35,25 +34,12 @@ impl ModelControl {
             root: crate::goal_artifacts::root(&coordinator.workspaces, &goal.id),
             explicit_input,
             failed_ack: AtomicBool::new(false),
-            failure: tokio::sync::Mutex::new(None),
             plans: tokio::sync::Mutex::new(BTreeMap::new()),
         })
     }
 
     pub(super) fn acknowledged(&self) -> bool {
         !self.failed_ack.load(Ordering::Acquire)
-    }
-
-    pub(super) async fn failure_detail(&self) -> Option<String> {
-        self.failure.lock().await.clone()
-    }
-
-    async fn fail_ack(&self, detail: &str) {
-        let mut failure = self.failure.lock().await;
-        if failure.is_none() {
-            *failure = Some(detail.chars().take(2048).collect());
-        }
-        self.failed_ack.store(true, Ordering::Release);
     }
 
     pub(super) async fn begin_typed(
@@ -89,12 +75,7 @@ impl ModelControl {
 
     async fn gate(&self) -> bitrouter_sdk::Result<()> {
         if !self.acknowledged() {
-            return Err(diagnostic(
-                self.failure_detail()
-                    .await
-                    .as_deref()
-                    .unwrap_or("previous outcome acknowledgement failed"),
-            ));
+            return Err(unavailable());
         }
         let response = self
             .goals
@@ -106,40 +87,26 @@ impl ModelControl {
                 now().map_err(|_| unavailable())?,
             )
             .await
-            .map_err(|error| diagnostic(&format!("source snapshot unavailable: {error}")))?;
+            .map_err(|_| unavailable())?;
         let GoalReply::Snapshot { goal } = response else {
             return Err(unavailable());
         };
         let time = now().map_err(|_| unavailable())?;
-        if goal.requirements_revision != self.goal.requirements_revision {
-            return Err(diagnostic(&format!(
-                "requirements changed from {} to {}",
-                self.goal.requirements_revision, goal.requirements_revision
-            )));
-        }
-        if let Err(error) = goal.budget.admission(goal.created_at_ms, time) {
-            return Err(diagnostic(&format!("budget admission rejected: {error}")));
-        }
-        if !self.explicit_input && goal.run_intent != RunIntent::Run {
-            return Err(diagnostic("background work was paused or stopped"));
-        }
-        if !self.explicit_input
-            && goal
+        if goal.requirements_revision != self.goal.requirements_revision
+            || goal.budget.admission(goal.created_at_ms, time).is_err()
+            || !self.explicit_input && goal.run_intent != RunIntent::Run
+            || !self.explicit_input
+                && goal
+                    .workflow
+                    .completion
+                    .completed_for(goal.requirements_revision)
+            || !goal
                 .workflow
-                .completion
-                .completed_for(goal.requirements_revision)
+                .coordinator
+                .as_ref()
+                .is_some_and(|lease| lease.id == self.coordinator_id && lease.expires_at_ms > time)
         {
-            return Err(diagnostic("this requirements version is already completed"));
-        }
-        match &goal.workflow.coordinator {
-            None => return Err(diagnostic("coordinator lease is missing")),
-            Some(lease) if lease.id != self.coordinator_id => {
-                return Err(diagnostic("coordinator lease belongs to a different owner"));
-            }
-            Some(lease) if lease.expires_at_ms <= time => {
-                return Err(diagnostic("coordinator lease expired"));
-            }
-            Some(_) => {}
+            return Err(unavailable());
         }
         Ok(())
     }
@@ -226,8 +193,7 @@ impl ModelControl {
     async fn commit(&self, operation: &str, event: Event) -> bitrouter_sdk::Result<()> {
         let provider_attempt =
             matches!(&event, Event::Begin { work } if work.kind == WorkKind::ProviderAttempt);
-        let change = Change::Accounting { event };
-        let mut result = self
+        let result = self
             .goals
             .workflow_change(
                 WorkflowActor {
@@ -237,39 +203,10 @@ impl ModelControl {
                 &self.goal.id,
                 operation,
                 self.goal.requirements_revision,
-                change.clone(),
+                Change::Accounting { event },
                 now().map_err(|_| unavailable())?,
             )
             .await;
-        // Retry only this exact durable fact. The SDK does not repeat any
-        // preparation, provider call or tool effect during this confirmation.
-        // Every retry rechecks the current source/lease or replays its matching
-        // receipt, so competing updates and a lost reply cannot poison the
-        // acknowledgement before the bounded confirmation has finished.
-        for retry in 0..3 {
-            if !matches!(
-                &result,
-                Err(bitrouter_orchestrator::goal::GoalError::Conflict
-                    | bitrouter_orchestrator::goal::GoalError::Storage { .. })
-            ) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5 << retry)).await;
-            result = self
-                .goals
-                .workflow_change(
-                    WorkflowActor {
-                        owner: "local",
-                        coordinator_id: &self.coordinator_id,
-                    },
-                    &self.goal.id,
-                    operation,
-                    self.goal.requirements_revision,
-                    change.clone(),
-                    now().map_err(|_| unavailable())?,
-                )
-                .await;
-        }
         if matches!(
             &result,
             Err(bitrouter_orchestrator::goal::GoalError::BudgetExceeded { .. })
@@ -280,28 +217,10 @@ impl ModelControl {
                 Change::Budget { event: bitrouter_orchestrator::goal::budget::Event::Halt { reason: "A provider attempt no longer fits the shared Goal budget; no dispatch occurred".into() } },
                 now().map_err(|_| unavailable())?).await;
         }
-        if let Err(error) = &result {
-            self.fail_ack(&format!(
-                "accounting operation {operation} was not acknowledged: {error}"
-            ))
-            .await;
+        if result.is_err() {
+            self.failed_ack.store(true, Ordering::Release);
         }
-        result.map(|_| ()).map_err(|error| {
-            diagnostic(&format!(
-                "accounting operation {operation} was not acknowledged: {error}"
-            ))
-        })?;
-        if matches!(
-            change,
-            Change::Accounting {
-                event: Event::Begin { .. }
-            }
-        ) {
-            // A recovered receipt confirms a past intent, not current authority
-            // to dispatch after a pause, source change or ownership transfer.
-            self.gate().await?;
-        }
-        Ok(())
+        result.map(|_| ()).map_err(|_| unavailable())
     }
 }
 
@@ -487,8 +406,7 @@ impl NativeExecutionControl for ModelControl {
     }
     async fn after_provider_work(&self, report: NativeProviderWorkReport) {
         let Ok(value) = serde_json::to_value(&report) else {
-            self.fail_ack("provider integration outcome could not be serialized")
-                .await;
+            self.failed_ack.store(true, Ordering::Release);
             return;
         };
         if self
@@ -496,8 +414,7 @@ impl NativeExecutionControl for ModelControl {
             .await
             .is_err()
         {
-            self.fail_ack("provider integration outcome was not acknowledged")
-                .await;
+            self.failed_ack.store(true, Ordering::Release);
         }
     }
     async fn after_attempt(&self, report: NativeAttemptReport) {
@@ -507,7 +424,7 @@ impl NativeExecutionControl for ModelControl {
             report.request_id, report.attempt_index
         ));
         let Ok(time) = now() else {
-            self.fail_ack("provider outcome clock unavailable").await;
+            self.failed_ack.store(true, Ordering::Release);
             return;
         };
         let current = self
@@ -555,8 +472,7 @@ impl NativeExecutionControl for ModelControl {
             _ => false,
         };
         let Ok(value) = serde_json::to_value(&report) else {
-            self.fail_ack("provider attempt outcome could not be serialized")
-                .await;
+            self.failed_ack.store(true, Ordering::Release);
             return;
         };
         if self
@@ -569,8 +485,7 @@ impl NativeExecutionControl for ModelControl {
             .await
             .is_err()
         {
-            self.fail_ack("provider attempt outcome was not acknowledged")
-                .await;
+            self.failed_ack.store(true, Ordering::Release);
         }
     }
 }
@@ -579,12 +494,6 @@ fn unavailable() -> bitrouter_sdk::error::BitrouterError {
     bitrouter_sdk::error::BitrouterError::bad_request(
         "Goal model source/owner or durable acknowledgement is unavailable",
     )
-}
-fn diagnostic(detail: &str) -> bitrouter_sdk::error::BitrouterError {
-    bitrouter_sdk::error::BitrouterError::bad_request(format!(
-        "Goal model {}",
-        detail.chars().take(2048).collect::<String>()
-    ))
 }
 fn key_id(key: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -603,6 +512,3 @@ fn provider_key(work: &NativeProviderWork) -> String {
         work.request_id, work.attempt_index, work.work_index
     )
 }
-
-#[cfg(test)]
-mod tests;

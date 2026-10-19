@@ -416,27 +416,6 @@ A persistent allow requires the actual offered card choice or explicit
 `/option <offered-id>`. Saved replies, dispatch, controller selection and tool
 results are separate facts. Typed judgments are not execution authority.
 
-Unresolved questions retain their original input identity and source version
-across unrelated queries and reconnects. Reply naturally in the current Goal,
-or use `/input <id> <reply>` to reference one exact open question. That reference
-does not grant permission or change the Goal/task scope. Runtime validates a
-reasoned answer, committed change or explicit withdrawal before removing that
-request; ordinary queries do not clear it. Requirement/control ambiguity and
-failed understanding prevent completion, while independent work continues.
-Query-only clarification is retained without adding a new completion condition.
-Saved resolution means input disposition or intent was committed, not that a
-worker adopted it or its result passed verification. Permission consent still
-requires the current actual Decision reference/card and offered option.
-
-The exact three-token `/input <id> /withdraw` is a direct, version-checked
-withdrawal of one unresolved request, available without a model or budget.
-It does not undo committed requirements, cancel worker/tool effects, resume
-work or increase a cap; other accepted/in-flight inputs remain ordered.
-Additional words, quotes and hypothetical discussion use normal understanding.
-The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 3; older outboxes are retained and rejected without replay
-or reinterpretation. Native/ACP protocol versions are separate.
-
 | Key in the current Goal | Effect |
 | --- | --- |
 | Enter | Submit current-Goal input; the draft clears after its original receipt |
