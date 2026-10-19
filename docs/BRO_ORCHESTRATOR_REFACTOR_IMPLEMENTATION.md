@@ -21,17 +21,16 @@ hierarchical sub-Goals and owner handoff are outside this delivery.
 
 | Topic | Concrete direction and boundary |
 | --- | --- |
-| D1: Goal owner | One accepted owner Thread referenced by `Workflow.owner_thread_id`; the Thread records `owned_goal_id`. The existing Goal coordinator lease remains a host fencing fact, distinct from the logical agent identity. A separate `input_thread_id` points to a metadata-only input Thread whose `input_for_thread_id` records the owner. Trusted native worker Threads carry immutable `goal_work` sources; app Goal attempts link actual Thread/Turn identities. Managed ACP worker associations now use the same execution authority; complete recovery remains pending. |
+| D1: Goal owner | One accepted owner Thread referenced by `Workflow.owner_thread_id`; the Thread records `owned_goal_id`. The existing Goal coordinator lease remains a host fencing fact, distinct from the logical agent identity. A separate `input_thread_id` points to a metadata-only input Thread whose `input_for_thread_id` records the owner. Trusted native worker Threads carry immutable `goal_work` sources; app Goal attempts link actual Thread/Turn identities. Managed ACP associations remain pending. |
 | D1: admission recovery | Owner creation uses a deterministic, namespaced key derived from the already saved Goal ID. `ThreadService.find_thread_admission` reads the original caller-scoped receipt without a new request or model call. After acceptance, the Goal association can be retried with the same action identity. This key is not reused for worker or Turn admissions. |
 | D1: persistence | `ThreadCreated` and checkpoints retain the optional associations. Goal model actions link their original purpose/source/requirements revision to actual Thread/Turn IDs in operation history. Action keys derive from those persisted identities. Legacy missing fields mean no recorded association; neither a read nor a projection invents one. No new database/table or cross-store transaction is introduced. |
 | D2: generation and input | Planning, input scope selection, input interpretation, branch review and completion evaluation now use tool-free Turns through the existing admission, runner, commit, owner and shutdown authority. The input Thread can overlap owner planning without a second active Turn in either Thread. Both consume shared active-Turn capacity. Bounded typed decisions retain their existing operation/accounting path. |
 | D3: resources | Coordination Threads record the configured route selector. Exact supplied prompts, credential-free prepared plans, admitted route indices and actual SDK attempt reports are retained in ExecutionStore; Goal model-control callbacks retain existing reservations/accounting and live source checks. A completed response requires acknowledgements from both stores. A selector is not actual provider/model evidence. Existing Core per-step context preparation and SDK fallback remain; complete native/ACP worker report association is pending. |
 
 The daemon passes its existing ThreadService to GoalRuntime. It does not create
-a second ExecutionStore owner. App generation submits managed model work;
-only its common runner invokes the SDK. New native and managed ACP dispatches
-use common accepted Turns. Unbound historical ACP runs retain their original
-read/control reconciliation path until cutover is proven. An owner link does not imply a
+a second ExecutionStore owner. App generation now submits managed model work;
+only its common runner invokes the SDK. Worker dispatch still uses the previous
+ACP coordinator and remains a migration source. An owner link does not imply a
 dispatched Turn, adoption, verification, recovered execution, or file permission.
 
 Coordination Threads are metadata-only: no native tools, MCP, skills, startup
@@ -55,7 +54,7 @@ not claim the target shared-runner architecture is complete.
 | Goal planning/input/review/completion generation | `ThreadService.start_goal_generation`, common admission/runner/commit | Owner or input Thread route selector; exact prompt, SDK plans and attempt reports in ExecutionStore, Root source/budget accounting. Tool-free. Current SDK fallback remains; no full Turn-fixed context guarantee. |
 | Native Goal work | `ThreadService.start_goal_worker_turn`, native Agent/Core driver | Selected/default route, actual saved prompt, selected MCP configuration and Ask permissions. Core checkpoints retain model/tool evidence; the app's worker projection does not yet expose a complete provider/resource/activity association. A recorded selection is not proof of use. |
 | Existing standalone native work | Native Thread/Turn entrypoints on that same ThreadService | Existing grants, native context/routing, permissions, verification and recovery remain authoritative. Goal-associated Threads reject the ordinary entrypoint. |
-| Managed external ACP Goal work | Common ThreadService admission/runner/commit; supervisor adapts process/protocol transport | Explicit ACP configuration and actual run/session mapping, bounded sequenced public observations, original permission options and stop receipts. Generic supervisor controls reject managed ownership. Private context, physical provider/model and unsupported controls remain unknown. Cold session continuation and the full failure matrix remain unqualified. |
+| Managed external ACP Goal work | App coordinator plus the existing supervisor; common Thread/Turn migration pending | Only negotiated session/model controls and actual public observations are available. Harness private context, model usage and unsupported controls remain unknown. This path is still an execution-authority migration source. |
 | Direct harness and transparent ACP serving | Existing direct/transparent entrypoints | Preserve the original harness interaction and protocol capabilities; do not fabricate Goal/Thread/Turn bindings or turn private harness behavior into native evidence. |
 
 The owner/input Thread split preserves input-model availability while owner
@@ -63,7 +62,7 @@ planning is active; it does not bypass the common active-Turn limit. Bounded
 typed decisions retain their existing work/accounting identities and are not
 presented as ordinary generated worker responses. Shared generation/native capacity
 waiting is now implemented below; worker quote waiting, managed ACP ownership
-recovery and worker evidence association remain S2–S4 work.
+and worker evidence association remain S2–S4 work.
 
 ## Native worker foundation
 
@@ -196,57 +195,23 @@ regressions are being validated separately from the earlier full run. The native
 negative case refuses the actual SQLite terminal-fact transaction; recovery
 must leave the stop unknown and the original Turn in place.
 
-### Managed ACP migration in progress
+### Managed ACP migration boundary
 
-Thread configuration now explicitly distinguishes native `AgentConfig` from
-ACP harness/model-request/duration configuration. Existing native JSON remains
-unchanged; mixed native/ACP headers are rejected. An ACP Turn creates no native
-Agent, model placeholder or Core checkpoint. Both drivers use common admission,
-active-Turn capacity, the OS workspace fence, commits, cancellation and shutdown.
+The next integration must change the actual driver and authority. Current
+`ThreadRecord`, `ThreadCreated` and `ThreadView` require native `AgentConfig`;
+ordinary admission constructs a native Agent. Adding ACP IDs to that path would
+still describe a native executor that never ran. Managed ACP needs an explicit
+executor/session representation, a shared accepted Turn and the common
+workspace/slot/commit/stop lifecycle. No placeholder native model, empty Core
+checkpoint or fabricated provider evidence is acceptable.
 
-The supervisor retains actual process/protocol mechanics and records its shared
-Thread/Turn owner. Managed startup sends no prompt and acquires no independent
-lease. Generic mutation, lease takeover/removal and private session/model queries
-cannot become a second controller. Adapter dispatch rechecks the common durable
-owner and live Goal source after preparation or a transport mutation wait.
-Original managed start receipts survive a lost process cache; a changed body or
-owner cannot reuse them to launch another process. Missing Goal links query
-original independent Thread/Turn keys before entering the historical path.
-
-Public ACP observations carry bounded original sequence numbers, actual session
-and negotiated route/capability reports. Multiple original permission requests
-retain their offered options; a common committed choice is distinct from its
-outbound dispatch and actual tool effects. A protocol end-turn response remains
-separate from owned process termination and Goal verification. Incomplete prompt
-history, uncertain stop or a failed durable ACK stays recovery-required. ACP
-private history/context and physical model/provider usage are not native facts.
-
-Cold reads retain associations but cannot authorize continuation. Confirmed same
-session recovery, late stop/effect reconciliation, replacement and complete fault
-coverage remain S3 work. The shared default ACP duration is 600 seconds; private
-harness spending cannot be qualified by that bound. Direct harness and transparent
-ACP serving retain their original mode.
-
-The exact `managed-acp-source2.json` passes 26 focused app/service cases, including
-actual ACP parallel handoff/delivery, no generic takeover, supplied model/MCP/skill
-material and native permission/effect regressions. Source3 adds owner/source/grant
-and durable-start-cache regressions: both pass, but its wider 74-case run has
-53 passes and 21 stack-overflow aborts. It is not a passing acceptance result.
-Source3's surviving crash fixtures are archived separately (2,103 regular files;
-15 sockets/symlinks/other entries explicitly omitted). Independent extraction
-verified every saved checksum; case-to-directory mapping and lost process/memory
-state remain unknown.
-
-Diagnostic probes found that supervisor queries included the startup future.
-Boxing the awaited startup and receipt-query boundaries reduces the measured
-dispatch future from 32,880 to 8,912 bytes, Goal task from 38,384 to 16,888 and
-worker from 40,720 to 18,304 on this toolchain. The temporary probe is archived,
-not retained as a product test. No stack limit or test requirement changed.
-The subsequent source4 run has 73 passes and one stop/projection failure, with
-no stack-overflow aborts. A permission refresh was advancing an already stopped
-attempt's pending projection. It now uses the existing `worker_requested` source
-predicate, preserving the original stop observation and avoiding repeated writes.
-The unchanged assertion passes in the source6 full run below. S3–S6 remain incomplete.
+The app supervisor already owns process/protocol transport, its original-action
+start receipts, negotiated session facts and journal. Preserve those adapters
+and direct/transparent entrypoints, while moving managed lifecycle decisions
+under ThreadService. Its in-memory directory claims do not substitute for the
+shared runtime's OS workspace fence. Ordinary supervisor mutation entrypoints
+must not become a second controller for a managed Turn. This migration is still
+pending; the stop-evidence correction alone does not implement S3.
 
 ## Compatibility
 
@@ -258,8 +223,8 @@ The unchanged assertion passes in the source6 full run below. S3–S6 remain inc
 - Native Thread projection adds optional Goal/input associations. Ordinary Threads
   still have no Goal. Generation source/request identity uses optional fields on
   the existing context/response projection. Native transport stays unchanged, but runtime root format
-  becomes **9** so older writers cannot ignore and erase ownership. Formats
-  2–8 remain readable; appending upgrades the existing envelope atomically,
+  becomes **8** so older writers cannot ignore and erase ownership. Formats
+  2–7 remain readable; appending upgrades the existing envelope atomically,
   without history rewriting. New generation records carry exact inputs and
   SDK evidence; native records/checkpoints retain their existing semantics.
 - A manually restarted old app Goal writer is a separate compatibility gate:
@@ -279,12 +244,12 @@ The unchanged assertion passes in the source6 full run below. S3–S6 remain inc
 
 | Stage | Status |
 | --- | --- |
-| S0 | Mapped: current fact authority, owner/input scheduling and native/ACP execution/resource boundaries are documented; no core persistence dependency or placeholder executor. This mapping does not prove the remaining stages. |
+| S0 | In progress: source authority, owner/input model scheduling and resource boundaries mapped; full worker/Turn mapping remains. |
 | S1 | In progress: owner/input association, model and worker Turn source links, stable binding operations and original-key lookup implemented. Full interruption/compatibility proof remains. |
 | S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and shared bounded generation/native capacity waiting are connected. Active cold recovery, worker quote waiting and full wait/effect projection remain pending. |
-| S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. Full session recovery, late reconciliation and replacement/interruption qualification remain. |
-| S4 | In progress: generation SDK reports, requested worker material and public ACP session/route reports are linked; complete native policy/material/actual execution report association remains. |
-| S5 | In progress: native standalone Goal completion and managed ACP dependencies/review consume shared Turn observations in controlled fixtures. Native branch overlap/isolation, adoption and the full coordinated closure remain. |
+| S3 | Pending: managed ACP through common admission/control; session replacement and recovery. |
+| S4 | Pending: complete policy/material/actual execution report association. |
+| S5 | Pending: Goal coordination, dependencies and completion consuming shared execution evidence. |
 | S6 | In progress: protocol fixtures now have an unpublished minimal Cargo package; repeated test-time app/runtime builds are removed. Old execution-loop removal and final regression/live gates remain. |
 
 ## Acceptance audit
@@ -698,12 +663,8 @@ size, timeout, assertion relaxation or test skip was introduced.
 
 ## Next execution work
 
-Complete managed ACP session recovery, original stop/effect reconciliation and
-worker replacement using the shared Thread/Turn authority. Preserve original
-native/ACP action keys and transparent/direct harness behavior. A cold query is
-not confirmed same-session continuation; an original startup receipt alone does
-not authorize another prompt. Do not invent native context or repeat uncertain
-effects to satisfy recovery.
+Migrate managed ACP adapters using distinct persisted action keys and the same
+Thread/Turn execution authority. Preserve transparent/direct harness behavior.
 Keep the earlier editor-input and route-startup intermittent failures visible;
 the latest green run and isolated repeats do not establish their causes.
 Close original-action recovery and late stop-evidence reconciliation, then
@@ -718,32 +679,6 @@ substitutes. Prove actual native branch overlap and isolation, dependency
 consumption and current-versus-historical adoption before completing S4/S5.
 Run the required fresh source checks for subsequent implementation batches and
 complete live harness/provider gates before the final A01–A22 audit.
-
-## Managed ACP source6 checkpoint
-
-`managed-acp-source6.json` binds the full repository file hashes to parent
-`d2c5ad519c438d655b3ac43786c8e4a832d4f9b8` and the saved dirty-source patch/tar.
-The source audit reports **zero changed files** throughout these commands:
-
-| Required check | Actual result |
-| --- | --- |
-| Workspace/all-target/all-feature Clippy with `-D warnings` | Passed |
-| `cargo fmt --all -- --check` | Passed |
-| Full workspace/all-feature nextest | **4,730 passed**, 24 existing skips, 7 slow; no failures, aborts or leak reports; 563.544 seconds |
-| Workspace/all-feature rustdoc | Passed; exact per-package results in the archived log |
-
-The full run includes the formerly failing native stop/revision assertion,
-original managed-start cache recovery and the shared owner/source/grant fence.
-It does not establish the causes of earlier intermittent leaks or platform
-failures, nor qualify pending cold-session/replacement/native-parallel gates.
-No stack limit, timeout, assertion or skip was relaxed for this batch.
-
-Raw failed trials, source snapshots, diagnostic probe, runners and crash fixtures
-remain outside the PR under the independent local archive's
-`MANAGED_ACP_INDEX.md`, `managed-acp-gates6.json` and source audit. This is a local
-partial implementation checkpoint, without a push or hosted-CI claim. Final
-publication must retain a separately retrievable archive and the necessary
-Cargo-built Rust fixtures/reproduction instructions in the feature PR.
 
 ## Delivery and evidence
 

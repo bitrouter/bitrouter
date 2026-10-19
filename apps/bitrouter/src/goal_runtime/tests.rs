@@ -27,7 +27,6 @@ mod provider;
 
 mod fixture;
 mod live_input;
-mod managed_acp;
 mod native;
 mod review_barrier;
 mod start_recovery;
@@ -158,8 +157,7 @@ async fn daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery() -> 
                 .is_none()
         );
         let id = fixture.create().await?;
-        let running = fixture.running(&id).await?;
-        managed_acp::assert_shared(&fixture, &running, false).await?;
+        fixture.running(&id).await?;
         fixture
             .input(
                 &id,
@@ -198,7 +196,6 @@ async fn daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery() -> 
         assert!(!answered.workflow.completion.completed_for(1));
         fixture.release().await?;
         let completed = fixture.completed(&id, 1).await?;
-        managed_acp::assert_shared(&fixture, &completed, true).await?;
         let delivery = completed
             .workflow
             .completion

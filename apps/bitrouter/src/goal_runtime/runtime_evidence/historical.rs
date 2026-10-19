@@ -74,7 +74,11 @@ async fn archive(
     let record =
         crate::goal_archive::decode(&goal.id, &task.spec.id, reference, &bytes, &operation)?;
     let execution = &record.execution;
-    let snapshot = coordinator.acp_run_snapshot(goal, task, execution).await?;
+    let snapshot = coordinator
+        .supervisor
+        .start_snapshot(&coordinator.grant, &execution.id)
+        .await?
+        .context("archived execution mapping unavailable")?;
     let SessionResponse::Events { replay } = coordinator
         .supervisor
         .dispatch(SessionRequest::authorized(

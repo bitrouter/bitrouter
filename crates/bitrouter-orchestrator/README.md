@@ -18,12 +18,8 @@ trace viewer. `apps/bitrouter` enables it for existing ACP commands and sessions
 | `acp/capture.rs` | Capture port and protocol events; the app supplies durable storage |
 | `acp/translate.rs`, `acp/telemetry.rs` | Typed session updates, NDJSON contract and context usage |
 
-The app injects route/cost services and retains CLI/UI adapters. Its managed Goal
-ACP adapter uses the same `ThreadService` admission, owner, permissions and stop
-facts as native workers, with explicit ACP settings and real session IDs. Generic
-supervisor controls cannot take over a managed Turn. Direct harness and transparent
-ACP modes retain their original behavior; complete managed session recovery is
-still under qualification. Agent configuration data remains in
+The app injects route/cost services and retains CLI/UI adapters. This extraction
+does not attach external ACP sessions to native `ThreadService` execution. Agent configuration data remains in
 `bitrouter_sdk::config::agent` beside the shared `Config`, without ACP runtime
 dependencies.
 
@@ -35,7 +31,7 @@ reattachment and durable cancel/close controls. The app supplies an authenticate
 local caller, host-authorized immutable resources and an OS-local stdio bridge.
 EOF affects observation only. The core owns single-Thread closure and records
 cancelled queued Turns before joining active cleanup; completion retries do not
-cancel newer work. Runtime format 9 retains supported 2/3/4/5/6/7/8 reads.
+cancel newer work. Runtime format 8 retains supported 2/3/4/5/6/7 reads.
 
 See [the native ACP contract](../../docs/BRO_NATIVE_ACP_SERVER_SPEC.md) and
 [local acceptance](../../docs/BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md). External

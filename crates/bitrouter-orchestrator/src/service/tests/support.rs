@@ -366,7 +366,7 @@ impl ThreadService {
                 .get_mut(turn_id)
                 .and_then(|record| record.pending.take())
             {
-                pending.cancel();
+                let _ = pending.response.send(false);
             }
         }
         Ok(())

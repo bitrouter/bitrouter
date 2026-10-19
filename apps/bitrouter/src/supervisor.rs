@@ -36,8 +36,6 @@ use crate::acp_cli::{
 };
 use crate::paths::ConfigSource;
 
-pub(crate) mod managed;
-
 /// Version of the local session-control JSON contract.
 pub const SESSION_PROTOCOL_VERSION: u16 = 1;
 
@@ -429,8 +427,6 @@ pub enum SessionEventKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSnapshot {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
     pub run_id: String,
     pub label: String,
     pub agent_id: String,
@@ -764,8 +760,6 @@ struct LedgerFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LedgerEntry {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
     run_id: String,
     label: String,
     agent_id: String,
@@ -1011,7 +1005,6 @@ impl LedgerStore {
 impl From<&RunSnapshot> for LedgerEntry {
     fn from(snapshot: &RunSnapshot) -> Self {
         Self {
-            managed_by: snapshot.managed_by.clone(),
             run_id: snapshot.run_id.clone(),
             label: snapshot.label.clone(),
             agent_id: snapshot.agent_id.clone(),
@@ -1142,9 +1135,7 @@ impl Supervisor {
             SessionCommand::Authorize { .. } => {
                 Err(anyhow::anyhow!("grant issuance was not dispatched"))
             }
-            // Keep process/session preparation out of every read-only query's
-            // future frame. Start remains the same awaited, owned operation.
-            SessionCommand::Start(request) => Box::pin(self.start(*request)).await,
+            SessionCommand::Start(request) => self.start(*request).await,
             SessionCommand::List => self.list().await,
             SessionCommand::PeekAll => self.peek_all().await,
             SessionCommand::Snapshot { run_id } => Ok(SessionResponse::Snapshot {
@@ -1270,20 +1261,12 @@ impl Supervisor {
                 cursor,
             } => {
                 let run = self.run(&run_id).await?;
-                anyhow::ensure!(
-                    run.snapshot().await.managed_by.is_none(),
-                    "managed ACP requests belong to its Thread/Turn"
-                );
                 let client = run.client().await?;
                 let response = client.list_sessions(cwd, cursor).await?;
                 Ok(SessionResponse::NativeSessions { response })
             }
             SessionCommand::RouteList { run_id } => {
                 let run = self.run(&run_id).await?;
-                anyhow::ensure!(
-                    run.snapshot().await.managed_by.is_none(),
-                    "managed ACP requests belong to its Thread/Turn"
-                );
                 let (client, session_id) = run.client_and_session().await?;
                 let state = client.route_list(&session_id).await?;
                 Ok(SessionResponse::RouteState {
@@ -1533,38 +1516,13 @@ impl Supervisor {
     }
 
     async fn start(&self, request: StartRunRequest) -> Result<SessionResponse> {
-        self.start_owned(request, None, None).await
-    }
-
-    pub(super) async fn start_managed(
-        &self,
-        request: StartRunRequest,
-        owner: bitrouter_orchestrator::service::worker::acp::Owner,
-        control: &dyn managed::DispatchGuard,
-    ) -> Result<SessionResponse> {
-        anyhow::ensure!(
-            request.prompt.is_none() && request.presentation == Presentation::Background,
-            "managed startup cannot submit a prompt or acquire another control lease"
-        );
-        self.start_owned(request, Some(owner), Some(control)).await
-    }
-
-    async fn start_owned(
-        &self,
-        request: StartRunRequest,
-        managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
-        control: Option<&dyn managed::DispatchGuard>,
-    ) -> Result<SessionResponse> {
         validate_identifier("action request", &request.action_request_id)?;
         anyhow::ensure!(
             !self.inner.shutting_down.load(Ordering::SeqCst),
             "the session supervisor is shutting down"
         );
-        let fingerprint = match &managed_by {
-            Some(owner) => serde_json::to_string(&(&request, owner)),
-            None => serde_json::to_string(&request),
-        }
-        .context("fingerprinting start request")?;
+        let fingerprint =
+            serde_json::to_string(&request).context("fingerprinting start request")?;
         loop {
             let wait = {
                 let mut starts = self.inner.starts.lock().await;
@@ -1605,42 +1563,6 @@ impl Supervisor {
                         Some(notify.clone())
                     }
                     None => {
-                        // The process cache is empty after a daemon restart.
-                        // A durable managed start still names the original Run;
-                        // never start another process under that action key.
-                        let existing = {
-                            let entries = self.inner.ledger.entries.lock().await;
-                            let mut found = entries.values().filter(|entry| {
-                                entry.start.as_ref().is_some_and(|start| {
-                                    start.action_request_id == request.action_request_id
-                                })
-                            });
-                            let entry = found.next().cloned();
-                            anyhow::ensure!(
-                                found.next().is_none(),
-                                "original start has multiple durable mappings"
-                            );
-                            entry
-                        };
-                        if let Some(entry) = existing
-                            && (entry.managed_by.is_some() || managed_by.is_some())
-                        {
-                            use sha2::{Digest, Sha256};
-                            let request_sha256 =
-                                hex::encode(Sha256::digest(serde_json::to_vec(&request)?));
-                            anyhow::ensure!(
-                                entry.managed_by == managed_by
-                                    && entry.start.as_ref().is_some_and(|start| {
-                                        start.request_sha256 == request_sha256
-                                    }),
-                                "original managed start belongs to another request or Thread/Turn owner"
-                            );
-                            drop(starts);
-                            return Ok(SessionResponse::Started {
-                                snapshot: Box::new(self.run(&entry.run_id).await?.snapshot().await),
-                                diagnostics: Vec::new(),
-                            });
-                        }
                         anyhow::ensure!(
                             !self.inner.shutting_down.load(Ordering::SeqCst),
                             "the session supervisor is shutting down"
@@ -1664,9 +1586,7 @@ impl Supervisor {
                 }
                 continue;
             }
-            let result = self
-                .start_new(request.clone(), managed_by.clone(), control)
-                .await;
+            let result = self.start_new(request.clone()).await;
             let mut starts = self.inner.starts.lock().await;
             let notify = match starts.get(&request.action_request_id) {
                 Some(StartState::Starting { notify, .. }) => Some(notify.clone()),
@@ -1708,12 +1628,7 @@ impl Supervisor {
         }
     }
 
-    async fn start_new(
-        &self,
-        request: StartRunRequest,
-        managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
-        control: Option<&dyn managed::DispatchGuard>,
-    ) -> Result<SessionResponse> {
+    async fn start_new(&self, request: StartRunRequest) -> Result<SessionResponse> {
         anyhow::ensure!(
             !self.inner.shutting_down.load(Ordering::SeqCst),
             "the session supervisor is shutting down"
@@ -1750,7 +1665,6 @@ impl Supervisor {
         self.reserve_claim(&claim_key, &run_id, request.allow_shared_directory)
             .await?;
         let snapshot = RunSnapshot {
-            managed_by,
             run_id: run_id.clone(),
             label: request
                 .label
@@ -1848,23 +1762,6 @@ impl Supervisor {
                 return Err(error);
             }
         };
-        // Preparation can await configuration, installation or credentials.
-        // Recheck the common owner/source before opening any ACP session.
-        if let Some(control) = control
-            && let Err(error) = control.authorize().await
-        {
-            run.state
-                .lock()
-                .await
-                .snapshot
-                .startup_aborted_before_session = true;
-            run.fail_launch(format!(
-                "managed dispatch closed before session open: {error:#}"
-            ))
-            .await;
-            run.finish_startup(true).await;
-            return Err(error);
-        }
         let mut handle = match host
             .open_supervised_with_cancel(&request.session, cwd, &run.startup_cancel)
             .await
@@ -2131,10 +2028,6 @@ impl Supervisor {
         let run = self.run(run_id).await?;
         let snapshot = run.snapshot().await;
         anyhow::ensure!(
-            snapshot.managed_by.is_none(),
-            "managed ACP metadata belongs to its Thread/Turn"
-        );
-        anyhow::ensure!(
             matches!(
                 snapshot.process,
                 ProcessState::Stopped | ProcessState::Failed | ProcessState::Interrupted
@@ -2213,7 +2106,6 @@ impl Run {
         claims: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
     ) -> Self {
         let snapshot = RunSnapshot {
-            managed_by: entry.managed_by,
             run_id: entry.run_id,
             label: entry.label,
             agent_id: entry.agent_id,
@@ -3382,10 +3274,6 @@ impl Run {
         validate_identifier("client", client_id)?;
         self.expire_lease().await;
         let mut state = self.state.lock().await;
-        anyhow::ensure!(
-            state.snapshot.managed_by.is_none(),
-            "managed ACP control belongs to its Thread/Turn"
-        );
         let lease = match &state.snapshot.lease {
             Some(lease) if lease.owner_client_id == client_id => ControlLease {
                 owner_client_id: client_id.to_string(),
@@ -3451,10 +3339,6 @@ impl Run {
         validate_identifier("action request", &fence.action_request_id)?;
         self.expire_lease().await;
         let state = self.state.lock().await;
-        anyhow::ensure!(
-            state.snapshot.managed_by.is_none(),
-            "managed ACP control belongs to its Thread/Turn"
-        );
         let lease = state
             .snapshot
             .lease
@@ -3935,7 +3819,6 @@ mod tests {
         let (ledger, _) = LedgerStore::open(temporary.path().join("ledger.json")).await?;
         let now = Utc::now();
         let snapshot = RunSnapshot {
-            managed_by: None,
             run_id: "run-1".to_string(),
             label: "test".to_string(),
             agent_id: "stub".to_string(),
@@ -4826,87 +4709,6 @@ mod tests {
                 .await
                 .is_err()
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn managed_start_uses_durable_receipt_after_its_process_cache_is_lost() -> Result<()> {
-        struct Closed(std::sync::atomic::AtomicUsize);
-        #[async_trait::async_trait]
-        impl managed::DispatchGuard for Closed {
-            async fn authorize(&self) -> Result<()> {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                anyhow::bail!("no new session is authorized")
-            }
-        }
-        let directory = tempfile::tempdir()?;
-        let (_ledger_directory, run) = test_run(directory.path(), "original-client").await?;
-        let supervisor = test_supervisor(directory.path(), run.clone());
-        let owner = bitrouter_orchestrator::service::worker::acp::Owner {
-            server_instance_id: "original-host".into(),
-            thread_id: "original-thread".into(),
-            turn_id: "original-turn".into(),
-        };
-        {
-            let mut state = run.state.lock().await;
-            state.snapshot.managed_by = Some(owner.clone());
-            state.snapshot.lease = None;
-            state.snapshot.process = ProcessState::Interrupted;
-        }
-        let request = StartRunRequest {
-            action_request_id: "original-managed-start".into(),
-            client_id: None,
-            label: None,
-            agent_id: "configured-peer".into(),
-            prompt: None,
-            cwd: directory.path().into(),
-            routing: Default::default(),
-            launch: Default::default(),
-            session: Default::default(),
-            presentation: Presentation::Background,
-            parent_run_id: None,
-            allow_shared_directory: false,
-            permission_policy: Default::default(),
-            result_schema: None,
-        };
-        let snapshot = run.snapshot().await;
-        supervisor
-            .inner
-            .ledger
-            .record_start(&snapshot, &request)
-            .await?;
-        let closed = Closed(std::sync::atomic::AtomicUsize::new(0));
-        assert!(supervisor.inner.starts.lock().await.is_empty());
-        let SessionResponse::Started {
-            snapshot: original, ..
-        } = supervisor
-            .start_managed(request.clone(), owner.clone(), &closed)
-            .await?
-        else {
-            anyhow::bail!("original receipt missing");
-        };
-        assert_eq!(original.run_id, snapshot.run_id);
-        assert_eq!(original.process, ProcessState::Interrupted);
-        assert!(supervisor.start(request.clone()).await.is_err());
-        let mut changed = request.clone();
-        changed.agent_id = "another-harness".into();
-        assert!(
-            supervisor
-                .start_managed(changed, owner.clone(), &closed)
-                .await
-                .is_err()
-        );
-        let mut another_owner = owner;
-        another_owner.server_instance_id = "another-host".into();
-        assert!(
-            supervisor
-                .start_managed(request, another_owner, &closed)
-                .await
-                .is_err()
-        );
-        assert_eq!(closed.0.load(Ordering::SeqCst), 0);
-        assert_eq!(supervisor.inner.runs.read().await.len(), 1);
-        assert!(supervisor.inner.starts.lock().await.is_empty());
         Ok(())
     }
 

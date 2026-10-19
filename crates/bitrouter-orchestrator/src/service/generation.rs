@@ -192,8 +192,8 @@ impl ThreadService {
             (
                 thread.snapshot.context_version,
                 thread.caller.clone(),
-                thread.config.max_duration(),
-                if thread.config.native()?.model_mode == crate::core::protocol::ModelMode::Fixed {
+                thread.config.max_duration,
+                if thread.config.model_mode == crate::core::protocol::ModelMode::Fixed {
                     NativeModelSelection::Fixed
                 } else {
                     NativeModelSelection::Policy

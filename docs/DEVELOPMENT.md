@@ -143,7 +143,7 @@ checkpoint recovery preserve identities and budgets without replaying completed
 effects; lost owners, unknown effects and uncertain accounting remain blocked.
 
 Use [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) for current
-requirements, including root format 9 (reading formats 2–8) and local v17/HTTP v2. The
+requirements, including root format 8 (reading formats 2–7) and local v17/HTTP v2. The
 [runtime acceptance index](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) separates local
 fixtures, historical provider/platform checks and remaining product gates.
 [Conversation UI](BRO_CONVERSATION_UI_SPEC.md) and

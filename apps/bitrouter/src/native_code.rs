@@ -1026,10 +1026,6 @@ mod tests {
         };
         show_event(&mut state, &event);
         let snapshot = TurnSnapshot {
-            acp_permissions: Vec::new(),
-            acp_selected: Default::default(),
-            acp: None,
-            acp_stop: None,
             generation: None,
             context_routing: None,
             resources: None,

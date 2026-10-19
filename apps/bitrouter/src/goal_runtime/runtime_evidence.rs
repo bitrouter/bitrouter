@@ -26,7 +26,11 @@ pub(super) async fn collect(
                 .native_execution_evidence(goal, task, execution)
                 .await;
         }
-        let snapshot = coordinator.acp_run_snapshot(goal, task, execution).await?;
+        let snapshot = coordinator
+            .supervisor
+            .start_snapshot(&coordinator.grant, &execution.id)
+            .await?
+            .context("original execution has no recorded run mapping")?;
         let response = coordinator
             .supervisor
             .dispatch(SessionRequest::authorized(

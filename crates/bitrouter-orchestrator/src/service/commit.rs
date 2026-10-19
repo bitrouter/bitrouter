@@ -319,7 +319,7 @@ impl ThreadService {
                 .get_mut(turn_id)
                 .and_then(|record| record.pending.take())
             {
-                pending.cancel();
+                let _ = pending.response.send(false);
             }
         }
         Ok(())
@@ -519,39 +519,6 @@ impl ThreadService {
                     if let Some(thread) = state.threads.get_mut(thread_id) {
                         thread.instructions = Some(snapshot.as_ref().clone());
                         thread.instructions_epoch = Some(self.inner.instance_id.clone());
-                    }
-                }
-                ExecutionRecord::AcpObservation { observation } => {
-                    if let Some(task) = state.turns.get_mut(turn_id) {
-                        task.snapshot.acp_permissions = observation.permissions.clone();
-                        task.snapshot.refresh_acp_input_status();
-                    }
-                }
-                ExecutionRecord::AcpPermissionChoice {
-                    request_id,
-                    option_id,
-                    action_id,
-                } => {
-                    if let Some(task) = state.turns.get_mut(turn_id) {
-                        task.acp_replies.push_back(super::worker::acp::Choice {
-                            request_id: request_id.clone(),
-                            option_id: option_id.clone(),
-                            action_id: action_id.clone(),
-                        });
-                        task.snapshot
-                            .acp_selected
-                            .insert(request_id.clone(), option_id.clone());
-                        task.snapshot.refresh_acp_input_status();
-                    }
-                }
-                ExecutionRecord::AcpProcessStop { observation } => {
-                    if let Some(task) = state.turns.get_mut(turn_id) {
-                        task.snapshot.acp_stop = Some(observation.clone());
-                    }
-                }
-                ExecutionRecord::AcpSession { binding } => {
-                    if let Some(task) = state.turns.get_mut(turn_id) {
-                        task.snapshot.acp = Some(binding.as_ref().clone());
                     }
                 }
                 ExecutionRecord::HarnessInventory { inventory, .. } => {

@@ -1966,7 +1966,7 @@ fn apply(
                                     run_id: Some(_),
                                     ..
                                 }
-                        ) || execution.thread.is_some()) => {}
+                        ) || task.spec.harness.is_none() && execution.thread.is_some()) => {}
                 _ => return Err(GoalError::Conflict),
             }
             match observation {

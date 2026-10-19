@@ -324,7 +324,7 @@ impl ThreadService {
                     self.inner.app.clone(),
                     thread.caller.clone(),
                     &thread.snapshot.workspace,
-                    thread.config.native()?.clone(),
+                    thread.config.clone(),
                 )
                 .map_err(storage)?
                 .with_native_record_limit(self.inner.limits.recovery_page_bytes)
@@ -857,10 +857,7 @@ impl ThreadService {
                 .ok_or("missing reconstruction report")?;
             // Optional historical usage cannot block a new Turn under the
             // same live owner. Lost/active continuation still needs every budget fact.
-            let optional_usage_only = thread
-                .config
-                .native()
-                .is_ok_and(|config| config.max_spend_microusd.is_none())
+            let optional_usage_only = thread.config.max_spend_microusd.is_none()
                 && report.turn.as_ref().is_some_and(|turn| {
                     !turn.budget.active_duration_unknown
                         && !turn.budget.tool_calls_unknown
@@ -1099,7 +1096,7 @@ impl Rebuild {
             queued: VecDeque::new(),
             next_order: 0,
             active: None,
-            blockers: if snapshot.model != config.model()
+            blockers: if snapshot.model != config.model
                 || snapshot.status != ThreadStatus::Idle
                 || snapshot.active_turn_id.is_some()
                 || !snapshot.queued.is_empty()
@@ -1536,13 +1533,6 @@ impl Rebuild {
         }
         let stored_pause_reason = self.view.thread.pause_reason.clone();
         let mut context_valid = crate::context::validate_history(&self.messages).is_ok();
-        if matches!(
-            self.view.config,
-            crate::thread::executor::Config::Acp { .. }
-        ) {
-            context_valid = false;
-            self.blockers.push(RecoveryBlocker::AcpSessionUnconfirmed);
-        }
         let mut report_turn = None;
         if let Some(active) = &mut self.active {
             context_valid &= crate::context::validate_history(&active.messages).is_ok();
@@ -1558,11 +1548,7 @@ impl Rebuild {
                 .chain(active.native_unknown_usage.iter().cloned())
                 .collect();
             active.budget.usage_unknown_steps.sort();
-            active.budget.estimated_spend_available = self
-                .view
-                .config
-                .native()
-                .is_ok_and(|config| config.estimate_rates.is_some())
+            active.budget.estimated_spend_available = self.view.config.estimate_rates.is_some()
                 && active.budget.usage_unknown_steps.is_empty()
                 && active.native_unpriced_decisions.is_empty();
             active.budget.active_duration_unknown = !active.exact_budget;
@@ -1769,7 +1755,6 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
     let cancel = CancellationToken::new();
     cancel.cancel();
     TurnRecord {
-        acp_replies: Default::default(),
         queue_order: None,
         user_item_id: None,
         fence: Arc::new(crate::control::LaunchFence::default()),

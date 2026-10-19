@@ -126,11 +126,7 @@ impl Coordinator {
                             ThreadRequest {
                                 caller,
                                 workspace: goal.workspace.clone(),
-                                config: owner_view
-                                    .config
-                                    .native()
-                                    .map_err(anyhow::Error::msg)?
-                                    .clone(),
+                                config: owner_view.config,
                                 permission_profile: PermissionProfile::ReadOnly,
                                 verification_command: None,
                                 idempotency_key: key.clone(),

@@ -13,8 +13,6 @@ use crate::turn::{
     SteeringReceipt, TurnEvent, TurnLifecycle, TurnReceipt, TurnSnapshot, TurnStatus,
 };
 
-pub mod executor;
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PermissionProfile {
@@ -131,7 +129,7 @@ pub struct ThreadView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<RecoveryState>,
     pub thread: ThreadSnapshot,
-    pub config: executor::Config,
+    pub config: AgentConfig,
     pub verification_command: Option<String>,
     /// Active Turn, or the last activated Turn after it settles.
     pub latest_turn: Option<TurnSnapshot>,
@@ -202,7 +200,6 @@ pub struct RecoveredSteering {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecoveryBlocker {
-    AcpSessionUnconfirmed,
     OwnershipUnconfirmed,
     EffectUnconfirmed { item_id: String, tool_name: String },
     UnsettledCall { item_id: String, tool_name: String },
@@ -214,23 +211,6 @@ pub enum RecoveryBlocker {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ThreadChange {
-    AcpPermissions {
-        turn_id: String,
-        pending: Vec<crate::service::worker::acp::Permission>,
-    },
-    AcpPermissionChoice {
-        turn_id: String,
-        request_id: String,
-        option_id: String,
-    },
-    AcpProcessStop {
-        turn_id: String,
-        observation: crate::service::worker::acp::Stop,
-    },
-    AcpSession {
-        turn_id: String,
-        binding: Box<crate::service::worker::acp::Binding>,
-    },
     ContextRouting {
         turn_id: String,
         inspection: Box<crate::core::context_router::inspection::Inspection>,

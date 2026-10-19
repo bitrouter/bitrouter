@@ -289,7 +289,6 @@ impl ThreadService {
         };
         let worker = match &managed {
             Some(super::worker::Managed::Native { source, control }) => Some((source, control)),
-            Some(super::worker::Managed::Acp(job)) => Some((&job.source, &job.control)),
             _ => None,
         };
         self.ensure_instance(Some(&target.server_instance_id))?;
@@ -394,7 +393,7 @@ impl ThreadService {
                     .len(),
                 None => request.prompt.len().saturating_mul(2),
             };
-            if generation.is_some() && extra > thread.config.native()?.max_context_bytes {
+            if generation.is_some() && extra > thread.config.max_context_bytes {
                 return Err("generation prompt exceeds the recorded Thread context bound".into());
             }
             if thread.context_bytes().saturating_add(extra)
@@ -439,15 +438,12 @@ impl ThreadService {
                 clear_pause,
             )
         };
-        let agent = if start
-            && generation.is_none()
-            && !matches!(managed, Some(super::worker::Managed::Acp(_)))
-        {
+        let agent = if start && generation.is_none() {
             let agent = Agent::new(
                 Arc::clone(&self.inner.app),
                 caller.clone(),
                 &workspace,
-                config.native()?.clone(),
+                config.clone(),
             )?
             .with_tool_workers(
                 Arc::clone(&self.inner.tool_workers),
@@ -468,7 +464,7 @@ impl ThreadService {
                 user_item_id: queued.user_item_id.clone(),
                 prompt: queued.prompt.clone(),
                 workspace: workspace.clone(),
-                model: config.model().into(),
+                model: config.model.clone(),
                 tool_mode: config.tool_mode(),
                 idempotency_key: Some(request.idempotency_key.clone()),
                 request_fingerprint: Some(hash.clone()),
@@ -559,10 +555,6 @@ impl ThreadService {
                 thread.snapshot.queued.push(receipt.clone());
             }
             let snapshot = TurnSnapshot {
-                acp_permissions: Vec::new(),
-                acp_selected: Default::default(),
-                acp: None,
-                acp_stop: None,
                 generation: generation
                     .as_ref()
                     .map(|job| crate::turn::GenerationProgress {
@@ -574,7 +566,7 @@ impl ThreadService {
                 steering: Vec::new(),
                 thread_id: target.thread_id.clone(),
                 server_instance_id: self.inner.instance_id.clone(),
-                model: config.model().into(),
+                model: config.model.clone(),
                 turn_id: queued.turn_id.clone(),
                 status: receipt.status,
                 cursor: 0,
@@ -592,7 +584,6 @@ impl ThreadService {
             state.turns.insert(
                 queued.turn_id.clone(),
                 TurnRecord {
-                    acp_replies: Default::default(),
                     queue_order: Some(queued.order),
                     user_item_id: Some(queued.user_item_id.clone()),
                     fence: Arc::new(crate::control::LaunchFence::default()),
@@ -626,22 +617,6 @@ impl ThreadService {
                 verification,
                 cancel,
             );
-        } else if let Some(super::worker::Managed::Acp(job)) = managed {
-            self.inner.workers.spawn(self.run_turn(
-                queued.turn_id,
-                super::runner::Driver::Acp(*job),
-                crate::agent::RunInput {
-                    prompt: queued.prompt,
-                    messages: Vec::new(),
-                    user_item_id: queued.user_item_id,
-                    context_version,
-                    checkpoint: None,
-                    complete_checkpoint: false,
-                    restored_verification: None,
-                },
-                None,
-                cancel,
-            ));
         } else if let Some(super::worker::Managed::Generation(job)) = managed {
             self.inner.workers.spawn(self.run_turn(
                 queued.turn_id,

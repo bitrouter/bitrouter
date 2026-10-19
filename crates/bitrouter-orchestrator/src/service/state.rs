@@ -13,18 +13,13 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use super::{ErrorCode, RuntimeLimits, ServiceError, startup, steering, workspace};
+use crate::agent::AgentConfig;
 use crate::store::ExecutionStore;
 use crate::thread::{PermissionProfile, ThreadSnapshot};
 use crate::turn::TurnSnapshot;
 
 pub(super) struct PendingInput {
     pub(super) response: oneshot::Sender<bool>,
-}
-
-impl PendingInput {
-    pub(super) fn cancel(self) {
-        let _ = self.response.send(false);
-    }
 }
 
 pub(super) struct VerificationBudget {
@@ -36,7 +31,6 @@ pub(super) struct VerificationBudget {
 }
 
 pub(super) struct TurnRecord {
-    pub(super) acp_replies: VecDeque<super::worker::acp::Choice>,
     /// Admission metadata cached for resident turns. Recovery may populate it
     /// lazily from the journal when answering a historical idempotency key.
     pub(super) queue_order: Option<u64>,
@@ -102,7 +96,7 @@ pub(super) struct ThreadRecord {
     pub(super) presentation: super::observation::Presentation,
     pub(super) snapshot: ThreadSnapshot,
     pub(super) caller: CallerContext,
-    pub(super) config: crate::thread::executor::Config,
+    pub(super) config: AgentConfig,
     pub(super) verification_command: Option<String>,
     pub(super) messages: Vec<Message>,
     pub(super) instructions: Option<crate::harness::instructions::InstructionSnapshot>,

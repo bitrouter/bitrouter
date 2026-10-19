@@ -6,34 +6,6 @@ use bitrouter_orchestrator::goal::decision::{
 
 impl Coordinator {
     pub(super) async fn drive_permissions(&self, goal: &GoalSnapshot) -> Result<()> {
-        // Workflow admission may itself be waiting for capacity. Keep actual
-        // accepted worker observations and permission cards moving independently.
-        for task in &goal.workflow.tasks {
-            if let Some(execution) = task.executions.last()
-                && execution.thread.is_some()
-                && matches!(execution.observation, Observation::Requested)
-                && bitrouter_orchestrator::goal::workflow::worker_requested(
-                    goal,
-                    &super::native::source(goal, task, execution)?,
-                )
-            {
-                Box::pin(self.drive_worker(goal, task, execution)).await?;
-            }
-        }
-        let GoalReply::Snapshot { goal: latest } = self
-            .goals
-            .execute(
-                "local",
-                GoalCommand::Get {
-                    goal_id: goal.id.clone(),
-                },
-                now()?,
-            )
-            .await?
-        else {
-            anyhow::bail!("permission worker projection snapshot unavailable");
-        };
-        let goal = &latest;
         for task in &goal.workflow.tasks {
             let Some(execution) = task.executions.last() else {
                 continue;
@@ -66,30 +38,7 @@ impl Coordinator {
             let SessionResponse::Snapshot { snapshot } = response else {
                 anyhow::bail!("unexpected permission snapshot");
             };
-            let admitted = if let Some(link) = &execution.thread {
-                let target = bitrouter_orchestrator::thread::ThreadTarget {
-                    thread_id: link.thread_id.clone(),
-                    server_instance_id: self.threads.capabilities().server_instance_id,
-                };
-                Some(
-                    self.threads
-                        .read_stored_turn(&target, &CallerContext::local(), &link.turn_id)
-                        .await?
-                        .acp_permissions
-                        .into_iter()
-                        .map(|permission| permission.request_id)
-                        .collect::<BTreeSet<_>>(),
-                )
-            } else {
-                None
-            };
             for permission in &snapshot.pending_permissions {
-                if admitted
-                    .as_ref()
-                    .is_some_and(|ids| !ids.contains(&permission.permission_id))
-                {
-                    continue;
-                }
                 self.observe_permission(goal, task, execution, run_id, permission)
                     .await?;
             }
@@ -345,15 +294,6 @@ impl Coordinator {
                     .deliver_native_permission(goal, decision, operation_id, option_id)
                     .await;
             };
-            if let Some((target, answer)) = self
-                .managed_permission_answer(goal, decision, operation_id, option_id)
-                .await?
-            {
-                self.threads
-                    .answer_acp_permission(&target, &CallerContext::local(), answer)
-                    .await?;
-                return Ok(true);
-            }
             let response = self
                 .supervisor
                 .dispatch(SessionRequest::authorized(
@@ -399,7 +339,7 @@ impl Coordinator {
         let (submitted, detail) = match result {
             Ok(true) => (
                 true,
-                if decision.run_id.is_some() { "Shared runtime or controller accepted the original option; delivery and tool effects require separate evidence" }
+                if decision.run_id.is_some() { "Controller confirms permission option selection; wire transmission and tool effects remain unconfirmed" }
                 else { "Native runtime durably accepted the choice; tool execution requires separate evidence" }.into(),
             ),
             Ok(false) => (
@@ -506,17 +446,6 @@ impl Coordinator {
                 .native_permission_selected(goal, decision, operation_id, option_id)
                 .await;
         };
-        if let Some((target, answer)) = self
-            .managed_permission_answer(goal, decision, operation_id, option_id)
-            .await?
-            && self
-                .threads
-                .find_acp_permission_answer(&target, &CallerContext::local(), &answer)
-                .await?
-                .is_some()
-        {
-            return Ok(true);
-        }
         let response = self
             .supervisor
             .dispatch(SessionRequest::authorized(
@@ -535,63 +464,6 @@ impl Coordinator {
             &decision.permission_id,
             option_id,
         ))
-    }
-}
-
-impl Coordinator {
-    async fn managed_permission_answer(
-        &self,
-        goal: &GoalSnapshot,
-        decision: &PermissionDecision,
-        operation_id: &str,
-        option_id: &str,
-    ) -> Result<
-        Option<(
-            bitrouter_orchestrator::thread::ThreadTarget,
-            bitrouter_orchestrator::service::worker::acp::Approval,
-        )>,
-    > {
-        let Some(execution) = goal
-            .workflow
-            .tasks
-            .iter()
-            .flat_map(|task| &task.executions)
-            .find(|execution| execution.id == decision.execution_id)
-        else {
-            return Ok(None);
-        };
-        let Some(binding) = &execution.thread else {
-            return Ok(None);
-        };
-        if decision.run_id.is_none() {
-            return Ok(None);
-        }
-        let target = bitrouter_orchestrator::thread::ThreadTarget {
-            thread_id: binding.thread_id.clone(),
-            server_instance_id: self.threads.capabilities().server_instance_id,
-        };
-        let turn = self
-            .threads
-            .read_stored_turn(&target, &CallerContext::local(), &binding.turn_id)
-            .await?;
-        anyhow::ensure!(
-            turn.acp.as_ref().map(|session| &session.run_id) == decision.run_id.as_ref(),
-            "ACP permission belongs to another accepted worker Turn"
-        );
-        use sha2::{Digest, Sha256};
-        let key = hex::encode(Sha256::digest(serde_json::to_vec(&(
-            &decision.id,
-            operation_id,
-        ))?));
-        Ok(Some((
-            target,
-            bitrouter_orchestrator::service::worker::acp::Approval {
-                turn_id: binding.turn_id.clone(),
-                request_id: decision.permission_id.clone(),
-                option_id: option_id.into(),
-                idempotency_key: format!("goal-permission-{key}"),
-            },
-        )))
     }
 }
 

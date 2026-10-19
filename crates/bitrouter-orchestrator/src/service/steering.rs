@@ -225,7 +225,7 @@ impl ThreadService {
         });
         task.native.push(receipt.input_id.clone(), request.text);
         if let Some(pending) = task.pending.take() {
-            pending.cancel();
+            let _ = pending.response.send(false);
         }
         Ok(receipt)
     }

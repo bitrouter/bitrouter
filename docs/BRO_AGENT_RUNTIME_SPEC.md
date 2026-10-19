@@ -330,7 +330,7 @@ If all candidates are ineligible, return overloaded rather than steal a worker o
 observer. Cold public queries do not load SDK context. Reload reserves reader/hot
 capacity and cannot create a second gate for a Thread still referenced elsewhere.
 
-Runtime root format is 9. Formats 2/3/4/5/6/7/8 remain readable; a new append upgrades its
+Runtime root format is 8. Formats 2/3/4/5/6/7 remain readable; a new append upgrades its
 envelope atomically without rewriting history. Migration 000026 labels existing development roots 0;
 unsupported roots fail before execution, without legacy conversion or deleting
 facts/owner/markers. Format rejection cannot become stopped-owner proof. Developer
@@ -341,16 +341,6 @@ rewriting. The pinned migrator rejects an applied migration unknown to an old
 binary before it can start a Goal writer that ignores new execution links.
 Removing this marker is rejected. This is a startup gate; cutover still requires
 stopping old running writers before enabling the new path.
-
-Managed Goal workers use the same ThreadService as native work. Thread settings
-explicitly select native or ACP execution; legacy native settings retain their
-JSON shape. ACP records preserve the real run/session, public observations,
-permission choices and owned-process stop separately from native checkpoints.
-Generic supervisor controls cannot acquire another owner for those Turns.
-The current ACP worker duration is 600 seconds. Session-private context and
-provider/model use are unreported unless actually observed; cold inspection
-does not authorize session continuation. Full ACP recovery remains in progress;
-see the refactor implementation ledger for current validation limits.
 
 ## Native ACP control
 
