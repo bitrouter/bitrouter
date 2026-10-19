@@ -2674,6 +2674,8 @@ pub struct PolicyRuntime {
     continuation_config: crate::config::ContinuationConfig,
     trajectory_config: TrajectoryConfig,
     trajectory: Option<Arc<TrajectoryRuntime>>,
+    #[cfg(feature = "multi-instance")]
+    published: bool,
 }
 
 #[derive(Debug)]
@@ -2728,8 +2730,57 @@ impl PolicyRuntime {
             continuation_config: config.continuation.clone(),
             trajectory_config: config.trajectory.clone(),
             trajectory,
+            #[cfg(feature = "multi-instance")]
+            published: false,
         });
         runtime.reload_for_config(config, config_path).await?;
+        Ok(runtime)
+    }
+
+    /// Build one immutable shared routing generation without consulting local
+    /// policy paths or bundled defaults. Replacement swaps the entire runtime.
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn from_document(
+        config: &Config,
+        document: Option<PolicyLock>,
+        eval_decisions: PendingEvalDecisionStore,
+        trajectory: Option<Arc<TrajectoryRuntime>>,
+    ) -> Result<Arc<Self>> {
+        anyhow::ensure!(
+            config.policy.path.is_none() && !config.inherit_defaults,
+            "published policy runtime requires explicit in-memory authority"
+        );
+        anyhow::ensure!(
+            config.trajectory.enabled == trajectory.is_some(),
+            "published policy trajectory configuration does not match runtime"
+        );
+        let loaded = match document {
+            Some(document) => {
+                validate_for_config(config, &document)?;
+                Some(LoadedPolicyLock {
+                    path: None,
+                    digest: semantic_digest(&document)?,
+                    document,
+                })
+            }
+            None => {
+                anyhow::ensure!(
+                    bound_policy_names(config).is_empty(),
+                    "published policy bindings require a document"
+                );
+                None
+            }
+        };
+        let runtime = Arc::new(Self {
+            snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
+            decision_recorder: None,
+            eval_decisions,
+            continuation_config: config.continuation.clone(),
+            trajectory_config: config.trajectory.clone(),
+            trajectory,
+            published: true,
+        });
+        runtime.commit(runtime.prepare_loaded(config, loaded)?);
         Ok(runtime)
     }
 
@@ -2753,6 +2804,11 @@ impl PolicyRuntime {
         config: &Config,
         config_path: Option<&Path>,
     ) -> Result<PreparedPolicySnapshot> {
+        #[cfg(feature = "multi-instance")]
+        anyhow::ensure!(
+            !self.published,
+            "published policy runtime must be replaced as a complete configuration"
+        );
         if config.continuation != self.continuation_config {
             anyhow::bail!(
                 "changing any continuation setting requires a daemon restart; live continuation state was not changed"
@@ -2769,6 +2825,14 @@ impl PolicyRuntime {
             )
         }
         let loaded = load_for_config(config, config_path).await?;
+        self.prepare_loaded(config, loaded)
+    }
+
+    fn prepare_loaded(
+        &self,
+        config: &Config,
+        loaded: Option<LoadedPolicyLock>,
+    ) -> Result<PreparedPolicySnapshot> {
         let mut routers = BTreeMap::new();
         if let Some(loaded) = &loaded {
             for (name, definition) in &loaded.document.policies {
@@ -3174,6 +3238,84 @@ pub struct PolicyRuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "multi-instance")]
+    #[tokio::test]
+    async fn published_runtime_keeps_its_document_and_rejects_file_reload() -> Result<()> {
+        let config = crate::config::parse(
+            "inherit_defaults: false\npresets:\n  coding:\n    model: fixture:strong\n    policy: auto\n",
+        )?;
+        let document: PolicyLock = serde_saphyr::from_str(BUNDLED_POLICY)?;
+        let runtime = PolicyRuntime::from_document(
+            &config,
+            Some(document.clone()),
+            PendingEvalDecisionStore::default(),
+            None,
+        )?;
+        let first_digest = runtime.status(config.policy.mode).digest;
+        anyhow::ensure!(first_digest.as_deref() == Some(semantic_digest(&document)?.as_str()));
+        let retained = runtime.routing_snapshot();
+
+        let mut replacement = document.clone();
+        replacement
+            .policies
+            .get_mut("auto")
+            .context("missing auto policy")?
+            .tiers
+            .get_mut("strong")
+            .context("missing strong tier")?
+            .model = "fixture:replacement".into();
+        let directory = tempfile::tempdir()?;
+        let config_path = directory.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            directory.path().join(DEFAULT_POLICY_LOCK_FILENAME),
+            deterministic_yaml(&replacement)?,
+        )
+        .await?;
+        let error = runtime
+            .reload_for_config(&config, Some(&config_path))
+            .await
+            .err()
+            .context("published runtime accepted file reload")?;
+        anyhow::ensure!(error.to_string().contains("complete configuration"));
+        anyhow::ensure!(runtime.status(config.policy.mode).digest == first_digest);
+        let next = PolicyRuntime::from_document(
+            &config,
+            Some(replacement.clone()),
+            PendingEvalDecisionStore::default(),
+            None,
+        )?;
+        anyhow::ensure!(next.status(config.policy.mode).digest != first_digest);
+        anyhow::ensure!(retained.document() == Some(&document));
+        anyhow::ensure!(next.routing_snapshot().document() == Some(&replacement));
+        anyhow::ensure!(
+            PolicyRuntime::from_document(&config, None, PendingEvalDecisionStore::default(), None,)
+                .is_err()
+        );
+        let mut invalid = config.clone();
+        invalid.trajectory.enabled = true;
+        anyhow::ensure!(
+            PolicyRuntime::from_document(
+                &invalid,
+                Some(document.clone()),
+                PendingEvalDecisionStore::default(),
+                None,
+            )
+            .is_err()
+        );
+        invalid = config;
+        invalid.policy.path = Some(directory.path().join(DEFAULT_POLICY_LOCK_FILENAME));
+        anyhow::ensure!(
+            PolicyRuntime::from_document(
+                &invalid,
+                Some(document),
+                PendingEvalDecisionStore::default(),
+                None,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn native_defaults_load_without_configuration_and_preserve_overrides() -> Result<()> {

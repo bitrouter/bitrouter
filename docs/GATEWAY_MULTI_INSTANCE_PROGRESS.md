@@ -151,3 +151,15 @@ lease timeout is never proof of stopped upstream work.
   These results do not close a process-level
   P1 gate. Operator commands, serving snapshot installation, lifecycle wiring,
   shared trajectory reconciliation and final process acceptance remain pending.
+
+## In-memory policy runtime preparation (2026-10-20)
+
+- Added a feature-gated constructor for a complete published policy document.
+  It shares the existing validated router construction, preserves each retained
+  request snapshot and refuses local file reload before filesystem access.
+  File-backed local construction retains its existing behavior.
+- `/tmp/bitrouter-p1-published-policy-tests.log`: **64 passed**, 0.39 seconds,
+  including distinct old/new runtime documents, an unrelated replacement file,
+  missing bound policy, trajectory-mode mismatch and explicit-path rejection.
+- Independent source review approved this helper substage. It is not yet wired
+  into the served shared gateway and does not close a P1 delivery gate.
