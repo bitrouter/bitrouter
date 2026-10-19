@@ -59,138 +59,6 @@ fn query(answer: &str) -> Interpretation {
 }
 
 #[tokio::test]
-async fn resource_edits_are_versioned_atomic_preserve_scope_and_do_not_resume() -> Result<()> {
-    use bitrouter_orchestrator::goal::resources::Selection;
-    let goals = service(database().await?);
-    let workspace = tempfile::tempdir()?;
-    let id = planned(&goals, workspace.path()).await?;
-    let current = snapshot(&goals, &id).await?;
-    goals
-        .execute(
-            "local",
-            GoalCommand::Control {
-                operation_id: "pause-resource-edit".into(),
-                goal_id: id.clone(),
-                expected_revision: current.revision,
-                intent: RunIntent::Pause,
-            },
-            100,
-        )
-        .await?;
-    let operation = admit(&goals, &id, "resource-input", Some("left")).await?;
-    begin(&goals, &id, operation).await?;
-    let mut proposal = query("Configure context at the next controlled execution boundary");
-    proposal.task_updates.push(TaskUpdate {
-        task_id: "left".into(),
-        instruction: "Original work and added context".into(),
-        resources: Some(Selection {
-            context_files: vec!["context.md".into()],
-            ..Default::default()
-        }),
-    });
-    let mut invalid = proposal.clone();
-    invalid.task_updates[0].resources = Some(Selection {
-        context_files: vec!["../outside".into()],
-        ..Default::default()
-    });
-    assert!(
-        finish(&goals, &id, "resource-input", invalid)
-            .await
-            .is_err()
-    );
-    let unchanged = snapshot(&goals, &id).await?;
-    assert_eq!(unchanged.requirements_revision, 1);
-    assert!(
-        unchanged
-            .workflow
-            .tasks
-            .iter()
-            .all(|task| task.spec.resources.is_empty())
-    );
-    finish(&goals, &id, "resource-input", proposal).await?;
-    let saved = snapshot(&goals, &id).await?;
-    assert_eq!(saved.run_intent, RunIntent::Pause);
-    assert_eq!(saved.requirements_revision, 2);
-    assert_eq!(
-        saved.workflow.tasks[0].spec.resources.context_files,
-        vec!["context.md"]
-    );
-    assert!(saved.workflow.tasks[1].spec.resources.is_empty());
-    assert_eq!(saved.workflow.tasks[1].requirements_revision, 1);
-    assert_eq!(saved.workflow.tasks[2].requirements_revision, 2);
-    assert_eq!(
-        saved
-            .inputs
-            .latest
-            .as_ref()
-            .map(|input| &input.affected_tasks),
-        Some(&vec!["integrate".into(), "left".into()])
-    );
-    let legacy: TaskUpdate = serde_json::from_value(
-        serde_json::json!({"task_id":"left","instruction":"unchanged resource selection"}),
-    )?;
-    assert!(legacy.resources.is_none());
-    for (version, operation_id, resources, expected_files) in [
-        (2, "preserve-resources", None, vec!["context.md"]),
-        (
-            3,
-            "remove-resources",
-            Some(Selection::default()),
-            Vec::new(),
-        ),
-    ] {
-        let operation = admit(&goals, &id, operation_id, Some("left")).await?;
-        goals
-            .workflow_change(
-                actor(),
-                &id,
-                &format!("{operation_id}-begin"),
-                version,
-                Change::Input {
-                    event: Event::Begin {
-                        operation: Box::new(operation),
-                        attempt_id: operation_id.into(),
-                        stage: Stage::Reasoning,
-                    },
-                },
-                150,
-            )
-            .await?;
-        let mut proposal = query("Save the explicitly requested update while remaining paused");
-        proposal.task_updates.push(TaskUpdate {
-            task_id: "left".into(),
-            instruction: "Keep original work; use saved resource selection".into(),
-            resources,
-        });
-        goals
-            .workflow_change(
-                actor(),
-                &id,
-                &format!("{operation_id}-finish"),
-                version,
-                Change::Input {
-                    event: Event::Finish {
-                        attempt_id: operation_id.into(),
-                        interpretation: proposal,
-                        reasoning_request_id: Some("resource-reasoning".into()),
-                    },
-                },
-                160,
-            )
-            .await?;
-        let saved = snapshot(&goals, &id).await?;
-        assert_eq!(
-            saved.workflow.tasks[0].spec.resources.context_files,
-            expected_files
-        );
-        assert_eq!(saved.run_intent, RunIntent::Pause);
-        assert_eq!(saved.requirements_revision, version + 1);
-        assert_eq!(saved.workflow.tasks[1].requirements_revision, 1);
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn typed_classification_cannot_directly_pause_execution() -> Result<()> {
     let goals = service(database().await?);
     let workspace = tempfile::tempdir()?;
@@ -323,7 +191,6 @@ async fn paused_branch_edit_invalidates_dependents_and_preserves_execution_sourc
     proposal.task_updates.push(TaskUpdate {
         task_id: "left".into(),
         instruction: "Fix expiry and verify the regression with the original API".into(),
-        resources: None,
     });
     finish(&goals, &id, "branch-edit", proposal).await?;
     let head = snapshot(&goals, &id).await?;
@@ -430,7 +297,6 @@ async fn explicit_task_reference_cannot_modify_another_task_or_control_goal() ->
     wrong_task.task_updates.push(TaskUpdate {
         task_id: "right".into(),
         instruction: "Unauthorized target".into(),
-        resources: None,
     });
     let mut wrong_control = query("Pause the wrong scope");
     wrong_control.control = Some(ControlProposal {

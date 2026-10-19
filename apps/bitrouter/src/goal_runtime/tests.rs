@@ -94,11 +94,6 @@ async fn active_branch_edit_preserves_independent_run_and_renews_pending_permiss
     parallel_fixture(Scenario::ActiveEdit).await
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn active_resource_edit_rejects_unknown_choices_and_supplies_the_new_version() -> Result<()> {
-    parallel_fixture(Scenario::ResourceEdit).await
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Scenario {
     Complete,
@@ -107,7 +102,6 @@ enum Scenario {
     PauseEdit,
     UnresolvedTool,
     ActiveEdit,
-    ResourceEdit,
 }
 
 async fn control(socket: &Path, id: &str, operation: &str, intent: RunIntent) -> Result<()> {
@@ -139,7 +133,7 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
         scenario,
         Scenario::Complete | Scenario::Resources | Scenario::ModelRoute
     );
-    let active_edit = matches!(scenario, Scenario::ActiveEdit | Scenario::ResourceEdit);
+    let active_edit = scenario == Scenario::ActiveEdit;
     let binary = peer_executable()?;
     let temporary = tempfile::tempdir()?;
     let home = temporary.path();
@@ -150,7 +144,7 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
         tokio::fs::create_dir_all(path).await?;
     }
     tokio::fs::write(workspace.join("seed.txt"), "original input\n").await?;
-    if matches!(scenario, Scenario::Resources | Scenario::ResourceEdit) {
+    if scenario == Scenario::Resources {
         let skill_dir = workspace.join("skills/goal-resource-fixture");
         tokio::fs::create_dir_all(&skill_dir).await?;
         tokio::fs::write(skill_dir.join("SKILL.md"), "---\nname: goal-resource-fixture\ndescription: Fixture material for selected context\n---\nGOAL_RESOURCE_SKILL_MARKER: report actual verification.\n").await?;
@@ -198,7 +192,7 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
     } else {
         config_text
     };
-    let config_text = if matches!(scenario, Scenario::ModelRoute | Scenario::ResourceEdit) {
+    let config_text = if scenario == Scenario::ModelRoute {
         Mock::given(method("GET"))
             .and(path("/health"))
             .respond_with(wiremock::ResponseTemplate::new(200))
@@ -217,7 +211,7 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
     } else {
         config_text
     };
-    let config_text = if matches!(scenario, Scenario::Resources | Scenario::ResourceEdit) {
+    let config_text = if scenario == Scenario::Resources {
         let mcp = example_binary::build("bitrouter-orchestrator", "harness_mcp_fixture")
             .map_err(anyhow::Error::msg)?;
         format!(
@@ -236,7 +230,7 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
         crate::goal_store::DatabaseGoalStore::new(assembled.db.clone()),
     )));
     let source = crate::paths::ConfigSource::File(config_path);
-    let socket = if matches!(scenario, Scenario::ModelRoute | Scenario::ResourceEdit) {
+    let socket = if scenario == Scenario::ModelRoute {
         crate::daemon::socket_path_for(&source, &config)
     } else {
         home.join("goal.sock")
@@ -336,25 +330,11 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
             let original_right = paused.workflow.tasks.iter().find(|task|task.spec.id == "right").context("right task missing")?.executions.last().context("right execution missing")?.id.clone();
             let old_right_permission = paused.workflow.decisions.iter().find(|decision| decision.execution_id == original_right).map(|decision|decision.id.clone());
             let old_left = paused.workflow.tasks.iter().find(|task|task.spec.id == "left").context("left task missing")?.executions.last().context("left execution missing")?.id.clone();
-            if scenario == Scenario::ResourceEdit {
-                let current = head(&socket, &id).await?;
-                rpc(&socket, GoalCommand::Input { operation_id:"invalid-resource-change".into(),goal_id:id.clone(),
-                    expected_revision:current.revision,text:"FIXTURE_NEW_LEFT_RULE: BAD_RESOURCE_CHANGE_FIXTURE select an unavailable server; preserve all other work.".into(),task_reference:Some("left".into()) }).await?;
-                let rejected = wait_for(&socket,&id,|goal|goal.inputs.latest.as_ref().is_some_and(|input|input.input_id == "invalid-resource-change")).await?;
-                let result = rejected.inputs.latest.as_ref().context("missing resource rejection")?;
-                assert!(result.clarification.as_ref().is_some_and(|text|text.contains("unavailable configured MCP")));
-                assert!(!result.requirements_saved && result.control_saved.is_none());
-                assert_eq!(rejected.requirements_revision,1);
-                assert!(rejected.workflow.tasks.iter().all(|task|task.spec.resources.is_empty()));
-                assert_eq!(rejected.workflow.tasks.iter().map(|task|task.executions.len()).sum::<usize>(),2);
-            }
             let mut accepted = false;
             for _ in 0..8 {
                 let current = head(&socket,&id).await?;
                 match rpc(&socket,GoalCommand::Input { operation_id:"edit-while-paused".into(),goal_id:id.clone(),
-                    expected_revision:current.revision,text: if scenario == Scenario::ResourceEdit {
-                        "FIXTURE_NEW_LEFT_RULE: RESOURCE_CHANGE_FIXTURE: keep LEFT newline, select the available goal-model route, resource server, goal resource skill and seed context for this branch's next execution. Preserve independent work.".into()
-                    } else { "FIXTURE_NEW_LEFT_RULE: keep LEFT newline and use these updated instructions when left executes again; do not resume.".into() },task_reference:Some("left".into()) }).await {
+                    expected_revision:current.revision,text:"FIXTURE_NEW_LEFT_RULE: keep LEFT newline and use these updated instructions when left executes again; do not resume.".into(),task_reference:Some("left".into()) }).await {
                     Ok(GoalReply::Accepted { .. }) => { accepted = true; break; },
                     Err(error) if error.downcast_ref::<bitrouter_orchestrator::goal::GoalError>() == Some(&bitrouter_orchestrator::goal::GoalError::Conflict) => {},
                     other => anyhow::bail!("paused fixture edit was not admitted: {other:?}"),
@@ -434,40 +414,6 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
         let requests = backend.received_requests().await.context("fixture request capture unavailable")?;
         assert!(requests.iter().any(|request| request.url.path() == "/v1/systemone"));
         assert!(requests.iter().filter(|request| request.url.path() == "/v1/chat/completions").count() >= 6);
-        if scenario == Scenario::ResourceEdit {
-            let left = completed.workflow.tasks.iter().find(|task|task.spec.id == "left").context("left task missing")?;
-            assert_eq!(left.executions.len(),2);
-            let old = &left.executions[0];
-            let replacement = &left.executions[1];
-            assert!(old.resources.as_ref().is_some_and(|prepared|prepared.selection.is_empty()));
-            assert!(matches!(old.stop,Some(StopState::Confirmed {..})));
-            assert_eq!(replacement.task_revision,2);
-            assert_eq!(replacement.confirmed_model_route.as_deref(),Some("goal-model"));
-            let prepared = replacement.resources.as_ref().context("new resource preparation missing")?;
-            assert_eq!(prepared.selection.mcp_servers,vec!["selected-resource-server"]);
-            assert_eq!(prepared.selection.context_files,vec!["seed.txt"]);
-            assert_eq!(prepared.selection.skills.len(),1);
-            assert_eq!(prepared.materials.len(),2);
-            let prompt = String::from_utf8(crate::goal_artifacts::read(&root,&prepared.prompt).await?)?;
-            assert!(prompt.contains("GOAL_RESOURCE_SKILL_MARKER") && prompt.contains("original input"));
-            let mut matched = false;
-            let mut files = tokio::fs::read_dir(&captures).await?;
-            while let Some(file) = files.next_entry().await? {
-                let text = tokio::fs::read_to_string(file.path()).await?;
-                let messages = text.lines().map(serde_json::from_str::<serde_json::Value>).collect::<std::result::Result<Vec<_>,_>>()?;
-                if messages.iter().any(|message|message["method"] == "session/prompt" && message["params"]["prompt"][0]["text"] == prompt) {
-                    let opened = messages.iter().find(|message|message["method"] == "session/new").context("new session missing")?;
-                    assert_eq!(opened["params"]["mcpServers"].as_array().map(Vec::len),Some(1));
-                    assert_eq!(opened["params"]["mcpServers"][0]["name"],"selected-resource-server");
-                    matched = true;
-                }
-            }
-            assert!(matched,"new frozen material did not reach the replacement ACP prompt");
-            let right = completed.workflow.tasks.iter().find(|task|task.spec.id == "right").context("right task missing")?;
-            assert_eq!(right.executions.len(),1);
-            assert_eq!(right.requirements_revision,1);
-            assert!(right.spec.resources.is_empty());
-        }
         if scenario == Scenario::ModelRoute {
             for task in &completed.workflow.tasks {
                 assert_eq!(task.spec.resources.model_route.as_deref(), Some("goal-model"));

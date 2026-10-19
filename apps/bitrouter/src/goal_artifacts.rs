@@ -272,18 +272,15 @@ pub(super) async fn apply(
         // Each bundle includes its dependency closure. Three-way application
         // merges common ancestors instead of replaying their hunks verbatim.
         // A conflict fails this private execution workspace before dispatch.
-        // Send the hash-verified bytes, avoiding Git for Windows' handling of
-        // canonical verbatim paths and a second read of the artifact file.
-        crate::goal_runtime::git_with_input(
+        crate::goal_runtime::git(
             workspace,
             &[
                 "apply".as_ref(),
                 "--3way".as_ref(),
                 "--index".as_ref(),
                 "--binary".as_ref(),
-                "-".as_ref(),
+                bundle.patch.path.as_os_str(),
             ],
-            Some(&patch),
         )
         .await?;
     }

@@ -37,9 +37,6 @@ pub struct PendingInput {
 pub struct TaskUpdate {
     pub task_id: String,
     pub instruction: String,
-    /// None preserves the current selection; Some replaces the complete set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resources: Option<super::resources::Selection>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -361,9 +358,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
             let mut affected = BTreeSet::new();
             for update in &proposal.task_updates {
                 message(&update.instruction)?;
-                if let Some(resources) = &update.resources {
-                    resources.validate()?;
-                }
                 if update.instruction.len() > 16 * 1024
                     || !goal
                         .workflow
@@ -425,9 +419,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                         .find(|task| task.spec.id == update.task_id)
                         .ok_or(GoalError::NotFound)?;
                     task.spec.instruction = update.instruction.clone();
-                    if let Some(resources) = &update.resources {
-                        task.spec.resources = resources.clone();
-                    }
                 }
                 for task in &mut goal.workflow.tasks {
                     if affected.contains(&task.spec.id) {

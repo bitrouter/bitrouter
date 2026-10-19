@@ -71,10 +71,6 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             task.spec.instruction.clone(),
         ];
         let mut artifacts = Vec::new();
-        detail.push(format!("Requested resources · task revision {} · BRO route {} · MCP {:?} · context {:?} · skills {:?}",
-            task.requirements_revision, task.spec.resources.model_route.as_deref().unwrap_or("harness default / uncontrolled"),
-            task.spec.resources.mcp_servers, task.spec.resources.context_files,
-            task.spec.resources.skills.iter().map(|skill| (&skill.material_id, &skill.sha256)).collect::<Vec<_>>()));
         let status = if let Some(attempt) = task.executions.last() {
             detail.push(format!(
                 "Execution: {} · source Goal requirements {} · task revision {}",
