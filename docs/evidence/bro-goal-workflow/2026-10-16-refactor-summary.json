@@ -22,35 +22,7 @@
     ],
     "compiledJsonlFixturesRetained": true,
     "committedCheckpoint": "59d0cc4dcf5ec6696cc875b944f06732c8fd4cf6",
-    "committedInputsMatch": false,
-    "compiledInputsMatch": true,
-    "compiledInputsSha256": "ceea84b299af00103e1abb0bd4ba00f2dc0989ed5fc19e847f507300a267a755",
-    "postTestCiChange": {
-      "path": ".github/workflows/ci.yml",
-      "evaluatedSha256": "a88563d45201b3301078e23660497370396a5e3bfd010ee0c227af7cdc8b9062",
-      "currentSha256": "05d169608a9358b00ec6ab81244b8ec580d6c46c162cdae43edd7c1c75f4a7ea",
-      "kind": "CI selection only; all Rust, fixtures, Cargo inputs and nextest configuration match final36",
-      "integrationTargetsBefore": 26,
-      "integrationTargetsAfter": 36,
-      "newShard": "native-goals",
-      "newShardBuildJobs": 1,
-      "newShardRetries": 0,
-      "newTargets": [
-        "code_tui_pty",
-        "goal_tui_pty",
-        "goals",
-        "harness_mcp_check",
-        "invocation",
-        "native_agent_process",
-        "native_agent_tui",
-        "native_harness_resources",
-        "orchestrator_core",
-        "skill_cli_contract"
-      ],
-      "coverageReport": "bro-linux-integration-coverage53.json",
-      "coverageReportSha256": "cfa2d557749e8aec3ba7a3780bda19d02aef3fb2b2b1d03c90276600040c29e5",
-      "evidenceLocator": "The PR acceptance comment pins the later hosted/coverage archive; archive.commit retains the accepted local-run archive."
-    }
+    "committedInputsMatch": true
   },
   "local": {
     "id": "ci-portability-final36",
@@ -320,7 +292,7 @@
     "independentGitArchiveChecksumsVerified": 1187
   },
   "hostedCi": {
-    "status": "Exact final CI head must validate the expanded Linux integration selection; actual results are posted in the PR acceptance comment.",
+    "status": "Exact final-head result is reported in the PR acceptance comment; separate from local proof.",
     "checks": "https://github.com/bitrouter/bitrouter/pull/981/checks"
   },
   "limits": [
