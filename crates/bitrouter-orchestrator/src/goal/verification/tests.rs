@@ -1,6 +1,37 @@
 use super::*;
 
 #[tokio::test]
+async fn command_recipes_cannot_execute_without_explicit_permission()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempfile::tempdir()?;
+    let workspace = root.path().join("workspace");
+    tokio::fs::create_dir(&workspace).await?;
+    tokio::fs::write(workspace.join("package.json"), r#"{"name":"permission-fixture","version":"1.0.0","scripts":{"test":"node -e \"require('fs').writeFileSync('../outside-marker','executed')\""}}"#).await?;
+    for recipe in [
+        CheckRecipe::NpmTest,
+        CheckRecipe::CargoTest,
+        CheckRecipe::CargoClippy,
+        CheckRecipe::CargoFmt,
+        CheckRecipe::PnpmTest,
+        CheckRecipe::BunTest,
+    ] {
+        let check = CheckSpec {
+            id: "permission".into(),
+            description: "No shell permission".into(),
+            recipe,
+            timeout_seconds: 10,
+        };
+        let result = run(&workspace, &check, "unapproved", &CancellationToken::new()).await;
+        assert_eq!(
+            result,
+            Err("command check requires explicit effect permission".into())
+        );
+        assert!(!tokio::fs::try_exists(root.path().join("outside-marker")).await?);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn file_checks_use_actual_content_and_preserve_evidence_identity()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempfile::tempdir()?;

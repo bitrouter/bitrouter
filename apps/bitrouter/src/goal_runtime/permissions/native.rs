@@ -88,6 +88,7 @@ impl Coordinator {
             Change::Decision {
                 event: Event::Observe {
                     decision: PermissionDecision {
+                        check: None,
                         id,
                         execution_id: execution.id.clone(),
                         run_id: None,

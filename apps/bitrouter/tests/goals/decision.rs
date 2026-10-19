@@ -40,6 +40,7 @@ pub(super) async fn pending(
         )
         .await?;
     let decision = PermissionDecision {
+        check: None,
         id: "permission-decision".into(),
         execution_id: "execution".into(),
         run_id: Some("run".into()),

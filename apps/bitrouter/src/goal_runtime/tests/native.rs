@@ -34,14 +34,17 @@ pub(super) fn completion(
         "usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}))
 }
 
-fn model(request: &Request) -> ResponseTemplate {
+pub(super) fn model(request: &Request) -> ResponseTemplate {
     let Ok(body) = serde_json::from_slice::<Value>(&request.body) else {
         return ResponseTemplate::new(400);
     };
     let text = String::from_utf8_lossy(&request.body);
-    let writing = text.contains("NATIVE_WRITE_FIXTURE");
+    let command_check = text.contains("NATIVE_COMMAND_CHECK_FIXTURE");
+    let writing = text.contains("NATIVE_WRITE_FIXTURE") || command_check;
     let shell = text.contains("NATIVE_SHELL_FIXTURE");
-    let file = if shell {
+    let file = if command_check {
+        "build.rs"
+    } else if shell {
         "shell-result.txt"
     } else if writing {
         "native-result.txt"
@@ -75,7 +78,10 @@ fn model(request: &Request) -> ResponseTemplate {
                     json!({"command":"printf 'NATIVE_GOAL\\n' >> shell-result.txt"}),
                 )
             } else if writing {
-                ("write", json!({"path":file,"content":"NATIVE_GOAL\n"}))
+                (
+                    "write",
+                    json!({"path":file,"content":if command_check { super::command_checks::BUILD_SCRIPT } else { "NATIVE_GOAL\n" }}),
+                )
             } else {
                 ("read", json!({"path":"seed.txt"}))
             };
@@ -91,6 +97,9 @@ fn model(request: &Request) -> ResponseTemplate {
         return ResponseTemplate::new(400);
     };
     let check = |id| {
+        if command_check {
+            return json!({"id":id,"description":"Run the repository's Cargo tests", "recipe":{"kind":"cargo_test"},"timeout_seconds":30});
+        }
         json!({"id":id,"description":"Verify the original seed content",
         "recipe":{"kind":"file_contains","path":file,"text":if writing || shell { "NATIVE_GOAL" } else { "original input" }},"timeout_seconds":10})
     };
@@ -104,7 +113,9 @@ fn model(request: &Request) -> ResponseTemplate {
     } else {
         "seed-final"
     };
-    let instruction = if shell {
+    let instruction = if command_check {
+        "NATIVE_COMMAND_CHECK_FIXTURE: write the fixture build.rs using only the write tool."
+    } else if shell {
         "NATIVE_SHELL_FIXTURE: run the requested shell command and wait for its actual permission."
     } else if writing {
         "NATIVE_WRITE_FIXTURE: write native-result.txt containing NATIVE_GOAL newline with the write tool."

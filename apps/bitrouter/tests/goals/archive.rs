@@ -319,6 +319,7 @@ async fn execution_archive_is_atomic_idempotent_cold_and_owner_scoped() -> Resul
         .workflow
         .decisions
         .push(bitrouter_orchestrator::goal::decision::PermissionDecision {
+            check: None,
             id: "retired-permission".into(),
             execution_id: "original".into(),
             run_id: Some("domain-original".into()),
@@ -503,6 +504,7 @@ async fn archive_keeps_unknown_effects_active_work_permissions_and_delivery_sour
                 token_reservation: None,
             }),
             2 => head.workflow.decisions.push(PermissionDecision {
+                check: None,
                 id: "old-permission".into(),
                 execution_id: "original".into(),
                 run_id: Some("domain-original".into()),

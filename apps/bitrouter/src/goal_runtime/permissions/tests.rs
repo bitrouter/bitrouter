@@ -53,6 +53,7 @@ async fn native_material_keeps_real_input_identity_and_reuses_only_local_file_po
         };
         let bytes = serde_json::to_vec(&request)?;
         let decision = PermissionDecision {
+            check: None,
             id: "native-decision".into(),
             execution_id: "native-execution".into(),
             run_id: None,
@@ -140,6 +141,7 @@ async fn decision(root: &Path, mut value: serde_json::Value) -> Result<Permissio
     }
     let permission: PendingPermissionSnapshot = serde_json::from_value(value.clone())?;
     Ok(PermissionDecision {
+        check: None,
         id: "decision".into(),
         execution_id: "execution".into(),
         run_id: Some("run".into()),

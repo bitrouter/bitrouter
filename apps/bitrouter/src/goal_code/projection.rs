@@ -464,18 +464,22 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             Decision {
                 id: decision.id.clone(),
                 requirements_revision: decision.requirements_revision,
-                label: format!(
+                label: if let Some(check) = &decision.check {
+                    format!("Run verification command: {}", check.specification.command().unwrap_or("unavailable"))
+                } else { format!(
                     "Permission for task {} · harness {}",
                     task.map_or("unreported", |task| task.spec.id.as_str()),
                     task.zip(execution).map_or("unreported", |(task, execution)| task.execution_harness(execution).unwrap_or("built-in"))
-                ),
+                ) },
                 details: vec![
-                    match &decision.run_id {
+                    if let Some(check) = &decision.check {
+                        format!("Check {} / artifact {} / one-time permission", check.specification.id, check.artifact.sha256)
+                    } else { match &decision.run_id {
                         Some(run_id) => format!("Execution {} / supervisor run {run_id}", decision.execution_id),
                         None => execution.and_then(|execution| execution.thread.as_ref())
                             .map_or_else(|| format!("Execution {} / native binding unavailable", decision.execution_id),
                                 |thread| format!("Execution {} / Thread {} / Turn {}", decision.execution_id, thread.thread_id, thread.turn_id)),
-                    },
+                    } },
                     format!(
                         "Request requirements {} / task {}; current Goal requirements {}",
                         decision.requirements_revision,
@@ -484,12 +488,17 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                     ),
                     format!(
                         "Assigned workspace: {}",
-                        execution
+                        decision.check.as_ref().map(|check| check.workspace.display().to_string()).or_else(|| execution
                             .map(|execution| execution.workspace.display().to_string())
+                        )
                             .unwrap_or_else(|| "unreported".into())
                     ),
                     format!("Goal reply: /decision {} <your message>", decision.id),
-                    "Persistent allow: choose the actual card option, or explicitly name /option <offered-id> in that reply".into(),
+                    if decision.check.is_some() {
+                        "This repository-controlled command can execute arbitrary code with host privileges. Approval applies only to this check and artifact.".into()
+                    } else {
+                        "Persistent allow: choose the actual card option, or explicitly name /option <offered-id> in that reply".into()
+                    },
                 ],
                 request: artifact(
                     &snapshot.id,
@@ -691,6 +700,21 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
 }
 
 pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
+    if let Ok(check) = serde_json::from_slice::<
+        bitrouter_orchestrator::goal::verification::permission::CheckPermission,
+    >(bytes)
+    {
+        return Ok(format!(
+            "Verification command: {}\nWorkspace: {}\nArtifact: {}\nTimeout: {} seconds\n\nRepository-controlled commands can execute arbitrary code with host privileges. This request is for one execution on this artifact; it is not consent or evidence that the command ran.",
+            check
+                .specification
+                .command()
+                .context("check has no command")?,
+            check.workspace.display(),
+            check.artifact.sha256,
+            check.specification.timeout_seconds
+        ));
+    }
     let material = crate::goal_permission_material::checked_value(bytes, None)?;
     if material.get("native").is_some() {
         let request: crate::goal_permission_material::native::Request =
