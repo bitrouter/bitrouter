@@ -210,7 +210,7 @@ mod tests {
             Some(TrajectorySettlementRecorder::new(
                 TrajectoryStore::new(db.clone()),
                 None,
-                CorrelationKey::from_bytes([53; 32])?,
+                CorrelationKey::from_bytes(rand::random())?,
             )),
             Some(Arc::new(EvalSettlementRecorder::new(
                 store.clone(),
