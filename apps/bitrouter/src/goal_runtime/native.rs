@@ -179,9 +179,6 @@ impl Coordinator {
         task: &Task,
         execution: &Execution,
     ) -> Result<()> {
-        if matches!(execution.observation, Observation::NotAdmitted { .. }) {
-            return Ok(());
-        }
         let caller = CallerContext::local();
         let epoch = self.threads.capabilities().server_instance_id;
         if execution.dispatch_requested {
@@ -219,7 +216,7 @@ impl Coordinator {
                 );
                 let target = ThreadTarget {
                     thread_id: thread.thread_id,
-                    server_instance_id: epoch.clone(),
+                    server_instance_id: epoch,
                 };
                 if let Some(turn) = self
                     .threads
@@ -240,92 +237,37 @@ impl Coordinator {
                     return Ok(());
                 }
             }
-            if execution.managed_dispatch
-                && let Observation::Unknown {
-                    run_id: None,
-                    reason,
-                } = &execution.observation
-            {
-                // Unknown has already revoked this exact source. The shared
-                // admission lock orders this lookup after any earlier accept
-                // and before every future authorization check. An existing
-                // Turn must be linked, even when its outcome is unresolved.
-                if let Some(turn) = self
-                    .threads
-                    .find_goal_worker_admission(&epoch, &caller, &source, &turn_key(&execution.id))
-                    .await?
-                {
-                    self.change(
-                        goal,
-                        Change::BindWorkerTurn {
-                            execution_id: execution.id.clone(),
-                            thread: ThreadExecution {
-                                thread_id: turn.thread_id,
-                                turn_id: turn.turn_id,
-                            },
-                        },
-                    )
-                    .await?;
-                } else {
-                    self.change(goal, Change::RejectWorkerDispatch {
-                        execution_id:execution.id.clone(),
-                        reason: format!("Original managed Turn was not admitted after source revocation; previous dispatch error: {reason}"),
-                    }).await?;
-                }
-                return Ok(());
-            }
             if bitrouter_orchestrator::goal::workflow::worker_requested(goal, &source) {
                 // The original durable admission key is absent. Re-submit that
                 // same action with its saved input; admission serializes a
                 // concurrent acceptance rather than creating another attempt.
-                let result = async {
-                    let prepared = execution
-                        .resources
-                        .as_ref()
-                        .context("native dispatch lacks its saved input")?;
-                    let prompt = String::from_utf8(
-                        crate::goal_artifacts::read(
-                            &crate::goal_artifacts::root(&self.workspaces, &goal.id),
-                            &prepared.prompt,
-                        )
-                        .await?,
-                    )?;
-                    match task.execution_harness(execution) {
-                        Some(harness) => {
-                            Box::pin(self.launch_acp(
-                                goal,
-                                task,
-                                &execution.id,
-                                prompt,
-                                harness,
-                                super::resources::servers(
-                                    &self.routing.snapshot_config(),
-                                    &prepared.selection,
-                                )?,
-                            ))
-                            .await
-                        }
-                        None => {
-                            Box::pin(self.launch_native(goal, task, &execution.id, prompt)).await
-                        }
-                    }
-                }
-                .await;
-                return match result {
-                    Ok(()) => Ok(()),
-                    Err(error) => {
-                        self.change(
+                let prepared = execution
+                    .resources
+                    .as_ref()
+                    .context("native dispatch lacks its saved input")?;
+                let prompt = String::from_utf8(
+                    crate::goal_artifacts::read(
+                        &crate::goal_artifacts::root(&self.workspaces, &goal.id),
+                        &prepared.prompt,
+                    )
+                    .await?,
+                )?;
+                return match task.execution_harness(execution) {
+                    Some(harness) => {
+                        Box::pin(self.launch_acp(
                             goal,
-                            Change::ObserveExecution {
-                                execution_id: execution.id.clone(),
-                                observation: Observation::Unknown {
-                                    run_id: None,
-                                    reason: bounded_error(&error),
-                                },
-                            },
-                        )
+                            task,
+                            &execution.id,
+                            prompt,
+                            harness,
+                            super::resources::servers(
+                                &self.routing.snapshot_config(),
+                                &prepared.selection,
+                            )?,
+                        ))
                         .await
                     }
+                    None => Box::pin(self.launch_native(goal, task, &execution.id, prompt)).await,
                 };
             }
             if matches!(execution.observation, Observation::Requested) {

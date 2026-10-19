@@ -302,17 +302,13 @@ impl Task {
                     {
                         return Ok(Some(handoff.clone()));
                     }
-                    if !execution.dispatch_requested
-                        || matches!(execution.observation, Observation::NotAdmitted { .. })
-                    {
+                    if !execution.dispatch_requested {
                         continue;
                     }
                 }
                 return Ok(None);
             }
-            if !execution.dispatch_requested
-                || matches!(execution.observation, Observation::NotAdmitted { .. })
-            {
+            if !execution.dispatch_requested {
                 continue;
             }
             if let Some(LocalReconciliation::Verified {
@@ -352,12 +348,11 @@ impl Task {
         goal_control_source: u64,
     ) -> ExecutionAdmission {
         let previous_ready = self.executions.last().is_none_or(|execution| {
-            matches!(execution.observation, Observation::NotAdmitted { .. })
-                || (!execution.dispatch_requested
-                    && matches!(
-                        execution.observation,
-                        Observation::Failed { run_id: None, .. }
-                    ))
+            (!execution.dispatch_requested
+                && matches!(
+                    execution.observation,
+                    Observation::Failed { run_id: None, .. }
+                ))
                 || execution.replacement_ready(
                     self.requirements_revision,
                     goal_control_source.max(self.control_source_revision),
@@ -405,10 +400,6 @@ pub struct Execution {
     pub control_source_revision: u64,
     #[serde(default)]
     pub dispatch_requested: bool,
-    /// This attempt uses the common ThreadService admission path. Legacy
-    /// supervisor requests, including choices frozen by later edits, omit it.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub managed_dispatch: bool,
     #[serde(default)]
     pub checks: Vec<CheckRun>,
     #[serde(default)]
@@ -469,10 +460,6 @@ impl Worker {
 
 fn zero_revision(revision: &u64) -> bool {
     *revision == 0
-}
-
-fn is_false(value: &bool) -> bool {
-    !value
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -649,11 +636,6 @@ pub enum StopState {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Observation {
     Requested,
-    /// The source was revoked and original-action reconciliation found no
-    /// accepted Turn. The earlier dispatch intent remains in history.
-    NotAdmitted {
-        reason: String,
-    },
     Running {
         run_id: Option<String>,
         native_session_id: Option<String>,
@@ -730,13 +712,6 @@ pub enum Change {
     },
     RequestDispatch {
         execution_id: String,
-    },
-    RequestWorkerDispatch {
-        execution_id: String,
-    },
-    RejectWorkerDispatch {
-        execution_id: String,
-        reason: String,
     },
     Input {
         event: super::input::Event,
@@ -1126,7 +1101,6 @@ impl GoalService {
                             | super::completion::Event::Block { .. }
                     } | Change::ObserveCheck { .. }
                         | Change::BindWorkerTurn { .. }
-                        | Change::RejectWorkerDispatch { .. }
                         | Change::BlockPlan { .. }
                         | Change::ObserveExecution { .. }
                         | Change::ConfirmModelRoute { .. }
@@ -1299,7 +1273,6 @@ fn apply(
         Change::RequestPlan { .. }
             | Change::RequestExecution { .. }
             | Change::RequestDispatch { .. }
-            | Change::RequestWorkerDispatch { .. }
             | Change::PrepareResources { .. }
             | Change::RequestCheck { .. }
             | Change::RequestReview { .. }
@@ -1334,7 +1307,6 @@ fn apply(
                 .find(|execution| &execution.id == execution_id)
                 .ok_or(GoalError::NotFound)?;
             if !execution.dispatch_requested
-                || matches!(execution.observation, Observation::NotAdmitted { .. })
                 || execution.requirements_revision != revision
                 || execution
                     .thread
@@ -1526,7 +1498,6 @@ fn apply(
                 task_revision: task.requirements_revision,
                 control_source_revision: goal_control_source.max(task.control_source_revision),
                 dispatch_requested: false,
-                managed_dispatch: false,
                 resources: None,
                 confirmed_model_route: None,
                 checks: Vec::new(),
@@ -1746,8 +1717,7 @@ fn apply(
                 passed: output.supports(&check.spec) && *workspace_after == check.workspace,
             };
         }
-        Change::RequestDispatch { execution_id }
-        | Change::RequestWorkerDispatch { execution_id } => {
+        Change::RequestDispatch { execution_id } => {
             let task = workflow
                 .tasks
                 .iter_mut()
@@ -1776,36 +1746,6 @@ fn apply(
                 return Err(GoalError::Conflict);
             }
             execution.dispatch_requested = true;
-            execution.managed_dispatch = matches!(change, Change::RequestWorkerDispatch { .. });
-        }
-        Change::RejectWorkerDispatch {
-            execution_id,
-            reason,
-        } => {
-            super::message(reason)?;
-            let execution = workflow
-                .tasks
-                .iter_mut()
-                .flat_map(|task| &mut task.executions)
-                .find(|execution| &execution.id == execution_id)
-                .ok_or(GoalError::NotFound)?;
-            // Unknown revokes worker_requested before the host queries the
-            // original keys under ThreadService's admission lock. A missing
-            // Goal binding alone is never this evidence.
-            if !execution.managed_dispatch
-                || !execution.dispatch_requested
-                || execution.thread.is_some()
-                || execution.stop.is_some()
-                || !matches!(
-                    execution.observation,
-                    Observation::Unknown { run_id: None, .. }
-                )
-            {
-                return Err(GoalError::Conflict);
-            }
-            execution.observation = Observation::NotAdmitted {
-                reason: reason.clone(),
-            };
         }
         Change::ApproveHandoff {
             execution_id,
@@ -2149,11 +2089,7 @@ fn apply(
                 _ => return Err(GoalError::Conflict),
             }
             match observation {
-                Observation::Requested | Observation::NotAdmitted { .. } => {
-                    return Err(invalid(
-                        "execution observation cannot set an admission verdict",
-                    ));
-                }
+                Observation::Requested => return Err(invalid("cannot replay requested execution")),
                 Observation::Candidate { report, .. } => report.validate()?,
                 Observation::Failed { reason, .. } | Observation::Unknown { reason, .. } => {
                     super::message(reason)?
@@ -2215,6 +2151,6 @@ fn observation_run(observation: &Observation) -> Option<&str> {
         Observation::Failed { run_id, .. } | Observation::Unknown { run_id, .. } => {
             run_id.as_deref()
         }
-        Observation::Requested | Observation::NotAdmitted { .. } => None,
+        Observation::Requested => None,
     }
 }

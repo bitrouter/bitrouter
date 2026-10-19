@@ -1054,15 +1054,8 @@ It does not undo committed requirements, cancel worker/tool effects, resume
 work or increase a cap; other accepted/in-flight inputs remain ordered.
 Additional words, quotes and hypothetical discussion use normal understanding.
 The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 7; older outboxes are retained and rejected without replay
+Goal IPC is version 6; older outboxes are retained and rejected without replay
 or reinterpretation. Native/ACP protocol versions are separate.
-
-A saved dispatch intent does not establish Turn acceptance. Uncertain managed
-attempts reconcile their original admission keys after their source is revoked.
-When no Turn was accepted, the Workflow reports **Turn not admitted / preparation
-may retry**, preserving the old intent and resources. An accepted Turn with an
-unknown outcome remains subject to stop/effect recovery. A later successful
-attempt cannot conceal that uncertainty or complete the Goal without evidence.
 Versioned task input may request a configured ACP worker or built-in execution.
 Old attempts keep their original requested worker and execution references;
 replacement requires confirmed stop/effect reconciliation and a new session

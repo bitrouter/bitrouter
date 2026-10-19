@@ -101,7 +101,7 @@ available. BRO requires controller confirmation before sending work; requested
 and confirmed routes remain distinct from an actual upstream model identity.
 Current-Goal input versions a task's requested worker/resources. BRO confirms old
 execution/effect boundaries before a new Thread adopts that selection.
-Unresolved input survives queries; `/input <id> <reply>` references it, and exact `/input <id> /withdraw` cancels only that uncommitted request without a model/budget increase. Query-only clarification adds no completion condition. Goal IPC v7 preserves older outboxes without replay. Superseded reconciled executions can leave the current snapshot; their complete records remain in immutable Goal history without resetting current attempts or budget.
+Unresolved input survives queries; `/input <id> <reply>` references it, and exact `/input <id> /withdraw` cancels only that uncommitted request without a model/budget increase. Query-only clarification adds no completion condition. Goal IPC v6 preserves older outboxes without replay. Superseded reconciled executions can leave the current snapshot; their complete records remain in immutable Goal history without resetting current attempts or budget.
 
 ```bash
 bro                         # Goals; no Goal or agent starts from a directory read

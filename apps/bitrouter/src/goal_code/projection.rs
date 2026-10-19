@@ -142,7 +142,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             ));
             detail.push(format!("Workspace: {}", attempt.workspace.display()));
             detail.push(format!(
-                "Dispatch intent saved: {} · stop fact: {:?}",
+                "Dispatch admitted: {} · stop fact: {:?}",
                 attempt.dispatch_requested, attempt.stop
             ));
             if matches!(attempt.stop, Some(StopState::Unknown { .. })) {
@@ -280,10 +280,6 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 Observation::Failed { reason, .. } => {
                     detail.push(reason.clone());
                     "failed / incomplete"
-                }
-                Observation::NotAdmitted { reason } => {
-                    detail.push(reason.clone());
-                    "Turn not admitted / preparation may retry"
                 }
             }
         } else {

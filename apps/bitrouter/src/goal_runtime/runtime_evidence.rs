@@ -87,7 +87,7 @@ fn project_bound(
             run_id.as_ref()
         }
         Observation::Failed { run_id, .. } | Observation::Unknown { run_id, .. } => run_id.as_ref(),
-        Observation::Requested | Observation::NotAdmitted { .. } => None,
+        Observation::Requested => None,
     };
     anyhow::ensure!(
         run_id == Some(&snapshot.run_id)

@@ -52,50 +52,6 @@ impl Managed {
 }
 
 impl ThreadService {
-    /// Read the original Thread and Turn keys under the admission lock. The
-    /// host must revoke this attempt's source before treating absence as a
-    /// settled refusal. This never authorizes work or proves ambient effects
-    /// outside the managed Turn absent.
-    pub async fn find_goal_worker_admission(
-        &self,
-        server_instance_id: &str,
-        caller: &CallerContext,
-        source: &GoalWork,
-        turn_key: &str,
-    ) -> Result<Option<TurnReceipt>, ServiceError> {
-        source.validate()?;
-        self.ensure_instance(Some(server_instance_id))?;
-        let _admission = self.inner.admission.lock().await;
-        let key = thread_key(source)?;
-        let scope = super::admission::key_scope(caller, None, "create_thread", &key)?;
-        let Some(entry) = self
-            .inner
-            .store
-            .find_key(&scope, &key)
-            .await
-            .map_err(ServiceError::storage)?
-        else {
-            return Ok(None);
-        };
-        let thread = self.existing_thread_receipt(&entry).await?;
-        self.check_snapshot_grant(&thread)?;
-        if thread.goal_work.as_ref() != Some(source) {
-            return Err("original worker Thread belongs to another source".into());
-        }
-        let scope =
-            super::admission::key_scope(caller, Some(&thread.thread_id), "goal_work", turn_key)?;
-        let Some(entry) = self
-            .inner
-            .store
-            .find_key(&scope, turn_key)
-            .await
-            .map_err(ServiceError::storage)?
-        else {
-            return Ok(None);
-        };
-        self.existing_turn_receipt(&entry).await.map(Some)
-    }
-
     /// Reconcile a saved Goal action without authorizing or starting work.
     pub async fn find_goal_worker_turn(
         &self,

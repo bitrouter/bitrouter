@@ -59,19 +59,6 @@ mod tests {
         }
     }
 
-    struct BeforeAdmissionVerdictMigrator;
-    #[async_trait::async_trait]
-    impl MigratorTrait for BeforeAdmissionVerdictMigrator {
-        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-            Migrator::migrations()
-                .into_iter()
-                .take_while(|migration| {
-                    migration.name() != "m20240101_000032_bro_admission_verdict"
-                })
-                .collect()
-        }
-    }
-
     #[tokio::test]
     async fn legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals()
     -> anyhow::Result<()> {
@@ -127,18 +114,6 @@ mod tests {
                 .is_err()
         );
         drop(goals);
-        assert!(
-            BeforeAdmissionVerdictMigrator::up(&db, None)
-                .await
-                .err()
-                .is_some_and(|error| error.to_string().contains("000032_bro_admission_verdict"))
-        );
-        assert!(
-            crate::db::migration::m20240101_000032_bro_admission_verdict::Migration
-                .down(&SchemaManager::new(&db))
-                .await
-                .is_err()
-        );
         drop(store);
         db.close().await?;
         let reopened = crate::db::connect(&url).await?;
