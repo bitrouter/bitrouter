@@ -64,12 +64,8 @@ Native Goal evidence now reads original Thread history and source-bound Goal
 accounting receipts for prepared inputs, router bindings and actual SDK/fallback
 reports. Bounded omissions and missing usage remain explicit. These read-only
 reads do not authorize work. Prepared configuration alone does not establish
-tool use, and commit times do not establish execution overlap. Actual received
-native content now carries bounded intervals in the existing accounting report.
-Only monotonic ticks with the same process clock identity support overlap;
-wall timestamps, admission and provider elapsed time are insufficient. This
-does not attest physical provider compute or a complete execution timeline.
-Final live/provider, recovery and full-refactor qualification remain open.
+tool use, and commit times do not establish execution overlap. Actual native
+activity intervals and final qualification remain open.
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,
