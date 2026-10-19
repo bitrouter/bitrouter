@@ -24,9 +24,7 @@
     "functionalRustUnchangedSinceFinal77": true,
     "changesSinceFinal77": [
       "apps/bitrouter/Cargo.toml"
-    ],
-    "committedCheckpoint": "b3460031343400c465211ec1b17c3e933e8209b1",
-    "committedInputsMatch": true
+    ]
   },
   "local": {
     "id": "unix-tty-focused88",
@@ -203,17 +201,17 @@
   "archive": {
     "repository": "https://github.com/bitrouter/bitrouter",
     "branch": "codex/pr981-refactor-evidence-20261016",
-    "commit": "0aa96eaaa31d3c1cfd40982ef8f834780949b1dd",
-    "publication": "published and remote head verified",
+    "commit": "b524ab8e82c8dc4a28e1ad9f07e9f2b5c06d2763",
+    "publication": "Prior archive remains pinned; Unix input-source annex pending.",
     "priorArchive": "382c2b58c5c25b02805175a33d60707dc4227b46",
-    "url": "https://github.com/bitrouter/bitrouter/tree/0aa96eaaa31d3c1cfd40982ef8f834780949b1dd",
+    "url": "https://github.com/bitrouter/bitrouter/tree/b524ab8e82c8dc4a28e1ad9f07e9f2b5c06d2763",
     "checksumManifest": "SHA256SUMS",
-    "checksumManifestSha256": "f27742dc25646c46010897a26f59b31eb9b79079afd477d61d65edb813e323f3",
-    "originalPayloadFiles": 4157,
-    "originalPayloadBytes": 84205457,
-    "publishedFiles": 1314,
+    "checksumManifestSha256": "05dacb8f9b78ca1b1f09be064e80b4a458ad32ff831a26269f24ba991227f7e8",
+    "originalPayloadFiles": 4125,
+    "originalPayloadBytes": 83227343,
+    "publishedFiles": 1280,
     "packedDirectories": 5,
-    "independentGitArchiveChecksumsVerified": 1314
+    "independentGitArchiveChecksumsVerified": 1280
   },
   "hostedCi": {
     "status": "Exact final-head result is reported in the PR acceptance comment; separate from local proof.",
