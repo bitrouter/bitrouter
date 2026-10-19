@@ -41,24 +41,17 @@ async fn requested_new_worker_cannot_bypass_unknown_old_tool_effects_or_resume_a
         let id = fixture.create().await?;
         fixture.running(&id).await?;
         let paused = paused_after_workers(&fixture,&id).await?;
-        let paused_left = task(&paused,"left")?;
-        let old = paused_left.executions.last().context("actual paused worker missing")?.clone();
-        assert!(old.thread.is_some(), "paused worker has no accepted Thread/Turn: {old:?}");
-        let old_attempts = paused_left.executions.len() + usize::try_from(paused_left.archived_executions)?;
+        let old = task(&paused,"left")?.executions[0].clone();
         let edited = edit_left(&fixture,&id,"FIXTURE_NEW_LEFT_RULE: WORKER_SWITCH_ACP_FIXTURE: select the replacement worker for left and retain the current pause.").await?;
         assert_eq!(edited.run_intent,RunIntent::Pause);
         assert_eq!(task(&edited,"left")?.spec.harness.as_deref(),Some("replacement-peer"));
         control(&fixture.socket,&id,"resume-worker-request",RunIntent::Run).await?;
-        let blocked = wait_for(&fixture.socket,&id,|goal| task(goal,"left").is_ok_and(|task| task.executions.last().is_some_and(|execution| execution.reconciliation.as_ref().is_some_and(|state| matches!(state, bitrouter_orchestrator::goal::workflow::LocalReconciliation::Blocked { .. }))))).await?;
+        let blocked = wait_for(&fixture.socket,&id,|goal| task(goal,"left").is_ok_and(|task| task.executions[0].reconciliation.as_ref().is_some_and(|state| matches!(state, bitrouter_orchestrator::goal::workflow::LocalReconciliation::Blocked { .. })))).await?;
         let left = task(&blocked,"left")?;
-        // Earlier known failures may already have retired into immutable
-        // history. Neither retirement nor a changed selection permits a new
-        // attempt while the actual paused worker still has unknown effects.
-        assert_eq!(left.executions.len() + usize::try_from(left.archived_executions)?, old_attempts);
-        let current = left.executions.last().context("blocked original worker missing")?;
-        assert_eq!(current.id,old.id,"original worker changed: before={old:?}; after={left:?}");
-        assert_eq!(current.thread,old.thread);
-        assert_eq!(left.execution_harness(current),Some("goal-peer"));
+        assert_eq!(left.executions.len(),1);
+        assert_eq!(left.executions[0].id,old.id);
+        assert_eq!(left.executions[0].thread,old.thread);
+        assert_eq!(left.execution_harness(&left.executions[0]),Some("goal-peer"));
         assert!(!blocked.workflow.completion.completed_for(2));
         assert!(!fixture.controls.join("started-join").exists());
         Ok(())

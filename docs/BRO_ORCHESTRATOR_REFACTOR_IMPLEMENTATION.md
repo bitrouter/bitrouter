@@ -53,7 +53,7 @@ not claim the target shared-runner architecture is complete.
 | Path | Current acceptance/execution authority | Resource control and evidence boundary |
 | --- | --- | --- |
 | Goal planning/input/review/completion generation | `ThreadService.start_goal_generation`, common admission/runner/commit | Owner or input Thread route selector; exact prompt, SDK plans and attempt reports in ExecutionStore, Root source/budget accounting. Tool-free. Current SDK fallback remains; no full Turn-fixed context guarantee. |
-| Native Goal work | `ThreadService.start_goal_worker_turn`, native Agent/Core driver | Immutable prepared resources, accepted Thread configuration, per-request prepared-input hashes and SDK router bindings, failed candidates/actual serving reports and committed tool observations are read from existing stores. Bounded omissions and missing facts remain explicit. Actual activity intervals and complete native parallel qualification remain pending; selections are not proof of use. |
+| Native Goal work | `ThreadService.start_goal_worker_turn`, native Agent/Core driver | Selected/default route, actual saved prompt, selected MCP configuration and Ask permissions. Core checkpoints retain model/tool evidence; the app's worker projection does not yet expose a complete provider/resource/activity association. A recorded selection is not proof of use. |
 | Existing standalone native work | Native Thread/Turn entrypoints on that same ThreadService | Existing grants, native context/routing, permissions, verification and recovery remain authoritative. Goal-associated Threads reject the ordinary entrypoint. |
 | Managed external ACP Goal work | Common ThreadService admission/runner/commit; supervisor adapts process/protocol transport | Explicit ACP configuration and actual run/session mapping, bounded sequenced public observations, original permission options and stop receipts. Generic supervisor controls reject managed ownership. Private context, physical provider/model and unsupported controls remain unknown. Cold session continuation and the full failure matrix remain unqualified. |
 | Direct harness and transparent ACP serving | Existing direct/transparent entrypoints | Preserve the original harness interaction and protocol capabilities; do not fabricate Goal/Thread/Turn bindings or turn private harness behavior into native evidence. |
@@ -313,7 +313,7 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
 | S1 | In progress: owner/input association, model and worker Turn source links, stable binding operations and original-key lookup implemented. Full interruption/compatibility proof remains. |
 | S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and shared bounded generation/native capacity waiting are connected. Active cold recovery, worker quote waiting and full wait/effect projection remain pending. |
 | S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
-| S4 | In progress: generation SDK reports, native prepared material/input hashes/router bindings and actual/fallback SDK reports now link to original work/Thread/Turn sources; public ACP session/route limits remain explicit. Native activity intervals, complete historical qualification and final evidence/UI closure remain. |
+| S4 | In progress: generation SDK reports, requested worker material and public ACP session/route reports are linked; complete native policy/material/actual execution report association remains. |
 | S5 | In progress: native standalone Goal completion and managed ACP dependencies/review consume shared Turn observations in controlled fixtures. Native branch overlap/isolation, adoption and the full coordinated closure remain. |
 | S6 | In progress: protocol fixtures now have an unpublished minimal Cargo package; repeated test-time app/runtime builds are removed. Old execution-loop removal and final regression/live gates remain. |
 
@@ -815,98 +815,6 @@ This closes a controlled replacement checkpoint, not the complete S3–S6 audit,
 same-session cold continuation, native parallel/resource evidence, live harness
 qualification or hosted CI. Subsequent implementation still needs appropriate
 fresh checks; unchanged broad checks need no immediate repetition.
-
-## Native execution evidence checkpoint
-
-[`native_evidence.rs`](../apps/bitrouter/src/goal_runtime/native_evidence.rs)
-now reads existing committed Thread history and Goal accounting receipts at
-fixed cutoffs. It joins exact `GoalWork` sources with accepted Thread/Turn
-identities, frozen startup resources, prepared-input hashes, SDK router binding
-digests, admitted candidates and actual SDK outcomes. SDK preparation callbacks
-remain distinct from model plans and provider attempts. Committed tool intents,
-known results/errors and context-routing observations retain original IDs.
-These queries neither start work nor write another execution state/store.
-
-The view scans at most 1,024 recent revision positions per history, follows the
-existing 16-item Goal page contract, and keeps at most 32 model work entries.
-Original intent receipts resolve outcomes whose Begin precedes that tail.
-Reports are hash-checked, each decoded artifact is capped at 2 MiB, model detail
-at 64 KiB and the native view at 96 KiB. Truncated, oversized, changed or missing
-material remains incomplete/unavailable; original receipts/artifacts are retained.
-Queries for another execution cannot acquire the original worker's reports.
-
-This exposes SDK serving reports, not physical provider attestation or proof
-that every supplied skill/MCP tool was used. Core still prepares context per
-step. Reports do not prove output adoption, permission, artifact verification or
-Goal completion. Commit timestamps are not execution intervals, and
-`timeline_complete` remains false. Verified native archive records now enter
-the native reader rather than the ACP reader; a dedicated complete native
-archive/recovery closure remains a later qualification gate.
-
-Source1 captures the new completion-evidence requirement failing against the
-old snapshot-only view. Source2 has 14/18 passes: native completion stays blocked
-because the new reader requested 128 Goal history rows where the existing limit
-is 16. Source3 retains the precise rejection; source4 passes after using the
-published bound and distinguishing SDK preparation callbacks from plans.
-Source5 passes native identity, tamper and actual HTTP fallback cases but has
-one earlier worker-identity assertion failure (18/19). That test selected the
-first historical attempt as the current worker. It now binds the latest actual
-accepted Thread/Turn and asserts unchanged cumulative attempt count across live
-and archived history. No stop/effect gate changed. The original transient state
-was not captured beyond its assertion; the reason for its earlier attempt is
-unconfirmed. Later passing repetitions do not establish that cause.
-
-| Source7 check | Actual result |
-| --- | --- |
-| Strict workspace/all-target/all-feature Clippy | Passed |
-| Workspace formatting check | Passed |
-| Complete `goal_runtime` test selection | **74 passed** |
-| Unknown-effect replacement guard, five stress iterations | **5/5 passed** |
-| Workspace/all-feature rustdoc | Six passed, one existing ignored |
-| Before/after source hashes | Zero changed files |
-
-Source6 separately passes all 19 native/worker-edit/admission cases. Controlled
-native completion requires actual SDK provider/model evidence. The HTTP fallback
-case retains failed candidate/unknown usage and a distinct successful provider
-under the same request and original Turn. Hash tampering removes the affected
-report's serving claims; repeated evidence reads issue no provider requests.
-These are local Rust/HTTP fixtures, not credentialed provider or hosted-CI proof.
-The last full workspace nextest remains the preceding worker-replacement run;
-fresh full workspace/final live gates are still required before publication.
-
-Source8 retains a separate **73/74** run: the existing ACP requirements-edit
-case failed during its initial worker startup, before the input under test.
-Its transient database was not retained and the cause remains unconfirmed.
-Later passes are not a fix or explanation for that failure. Sources9 and10
-retain failed attempts to copy a memory SQLite fixture: no database file was
-materialized, and the later read-only open failed. Their independently extracted
-filesystem archives each verify all 251 surviving files; neither archive claims
-to contain the lost memory database or original process state.
-
-The native evidence case now explicitly uses a file-backed database and verifies
-the existing SQLite snapshot helper by reopening the copy read-only and reading
-the same Goal identity and nonempty execution history. Source11 passes that case
-and the ACP edit case with file-backed fixtures. Source12 preserves the normal
-storage profiles: only the explicit native snapshot case is file-backed. Strict
-Clippy, formatting, all **74 Goal runtime tests**, both ACP edit/unknown-effect
-cases for **five iterations each**, and six rustdoc tests (one existing ignored)
-pass with zero changed source hashes. Nextest reports **one leaky test** in the
-accounting lost-reply case; five isolated repetitions subsequently pass without
-a leak report. The cause is unconfirmed; the earlier report is retained rather
-than described as fixed.
-
-Setting the test-only `BRO_GOAL_FIXTURE_KEEP_FAILURES=1` retains failed fixture
-files, a bounded read of existing Goal/Thread/Turn facts, and diagnostic errors.
-It does not change the fixture's storage profile or execute new work. File-backed
-fixtures additionally reuse the existing preflight SQLite snapshot helper before
-and after normal shutdown. Memory fixtures explicitly record that no full database
-copy is available. These reads are separate observations, not an atomic snapshot
-of all stores; private process state is not claimed captured. The flag is unset
-by default. This adds no runtime storage or protocol surface.
-
-Raw failed/passing logs, exact sources and commands remain in the independent
-local archive under `NATIVE_EVIDENCE_INDEX.md`, without adding campaign snapshots
-to the PR. This is a partial S4 checkpoint, not completion of S0–S6/A01–A22.
 
 ## Delivery and evidence
 

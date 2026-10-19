@@ -74,14 +74,6 @@ async fn archive(
     let record =
         crate::goal_archive::decode(&goal.id, &task.spec.id, reference, &bytes, &operation)?;
     let execution = &record.execution;
-    if task.execution_harness(execution).is_none() {
-        let mut value = coordinator
-            .native_execution_evidence_bound(goal, task, execution)
-            .await?;
-        value["committed_archive"] = serde_json::to_value(reference)?;
-        value["archive_operation_id"] = operation.id.into();
-        return Ok(value);
-    }
     let snapshot = coordinator.acp_run_snapshot(goal, task, execution).await?;
     let SessionResponse::Events { replay } = coordinator
         .supervisor

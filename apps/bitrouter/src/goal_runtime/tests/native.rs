@@ -123,28 +123,6 @@ fn model(request: &Request) -> ResponseTemplate {
     } else if state.get("actual_workspace").is_some() {
         json!({"ready":true,"reason":"Fixture semantic judgment; machine checks are independently required", "missing_checks":[]})
     } else if state.get("integrated_material").is_some() {
-        let runtime = &state["task_evidence"][0]["runtime_observations"];
-        let provider_observed =
-            runtime["model_work"]["entries"]
-                .as_array()
-                .is_some_and(|entries| {
-                    entries.iter().any(|entry| {
-                        entry["kind"] == "provider_attempt"
-                            && (entry["observation"]["actual_provider"] == "fixture"
-                                || entry["observation"]["actual_provider"] == "fixture-backup")
-                            && entry["observation"]["actual_model"] == "test-model"
-                    })
-                });
-        if runtime["executor"] != "built_in"
-            || !provider_observed
-            || runtime["history_complete"] != false
-            || runtime["timeline_complete"] != false
-        {
-            return ResponseTemplate::new(422).set_body_json(json!({
-                "status":runtime["status"],"reason":runtime["reason"],
-                "model_work":runtime["model_work"]
-            }));
-        }
         json!({"conditions":[{"id":condition,"status":"met","reason":"Actual read and content-check evidence",
             "evidence":["integrated_material",format!("check:{final_check}")]}],"unmet_original_requirements":[],
             "constraints_preserved":true,"human_acceptance_required":false,"summary":"Verified seed inspection fixture"})
@@ -166,8 +144,7 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
             .with_test_writer()
             .finish(),
     );
-    let mut setup = fixture::Setup::new_without_external_harnesses().await?;
-    setup.persistent_database()?;
+    let setup = fixture::Setup::new_without_external_harnesses().await?;
     Mock::given(method("POST"))
         .and(path("/v1/chat/completions"))
         .respond_with(model)
@@ -210,50 +187,6 @@ async fn native_goal_uses_real_thread_turn_and_tools_without_an_external_harness
                     message["role"] == "tool" && message["content"].as_str().is_some_and(|text| text.contains("original input"))))
             })
         }));
-        let source = super::super::native::source(&goal, task, execution)?;
-        let evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await?;
-        let entries = evidence["entries"].as_array().context("native model entries missing")?;
-        assert!(!entries.is_empty());
-        let serialized_source = serde_json::to_value(&source)?;
-        assert!(entries.iter().all(|entry| entry["source"] == serialized_source));
-        assert!(entries.iter().any(|entry| entry["kind"] == "preparation"
-            && entry["observation"]["requested_selector"] == "goal-model"
-            && entry["observation"]["prepared_prompt_bytes"].as_u64().is_some_and(|bytes| bytes > 0)
-            && entry["observation"]["prepared_prompt_sha256"].as_str().is_some_and(|hash| hash.len() == 64)
-            && entry["observation"]["actual_model"].is_null()));
-        let mut foreign = source.clone();
-        foreign.execution_id = "unrelated-attempt".into();
-        let foreign_evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &foreign).await?;
-        assert_eq!(foreign_evidence["entries"], json!([]));
-        // An artifact whose immutable identity no longer matches cannot supply
-        // an actual serving identity. Restore it after checking this refusal.
-        let observed = entries.iter().find(|entry| entry["kind"] == "provider_attempt").context("native provider outcome missing")?;
-        let reference: ArtifactRef = serde_json::from_value(observed["report"].clone())?;
-        let original = crate::goal_artifacts::read(&fixture.root(&id), &reference).await?;
-        let changed = original.iter().enumerate().map(|(index, byte)| if index == 0 { *byte ^ 1 } else { *byte }).collect::<Vec<_>>();
-        tokio::fs::write(&reference.path, &changed).await?;
-        let refused = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await;
-        tokio::fs::write(&reference.path, original).await?;
-        let refused = refused?;
-        let rejected = refused["entries"].as_array().context("refusal entries missing")?.iter()
-            .find(|entry| entry["work_id"] == observed["work_id"]).context("original outcome was discarded")?;
-        assert_eq!(rejected["observation"]["status"], "unavailable");
-        assert!(rejected["observation"]["actual_provider"].is_null());
-        assert_eq!(fixture.backend.received_requests().await.context("request capture unavailable")?.len(), requests.len());
-        // Prove the opt-in failure snapshot mechanism can retain both stores
-        // from this real in-memory Goal/Thread run and reopen them read-only.
-        let copy = fixture.controls.join("native-evidence-copy.sqlite");
-        fixture::copy_database(&fixture.db, &copy).await?;
-        let copied_db = crate::db::connect(&format!("sqlite://{}?mode=ro", copy.display())).await?;
-        let copied_goals = GoalService::new(Arc::new(crate::goal_store::DatabaseGoalStore::new(copied_db.clone())));
-        let GoalReply::Snapshot { goal: copied } = copied_goals.execute("local", GoalCommand::Get { goal_id:id.clone() }, now()?).await?
-            else { anyhow::bail!("retained Goal snapshot missing") };
-        assert_eq!(copied.workflow.tasks[0].executions.last().and_then(|execution| execution.thread.as_ref()), Some(binding));
-        use bitrouter_orchestrator::store::ExecutionStore as _;
-        let copied_store = crate::agent_store::DatabaseExecutionStore::new(copied_db);
-        let retained = copied_store.read_records(&binding.thread_id, 0, None, 64, 4 * 1024 * 1024).await.map_err(anyhow::Error::msg)?
-            .context("retained execution history missing")?;
-        assert!(retained.cutoff > 0);
         assert!(!fixture.controls.join("started-inspect").exists());
         Ok(())
     }.await;
@@ -297,67 +230,6 @@ async fn native_fixture() -> Result<fixture::Fixture> {
         .mount(&setup.backend)
         .await;
     setup.start().await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn native_fallback_evidence_retains_failed_candidate_and_actual_serving_identity()
--> Result<()> {
-    let mut setup = Setup::new_without_external_harnesses().await?;
-    setup.native_fallback();
-    Mock::given(method("POST"))
-        .and(path("/v1/chat/completions"))
-        .respond_with(|request: &Request| {
-            if serde_json::from_slice::<Value>(&request.body)
-                .ok()
-                .is_some_and(|body| {
-                    body["tools"]
-                        .as_array()
-                        .is_some_and(|tools| !tools.is_empty())
-                })
-            {
-                ResponseTemplate::new(503).set_body_json(
-                    json!({"error":{"message":"controlled primary candidate failure"}}),
-                )
-            } else {
-                model(request)
-            }
-        })
-        .with_priority(1)
-        .mount(&setup.backend)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/v2/chat/completions"))
-        .respond_with(model)
-        .mount(&setup.backend)
-        .await;
-    let fixture = setup.start().await?;
-    let result = async {
-        let id = fixture.create_with("Read seed.txt with the built-in executor, preserve its contents and deliver a verified report. Use the configured fallback when the primary candidate is unavailable.").await?;
-        let goal = wait_for(&fixture.socket, &id, |goal| goal.workflow.completion.completed_for(1)).await?;
-        let task = &goal.workflow.tasks[0];
-        let execution = task.executions.last().context("fallback execution missing")?;
-        assert_eq!(task.executions.len(), 1);
-        let source = super::super::native::source(&goal, task, execution)?;
-        let evidence = super::super::native_evidence::model_work(&fixture.goals, &fixture.root(&id), &goal, &source).await?;
-        let entries = evidence["entries"].as_array().context("fallback evidence missing")?;
-        let failed = entries.iter().find(|entry| entry["kind"] == "provider_attempt"
-            && entry["observation"]["candidate_provider"] == "fixture"
-            && entry["observation"]["error_reported"] == true).context("failed candidate was omitted")?;
-        assert!(failed["observation"]["actual_provider"].is_null());
-        assert!(failed["observation"]["actual_model"].is_null());
-        assert!(failed["observation"]["usage"].is_null());
-        let served = entries.iter().find(|entry| entry["kind"] == "provider_attempt"
-            && entry["request_id"] == failed["request_id"]
-            && entry["observation"]["actual_provider"] == "fixture-backup").context("actual fallback outcome missing")?;
-        assert_eq!(served["observation"]["actual_model"], "test-model");
-        assert_eq!(served["observation"]["output_recorded"], true);
-        assert_ne!(served["observation"]["attempt_index"], failed["observation"]["attempt_index"]);
-        let requests = fixture.backend.received_requests().await.context("fallback requests missing")?;
-        assert!(requests.iter().any(|request| request.url.path() == "/v2/chat/completions"));
-        assert_eq!(tokio::fs::read_to_string(fixture.workspace.join("seed.txt")).await?, "original input\n");
-        Ok(())
-    }.await;
-    fixture.finish(result).await
 }
 
 #[tokio::test]

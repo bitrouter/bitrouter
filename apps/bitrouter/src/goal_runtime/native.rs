@@ -48,6 +48,56 @@ impl Coordinator {
         Ok(self.threads.register_local_workspace(&workspace)?)
     }
 
+    pub(super) async fn native_execution_evidence(
+        &self,
+        goal: &GoalSnapshot,
+        task: &Task,
+        execution: &Execution,
+    ) -> Result<serde_json::Value> {
+        anyhow::ensure!(
+            goal.workflow
+                .tasks
+                .iter()
+                .any(|known| known.spec == task.spec && known.executions.contains(execution)),
+            "native execution is outside this Goal cutoff"
+        );
+        self.native_workspace(goal, execution)?;
+        let binding = execution
+            .thread
+            .as_ref()
+            .context("native execution has no accepted Thread/Turn link")?;
+        let target = ThreadTarget {
+            thread_id: binding.thread_id.clone(),
+            server_instance_id: self.threads.capabilities().server_instance_id,
+        };
+        let caller = CallerContext::local();
+        let view = self
+            .threads
+            .read_stored_thread_view(&target, &caller)
+            .await?;
+        anyhow::ensure!(
+            view.thread.goal_work.as_ref() == Some(&source(goal, task, execution)?)
+                && view.thread.workspace.canonicalize()? == execution.workspace.canonicalize()?,
+            "native execution source or workspace does not match"
+        );
+        let turn = self
+            .threads
+            .read_stored_turn(&target, &caller, &binding.turn_id)
+            .await?;
+        Ok(
+            serde_json::json!({"status":"observed", "executor":"built_in", "goal_id":goal.id,
+            "task_id":task.spec.id, "execution_id":execution.id, "thread_id":binding.thread_id, "turn_id":binding.turn_id,
+            "execution_requirements_revision":execution.requirements_revision,"execution_task_revision":execution.task_revision,
+            "current_task_version":execution.task_revision == task.requirements_revision,
+            "turn_status":turn.status,"unknown_effect":turn.unknown_effect,"verification":turn.verification,
+            "requested_model_route":execution.resources.as_ref().and_then(|resources| resources.selection.model_route.as_ref()),
+            "recorded_model_selector":turn.model,"actual_provider_model":"unreported by this snapshot projection",
+            "snapshot_seq":view.thread.cursor,"history_complete":false,"timeline_complete":false,
+            "admission_is_execution_evidence":false,
+            "scope":"Committed native Thread/Turn projection only. This does not include a complete activity timeline, prove parallel overlap, verify artifacts or authorize replay. Model selector and configured resources do not prove actual provider or tool/skill use."}),
+        )
+    }
+
     pub(super) async fn launch_native(
         &self,
         goal: &GoalSnapshot,

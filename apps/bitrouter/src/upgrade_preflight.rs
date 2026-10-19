@@ -110,7 +110,7 @@ async fn integrity(db: &DatabaseConnection) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn snapshot(db: &DatabaseConnection, destination: &Path) -> Result<()> {
+async fn snapshot(db: &DatabaseConnection, destination: &Path) -> Result<()> {
     let quoted = destination.to_string_lossy().replace('\'', "''");
     db.execute(Statement::from_string(
         DatabaseBackend::Sqlite,
