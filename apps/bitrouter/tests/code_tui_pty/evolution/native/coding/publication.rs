@@ -43,25 +43,9 @@ fn send(code: &NativeFixture, runtime: &tokio::runtime::Runtime, failed: bool) -
 }
 
 async fn processed(service: &NativeService, identity: &SessionIdentity) -> Result<LearningReport> {
-    let mut checked = false;
-    let mut checked_pass = None;
-    let mut phase = "waiting for scheduler";
-    let mut last_observation = Value::Null;
-    let result = tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
-            let worker = service.evolution.worker_status();
-            if checked && worker.last_finished_at == checked_pass {
-                // A complete learning snapshot rereads the enrolled history.
-                // Inspect once per actual background pass, so this observer
-                // does not repeatedly compete with resource reconciliation.
-                phase = "waiting for another scheduler pass";
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                continue;
-            }
-            checked = true;
-            checked_pass = worker.last_finished_at;
             let learning = service.evolution.service("local")?;
-            phase = "reading learning snapshot";
             let report = match learning.learning_status(BLOCK).await {
                 Err(error)
                     if error.to_string().contains("changed")
@@ -80,26 +64,14 @@ async fn processed(service: &NativeService, identity: &SessionIdentity) -> Resul
                 .sessions
                 .get(&key)
                 .or_else(|| report.monitoring_observations.sessions.get(&key));
-            last_observation = json!({
-                "block_status": report.block_status,
-                "trial_sessions": report.observations.sessions.len(),
-                "monitor_sessions": report.monitoring_observations.sessions.len(),
-                "quality": observation.is_some_and(|value| value.quality.is_some()),
-                "cost": observation.is_some_and(|value| value.total_cost_micro_usd.is_some()),
-                "latency": observation.is_some_and(|value| value.latency_ms.is_some()),
-                "rollback": report.monitoring.rollback,
-            });
             if observation.is_some_and(|o| {
                 o.quality.is_some() && o.total_cost_micro_usd.is_some() && o.latency_ms.is_some()
             }) {
-                phase = "reading reconciled control state";
                 let state = learning.state().await?;
                 let block = state
                     .blocks
                     .get(BLOCK)
                     .context("campaign block disappeared")?;
-                last_observation["batch_closed"] = json!(block.batch.closed);
-                last_observation["batch_sequence"] = json!(block.batch.sequence);
                 // Wait for the existing scheduler to reconcile a closed cohort;
                 // no synthetic tick or explicit backend mutation accelerates it.
                 if block.status == report.block_status
@@ -112,13 +84,8 @@ async fn processed(service: &NativeService, identity: &SessionIdentity) -> Resul
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
     })
-    .await;
-    result.with_context(|| {
-        format!(
-            "coding evidence or background publication did not settle; phase: {phase}; last observation: {last_observation}; worker: {:?}",
-            service.evolution.worker_status()
-        )
-    })?
+    .await
+    .context("coding evidence or background publication did not settle")?
 }
 
 async fn verify_checkpoint(

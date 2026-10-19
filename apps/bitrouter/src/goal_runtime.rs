@@ -853,67 +853,6 @@ impl Coordinator {
     }
 
     async fn drive(&self, goal: &GoalSnapshot) -> Result<()> {
-        let mut refreshed = None;
-        for task in &goal.workflow.tasks {
-            if let Some(execution) = task.executions.iter().find(|execution| {
-                bitrouter_orchestrator::goal::workflow::can_archive(goal, task, execution)
-            }) {
-                let decisions = goal
-                    .workflow
-                    .decisions
-                    .iter()
-                    .filter(|decision| decision.execution_id == execution.id)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let root = crate::goal_artifacts::root(&self.workspaces, &goal.id);
-                let record = crate::goal_artifacts::put(
-                    &root,
-                    &serde_json::to_vec(&serde_json::json!({
-                        "goal_id": goal.id, "owner": goal.owner, "task_id": task.spec.id,
-                        "execution": execution, "decisions": decisions, "previous": task.latest_archive,
-                    }))?,
-                )
-                .await?;
-                self.goals
-                    .workflow_change(
-                        WorkflowActor {
-                            owner: "local",
-                            coordinator_id: &self.id,
-                        },
-                        &goal.id,
-                        &bitrouter_orchestrator::goal::workflow::archive_operation_id(
-                            &goal.id,
-                            &execution.id,
-                        ),
-                        goal.requirements_revision,
-                        Change::ArchiveExecution {
-                            task_id: task.spec.id.clone(),
-                            execution: Box::new(execution.clone()),
-                            decisions,
-                            record,
-                        },
-                        now()?,
-                    )
-                    .await?;
-                let GoalReply::Snapshot { goal: current } = self
-                    .goals
-                    .execute(
-                        "local",
-                        GoalCommand::Get {
-                            goal_id: goal.id.clone(),
-                        },
-                        now()?,
-                    )
-                    .await?
-                else {
-                    anyhow::bail!("unexpected Goal snapshot after execution archive");
-                };
-                refreshed = Some(*current);
-                break;
-            }
-        }
-        // Continue independent work using the committed, current head.
-        let goal = refreshed.as_ref().unwrap_or(goal);
         if goal
             .workflow
             .completion

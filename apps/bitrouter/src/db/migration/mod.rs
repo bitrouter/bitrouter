@@ -39,7 +39,6 @@ pub mod m20240101_000025_create_bro_execution_index;
 mod m20240101_000026_bro_runtime_format;
 mod m20240101_000027_bro_managed_sessions;
 mod m20240101_000028_create_bro_goals;
-mod m20240101_000029_index_acp_resource_head;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -78,7 +77,6 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000026_bro_runtime_format::Migration),
             Box::new(m20240101_000027_bro_managed_sessions::Migration),
             Box::new(m20240101_000028_create_bro_goals::Migration),
-            Box::new(m20240101_000029_index_acp_resource_head::Migration),
         ]
     }
 }

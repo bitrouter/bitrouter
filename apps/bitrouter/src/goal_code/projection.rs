@@ -72,17 +72,6 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             task.spec.instruction.clone(),
         ];
         let mut artifacts = Vec::new();
-        if task.archived_executions != 0 {
-            detail.push(format!("{} older reconciled executions retained in immutable Goal history; current attempts and budget are unchanged", task.archived_executions));
-        }
-        if let Some(record) = &task.latest_archive {
-            artifacts.push(artifact(
-                &snapshot.id,
-                "Older execution record · read only",
-                record,
-                map,
-            ));
-        }
         detail.push(format!("Requested resources · task revision {} · BRO route {} · MCP {:?} · context {:?} · skills {:?}",
             task.requirements_revision, task.spec.resources.model_route.as_deref().unwrap_or("harness default / uncontrolled"),
             task.spec.resources.mcp_servers, task.spec.resources.context_files,
@@ -597,10 +586,6 @@ pub(super) fn operation(operation: &GoalOperation) -> Option<String> {
             "Your explicit withdrawal of input {input_id} / source requirements {source_requirements_revision} was saved without model use; existing requirements, controls, effects and budget remain"
         ),
         OperationKind::Workflow { change } => match change.as_ref() {
-            Change::ArchiveExecution { task_id, execution, .. } => format!(
-                "Execution {} / task {} / source Goal requirements {} / task revision {} archived with its complete original record. Work and effects were not replayed.",
-                execution.id, task_id, execution.requirements_revision, execution.task_revision
-            ),
             Change::Input {
                 event: bitrouter_orchestrator::goal::input::Event::Finish { .. },
             } => "Input processing recorded; effective changes are reported from the runtime result, not the model proposal".into(),

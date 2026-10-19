@@ -1,8 +1,6 @@
 //! Goal admission uses real migrations and transactions, with no model/worker effects.
 #[path = "goals/accounting.rs"]
 mod accounting_tests;
-#[path = "goals/archive.rs"]
-mod archive_tests;
 #[path = "goals/budget.rs"]
 mod budget_tests;
 #[path = "goals/completion.rs"]

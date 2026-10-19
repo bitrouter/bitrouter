@@ -349,20 +349,6 @@ async fn late_metering_changes_resources_without_changing_content_or_labels() ->
         .await?;
     assert_eq!(priced_again.revision, 4);
     assert_ne!(priced_again.observation_id, refreshed.observation_id);
-    let current = store
-        .effective_assessment(&identity("s"))
-        .await?
-        .resource
-        .context("current resource missing")?;
-    assert_eq!(current.observation_id, priced_again.observation_id);
-    assert_eq!(current.revision, 4);
-    assert_eq!(
-        store
-            .checkpoint_resource_history(&identity("s"), &cp.checkpoint_id)
-            .await?
-            .len(),
-        4
-    );
     assert_eq!(
         store
             .checkpoint_resource_history(&identity("s"), &cp.checkpoint_id)
@@ -383,82 +369,6 @@ async fn late_metering_changes_resources_without_changing_content_or_labels() ->
             .context("next resource")?
             .known_cost_micro_usd,
         116
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn latest_resource_reader_preserves_scope_deletion_and_revision_integrity() -> Result<()> {
-    let store = store().await?;
-    let recorder = store.recorder(scope()).await?;
-    new_session(recorder.as_ref(), "s").await?;
-    let cp = freeze(&store, "s").await?;
-    let original = store
-        .latest_checkpoint_resource(&identity("s"), &cp.checkpoint_id)
-        .await?
-        .context("initial resource missing")?;
-    assert!(
-        store
-            .latest_checkpoint_resource(&identity("foreign"), &cp.checkpoint_id)
-            .await
-            .is_err()
-    );
-    let plan = store.db.query_all(sea_orm::Statement::from_sql_and_values(
-        sea_orm::DatabaseBackend::Sqlite,
-        "EXPLAIN QUERY PLAN SELECT observation_json FROM acp_resource_observations WHERE checkpoint_id = ? ORDER BY revision DESC LIMIT 1",
-        vec![cp.checkpoint_id.clone().into()],
-    )).await?;
-    let details = plan
-        .iter()
-        .map(|row| row.try_get::<String>("", "detail"))
-        .collect::<Result<Vec<_>, _>>()?
-        .join(" ");
-    assert!(
-        details.contains("idx_acp_resources_checkpoint_revision"),
-        "latest resource lookup did not use the compound index: {details}"
-    );
-    assert!(
-        !details.contains("TEMP B-TREE"),
-        "latest lookup sorts the full history: {details}"
-    );
-    let mut corrupt = original.clone();
-    corrupt.revision += 1;
-    resources::Entity::update_many()
-        .col_expr(
-            resources::Column::ObservationJson,
-            Expr::value(serde_json::to_string(&corrupt)?),
-        )
-        .filter(resources::Column::ObservationId.eq(&original.observation_id))
-        .exec(&store.db)
-        .await?;
-    assert!(
-        store
-            .latest_checkpoint_resource(&identity("s"), &cp.checkpoint_id)
-            .await
-            .is_err()
-    );
-    resources::Entity::update_many()
-        .col_expr(
-            resources::Column::ObservationJson,
-            Expr::value(serde_json::to_string(&original)?),
-        )
-        .filter(resources::Column::ObservationId.eq(&original.observation_id))
-        .exec(&store.db)
-        .await?;
-    assert_eq!(
-        store
-            .latest_checkpoint_resource(&identity("s"), &cp.checkpoint_id)
-            .await?
-            .context("restored resource missing")?
-            .observation_id,
-        original.observation_id
-    );
-    store.delete(&identity("s")).await?;
-    assert!(
-        store
-            .latest_checkpoint_resource(&identity("s"), &cp.checkpoint_id)
-            .await
-            .is_err()
     );
     Ok(())
 }

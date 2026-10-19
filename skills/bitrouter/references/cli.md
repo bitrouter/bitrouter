@@ -434,12 +434,8 @@ It does not undo committed requirements, cancel worker/tool effects, resume
 work or increase a cap; other accepted/in-flight inputs remain ordered.
 Additional words, quotes and hypothetical discussion use normal understanding.
 The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 4; older outboxes are retained and rejected without replay
+Goal IPC is version 3; older outboxes are retained and rejected without replay
 or reinterpretation. Native/ACP protocol versions are separate.
-Superseded reconciled executions without active references are archived into
-immutable Goal operation history. The current snapshot retains the archive count;
-history queries preserve full execution/source records without restarting work.
-Current-version attempt limits and cumulative budget/accounting are retained.
 
 | Key in the current Goal | Effect |
 | --- | --- |

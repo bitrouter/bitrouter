@@ -276,8 +276,9 @@ impl CanonicalStore {
                 }
             }
             resource = self
-                .latest_checkpoint_resource(identity, &cp.checkpoint_id)
-                .await?;
+                .checkpoint_resource_history(identity, &cp.checkpoint_id)
+                .await?
+                .pop();
         }
         let assessment = match current {
             Some(value) if value.input.assessment.is_some() => Some(value),

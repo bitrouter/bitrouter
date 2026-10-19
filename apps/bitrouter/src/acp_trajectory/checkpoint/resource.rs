@@ -193,33 +193,4 @@ impl CanonicalStore {
         manifest(&self.db, identity, id).await?;
         result
     }
-
-    /// Current-state reads do not deserialize the retained revision history.
-    pub(super) async fn latest_checkpoint_resource(
-        &self,
-        identity: &SessionIdentity,
-        id: &str,
-    ) -> Result<Option<ResourceObservation>> {
-        manifest(&self.db, identity, id).await?;
-        let row = resources::Entity::find()
-            .filter(resources::Column::CheckpointId.eq(id))
-            .order_by_desc(resources::Column::Revision)
-            .one(&self.db)
-            .await?;
-        let observation = row
-            .map(|row| {
-                let value: ResourceObservation = serde_json::from_str(&row.observation_json)?;
-                ensure!(
-                    value.checkpoint_id == row.checkpoint_id
-                        && value.observation_id == row.observation_id
-                        && value.revision == row.revision
-                        && value.observed_at == row.observed_at,
-                    "resource observation identity or revision mismatch"
-                );
-                Ok::<_, anyhow::Error>(value)
-            })
-            .transpose()?;
-        manifest(&self.db, identity, id).await?;
-        Ok(observation)
-    }
 }

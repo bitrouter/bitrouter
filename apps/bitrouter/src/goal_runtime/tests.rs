@@ -441,19 +441,10 @@ async fn parallel_fixture(scenario: Scenario) -> Result<()> {
         if scenario == Scenario::ResourceEdit {
             assert!(completed.inputs.unresolved_inputs().is_empty());
             assert!(completed.inputs.latest.as_ref().is_some_and(|input| input.resolutions.iter().any(|resolution| resolution.input_id == "invalid-resource-change")));
-            let completed = wait_for(&socket,&id,|goal|goal.workflow.tasks.iter().find(|task|task.spec.id == "left").is_some_and(|task|task.archived_executions == 1)).await?;
             let left = completed.workflow.tasks.iter().find(|task|task.spec.id == "left").context("left task missing")?;
-            assert_eq!(left.executions.len(),1);
-            let pointer = left.latest_archive.as_ref().context("readonly archive pointer missing")?;
-            let metadata: serde_json::Value = serde_json::from_slice(&crate::goal_artifacts::read(&root,pointer).await?)?;
-            let original_id = metadata["execution"]["id"].as_str().context("archive original identity missing")?;
-            let archive = rpc(&socket,GoalCommand::Operation { operation_id: bitrouter_orchestrator::goal::workflow::archive_operation_id(&id,original_id) }).await?;
-            let GoalReply::Accepted { operation } = archive else { anyhow::bail!("missing cold original execution receipt") };
-            let bitrouter_orchestrator::goal::OperationKind::Workflow { change } = operation.kind else { anyhow::bail!("unexpected archive receipt") };
-            let Change::ArchiveExecution { execution: old, record, .. } = *change else { anyhow::bail!("missing complete original execution") };
-            assert_eq!(&record,pointer);
-            assert_eq!(serde_json::from_value::<Execution>(metadata["execution"].clone())?,*old);
-            let replacement = left.executions.last().context("replacement missing")?;
+            assert_eq!(left.executions.len(),2);
+            let old = &left.executions[0];
+            let replacement = &left.executions[1];
             assert!(old.resources.as_ref().is_some_and(|prepared|prepared.selection.is_empty()));
             assert!(matches!(old.stop,Some(StopState::Confirmed {..})));
             assert_eq!(replacement.task_revision,2);

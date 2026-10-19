@@ -10,80 +10,6 @@ use super::{GoalError, GoalOperation, GoalService, OperationKind, RunIntent, ide
 pub const MAX_TASKS: usize = 32;
 pub const OWNER_LEASE_MS: u64 = 30_000;
 
-/// Stable receipt key makes retirement recoverable and prevents identity reuse.
-pub fn archive_operation_id(goal_id: &str, execution_id: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(b"bro-goal-execution-archive-v1");
-    digest.update((goal_id.len() as u64).to_le_bytes());
-    digest.update(goal_id.as_bytes());
-    digest.update(execution_id.as_bytes());
-    format!("archive-{}", hex::encode(digest.finalize()))
-}
-
-/// Only superseded, reconciled records without active references may leave the head.
-pub fn can_archive(goal: &super::GoalSnapshot, task: &Task, execution: &Execution) -> bool {
-    execution.task_revision < task.requirements_revision
-        && task.executions.last() != Some(execution)
-        && execution.effects_reconciled()
-        && !matches!(execution.review, Some(ReviewState::Requested { .. }))
-        && !execution.checks.iter().any(|check| {
-            matches!(
-                check.state,
-                CheckState::Requested
-                    | CheckState::Observed {
-                        completed: false,
-                        ..
-                    }
-            )
-        })
-        && !goal.workflow.decisions.iter().any(|decision| {
-            decision.execution_id == execution.id
-                && !matches!(
-                    decision.state,
-                    super::decision::PermissionState::Submitted { .. }
-                        | super::decision::PermissionState::Obsolete { .. }
-                )
-        })
-        && !goal
-            .workflow
-            .completion
-            .attempt
-            .as_ref()
-            .is_some_and(|attempt| {
-                attempt
-                    .sources
-                    .iter()
-                    .any(|source| source.execution_id == execution.id)
-            })
-        && !goal
-            .workflow
-            .completion
-            .last_completed
-            .as_ref()
-            .is_some_and(|completed| {
-                completed
-                    .sources
-                    .iter()
-                    .any(|source| source.execution_id == execution.id)
-            })
-        && !goal
-            .accounting
-            .in_flight
-            .iter()
-            .any(|work| work.requirements_revision == execution.requirements_revision)
-        && goal.inputs.pending.is_none()
-        && !goal.inputs.unresolved_inputs().iter().any(|input| {
-            input.source_requirements_revision == execution.requirements_revision
-                || input.permission_decision.as_ref().is_some_and(|id| {
-                    goal.workflow
-                        .decisions
-                        .iter()
-                        .any(|decision| decision.id == *id && decision.execution_id == execution.id)
-                })
-        })
-}
-
 /// Content identity, rather than an inline transcript in every Goal snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactRef {
@@ -183,19 +109,10 @@ pub struct Task {
     pub spec: TaskSpec,
     pub requirements_revision: u64,
     pub executions: Vec<Execution>,
-    /// Full retired records remain in immutable, bounded Goal history pages.
-    #[serde(default, skip_serializing_if = "no_archives")]
-    pub archived_executions: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub latest_archive: Option<ArtifactRef>,
     #[serde(default)]
     pub run_intent: RunIntent,
     #[serde(default)]
     pub control_source_revision: u64,
-}
-
-fn no_archives(value: &u64) -> bool {
-    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,12 +290,6 @@ pub enum Observation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "change", rename_all = "snake_case")]
 pub enum Change {
-    ArchiveExecution {
-        task_id: String,
-        execution: Box<Execution>,
-        decisions: Vec<super::decision::PermissionDecision>,
-        record: ArtifactRef,
-    },
     Budget {
         event: super::budget::Event,
     },
@@ -673,22 +584,6 @@ impl GoalService {
         }
         for _ in 0..4 {
             let mut goal = self.store.get(owner, goal_id).await?;
-            if let Change::ArchiveExecution { execution, .. } = &change
-                && operation_id != archive_operation_id(goal_id, &execution.id)
-            {
-                return Err(invalid(
-                    "execution archive requires its stable receipt identity",
-                ));
-            }
-            if let Change::RequestExecution { execution_id, .. } = &change
-                && self
-                    .store
-                    .operation(owner, &archive_operation_id(goal_id, execution_id))
-                    .await?
-                    .is_some()
-            {
-                return Err(invalid("an archived execution identity cannot be reused"));
-            }
             if matches!(
                 &change,
                 Change::Input {
@@ -832,56 +727,6 @@ fn apply(
     change: &Change,
     now_ms: u64,
 ) -> Result<(), GoalError> {
-    if let Change::ArchiveExecution {
-        task_id,
-        execution,
-        decisions,
-        record,
-    } = change
-    {
-        identifier(task_id)?;
-        identifier(&execution.id)?;
-        record.validate()?;
-        if record.bytes == 0 || record.bytes > super::MAX_RECORD_BYTES as u64 {
-            return Err(invalid("invalid execution archive record bound"));
-        }
-        let task = goal
-            .workflow
-            .tasks
-            .iter()
-            .find(|task| &task.spec.id == task_id)
-            .ok_or(GoalError::NotFound)?;
-        if !task
-            .executions
-            .iter()
-            .any(|stored| stored == execution.as_ref())
-            || !can_archive(goal, task, execution)
-            || goal
-                .workflow
-                .decisions
-                .iter()
-                .filter(|decision| decision.execution_id == execution.id)
-                .ne(decisions.iter())
-        {
-            return Err(GoalError::Conflict);
-        }
-        let task = goal
-            .workflow
-            .tasks
-            .iter_mut()
-            .find(|task| &task.spec.id == task_id)
-            .ok_or(GoalError::NotFound)?;
-        task.archived_executions = task
-            .archived_executions
-            .checked_add(1)
-            .ok_or_else(|| invalid("execution archive count exhausted"))?;
-        task.executions.retain(|stored| stored.id != execution.id);
-        task.latest_archive = Some(record.clone());
-        goal.workflow
-            .decisions
-            .retain(|decision| decision.execution_id != execution.id);
-        return Ok(());
-    }
     if let Change::Budget { event } = change {
         return super::budget::apply(goal, event, now_ms);
     }
@@ -958,9 +803,6 @@ fn apply(
     }
     let workflow = &mut goal.workflow;
     match change {
-        Change::ArchiveExecution { .. } => {
-            return Err(invalid("archive transition was not handled"));
-        }
         Change::Budget { .. } => return Err(invalid("budget transition was not handled")),
         Change::Completion { .. } => return Err(invalid("completion transition was not handled")),
         Change::Accounting { .. } => return Err(invalid("accounting transition was not handled")),
@@ -1015,8 +857,6 @@ fn apply(
                     spec,
                     requirements_revision: revision,
                     executions: Vec::new(),
-                    archived_executions: 0,
-                    latest_archive: None,
                     run_intent: RunIntent::Run,
                     control_source_revision: 0,
                 })
