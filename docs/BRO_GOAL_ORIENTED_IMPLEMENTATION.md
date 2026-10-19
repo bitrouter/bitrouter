@@ -8,7 +8,7 @@
 - 本地分支：`codex/bro-goal-workflow-mvp`；用户在 2026-10-14 明确请求 PR to main，授权本次 commit/push/创建PR；未授权 merge、release 或部署。
 - 初始修改：`docs/README.md` 索引，以及未跟踪的 PRD 和 implementation spec，均为本次产品讨论的文档。没有初始源码修改。
 - Implementation spec 已补至 v0.2；文档进展不计为 MVP 完成。
-- 当前阶段：本地MVP验收通过；跨平台交付以PR981当前head的CI结果为准。D260记录Unix测试helper的编译条件修正及完成状态纠正，D262记录Windows路径/JSON测试fixture修正。R16实际闭环与4675项本地全仓检查证据保持原版本，不冒充修正后重跑；生产行为未改变，修正后的结果见当前head CI。见[最终验收对账](evidence/bro-goal-workflow/2026-10-15-final-acceptance.md)。
+- 当前阶段：本地MVP验收通过；跨平台交付以PR981当前head的CI结果为准。bfc50f68 Windows CI暴露两个Unix测试helper的编译条件不一致，D260记录两行test-only cfg修正及完成状态纠正。R16实际闭环与4675项本地全仓检查证据保持原版本，不冒充修正后重跑；生产行为未改变，仍需核对修正后的实际CI。见[最终验收对账](evidence/bro-goal-workflow/2026-10-15-final-acceptance.md)。
 
 | 阶段 | 状态 | 已取得证据 / 剩余工作 |
 | --- | --- | --- |
@@ -776,11 +776,3 @@ Fresh local consumer tests/strict Clippy/fmt/diff/source hashes are running; the
 Local runner60365 ended0:19 existing consumer/permission/UI tests passed (including actual active-resource edit and archive inspection), strict workspace/all-feature/all-target Clippy, fmt/diff and1023 hashes passed. Applicability audit verifies exactly one changed compiler input versus the original final manifest: goal_code.rs has only the two helper-definition cfg guards changed; all function/test bodies, registrations, assertions, ignores, runtime/config behavior and1022 other inputs are unchanged. Original4675-test/R16 artifacts keep their original hashes and are not relabeled as a new full local run or a repeated paid workflow.
 
 Fix308a1836 is on PR981. Post-fix source/evidence are reviewable; complete CI is inspected at the delivered head before final handoff. Hosted results stay in GitHub's immutable job records rather than being copied into a further commit that retriggers them. The resumed Goal remains active while current platform CI is unfinished or failing. This explicitly supersedes the premature completion in D260, not the successful local proof in D259.
-
-### D262 — Windows runtime failures are invalid fixture paths, not relaxed guards
-
-Head73d10e84 passed Windows Clippy and compiled/reran4510 Windows tests:4508pass/2fail/3existing skips, with1 existing flaky case passing CI's retry. Both failures persisted through3 attempts: historical_content_needs_the_exact_goal_task_and_archive_receipt and captured_context_allows_only_declared_workspace_reads_and_keeps_all_paths. Code Review's job-log tail was truncated; the GitHub connector supplied the full original log, confirming respectively `invalid artifact identity` and JSON `invalid escape at line482 column27`. Summary and original excerpts are preserved in windows-fixture-path-diagnostic.json.
-
-Archive test data now uses actual native absolute temp paths instead of `/archive` and `/work`. Permission fixture replacement now JSON-escapes its native path before substituting into serialized material. A backslash workspace name also requires escaping on Unix (and becomes a valid nested path on Windows), so the same failure class is exercised locally. All original receipt/foreign-scope/hash/changed-workspace/earlier-outside-path assertions remain; no new ignore, test removal, lint suppression or runtime guard change.
-
-Local runner55050 ended0:11 archive/permission-context tests pass, strict workspace/all-feature/all-target Clippy, fmt/diff and1023 hashes pass. Compared with original bfc final proof, exactly3 inputs differ, all test-only: helper-definition cfg, archive test data, permission test data. The archive decoder and permission policy production bodies are unchanged. Original full4675/R16 remain source-bound original observations, not claimed paid reruns. Actual full platform CI at the delivered head remains required; no further completion status precedes consuming that result.
