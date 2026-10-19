@@ -4,12 +4,12 @@ Implementation follows the [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 P1 remains out of scope. This ledger records evidence for the full P0 delivery;
 completing one extraction does not complete the milestone.
 
-Current local status: P0 implementation and all local executable checks have
-passed on the frozen runtime candidate. Independent final aggregate review passed;
-the final acceptance table below identifies exact evidence and limits. Required
-hosted OS checks belong to the implementation PR and must pass before the P0
-delivery is considered complete. P1, publication and external consumers' releases
-are not part of this result.
+Current status: P0 implementation, local acceptance and final independent review
+passed. Required hosted OS checks also passed at `1527bc2`; the
+[hosted closure record](#hosted-p0-acceptance-closure-2026-10-19) closes the remaining
+cross-platform gates and preserves the limits of the evidence. Dated entries
+below retain their original status and source identities. P1, merging,
+publication and external consumers' releases are not part of this result.
 
 ## Baseline
 
@@ -3664,3 +3664,36 @@ minimum-gateway ingress cases, and the unchanged large checkpoint workload
 Rust 1.97, formatting and diff checks passed. Independent four-file review found
 no blocking issue. The [follow-up evidence](evidence/service-refactor/pr-984-windows-2026-10-18.json)
 records exact source/log hashes, commands and remaining hosted limitations.
+
+## Hosted P0 acceptance closure (2026-10-19)
+
+PR [#984](https://github.com/bitrouter/bitrouter/pull/984) at
+`1527bc223669f2ed4a057fafc930d590639c01f7` passed all 57 jobs in
+[CI run 39059949981, attempt 2](https://github.com/bitrouter/bitrouter/actions/runs/39059949981/attempts/2).
+This closes the hosted feature/profile, packaging and OS-specific acceptance
+gates identified in A01–A16 above. On 2026-10-19 the PR was open, non-draft and
+`CLEAN` / `MERGEABLE`, with 64 successful checks, eight conditional
+packaging/release skips and no review comments or unresolved review threads.
+CodeQL, release planning and PR validation passed; no publication occurred.
+
+The final macOS suite passed 4,693 tests with 47 skips and Windows passed 4,537
+with 23 skips, both without test retries. Linux shards, all six gateway archive
+targets, all three independent core SDK consumers, isolated features,
+PostgreSQL/MySQL, telemetry exports and strict platform linting passed.
+
+The unchanged suspend/resume PTY case had
+[one intermittent Linux failure](https://github.com/bitrouter/bitrouter/actions/runs/39059949981/job/117475668959).
+Its cause remains unresolved. Independent review confirmed that the test and
+relevant signal/lifecycle code match the base branch. One
+[same-revision terminal-job rerun](https://github.com/bitrouter/bitrouter/actions/runs/39059949981/job/117484316579)
+passed all 50 tests with test retries disabled; the case also passed the full
+macOS suite and 30 consecutive local macOS repetitions. The failed attempt is
+retained, and this record does not claim a fixed or proven baseline defect.
+
+Independent closure review found no remaining P0 code blocker. This follow-up
+only reconciles documentation status; it does not alter executable sources,
+dependencies or CI policy. Frozen local performance evidence remains tied to
+`d233944b0bb34f46ee3880dfed1af6939e8c293e`: full idle RSS increased by
+2.8125 MiB / 4.58%, below the accepted measured overhead, and the memory
+optimization follow-up remains open. No new performance run is claimed.
+P1 is not implemented by this PR.

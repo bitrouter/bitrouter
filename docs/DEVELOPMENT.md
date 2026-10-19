@@ -4,12 +4,13 @@ This document is the workspace-level guide for BitRouter internals. Start with [
 
 ## Workspace Architecture
 
-The table below describes the current implementation during P0. Core, harness,
+The table below describes the completed P0 implementation. Core, harness,
 TUI, telemetry, model/provider runtime and the old SDK server have moved into
 the application. The SDK provides gateway HTTP/SSE, control, evaluation, harness
-HTTP/SSE and managed core transport clients. Final feature/profile and delivery
-acceptance remains open. The final
-architecture and migration gates are in the
+HTTP/SSE and managed core transport clients. Feature/profile and delivery
+acceptance passed locally and in hosted CI at `1527bc2`; see the
+[final acceptance record](BITROUTER_SERVICE_REFACTOR_PROGRESS.md#hosted-p0-acceptance-closure-2026-10-19).
+The architecture and migration gates are in the
 [service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 
 BitRouter is a Cargo workspace organized into `crates/` for shared libraries and contracts, `apps/` for product hosts, and `extensions/` for independently delivered capabilities. Each extension groups its related Cargo packages in one directory; `helpers/` contains contributor tooling.
@@ -53,7 +54,7 @@ Terminal-free log tails, transcript formatting and shared values live in
 `presentation`. Plain and terminal output consume that logical representation;
 physical wrapping, painting and input stay under `tui`. Non-TUI production
 dependency closures exclude the terminal stack. The progress ledger records
-profile checks separately from the remaining final P0 matrix.
+profile checks separately from the completed final P0 matrix.
 
 BRO native tools are `read`, `glob`, `grep`, `write`, `edit`, and `shell`.
 `read` dispatches known workspace paths to file lines or direct directory
@@ -320,7 +321,7 @@ service-client package and never owns gateway assembly, configuration discovery
 or provider authentication. Its gateway/control/evaluation methods use explicit endpoints and
 credentials, bounded reads and no automatic replay. See the
 [SDK guide](../crates/bitrouter-sdk/README.md) for the available methods and
-[service progress](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for remaining P0 work.
+[service progress](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for P0 acceptance evidence.
 
 The span names, attribute vocabulary and lifecycle invariants belong to the AI
 observation contract. The committed schema and conformance tests preserve those

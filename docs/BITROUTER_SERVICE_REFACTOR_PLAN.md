@@ -1,12 +1,13 @@
 # BitRouter service architecture refactor plan
 
-Status: **accepted architecture direction; P0 implementation in progress.**
+Status: **P0 implemented; local and hosted acceptance passed at `1527bc2`.
+P1 remains a separate milestone.**
 
-See the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for verified
-results and open acceptance gates. The target tables below are not a claim that
-every boundary has already been implemented.
+See the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md#hosted-p0-acceptance-closure-2026-10-19)
+for the final P0 evidence, revision identities and remaining nonblocking limits.
+The P1 target tables below do not describe implemented multi-instance behavior.
 
-Updated: 2026-10-17. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
+Updated: 2026-10-19. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
 on `main`, version `1.0.0-alpha.33`.
 
 BitRouter will ship as an independently running service assembled by the `bitrouter`

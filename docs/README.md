@@ -12,7 +12,7 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`DISTRIBUTION.md`](DISTRIBUTION.md) — full and gateway profiles, archive
   identity/checksums, profile-preserving updates and packaged SDK acceptance.
 - [`BITROUTER_SERVICE_REFACTOR_PLAN.md`](BITROUTER_SERVICE_REFACTOR_PLAN.md) —
-  **accepted direction; P0 implementation in progress.** Complete package/module
+  **P0 implemented; local and hosted acceptance passed at `1527bc2`.** Complete package/module
   migration inventory, lightweight AI contracts, HTTP SDK, application-owned
   telemetry, feature dependencies, P0 single-instance delivery and acceptance,
   capability-aware daemon compatibility, profile-preserving updates, and the
