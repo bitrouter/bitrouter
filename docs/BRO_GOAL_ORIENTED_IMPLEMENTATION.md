@@ -8,7 +8,7 @@
 - 本地分支：`codex/bro-goal-workflow-mvp`；用户在 2026-10-14 明确请求 PR to main，授权本次 commit/push/创建PR；未授权 merge、release 或部署。
 - 初始修改：`docs/README.md` 索引，以及未跟踪的 PRD 和 implementation spec，均为本次产品讨论的文档。没有初始源码修改。
 - Implementation spec 已补至 v0.2；文档进展不计为 MVP 完成。
-- 当前阶段：用户再次授权PR to main，本轮提交/push更新现有Draft PR #981。发布head50a4605f全CI通过；6个native opt-in已迁离code agent，35短/普通场景及新增lease release回归通过。v15完整workspace4600pass/22原skip；v16仅清理一处Copy枚举的多余借用，受影响32项测试、严格Clippy、fmt/diff/107hash全部通过；独立doc6pass/1原ignored。v15 Claude长campaign1698.831s因processed原30s deadline超时失败，Codex仍在原binary运行，不能计为长场景验收通过；保存非终态日志快照，保留原活动日志。25条输入候选0模型运行，完整MVP和真实Goal/provider/typed gate仍未完成，右侧只读，未merge。
+- 当前阶段：本轮按用户 PR to main 授权更新 Draft PR #981。持久澄清、精确解决、无模型明确撤回、query-only完成边界及accounting冲突/回应丢失恢复已有本地证据；ack-withdrawal-v4完整4598passed/22原skipped，严格Clippy、独立doc6pass/1原ignored、fmt/diff和103source hashes通过。后续只修正文档协议v3与入口注释，行为源码不变。右侧保持只读；此前5a18a35e hosted Windows通过、Linux失败，当前head的hosted证据须独立确认。输入质量、真实provider/harness、一般恢复及最终验收未完成，本机未配置decision_model。
 
 | 阶段 | 状态 | 已取得证据 / 剩余工作 |
 | --- | --- | --- |
@@ -158,21 +158,6 @@
 | D126 | ack-withdrawal-v4选定99项全部passed、exit0、111.989s、4slow，2195filtered；actual活跃PTY把bad resource保留为具体Question，再由Enter exact withdrawal保存InputWithdrawn receipt，原文不作为Input/模型request，无要求/控制/预算改动、两分支保持，原readonly/permission/detach验证通过。DB验证cap耗尽后无需模型移除未提交请求、回滚/幂等、queued input cursor保留及已验证旧交付完成；real Client/outbox验证withdrawal lane不遗留、旧Goal协议拒绝。完整103source workspace/Clippy/doc/fmt检查session52175当前运行，MVP仍未完成 |
 | D127 | ack-withdrawal-v4最终完整workspace run60bdf38a-bb23-46f9-856e-a70f5d1cda9a：4598passed、22原opt-in skipped、666.968s、9slow、71binaries，无LEAK/timeout；session52175 exit0，严格Clippy70s、独立doc6pass/1原ignored/7suites、fmt/diff/103hash全部通过。用户再次明确PR to main，授权commit/push更新现有Draft；保持完整MVP未完成，未merge/release/部署 |
 | D128 | 用户授权的入口迁移review agent只读确认Goal v3与native/ACP协议分域、exact withdrawal原子范围、旧outbox保留拒绝；6个opt-in evolution场景仍调用已删code agent，已记录为未完成，未恢复隐藏旧入口。最终检查后仅修main.rs入口注释与DEVELOPMENT协议表；单独记录新source manifest与格式/身份核对，不称重新运行全仓。当前review边界不替代真实模型质量或hosted新head验证 |
-| D129 | 前一Goal turn是progress：50a4605f按用户PR授权commit/push到现有Draft，完整4598pass/22原skipped与static/doc证据已发布；本轮从clean checkout继续。新head hosted Linux lib job115798813433 run30142e38-d788-4082-85ff-374814923d55完整1743pass/5原skip、252.426s、7slow；原parallel Goal失败case85.702s通过。只证明该head实际通过，不确定历史opaque错误的精确根因，见[Linux摘录](evidence/bro-goal-workflow/2026-10-14-pr981-linux-lib-success.txt) |
-| D130 | 6个maintained native场景迁到现有owner-scoped session API和operator CLI，保留真实工具/测试/记录/成本/自动采纳与回滚断言，未恢复code agent，也不扩大Goal右侧权限。普通v2 31pass/6原opt-in skip，含新session/actual CLI receipt/明确停止，删除仅已无调用的旧composer/paste helpers；实际Goal PTY覆盖保留。完整证据见[迁移记录](evidence/bro-goal-workflow/2026-10-14-native-optin-migration.md) |
-| D131 | v2实际worker四项1pass/3fail；v3加actual事件：Codex收到model_conversion_incompatible，旧gpt-5.2产生metadata warning并被正确判为已开始；Claude resource并发revision尚未一致，v3该feedback通过。用户授权review agent只读确认Responses provider-defined namespace不能投影Chat、旧selector不在实际0.162.1 native catalog；本地隔离model/list确认gpt-6.1-sol。fixture改用支持的Responses及namespace/function_call_output，选择实际已知selector，不禁能力/降worker/过滤warning或修改生产保护 |
-| D132 | v4四项3pass/1fail（Codex coding未在phase deadline结束），126.318s，原两feedback与Claude coding通过。v5测试ID方法误用as_ref导致compile101、未运行；已改to_string。Codex测试经真实SetMode选其协商的Ask-for-approval并确认，以逐次响应真实ACP权限，不依赖另一个模型auto-reviewer；fresh session同样明确配置，每权限后保留原bounded下一phase。v6 106source已冻结，31普通＋四maintained当前复验session30050；两个publication campaigns/最终gates仍未完成，本轮不自动push |
-| D133 | PR50a4605f hosted CI run38547648773现已terminal success：macOS4598pass/22原skip、1359.208s、13slow；Windows4451pass/3原skip、1336.853s、11slow，无flaky标记；Linux所有分片及三平台Clippy成功。精确来源见[CI摘录](evidence/bro-goal-workflow/2026-10-14-pr981-head50-ci-success.txt)。当前本地native迁移未push，不能继承该head行为验证；MVP/真实输入质量未完成，不merge |
-| D134 | v6 35项33pass/2Codex fail，原因是误读initial modes作为当前值；v7/v8分别等CurrentModeUpdate/同时等ConfigOptionUpdate，actual Codex未发对应notification，各0pass/2fail。现改用已有SetConfig：真实response返回完整当前option table，supervisor在mutation ack前保存该response，再核对mode current value；不把SetMode空ack或初始modes当采用证明。v9 source106文件冻结，35项当前复验session15879；失败原日志全部保留，未扩deadline/假授权，两个长campaign/最终gates仍待完成 |
-| D135 | v9 35项34pass/1Codex coding fail、142.264s，actual配置值已确认；事件显示HTTP503重连。v10诊断确定当前worker广告functions.exec custom tool，旧fixture仅认traditional shell function而返回500；没有把缺工具直接报完成。增加namespace/custom_tool_call原生SSE与真实tools.exec_command执行/回传，不移除默认工具或改生产守卫。v11 run0ce55491-f70d-487b-a184-42b85d0e7f1d全部35pass/2长campaign filtered、122.506s、1slow，无LEAK/timeout；Codex实际Rust编译/两测试/文件/原checkpoint/continuation通过，四maintained短场景均通过。actual模型回复/价格仍为fixture，不计语义质量 |
-| D136 | 两长场景重命名后同步nextest filter为session_coding_publication_and_rollback，原60s×41和内部2400s/batch16/每arm≥20/最多512arrival/12monitor均未变。v12源码107files冻结，只有filter名相对v11变，未删测试/放松deadline。session39849正在串行跑两maintained publication/quality rollback campaigns；source保持冻结，最终workspace/Clippy/doc/fmt/身份复核仍待本轮完成，MVP保持active且未完成，本轮不push |
-| D137 | v12两campaign均在实际learning读遇到mixed gateway revisions而失败，run2tests/0pass/2fail、99.573s，非deadline/质量阈值失败。processed读等待与短trial相同：仅对该已知revision race在原30s内等既有scheduler刷新后重读，不调用模型/种植observations/加速tick。v13 107source冻结，owned combined session29775：先两campaign，成功后完整workspace、严格Clippy、独立doc、fmt/diff/hash。任何failure由set-e停止后续，不能计为完整通过。当前仍运行，完整MVP未完成 |
-| D138 | 上一Goal turn为progress：native旧入口迁移、35短场景、typed wire/custom tool诊断与CI证据；本轮先复核owned29775仍live，随后v13两campaign终止0pass/2fail、144.927s、均为session API lost its control lease，set-e未运行后续checks。旧TUI heartbeat缺失于新测试client。ClientHeartbeat每5s仅续同一owner/generation，不Acquire/接管；错误保留并封prompt/fresh，stop/drop终止续租。v14 35pass/2长filtered、127.491s，actual worker短场景保持通过 |
-| D139 | 新增actual endpoint release反例：heartbeat_preserves_lease_loss_without_reacquiring_or_dispatching run e878c548-f343-4fa2-9b03-98184716d6d7，1pass、76.256s（含Cargo fixture build）；显式Release后守卫观察失败，prompt拒绝、capture为空、lease仍None，不放宽原TTL。v15 source107冻结，combined40114：此反例→两campaign→完整workspace/strictClippy/doc/fmt/hash按序运行。当前campaign run e270954d-bdec-41d4-a537-25468a2faa46 live；只读实际DB曾观察53enrollments/212execution records、candidate8、batch3，仍Exploring，不把进度当采纳/回滚通过 |
-| D140 | 逐项读取spec和当前实现/测试/已执行证据，新增G01-G13/A01-A37/F01-F12非最终审计，明确真实Goal/provider/typed、预算/恢复/停滞、long-history gates。GoalStore完整head≤1MiB且workflow.executions累积是长期运行具体缺口，不能提高cap/删除history冒充修复。新增25条input-eval JSONL候选及state/语义/允许禁止效果；格式/唯一ID验证通过，未运行模型、未给precision/recall，不能将runtime挡住错误提议算分类正确 |
-| D141 | 用户再次请求PR to main，授权本次commit/push更新已有Draft，不merge。main仍9956a427，无新增base冲突。入口迁移review agent只读复核当前diff，未发现可确认新增代码阻塞；原租约、真实工具结果、默认bandit/batch16、>=20/arm、自动采纳/质量回滚及原时限保留。v15 Claude长campaign1698.831s失败，最后周期记录trial192仍Exploring，processed原30s等待超时，精确根因未确认；Codex仍运行。独立完整检查session33737覆盖同一107文件，长场景失败不会跳过必需检查 |
-| D142 | v15独立完整workspace run5356bf5f-8706-4787-874e-1ef497a3ee75：4600pass/22原skip、792.596s、5slow，无LEAK/timeout。首strictClippy只报告session.rs:244 needless_borrows_for_generic_args；v16仅serde_json::to_value(&option.kind)→to_value(option.kind)，复制枚举语义不变，未allow/删断言。原v15长campaign继续原binary，不冒充v16证据；v16受影响suite/Clippy/fmt/hash独立复验，完整4600结果明确属于清理前v15，doc在独立pipeline继续 |
-| D143 | v16 run9009986d-fdcf-42f2-bc9c-23464b5f5681：32pass/6原opt-in skip、123.631s、4slow。strict workspace/all-target/all-feature Clippy 1m45s通过；fmt/diff及107source hashes通过，独立workspace doc6pass/1原ignored通过。PR提交包含静态/常规/失败证据与带时间的长campaign非终态快照，不stage仍在追加的活动日志。没有重新运行v16完整workspace，清理前4600结果和最终32项复验明确分开；新版hosted CI需独立确认。完整MVP未完成，Goal保持active |
 
 ## 发现与阻塞
 
@@ -376,105 +361,10 @@
 
 ## 最终交付
 
-### 当前完成审计（未通过最终验收）
-
-2026-10-14重新核对spec的每个G/A/F要求。以下“已有证据”均限定为已发布50a4605f的源码/实际fixture或本地native短场景，不继承为当前冻结源码的最终检查；所有行仍需最终source identity与必需真实服务gate复核。源码/测试名是定位，行为结论来自上面的实际run记录；不能只凭存在同名测试计为完成。
-
-| 要求 | 已有实现/证据定位 | 本轮审计结论 / 剩余证据 |
-| --- | --- | --- |
-| G01 | main dispatch、goal_code；Goal PTY的bare_and_code_open_goals与defaults variants | 已观察目录无执行和两个默认入口；最终版本复核待完成 |
-| G02 | CodeArgs、retired入口parse测试 | 已观察拒绝agent/旧flags且无目录副作用；6个旧消费者本地已迁，长场景待完成 |
-| G03 | native spawn、acp_cli；session API/transparent bridge与maintained短场景 | 保留路径有实际证据；最终迁移/真实Goal路径不能由native短场景替代 |
-| G04 | bitrouter-tui::goals state、goal_code投影 | 独立草稿/范围/导航回归有证据；真实多Goal事项/焦点竞态待核对 |
-| G05 | Goal PTY active_goal_enter_permission_readonly_workflow_and_detach | 实际readonly inspector、无可操作底层终端有fixture证据；最终版本待复核 |
-| G06 | goal_runtime输入job、goal/input、active edit/PTY | 输入在两worker运行时处理；自然多意图实际模型和复杂控制PTY未完成 |
-| G07 | typed Question request、execute/validate、reasoning与Runtime校验 | 有实际fixture传输；当前所有typed结果仍升级reasoning，未校准有限控制阈值；真实typed调用/输入评测未完成 |
-| G08 | versioned input/execution/permission/check事实与projection | fixture区分保存/配置提供/送达/验证；实际模型下逐分支传播及人体工学待完成 |
-| G09 | completion自主提交与显式acceptance测试 | 默认verified delivery和显式验收版本边界有fixture证据；真实语义完成判断待完成 |
-| G10 | completion::sources/current revision/actual check | 旧版本、在途work、未解决修改有拒绝证据；完整外部证据/恢复审计未完成 |
-| G11 | budget/accounting、competing reservations、projection | elapsed和managed token估算cap有证据；外部harness/tool完整费用与预留不具备完整证据 |
-| G12 | generic ACP worker/negotiation、resource/unsupported transport fixtures | 协议入口未绑定品牌；当前真实native Responses/custom工具已验证，真实Goal harness组合未完成 |
-| G13 | daemon owner、outbox原操作查询、Goal PTY detach/reconnect | 有实际fixture证据；长历史归档/一般外部效果恢复未完成 |
-| F01 | Goal SQLite事务失败、model_control永久storage fault | 数据回滚/预派发gate有证据；全链路crash窗口和逐种外部无派发证明待审计 |
-| F02 | outbox actual_database_receipt、lost acknowledgement tests | 原身份确认/无重复accounting已观察；外部dispatch回应丢失矩阵未完整 |
-| F03 | goal_runtime/recovery、stopped_process_without_terminal_tool_evidence | 未确认效果被封锁且不重放；一般外部effects的可恢复闭环未完成 |
-| F04 | input旧source拒绝、accepted_input_and_new_requirements_fence_old_completion | 数据库与fixture版本竞态有证据；真实模型运行中竞态未验证 |
-| F05 | paused_goal_edit_stays_paused、active_branch_edit、branch control tests | 停止/修改/独立分支有fixture证据；复杂控制PTY与真实harness场景未完成 |
-| F06 | competing_reservations、unknown_usage、verified_usage | 同一managed估算cap和未知预留有证据；所有外部费用/实际共享预算未完成 |
-| F07 | nonzero_exit_and_changed_artifact、artifact_change completion tests | 版本/产物变动拒绝有证据；真实完成评估期间竞争写入仍待核对 |
-| F08 | newer_requirements_reject_stale_permission、explicit_acceptance | stale选项/验收拒绝及实际权限材料有证据；NL许可/验收真实模型场景未完成 |
-| F09 | Goal PTY detach、outbox recovery、history cutoff | 原身份/草稿/readonly恢复有fixture证据；历史容量与跨incarnation异常未全覆盖 |
-| F10 | resources unsupported MCP/model guards、stopped missing tool tests | 拒绝不支持能力、不假报采用有证据；真实不同harness能力差异未完整 |
-| F11 | typed execute/validate/error retention与reasoning fallback | 无效typed不能直接commit效果有fixture证据；实际backend拒绝/超时/矛盾与升级率未验证 |
-| F12 | planning obsolete、check blocked、completion guards | 部分封锁/旧计划有证据；impossible、无新事实loop和完整停滞策略未完成 |
-| A01 | GoalRuntime planning + parallel fixture | 可不手选worker委托的fixture；实际模型自动分支与授权行为未验证 |
-| A02 | Goal PTY Workflow和Goals renderer | 分支/readonly无前台session tab有fixture证据；真实动态规划未验证 |
-| A03 | daemon parallel handoff、goal verification tests | 实际文件验证/依赖消费有fixture证据；真实模型/Goal harness闭环未完成 |
-| A04 | goals state草稿/焦点 reducer | 有局部UI证据；actual多个运行Goal事项竞争未完成 |
-| A05 | Goal PTY目录/草稿/resize + state | 实际导航无执行/独立草稿有证据；最终版本待复核 |
-| A06 | active edit/resource edit/Goal Enter | 无额外计划批准、新版本材料有fixture证据；实际理解/采用未验证 |
-| A07 | unknown tool ending/recovery投影 | 明确封锁和等待有fixture证据；真实不支持steering场景未完整 |
-| A08 | active_branch_edit_preserves_independent_run | 版本失效、right继续、新permission重绑有fixture证据；真实模型未验证 |
-| A09 | actual permission preview/decision/permission_input | offered option与实际材料有证据；自然授权/复杂跨范围未完成 |
-| A10 | outbox/receipt/source recovery | 原身份查询、不重发有证据；所有external unknown窗口未完整 |
-| A11 | completion与projection incomplete dimensions | worker结束不等于Goal完成有fixture证据；语义真实判断待完成 |
-| A12 | active readonly inspector、native inspection isolation | 实际readonly/无权限暗授有证据；最终版本待复核 |
-| A13 | active Goal PTY UI退出后继续/重开 | actual daemon和Rust ACP peer闭环；真实Goal harness detach/reconnect未完成 |
-| A14 | Goal PTY unicode/paste/editor/resize/signal | 实际终端证据；复杂更新与未知资源交互待补 |
-| A15 | query/typed/input domain与runtime fixture | 运行效果分离有证据；自然问句/否定/混合模型语义评测未完成 |
-| A16 | typed多Question与reasoning路径 | fixture仅证明请求/传输；实际分布、有限控制策略和升级评测未完成 |
-| A17 | atomic commit/rollback + model work fencing | 有实际SQLite/fixture guard证据；完整提交/派发矩阵待审计 |
-| A18 | task versions/actual controller/check evidence | fixture来源可追溯；真实模型跨分支反馈待完成 |
-| A19 | unresolved inputs/paused edits/control source | 澄清不被query清除、精确无模型撤回已观察；连续真实替代请求/PTY未完成 |
-| A20 | current requirements/explicit task reference guards | 旧产物与Goal范围拒绝有证据；全局scope与实际晚到结果场景待核对 |
-| A21 | bare/code+旧defaults实际PTY | 已观察无隐式启动；最终版本待复核 |
-| A22 | retired args parse与本地native迁移 | 无静默改投有证据；两长campaign/最终旧消费者检索待完成 |
-| A23 | spawn CLI/native task/session/maintained执行 | 保留source与真实worker短场景；原生shortcut真实TUI的完整回归范围待核对 |
-| A24 | external ACP transparent bridge/native capture authority | 有protocol/实际worker证据；真实Goal内引用session及重连未完成 |
-| A25 | generic negotiation与unsupported fixtures | capability事实分离有证据；实际Goal harness能力矩阵待完成 |
-| A26 | completion autonomous fixture | 实际checks后自主交付；实际语义provider完成判定未验证 |
-| A27 | explicit_acceptance exact delivery/source tests | 数据库和实际入口有部分证据；NL acceptance/过期交互未完整 |
-| A28 | verification/check artifact hash/environment fields | 版本关联有fixture证据；必需外部来源/环境范围审计待完成 |
-| A29 | dependency joined output、changed artifact/check failures | 文件集成和反例有证据；修改测试/矛盾证据语义判断未完成 |
-| A30 | in_flight_work、accepted inputs、completion CAS | 拒绝错误完成有fixture证据；所有未知写入/评估竞态未完整 |
-| A31 | budget limits/admission/accounting | managed estimate预留有证据；完整预算/验证资源保证未完成 |
-| A32 | already_verified_delivery budget boundary/explicit withdrawal | 合法边界完成且不增加cap有证据；部分结果/剩余条件真实表达待核对 |
-| A33 | accounting/projection/harness facts | estimated/unpriced/stop facts分开有证据；完整费用来源与停止状态未全验证 |
-| A34 | independent tasks blocked guards | 独立分支继续有fixture证据；真正无可行路径说明未完整 |
-| A35 | recovery local proofs、obsolete plan | 不重放unknown有证据；有界一般恢复/impossible/stagnation未完成 |
-| A36 | Goal SQLite/cold history/outbox/control version | 原记录/控制源有证据；长期归档与异常恢复未完成 |
-| A37 | completion required checks、query-only clarification | 具体检查与无关询问边界有证据；调查类完成/范围外unknown真实判断未完成 |
-
-当前审计明确发现三个不能被绿色CI替代的门槛：实际provider/typed backend的Goal闭环与输入评测；一般恢复/完整预算与停滞策略；长历史可持续运行。后者的具体源码反证是GoalStore把完整head编码为最多1MiB，workflow仍在head中累积task executions；尚没有从head归档旧执行、再由权威history冷读的生产实现。不能只提高byte limit或删除历史来把它算完成。
-
-当前冻结检查期间只读核对长期归档的具体约束，尚未实现：`goal_runtime::change`会遍历execution以找原check/review/source要求版本；stop协调刷新head后再次按execution ID查找；`goal_runtime/permissions`要以Decision.execution_id找到原任务/执行；completion的delivery sources也保留execution引用。因此直接截断Vec会让现有事实失去来源或把旧事件误算到当前版本，不能作为修复。
-
-- 每个任务的当前last execution保留在head；in-flight accounting、未解决输入、适用Decision、当前completion/handoff来源及尚需stop/check/recovery协调的执行不能提前移除。
-- 旧执行的stop确认不等于effects_reconciled；只有已具备实际协调证明且不再被活动引用的记录才有资格离开hot head。未知效果保持封锁。
-- 归档与head更新/原operation receipt必须在同一权威事务提交，保留owner、Goal/task/execution身份、source版本及原始不可变内容；失败不能只保存其中一半。
-- 冷查询与renderer只能读取，不能因加载归档重新派发/批准/恢复；旧source查找要能明确查到原记录或明确拒绝，不能默认套用当前requirements revision。
-- 预算累计值与未确认预留不因归档清零，配置/材料版本和实际验证关联仍需可检索；最终须以真实SQLite/cold read、source竞态、存储故障和跨1MiB长workflow验证，不能只证明一个helper能缩小JSON。
-
-### 输入评测案例草案（尚未运行模型）
-
-[25条候选标注](evidence/bro-goal-workflow/input-eval-cases.jsonl)由spec 9.1和当前scope/permission/input合同推导，作者为本次Codex实现；不是已由用户验收的human gold，也没有真实模型结果。已解析全部JSONL并核对唯一ID/原文/state/expected/forbidden/basis，25条合法；这只证明数据格式，不能计为输入评测通过。每例必须同时传给相同snapshot上的规则＋reasoning、typed＋升级路径；不得向模型提供expected/forbidden标签。
-
-| state | 后续实际执行时须构造并读取的权威状态 |
-| --- | --- |
-| running_two_branches | 当前Goal g1，req1，Run；left/right实际运行，join依赖两者，无未授权许可；默认scope只来自当前Goal，UI选中节点不补引用 |
-| paused_two_branches | 同一图和有效要求，Goal Pause且停止状态另行确认；修改left失效其下游join，保存修改不恢复Goal |
-| permission_pending | g1 req1，实际Decision d1引用left/current execution、hash-verified原request；仅提供allow_once/allow_always两真实选项，未保存回应 |
-| permission_stale | 当前req2，d1仍引用req1、已不适用；用户意图可判为permission，但runtime拒绝不能算分类正确 |
-| open_change_question | req1，未提交的u1修改请求已要求澄清，原receipt/Task范围仍有效；普通query保留u1并继续独立工作 |
-| halted_open_change_question | 同一u1且Goal预算halt；精确withdraw通过有限路径，不调模型、不加cap、不恢复/回滚已提交效果 |
-| browser_failure_two_branches | 当前Goal调查Safari失败；唯一safari任务需复现和解释，chrome独立运行，join消费两者；没有实现修改许可，用户补充“先别改实现”的约束 |
-
-expected中的intents是语义标签，control/permission/requirements及forbidden是允许/禁止的最终效果。必须另存模型原提议、runtime拒绝和实际效果，分别统计语义误判、范围误判及错误派发；如模型提议stale permission被guard挡住，不得把它计为语义/范围准确。q22只验证明确有限命令，不加入模型分类precision/recall分母。查询/假设/否定、礼貌控制、中英变体、混合query+control、Safari复现/约束、歧义/失效/跨Goal、暂停修改、许可、不可用资源和未解决请求均已列入草案；连续替代修改、模型错误/超时及更多反例仍待增补与实际执行。
-
 MVP 未完成。Codex Goal 保持 active；完整完成条件不缩小为单个阶段或 UI 交付。
 
 最新可恢复状态：活动 Goal PTY 使用 actual daemon/SQLite、两条并行 ACP、原始 Goal Enter、真实 permission request/显式 consent 与文件效果、只读 Task/证据/全屏、原草稿返回、UI detach 后依赖交接、BRO checks 和 req 1 verified delivery 重开。原 Workspace 不被写入，生成尝试数与实际 HTTP requests 一致。S6 又迁移两个 settings 场景到 session API，确认/失败均由实际回应决定；Fixture 共用数据已提取，默认相对 DB 泄漏已修正并保留原文件。
 
-已发布50a4605f的完整workspace/static/doc与三平台hosted CI通过，base9956a427。当前提交源码为[native迁移v16的107文件](evidence/bro-goal-workflow/2026-10-14-native-optin-migration-v16-source.sha256)：清理前v15完整workspace4600pass/22原skip；一处等价lint清理后32项受影响测试、严格Clippy/fmt/diff/107hash通过，独立doc6pass/1原ignored。Claude长campaign超时失败，Codex尚未完成，非终态快照不计通过。详见[迁移证据](evidence/bro-goal-workflow/2026-10-14-native-optin-migration.md)。fixed judgments不计输入质量；旧code agent未恢复、右侧保持只读，原campaign deadline/采纳门槛未改。
+最新行为验证source为[ack-withdrawal-v4的103文件](evidence/bro-goal-workflow/2026-10-14-model-ack-withdrawal-v4-source.sha256)，base9956a427。完整workspace4598passed/22原skipped；严格Clippy、独立doc6pass/1原ignored、fmt/diff和源码身份检查通过。最终文档/注释修正单列[PR更新摘要](evidence/bro-goal-workflow/2026-10-14-pr981-update-source.sha256)。未解决请求不被无关query清除，原input receipt进入理解上下文，解决/撤回绑定身份/源版本与原scope，query-only不新增完成条件。exact withdrawal无需模型或预算增加；accounting确认重试只针对同一持久事实，确认旧receipt后重新校验派发权。详见[澄清证据](evidence/bro-goal-workflow/2026-10-14-persistent-clarifications.md)与[确认/撤回证据](evidence/bro-goal-workflow/2026-10-14-model-ack-withdrawal.md)。fixed judgments不计输入质量，普通deadline未改。
 
-用户授权的[Draft PR #981](https://github.com/bitrouter/bitrouter/pull/981)本轮提交更新；未merge/release/部署。此前发布50a4605f全CI通过，Linux历史opaque失败精确原因仍未确认。下一步确认更新head hosted结果，排查长campaign超时，完成复杂控制/修改PTY、一般外部效果恢复、长期归档、输入评测、真实backend/harness与最终G/A/F gates。本机尚无decision_model配置，已有配置信息请求未重复发送；MVP未完成，Codex Goal保持active。
+用户授权的[Draft PR #981](https://github.com/bitrouter/bitrouter/pull/981)本轮提交更新；未merge/release/部署。此前远端Windows修复已验证；Linux原始source/owner/ack失败的精确原因未确认，本地冲突/回应丢失修复不冒充hosted证明。下一步确认新head hosted结果，处理已满足/替代请求的证据协调、6个opt-in native/evolution迁移、复杂控制/修改PTY、一般外部效果恢复、长期归档、输入评测、真实backend/harness与最终G/A/F gates。本机尚无decision_model配置，已有配置信息请求未重复发送；MVP未完成，Codex Goal保持active。
