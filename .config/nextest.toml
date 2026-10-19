@@ -18,18 +18,6 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 [test-groups]
 core-tree-pressure = { max-threads = 1 }
 
-# Complete Goal coordinator fixtures run concurrent services and subprocesses
-# internally. Partial grouping still overlapped unrelated heavy tests, hitting
-# original waits and output-leak detection. Reserve global slots per complete
-# fixture, including native, ACP, input and handoff paths. Keep their internal
-# concurrency, all product/fixture/stack bounds, and nextest's leak detector.
-# Terminal Goal and SQLite/MCP resource fixtures own the same full workload;
-# ACP capability probes also own real subprocess lifecycles.
-# https://nexte.st/docs/configuration/threads-required/
-[[profile.default.overrides]]
-filter = 'test(goal_runtime::tests::) | binary(goal_tui_pty) | binary(native_harness_resources) | test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)'
-threads-required = "num-test-threads"
-
 [[profile.default.overrides]]
 filter = 'test(capacity::tree_limits::maximum_tree_)'
 test-group = 'core-tree-pressure'

@@ -35,12 +35,7 @@ impl ThreadService {
             Some(thread) => thread.config.max_duration(),
             None => return,
         };
-        let remaining = job.continuation.as_ref().map_or(duration, |saved| {
-            duration.saturating_sub(Duration::from_millis(
-                crate::service::now_ms().saturating_sub(saved.accepted_at_ms),
-            ))
-        });
-        let deadline = tokio::time::Instant::now() + remaining;
+        let deadline = tokio::time::Instant::now() + duration;
         let mut progress = Progress {
             owner: Owner {
                 server_instance_id: self.inner.instance_id.clone(),
@@ -176,13 +171,7 @@ impl ThreadService {
         let turn = &progress.owner.turn_id;
         self.append(turn, TurnEventPayload::Started).await?;
         self.acp_gate(turn, job).await?;
-        if cancel.is_cancelled() || tokio::time::Instant::now() >= deadline {
-            return Err("Original ACP duration or execution control closed before startup".into());
-        }
-        let start = job.continuation.as_ref().map_or_else(
-            || Action::Start.key(turn),
-            |saved| format!("acp-{turn}-restore-{}", saved.binding.run_id),
-        );
+        let start = Action::Start.key(turn);
         self.commit_records(
             turn,
             &[ExecutionRecord::AcpDispatch {
@@ -195,11 +184,11 @@ impl ThreadService {
         progress.start_dispatched = true;
         // Startup is owned and awaited to settlement. No prompt has been sent;
         // dropping this future on a transport timeout would lose its mapping.
-        let binding = match &job.continuation {
-            Some(saved) => job.driver.restore(&progress.owner, &start, saved).await,
-            None => job.driver.start(&progress.owner, &start).await,
-        }
-        .map_err(ServiceError::storage)?;
+        let binding = job
+            .driver
+            .start(&progress.owner, &start)
+            .await
+            .map_err(ServiceError::storage)?;
         let config = {
             let state = self.lock_state();
             state
@@ -213,12 +202,7 @@ impl ThreadService {
             return Err("ACP driver has a native Thread".into());
         };
         progress.binding = Some(binding.clone());
-        if job.continuation.as_ref().is_some_and(|saved| {
-            binding.session_id != saved.binding.session_id
-                || binding.agent_id != saved.binding.agent_id
-                || binding.restored_from.as_ref() != Some(&saved.binding.run_id)
-                || binding.run_id == saved.binding.run_id
-        }) || binding.run_id.is_empty()
+        if binding.run_id.is_empty()
             || binding.session_id.is_empty()
             || binding.agent_id != acp.agent_id
             || acp

@@ -123,7 +123,3 @@ Keep outputs private and retain failures. q03/q07 are human-reviewed;
 remaining labels are drafts. Persisted forbidden effects, native predictions,
 reasoning proposals and semantic quality are different measurements. All
 current typed inputs upgrade; no calibrated typed fast-path benefit is claimed.
-
-## BRO execution refactor
-
-Use [current refactor acceptance](2026-10-16-refactor-acceptance.md) for the complete workspace command, focused original-session load case and current limits. [Final summary](2026-10-16-refactor-summary.json) pins the evaluated source inputs and independent raw archive. Current fixtures are Cargo-built Rust; BRO_GOAL_FIXTURE_KEEP_FAILURES=1 preserves subsequent failures when supported. Historical database/filesystem copies are forensic evidence and do not imply arbitrary process/state takeover.

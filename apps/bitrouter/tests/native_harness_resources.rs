@@ -74,15 +74,7 @@ async fn wait(
 #[tokio::test]
 async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_connections()
 -> Result<(), Box<dyn std::error::Error>> {
-    let mut directory = tempfile::tempdir()?;
-    let keep = std::env::var_os("BRO_GOAL_FIXTURE_KEEP_FAILURES").is_some();
-    directory.disable_cleanup(keep);
-    if keep {
-        eprintln!(
-            "Failure-retention native resource fixture: {}",
-            directory.path().display()
-        );
-    }
+    let directory = tempfile::tempdir()?;
     let workspace = directory.path().join("workspace");
     std::fs::create_dir(&workspace)?;
     std::fs::write(workspace.join("AGENTS.md"), "SQLITE_STARTUP_INSTRUCTIONS")?;
@@ -269,6 +261,5 @@ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_conne
     destination.shutdown().await;
     drop(destination);
     reopened.close().await?;
-    directory.disable_cleanup(false);
     Ok(())
 }

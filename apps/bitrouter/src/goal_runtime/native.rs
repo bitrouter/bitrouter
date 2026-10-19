@@ -1,4 +1,4 @@
-//! Built-in execution and shared worker observation reference ThreadService facts.
+//! Built-in workers use ThreadService; Goal records only reference its facts.
 use super::*;
 use bitrouter_orchestrator::agent::AgentConfig;
 use bitrouter_orchestrator::goal::workflow::ThreadExecution;
@@ -343,31 +343,27 @@ impl Coordinator {
             .read_stored_turn(&target, &caller, &binding.turn_id)
             .await?;
         let external = task.execution_harness(execution).is_some();
-        if turn.status == TurnStatus::RecoveryRequired {
+        if !external && turn.status == TurnStatus::RecoveryRequired {
             let source = source(goal, task, execution)?;
             if bitrouter_orchestrator::goal::workflow::worker_requested(goal, &source) {
                 let control = model_control::ModelControl::for_worker(self, goal, source.clone());
-                let continuation = if external {
-                    self.resume_acp_worker(goal, task, execution).await
-                } else {
-                    self.threads
-                        .resume_goal_worker_turn(
-                            &target,
-                            &caller,
-                            &source,
-                            &binding.turn_id,
-                            &turn_key(&execution.id),
-                            control,
-                        )
-                        .await
-                        .map_err(anyhow::Error::from)
-                };
-                match continuation {
+                match self
+                    .threads
+                    .resume_goal_worker_turn(
+                        &target,
+                        &caller,
+                        &source,
+                        &binding.turn_id,
+                        &turn_key(&execution.id),
+                        control,
+                    )
+                    .await
+                {
                     Ok(receipt) => {
                         anyhow::ensure!(
                             receipt.thread_id == binding.thread_id
                                 && receipt.turn_id == binding.turn_id,
-                            "worker continuation changed its original execution identity"
+                            "native continuation changed its original execution identity"
                         );
                         turn = self
                             .threads
@@ -383,8 +379,8 @@ impl Coordinator {
                                     observation: Observation::Unknown {
                                         run_id: None,
                                         reason: format!(
-                                            "Worker checkpoint continuation was not admitted: {}",
-                                            bounded_error(&error)
+                                            "Native checkpoint continuation was not admitted: {}",
+                                            bounded_error(&anyhow::Error::from(error))
                                         ),
                                     },
                                 },

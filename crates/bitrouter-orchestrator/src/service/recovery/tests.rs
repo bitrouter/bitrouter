@@ -154,7 +154,6 @@ fn settlement_charges_native_fallback_attempts_and_legacy_requests()
     ] {
         let mut active = Active {
             generation: None,
-            acp: acp::State::new(String::new()),
             native,
             native_runs: std::collections::BTreeMap::from([("run".into(), (attempts, 0))]),
             native_unknown_usage: Default::default(),

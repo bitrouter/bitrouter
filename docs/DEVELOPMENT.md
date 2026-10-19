@@ -58,7 +58,7 @@ for current workers' provider reservations; settled unknown-cost holds remain bl
 Wait begin/end facts drive the read-only projection. SDK cancellation before executor
 dispatch reconciles the original admission without inventing actual serving evidence.
 Never-started ACP metadata can retain its Thread after confirmed owner shutdown;
-its first session is still new. Confirmed pre-prompt ACP session loading can continue its original Thread/Turn; possibly submitted input or incomplete history remains blocked. Original elapsed duration, source owner, process stop and frozen MCP descriptors remain required.
+its first session is still new. Accepted private-session continuation remains blocked.
 Managed ACP uses the same acceptance/control owner;
 the supervisor supplies protocol/process facts. Historical unbound runs retain
 their reconciliation path. Worker changes version the existing work and create
@@ -501,7 +501,7 @@ loopback exposure policy. It does not mount an MCP origin endpoint. See
 
 ## CLI Surface
 
-`bro <subcommand>` exposes lifecycle and reports plus agent-facing entries: `task run` (BRO headless), bare `bro` / `code` (Goals), `launch <agent>` (native interface), `run <agent>` (headless turn), and `acp serve` (native v1/v2 ingress) and `acp serve <agent>` (external manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp check [server]` inspects configured upstream MCP servers. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
+`bro <subcommand>` exposes lifecycle and reports plus agent-facing entries: `task run` (BRO headless), bare `code` (BRO interactive), `launch <agent>` (native interface), `code <agent>` (ACP UI), `run <agent>` (headless turn), and `acp serve` (native v1/v2 ingress) and `acp serve <agent>` (external manager endpoint). `claude`, `claude-code`, and `codex` are native shortcuts. `requests` is the canonical request-history report; `mcp check [server]` inspects configured upstream MCP servers. Old `spawn`, `chat`, `tui`, `tools`, and related compatibility leaves are hidden. See `apps/bitrouter/src/main.rs`.
 
 ### Observability surface (`bro requests`)
 

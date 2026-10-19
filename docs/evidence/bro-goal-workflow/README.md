@@ -1,7 +1,5 @@
 # BRO Goal workflow final acceptance evidence
 
-Current refactor: [design and diagrams](../../BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md), [RF/A acceptance mapping](2026-10-16-refactor-acceptance.md) and [source-bound final summary](2026-10-16-refactor-summary.json). The reports below bind the earlier pre-refactor source; current local/hosted/live qualification is recorded separately.
-
 This directory keeps final acceptance summaries, source bindings, the two
 unchanged input-evaluation fixtures and the material needed to reproduce the
 controlled local workflow. Raw logs and intermediate evaluation snapshots are
@@ -44,7 +42,8 @@ A bare historical filename in a retained JSON summary resolves under
 `docs/evidence/bro-goal-workflow/` at the archive commit when it is absent here.
 Original manifests bind their original evaluated source, not this later
 documentation cleanup. No credentialed campaign or full local suite was rerun
-merely to move evidence. That evidence cleanup left source/tests and both compiled-in JSONL fixtures unchanged. The later execution refactor has its own source-bound acceptance above.
+merely to move evidence. Source/test code and the two compiled-in JSONL
+fixtures remain unchanged.
 
 Hosted CI for the pre-cleanup functional head `4772d9e09deb9c69f539e97d2b24dda9ca770e0c`
 [completed successfully](https://github.com/bitrouter/bitrouter/actions/runs/38737081691).

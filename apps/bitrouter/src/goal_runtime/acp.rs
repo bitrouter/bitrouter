@@ -1,9 +1,7 @@
 //! External Goal workers are adapters of the same Thread/Turn service as native work.
 use super::*;
 use bitrouter_orchestrator::control::WorkControl;
-use bitrouter_orchestrator::service::worker::acp::{
-    Binding, Continuation, Driver, Outcome, Owner, Stop,
-};
+use bitrouter_orchestrator::service::worker::acp::{Binding, Driver, Outcome, Owner, Stop};
 use bitrouter_orchestrator::thread::executor::{AcpConfig, AcpThreadRequest};
 use bitrouter_orchestrator::thread::{PermissionProfile, ThreadTarget};
 use bitrouter_orchestrator::turn::TurnRequest;
@@ -13,7 +11,6 @@ struct Adapter {
     threads: bitrouter_orchestrator::service::ThreadService,
     request: StartRunRequest,
     control: Arc<dyn WorkControl>,
-    grant: SessionGrant,
 }
 
 struct Dispatch<'a> {
@@ -58,7 +55,6 @@ impl Driver for Adapter {
             return Err("Original ACP process is not confirmed running; no startup replay".into());
         }
         Ok(Binding {
-            restored_from: None,
             run_id: snapshot.run_id,
             session_id: snapshot
                 .native_session_id
@@ -71,87 +67,6 @@ impl Driver for Adapter {
                 .transpose()
                 .map_err(|error| error.to_string())?,
         })
-    }
-    async fn restore(
-        &self,
-        owner: &Owner,
-        key: &str,
-        saved: &Continuation,
-    ) -> std::result::Result<Binding, String> {
-        let result = async {
-            let previous = &saved.binding;
-            let SessionResponse::Snapshot { snapshot } = self
-                .supervisor
-                .dispatch(SessionRequest::authorized(
-                    &self.grant,
-                    SessionCommand::Snapshot {
-                        run_id: previous.run_id.clone(),
-                    },
-                ))
-                .await?
-            else {
-                anyhow::bail!("original ACP snapshot missing");
-            };
-            let original_owner = snapshot
-                .managed_by
-                .as_ref()
-                .context("original session owner missing")?;
-            // Cold supervisor summaries intentionally omit capabilities. The
-            // original Turn binding owns that declaration; the new controller
-            // must independently negotiate and accept the exact session/load.
-            anyhow::ensure!(
-                original_owner == &saved.owner
-                    && original_owner.thread_id == owner.thread_id
-                    && original_owner.turn_id == owner.turn_id
-                    && original_owner.server_instance_id != owner.server_instance_id
-                    && snapshot.native_session_id.as_ref() == Some(&previous.session_id)
-                    && snapshot.agent_id == previous.agent_id
-                    && snapshot.owned_process_terminated()
-                    && snapshot.pending_permissions.is_empty()
-                    && previous
-                        .capabilities
-                        .as_ref()
-                        .is_some_and(|caps| caps["load"] == true),
-                "original ACP session lacks stopped-owner/load evidence"
-            );
-            let (_, replay) = self
-                .supervisor
-                .managed_observation(original_owner, &previous.run_id, 0)
-                .await?;
-            anyhow::ensure!(
-                replay.history_complete
-                    && replay.events.iter().all(|event| !matches!(
-                        event.kind,
-                        crate::supervisor::SessionEventKind::UserPrompt { .. }
-                            | crate::supervisor::SessionEventKind::Update { .. }
-                            | crate::supervisor::SessionEventKind::PayloadOmitted { .. }
-                            | crate::supervisor::SessionEventKind::Permission { .. }
-                    )),
-                "original ACP startup has incomplete or possibly executed activity"
-            );
-            let mut request = self.request.clone();
-            request.session = crate::acp_cli::SessionSelection::Load(previous.session_id.clone());
-            request.parent_run_id = Some(previous.run_id.clone());
-            let restored = Adapter {
-                supervisor: self.supervisor.clone(),
-                threads: self.threads.clone(),
-                control: self.control.clone(),
-                grant: self.grant.clone(),
-                request,
-            };
-            let mut binding = restored
-                .start(owner, key)
-                .await
-                .map_err(anyhow::Error::msg)?;
-            anyhow::ensure!(
-                binding.session_id == previous.session_id,
-                "ACP did not restore the requested session"
-            );
-            binding.restored_from = Some(previous.run_id.clone());
-            Ok::<_, anyhow::Error>(binding)
-        }
-        .await;
-        result.map_err(|error| format!("{error:#}"))
     }
     async fn prompt(
         &self,
@@ -289,87 +204,6 @@ impl Driver for Adapter {
 }
 
 impl Coordinator {
-    fn acp_driver(
-        &self,
-        goal: &GoalSnapshot,
-        task: &Task,
-        execution: &Execution,
-        mcp_servers: Vec<agent_client_protocol::schema::v1::McpServer>,
-        control: Arc<dyn WorkControl>,
-    ) -> Result<Arc<Adapter>> {
-        super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
-        let workspace = self.native_workspace(goal, execution)?;
-        let harness = task
-            .execution_harness(execution)
-            .context("ACP worker harness missing")?;
-        Ok(Arc::new(Adapter {
-            supervisor: self.supervisor.clone(),
-            threads: self.threads.clone(),
-            control: control.clone(),
-            grant: self.grant.clone(),
-            request: StartRunRequest {
-                action_request_id: String::new(),
-                client_id: None,
-                label: Some(format!("{} / {}", goal.title, task.spec.title)),
-                agent_id: harness.into(),
-                prompt: None,
-                cwd: workspace,
-                routing: Default::default(),
-                launch: crate::acp_cli::LaunchOptions {
-                    required_session_route: task.spec.resources.model_route.clone(),
-                    mcp_servers,
-                    ..Default::default()
-                },
-                session: Default::default(),
-                presentation: crate::supervisor::Presentation::Background,
-                parent_run_id: None,
-                allow_shared_directory: false,
-                permission_policy: Default::default(),
-                result_schema: None,
-            },
-        }))
-    }
-
-    pub(super) async fn resume_acp_worker(
-        &self,
-        goal: &GoalSnapshot,
-        task: &Task,
-        execution: &Execution,
-    ) -> Result<bitrouter_orchestrator::turn::TurnReceipt> {
-        let source = super::native::source(goal, task, execution)?;
-        let link = execution
-            .thread
-            .as_ref()
-            .context("original ACP Thread missing")?;
-        let control = model_control::ModelControl::for_worker(self, goal, source.clone());
-        let prepared = execution
-            .resources
-            .as_ref()
-            .context("saved ACP resources missing")?;
-        let mcp_servers =
-            super::resources::servers(&self.routing.snapshot_config(), &prepared.selection)?;
-        let driver = self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
-        let receipt = self
-            .threads
-            .resume_goal_acp_turn(
-                &ThreadTarget {
-                    thread_id: link.thread_id.clone(),
-                    server_instance_id: self.threads.capabilities().server_instance_id,
-                },
-                &CallerContext::local(),
-                source,
-                &super::native::turn_key(&execution.id),
-                control,
-                driver,
-            )
-            .await?;
-        anyhow::ensure!(
-            receipt.thread_id == link.thread_id && receipt.turn_id == link.turn_id,
-            "ACP continuation changed its accepted identity"
-        );
-        Ok(receipt)
-    }
-
     pub(super) async fn acp_run_snapshot(
         &self,
         goal: &GoalSnapshot,
@@ -495,37 +329,37 @@ impl Coordinator {
             .find_goal_worker_turn(&target, &caller, &key)
             .await?
         {
-            Some(turn) => {
-                if self
-                    .threads
-                    .read_stored_thread_view(&target, &caller)
-                    .await?
-                    .recovery
-                    .is_some()
-                {
-                    let driver =
-                        self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
-                    self.threads
-                        .resume_goal_acp_turn(
-                            &target,
-                            &caller,
-                            source.clone(),
-                            &key,
-                            control,
-                            driver,
-                        )
-                        .await?
-                } else {
-                    turn
-                }
-            }
+            Some(turn) => turn,
             None => {
                 // Thread metadata can outlive a missing Turn admission. Check
                 // the exact descriptors again before constructing its driver;
                 // an existing Turn receipt remains readable after config edits.
                 super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
-                let driver =
-                    self.acp_driver(goal, task, execution, mcp_servers, control.clone())?;
+                let driver = Arc::new(Adapter {
+                    supervisor: self.supervisor.clone(),
+                    threads: self.threads.clone(),
+                    control: control.clone(),
+                    request: StartRunRequest {
+                        action_request_id: String::new(),
+                        client_id: None,
+                        label: Some(format!("{} / {}", goal.title, task.spec.title)),
+                        agent_id: harness.into(),
+                        prompt: None,
+                        cwd: workspace,
+                        routing: Default::default(),
+                        launch: crate::acp_cli::LaunchOptions {
+                            required_session_route: task.spec.resources.model_route.clone(),
+                            mcp_servers,
+                            ..Default::default()
+                        },
+                        session: Default::default(),
+                        presentation: crate::supervisor::Presentation::Background,
+                        parent_run_id: None,
+                        allow_shared_directory: false,
+                        permission_policy: Default::default(),
+                        result_schema: None,
+                    },
+                });
                 self.threads
                     .wait_goal_acp_turn(
                         &target,

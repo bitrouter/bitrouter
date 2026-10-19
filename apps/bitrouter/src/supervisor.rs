@@ -926,7 +926,6 @@ impl LedgerStore {
             snapshot.owned_process_terminated()
                 && snapshot.process == entry.process
                 && snapshot.startup_aborted_before_session == entry.startup_aborted_before_session
-                && snapshot.managed_by == entry.managed_by
                 && snapshot.run_id == entry.run_id
                 && snapshot.agent_id == entry.agent_id
                 && snapshot.native_session_id == entry.native_session_id
@@ -4801,13 +4800,6 @@ mod tests {
             .context("stopped row missing")?;
         assert!(ledger.stopped_replay(&entry).await?.is_some());
         let mut other = entry.clone();
-        other.managed_by = Some(bitrouter_orchestrator::service::worker::acp::Owner {
-            server_instance_id: "different-owner".into(),
-            thread_id: "thread".into(),
-            turn_id: "turn".into(),
-        });
-        assert!(ledger.stopped_replay(&other).await.is_err());
-        other = entry.clone();
         other.run_id = "different-run".into();
         assert!(ledger.stopped_replay(&other).await.is_err());
         other = entry.clone();
