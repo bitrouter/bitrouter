@@ -2,7 +2,7 @@
 #![cfg(unix)]
 
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -16,73 +16,6 @@ use tokio::process::Command;
 mod fixture_binary;
 #[path = "support/goal_provider.rs"]
 mod provider;
-
-// This file owns real daemon processes; protocol/model fixtures stay explicit.
-struct Daemon {
-    socket: PathBuf,
-    child: tokio::process::Child,
-}
-
-impl Daemon {
-    async fn start(config: &Path, home: &Path, env: &[(&str, &str)]) -> Result<Self> {
-        let source = bitrouter::paths::ConfigSource::File(config.into());
-        let cfg = bitrouter::paths::load_config(&source).await?;
-        let socket = bitrouter::daemon::socket_path_for(&source, &cfg);
-        let child = Command::new(env!("CARGO_BIN_EXE_bro"))
-            .args(["serve", "--config"])
-            .arg(config)
-            .env("HOME", home)
-            .env("BITROUTER_HOME", home)
-            .envs(env.iter().copied())
-            .current_dir(home)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
-        let mut daemon = Self { socket, child };
-        let ready = async {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
-            while directory(&daemon.socket).await.is_err() {
-                ensure!(daemon.child.try_wait()?.is_none(), "fixture daemon exited");
-                ensure!(
-                    tokio::time::Instant::now() < deadline,
-                    "fixture daemon not ready"
-                );
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            Ok::<_, anyhow::Error>(())
-        }
-        .await;
-        if let Err(error) = ready {
-            let _ = daemon.child.kill().await;
-            let _ = daemon.child.wait().await;
-            return Err(error);
-        }
-        Ok(daemon)
-    }
-
-    async fn stop(mut self, seconds: u64) -> Result<()> {
-        let reply = send_command(&self.socket, &DaemonCommand::Stop).await;
-        if !matches!(&reply, Ok(DaemonResponse::Ok)) {
-            self.child.kill().await?;
-        }
-        let status =
-            match tokio::time::timeout(Duration::from_secs(seconds), self.child.wait()).await {
-                Ok(status) => status?,
-                Err(error) => {
-                    self.child.kill().await?;
-                    self.child.wait().await?;
-                    return Err(error).context("fixture daemon did not stop before its deadline");
-                }
-            };
-        ensure!(
-            matches!(reply?, DaemonResponse::Ok),
-            "fixture daemon rejected shutdown"
-        );
-        ensure!(status.success(), "fixture daemon exited with {status}");
-        Ok(())
-    }
-}
 
 struct Terminal {
     writer: Box<dyn Write + Send>,
@@ -722,14 +655,27 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
                 "env":{"BRO_GOAL_FIXTURE_CONTROL":controls,"BRO_GOAL_FIXTURE_CAPTURE":captures,"BRO_GOAL_FIXTURE_RIGHT_MANUAL":"1","BRO_GOAL_FIXTURE_RIGHT_GATE":"1","BRO_GOAL_FIXTURE_RIGHT_OVERLAP":"1"}}}}
         }))?,
     )?;
-    let server = Daemon::start(
-        &config_path,
-        home.path(),
-        &[("BRO_GOAL_FIXTURE_DECISION_KEY", "fixture-decision-key")],
-    )
-    .await?;
-    let socket = server.socket.clone();
+    let source = bitrouter::paths::ConfigSource::File(config_path.clone());
+    let config = bitrouter::paths::load_config(&source).await?;
+    let socket = bitrouter::daemon::socket_path_for(&source, &config);
+    let mut server = Command::new(env!("CARGO_BIN_EXE_bro"))
+        .args(["serve", "--config"])
+        .arg(&config_path)
+        .env("HOME", home.path())
+        .env("BITROUTER_HOME", home.path())
+        .env("BRO_GOAL_FIXTURE_DECISION_KEY", "fixture-decision-key")
+        .current_dir(home.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
     let result = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while directory(&socket).await.is_err() {
+            ensure!(server.try_wait()?.is_none(), "fixture daemon exited");
+            ensure!(tokio::time::Instant::now() < deadline, "fixture daemon not ready");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         let mut terminal = Terminal::open(home.path(),true)?;
         terminal.wait("No matching Goals")?;
         ensure!(backend.received_requests().await.is_some_and(|requests| requests.is_empty()));
@@ -968,11 +914,16 @@ async fn active_goal_enter_permission_readonly_workflow_and_detach_use_actual_ex
         terminal.detach()?;
         Ok::<_,anyhow::Error>(())
     }.await;
-    let shutdown = server.stop(15).await;
-    if result.is_ok() && shutdown.is_ok() {
+    let stop = send_command(&socket, &DaemonCommand::Stop).await;
+    if stop.is_err() {
+        server.kill().await?;
+    }
+    let ended = tokio::time::timeout(Duration::from_secs(15), server.wait()).await;
+    ensure!(ended.is_ok(), "fixture daemon did not finish cleanup");
+    if result.is_ok() {
         home.disable_cleanup(false);
     }
-    result.and(shutdown)
+    result
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -997,13 +948,30 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
             "database":{"url":format!("sqlite://{}?mode=rwc",home.path().join("bitrouter.db").display())}
         }))?,
     )?;
-    let server = Daemon::start(&config, home.path(), &[]).await?;
-    let socket = server.socket.clone();
+    let source = bitrouter::paths::ConfigSource::File(config.clone());
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let socket = bitrouter::daemon::socket_path_for(&source, &cfg);
+    let mut server = Command::new(env!("CARGO_BIN_EXE_bro"))
+        .args(["serve", "--config"])
+        .arg(&config)
+        .env("HOME", home.path())
+        .env("BITROUTER_HOME", home.path())
+        .current_dir(home.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
     let editor = format!(
         "'{}' --editor",
         binary.to_string_lossy().replace('\'', "'\\''")
     );
     let result = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while directory(&socket).await.is_err() {
+            ensure!(server.try_wait()?.is_none(), "editor fixture daemon exited");
+            ensure!(tokio::time::Instant::now() < deadline, "editor fixture daemon not ready");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         for fail in [false, true] {
             let original = "original draft 中文 👩‍💻\nsecond original line  ";
             let edited = "replacement 中文 👩‍💻\nsecond edited line  ";
@@ -1127,15 +1095,23 @@ async fn goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_s
         ensure!(directory(&socket).await? == 2, "signal exit delegated a draft");
         Ok::<_,anyhow::Error>(())
     }.await;
-    let release_result = std::fs::write(&release, "release").map_err(anyhow::Error::from);
-    let shutdown = server.stop(10).await;
-    let result = result.and(release_result).and(shutdown);
+    let release_result = std::fs::write(&release, "release");
+    let stop = send_command(&socket, &DaemonCommand::Stop).await;
+    let status = tokio::time::timeout(Duration::from_secs(10), server.wait()).await;
     if result.is_err() {
         let retained = home.keep();
         return result
             .with_context(|| format!("editor fixture retained at {}", retained.display()));
     }
-    result
+    result?;
+    release_result?;
+    ensure!(matches!(stop?, DaemonResponse::Ok));
+    ensure!(
+        status
+            .context("external editor fixture daemon did not stop")??
+            .success()
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1161,9 +1137,29 @@ async fn goal_directory_resize_defers_backlog_and_isolates_native_inspection() -
             }}}}
         }))?,
     )?;
-    let server = Daemon::start(&config, home.path(), &[]).await?;
-    let socket = server.socket.clone();
+    let source = bitrouter::paths::ConfigSource::File(config.clone());
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let socket = bitrouter::daemon::socket_path_for(&source, &cfg);
+    let mut server = Command::new(env!("CARGO_BIN_EXE_bro"))
+        .args(["serve", "--config"])
+        .arg(&config)
+        .env("HOME", home.path())
+        .env("BITROUTER_HOME", home.path())
+        .current_dir(home.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
     let result = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while directory(&socket).await.is_err() {
+            ensure!(server.try_wait()?.is_none(), "isolation daemon exited");
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "isolation daemon unavailable"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
         let GoalReply::Accepted { operation } = request(
             &socket,
             GoalCommand::Create {
@@ -1410,8 +1406,12 @@ async fn goal_directory_resize_defers_backlog_and_isolates_native_inspection() -
         Ok::<_, anyhow::Error>(())
     }
     .await;
-    let shutdown = server.stop(15).await;
-    result.and(shutdown)
+    let stop = send_command(&socket, &DaemonCommand::Stop).await;
+    if stop.is_err() {
+        server.kill().await?;
+    }
+    tokio::time::timeout(Duration::from_secs(15), server.wait()).await??;
+    result
 }
 
 async fn verify_goal_entries_with_defaults(inherit_defaults: bool) -> Result<()> {
@@ -1426,9 +1426,29 @@ async fn verify_goal_entries_with_defaults(inherit_defaults: bool) -> Result<()>
             "database":{"url":format!("sqlite://{}?mode=rwc",home.path().join("bitrouter.db").display())}
         }))?,
     )?;
-    let server = Daemon::start(&config, home.path(), &[]).await?;
-    let socket = server.socket.clone();
+    let source = bitrouter::paths::ConfigSource::File(config.clone());
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let socket = bitrouter::daemon::socket_path_for(&source, &cfg);
+    let mut server = Command::new(env!("CARGO_BIN_EXE_bro"))
+        .args(["serve", "--config"])
+        .arg(&config)
+        .env("HOME", home.path())
+        .env("BITROUTER_HOME", home.path())
+        .current_dir(home.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
     let result = async {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        while directory(&socket).await.is_err() {
+            ensure!(server.try_wait()?.is_none(), "fixture daemon exited");
+            ensure!(
+                tokio::time::Instant::now() < deadline,
+                "fixture daemon not ready"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         for code in [false, true] {
             let mut terminal = Terminal::open(home.path(), code)?;
             terminal.wait("No matching Goals")?;
@@ -1578,6 +1598,7 @@ async fn verify_goal_entries_with_defaults(inherit_defaults: bool) -> Result<()>
         Result::<()>::Ok(())
     }
     .await;
-    let shutdown = server.stop(15).await;
-    result.and(shutdown)
+    server.kill().await?;
+    let _ = server.wait().await?;
+    result
 }

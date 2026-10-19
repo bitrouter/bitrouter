@@ -30,69 +30,6 @@ fn pending_input(goal_id: &str, operation_id: &str) -> Pending {
     }
 }
 
-struct ClientFixture {
-    client: Client,
-    service: std::sync::Arc<GoalService>,
-    running: tokio::task::JoinHandle<Result<()>>,
-}
-
-async fn client_fixture(socket: &Path) -> Result<ClientFixture> {
-    use crate::daemon::{AcpControlPlane, LocalControlOptions, NoopObserveStatus, NoopReloader};
-    use std::sync::Arc;
-    let db = crate::db::connect("sqlite::memory:").await?;
-    crate::db::run_migrations(&db).await?;
-    let service = Arc::new(GoalService::new(Arc::new(DatabaseGoalStore::new(
-        db.clone(),
-    ))));
-    let bound = crate::daemon::bind_control_socket(socket).await?;
-    let running = tokio::spawn(crate::daemon::run_bound_control_socket(
-        bound,
-        Arc::new(bitrouter_sdk::App::builder().build()?),
-        "127.0.0.1:0".into(),
-        Arc::new(NoopReloader),
-        Arc::new(NoopObserveStatus { compiled_in: false }),
-        AcpControlPlane {
-            runtime: Arc::new(crate::acp_runtime::AcpRuntime::new()),
-            metering: crate::metering::MeteringStore::new(db),
-            inventory: None,
-            evolution: None,
-        },
-        LocalControlOptions {
-            administration: None,
-            threads: None,
-            goals: Some(service.clone()),
-            gate: crate::daemon_handoff::HandoffGate::default(),
-            cli_owned: false,
-        },
-    ));
-    Ok(ClientFixture {
-        client: Client::new(socket.into()),
-        service,
-        running,
-    })
-}
-
-// Pure presentation seed: no store, model or worker execution is claimed.
-fn projection_snapshot(workspace: &Path) -> GoalSnapshot {
-    GoalSnapshot {
-        id: "projection-goal".into(),
-        owner: "local".into(),
-        title: "Projection Goal".into(),
-        workspace: workspace.into(),
-        objective: "Display the recorded state".into(),
-        revision: 1,
-        requirements_revision: 1,
-        run_intent: RunIntent::Run,
-        created_at_ms: 100,
-        updated_at_ms: 100,
-        workflow: Default::default(),
-        inputs: Default::default(),
-        control_source_revision: 1,
-        accounting: Default::default(),
-        budget: Default::default(),
-    }
-}
-
 #[test]
 fn unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop() -> Result<()> {
     let mut admissions = submissions::Submissions::default();
@@ -322,14 +259,40 @@ async fn actual_database_receipt_must_match_the_original_client_payload() -> Res
 #[tokio::test]
 async fn real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates()
 -> Result<()> {
-    use crate::daemon::{DaemonCommand, DaemonResponse};
+    use crate::daemon::{
+        AcpControlPlane, DaemonCommand, DaemonResponse, LocalControlOptions, NoopObserveStatus,
+        NoopReloader,
+    };
+    use std::sync::Arc;
     let temporary = tempfile::tempdir()?;
     let socket = temporary.path().join("goal-client.sock");
-    let ClientFixture {
-        client,
-        service: _,
-        running,
-    } = client_fixture(&socket).await?;
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let service = Arc::new(GoalService::new(Arc::new(DatabaseGoalStore::new(
+        db.clone(),
+    ))));
+    let bound = crate::daemon::bind_control_socket(&socket).await?;
+    let running = tokio::spawn(crate::daemon::run_bound_control_socket(
+        bound,
+        Arc::new(bitrouter_sdk::App::builder().build()?),
+        "127.0.0.1:0".into(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+        AcpControlPlane {
+            runtime: Arc::new(crate::acp_runtime::AcpRuntime::new()),
+            metering: crate::metering::MeteringStore::new(db),
+            inventory: None,
+            evolution: None,
+        },
+        LocalControlOptions {
+            administration: None,
+            threads: None,
+            goals: Some(service),
+            gate: crate::daemon_handoff::HandoffGate::default(),
+            cli_owned: false,
+        },
+    ));
+    let client = Client::new(socket.clone());
     let original = pending(temporary.path(), &uuid::Uuid::new_v4().to_string());
     let GoalReply::Accepted { operation } = client.request(original.command).await? else {
         anyhow::bail!("missing creation receipt");
@@ -400,16 +363,42 @@ async fn real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_
 
 #[tokio::test]
 async fn exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt() -> Result<()> {
-    use crate::daemon::{DaemonCommand, DaemonResponse};
+    use crate::daemon::{
+        AcpControlPlane, DaemonCommand, DaemonResponse, LocalControlOptions, NoopObserveStatus,
+        NoopReloader,
+    };
     use bitrouter_orchestrator::goal::input::{Event as InputEvent, Interpretation, Stage};
     use bitrouter_orchestrator::goal::workflow::{Change, OWNER_LEASE_MS, WorkflowActor};
+    use std::sync::Arc;
     let temporary = tempfile::tempdir()?;
     let socket = temporary.path().join("withdraw-client.sock");
-    let ClientFixture {
-        client,
-        service,
-        running,
-    } = client_fixture(&socket).await?;
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let service = Arc::new(GoalService::new(Arc::new(DatabaseGoalStore::new(
+        db.clone(),
+    ))));
+    let bound = crate::daemon::bind_control_socket(&socket).await?;
+    let running = tokio::spawn(crate::daemon::run_bound_control_socket(
+        bound,
+        Arc::new(bitrouter_sdk::App::builder().build()?),
+        "127.0.0.1:0".into(),
+        Arc::new(NoopReloader),
+        Arc::new(NoopObserveStatus { compiled_in: false }),
+        AcpControlPlane {
+            runtime: Arc::new(crate::acp_runtime::AcpRuntime::new()),
+            metering: crate::metering::MeteringStore::new(db),
+            inventory: None,
+            evolution: None,
+        },
+        LocalControlOptions {
+            administration: None,
+            threads: None,
+            goals: Some(service.clone()),
+            gate: crate::daemon_handoff::HandoffGate::default(),
+            cli_owned: false,
+        },
+    ));
+    let client = Client::new(socket.clone());
     let GoalReply::Accepted { operation } = client
         .request(pending(temporary.path(), "withdraw-goal").command)
         .await?
@@ -572,11 +561,35 @@ async fn exact_withdrawal_uses_real_client_outbox_and_no_model_under_budget_halt
     Ok(())
 }
 
-#[test]
-fn projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer() -> Result<()> {
+#[tokio::test]
+async fn projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer() -> Result<()> {
     use bitrouter_orchestrator::goal::input::{ClarificationKind, UnresolvedInput};
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let service = GoalService::new(std::sync::Arc::new(DatabaseGoalStore::new(db)));
     let workspace = tempfile::tempdir()?;
-    let mut goal = projection_snapshot(workspace.path());
+    let GoalReply::Accepted { operation } = service
+        .execute(
+            "local",
+            pending(workspace.path(), "projection-clarification").command,
+            100,
+        )
+        .await?
+    else {
+        anyhow::bail!("missing creation");
+    };
+    let GoalReply::Snapshot { mut goal } = service
+        .execute(
+            "local",
+            GoalCommand::Get {
+                goal_id: operation.goal_id,
+            },
+            110,
+        )
+        .await?
+    else {
+        anyhow::bail!("missing snapshot");
+    };
     goal.inputs.unresolved.push(UnresolvedInput {
         input_id: "original-change".into(),
         source_requirements_revision: 1,
@@ -614,11 +627,30 @@ fn projection_keeps_an_unresolved_question_visible_after_an_unrelated_answer() -
     Ok(())
 }
 
-#[test]
-fn projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions() -> Result<()>
-{
+#[tokio::test]
+async fn projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions()
+-> Result<()> {
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let service = GoalService::new(std::sync::Arc::new(DatabaseGoalStore::new(db)));
     let temporary = tempfile::tempdir()?;
-    let mut goal = projection_snapshot(temporary.path());
+    let original = pending(temporary.path(), &uuid::Uuid::new_v4().to_string());
+    let GoalReply::Accepted { operation } = service.execute("local", original.command, 100).await?
+    else {
+        anyhow::bail!("missing creation");
+    };
+    let GoalReply::Snapshot { mut goal } = service
+        .execute(
+            "local",
+            GoalCommand::Get {
+                goal_id: operation.goal_id,
+            },
+            110,
+        )
+        .await?
+    else {
+        anyhow::bail!("missing snapshot");
+    };
     goal.budget.resume_required = true;
     goal.budget.halt = Some("Budget reached; execution confirmation is separate".into());
     let mut artifacts = projection::Artifacts::new();
@@ -903,11 +935,35 @@ async fn retry_admission_matches_durable_commit_and_projection_at_recovery_bound
     Ok(())
 }
 
-#[test]
-fn quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion() -> Result<()>
-{
+#[tokio::test]
+async fn quote_wait_projection_is_current_source_scoped_and_distinct_from_budget_exhaustion()
+-> Result<()> {
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let service = GoalService::new(std::sync::Arc::new(DatabaseGoalStore::new(db)));
     let directory = tempfile::tempdir()?;
-    let mut goal = projection_snapshot(directory.path());
+    let GoalReply::Accepted { operation } = service
+        .execute(
+            "local",
+            pending(directory.path(), "quote-view").command,
+            100,
+        )
+        .await?
+    else {
+        anyhow::bail!("fixture Goal missing")
+    };
+    let GoalReply::Snapshot { mut goal } = service
+        .execute(
+            "local",
+            GoalCommand::Get {
+                goal_id: operation.goal_id,
+            },
+            101,
+        )
+        .await?
+    else {
+        anyhow::bail!("fixture snapshot missing")
+    };
     // Presentation fixture only: no worker, Thread, provider or tool ran here.
     goal.workflow.owner_thread_id = Some("owner".into());
     goal.workflow.tasks.push(serde_json::from_value(serde_json::json!({

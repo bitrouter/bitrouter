@@ -16,8 +16,7 @@ mod quote_wait;
 
 pub(super) struct ModelControl {
     goals: Arc<GoalService>,
-    goal_id: String,
-    requirements_revision: u64,
+    goal: GoalSnapshot,
     coordinator_id: String,
     root: PathBuf,
     explicit_input: bool,
@@ -63,8 +62,7 @@ impl ModelControl {
     fn base(coordinator: &Coordinator, goal: &GoalSnapshot, explicit_input: bool) -> Self {
         Self {
             goals: coordinator.goals.clone(),
-            goal_id: goal.id.clone(),
-            requirements_revision: goal.requirements_revision,
+            goal: goal.clone(),
             coordinator_id: coordinator.id.clone(),
             root: crate::goal_artifacts::root(&coordinator.workspaces, &goal.id),
             explicit_input,
@@ -178,7 +176,7 @@ impl ModelControl {
             .execute(
                 "local",
                 GoalCommand::Get {
-                    goal_id: self.goal_id.clone(),
+                    goal_id: self.goal.id.clone(),
                 },
                 now().map_err(|_| unavailable())?,
             )
@@ -202,10 +200,10 @@ impl ModelControl {
                 "the originating worker attempt is no longer current",
             ));
         }
-        if self.worker.is_none() && goal.requirements_revision != self.requirements_revision {
+        if self.worker.is_none() && goal.requirements_revision != self.goal.requirements_revision {
             return Err(diagnostic(&format!(
                 "requirements changed from {} to {}",
-                self.requirements_revision, goal.requirements_revision
+                self.goal.requirements_revision, goal.requirements_revision
             )));
         }
         if let Err(error) = goal.budget.admission(goal.created_at_ms, time) {
@@ -262,7 +260,7 @@ impl ModelControl {
             Err(bitrouter_orchestrator::goal::GoalError::NotFound) => return Ok(None),
             _ => return Err(unavailable()),
         };
-        if operation.goal_id != self.goal_id {
+        if operation.goal_id != self.goal.id {
             return Err(unavailable());
         }
         let bitrouter_orchestrator::goal::OperationKind::Workflow { change } = operation.kind
@@ -294,7 +292,7 @@ impl ModelControl {
         let requirements_revision = self
             .intent(&id)
             .await?
-            .map_or(self.requirements_revision, |work| {
+            .map_or(self.goal.requirements_revision, |work| {
                 work.requirements_revision
             });
         let intent = crate::goal_artifacts::put(
@@ -384,7 +382,7 @@ impl ModelControl {
             && self.worker.is_none()
         {
             let _ = self.goals.workflow_change(WorkflowActor { owner: "local", coordinator_id: &self.coordinator_id },
-                &self.goal_id, &format!("{operation}-budget"), self.requirements_revision,
+                &self.goal.id, &format!("{operation}-budget"), self.goal.requirements_revision,
                 Change::Budget { event: bitrouter_orchestrator::goal::budget::Event::Halt { reason: "A provider attempt no longer fits the shared Goal budget; no dispatch occurred".into() } },
                 now().map_err(|_| unavailable())?).await;
         }
@@ -582,7 +580,7 @@ impl NativeExecutionControl for ModelControl {
             .execute(
                 "local",
                 GoalCommand::Get {
-                    goal_id: self.goal_id.clone(),
+                    goal_id: self.goal.id.clone(),
                 },
                 now().map_err(|_| unavailable())?,
             )
@@ -629,7 +627,7 @@ impl NativeExecutionControl for ModelControl {
                 ));
             }
             self.goals.workflow_change(WorkflowActor { owner: "local", coordinator_id: &self.coordinator_id },
-                &self.goal_id, &format!("{}-budget", key_id(&key)), goal.requirements_revision,
+                &self.goal.id, &format!("{}-budget", key_id(&key)), goal.requirements_revision,
                 Change::Budget { event: bitrouter_orchestrator::goal::budget::Event::Halt { reason: "No frozen model route has a bounded token-price reservation fitting the Goal cap".into() } }, now().map_err(|_| unavailable())?).await.map_err(|_| unavailable())?;
             return Err(unavailable());
         }
@@ -737,7 +735,7 @@ impl NativeExecutionControl for ModelControl {
             .execute(
                 "local",
                 GoalCommand::Get {
-                    goal_id: self.goal_id.clone(),
+                    goal_id: self.goal.id.clone(),
                 },
                 time,
             )

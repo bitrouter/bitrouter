@@ -23,7 +23,7 @@ impl ModelControl {
                         owner: "local",
                         coordinator_id: &self.coordinator_id,
                     },
-                    &self.goal_id,
+                    &self.goal.id,
                     operation,
                     revision,
                     change.clone(),
@@ -66,7 +66,7 @@ impl ModelControl {
             while matches!(&result, Err(GoalError::BudgetExceeded { .. })) {
                 self.gate().await?;
                 let GoalReply::Snapshot { goal } = self.goals.execute("local",
-                    GoalCommand::Get { goal_id: self.goal_id.clone() }, now().map_err(|_| unavailable())?
+                    GoalCommand::Get { goal_id: self.goal.id.clone() }, now().map_err(|_| unavailable())?
                 ).await.map_err(|_| unavailable())? else { return Err(unavailable()) };
                 match bitrouter_orchestrator::goal::budget::waiting_on_workers(&goal, work.token_reservation.as_ref()) {
                     Ok(true) => {
@@ -195,7 +195,7 @@ impl ModelControl {
         else {
             return Err(unavailable());
         };
-        if operation.goal_id != self.goal_id || id != key_id(key) {
+        if operation.goal_id != self.goal.id || id != key_id(key) {
             return Err(unavailable());
         }
         let bytes = crate::goal_artifacts::read(&self.root, &report)

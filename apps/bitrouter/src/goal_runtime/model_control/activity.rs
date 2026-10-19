@@ -92,7 +92,7 @@ impl ModelControl {
             .await;
         let operation = match reply {
             Err(bitrouter_orchestrator::goal::GoalError::NotFound) => return Ok(false),
-            Ok(GoalReply::Accepted { operation }) if operation.goal_id == self.goal_id => operation,
+            Ok(GoalReply::Accepted { operation }) if operation.goal_id == self.goal.id => operation,
             _ => return Err(unavailable()),
         };
         let bitrouter_orchestrator::goal::OperationKind::Workflow { change } = operation.kind

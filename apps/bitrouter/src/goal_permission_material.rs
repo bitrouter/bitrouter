@@ -18,12 +18,12 @@ pub(crate) fn decision_value(
 ) -> Result<Value> {
     match decision.run_id.as_deref() {
         Some(run_id) => {
-            let material = checked_value(bytes, Some(run_id))?;
+            let request: PendingPermissionSnapshot = serde_json::from_slice(bytes)?;
             anyhow::ensure!(
-                material["permission_id"].as_str() == Some(decision.permission_id.as_str()),
+                request.permission_id == decision.permission_id,
                 "permission material has a different request identity"
             );
-            Ok(material)
+            checked_value(bytes, Some(run_id))
         }
         None => {
             let request = native::Request::decode(bytes)?;
@@ -40,17 +40,10 @@ pub(crate) fn decision_tool(
     bytes: &[u8],
     decision: &bitrouter_orchestrator::goal::decision::PermissionDecision,
 ) -> Result<Option<Value>> {
-    let material = decision_value(bytes, decision)?;
+    decision_value(bytes, decision)?;
     match decision.run_id.as_deref() {
-        Some(_) => effective_tool_from_checked(&material),
-        None => Ok(native::tool_scope(
-            material["input"]["tool_name"]
-                .as_str()
-                .context("native tool name missing")?,
-            material["input"]["arguments"]
-                .as_str()
-                .context("native arguments missing")?,
-        )),
+        Some(run_id) => effective_tool(bytes, run_id),
+        None => Ok(native::Request::decode(bytes)?.tool()),
     }
 }
 
@@ -260,23 +253,18 @@ pub(crate) fn checked_value(bytes: &[u8], run_id: Option<&str>) -> Result<Value>
     Ok(value)
 }
 
-#[cfg(test)]
-fn effective_tool(bytes: &[u8], run_id: &str) -> Result<Option<Value>> {
-    effective_tool_from_checked(&checked_value(bytes, Some(run_id))?)
+pub(crate) fn effective_tool(bytes: &[u8], run_id: &str) -> Result<Option<Value>> {
+    tool_scope(bytes, run_id, false)
 }
 
 /// Inspect a denied operation's declared scope after a failed terminal update.
 /// This never admits permission; recovery separately requires failure evidence.
 pub(crate) fn denied_tool_scope(bytes: &[u8], run_id: &str) -> Result<Option<Value>> {
-    tool_scope(&checked_value(bytes, Some(run_id))?, true)
+    tool_scope(bytes, run_id, true)
 }
 
-/// Project only material already validated by checked_value or decision_value.
-pub(crate) fn effective_tool_from_checked(material: &Value) -> Result<Option<Value>> {
-    tool_scope(material, false)
-}
-
-fn tool_scope(material: &Value, failed_terminal: bool) -> Result<Option<Value>> {
+fn tool_scope(bytes: &[u8], run_id: &str, failed_terminal: bool) -> Result<Option<Value>> {
+    let material = checked_value(bytes, Some(run_id))?;
     if material.get("tool_context_unavailable").is_some() {
         return Ok(None);
     }
@@ -406,16 +394,16 @@ pub(crate) fn validate_current(saved: &[u8], current: &[u8], run_id: &str) -> Re
         original_bytes(saved)? == original_bytes(current)?,
         "original permission request changed before delivery"
     );
-    let mut saved = checked_value(saved, Some(run_id))?;
-    let mut current = checked_value(current, Some(run_id))?;
-    let saved_tool = effective_tool_from_checked(&saved)?;
-    let current_tool = effective_tool_from_checked(&current)?;
+    let saved_tool = effective_tool(saved, run_id)?;
+    let current_tool = effective_tool(current, run_id)?;
     if saved_tool.is_some() {
         anyhow::ensure!(
             saved_tool == current_tool,
             "declared tool scope or arguments changed before permission delivery"
         );
     } else {
+        let mut saved = checked_value(saved, Some(run_id))?;
+        let mut current = checked_value(current, Some(run_id))?;
         for value in [&mut saved, &mut current] {
             if let Some(context) = value.get_mut(CONTEXT_FIELD).and_then(Value::as_object_mut) {
                 context.remove("snapshot_seq");

@@ -2,8 +2,6 @@
 
 本轮依据 [重构 spec v0.2](BRO_ORCHESTRATOR_REFACTOR_SPEC.md)，统一 BRO 的执行接纳与控制，保留现有存储职责。**本轮 BRO 执行重构已完成本地实现与最终源码回归。** [验收映射](evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md)逐项说明 RF01–RF12 / A01–A22 的本地证明与范围；[最终摘要](evidence/bro-goal-workflow/2026-10-16-refactor-summary.json)记录源码绑定、归档发布和 CI 的分层状态。真实厂商 harness/provider 在本轮源码上的复验仍为未通过 gate。
 
-后续两份独立 review 的取消、竞态、退出检查与局部简化已落实；最新 4,758 项本地回归及源码适用范围见 [review 修正验收](evidence/bro-goal-workflow/2026-10-16-review-fixes.md)。下文既有阶段记录继续绑定各自原始源码。
-
 BRO 面向 Goal 和长期并行工作流。它负责理解、规划、委派、协调和验收；实际工作统一交给 ThreadService。内置执行器可独立完成 Goal，外部 ACP harness 是可选 worker。未来 core persistent workflow state、状态权威迁移、通用动态图和 Goal owner handoff 不进入本轮。
 
 此前的逐轮排查记录已完整保存在独立归档；本文只保留当前实现、必要复现入口、验收范围和剩余工作。
