@@ -114,30 +114,6 @@ fn old_receipt_with_identical_text_cannot_clear_a_different_pending_draft() -> R
     Ok(())
 }
 
-#[test]
-fn permission_preview_separates_earlier_declarations_from_original_rpc() -> Result<()> {
-    use crate::supervisor::{ReplayBatch, SessionEventKind};
-    let replay: ReplayBatch = serde_json::from_str(include_str!(
-        "../../tests/fixtures/acp-permission-context.json"
-    ))?;
-    let permission = replay
-        .events
-        .iter()
-        .find_map(|event| match &event.kind {
-            SessionEventKind::Permission { permission } if event.seq == 66 => Some(permission),
-            _ => None,
-        })
-        .context("original permission missing")?;
-    let bytes = crate::goal_permission_material::capture(permission, "run", &replay)?;
-    let text = projection::permission_text(&bytes)?;
-    assert!(text.starts_with("Earlier tool declarations"));
-    assert!(text.contains("/fixture/workspace/package.json"));
-    assert!(text.contains("Original permission request remains unchanged"));
-    assert!(text.contains("Declared locations: []"));
-    assert!(text.contains(&serde_json::to_string_pretty(permission)?));
-    Ok(())
-}
-
 #[tokio::test]
 async fn permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution()
 -> Result<()> {
@@ -687,35 +663,5 @@ async fn projection_preserves_incomplete_budget_and_unknown_effects_as_separate_
             .iter()
             .any(|line| line.contains("no replacement"))
     );
-    let control_source_revision = goal.control_source_revision;
-    let task = &mut goal.workflow.tasks[0];
-    let reference = bitrouter_orchestrator::goal::workflow::ArtifactRef {
-        path: temporary.path().join("retained-evidence"),
-        sha256: "a".repeat(64),
-        bytes: 1,
-    };
-    task.executions[0].reconciliation = Some(
-        bitrouter_orchestrator::goal::workflow::LocalReconciliation::Verified {
-            task_revision: 1,
-            control_source_revision,
-            workspace: reference.clone(),
-            transcript: reference,
-        },
-    );
-    let original = task.executions[0].clone();
-    task.executions = (0..3)
-        .map(|index| {
-            let mut attempt = original.clone();
-            attempt.id = format!("attempt-{index}");
-            attempt
-        })
-        .collect();
-    let exhausted = projection::goal(&goal, &mut artifacts);
-    assert!(exhausted.needs_you);
-    assert!(exhausted.reason.contains("retry limit"));
-    assert!(exhausted.tasks[0].status.contains("retry limit"));
-    assert!(!exhausted.tasks[0].status.contains("pending"));
-    assert_eq!(exhausted.satisfaction, "incomplete");
-    assert_eq!(exhausted.delivery, "None");
     Ok(())
 }

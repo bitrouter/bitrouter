@@ -17,7 +17,6 @@ impl Coordinator {
                 || task.run_intent != RunIntent::Run
                 || execution.task_revision != task.requirements_revision
                 || execution.stop.is_some()
-                || execution.stop_boundary_deadline_ms.is_some()
             {
                 continue;
             }
@@ -87,37 +86,9 @@ impl Coordinator {
                     else {
                         continue;
                     };
-                    if matches!(execution.stop, Some(StopState::Confirmed { .. })) {
-                        let response = self
-                            .supervisor
-                            .dispatch(SessionRequest::authorized(
-                                &self.grant,
-                                SessionCommand::Snapshot {
-                                    run_id: decision.run_id.clone(),
-                                },
-                            ))
-                            .await?;
-                        let SessionResponse::Snapshot { snapshot } = response else {
-                            anyhow::bail!("stopped permission snapshot is unavailable");
-                        };
-                        if snapshot.run_id == decision.run_id
-                            && snapshot.process == ProcessState::Stopped
-                            && !snapshot
-                                .pending_permissions
-                                .iter()
-                                .any(|pending| pending.permission_id == decision.permission_id)
-                        {
-                            self.change(&current, Change::Decision { event: Event::Obsolete {
-                                decision_id: decision.id.clone(),
-                                reason: "The original owned session is stopped and this request is no longer pending. No user consent or tool completion follows from closing it.".into(),
-                            }}).await?;
-                            continue;
-                        }
-                    }
                     if current.run_intent != RunIntent::Run
                         || task.run_intent != RunIntent::Run
                         || execution.stop.is_some()
-                        || execution.stop_boundary_deadline_ms.is_some()
                     {
                         continue;
                     }
@@ -199,26 +170,7 @@ impl Coordinator {
             return Ok(());
         }
         let root = crate::goal_artifacts::root(&self.workspaces, &goal.id);
-        let material = match self
-            .supervisor
-            .dispatch(SessionRequest::authorized(
-                &self.grant,
-                SessionCommand::Events {
-                    run_id: run_id.into(),
-                    after_seq: 0,
-                },
-            ))
-            .await
-        {
-            Ok(SessionResponse::Events { replay }) => {
-                crate::goal_permission_material::capture(permission, run_id, &replay)?
-            }
-            _ => crate::goal_permission_material::unavailable(
-                permission,
-                "Current tool history is unavailable",
-            )?,
-        };
-        let request = crate::goal_artifacts::put(&root, &material).await?;
+        let request = crate::goal_artifacts::put(&root, &serde_json::to_vec(permission)?).await?;
         let options = permission
             .options
             .iter()
@@ -272,7 +224,6 @@ impl Coordinator {
                 },
             )
             .await?;
-            self.validate_permission_delivery(goal, decision).await?;
             let response = self
                 .supervisor
                 .dispatch(SessionRequest::authorized(
@@ -339,48 +290,6 @@ impl Coordinator {
         .await
     }
 
-    async fn validate_permission_delivery(
-        &self,
-        goal: &GoalSnapshot,
-        decision: &PermissionDecision,
-    ) -> Result<()> {
-        let response = self
-            .supervisor
-            .dispatch(SessionRequest::authorized(
-                &self.grant,
-                SessionCommand::Snapshot {
-                    run_id: decision.run_id.clone(),
-                },
-            ))
-            .await?;
-        let SessionResponse::Snapshot { snapshot } = response else {
-            anyhow::bail!("unexpected current permission snapshot");
-        };
-        let permission = snapshot
-            .pending_permissions
-            .iter()
-            .find(|permission| permission.permission_id == decision.permission_id)
-            .context("permission is no longer pending on its original run")?;
-        let response = self
-            .supervisor
-            .dispatch(SessionRequest::authorized(
-                &self.grant,
-                SessionCommand::Events {
-                    run_id: decision.run_id.clone(),
-                    after_seq: 0,
-                },
-            ))
-            .await?;
-        let SessionResponse::Events { replay } = response else {
-            anyhow::bail!("unexpected current permission events");
-        };
-        let current =
-            crate::goal_permission_material::capture(permission, &decision.run_id, &replay)?;
-        let root = crate::goal_artifacts::root(&self.workspaces, &goal.id);
-        let saved = crate::goal_artifacts::read(&root, &decision.request).await?;
-        crate::goal_permission_material::validate_current(&saved, &current, &decision.run_id)
-    }
-
     async fn permission_was_selected(
         &self,
         decision: &PermissionDecision,
@@ -399,37 +308,8 @@ impl Coordinator {
         let SessionResponse::Events { replay } = response else {
             anyhow::bail!("unexpected permission events response");
         };
-        Ok(choice_was_selected(
-            &replay.events,
-            &decision.permission_id,
-            option_id,
-        ))
+        Ok(replay.events.iter().any(|event| matches!(&event.kind, crate::supervisor::SessionEventKind::PermissionResolved { permission_id, option_id: Some(selected), .. } if permission_id == &decision.permission_id && selected == option_id)))
     }
-}
-
-fn choice_was_selected(
-    events: &[crate::supervisor::SessionEvent],
-    permission: &str,
-    option: &str,
-) -> bool {
-    use crate::supervisor::{PermissionResolutionOrigin, SessionEventKind};
-    let mut resolutions = events.iter().filter(|event| {
-        matches!(&event.kind,
-        SessionEventKind::PermissionResolved { permission_id, .. } if permission_id == permission)
-    });
-    let Some(resolution) = resolutions.next() else {
-        return false;
-    };
-    if resolutions.next().is_some() {
-        return false;
-    }
-    matches!(&resolution.kind, SessionEventKind::PermissionResolved {
-        option_id: Some(selected), automatic: false,
-        origin: Some(PermissionResolutionOrigin::ControllerChoice), ..
-    } | SessionEventKind::PermissionResolved {
-        option_id: Some(selected), automatic: true,
-        origin: Some(PermissionResolutionOrigin::ConfiguredPolicy), ..
-    } if selected == option)
 }
 
 pub(super) async fn allowed_local_option(
@@ -437,68 +317,28 @@ pub(super) async fn allowed_local_option(
     decision: &PermissionDecision,
     workspace: &Path,
 ) -> Result<Option<String>> {
-    let bytes = crate::goal_artifacts::read(root, &decision.request).await?;
-    let Some(tool) = crate::goal_permission_material::effective_tool(&bytes, &decision.run_id)?
-    else {
+    let value: serde_json::Value =
+        serde_json::from_slice(&crate::goal_artifacts::read(root, &decision.request).await?)?;
+    let Some(tool) = value.get("tool_call") else {
         return Ok(None);
     };
-    if !is_local_tool(&tool, workspace).await? {
-        return Ok(None);
-    }
-    Ok(decision
-        .options
-        .iter()
-        .find(|option| option.allows && !option.persistent)
-        .map(|option| option.id.clone()))
-}
-
-pub(super) async fn is_local_tool(tool: &serde_json::Value, workspace: &Path) -> Result<bool> {
     if !matches!(
         tool.get("kind").and_then(serde_json::Value::as_str),
         Some("read" | "edit" | "search")
     ) {
-        return Ok(false);
+        return Ok(None);
     }
-    // ACP locations are optional display metadata. Explicit path arguments
-    // remain separate original declarations; check every supplied source.
-    let mut paths = Vec::new();
-    if let Some(value) = tool.get("locations").filter(|value| !value.is_null()) {
-        let Some(locations) = value.as_array() else {
-            return Ok(false);
-        };
-        if locations.len() > 32 {
-            return Ok(false);
-        }
-        for location in locations {
-            let Some(path) = location.get("path").and_then(serde_json::Value::as_str) else {
-                return Ok(false);
-            };
-            paths.push(path);
-        }
-    }
-    if let Some(value) = tool.get("rawInput").filter(|value| !value.is_null()) {
-        let Some(arguments) = value.as_object() else {
-            return Ok(false);
-        };
-        for key in ["path", "file_path", "filePath"] {
-            if let Some(value) = arguments.get(key).filter(|value| !value.is_null()) {
-                let Some(path) = value.as_str() else {
-                    return Ok(false);
-                };
-                paths.push(path);
-            }
-        }
-    }
-    paths.sort_unstable();
-    paths.dedup();
-    if paths.is_empty() || paths.len() > 32 {
-        return Ok(false);
+    let Some(locations) = tool.get("locations").and_then(serde_json::Value::as_array) else {
+        return Ok(None);
+    };
+    if locations.is_empty() || locations.len() > 32 {
+        return Ok(None);
     }
     let workspace = tokio::fs::canonicalize(workspace).await?;
-    for path in paths {
-        if path.is_empty() || path.contains("://") {
-            return Ok(false);
-        }
+    for location in locations {
+        let Some(path) = location.get("path").and_then(serde_json::Value::as_str) else {
+            return Ok(None);
+        };
         let path = Path::new(path);
         if tool.get("kind").and_then(serde_json::Value::as_str) == Some("edit")
             && path.components().any(|part| {
@@ -506,7 +346,7 @@ pub(super) async fn is_local_tool(tool: &serde_json::Value, workspace: &Path) ->
                 std::path::Component::Normal(name) if name == ".git" || name == ".bro")
             })
         {
-            return Ok(false);
+            return Ok(None);
         }
         let mut target = if path.is_absolute() {
             path.to_path_buf()
@@ -517,11 +357,11 @@ pub(super) async fn is_local_tool(tool: &serde_json::Value, workspace: &Path) ->
             .components()
             .any(|part| matches!(part, std::path::Component::ParentDir))
         {
-            return Ok(false);
+            return Ok(None);
         }
         while !tokio::fs::try_exists(&target).await? {
             let Some(parent) = target.parent() else {
-                return Ok(false);
+                return Ok(None);
             };
             target = parent.to_path_buf();
         }
@@ -529,10 +369,14 @@ pub(super) async fn is_local_tool(tool: &serde_json::Value, workspace: &Path) ->
             .await?
             .starts_with(&workspace)
         {
-            return Ok(false);
+            return Ok(None);
         }
     }
-    Ok(true)
+    Ok(decision
+        .options
+        .iter()
+        .find(|option| option.allows && !option.persistent)
+        .map(|option| option.id.clone()))
 }
 
 #[cfg(test)]

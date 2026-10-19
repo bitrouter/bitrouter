@@ -2,46 +2,6 @@ use super::*;
 use bitrouter_orchestrator::goal::verification::{CheckOutput, CheckSpec};
 use bitrouter_orchestrator::goal::workflow::CheckState;
 
-pub(super) async fn passed(
-    root: &Path,
-    task: &Task,
-    execution: &Execution,
-    workspace: &ArtifactRef,
-) -> Result<Vec<serde_json::Value>> {
-    let mut results = Vec::new();
-    for specification in &task.spec.checks {
-        let check = execution
-            .checks
-            .iter()
-            .find(|check| {
-                check.spec == *specification
-                    && check.task_revision == task.requirements_revision
-                    && check.workspace == *workspace
-            })
-            .context("handoff has no matching task check")?;
-        let CheckState::Observed {
-            passed: true,
-            completed: true,
-            report,
-        } = &check.state
-        else {
-            anyhow::bail!("handoff task check is not verified")
-        };
-        let output: CheckOutput =
-            serde_json::from_slice(&crate::goal_artifacts::read(root, report).await?)?;
-        anyhow::ensure!(
-            output.supports(specification),
-            "task check output does not support its specification"
-        );
-        results.push(
-            serde_json::json!({"specification":specification,"task_revision":check.task_revision,
-            "source_requirements_revision":check.requirements_revision,"artifact":check.workspace,
-            "report":report,"actual_output":output}),
-        );
-    }
-    Ok(results)
-}
-
 impl Coordinator {
     pub(super) async fn ensure_checks(
         &self,

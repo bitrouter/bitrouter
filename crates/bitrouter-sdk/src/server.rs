@@ -1702,10 +1702,6 @@ async fn stream_response(
 
 impl IntoResponse for BitrouterError {
     fn into_response(self) -> Response {
-        if let BitrouterError::Incompatible { report } = &self {
-            // ConversionReport contains only bounded enums and structural indices.
-            tracing::warn!(conversion = ?report, "model request conversion refused");
-        }
         match self {
             BitrouterError::UpstreamBadRequest { error } => (
                 StatusCode::BAD_REQUEST,

@@ -20,21 +20,11 @@ impl Document {
             self.logical = render::document(state);
         }
         if refresh || self.width != width {
-            let mut physical = self
+            self.rows = self
                 .logical
                 .iter()
-                .rev()
-                .flat_map(|row| crate::wrap::wrap(row, width.max(1)).into_iter().rev());
-            let mut rows: Vec<_> = physical.by_ref().take(4095).collect();
-            if physical.next().is_some() {
-                rows.push(ratatui::text::Line::raw(if width >= 26 {
-                    "Older rows: Ctrl-O history"
-                } else {
-                    "…"
-                }));
-            }
-            rows.reverse();
-            self.rows = rows;
+                .flat_map(|row| crate::wrap::wrap(row, width.max(1)))
+                .collect();
         }
         self.width = width;
         &self.rows
@@ -213,36 +203,5 @@ mod tests {
         for screen in [Screen::Goals, Screen::Workflow, Screen::Detail] {
             assert_eq!(text.matches(&format!("DEFERRED_{screen:?}")).count(), 1);
         }
-    }
-}
-
-#[cfg(test)]
-mod bounded_tests {
-    use super::*;
-
-    #[test]
-    fn physical_window_stays_bounded_and_keeps_wrapped_lines_in_order() {
-        let mut state = State::new("/project".into());
-        state.receive(crate::goals::Goal {
-            id: "g".into(),
-            ..Default::default()
-        });
-        state.observe("g".into());
-        for _ in 0..100 {
-            state.event_line(
-                "g",
-                format!("{}\n{}", "early\n".repeat(1000), "0123456789".repeat(20)),
-            );
-            state.event_line("g", "different entry".into());
-        }
-        state.event_line("g", "ABCDEFGHIJKLMNO".into());
-        let mut document = Document::default();
-        let rows = document.draw(&state, 5);
-        assert!(rows.len() <= 4096);
-        let tail: Vec<_> = rows.iter().rev().take(3).map(ToString::to_string).collect();
-        assert_eq!(tail, ["KLMNO", "FGHIJ", "ABCDE"]);
-        assert_eq!(rows.first().map(ToString::to_string).as_deref(), Some("…"));
-        assert!(rows.iter().all(|row| row.width() <= 5));
-        assert!(document.draw(&state, 80).len() <= 4096);
     }
 }

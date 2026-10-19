@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub mod budget;
 mod decision;
-mod history;
 mod render;
 #[cfg(test)]
 mod tests;
@@ -148,7 +147,6 @@ pub enum Screen {
     New,
     Workflow,
     Detail,
-    History,
 }
 
 /// These are client requests; receipt, validation and effects stay in the app.
@@ -195,12 +193,6 @@ pub enum Effect {
     Refresh,
     NextPage,
     PreviousPage,
-    ReadHistory {
-        goal_id: String,
-        after: u64,
-        cutoff: Option<u64>,
-        epoch: u64,
-    },
     Detach,
 }
 
@@ -215,7 +207,6 @@ pub enum Control {
 pub struct Notebook {
     pub editor: Editor,
     pub events: Vec<String>,
-    pub omitted_events: usize,
     pub selected_task: Option<String>,
     pub detail_offset: usize,
     pub selected_artifact: usize,
@@ -245,13 +236,11 @@ pub struct State {
     pub artifact_preview: Option<String>,
     pub fullscreen: bool,
     pub viewport: Option<(u16, u16)>,
-    archived_detail: Option<(Task, usize, usize)>,
     search: Option<Editor>,
     directory_search: String,
     decision: Option<decision::Dialog>,
     acceptance_dialog: Option<(String, Acceptance)>,
     budget_dialog: Option<budget::Dialog>,
-    history: Option<history::History>,
 }
 
 impl State {
@@ -282,8 +271,6 @@ impl State {
             acceptance_dialog: None,
             budget_dialog: None,
             viewport: None,
-            archived_detail: None,
-            history: None,
         }
     }
 
@@ -333,17 +320,6 @@ impl State {
         }
         self.next_page = next;
         self.previous_page = previous;
-        self.notebooks.retain(|id, book| {
-            self.current.as_ref() == Some(id)
-                || self.directory.contains(id)
-                || book.pending
-                || !book.editor.text().is_empty()
-        });
-        self.goals.retain(|id, _| {
-            self.current.as_ref() == Some(id)
-                || self.directory.contains(id)
-                || self.notebooks.contains_key(id)
-        });
     }
 
     pub fn observe(&mut self, id: String) {
@@ -355,7 +331,6 @@ impl State {
         self.budget_dialog = None;
         self.search = None;
         self.fullscreen = false;
-        self.archived_detail = None;
     }
 
     pub fn current_goal(&self) -> Option<&Goal> {
@@ -399,31 +374,12 @@ impl State {
             editor.clear();
         }
         editor.push_history(text.to_owned());
-        editor.retain_recent_history();
         self.pending(goal_id, false);
     }
 
-    pub fn event_line(&mut self, goal_id: &str, mut line: String) {
-        if line.len() > 32 * 1024 {
-            let end = line
-                .char_indices()
-                .map(|(index, _)| index)
-                .take_while(|index| *index <= 32 * 1024)
-                .last()
-                .unwrap_or(0);
-            line.truncate(end);
-            line.push_str("\nDisplay truncated · Ctrl-O persistent history");
-        }
+    pub fn event_line(&mut self, goal_id: &str, line: String) {
         let book = self.notebooks.entry(goal_id.into()).or_default();
-        if book.events.last() == Some(&line) {
-            return;
-        }
         book.events.push(line);
-        let mut bytes: usize = book.events.iter().map(String::len).sum();
-        while book.events.len() > 128 || bytes > 256 * 1024 {
-            bytes = bytes.saturating_sub(book.events.remove(0).len());
-            book.omitted_events = book.omitted_events.saturating_add(1);
-        }
     }
 
     fn directory_ids(&self) -> Vec<String> {
@@ -524,9 +480,6 @@ impl State {
                 }
             }
             return Vec::new();
-        }
-        if self.screen == Screen::History {
-            return self.history_event(key.code);
         }
         if self.screen == Screen::Workflow || self.screen == Screen::Detail {
             return self.browse(key.code, ctrl);
@@ -644,9 +597,6 @@ impl State {
             return Vec::new();
         };
         if ctrl {
-            if key.code == KeyCode::Char('o') {
-                return vec![self.open_history(id)];
-            }
             if key.code == KeyCode::Char('b') {
                 if let Some(goal) = self.current_goal() {
                     self.budget_dialog =
@@ -673,7 +623,6 @@ impl State {
                     };
                     let revision = goal.revision;
                     self.detail = Some(detail);
-                    self.archived_detail = None;
                     self.detail_revision = revision;
                     self.detail_updated = false;
                     self.artifact_preview = None;
@@ -757,16 +706,6 @@ impl State {
             if self.artifact_preview.take().is_some() {
                 return Vec::new();
             }
-            if let Some((detail, offset, selected)) = self.archived_detail.take() {
-                self.detail = Some(detail);
-                if let Some(id) = &self.current
-                    && let Some(book) = self.notebooks.get_mut(id)
-                {
-                    book.detail_offset = offset;
-                    book.selected_artifact = selected;
-                }
-                return Vec::new();
-            }
             self.screen = if self.screen == Screen::Detail {
                 Screen::Workflow
             } else {
@@ -842,7 +781,6 @@ impl State {
                     let detail = task.clone();
                     let revision = goal.revision;
                     self.detail = Some(detail);
-                    self.archived_detail = None;
                     self.detail_revision = revision;
                     self.detail_updated = false;
                     self.artifact_preview = None;

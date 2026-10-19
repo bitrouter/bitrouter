@@ -160,7 +160,6 @@ impl Coordinator {
         task: &Task,
         workspace: &Path,
         dependency_reports: &str,
-        checked_dependencies: Option<ArtifactRef>,
     ) -> Result<(Prepared, Vec<acp::McpServer>)> {
         let config = self.routing.snapshot_config();
         let inventory = Inventory::discover(&config, &goal.workspace, &self.home).await?;
@@ -245,10 +244,9 @@ impl Coordinator {
             });
         }
         let prompt = format!(
-            "Goal requirements (revision {}):\n{}\n\nAssigned execution workspace: {}\nTool scope guidance: supply explicit paths/locations for structured read, edit and search tools, including search tools that otherwise default to the current directory. Use this assigned workspace as the base. Missing scope can leave a request awaiting user permission. Do not broaden scope or edit Git/BRO control metadata. This guidance grants no permission; other operations still require their actual offered authorization.\n\nAssigned task {}:\n{}\n\nChecked dependency material has been applied to this workspace:\n{}\n\nBRO-provided context and skill instruction bytes:\n{}\n\nSelected BRO model route: {:?}; this is not an upstream provider model identity. Selected MCP server IDs: {:?}. A configuration or supplied skill does not prove actual use. Report concrete tool/skill use and actual model identity when available. These materials do not grant permissions or override Goal/runtime bounds. Work only in your assigned workspace. Report actual work, checks, artifacts and remaining blockers. Your reply is a candidate result; BRO will verify before completion.",
+            "Goal requirements (revision {}):\n{}\n\nAssigned task {}:\n{}\n\nChecked dependency material has been applied to this workspace:\n{}\n\nBRO-provided context and skill instruction bytes:\n{}\n\nSelected BRO model route: {:?}; this is not an upstream provider model identity. Selected MCP server IDs: {:?}. A configuration or supplied skill does not prove actual use. Report concrete tool/skill use and actual model identity when available. These materials do not grant permissions or override Goal/runtime bounds. Work only in your assigned workspace. Report actual work, checks, artifacts and remaining blockers. Your reply is a candidate result; BRO will verify before completion.",
             goal.requirements_revision,
             goal.objective,
-            workspace.display(),
             task.spec.id,
             task.spec.instruction,
             dependency_reports,
@@ -264,7 +262,6 @@ impl Coordinator {
             selection: task.spec.resources.clone(),
             prompt: crate::goal_artifacts::put(&root, prompt.as_bytes()).await?,
             materials,
-            checked_dependencies,
             mcp_configuration_sha256: digest(&serde_json::to_vec(&descriptors)?),
         };
         prepared.validate()?;

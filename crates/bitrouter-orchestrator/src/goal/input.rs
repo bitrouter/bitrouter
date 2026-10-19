@@ -1,7 +1,6 @@
 //! Ordered Goal input understanding and atomic requirement/control commits.
-pub mod scope;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
@@ -156,7 +155,6 @@ pub(super) fn withdraw(
         classification: None,
         reasoning_request_id: None,
         clarification_kind: ClarificationKind::Unknown,
-        modification_scope: None,
         resolutions: vec![Resolution {
             input_id: id.into(),
             source_requirements_revision: source_revision,
@@ -191,10 +189,6 @@ pub struct TaskUpdate {
     /// None preserves the current selection; Some replaces the complete set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<super::resources::Selection>,
-    /// Add named machine checks while retaining existing requirements. A
-    /// matching existing id must have the exact same specification.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_checks: Vec<super::verification::CheckSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,8 +250,6 @@ pub struct Interpretation {
     pub clarification_kind: Option<ClarificationKind>,
     #[serde(default)]
     pub resolutions: Vec<Resolution>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub modification_scope: Option<Box<scope::Binding>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,8 +270,6 @@ pub struct InputResult {
     pub reasoning_request_id: Option<String>,
     #[serde(default)]
     pub clarification_kind: ClarificationKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub modification_scope: Option<scope::Binding>,
     #[serde(default)]
     pub resolutions: Vec<Resolution>,
 }
@@ -367,7 +357,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                     || proposal.control.is_some()
                     || proposal.permission_response.is_some()
                     || !proposal.resolutions.is_empty()
-                    || proposal.modification_scope.is_some()
                     || proposal
                         .clarification_kind
                         .is_some_and(|kind| kind != ClarificationKind::Unknown)
@@ -384,7 +373,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                     || proposal.control.is_some()
                     || proposal.permission_response.is_some()
                     || !proposal.resolutions.is_empty()
-                    || proposal.modification_scope.is_some()
                     || proposal
                         .clarification_kind
                         .is_some_and(|kind| kind != ClarificationKind::Unknown))
@@ -403,18 +391,7 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
             {
                 message(text)?;
             }
-            if let Some(binding) = &proposal.modification_scope {
-                binding.validate(goal, &pending, &proposal)?;
-            }
-            let modification_only_ambiguity =
-                proposal.modification_scope.as_ref().is_some_and(|binding| {
-                    matches!(binding.selection, scope::Selection::Unknown { .. })
-                }) && proposal.objective.is_none()
-                    && proposal.task_updates.is_empty()
-                    && proposal.permission_response.is_none();
             if proposal.clarification.is_some()
-                && proposal.clarification_kind != Some(ClarificationKind::Query)
-                && !modification_only_ambiguity
                 && (proposal.objective.is_some()
                     || !proposal.task_updates.is_empty()
                     || proposal.control.is_some()
@@ -433,7 +410,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                 proposal.control = None;
                 proposal.permission_response = None;
                 proposal.resolutions.clear();
-                proposal.modification_scope = None;
                 proposal.clarification_kind = Some(ClarificationKind::Unknown);
                 proposal.clarification = Some(
                     "Requirements changed during understanding; no proposed effects were committed"
@@ -615,7 +591,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                 return Err(invalid("understanding produced no answer or disposition"));
             }
             let mut affected = BTreeSet::new();
-            let mut updated_checks = BTreeMap::new();
             for update in &proposal.task_updates {
                 message(&update.instruction)?;
                 if let Some(resources) = &update.resources {
@@ -635,37 +610,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                     return Err(invalid(
                         "task modification has an invalid or ambiguous target",
                     ));
-                }
-                if !update.additional_checks.is_empty() {
-                    let task = goal
-                        .workflow
-                        .tasks
-                        .iter()
-                        .find(|task| task.spec.id == update.task_id)
-                        .ok_or(GoalError::NotFound)?;
-                    let mut checks = task.spec.checks.clone();
-                    let mut additions = BTreeSet::new();
-                    for check in &update.additional_checks {
-                        check.validate()?;
-                        if !additions.insert(&check.id) {
-                            return Err(invalid("additional check ids must be unique"));
-                        }
-                        if let Some(existing) =
-                            checks.iter().find(|existing| existing.id == check.id)
-                        {
-                            if existing != check {
-                                return Err(invalid(
-                                    "additional checks cannot replace or weaken an existing check",
-                                ));
-                            }
-                        } else {
-                            checks.push(check.clone());
-                        }
-                    }
-                    if checks.len() > 16 {
-                        return Err(invalid("task machine checks exceed their bound"));
-                    }
-                    updated_checks.insert(update.task_id.clone(), checks);
                 }
             }
             loop {
@@ -715,9 +659,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                     task.spec.instruction = update.instruction.clone();
                     if let Some(resources) = &update.resources {
                         task.spec.resources = resources.clone();
-                    }
-                    if let Some(checks) = updated_checks.remove(&update.task_id) {
-                        task.spec.checks = checks;
                     }
                 }
                 for task in &mut goal.workflow.tasks {
@@ -822,7 +763,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                 classification: pending.classification,
                 reasoning_request_id: reasoning_request_id.clone(),
                 clarification_kind: proposal.clarification_kind.unwrap_or_default(),
-                modification_scope: proposal.modification_scope.map(|binding| *binding),
                 resolutions: proposal.resolutions,
             });
             goal.inputs.pending = None;

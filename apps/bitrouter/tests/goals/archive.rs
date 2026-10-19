@@ -131,7 +131,6 @@ async fn settle_and_edit(
                         instruction: format!(
                             "Original work with the next {execution_id} requirement"
                         ),
-                        additional_checks: Vec::new(),
                         resources: None,
                     }],
                     ..Default::default()

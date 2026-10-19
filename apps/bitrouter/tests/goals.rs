@@ -43,58 +43,6 @@ fn service(db: DatabaseConnection) -> GoalService {
     GoalService::new(Arc::new(DatabaseGoalStore::new(db)))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn independent_goal_receipts_commit_under_wal_write_contention() -> Result<()> {
-    let directory = tempfile::tempdir()?;
-    let url = format!(
-        "sqlite://{}?mode=rwc",
-        directory.path().join("goals.db").display()
-    );
-    let db = bitrouter::db::connect(&url).await?;
-    bitrouter::db::run_migrations(&db).await?;
-    let store = Arc::new(DatabaseGoalStore::new(db));
-    let barrier = Arc::new(tokio::sync::Barrier::new(16));
-    let mut tasks = tokio::task::JoinSet::new();
-    for index in 0..16 {
-        // Supervisor/native execution assembles its own pool for the same file.
-        let goals = Arc::new(GoalService::new(Arc::new(DatabaseGoalStore::new(
-            bitrouter::db::connect(&url).await?,
-        ))));
-        let barrier = barrier.clone();
-        let workspace = directory.path().to_path_buf();
-        tasks.spawn(async move {
-            barrier.wait().await;
-            goals
-                .execute(
-                    "local",
-                    GoalCommand::Create {
-                        operation_id: format!("independent-{index}"),
-                        title: format!("Goal {index}"),
-                        workspace,
-                        objective: "Deliver verified local work".into(),
-                        budget_limits: Default::default(),
-                    },
-                    1,
-                )
-                .await
-        });
-    }
-    let mut ids = BTreeSet::new();
-    while let Some(result) = tasks.join_next().await {
-        let GoalReply::Accepted { operation } = result?? else {
-            anyhow::bail!("independent creation returned no original receipt")
-        };
-        assert!(ids.insert(operation.goal_id.clone()));
-        assert_eq!(
-            store.operation("local", &operation.id).await?,
-            Some(operation.clone())
-        );
-        assert_eq!(store.get("local", &operation.goal_id).await?.revision, 1);
-    }
-    assert_eq!(ids.len(), 16);
-    Ok(())
-}
-
 fn actor() -> WorkflowActor<'static> {
     WorkflowActor {
         owner: "local",

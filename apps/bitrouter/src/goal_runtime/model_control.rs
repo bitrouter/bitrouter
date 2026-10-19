@@ -60,15 +60,12 @@ impl ModelControl {
         &self,
         attempt_id: &str,
         request: &bitrouter_sdk::decision_model::types::DecisionRequest,
-        pricing: Option<&bitrouter_sdk::decision_model::policy::DecisionPricing>,
     ) -> bitrouter_sdk::Result<()> {
-        let quote = pricing.and_then(|pricing| typed_quote(&request.model, pricing));
-        self.begin_with_reservation(
+        self.begin(
             WorkKind::TypedDecision,
             &format!("typed/{attempt_id}"),
             None,
             serde_json::to_value(request).map_err(|_| unavailable())?,
-            quote,
         )
         .await
     }
@@ -82,50 +79,10 @@ impl ModelControl {
         >,
         estimate: Option<u64>,
     ) -> bitrouter_sdk::Result<()> {
-        let work_id = key_id(&format!("typed/{attempt_id}"));
-        let current = self
-            .goals
-            .execute(
-                "local",
-                GoalCommand::Get {
-                    goal_id: self.goal.id.clone(),
-                },
-                now().map_err(|_| unavailable())?,
-            )
-            .await
-            .map_err(|_| unavailable())?;
-        let GoalReply::Snapshot { goal } = current else {
-            return Err(unavailable());
-        };
-        let quote = goal
-            .accounting
-            .in_flight
-            .iter()
-            .find(|work| work.id == work_id)
-            .and_then(|work| work.token_reservation.as_ref());
-        let usage = match outcome {
-            Ok(response) => Some(response.usage),
-            Err(error) => error.usage,
-        };
-        let no_dispatch = matches!(outcome, Err(error) if !error.may_have_run);
-        let verified = no_dispatch
-            || quote.is_some_and(|quote| {
-                let Some(usage) = usage else { return false };
-                let Ok(pricing) = serde_json::from_value::<
-                    bitrouter_sdk::decision_model::policy::DecisionPricing,
-                >(quote.evidence["pricing"].clone()) else {
-                    return false;
-                };
-                typed_quote(&quote.model, &pricing).as_ref() == Some(quote)
-                    && usage.input_tokens <= quote.input_tokens_bound
-                    && usage.output_tokens <= quote.output_tokens_bound
-                    && decision_estimate(&pricing, usage) == estimate
-            });
-        self.observe_with_reservation(
+        self.observe(
             &format!("typed/{attempt_id}"),
             serde_json::to_value(outcome).map_err(|_| unavailable())?,
-            if no_dispatch { Some(0) } else { estimate },
-            verified,
+            estimate,
         )
         .await
     }
@@ -632,48 +589,6 @@ fn diagnostic(detail: &str) -> bitrouter_sdk::error::BitrouterError {
 fn key_id(key: &str) -> String {
     use sha2::{Digest, Sha256};
     hex::encode(Sha256::digest(key.as_bytes()))
-}
-fn decision_estimate(
-    pricing: &bitrouter_sdk::decision_model::policy::DecisionPricing,
-    usage: bitrouter_sdk::decision_model::types::DecisionUsage,
-) -> Option<u64> {
-    let amount = pricing.estimate(usage) * 1_000_000.0;
-    if !amount.is_finite() || amount < 0.0 {
-        return None;
-    }
-    format!("{:.0}", amount.ceil()).parse().ok()
-}
-fn typed_quote(
-    model: &str,
-    pricing: &bitrouter_sdk::decision_model::policy::DecisionPricing,
-) -> Option<NativeTokenReservation> {
-    pricing.validate().ok()?;
-    let bound = |tokens: Option<u64>, rate: f64| {
-        if rate == 0.0 {
-            Some(tokens.unwrap_or(u64::MAX))
-        } else {
-            tokens
-        }
-    };
-    let input = bound(pricing.max_input_tokens, pricing.input_usd_per_million)?;
-    let output = bound(pricing.max_output_tokens, pricing.output_usd_per_million)?;
-    let evidence = serde_json::json!({"pricing":pricing,"model":model,"basis":"operator_declared_aggregate_token_estimate"});
-    let micro_usd = decision_estimate(
-        pricing,
-        bitrouter_sdk::decision_model::types::DecisionUsage {
-            input_tokens: input,
-            output_tokens: output,
-        },
-    )?;
-    Some(NativeTokenReservation {
-        micro_usd,
-        pricing_version: key_id(&serde_json::to_string(&evidence).ok()?),
-        provider: "decision_model".into(),
-        model: model.into(),
-        input_tokens_bound: input,
-        output_tokens_bound: output,
-        evidence,
-    })
 }
 fn prep_key(work: &NativePreparationWork) -> bitrouter_sdk::Result<String> {
     Ok(format!(

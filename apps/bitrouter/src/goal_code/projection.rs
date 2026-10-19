@@ -6,27 +6,16 @@ use bitrouter_orchestrator::goal::workflow::{
 };
 use bitrouter_tui::goals::{Acceptance, Artifact, Decision, DecisionOption, Facts, Goal, Task};
 
-#[derive(Clone)]
-pub(super) enum Target {
-    File(bitrouter_orchestrator::goal::workflow::ArtifactRef),
-    Archive {
-        task_id: String,
-        reference: bitrouter_orchestrator::goal::workflow::ArtifactRef,
-    },
-}
+pub(super) type Artifacts =
+    BTreeMap<(String, String), bitrouter_orchestrator::goal::workflow::ArtifactRef>;
 
-pub(super) type Artifacts = BTreeMap<(String, String), Target>;
-
-pub(super) fn artifact(
+fn artifact(
     goal: &str,
     label: &str,
     reference: &bitrouter_orchestrator::goal::workflow::ArtifactRef,
     map: &mut Artifacts,
 ) -> Artifact {
-    map.insert(
-        (goal.into(), reference.sha256.clone()),
-        Target::File(reference.clone()),
-    );
+    map.insert((goal.into(), reference.sha256.clone()), reference.clone());
     Artifact {
         id: reference.sha256.clone(),
         label: format!(
@@ -34,23 +23,6 @@ pub(super) fn artifact(
             reference.sha256, reference.bytes
         ),
     }
-}
-
-pub(super) fn archive_artifact(
-    goal: &str,
-    task_id: &str,
-    reference: &bitrouter_orchestrator::goal::workflow::ArtifactRef,
-    map: &mut Artifacts,
-) -> Artifact {
-    let artifact = artifact(goal, "Older execution record · read only", reference, map);
-    map.insert(
-        (goal.into(), reference.sha256.clone()),
-        Target::Archive {
-            task_id: task_id.into(),
-            reference: reference.clone(),
-        },
-    );
-    artifact
 }
 
 pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
@@ -91,7 +63,6 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
     .to_owned();
     let mut tasks = Vec::new();
     let mut recovery_needs_you = false;
-    let mut retry_limit_needs_you = false;
     for task in &snapshot.workflow.tasks {
         let mut detail = vec![
             format!(
@@ -105,50 +76,18 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             detail.push(format!("{} older reconciled executions retained in immutable Goal history; current attempts and budget are unchanged", task.archived_executions));
         }
         if let Some(record) = &task.latest_archive {
-            artifacts.push(archive_artifact(&snapshot.id, &task.spec.id, record, map));
+            artifacts.push(artifact(
+                &snapshot.id,
+                "Older execution record · read only",
+                record,
+                map,
+            ));
         }
         detail.push(format!("Requested resources · task revision {} · BRO route {} · MCP {:?} · context {:?} · skills {:?}",
             task.requirements_revision, task.spec.resources.model_route.as_deref().unwrap_or("harness default / uncontrolled"),
             task.spec.resources.mcp_servers, task.spec.resources.context_files,
             task.spec.resources.skills.iter().map(|skill| (&skill.material_id, &skill.sha256)).collect::<Vec<_>>()));
         let status = if let Some(attempt) = task.executions.last() {
-            if attempt.stop_boundary_deadline_ms.is_some() {
-                detail.push("Requirements saved; waiting briefly for a tool permission or settled boundary before stopping this superseded execution. Replacement has not started; no new permissions are admitted for this version.".into());
-            }
-            let retry_ready = attempt.replacement_ready(
-                task.requirements_revision,
-                snapshot
-                    .control_source_revision
-                    .max(task.control_source_revision),
-            ) || !attempt.dispatch_requested
-                && matches!(
-                    attempt.observation,
-                    Observation::Failed { run_id: None, .. }
-                );
-            let retry_limit = retry_ready
-                && (task.executions.len() >= 16
-                    || task
-                        .executions
-                        .iter()
-                        .filter(|execution| execution.task_revision == task.requirements_revision)
-                        .count()
-                        >= 3);
-            if retry_limit {
-                facts.blocked = true;
-                recovery_needs_you = true;
-                retry_limit_needs_you = true;
-                detail.push(format!("Automatic retry limit reached for task version {}. No new execution admitted; review retained evidence and revise the requirements or execution plan before another attempt. Budget and previous attempts remain recorded.", task.requirements_revision));
-            }
-            let repair_pending = attempt
-                .repairable_failure(snapshot.requirements_revision, task.requirements_revision)
-                && !retry_limit
-                && !matches!(
-                    attempt.reconciliation,
-                    Some(LocalReconciliation::Blocked { .. })
-                );
-            if repair_pending {
-                detail.push("A check or review found a specific issue. BRO is reconciling this attempt before a bounded repair with the same requirements and checks; a new execution has not yet started.".into());
-            }
             detail.push(format!(
                 "Execution: {} · source Goal requirements {} · task revision {}",
                 attempt.id, attempt.requirements_revision, attempt.task_revision
@@ -166,8 +105,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 && !attempt.effects_reconciled()
                 || attempt.task_revision == task.requirements_revision
                     && (matches!(attempt.observation, Observation::Failed { .. })
-                        || matches!(attempt.review, Some(ReviewState::Rejected { .. }))
-                            && !repair_pending);
+                        || matches!(attempt.review, Some(ReviewState::Rejected { .. })));
             facts.running |= matches!(attempt.observation, Observation::Running { .. })
                 && !matches!(attempt.stop, Some(StopState::Confirmed { .. }));
             facts.has_results |= matches!(attempt.observation, Observation::Candidate { .. });
@@ -209,8 +147,6 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 }
             }
             match &attempt.observation {
-                _ if retry_limit => "retry limit reached / needs you",
-                _ if repair_pending => "verified issue / preparing repair",
                 Observation::Unknown { .. }
                     if attempt.replacement_ready(
                         task.requirements_revision,
@@ -289,7 +225,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                     transcript,
                     ..
                 }) => {
-                    detail.push(format!("Prior execution {}: scoped lifecycle/tool evidence and stopped workspace reconciled for task version {task_revision}. Replacement dispatch and verification remain separate.",attempt.id));
+                    detail.push(format!("Prior execution {}: finished scoped local tools and stopped workspace reconciled for task version {task_revision}. Replacement dispatch and verification remain separate.",attempt.id));
                     artifacts.push(artifact(
                         &snapshot.id,
                         "Stopped local workspace",
@@ -362,14 +298,6 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                 &prepared.prompt,
                 map,
             ));
-            if let Some(reference) = &prepared.checked_dependencies {
-                artifacts.push(artifact(
-                    &snapshot.id,
-                    "Prepared checked dependency evidence",
-                    reference,
-                    map,
-                ));
-            }
             for material in &prepared.materials {
                 use bitrouter_orchestrator::goal::resources::Material;
                 let (label, content) = match material {
@@ -460,19 +388,6 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
         })
         .collect();
     let mut result_artifacts = Vec::new();
-    if let Some(binding) = snapshot
-        .inputs
-        .latest
-        .as_ref()
-        .and_then(|input| input.modification_scope.as_ref())
-    {
-        result_artifacts.push(artifact(
-            &snapshot.id,
-            "Input modification scope evidence / not a delivery",
-            &binding.evidence,
-            map,
-        ));
-    }
     let mut delivery = "None".to_owned();
     if let Some(record) = &progress.last_completed {
         delivery = format!(
@@ -531,7 +446,7 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
             ));
         }
     }
-    let mut conditions: Vec<String> = progress
+    let conditions = progress
         .specification
         .as_ref()
         .map(|spec| {
@@ -564,20 +479,10 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
                     .into(),
             ]
         });
-    conditions.extend(snapshot.inputs.unresolved_inputs().iter().map(|input| {
-        format!(
-            "Unresolved input {} / {:?}: {} · /input {} references this question",
-            input.input_id, input.kind, input.question, input.input_id
-        )
-    }));
     facts.has_results |= !result_artifacts.is_empty();
     if recovery_needs_you && snapshot.run_intent == RunIntent::Run && snapshot.budget.halt.is_none()
     {
-        reason = if retry_limit_needs_you {
-            "A branch reached its automatic retry limit; review its retained evidence. Independent authorized work may continue."
-        } else {
-            "A stopped branch needs tool/workspace reconciliation; inspect its recorded recovery reason and evidence"
-        }.into();
+        reason = "A stopped branch needs tool/workspace reconciliation; inspect its recorded recovery reason and evidence".into();
     }
     if snapshot.inputs.completion_waits_for_input()
         && snapshot.run_intent == RunIntent::Run
@@ -642,9 +547,8 @@ pub(super) fn goal(snapshot: &GoalSnapshot, map: &mut Artifacts) -> Goal {
 pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
     let permission: crate::supervisor::PendingPermissionSnapshot = serde_json::from_slice(bytes)
         .context("permission evidence is not a supported actual request")?;
-    let material = crate::goal_permission_material::checked_value(bytes, None)?;
     let tool = serde_json::to_value(&permission.tool_call)?;
-    let mut text = format!(
+    Ok(format!(
         "Requested operation (harness reported): {}\nKind (harness reported): {}\nDeclared locations: {}\n\nActual request:\n{}",
         tool.get("title")
             .and_then(serde_json::Value::as_str)
@@ -656,35 +560,7 @@ pub(super) fn permission_text(bytes: &[u8]) -> Result<String> {
             .map(serde_json::Value::to_string)
             .unwrap_or_else(|| "unreported".into()),
         serde_json::to_string_pretty(&permission)?
-    );
-    if let Some(reason) = material
-        .get("tool_context_unavailable")
-        .and_then(serde_json::Value::as_str)
-    {
-        text.insert_str(
-            0,
-            &format!(
-                "Tool context unavailable: {reason}. Automatic local approval is unavailable.\n\n"
-            ),
-        );
-    }
-    if let Some(context) = material.get("earlier_tool_context") {
-        let run_id = context
-            .get("run_id")
-            .and_then(serde_json::Value::as_str)
-            .context("permission context has no run")?;
-        let summary = match crate::goal_permission_material::effective_tool(bytes, run_id)? {
-            Some(tool) => format!(
-                "Earlier tool declarations: kind {} · locations {} · arguments {}\nOriginal permission request remains unchanged. These are declarations, not execution evidence.\n\n",
-                tool["kind"], tool["locations"], tool["rawInput"],
-            ),
-            None => "Earlier tool declarations conflict or have changed; automatic local approval is unavailable.\nOriginal permission request remains unchanged.\n\n".into(),
-        };
-        text.insert_str(0, &summary);
-        text.push_str("\n\nEarlier harness-declared tool context (separate from the original request; not tool results):\n");
-        text.push_str(&serde_json::to_string_pretty(context)?);
-    }
-    Ok(text)
+    ))
 }
 
 pub(super) fn operation(operation: &GoalOperation) -> Option<String> {
@@ -728,8 +604,7 @@ pub(super) fn operation(operation: &GoalOperation) -> Option<String> {
             Change::Input {
                 event: bitrouter_orchestrator::goal::input::Event::Finish { .. },
             } => "Input processing recorded; effective changes are reported from the runtime result, not the model proposal".into(),
-            Change::Accounting { .. } | Change::ClaimCoordinator { .. }
-            | Change::Budget { event: bitrouter_orchestrator::goal::budget::Event::ObserveElapsed } => return None,
+            Change::Accounting { .. } | Change::ClaimCoordinator { .. } => return None,
             other => format!("Committed workflow fact: {other:?}"),
         },
     };
@@ -756,16 +631,6 @@ pub(super) fn input_lines(goal: &GoalSnapshot) -> Vec<String> {
         "Runtime input result {} · source requirements {} · effective requirements {}",
         input.input_id, input.source_requirements_revision, input.effective_requirements_revision
     ));
-    if let Some(binding) = &input.modification_scope {
-        use bitrouter_orchestrator::goal::input::scope::Selection;
-        let scope = match &binding.selection {
-            Selection::Goal => "current Goal".into(),
-            Selection::Tasks { task_ids } => format!("tasks {}", task_ids.join(", ")),
-            Selection::NoChange => "no requirement change".into(),
-            Selection::Unknown { .. } => "unresolved modification target".into(),
-        };
-        lines.push(format!("Modification boundary recorded: {scope} · source requirements {} · not authorization, dispatch or adoption", binding.requirements_revision));
-    }
     for resolution in &input.resolutions {
         lines.push(format!("Input {} disposition saved: {:?} · source requirements {} · execution evidence is separate",
             resolution.input_id, resolution.kind, resolution.source_requirements_revision));

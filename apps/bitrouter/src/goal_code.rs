@@ -1,6 +1,5 @@
 //! Local Goal UI client. The daemon is the only execution/state authority.
 mod client;
-mod evidence;
 mod outbox;
 mod projection;
 mod submissions;
@@ -34,37 +33,10 @@ enum Job {
     Directory(u64, Result<GoalPage>),
     Snapshot(String, Result<Box<GoalSnapshot>>),
     History(String, Result<HistoryPage>),
-    HistoryRead(String, u64, Result<HistoryPage>),
     Prepared(Effect, Result<Pending>),
     Submitted(Pending, Result<GoalReply>),
-    Inspected(String, String, Result<evidence::Read>),
+    Inspected(String, String, Result<String>),
     Edited(Option<String>, Result<String>),
-}
-
-/// Test the UI's production reader against an archive produced by the live daemon.
-#[cfg(test)]
-pub(crate) async fn read_archive_fixture(
-    socket: &Path,
-    root: &Path,
-    goal_id: &str,
-    task_id: &str,
-    reference: &bitrouter_orchestrator::goal::workflow::ArtifactRef,
-) -> Result<bitrouter_tui::goals::Task> {
-    let client = Client::new(socket.into());
-    let target = projection::Target::Archive {
-        task_id: task_id.into(),
-        reference: reference.clone(),
-    };
-    match evidence::inspect(&client, root, goal_id, &target, false).await? {
-        evidence::Read::Archive { detail, .. } => Ok(detail),
-        evidence::Read::Text(_) => anyhow::bail!("archive opened as unverified raw text"),
-    }
-}
-
-/// Inspect the same persisted-input feedback rendered by the production UI.
-#[cfg(test)]
-pub(crate) fn input_feedback_fixture(goal: &GoalSnapshot) -> Vec<String> {
-    projection::input_lines(goal)
 }
 
 pub async fn run(
@@ -122,7 +94,6 @@ pub async fn run(
         anyhow::bail!("unexpected Goal directory reply");
     };
     let mut artifacts = projection::Artifacts::new();
-    let mut archive_artifacts = projection::Artifacts::new();
     show_page(&mut state, &mut directory, page, &mut artifacts);
     if let Some(id) = goal_id {
         state.observe(id);
@@ -202,7 +173,6 @@ pub async fn run(
                                 inputs.insert(goal.id.clone(),input.input_id.clone());
                             }
                             state.receive(projection::goal(&goal,&mut artifacts));
-                            prune_artifacts(&state,&mut artifacts);
                         }, Err(error) => state.notice = Some(format!("Goal {id} snapshot stale: {error}")) }
                     }
                     Some(Ok(Job::History(id,result))) => {
@@ -214,9 +184,6 @@ pub async fn run(
                             },
                             Err(error) => state.notice = Some(format!("History unavailable for {id}: {error}")),
                         }
-                    }
-                    Some(Ok(Job::HistoryRead(id,epoch,result))) => {
-                        state.receive_history(&id,epoch,result.and_then(history_content).map_err(|error| error.to_string()));
                     }
                     Some(Ok(Job::Prepared(effect,result))) => match result {
                         Ok(pending) => {
@@ -252,13 +219,7 @@ pub async fn run(
                         }
                     }
                     Some(Ok(Job::Inspected(goal,id,result))) => {
-                        match result {
-                            Ok(evidence::Read::Text(text)) => state.receive_evidence(&goal,&id,Ok(text)),
-                            Ok(evidence::Read::Archive { detail, artifacts: read_artifacts }) => {
-                                if state.receive_archive(&goal,&id,detail) { archive_artifacts = read_artifacts; }
-                            },
-                            Err(error) => state.receive_evidence(&goal,&id,Err(error.to_string())),
-                        }
+                        state.receive_evidence(&goal,&id,result.map_err(|error|error.to_string()));
                     }
                     Some(Err(error)) => { state.notice = Some(format!("UI request job ended: {error}; no execution state inferred")); }
                     None => {}
@@ -284,18 +245,6 @@ pub async fn run(
                 for effect in state.event(&event) {
                     match effect {
                         Effect::Detach => return Ok(()),
-                        Effect::ReadHistory { goal_id,after,cutoff,epoch } => {
-                            let client=client.clone();
-                            jobs.spawn(async move {
-                                let result=async {
-                                    match client.request(GoalCommand::History { goal_id:goal_id.clone(),after,cutoff,limit:16 }).await? {
-                                        GoalReply::History { page } => Ok(page),
-                                        _ => anyhow::bail!("unexpected Goal history reply"),
-                                    }
-                                }.await;
-                                Job::HistoryRead(goal_id,epoch,result)
-                            });
-                        },
                         Effect::ExternalEditor { goal_id, text } => {
                             drop(events.take());
                             view.suspend()?;
@@ -306,12 +255,14 @@ pub async fn run(
                         Effect::Refresh => { directory.cutoff = None; directory.epoch = directory.epoch.saturating_add(1); if !directory_poll { directory_poll = true; poll_directory(&mut jobs,&client,&directory); } },
                         Effect::NextPage => if let Some(next) = directory.next { directory.previous.push(directory.after); directory.after = next; directory.epoch = directory.epoch.saturating_add(1); if !directory_poll { directory_poll = true; poll_directory(&mut jobs,&client,&directory); } },
                         Effect::PreviousPage => if let Some(previous) = directory.previous.pop() { directory.after = previous; directory.epoch = directory.epoch.saturating_add(1); if !directory_poll { directory_poll = true; poll_directory(&mut jobs,&client,&directory); } },
-                        Effect::Inspect { goal_id, artifact_id } => if let Some(reference) = archive_artifacts.get(&(goal_id.clone(),artifact_id.clone())).or_else(|| artifacts.get(&(goal_id.clone(),artifact_id.clone()))).cloned() {
+                        Effect::Inspect { goal_id, artifact_id } => if let Some(reference) = artifacts.get(&(goal_id.clone(),artifact_id.clone())).cloned() {
                             let permission = state.permission_evidence_is_open(&goal_id,&artifact_id);
                             let root = crate::goal_artifacts::root(&root,&goal_id);
-                            let client = client.clone();
-                            jobs.spawn(async move { let result = evidence::inspect(&client,&root,&goal_id,&reference,permission).await;
-                                Job::Inspected(goal_id,artifact_id,result) });
+                            jobs.spawn(async move { let result = async {
+                                anyhow::ensure!(reference.bytes <= 1024 * 1024, "evidence exceeds the text preview limit; immutable identity remains available");
+                                let bytes = crate::goal_artifacts::read(&root,&reference).await?;
+                                if permission { projection::permission_text(&bytes) } else { String::from_utf8(bytes).context("binary evidence cannot be shown as text") }
+                            }.await; Job::Inspected(goal_id,artifact_id,result) });
                         },
                         other => if !submissions.begin(&other) { state.notice = Some("Request not sent: an earlier request in this scope is unresolved, or the request limit was reached. Draft retained.".into()); }
                         else { submissions.sync(&mut state); let client = client.clone(); let workspace = workspace.clone(); jobs.spawn(async move { let result = client::prepare(&client,&workspace,&other).await; Job::Prepared(other,result) }); }
@@ -357,34 +308,6 @@ fn show_page(
         page.next_after.is_some(),
         !directory.previous.is_empty(),
     );
-    prune_artifacts(state, artifacts);
-}
-fn prune_artifacts(state: &State, artifacts: &mut projection::Artifacts) {
-    let mut retained = std::collections::BTreeSet::new();
-    for (id, goal) in &state.goals {
-        for artifact in goal
-            .artifacts
-            .iter()
-            .chain(goal.tasks.iter().flat_map(|task| &task.artifacts))
-            .chain(goal.decisions.iter().map(|decision| &decision.request))
-        {
-            retained.insert((id.clone(), artifact.id.clone()));
-        }
-    }
-    if let (Some(id), Some(detail)) = (&state.current, &state.detail) {
-        for artifact in &detail.artifacts {
-            retained.insert((id.clone(), artifact.id.clone()));
-        }
-    }
-    artifacts.retain(|key, _| retained.contains(key));
-}
-fn history_content(page: HistoryPage) -> Result<(Vec<String>, u64, Option<u64>)> {
-    let lines = page
-        .operations
-        .iter()
-        .map(serde_json::to_string_pretty)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok((lines, page.cutoff, page.next_after))
 }
 fn poll_directory(jobs: &mut JoinSet<Job>, client: &Client, directory: &Directory) {
     let client = client.clone();

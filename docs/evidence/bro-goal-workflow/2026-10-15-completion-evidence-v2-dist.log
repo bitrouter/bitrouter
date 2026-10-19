@@ -1,6 +1,0 @@
-   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
-   Compiling dist-helper v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/helpers/dist-helper)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.49s
-     Running `target/debug/dist-helper check`
-schema is up to date: /Users/kelsen/.codex/worktrees/d91b/bitrouter/dist/schema/bitrouter.config.schema.json
-registry dist is up to date: 45 providers, 62 canonical models, 1 runtimes, 6 agents

@@ -9,7 +9,6 @@ use super::{GoalError, GoalOperation, GoalService, OperationKind, RunIntent, ide
 
 pub const MAX_TASKS: usize = 32;
 pub const OWNER_LEASE_MS: u64 = 30_000;
-pub const SUPERSEDED_STOP_GRACE_MS: u64 = 10_000;
 
 /// Stable receipt key makes retirement recoverable and prevents identity reuse.
 pub fn archive_operation_id(goal_id: &str, execution_id: &str) -> String {
@@ -212,9 +211,6 @@ pub struct Execution {
     pub checks: Vec<CheckRun>,
     #[serde(default)]
     pub stop: Option<StopState>,
-    /// A bounded pre-actuation wait; no stop RPC has been admitted by this fact.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stop_boundary_deadline_ms: Option<u64>,
     #[serde(default)]
     pub base_commit: Option<String>,
     #[serde(default)]
@@ -247,38 +243,6 @@ pub enum LocalReconciliation {
 }
 
 impl Execution {
-    /// Known, current candidate failures can be repaired after effect
-    /// reconciliation. Interrupted checks/reviews never grant retry authority.
-    pub fn repairable_failure(&self, goal_revision: u64, task_revision: u64) -> bool {
-        self.task_revision == task_revision
-            && self.handoff.is_none()
-            && matches!(self.observation, Observation::Candidate { .. })
-            && !matches!(self.review, Some(ReviewState::Requested { .. }))
-            && self.checks.iter().all(|check| {
-                matches!(
-                    check.state,
-                    CheckState::Observed {
-                        completed: true,
-                        ..
-                    }
-                )
-            })
-            && (matches!(&self.review, Some(ReviewState::Rejected {
-                requirements_revision, task_revision: reviewed_task, report: Some(_), ..
-            }) if *requirements_revision == goal_revision && *reviewed_task == task_revision)
-                || self.checks.iter().any(|check| {
-                    check.task_revision == task_revision
-                        && matches!(
-                            check.state,
-                            CheckState::Observed {
-                                completed: true,
-                                passed: false,
-                                ..
-                            }
-                        )
-                }))
-    }
-
     pub fn effects_reconciled(&self) -> bool {
         matches!(self.stop, Some(StopState::Confirmed { .. }))
             && matches!(
@@ -340,24 +304,6 @@ pub enum ReviewState {
 }
 
 impl ReviewState {
-    /// A fresh Goal context can require a new assessment of retained task
-    /// evidence. An approved unchanged task and an in-flight request remain
-    /// protected; the original request/result stays in immutable history.
-    pub fn can_reopen(&self, requirements_revision: u64, task_revision: u64) -> bool {
-        match self {
-            Self::Requested { .. } => false,
-            Self::Approved {
-                task_revision: reviewed,
-                ..
-            } => *reviewed < task_revision,
-            Self::Rejected {
-                requirements_revision: reviewed_goal,
-                task_revision: reviewed_task,
-                ..
-            } => *reviewed_task < task_revision || *reviewed_goal < requirements_revision,
-        }
-    }
-
     pub fn task_revision(&self) -> u64 {
         match self {
             Self::Approved { task_revision, .. }
@@ -427,10 +373,6 @@ pub enum Observation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "change", rename_all = "snake_case")]
 pub enum Change {
-    AwaitStopBoundary {
-        execution_id: String,
-        deadline_ms: u64,
-    },
     ArchiveExecution {
         task_id: String,
         execution: Box<Execution>,
@@ -1175,7 +1117,6 @@ fn apply(
                 confirmed_model_route: None,
                 checks: Vec::new(),
                 stop: None,
-                stop_boundary_deadline_ms: None,
                 base_commit: None,
                 handoff: None,
                 review: None,
@@ -1498,11 +1439,10 @@ fn apply(
                 .iter_mut()
                 .find(|execution| &execution.id == execution_id)
                 .ok_or(GoalError::NotFound)?;
-            if execution
-                .review
-                .as_ref()
-                .is_some_and(|review| !review.can_reopen(revision, task_revision))
-                || execution.base_commit.is_none()
+            if execution.review.as_ref().is_some_and(|review| {
+                matches!(review, ReviewState::Requested { .. })
+                    || review.task_revision() >= task_revision
+            }) || execution.base_commit.is_none()
                 || !matches!(execution.observation, Observation::Candidate { .. })
                 || !matches!(execution.stop, Some(StopState::Confirmed { .. }))
             {
@@ -1560,44 +1500,6 @@ fn apply(
                 task_revision: *task_revision,
             });
         }
-        Change::AwaitStopBoundary {
-            execution_id,
-            deadline_ms,
-        } => {
-            if budget_stopped
-                || intent != RunIntent::Run
-                || *deadline_ms <= now_ms
-                || deadline_ms.saturating_sub(now_ms) > SUPERSEDED_STOP_GRACE_MS
-            {
-                return Err(GoalError::Conflict);
-            }
-            let task = workflow
-                .tasks
-                .iter_mut()
-                .find(|task| {
-                    task.executions
-                        .iter()
-                        .any(|execution| &execution.id == execution_id)
-                })
-                .ok_or(GoalError::NotFound)?;
-            let task_revision = task.requirements_revision;
-            if task.run_intent != RunIntent::Run {
-                return Err(GoalError::Conflict);
-            }
-            let execution = task
-                .executions
-                .iter_mut()
-                .find(|execution| &execution.id == execution_id)
-                .ok_or(GoalError::NotFound)?;
-            if execution.task_revision == task_revision
-                || execution.stop.is_some()
-                || execution.stop_boundary_deadline_ms.is_some()
-                || observation_run(&execution.observation).is_none()
-            {
-                return Err(GoalError::Conflict);
-            }
-            execution.stop_boundary_deadline_ms = Some(*deadline_ms);
-        }
         Change::RequestStop {
             execution_id,
             operation_id,
@@ -1622,12 +1524,7 @@ fn apply(
             if (!budget_stopped
                 && intent == RunIntent::Run
                 && task_intent == RunIntent::Run
-                // A mapped failed/unknown attempt may be frozen for evidence
-                // reconciliation while independent authorized work continues.
-                // This does not authorize replacement dispatch.
-                && !matches!(execution.observation, Observation::Candidate { .. }
-                    | Observation::Failed { run_id: Some(_), .. }
-                    | Observation::Unknown { run_id: Some(_), .. })
+                && !matches!(execution.observation, Observation::Candidate { .. })
                 && execution.task_revision == task_revision)
                 || execution.stop.is_some()
                 || observation_run(&execution.observation).is_none()
@@ -1637,7 +1534,6 @@ fn apply(
             execution.stop = Some(StopState::Requested {
                 operation_id: operation_id.clone(),
             });
-            execution.stop_boundary_deadline_ms = None;
         }
         Change::ObserveStop {
             execution_id,
@@ -1727,16 +1623,6 @@ fn apply(
                         return Err(GoalError::Conflict);
                     }
                 }
-                Observation::Unknown { run_id: None, .. }
-                    if execution.dispatch_requested
-                        && matches!(
-                            observation,
-                            Observation::Running { .. }
-                                | Observation::Unknown {
-                                    run_id: Some(_),
-                                    ..
-                                }
-                        ) => {}
                 _ => return Err(GoalError::Conflict),
             }
             match observation {

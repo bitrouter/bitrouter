@@ -30,11 +30,6 @@ struct Peer {
     right_manual: bool,
     right_gate: bool,
     right_overlap: bool,
-    sparse_permission: bool,
-    right_denied_local: bool,
-    fail_first_initialize: bool,
-    fail_initialize: bool,
-    fail_left_once: bool,
 }
 
 fn lock<T>(value: &Mutex<T>) -> FixtureResult<std::sync::MutexGuard<'_, T>> {
@@ -50,9 +45,7 @@ impl Peer {
         } else {
             format!("{task}.txt")
         };
-        let permission_kind = if task == "right" && self.right_denied_local {
-            "read"
-        } else if task == "right" && self.right_manual {
+        let permission_kind = if task == "right" && self.right_manual {
             "other"
         } else {
             "edit"
@@ -81,35 +74,12 @@ impl Peer {
             .map(|request| request.0.to_owned())
             .collect();
         for (id, tool, title, allow) in requests {
-            let options = if task == "right" && self.right_denied_local {
-                json!([{"optionId":"allow-always","name":"Allow persistently","kind":"allow_always"},
-                    {"optionId":"deny-once","name":"Reject once","kind":"reject_once"}])
-            } else {
-                json!([{"optionId":"allow-once","name":allow,"kind":"allow_once"},
-                {"optionId":"deny-once","name":"Deny this fixture write","kind":"reject_once"}])
-            };
-            if self.sparse_permission {
-                self.send(json!({"jsonrpc":"2.0","method":"session/update","params":{
-                    "sessionId":self.session,"update":{"sessionUpdate":"tool_call_update","toolCallId":tool,
-                        "kind":permission_kind,"locations":[{"path":cwd.join(&filename)}],"rawInput":{"path":filename}}}}))?;
-            }
-            let locations = if self.sparse_permission {
-                json!([])
-            } else {
-                json!([{"path":cwd.join(&filename)}])
-            };
-            let input = if self.sparse_permission {
-                json!({})
-            } else {
-                json!({"path":filename})
-            };
-            self.send(
-                json!({"jsonrpc":"2.0","id":id,"method":"session/request_permission",
+            self.send(json!({"jsonrpc":"2.0","id":id,"method":"session/request_permission",
                 "params":{"sessionId":self.session,"toolCall":{"toolCallId":tool,
                     "title":title,"kind":permission_kind,
-                    "locations":locations,"rawInput":input},
-                    "options":options}}),
-            )?;
+                    "locations":[{"path":cwd.join(&filename)}],"rawInput":{"path":filename}},
+                    "options":[{"optionId":"allow-once","name":allow,"kind":"allow_once"},
+                        {"optionId":"deny-once","name":"Deny this fixture write","kind":"reject_once"}]}}))?;
         }
         Ok(())
     }
@@ -139,22 +109,11 @@ impl Peer {
             }
             std::fs::write(cwd.join("joined.txt"), format!("{left}{right}"))?;
         } else {
-            let mut content = match task.as_str() {
+            let content = match task.as_str() {
                 "left" => "LEFT\n",
                 "right" => "RIGHT\n",
                 _ => return Err("unknown fixture task".into()),
             };
-            if task == "left" && self.fail_left_once {
-                match OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(self.control.join("left-first-defect"))
-                {
-                    Ok(_) => content = "WRONG\n",
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(error) => return Err(error.into()),
-                }
-            }
             std::fs::write(cwd.join(format!("{task}.txt")), content)?;
             if task == "right" && self.right_overlap {
                 if std::fs::read_to_string(cwd.join("right.txt"))? != "RIGHT\n" {
@@ -206,24 +165,8 @@ impl Peer {
                     vec![configured.api_type], true, Some(current))]);
                 self.respond(id, serde_json::to_value(response)?)?;
             }
-            Some("initialize") => {
-                let fail_once = if self.fail_first_initialize {
-                    match OpenOptions::new().write(true).create_new(true)
-                        .open(self.control.join("failed-initialize"))
-                    {
-                        Ok(_) => true,
-                        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
-                        Err(error) => return Err(error.into()),
-                    }
-                } else { false };
-                if self.fail_initialize || fail_once {
-                    self.send(json!({"jsonrpc":"2.0","id":id,"error":{
-                        "code":-32603,"message":"fixture startup service unavailable"}}))?;
-                } else {
-                    self.respond(id, json!({"protocolVersion":1,
-                        "agentCapabilities":{},"agentInfo":{"name":"goal-wire-fixture","version":"1"}}))?;
-                }
-            }
+            Some("initialize") => self.respond(id, json!({"protocolVersion":1,
+                "agentCapabilities":{},"agentInfo":{"name":"goal-wire-fixture","version":"1"}}))?,
             Some("session/new") => {
                 lock(&self.state)?.cwd = PathBuf::from(message["params"]["cwd"].as_str().ok_or("missing cwd")?);
                 self.respond(id, json!({"sessionId":self.session}))?;
@@ -245,10 +188,9 @@ impl Peer {
                 std::fs::write(self.control.join(format!("started-{task}")), cwd.to_string_lossy().as_bytes())?;
                 self.update(&format!("Fixture {task} started; waiting for permission and release."))?;
                 let filename = if task == "join" { "joined.txt".to_owned() } else { format!("{task}.txt") };
-                let kind = if task == "right" && self.right_denied_local { "read" } else { "edit" };
                 self.send(json!({"jsonrpc":"2.0","method":"session/update","params":{
                     "sessionId":self.session,"update":{"sessionUpdate":"tool_call","toolCallId":"fixture-write",
-                        "title":format!("Write {filename}"),"kind":kind,"status":"in_progress",
+                        "title":format!("Write {filename}"),"kind":"edit","status":"in_progress",
                         "locations":[{"path":cwd.join(&filename)}]}}}))?;
                 if task == "right" && self.right_gate {
                     let peer = self.clone();
@@ -290,10 +232,6 @@ impl Peer {
                 };
                 if let Some((prompt, task)) = pending {
                     if !allowed {
-                        if task == "right" && self.right_denied_local {
-                            self.send(json!({"jsonrpc":"2.0","method":"session/update","params":{
-                                "sessionId":self.session,"update":{"sessionUpdate":"tool_call_update", "toolCallId":"fixture-write","status":"failed"}}}))?;
-                        }
                         self.respond(&prompt, json!({"stopReason":"refusal"}))?;
                     } else {
                         let cwd = lock(&self.state)?.cwd.clone();
@@ -336,16 +274,6 @@ fn main() -> FixtureResult {
             .is_ok_and(|value| value == "1"),
         right_gate: std::env::var("BRO_GOAL_FIXTURE_RIGHT_GATE").is_ok_and(|value| value == "1"),
         right_overlap: std::env::var("BRO_GOAL_FIXTURE_RIGHT_OVERLAP")
-            .is_ok_and(|value| value == "1"),
-        sparse_permission: std::env::var("BRO_GOAL_FIXTURE_SPARSE_PERMISSION")
-            .is_ok_and(|value| value == "1"),
-        right_denied_local: std::env::var("BRO_GOAL_FIXTURE_RIGHT_DENIED_LOCAL")
-            .is_ok_and(|value| value == "1"),
-        fail_first_initialize: std::env::var("BRO_GOAL_FIXTURE_FAIL_FIRST_INITIALIZE")
-            .is_ok_and(|value| value == "1"),
-        fail_initialize: std::env::var("BRO_GOAL_FIXTURE_FAIL_INITIALIZE")
-            .is_ok_and(|value| value == "1"),
-        fail_left_once: std::env::var("BRO_GOAL_FIXTURE_FAIL_LEFT_ONCE")
             .is_ok_and(|value| value == "1"),
         omit_tool_completion: std::env::var("BRO_GOAL_FIXTURE_OMIT_TOOL_COMPLETION")
             .is_ok_and(|value| value == "1"),
