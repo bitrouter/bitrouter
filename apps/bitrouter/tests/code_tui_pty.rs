@@ -837,6 +837,7 @@ impl Drop for MockProcess {
 /// condition is observed. It never uses a fixed sleep to make progress.
 struct PtyRunner {
     master: Box<dyn MasterPty + Send>,
+    original_terminal_mode: String,
     writer: Box<dyn Write + Send>,
     output: Vec<u8>,
     screen: vt100::Parser,
@@ -865,6 +866,12 @@ impl PtyRunner {
                 pixel_height: 0,
             })
             .context("opening test PTY")?;
+        let original_terminal_mode = format!(
+            "{:?}",
+            pty.master
+                .get_termios()
+                .context("reading initial PTY terminal mode")?
+        );
         let reader = pty
             .master
             .try_clone_reader()
@@ -910,6 +917,7 @@ impl PtyRunner {
 
         Ok(Self {
             master: pty.master,
+            original_terminal_mode,
             writer,
             output: Vec::new(),
             screen: vt100::Parser::new(rows, columns, 0),
@@ -948,6 +956,21 @@ impl PtyRunner {
             output_len: self.output.len(),
             screen: self.screen.screen().contents(),
         }
+    }
+
+    fn assert_terminal_mode_restored(&self) -> Result<()> {
+        let current = format!(
+            "{:?}",
+            self.master
+                .get_termios()
+                .context("reading suspended PTY terminal mode")?
+        );
+        ensure!(
+            current == self.original_terminal_mode,
+            "suspended process retained terminal modes: before={:?}, after={current:?}",
+            self.original_terminal_mode
+        );
+        Ok(())
     }
 
     fn wait_for_text(&mut self, text: &str) -> Result<String> {
@@ -1080,10 +1103,14 @@ impl PtyRunner {
                     bail!("PTY reader failed while waiting for raw {text:?}: {error}")
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    bail!("timed out waiting for raw PTY text {text:?} after checkpoint")
+                    bail!(
+                        "timed out waiting for raw PTY text {text:?} after checkpoint; output was {transcript:?}"
+                    )
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    bail!("PTY closed while waiting for raw {text:?} after checkpoint")
+                    bail!(
+                        "PTY closed while waiting for raw {text:?} after checkpoint; output was {transcript:?}"
+                    )
                 }
             }
         }
@@ -2366,20 +2393,23 @@ async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<(
 fn code_sigtstp_restores_then_sigcont_reacquires_terminal() -> Result<()> {
     let mut code = CodeFixture::agent(MockScenario::Minimal)?;
     code.wait_for_agent_ready()?;
-    let suspended = code.pty.checkpoint();
-    code.signal_child("TSTP")?;
-    let _ = code
-        .pty
-        .wait_for_raw_text_since(&suspended, "\x1b[?2004l")?;
+    for _ in 0..3 {
+        let suspended = code.pty.checkpoint();
+        code.signal_child("TSTP")?;
+        code.pty.assert_terminal_mode_restored()?;
+        let _ = code
+            .pty
+            .wait_for_raw_text_since(&suspended, "\x1b[?2004l")?;
 
-    let resumed = code.pty.checkpoint();
-    code.signal_child("CONT")?;
-    let _ = code.pty.wait_for_raw_text_since(&resumed, "\x1b[?2004h")?;
-    let screen = code.pty.wait_for_text_since(&resumed, "Message")?;
-    ensure!(
-        screen.contains("FXRD"),
-        "SIGCONT did not redraw the authoritative conversation"
-    );
+        let resumed = code.pty.checkpoint();
+        code.signal_child("CONT")?;
+        let _ = code.pty.wait_for_raw_text_since(&resumed, "\x1b[?2004h")?;
+        let screen = code.pty.wait_for_text_since(&resumed, "Message")?;
+        ensure!(
+            screen.contains("FXRD"),
+            "SIGCONT did not redraw the authoritative conversation"
+        );
+    }
     code.pty.send(b"\x04")?;
     code.assert_terminal_restored()
 }
@@ -2430,16 +2460,20 @@ async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -
         let _ = manager
             .pty
             .wait_for_text(if attach { "FXRP1" } else { "Agents ·" })?;
-        let suspended = manager.pty.checkpoint();
-        manager.signal_child("TSTP")?;
-        let _ = manager
-            .pty
-            .wait_for_raw_text_since(&suspended, LEAVE_ALTERNATE_SCREEN)?;
-        let resumed = manager.pty.checkpoint();
-        manager.signal_child("CONT")?;
-        let _ = manager
-            .pty
-            .wait_for_raw_text_since(&resumed, ENTER_ALTERNATE_SCREEN)?;
+        for _ in 0..3 {
+            let suspended = manager.pty.checkpoint();
+            manager.signal_child("TSTP")?;
+            manager.pty.assert_terminal_mode_restored()?;
+            let _ = manager
+                .pty
+                .wait_for_raw_text_since(&suspended, LEAVE_ALTERNATE_SCREEN)?;
+            let resumed = manager.pty.checkpoint();
+            manager.signal_child("CONT")?;
+            let _ = manager
+                .pty
+                .wait_for_raw_text_since(&resumed, ENTER_ALTERNATE_SCREEN)
+                .with_context(|| format!("resuming standalone agent manager (attach={attach})"))?;
+        }
         manager.signal_child("TERM")?;
         manager.assert_terminal_restored()?;
         let runs = manager.mock.supervised_runs().await?;
