@@ -118,7 +118,7 @@ async fn paused_goal_recovers_original_start_and_stops_without_relaunch() -> Res
     let config = bitrouter_sdk::config::parse_with(&configuration, |_| None)?;
     let assembled = crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
     let goals = Arc::new(GoalService::new(Arc::new(
-        crate::goal_store::DatabaseGoalStore::new(assembled.db.clone()),
+        crate::goal_store::DatabaseGoalStore::new(assembled.db),
     )));
     let routing = Arc::new(ConfigRoutingTable::from_config(config));
     let supervisor = Supervisor::open(
@@ -141,19 +141,10 @@ async fn paused_goal_recovers_original_start_and_stops_without_relaunch() -> Res
     else {
         anyhow::bail!("original owner grant missing")
     };
-    let app = Arc::new(assembled.app);
-    let threads = bitrouter_orchestrator::service::ThreadService::with_store(
-        app.clone(),
-        &[],
-        Arc::new(crate::agent_store::DatabaseExecutionStore::new(
-            assembled.db.clone(),
-        )),
-    )?;
     let coordinator = Coordinator {
         id: "lost-observation-owner".into(),
-        app,
+        app: Arc::new(assembled.app),
         goals: goals.clone(),
-        threads,
         supervisor: supervisor.clone(),
         routing,
         workspaces: home.join("goal-workspaces"),
@@ -164,13 +155,12 @@ async fn paused_goal_recovers_original_start_and_stops_without_relaunch() -> Res
         gate: crate::daemon_handoff::HandoffGate::default(),
     };
     let result = async {
-        for case in 0..3 {
-            let unknown = case > 0;
-            let execution_id = format!("original-dispatch-{case}");
+        for unknown in [false, true] {
+            let execution_id = format!("original-dispatch-{unknown}");
             let workspace = home.join(&execution_id);
             tokio::fs::create_dir_all(&workspace).await?;
             let GoalReply::Accepted { operation } = goals.execute("local", GoalCommand::Create {
-                operation_id: format!("create-{case}"), title: "Original dispatch recovery".into(),
+                operation_id: format!("create-{unknown}"), title: "Original dispatch recovery".into(),
                 objective: "Preserve the original execution without replay".into(), workspace: workspace.clone(),
                 budget_limits: Default::default(),
             }, now()?).await? else { anyhow::bail!("creation receipt missing") };
@@ -180,7 +170,7 @@ async fn paused_goal_recovers_original_start_and_stops_without_relaunch() -> Res
             for (step, change) in [
                 Change::RequestPlan { attempt_id: "fixture-plan".into() },
                 Change::InstallPlan { attempt_id: "fixture-plan".into(), plan: Plan {
-                    tasks: vec![TaskSpec { id: "left".into(), title: "Left".into(), instruction: "Keep original evidence".into(), harness: Some("goal-peer".into()), dependencies: vec![], checks: vec![], resources: Default::default() }],
+                    tasks: vec![TaskSpec { id: "left".into(), title: "Left".into(), instruction: "Keep original evidence".into(), harness: "goal-peer".into(), dependencies: vec![], checks: vec![], resources: Default::default() }],
                     completion: Specification { conditions: vec![Condition { id: "original".into(), description: "Verified original result".into() }], checks: vec![], human_acceptance_required: false },
                 }, available_harnesses: BTreeSet::from(["goal-peer".into()]) },
                 Change::RequestExecution { task_id: "left".into(), execution_id: execution_id.clone(), workspace: workspace.clone() },
@@ -207,7 +197,7 @@ async fn paused_goal_recovers_original_start_and_stops_without_relaunch() -> Res
                 }).await?;
             }
             let current = read_goal(&goals, &id).await?;
-            goals.execute("local", GoalCommand::Control { operation_id: format!("pause-{case}"),
+            goals.execute("local", GoalCommand::Control { operation_id: format!("pause-{unknown}"),
                 goal_id: id.clone(), expected_revision: current.revision, intent: RunIntent::Pause,
             }, now()?).await?;
             let paused = read_goal(&goals, &id).await?;
@@ -216,30 +206,8 @@ async fn paused_goal_recovers_original_start_and_stops_without_relaunch() -> Res
             assert_eq!(recovered.run_intent, RunIntent::Pause);
             assert_eq!(recovered.workflow.tasks[0].executions.len(), 1);
             assert!(matches!(&recovered.workflow.tasks[0].executions[0].observation,
-                Observation::Running { run_id, native_session_id } if run_id.as_ref() == Some(&snapshot.run_id) && native_session_id == &snapshot.native_session_id));
-            if case == 2 {
-                let operation_id = "original-late-stop";
-                for change in [
-                    Change::RequestStop { execution_id: execution_id.clone(), operation_id: operation_id.into() },
-                    Change::ObserveStop { execution_id: execution_id.clone(), operation_id: operation_id.into(),
-                        confirmed: false, detail: "Original stop acknowledgement has not arrived".into() },
-                ] {
-                    coordinator.change(&read_goal(&goals, &id).await?, change).await?;
-                }
-                let uncertain = read_goal(&goals, &id).await?;
-                Box::pin(coordinator.drive_controls(&uncertain)).await?;
-                assert_eq!(read_goal(&goals, &id).await?.revision, uncertain.revision,
-                    "another unknown observation must not append a new stop or repeat the RPC");
-                let SessionResponse::Snapshot { snapshot: running } = Box::pin(supervisor.dispatch(SessionRequest::authorized(
-                    &coordinator.grant, SessionCommand::Snapshot { run_id: snapshot.run_id.clone() }
-                ))).await? else { anyhow::bail!("original active process missing") };
-                assert_eq!(running.process, ProcessState::Running);
-                let (confirmed, _) = Box::pin(coordinator.stop(&snapshot.run_id, operation_id)).await?;
-                assert!(confirmed, "the original owned process must actually stop");
-                Box::pin(coordinator.drive_controls(&read_goal(&goals, &id).await?)).await?;
-            } else {
-                coordinator.drive_controls(&recovered).await.context("stop original recovered process")?;
-            }
+                Observation::Running { run_id, native_session_id } if run_id == &snapshot.run_id && native_session_id == &snapshot.native_session_id));
+            coordinator.drive_controls(&recovered).await.context("stop original recovered process")?;
             let stopped = read_goal(&goals, &id).await?;
             let execution = &stopped.workflow.tasks[0].executions[0];
             assert!(matches!(execution.stop, Some(StopState::Confirmed { .. })));
@@ -261,7 +229,7 @@ async fn paused_goal_recovers_original_start_and_stops_without_relaunch() -> Res
                 assert_ne!(message["method"], "session/prompt");
             }
         }
-        assert_eq!(starts, 3, "recovery must not dispatch another ACP session");
+        assert_eq!(starts, 2, "recovery must not dispatch another ACP session");
         Ok(())
     }.await;
     supervisor.shutdown().await;

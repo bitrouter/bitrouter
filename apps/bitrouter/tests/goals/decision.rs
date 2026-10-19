@@ -32,7 +32,7 @@ pub(super) async fn pending(
             Change::ObserveExecution {
                 execution_id: "execution".into(),
                 observation: Observation::Running {
-                    run_id: Some("run".into()),
+                    run_id: "run".into(),
                     native_session_id: None,
                 },
             },
@@ -42,7 +42,7 @@ pub(super) async fn pending(
     let decision = PermissionDecision {
         id: "permission-decision".into(),
         execution_id: "execution".into(),
-        run_id: Some("run".into()),
+        run_id: "run".into(),
         permission_id: "actual-permission-id".into(),
         requirements_revision: 1,
         task_revision: 1,

@@ -23,7 +23,6 @@ pub(super) struct PendingInput {
 }
 
 pub(super) struct VerificationBudget {
-    pub(super) work_control: Option<Arc<dyn crate::control::WorkControl>>,
     pub(super) duration: Duration,
     pub(super) active_duration_ms: u64,
     pub(super) calls: u32,

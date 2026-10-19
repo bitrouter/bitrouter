@@ -49,7 +49,6 @@ struct Step {
 
 #[derive(Serialize)]
 struct Active {
-    generation: Option<crate::turn::GenerationOrigin>,
     native: bool,
     native_runs: std::collections::BTreeMap<String, (u32, u64)>,
     native_unknown_usage: std::collections::BTreeSet<String>,
@@ -110,17 +109,6 @@ impl ThreadService {
         caller: &CallerContext,
         request: ThreadRecoveryRequest,
     ) -> Result<ThreadView, ServiceError> {
-        self.recover_thread_controlled(target, caller, request, None)
-            .await
-    }
-
-    pub(super) async fn recover_thread_controlled(
-        &self,
-        target: &ThreadTarget,
-        caller: &CallerContext,
-        request: ThreadRecoveryRequest,
-        control: Option<Arc<dyn crate::control::WorkControl>>,
-    ) -> Result<ThreadView, ServiceError> {
         let (send, receive) = oneshot::channel();
         let service = self.clone();
         let target = target.clone();
@@ -135,7 +123,7 @@ impl ThreadService {
             }
             self.inner.workers.spawn(async move {
                 let result = service
-                    .recover_thread_owned(&target, &caller, request, control)
+                    .recover_thread_owned(&target, &caller, request)
                     .await;
                 let _ = send.send(result);
             });
@@ -148,13 +136,9 @@ impl ThreadService {
         target: &ThreadTarget,
         caller: &CallerContext,
         request: ThreadRecoveryRequest,
-        control: Option<Arc<dyn crate::control::WorkControl>>,
     ) -> Result<ThreadView, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
-        let coordination = self
-            .read_thread_view(target, caller)?
-            .thread
-            .is_goal_coordination();
+        self.read_thread_view(target, caller)?;
         let scope = admission::key_scope(
             caller,
             Some(&target.thread_id),
@@ -201,40 +185,16 @@ impl ThreadService {
                     "recovery inspection is stale",
                 ));
             }
-            let coordination = thread.snapshot.is_goal_coordination();
-            if thread.snapshot.goal_work.is_some()
-                && !report.terminal_checkpoint
-                && control.is_none()
-            {
-                return Err(ServiceError::new(
-                    ErrorCode::Unauthorized,
-                    "Goal worker recovery requires its live source and budget control",
-                ));
-            }
-            let settled_generation = coordination
-                && report.terminal_checkpoint
-                && report.turn.as_ref().is_none_or(|turn| {
-                    turn.outcome.is_some()
-                        && turn.unresolved_calls.is_empty()
-                        && !turn.budget.tool_calls_unknown
-                        && turn.budget.tool_calls_known == 0
-                });
             if !report.context_valid
-                || (coordination && !settled_generation)
                 || (report.terminal_checkpoint
                     && !matches!(
                         report.stored_status,
                         ThreadStatus::Idle | ThreadStatus::Paused
                     ))
-                || report.blockers.iter().any(|blocker| {
-                    !matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed)
-                        && !(settled_generation
-                            && matches!(
-                                blocker,
-                                RecoveryBlocker::BudgetUncertain { .. }
-                                    | RecoveryBlocker::ModelRequestIncomplete { .. }
-                            ))
-                })
+                || report
+                    .blockers
+                    .iter()
+                    .any(|blocker| !matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed))
             {
                 return Err(ServiceError::new(
                     ErrorCode::RecoveryRequired,
@@ -246,34 +206,27 @@ impl ThreadService {
                 .active_turn_id
                 .as_deref()
                 .unwrap_or(&target.thread_id);
-            if !coordination
-                && state
-                    .active_workspaces
-                    .get(&thread.snapshot.workspace)
-                    .map(String::as_str)
-                    != Some(expected)
+            if state
+                .active_workspaces
+                .get(&thread.snapshot.workspace)
+                .map(String::as_str)
+                != Some(expected)
             {
                 return Err(ServiceError::new(
                     ErrorCode::Conflict,
                     "workspace inspection owner changed",
                 ));
             }
-            let fence = if coordination {
-                None
-            } else {
-                Some(
-                    state
-                        .workspace_fences
-                        .get(&thread.snapshot.workspace)
-                        .cloned()
-                        .ok_or_else(|| {
-                            ServiceError::new(
-                                ErrorCode::RecoveryRequired,
-                                "workspace is still held by another runtime",
-                            )
-                        })?,
-                )
-            };
+            let fence = state
+                .workspace_fences
+                .get(&thread.snapshot.workspace)
+                .cloned()
+                .ok_or_else(|| {
+                    ServiceError::new(
+                        ErrorCode::RecoveryRequired,
+                        "workspace is still held by another runtime",
+                    )
+                })?;
             let continuation = if report.terminal_checkpoint {
                 None
             } else {
@@ -332,10 +285,6 @@ impl ThreadService {
                     self.inner.tool_workers.clone(),
                     self.inner.limits.tools_per_turn,
                 );
-                let agent = match &control {
-                    Some(control) => agent.with_work_control(control.clone()),
-                    None => agent,
-                };
                 Some(RecoveredRun {
                     turn_id: turn.turn_id.clone(),
                     input: RunInput {
@@ -464,13 +413,11 @@ impl ThreadService {
         let workspace_owner = owner.clone();
         let source = source_owner.ok_or("source ownership proof missing")?;
         let active_id = continuation.as_ref().map(|run| run.turn_id.clone());
-        if let Some(fence) = fence {
-            self.workspace_io(true, move || match active_id {
-                Some(id) => fence.activate_recovered_checkpoint(&source, &workspace_owner, &id),
-                None => fence.finish_idle_inspection(&workspace_owner),
-            })
-            .await?;
-        }
+        self.workspace_io(true, move || match active_id {
+            Some(id) => fence.activate_recovered_checkpoint(&source, &workspace_owner, &id),
+            None => fence.finish_idle_inspection(&workspace_owner),
+        })
+        .await?;
         snapshot.status = if continuation.is_some() {
             ThreadStatus::Busy
         } else if snapshot.queued.is_empty() {
@@ -590,7 +537,7 @@ impl ThreadService {
             task.snapshot.unknown_effect = false;
             task.snapshot.pending_input_id = None;
             task.snapshot.pending_input = None;
-        } else if !coordination {
+        } else {
             state.active_workspaces.remove(&workspace);
             state.workspace_fences.remove(&workspace);
         }
@@ -599,7 +546,7 @@ impl ThreadService {
         if let Some(run) = continuation {
             self.inner.workers.spawn(self.run_turn(
                 run.turn_id,
-                super::runner::Driver::Native(run.agent),
+                run.agent,
                 run.input,
                 run.verification,
                 run.cancel,
@@ -791,19 +738,17 @@ impl ThreadService {
         )?;
         rebuild.authorize(caller)?;
         self.check_snapshot_grant(&rebuild.view.thread)?;
-        if !rebuild.view.thread.is_goal_coordination() {
-            let canonical = rebuild
-                .view
-                .thread
-                .workspace
-                .canonicalize()
-                .map_err(|error| error.to_string())?;
-            if canonical != rebuild.view.thread.workspace || !canonical.is_dir() {
-                return Err(ServiceError::new(
-                    ErrorCode::Unauthorized,
-                    "stored workspace identity changed",
-                ));
-            }
+        let canonical = rebuild
+            .view
+            .thread
+            .workspace
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if canonical != rebuild.view.thread.workspace || !canonical.is_dir() {
+            return Err(ServiceError::new(
+                ErrorCode::Unauthorized,
+                "stored workspace identity changed",
+            ));
         }
         rebuild.consume_page(first.records)?;
         while rebuild.sequence < cutoff {
@@ -946,17 +891,6 @@ impl ThreadService {
             state.threads.insert(target.thread_id.clone(), thread);
             return Ok(view);
         }
-        if thread.snapshot.is_goal_coordination() {
-            // This driver has no filesystem authority. Inspection preserves
-            // recovery blockers without claiming a project workspace lock.
-            let view = thread.presentation.view.clone();
-            let mut state = self.lock_state();
-            for (id, task) in tasks {
-                state.turns.insert(id, task);
-            }
-            state.threads.insert(target.thread_id.clone(), thread);
-            return Ok(view);
-        }
         let workspace = thread.snapshot.workspace.clone();
         let epoch = self.inner.instance_id.clone();
         let execution_id = thread
@@ -1052,26 +986,6 @@ impl Rebuild {
         };
         if snapshot.thread_id != thread_id || snapshot.server_instance_id.is_empty() {
             return Err(storage("invalid Thread identity or epoch"));
-        }
-        if let Some(goal_id) = &snapshot.owned_goal_id {
-            crate::goal::identifier(goal_id).map_err(|error| storage(error.to_string()))?;
-        }
-        if let Some(parent) = &snapshot.input_for_thread_id {
-            crate::goal::identifier(parent).map_err(|error| storage(error.to_string()))?;
-        }
-        if let Some(source) = &snapshot.goal_work {
-            source.validate().map_err(storage)?;
-            if snapshot.is_goal_coordination() {
-                return Err(storage("worker Thread cannot also own or interpret a Goal"));
-            }
-        }
-        if snapshot.is_goal_coordination()
-            && (snapshot.permission_profile != crate::thread::PermissionProfile::ReadOnly
-                || config.tool_mode() != crate::agent::ToolMode::ReadOnly
-                || verification_command.is_some()
-                || (snapshot.owned_goal_id.is_some() && snapshot.input_for_thread_id.is_some()))
-        {
-            return Err(storage("invalid Goal coordination Thread settings"));
         }
         let mut view = ThreadView {
             recovery: None,
@@ -1241,7 +1155,6 @@ impl Rebuild {
                 let mut messages = self.messages.clone();
                 messages.push(Message::text(Role::User, entry.prompt));
                 self.active = Some(Active {
-                    generation: None,
                     native: false,
                     native_runs: Default::default(),
                     native_unknown_usage: Default::default(),
@@ -1279,9 +1192,6 @@ impl Rebuild {
             } => {
                 if self.unfinished_close.as_ref() != Some(idempotency_key)
                     || snapshot.thread_id != self.view.thread.thread_id
-                    || snapshot.owned_goal_id != self.view.thread.owned_goal_id
-                    || snapshot.input_for_thread_id != self.view.thread.input_for_thread_id
-                    || snapshot.goal_work != self.view.thread.goal_work
                     || snapshot.status != ThreadStatus::Paused
                     || snapshot.active_turn_id.is_some()
                     || !snapshot.queued.is_empty()
@@ -1330,15 +1240,6 @@ impl Rebuild {
                 if snapshot.thread_id != self.view.thread.thread_id {
                     self.invalid("checkpoint belongs to another Thread");
                 }
-                if snapshot.owned_goal_id != self.view.thread.owned_goal_id {
-                    self.invalid("checkpoint changes Goal ownership without a handoff");
-                }
-                if snapshot.input_for_thread_id != self.view.thread.input_for_thread_id {
-                    self.invalid("checkpoint changes the Goal input parent");
-                }
-                if snapshot.goal_work != self.view.thread.goal_work {
-                    self.invalid("checkpoint changes the delegated work identity");
-                }
                 if let Err(error) = crate::context::validate_history(messages) {
                     self.invalid(format!("invalid retained checkpoint: {error}"));
                 }
@@ -1378,58 +1279,6 @@ impl Rebuild {
                 }
             }
             ExecutionRecord::TurnRecord { turn_id, fact } => {
-                if self.view.thread.is_goal_coordination() {
-                    match fact.as_ref() {
-                        ExecutionRecord::GenerationInput { origin, prompt, .. } => {
-                            if crate::goal::identifier(&origin.goal_id).is_err()
-                                || crate::goal::identifier(&origin.source_id).is_err()
-                                || origin.requirements_revision == 0
-                                || self
-                                    .view
-                                    .thread
-                                    .owned_goal_id
-                                    .as_ref()
-                                    .is_some_and(|id| id != &origin.goal_id)
-                                || origin.purpose.is_input()
-                                    != self.view.thread.input_for_thread_id.is_some()
-                                || !prompt.tools.is_empty()
-                                || prompt.tool_choice.is_some()
-                                || prompt.stream
-                            {
-                                self.invalid("invalid managed generation source or tool boundary");
-                            }
-                        }
-                        ExecutionRecord::ModelRequest { prompt, .. } => {
-                            if self
-                                .active
-                                .as_ref()
-                                .is_none_or(|active| active.generation.is_none())
-                                || !prompt.tools.is_empty()
-                                || prompt.tool_choice.is_some()
-                            {
-                                self.invalid(
-                                    "Goal model request has no tool-free generation admission",
-                                );
-                            }
-                        }
-                        ExecutionRecord::ToolIntent { .. }
-                        | ExecutionRecord::ToolResult { .. }
-                        | ExecutionRecord::VerificationResult { .. }
-                        | ExecutionRecord::CoreCheckpoint { .. } => {
-                            self.invalid("Goal coordination cannot execute native tools or restore a native loop");
-                        }
-                        _ => {}
-                    }
-                } else if matches!(
-                    fact.as_ref(),
-                    ExecutionRecord::GenerationInput { .. }
-                        | ExecutionRecord::GenerationDecisionIntent { .. }
-                        | ExecutionRecord::GenerationDecisionOutcome { .. }
-                        | ExecutionRecord::GenerationAttempt { .. }
-                        | ExecutionRecord::GenerationPlan { .. }
-                ) {
-                    self.invalid("ordinary native Thread contains managed generation facts");
-                }
                 if let ExecutionRecord::InstructionContext {
                     snapshot,
                     message,
@@ -1796,12 +1645,6 @@ impl Active {
             return Ok(());
         }
         match fact {
-            ExecutionRecord::GenerationInput { origin, .. } => {
-                if self.generation.is_some() || !self.steps.is_empty() {
-                    return Err("generation source changed after admission".into());
-                }
-                self.generation = Some(origin.clone());
-            }
             ExecutionRecord::InstructionContext {
                 context_version,
                 message,
@@ -2196,9 +2039,6 @@ pub(super) struct StartupAudit {
 }
 
 impl StartupAudit {
-    pub(super) fn is_goal_coordination(&self) -> bool {
-        self.rebuild.view.thread.is_goal_coordination()
-    }
     pub(super) fn new(
         record: &ExecutionRecord,
         id: &str,

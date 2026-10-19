@@ -1,90 +1,5 @@
 use super::*;
 
-#[cfg(unix)]
-#[tokio::test]
-async fn local_file_policy_rejects_control_metadata_through_workspace_symlinks() -> Result<()> {
-    let workspace = tempfile::tempdir()?;
-    for (control, alias) in [(".git", "repository-control"), (".bro", "runtime-control")] {
-        tokio::fs::create_dir(workspace.path().join(control)).await?;
-        tokio::fs::write(workspace.path().join(control).join("config"), "unchanged").await?;
-        std::os::unix::fs::symlink(workspace.path().join(control), workspace.path().join(alias))?;
-        let tool =
-            serde_json::json!({"kind":"edit", "rawInput":{"path":format!("{alias}/config")}});
-        assert!(
-            !is_local_tool(&tool, workspace.path()).await?,
-            "metadata alias: {alias}"
-        );
-    }
-    assert!(
-        is_local_tool(
-            &serde_json::json!({"kind":"edit", "rawInput":{"path":"ordinary.txt"}}),
-            workspace.path()
-        )
-        .await?
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn native_material_keeps_real_input_identity_and_reuses_only_local_file_policy() -> Result<()>
-{
-    let root = tempfile::tempdir()?;
-    let workspace = root.path().join("workspace");
-    tokio::fs::create_dir(&workspace).await?;
-    for (name, path, expected) in [
-        ("write", "new.txt", Some("allow-once")),
-        ("write", "../outside.txt", None),
-        ("edit", ".git/config", None),
-        ("edit", ".GiT/config", None),
-        ("write", ".BRO/new-state", None),
-        ("shell", "new.txt", None),
-    ] {
-        let request = crate::goal_permission_material::native::Request {
-            native: bitrouter_orchestrator::goal::workflow::ThreadExecution {
-                thread_id: "native-thread".into(),
-                turn_id: "native-turn".into(),
-            },
-            input: bitrouter_orchestrator::turn::InputRequest {
-                request_id: "actual-native-input".into(),
-                tool_id: "actual-native-tool".into(),
-                tool_name: name.into(),
-                arguments: serde_json::json!({"path":path}).to_string(),
-            },
-        };
-        let bytes = serde_json::to_vec(&request)?;
-        let decision = PermissionDecision {
-            id: "native-decision".into(),
-            execution_id: "native-execution".into(),
-            run_id: None,
-            permission_id: request.input.request_id.clone(),
-            requirements_revision: 1,
-            task_revision: 1,
-            request: crate::goal_artifacts::put(root.path(), &bytes).await?,
-            options: vec![PermissionOption {
-                id: "allow-once".into(),
-                label: "Allow once".into(),
-                allows: true,
-                persistent: false,
-            }],
-            state: PermissionState::Pending,
-        };
-        assert_eq!(
-            allowed_local_option(root.path(), &decision, &workspace)
-                .await?
-                .as_deref(),
-            expected
-        );
-        assert!(
-            crate::goal_permission_material::checked_value(&bytes, Some("invented-acp-run"))
-                .is_err()
-        );
-        let mut foreign = decision;
-        foreign.permission_id = "another-input".into();
-        assert!(crate::goal_permission_material::decision_value(&bytes, &foreign).is_err());
-    }
-    Ok(())
-}
-
 #[test]
 fn selected_option_requires_choice_origin_and_unique_actual_resolution() -> Result<()> {
     for (origin, expected) in [
@@ -142,7 +57,7 @@ async fn decision(root: &Path, mut value: serde_json::Value) -> Result<Permissio
     Ok(PermissionDecision {
         id: "decision".into(),
         execution_id: "execution".into(),
-        run_id: Some("run".into()),
+        run_id: "run".into(),
         permission_id: permission.permission_id,
         requirements_revision: 1,
         task_revision: 1,

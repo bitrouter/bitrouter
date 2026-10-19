@@ -50,60 +50,12 @@ The CLI word `task` denotes a one-shot client experience, not a separate stored
 Task domain. There is no public Task submit, legacy root conversion or second
 execution loop. SDK dependencies do not point back to orchestrator.
 
-Local BRO refactor additions associate `Workflow.owner_thread_id` with
-`ThreadSnapshot.owned_goal_id`. A separate input Thread references this owner;
-it may interpret input while owner planning is active, with at most one active
-Turn per Thread and shared runtime capacity. These metadata-only Threads have
-no native tools, project instructions, MCP or skills. Their absolute project
-path is a label, not a filesystem grant; it can remain readable when the project
-is unavailable. Ordinary native start/enqueue/steer cannot bypass Goal inputs.
-
-Trusted Goal assembly uses existing Thread transactions and action-scoped stable
-keys. Receipt lookups authenticate the caller without executing; native Threads
-also retain workspace-grant checks. Reusing a key with changed content fails.
-Planning, input generation, review and completion evaluation now use tool-free
-Turns on the existing runner and commit authority. Exact inputs, prepared plans
-and SDK attempt reports are retained; the Goal's existing control/accounting
-callbacks must acknowledge outcomes before a response can complete. Completion
-of a model Turn is separate from adoption, verification or Goal completion.
-Ownership is immutable; checkpoints cannot implement owner handoff. Trusted
-native worker admission now records an immutable `GoalWork` reference on the
-Thread and requires a host-supplied live control. Ordinary native RPCs cannot
-start/enqueue/steer these workers or resume active work without that control.
-They retain native Core checkpoints, workspace grants, tool permissions and
-verification. Aggregate model callbacks may narrow existing route indices while
-preserving Core order; context decisions have separate host admission and
-settlement callbacks. Source/budget refusal stops new work without revoking the
-durable connection needed to record in-flight outcomes. Model or decision output
-cannot be adopted after a failed host outcome acknowledgement.
-
-App Goal plans can now select built-in work and link its actual Thread/Turn;
-original-key lookup is read-only and does not authorize replay. Native permission
-cards/answers use the original input and shared approval transaction, with
-one-time choices and separate tool-effect evidence. Scoped stopped local effects
-now have native history/workspace reconciliation with a controlled real-tool
-repair regression. Tool-free generation and native Goal workers use one bounded
-shared admission wait: only confirmed Thread occupancy, active-Turn capacity or
-a native worker's known live local workspace owner is retried, retaining
-the original action key and rechecking live source authorization. The recorded
-Thread duration bounds the wait; a receipt is checked again before reporting
-expiry. Foreign OS locks without a known local owner and unresolved workspace
-effects are refused rather than retried as capacity. Native cold receipt lookup restores registration only for the exact
-managed Goal/attempt directory, rejecting external paths and symlink escapes
-without restoring revoked profiles. Active cold
-recovery, worker quote waiting and complete effect recovery remain unfinished, as
-does managed ACP migration. Controlled native inspection/write fixtures do not
-qualify real-model planning/review or the complete coding product. Progress is recorded in
-[the refactor ledger](BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md).
-
 Public operations authenticate the caller and check the serving instance,
 Thread ownership and current canonical workspace/profile grant. Knowing an ID,
 local transport access or inference `skip_auth` cannot grant effect permission.
 ReadOnly hides and rejects effectful tools and verification. Ask requires
 identified approval; AllowEffects requires the corresponding server grant.
 Approval cannot broaden a grant, and grants are rechecked on reload and control.
-The metadata-only coordination exception above grants no filesystem execution;
-model dispatch still checks the database owner/version fence after callback waits.
 
 ## Admission and controls
 
@@ -111,8 +63,6 @@ model dispatch still checks the database owner/version fence after callback wait
 | --- | --- |
 | `create_thread` | Persist owner/workspace/configuration/grants without executing |
 | `start_turn` | Accept only an idle Thread without prior accepted queued work |
-| `start_goal_generation` | Trusted in-process Goal assembly only; versioned tool-free input, independent action key, shared active capacity and writer fencing |
-| `wait_goal_generation` | Same trusted generation admission, with original-key reconciliation and bounded waiting for known Thread/Turn contention; no separate execution owner |
 | `enqueue_turn` | Persist FIFO input; acquire execution resources at activation |
 | `steer` | Target the expected active Turn; apply once at a model boundary |
 | `cancel_turn` / `cancel_queued_turn` | Cancel the originating active Turn or withdraw one unstarted input |
@@ -330,17 +280,12 @@ If all candidates are ineligible, return overloaded rather than steal a worker o
 observer. Cold public queries do not load SDK context. Reload reserves reader/hot
 capacity and cannot create a second gate for a Thread still referenced elsewhere.
 
-Runtime root format is 8. Formats 2/3/4/5/6/7 remain readable; a new append upgrades its
+Runtime root format is 7. Formats 2/3/4/5/6 remain readable; a new append upgrades its
 envelope atomically without rewriting history. Migration 000026 labels existing development roots 0;
 unsupported roots fail before execution, without legacy conversion or deleting
 facts/owner/markers. Format rejection cannot become stopped-owner proof. Developer
 database cleanup is a separate authorized operation and must preserve unrelated
 metering/configuration data and unresolved execution evidence.
-App migration 000030 is a compatibility marker without new tables or history
-rewriting. The pinned migrator rejects an applied migration unknown to an old
-binary before it can start a Goal writer that ignores new execution links.
-Removing this marker is rejected. This is a startup gate; cutover still requires
-stopping old running writers before enabling the new path.
 
 ## Native ACP control
 
@@ -368,9 +313,8 @@ HTTP does not expose operator recovery or maintain its own execution queue.
 
 `bro task run` creates/starts through the same service with stable separate keys.
 An explicitly rejected start may leave an empty Thread; an uncertain receipt must
-be resolved before treating it as empty. `bro` and `bro code` open Goals;
-`bro code <agent>` is removed. `bro claude` and `bro codex` retain direct harness
-interaction. Native clients reattaching by Thread ID preserve stored
+be resolved before treating it as empty. `bro code` retains a continuous Thread;
+`bro code <agent>` remains external ACP. Reattach by Thread ID preserves stored
 configuration and grants. Client detach/reconnect does not execute recovery or
 resume FIFO. Native draft persistence is in-process, not across client restarts.
 

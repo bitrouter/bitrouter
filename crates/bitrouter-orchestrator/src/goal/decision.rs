@@ -17,23 +17,13 @@ pub struct PermissionOption {
 pub struct PermissionDecision {
     pub id: String,
     pub execution_id: String,
-    /// External ACP identity only; built-in decisions use execution.thread.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_id: Option<String>,
+    pub run_id: String,
     pub permission_id: String,
     pub requirements_revision: u64,
     pub task_revision: u64,
     pub request: ArtifactRef,
     pub options: Vec<PermissionOption>,
     pub state: PermissionState,
-}
-
-pub fn native_choice(option_id: &str) -> Option<bool> {
-    match option_id {
-        "allow-once" => Some(true),
-        "deny-once" => Some(false),
-        _ => None,
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,15 +115,8 @@ pub(super) fn validate_response(
         || decision.task_revision != task.requirements_revision
         || execution.task_revision != task.requirements_revision
         || !matches!(&execution.observation, Observation::Running { run_id, .. } if run_id == &decision.run_id)
-        || decision.run_id.is_none() && (task.spec.harness.is_some() || execution.thread.is_none())
         || execution.stop.is_some()
         || option.allows && (goal.run_intent != RunIntent::Run || task.run_intent != RunIntent::Run)
-        || decision.run_id.is_none()
-            && option.allows
-            && goal
-                .control_source_revision
-                .max(task.control_source_revision)
-                != execution.control_source_revision
         || automatic && (!option.allows || option.persistent)
     {
         return Err(GoalError::Conflict);
@@ -160,14 +143,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event) -> Result<(), GoalEr
                 if !ids.insert(&option.id) {
                     return Err(invalid("duplicate permission option"));
                 }
-                if decision.run_id.is_none()
-                    && (native_choice(&option.id) != Some(option.allows) || option.persistent)
-                {
-                    return Err(invalid("native approvals offer only one-time allow/deny"));
-                }
-            }
-            if decision.run_id.is_none() && decision.options.len() != 2 {
-                return Err(invalid("native approval options are incomplete"));
             }
             if goal
                 .workflow
@@ -195,8 +170,6 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event) -> Result<(), GoalEr
             if decision.requirements_revision != goal.requirements_revision
                 || decision.task_revision != execution.task_revision
                 || !matches!(&execution.observation, Observation::Running { run_id, .. } if run_id == &decision.run_id)
-                || decision.run_id.is_none()
-                    && (task.spec.harness.is_some() || execution.thread.is_none())
             {
                 return Err(GoalError::Conflict);
             }

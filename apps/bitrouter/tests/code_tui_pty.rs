@@ -48,8 +48,8 @@ mod background;
 /// A deliberately small ACP agent. Its responses are protocol-shaped JSON, not
 /// terminal snapshots, so test failures describe lifecycle behavior instead of
 /// an incidental escape-sequence layout.
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/fixture_binary.rs"]
-mod fixture_binary;
+#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+mod example_binary;
 
 /// The mode an isolated mock agent should exercise.
 #[derive(Debug, Clone, Copy)]
@@ -1278,7 +1278,7 @@ fn acp_fixture_executable() -> Result<PathBuf> {
     static BINARY: std::sync::OnceLock<std::result::Result<PathBuf, String>> =
         std::sync::OnceLock::new();
     BINARY
-        .get_or_init(|| fixture_binary::build("pty_acp_fixture"))
+        .get_or_init(|| example_binary::build("bitrouter", "pty_acp_fixture"))
         .clone()
         .map_err(anyhow::Error::msg)
 }

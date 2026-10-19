@@ -22,11 +22,11 @@ core-tree-pressure = { max-threads = 1 }
 filter = 'test(capacity::tree_limits::maximum_tree_)'
 test-group = 'core-tree-pressure'
 
-# Native long-loop, crash-journal and ACP replay cases serialize Core checkpoints too.
+# Native long-loop and ACP replay cases serialize growing Core checkpoints too.
 # Share the existing pressure group so they do not compete with full-tree and
 # cold-recovery workloads. Keep their ordinary timeout and product limits.
 [[profile.default.overrides]]
-filter = 'test(native_checkpoint_capacity_failure_reports_the_resource_cause) | test(native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(unicode_stream_reconciles_once_and_replays_beyond_hot_history) | test(stalled_replay_disconnects_observer_without_cancelling_native_history) | test(native_process_loss_at_commit_windows_never_retires_owner_or_replays_work)'
+filter = 'test(native_checkpoint_capacity_failure_reports_the_resource_cause) | test(native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(unicode_stream_reconciles_once_and_replays_beyond_hot_history) | test(stalled_replay_disconnects_observer_without_cancelling_native_history)'
 test-group = 'core-tree-pressure'
 
 # A native cold recovery replays several multi-megabyte checkpoints before

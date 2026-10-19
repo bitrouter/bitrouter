@@ -29,8 +29,6 @@ pub enum WorkKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Work {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<Box<crate::thread::GoalWork>>,
     pub id: String,
     pub kind: WorkKind,
     pub requirements_revision: u64,
@@ -66,9 +64,6 @@ pub enum Event {
 pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Result<(), GoalError> {
     match event {
         Event::Begin { work } => {
-            if let Some(source) = &work.source {
-                source.validate().map_err(|error| invalid(&error))?;
-            }
             identifier(&work.id)?;
             work.intent.validate()?;
             super::budget::reserve(
@@ -81,12 +76,7 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event, now_ms: u64) -> Resu
                 ),
                 now_ms,
             )?;
-            if work.requirements_revision == 0
-                || work.requirements_revision > goal.requirements_revision
-                || work.source.as_ref().map_or(
-                    work.requirements_revision != goal.requirements_revision,
-                    |source| !super::workflow::worker_requested(goal, source),
-                )
+            if work.requirements_revision != goal.requirements_revision
                 || goal.accounting.in_flight.len() >= 128
                 || goal
                     .accounting

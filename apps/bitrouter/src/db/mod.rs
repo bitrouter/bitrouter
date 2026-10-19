@@ -35,12 +35,7 @@ pub async fn connect(url: &str) -> Result<DatabaseConnection> {
     let mut opts = ConnectOptions::new(normalize_url(url));
     opts.sqlx_logging(false);
     if is_sqlite_memory(url) {
-        // This connection is the database. SQLx can drop it when a cancelled
-        // checkout is awaiting its default health ping, erasing the schema.
-        // Avoid that cancellation window (Pool::acquire's documented remedy).
-        opts.min_connections(1)
-            .max_connections(1)
-            .test_before_acquire(false);
+        opts.min_connections(1).max_connections(1);
     }
     let db = Database::connect(opts)
         .await
@@ -233,54 +228,6 @@ mod tests {
         assert!(is_sqlite_memory("sqlite://:memory:"));
         assert!(!is_sqlite_memory("sqlite://./bitrouter.db"));
         assert!(!is_sqlite_memory("postgres://host/db"));
-    }
-
-    #[tokio::test]
-    async fn cancelled_memory_checkout_preserves_committed_schema_and_data() -> anyhow::Result<()> {
-        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
-        let db = connect("sqlite::memory:").await?;
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "CREATE TABLE cancellation_probe (value TEXT NOT NULL)",
-        ))
-        .await?;
-        db.execute(Statement::from_string(
-            DatabaseBackend::Sqlite,
-            "INSERT INTO cancellation_probe VALUES ('committed')",
-        ))
-        .await?;
-        let pool = db.get_sqlite_connection_pool();
-        for _ in 0..16 {
-            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
-            while pool.num_idle() == 0 {
-                anyhow::ensure!(
-                    tokio::time::Instant::now() < deadline,
-                    "connection did not return to the idle pool"
-                );
-                tokio::task::yield_now().await;
-            }
-            {
-                let checkout = pool.acquire();
-                tokio::pin!(checkout);
-                if let std::task::Poll::Ready(connection) = futures::poll!(checkout.as_mut()) {
-                    drop(connection?);
-                }
-                // Cancel a pending checkout after its first poll, as happens
-                // when a completed model call drops the live control monitor.
-            }
-            let row = db
-                .query_one(Statement::from_string(
-                    DatabaseBackend::Sqlite,
-                    "SELECT value FROM cancellation_probe",
-                ))
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!("committed row disappeared after checkout cancellation")
-                })?;
-            assert_eq!(row.try_get::<String>("", "value")?, "committed");
-        }
-        db.close().await?;
-        Ok(())
     }
 
     #[test]

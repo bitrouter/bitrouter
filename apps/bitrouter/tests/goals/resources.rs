@@ -160,7 +160,7 @@ async fn selected_resources_must_be_frozen_before_dispatch_and_survive_reload() 
             Change::ObserveExecution {
                 execution_id: "resource-execution".into(),
                 observation: Observation::Running {
-                    run_id: Some("resource-run".into()),
+                    run_id: "resource-run".into(),
                     native_session_id: None,
                 },
             },

@@ -957,9 +957,6 @@ mod tests {
                                 snapshot: Box::new(ThreadSnapshot {
                                     server_instance_id: "fixture-epoch".into(),
                                     thread_id: "original-thread".into(),
-                                    owned_goal_id: None,
-                                    input_for_thread_id: None,
-                                    goal_work: None,
                                     status: bitrouter_orchestrator::thread::ThreadStatus::Idle,
                                     workspace: PathBuf::from("/fixture"),
                                     model: "fixture-model".into(),

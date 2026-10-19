@@ -37,7 +37,6 @@ async fn goals_local_ipc_retries_original_operation_and_rejects_wrong_protocol()
         },
         LocalControlOptions {
             administration: None,
-            threads: None,
             goals: Some(goals),
             gate: crate::daemon_handoff::HandoffGate::default(),
             cli_owned: false,

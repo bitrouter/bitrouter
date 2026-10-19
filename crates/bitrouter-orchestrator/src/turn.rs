@@ -115,8 +115,6 @@ pub struct TurnEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generation: Option<GenerationProgress>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_routing: Option<crate::core::context_router::inspection::Inspection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<crate::harness::HarnessInventory>,
@@ -142,41 +140,8 @@ pub struct TurnSnapshot {
     pub live: Option<LiveActivity>,
 }
 
-/// Causal source of one managed generation. This is not an execution permission
-/// or evidence that the provider used the requested model.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GenerationOrigin {
-    pub goal_id: String,
-    pub source_id: String,
-    pub requirements_revision: u64,
-    pub purpose: GenerationPurpose,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GenerationProgress {
-    pub origin: GenerationOrigin,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GenerationPurpose {
-    Planning,
-    InputScope,
-    Input,
-    Review,
-    Completion,
-}
-
-impl GenerationPurpose {
-    pub fn is_input(self) -> bool {
-        matches!(self, Self::InputScope | Self::Input)
-    }
-}
-
 /// Complete approval metadata is available even when its event was evicted.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InputRequest {
     pub request_id: String,
     pub tool_id: String,
@@ -345,7 +310,7 @@ pub enum TurnLifecycle {
     },
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct TurnRequest {
     pub prompt: String,
     pub idempotency_key: String,

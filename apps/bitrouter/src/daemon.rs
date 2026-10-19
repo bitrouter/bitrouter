@@ -723,7 +723,6 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
         LocalControlOptions {
             administration,
             goals: None,
-            threads: None,
             gate: crate::daemon_handoff::HandoffGate::default(),
             cli_owned: false,
         },
@@ -735,7 +734,6 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
 pub struct LocalControlOptions {
     pub administration: Option<Administration>,
     pub goals: Option<Arc<bitrouter_orchestrator::goal::GoalService>>,
-    pub threads: Option<bitrouter_orchestrator::service::ThreadService>,
     pub gate: crate::daemon_handoff::HandoffGate,
     pub cli_owned: bool,
 }
@@ -770,17 +768,11 @@ pub(crate) async fn run_bound_control_socket(
         ),
         None => None,
     };
-    let goal_runtime = match (
-        &options.goals,
-        &options.threads,
-        &supervisor,
-        &options.administration,
-    ) {
-        (Some(goals), Some(threads), Some(supervisor), Some(administration)) => Some(
+    let goal_runtime = match (&options.goals, &supervisor, &options.administration) {
+        (Some(goals), Some(supervisor), Some(administration)) => Some(
             crate::goal_runtime::GoalRuntime::start(
                 app.clone(),
                 goals.clone(),
-                threads.clone(),
                 supervisor.clone(),
                 administration.routing.clone(),
                 administration.source.home(),

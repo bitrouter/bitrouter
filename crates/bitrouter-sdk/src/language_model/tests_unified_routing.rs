@@ -1,6 +1,3 @@
-#[path = "tests_unified_routing/typed_routing.rs"]
-mod typed_routing;
-
 use super::*;
 use crate::decision_model::types::{
     Answer, DecisionError, DecisionRequest, DecisionResponse, DecisionUsage, Question,

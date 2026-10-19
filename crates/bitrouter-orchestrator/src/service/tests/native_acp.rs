@@ -726,7 +726,7 @@ async fn accepted_close_survives_eof_without_blocking_other_threads_and_cold_his
         .load(&session)
         .await?
         .ok_or("history missing")?;
-    assert_eq!(saved.format_version, crate::store::RUNTIME_FORMAT_VERSION);
+    assert_eq!(saved.format_version, 7);
     assert_eq!(
         saved
             .records

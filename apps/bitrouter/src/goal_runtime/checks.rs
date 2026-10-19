@@ -107,16 +107,26 @@ impl Coordinator {
                 },
             )
             .await?;
-            let (report, output, after) = self
-                .record_workspace_check(
+            let output = self
+                .run_workspace_check(
                     goal,
                     &execution.workspace,
                     Some((&task.spec.id, task.requirements_revision)),
                     spec,
                     &attempt_id,
-                    execution.base_commit.as_deref(),
                 )
-                .await?;
+                .await
+                .unwrap_or_else(|error| unavailable(&bounded_error(&error)));
+            let report = crate::goal_artifacts::put(&root, &serde_json::to_vec(&output)?).await?;
+            let after = crate::goal_artifacts::capture(
+                &root,
+                &execution.workspace,
+                execution
+                    .base_commit
+                    .as_deref()
+                    .context("check has no workspace baseline")?,
+            )
+            .await?;
             self.change(
                 goal,
                 Change::ObserveCheck {
@@ -138,33 +148,7 @@ impl Coordinator {
         Ok(evidence)
     }
 
-    // Request/Observe events and their artifact/version bindings stay with the
-    // task or delivery caller. Only the identical external execution is shared.
-    pub(super) async fn record_workspace_check(
-        &self,
-        goal: &GoalSnapshot,
-        workspace: &Path,
-        task: Option<(&str, u64)>,
-        spec: &CheckSpec,
-        attempt_id: &str,
-        baseline: Option<&str>,
-    ) -> Result<(ArtifactRef, CheckOutput, ArtifactRef)> {
-        let root = crate::goal_artifacts::root(&self.workspaces, &goal.id);
-        let output = self
-            .run_workspace_check(goal, workspace, task, spec, attempt_id)
-            .await
-            .unwrap_or_else(|error| unavailable(&bounded_error(&error)));
-        let report = crate::goal_artifacts::put(&root, &serde_json::to_vec(&output)?).await?;
-        let after = crate::goal_artifacts::capture(
-            &root,
-            workspace,
-            baseline.context("workspace check has no input baseline")?,
-        )
-        .await?;
-        Ok((report, output, after))
-    }
-
-    async fn run_workspace_check(
+    pub(super) async fn run_workspace_check(
         &self,
         goal: &GoalSnapshot,
         workspace: &Path,
@@ -202,7 +186,7 @@ impl Coordinator {
     }
 }
 
-fn unavailable(reason: &str) -> CheckOutput {
+pub(super) fn unavailable(reason: &str) -> CheckOutput {
     CheckOutput {
         completed: false,
         passed: false,

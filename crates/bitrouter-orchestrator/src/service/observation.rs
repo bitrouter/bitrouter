@@ -441,16 +441,6 @@ pub(super) fn project_with_native(
                 latest_turn: None,
             }),
         },
-        ExecutionRecord::GenerationInput {
-            origin,
-            context_version,
-            ..
-        } => ThreadChange::ContextAdvanced {
-            generation: Some(origin.clone()),
-            turn_id: turn,
-            context_version: *context_version,
-            resources: None,
-        },
         ExecutionRecord::TurnQueued {
             turn_id,
             user_item_id,
@@ -499,7 +489,6 @@ pub(super) fn project_with_native(
         ExecutionRecord::InstructionContext {
             context_version, ..
         } => ThreadChange::ContextAdvanced {
-            generation: None,
             turn_id: turn,
             context_version: *context_version,
             resources: None,
@@ -508,7 +497,6 @@ pub(super) fn project_with_native(
             inventory,
             context_version,
         } => ThreadChange::ContextAdvanced {
-            generation: None,
             turn_id: turn,
             context_version: *context_version,
             resources: Some(inventory.clone()),
@@ -591,7 +579,6 @@ pub(super) fn project_with_native(
         ExecutionRecord::Settled {
             context_version, ..
         } => ThreadChange::ContextAdvanced {
-            generation: None,
             resources: None,
             turn_id: turn,
             context_version: *context_version,
@@ -662,7 +649,6 @@ impl ThreadView {
                     context_version, ..
                 } => self.thread.context_version = *context_version,
                 ThreadChange::ContextAdvanced {
-                    generation,
                     turn_id,
                     context_version,
                     resources,
@@ -670,33 +656,13 @@ impl ThreadView {
                     self.thread.context_version = *context_version;
                     if let Some(turn) = &mut self.latest_turn
                         && &turn.turn_id == turn_id
+                        && let Some(resources) = resources
                     {
-                        if let Some(resources) = resources {
-                            turn.resources = Some(resources.as_ref().clone());
-                        }
-                        if let Some(origin) = generation {
-                            turn.generation = Some(crate::turn::GenerationProgress {
-                                origin: origin.clone(),
-                                request_id: None,
-                            });
-                        }
+                        turn.resources = Some(resources.as_ref().clone());
                     }
                 }
-                ThreadChange::AssistantResponse {
-                    turn_id,
-                    request_id,
-                    ..
-                } => {
-                    if let Some(turn) = &mut self.latest_turn
-                        && &turn.turn_id == turn_id
-                    {
-                        turn.live = None;
-                        if let Some(generation) = &mut turn.generation {
-                            generation.request_id = Some(request_id.clone());
-                        }
-                    }
-                }
-                ThreadChange::AssistantInterrupted { turn_id, .. }
+                ThreadChange::AssistantResponse { turn_id, .. }
+                | ThreadChange::AssistantInterrupted { turn_id, .. }
                 | ThreadChange::ToolResult { turn_id, .. } => {
                     if let Some(turn) = &mut self.latest_turn
                         && &turn.turn_id == turn_id
@@ -734,7 +700,6 @@ pub(super) fn empty_turn(
     turn_id: &str,
 ) -> TurnSnapshot {
     TurnSnapshot {
-        generation: None,
         context_routing: None,
         resources: None,
         steering: Vec::new(),

@@ -11,8 +11,6 @@ mod completion_tests;
 mod decision_tests;
 #[path = "goals/input.rs"]
 mod input_tests;
-#[path = "goals/native.rs"]
-mod native_tests;
 #[path = "goals/permission_input.rs"]
 mod permission_input_tests;
 #[path = "goals/recovery.rs"]
@@ -138,7 +136,7 @@ fn task(id: &str, dependencies: &[&str]) -> TaskSpec {
         id: id.into(),
         title: format!("Task {id}"),
         instruction: "Inspect the assigned material and report evidence".into(),
-        harness: Some("configured-acp".into()),
+        harness: "configured-acp".into(),
         dependencies: dependencies.iter().map(|id| (*id).into()).collect(),
         checks: Vec::new(),
         resources: Default::default(),
@@ -208,7 +206,7 @@ async fn request_handoff(
         Change::ObserveExecution {
             execution_id: execution_id.clone(),
             observation: Observation::Candidate {
-                run_id: Some(format!("{task}-run")),
+                run_id: format!("{task}-run"),
                 native_session_id: None,
                 report: candidate,
             },
@@ -514,7 +512,7 @@ async fn goals_stop_confirmation_does_not_overwrite_candidate_result() -> Result
             Change::ObserveExecution {
                 execution_id: "execution".into(),
                 observation: Observation::Candidate {
-                    run_id: Some("real-run".into()),
+                    run_id: "real-run".into(),
                     native_session_id: None,
                     report: report(
                         workspace.path(),
@@ -793,7 +791,7 @@ async fn goals_dispatch_receipt_failure_does_not_admit_start_or_run_mapping() ->
             Change::ObserveExecution {
                 execution_id: "execution".into(),
                 observation: Observation::Running {
-                    run_id: Some("unadmitted-run".into()),
+                    run_id: "unadmitted-run".into(),
                     native_session_id: None,
                 },
             },
@@ -936,7 +934,7 @@ async fn goals_pause_and_unverified_candidate_cannot_admit_dependents() -> Resul
             Change::ObserveExecution {
                 execution_id: "execution".into(),
                 observation: Observation::Candidate {
-                    run_id: Some("actual-run".into()),
+                    run_id: "actual-run".into(),
                     native_session_id: Some("harness-session".into()),
                     report: report(
                         workspace.path(),
@@ -1049,7 +1047,7 @@ async fn goals_late_execution_facts_keep_original_requirements_version() -> Resu
             Change::ObserveExecution {
                 execution_id: "execution".into(),
                 observation: Observation::Candidate {
-                    run_id: Some("actual-run".into()),
+                    run_id: "actual-run".into(),
                     native_session_id: None,
                     report: report(workspace.path(), "Result from requirement revision one")?,
                 },

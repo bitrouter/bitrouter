@@ -96,7 +96,6 @@ fn begin(workspace: &std::path::Path, id: &str, amount: Option<u64>) -> Result<C
                 id: id.into(),
                 kind: WorkKind::ProviderAttempt,
                 requirements_revision: 1,
-                source: None,
                 request_id: Some(id.into()),
                 intent: report(workspace, id)?,
                 token_reservation: amount.map(quote),

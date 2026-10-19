@@ -101,7 +101,7 @@ loading or reconnecting never resumes a stored queue. No operator recovery
 command is published.
 
 Defaults: 8 active Turns, 32 hot Threads, 32 queued inputs per Thread, 2 MiB
-context per Thread / 256 MiB hot context, and 32 settled Turn snapshots / 64 MiB
+context per Thread / 64 MiB hot context, and 32 settled Turn snapshots / 64 MiB
 for up to 30 minutes. Thread observation caches retain 256 events / 2 MiB,
 with 8 subscribers and 32 queued events per subscriber. Live snapshots retain
 at most 32 KiB. Evicting a snapshot or hot Thread does not remove durable keys
@@ -119,7 +119,7 @@ Startup claims one database owner and completes bounded cold discovery before
 admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
-or prompts. New/updated roots use runtime format 8; formats 2/3/4/5/6/7 remain readable without history rewriting. Migration adds metadata with
+or prompts. New/updated roots use runtime format 5; formats 2/3/4 remain readable without history rewriting. Migration adds metadata with
 **default 0** for old roots; unsupported formats fail before payload decoding
 or execution, with `recovery_required` / `unsupported_runtime_format`.
 They are not converted or marked safe.
@@ -364,31 +364,7 @@ See `references/sessions.md` for the controller/native-session boundary and what
 
 ## Goal interface (bro / bro code)
 
-BRO orchestrates long-running, parallel workflows. The current refactor adds
-built-in workers over the existing native Thread/Turn runtime alongside ACP
-workers. A plan can omit an external harness; it then uses a configured native
-model route, isolated workspace, selected MCP servers and Ask permissions.
-Native Goal permission cards retain the original input/tool/arguments and offer
-one-time allow/deny through the shared approval transaction. The local-file policy
-may allow workspace-scoped operations once; shell/MCP require an explicit choice.
-An accepted reply does not prove execution. Cancellation is not consent, and
-pause/resume does not reauthorize an old request. Native stopped local-work
-reconciliation uses original admission, complete bounded Thread history and
-stable workspace evidence; shell/MCP/unknown effects require explicit reconciliation.
-Omitted search paths use the built-in tool's documented workspace default; the
-original permission arguments remain intact. This does not infer missing ACP scope.
-Tool-free Goal model work and native workers share a bounded admission wait for
-known Thread occupancy or active-Turn capacity; native workers also wait for a
-known live local workspace owner. They retain the original action key and
-rechecking source/budget authorization. The recorded Thread duration bounds this
-wait; input limits, content conflicts and recovery blockers fail directly.
-Waiting alone accepts no Turn or model call. Foreign OS locks without a known
-local owner and unresolved effects are refused directly. Native cold receipt lookup restores
-only the exact managed Goal/attempt directory registration; outside paths and
-symlink escapes fail, and existing revoked profiles remain revoked.
-Active cold recovery and worker token-quote waiting remain incomplete. Do not treat
-controlled HTTP/tool fixtures as qualified self-driving coding. Native and ACP execution proof
-remain separate; a Thread/Turn admission is not evidence of model/tool dispatch.
+BRO orchestrates long-running, parallel workflows through ACP-compatible harnesses.
 Both `bro` and `bro code` open Goals; reading the directory does not create or
 run a Goal. `bro init` is the explicit setup wizard. Saved `chat.agent` and native
 Thread records remain readable and do not select the default view.
@@ -458,11 +434,8 @@ It does not undo committed requirements, cancel worker/tool effects, resume
 work or increase a cap; other accepted/in-flight inputs remain ordered.
 Additional words, quotes and hypothetical discussion use normal understanding.
 The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 5; older outboxes are retained and rejected without replay
+Goal IPC is version 4; older outboxes are retained and rejected without replay
 or reinterpretation. Native/ACP protocol versions are separate.
-The managed Goal refactor also records database migration 000030: older app
-versions reject that database at startup. Do not remove the version marker or
-run old and new Goal writers concurrently; it preserves existing history.
 Superseded reconciled executions without active references are archived into
 immutable Goal operation history. The current snapshot retains the archive count;
 history queries preserve full execution/source records without restarting work.
@@ -718,8 +691,7 @@ Turns, including an empty snapshot. A new Thread discovers again. After server
 restart, authorized continuation refreshes instructions only at a settled model
 boundary and records replacements/removals explicitly; known effects are never
 replayed. Completing an already settled outcome and cold browsing reread no
-instruction files. Runtime format 8 retains snapshots, private ACP bindings/close
-results and explicit Goal execution associations; formats 2–7 remain readable.
+instruction files. Runtime format 5 persists snapshots and private ACP bindings/close results; formats 2/3/4 remain readable.
 
 The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
 use the existing approval, exclusive execution and durable result barriers;

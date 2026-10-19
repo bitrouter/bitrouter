@@ -268,14 +268,11 @@ async fn startup_rejection(model_route: bool) -> Result<()> {
             }
             Err(error) => error,
         };
-        ensure!(
-            error.to_string().contains(if model_route {
-                "selected BRO model route was not confirmed"
-            } else {
-                "not supported"
-            }),
-            "unexpected resource startup rejection: {error:#}"
-        );
+        ensure!(error.to_string().contains(if model_route {
+            "selected BRO model route was not confirmed"
+        } else {
+            "not supported"
+        }));
         let files = std::fs::read_dir(&captures)?.collect::<std::io::Result<Vec<_>>>()?;
         assert_eq!(files.len(), 1);
         let text = std::fs::read_to_string(files[0].path())?;

@@ -66,7 +66,7 @@ pub(super) async fn seed_state(
         goal.workflow.decisions = vec![PermissionDecision {
             id: "d1".into(),
             execution_id: "domain-left".into(),
-            run_id: Some("domain-left".into()),
+            run_id: "domain-left".into(),
             permission_id: "fixture-permission".into(),
             requirements_revision: 1,
             task_revision: 1,

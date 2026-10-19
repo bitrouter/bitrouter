@@ -1849,27 +1849,12 @@ impl Pipeline {
             let prepared = match prepared {
                 Some(prepared) => prepared,
                 None => {
-                    let prompt = ctx.require_generation_prompt()?;
-                    let runtime = resolution.policy.as_ref().and(self.decision_model.as_ref());
-                    match native.as_ref() {
-                        Some(native) => {
-                            crate::routing::preparation::Prepared::from_prompt_controlled(
-                                prompt,
-                                runtime,
-                                ctx.request_id(),
-                                native.control.as_ref(),
-                            )
-                            .await?
-                        }
-                        None => {
-                            crate::routing::preparation::Prepared::from_prompt(
-                                prompt,
-                                runtime,
-                                ctx.request_id(),
-                            )
-                            .await
-                        }
-                    }
+                    crate::routing::preparation::Prepared::from_prompt(
+                        ctx.require_generation_prompt()?,
+                        resolution.policy.as_ref().and(self.decision_model.as_ref()),
+                        ctx.request_id(),
+                    )
+                    .await
                 }
             };
             prepared.validate_for(ctx.require_generation_prompt()?)?;

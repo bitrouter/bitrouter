@@ -11,69 +11,6 @@ pub const MAX_TASKS: usize = 32;
 pub const OWNER_LEASE_MS: u64 = 30_000;
 pub const SUPERSEDED_STOP_GRACE_MS: u64 = 10_000;
 
-/// Reconstruct the same owner admission after an interrupted cross-store link.
-/// This is a single action key, not the key for every child admission.
-pub fn owner_thread_key(goal_id: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(b"bro-goal-owner-thread-v1");
-    digest.update(goal_id.as_bytes());
-    format!("goal-owner-{}", hex::encode(digest.finalize()))
-}
-
-pub fn input_thread_key(goal_id: &str) -> String {
-    format!("input-{}", owner_thread_key(goal_id))
-}
-
-/// Local edits do not revoke an unrelated task's execution. Explicit controls,
-/// replacement, task version changes and stopping do revoke that attempt.
-pub fn worker_requested(goal: &super::GoalSnapshot, source: &crate::thread::GoalWork) -> bool {
-    goal.id == source.goal_id
-        && goal.workflow.owner_thread_id.as_ref() == Some(&source.owner_thread_id)
-        && goal.run_intent == RunIntent::Run
-        && goal.workflow.tasks.iter().any(|task| {
-            task.spec.id == source.task_id
-                && task.requirements_revision == source.task_revision
-                && task.run_intent == RunIntent::Run
-                && goal
-                    .control_source_revision
-                    .max(task.control_source_revision)
-                    == source.control_source_revision
-                && task.executions.last().is_some_and(|execution| {
-                    execution.id == source.execution_id
-                        && execution.task_revision == source.task_revision
-                        && execution.dispatch_requested
-                        && execution.stop.is_none()
-                        && matches!(
-                            execution.observation,
-                            Observation::Requested | Observation::Running { .. }
-                        )
-                })
-        })
-}
-
-/// A model proposal belongs to a still-pending domain action, not just a Goal
-/// whose broad run intent happens to remain enabled.
-pub fn generation_requested(
-    goal: &super::GoalSnapshot,
-    origin: &crate::turn::GenerationOrigin,
-) -> bool {
-    use crate::turn::GenerationPurpose as P;
-    if goal.id != origin.goal_id || goal.requirements_revision != origin.requirements_revision {
-        return false;
-    }
-    match origin.purpose {
-        P::Planning => matches!(&goal.workflow.planning,
-            Planning::Requested { attempt_id } if *attempt_id == origin.source_id),
-        P::InputScope => goal.inputs.pending.as_ref().is_some_and(|pending| pending.operation.id == origin.source_id),
-        P::Input => goal.inputs.pending.as_ref().is_some_and(|pending| pending.attempt_id == origin.source_id),
-        P::Review => goal.workflow.tasks.iter().flat_map(|task| &task.executions).any(|execution|
-            matches!(&execution.review, Some(ReviewState::Requested { attempt_id, .. }) if *attempt_id == origin.source_id)),
-        P::Completion => goal.workflow.completion.attempt.as_ref().is_some_and(|attempt|
-            attempt.id == origin.source_id && attempt.state == super::completion::State::Evaluating),
-    }
-}
-
 /// Stable receipt key makes retirement recoverable and prevents identity reuse.
 pub fn archive_operation_id(goal_id: &str, execution_id: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -192,12 +129,6 @@ pub struct CoordinatorLease {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workflow {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_thread_id: Option<String>,
-    /// An accepted Thread identity. Missing on legacy records; never inferred
-    /// from an ACP run or used as evidence that execution has begun.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub owner_thread_id: Option<String>,
     #[serde(default)]
     pub completion: super::completion::Progress,
     #[serde(default)]
@@ -240,10 +171,7 @@ pub struct TaskSpec {
     pub id: String,
     pub title: String,
     pub instruction: String,
-    /// No external harness selects BRO's built-in executor. Existing ACP IDs
-    /// retain their serialized spelling and operation fingerprints.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub harness: Option<String>,
+    pub harness: String,
     pub dependencies: Vec<String>,
     #[serde(default)]
     pub checks: Vec<super::verification::CheckSpec>,
@@ -267,52 +195,6 @@ pub struct Task {
     pub control_source_revision: u64,
 }
 
-/// Pure execution admission shared by scheduling, projection and durable commit.
-/// Goal authorization, dependencies, budget and CAS still require fresh checks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionAdmission {
-    Ready,
-    Blocked,
-    RetryLimit,
-}
-
-impl Task {
-    pub fn execution_admission(
-        &self,
-        goal_revision: u64,
-        goal_control_source: u64,
-    ) -> ExecutionAdmission {
-        let previous_ready = self.executions.last().is_none_or(|execution| {
-            (!execution.dispatch_requested
-                && matches!(
-                    execution.observation,
-                    Observation::Failed { run_id: None, .. }
-                ))
-                || execution.replacement_ready(
-                    self.requirements_revision,
-                    goal_control_source.max(self.control_source_revision),
-                )
-        });
-        if !previous_ready {
-            return ExecutionAdmission::Blocked;
-        }
-        if self.executions.len() >= 16
-            || self
-                .executions
-                .iter()
-                .filter(|execution| execution.task_revision == self.requirements_revision)
-                .count()
-                >= 3
-        {
-            return ExecutionAdmission::RetryLimit;
-        }
-        if self.run_intent != RunIntent::Run || self.requirements_revision > goal_revision {
-            return ExecutionAdmission::Blocked;
-        }
-        ExecutionAdmission::Ready
-    }
-}
-
 fn no_archives(value: &u64) -> bool {
     *value == 0
 }
@@ -322,13 +204,8 @@ pub struct Execution {
     pub id: String,
     pub workspace: PathBuf,
     pub observation: Observation,
-    /// Accepted execution identity, distinct from any ACP session/run ID.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread: Option<ThreadExecution>,
     pub requirements_revision: u64,
     pub task_revision: u64,
-    #[serde(default, skip_serializing_if = "zero_revision")]
-    pub control_source_revision: u64,
     #[serde(default)]
     pub dispatch_requested: bool,
     #[serde(default)]
@@ -351,16 +228,6 @@ pub struct Execution {
     /// Acknowledged BRO session route; not proof of an upstream provider model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confirmed_model_route: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ThreadExecution {
-    pub thread_id: String,
-    pub turn_id: String,
-}
-
-fn zero_revision(revision: &u64) -> bool {
-    *revision == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -538,11 +405,11 @@ pub enum StopState {
 pub enum Observation {
     Requested,
     Running {
-        run_id: Option<String>,
+        run_id: String,
         native_session_id: Option<String>,
     },
     Candidate {
-        run_id: Option<String>,
+        run_id: String,
         native_session_id: Option<String>,
         report: ArtifactRef,
     },
@@ -560,21 +427,6 @@ pub enum Observation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "change", rename_all = "snake_case")]
 pub enum Change {
-    BindWorkerTurn {
-        execution_id: String,
-        thread: ThreadExecution,
-    },
-    BindInputThread {
-        thread_id: String,
-    },
-    BindModelTurn {
-        origin: crate::turn::GenerationOrigin,
-        thread_id: String,
-        turn_id: String,
-    },
-    BindOwnerThread {
-        thread_id: String,
-    },
     AwaitStopBoundary {
         execution_id: String,
         deadline_ms: u64,
@@ -706,9 +558,7 @@ impl Plan {
                 }
             }
             identifier(&task.id)?;
-            if let Some(harness) = &task.harness {
-                identifier(harness)?;
-            }
+            identifier(&task.harness)?;
             super::message(&task.instruction)?;
             if task.instruction.len() > 16 * 1024 {
                 return Err(invalid("task instruction exceeds 16 KiB"));
@@ -721,11 +571,7 @@ impl Plan {
                     "task title must contain 1–256 bytes without control characters",
                 ));
             }
-            if task
-                .harness
-                .as_ref()
-                .is_some_and(|harness| !available_harnesses.contains(harness))
-            {
+            if !available_harnesses.contains(&task.harness) {
                 return Err(invalid("plan selected an unavailable harness"));
             }
             if dependencies
@@ -990,18 +836,11 @@ impl GoalService {
                             | super::decision::Event::Obsolete { .. }
                     } | Change::Accounting {
                         event: super::accounting::Event::Observe { .. }
-                            | super::accounting::Event::Begin {
-                                work: super::accounting::Work {
-                                    source: Some(_),
-                                    ..
-                                }
-                            }
                     } | Change::Completion {
                         event: super::completion::Event::ObserveCheck { .. }
                             | super::completion::Event::ObserveAssessment { .. }
                             | super::completion::Event::Block { .. }
                     } | Change::ObserveCheck { .. }
-                        | Change::BindWorkerTurn { .. }
                         | Change::BlockPlan { .. }
                         | Change::ObserveExecution { .. }
                         | Change::ConfirmModelRoute { .. }
@@ -1051,11 +890,6 @@ fn apply(
     change: &Change,
     now_ms: u64,
 ) -> Result<(), GoalError> {
-    if let Change::BindModelTurn { origin, .. } = change
-        && !generation_requested(goal, origin)
-    {
-        return Err(GoalError::Conflict);
-    }
     if let Change::ArchiveExecution {
         task_id,
         execution,
@@ -1182,87 +1016,6 @@ fn apply(
     }
     let workflow = &mut goal.workflow;
     match change {
-        Change::BindWorkerTurn {
-            execution_id,
-            thread,
-        } => {
-            identifier(&thread.thread_id)?;
-            identifier(&thread.turn_id)?;
-            if workflow.owner_thread_id.is_none()
-                || workflow.owner_thread_id.as_ref() == Some(&thread.thread_id)
-                || workflow.input_thread_id.as_ref() == Some(&thread.thread_id)
-                || workflow
-                    .tasks
-                    .iter()
-                    .flat_map(|task| &task.executions)
-                    .any(|execution| {
-                        &execution.id != execution_id && execution.thread.as_ref() == Some(thread)
-                    })
-            {
-                return Err(GoalError::Conflict);
-            }
-            let execution = workflow
-                .tasks
-                .iter_mut()
-                .flat_map(|task| &mut task.executions)
-                .find(|execution| &execution.id == execution_id)
-                .ok_or(GoalError::NotFound)?;
-            if !execution.dispatch_requested
-                || execution.requirements_revision != revision
-                || execution
-                    .thread
-                    .as_ref()
-                    .is_some_and(|known| known != thread)
-            {
-                return Err(GoalError::Conflict);
-            }
-            execution.thread = Some(thread.clone());
-        }
-        Change::BindInputThread { thread_id } => {
-            identifier(thread_id)?;
-            if workflow.owner_thread_id.is_none()
-                || workflow.owner_thread_id.as_ref() == Some(thread_id)
-                || workflow
-                    .input_thread_id
-                    .as_ref()
-                    .is_some_and(|current| current != thread_id)
-            {
-                return Err(GoalError::Conflict);
-            }
-            workflow.input_thread_id = Some(thread_id.clone());
-        }
-        Change::BindModelTurn {
-            origin,
-            thread_id,
-            turn_id,
-        } => {
-            identifier(&origin.source_id)?;
-            identifier(thread_id)?;
-            identifier(turn_id)?;
-            if origin.goal_id != goal.id
-                || origin.requirements_revision != revision
-                || ![
-                    workflow.owner_thread_id.as_ref(),
-                    workflow.input_thread_id.as_ref(),
-                ]
-                .contains(&Some(thread_id))
-            {
-                return Err(GoalError::Conflict);
-            }
-            // The immutable operation is the association. Keeping every model
-            // call in the current Goal head would duplicate unbounded history.
-        }
-        Change::BindOwnerThread { thread_id } => {
-            identifier(thread_id)?;
-            if workflow
-                .owner_thread_id
-                .as_ref()
-                .is_some_and(|current| current != thread_id)
-            {
-                return Err(GoalError::Conflict);
-            }
-            workflow.owner_thread_id = Some(thread_id.clone());
-        }
         Change::ArchiveExecution { .. } => {
             return Err(invalid("archive transition was not handled"));
         }
@@ -1384,7 +1137,30 @@ fn apply(
                 }
             }
             let task = &mut workflow.tasks[task_index];
-            if task.execution_admission(revision, goal_control_source) != ExecutionAdmission::Ready
+            let safe_retry = task.executions.last().is_some_and(|execution| {
+                !execution.dispatch_requested
+                    && matches!(
+                        execution.observation,
+                        Observation::Failed { run_id: None, .. }
+                    )
+            });
+            let attempts = task
+                .executions
+                .iter()
+                .filter(|execution| execution.task_revision == task.requirements_revision)
+                .count();
+            if task.run_intent != RunIntent::Run
+                || task.requirements_revision > revision
+                || (!task.executions.is_empty()
+                    && !safe_retry
+                    && !task.executions.last().is_some_and(|execution| {
+                        execution.replacement_ready(
+                            task.requirements_revision,
+                            goal_control_source.max(task.control_source_revision),
+                        )
+                    }))
+                || attempts >= 3
+                || task.executions.len() >= 16
             {
                 return Err(GoalError::Conflict);
             }
@@ -1392,10 +1168,8 @@ fn apply(
                 id: execution_id.clone(),
                 workspace: workspace.clone(),
                 observation: Observation::Requested,
-                thread: None,
                 requirements_revision: revision,
                 task_revision: task.requirements_revision,
-                control_source_revision: goal_control_source.max(task.control_source_revision),
                 dispatch_requested: false,
                 resources: None,
                 confirmed_model_route: None,
@@ -1852,11 +1626,11 @@ fn apply(
                 // reconciliation while independent authorized work continues.
                 // This does not authorize replacement dispatch.
                 && !matches!(execution.observation, Observation::Candidate { .. }
-                    | Observation::Failed { .. }
-                    | Observation::Unknown { .. })
+                    | Observation::Failed { run_id: Some(_), .. }
+                    | Observation::Unknown { run_id: Some(_), .. })
                 && execution.task_revision == task_revision)
                 || execution.stop.is_some()
-                || observation_run(&execution.observation).is_none() && execution.thread.is_none()
+                || observation_run(&execution.observation).is_none()
             {
                 return Err(GoalError::Conflict);
             }
@@ -1878,15 +1652,11 @@ fn apply(
                 .flat_map(|task| &mut task.executions)
                 .find(|execution| &execution.id == execution_id)
                 .ok_or(GoalError::NotFound)?;
-            // Late evidence may resolve the original unknown stop. It cannot
-            // introduce a different action, repeat uncertainty or downgrade
-            // a confirmed result. The coordinator lease is still required.
-            let original = match &execution.stop {
-                Some(StopState::Requested { operation_id }) => Some(operation_id),
-                Some(StopState::Unknown { operation_id, .. }) if *confirmed => Some(operation_id),
-                _ => None,
-            };
-            if original != Some(operation_id) {
+            if execution.stop
+                != Some(StopState::Requested {
+                    operation_id: operation_id.clone(),
+                })
+            {
                 return Err(GoalError::Conflict);
             }
             execution.stop = Some(if *confirmed {
@@ -1953,20 +1723,20 @@ fn apply(
             match &execution.observation {
                 Observation::Requested => {}
                 Observation::Running { run_id, .. } => {
-                    if observation_run(observation) != run_id.as_deref() {
+                    if observation_run(observation) != Some(run_id.as_str()) {
                         return Err(GoalError::Conflict);
                     }
                 }
                 Observation::Unknown { run_id: None, .. }
                     if execution.dispatch_requested
-                        && (matches!(
+                        && matches!(
                             observation,
                             Observation::Running { .. }
                                 | Observation::Unknown {
                                     run_id: Some(_),
                                     ..
                                 }
-                        ) || task.spec.harness.is_none() && execution.thread.is_some()) => {}
+                        ) => {}
                 _ => return Err(GoalError::Conflict),
             }
             match observation {
@@ -1975,23 +1745,7 @@ fn apply(
                 Observation::Failed { reason, .. } | Observation::Unknown { reason, .. } => {
                     super::message(reason)?
                 }
-                Observation::Running { .. } => {}
-            }
-            if task.spec.harness.is_none()
-                && matches!(
-                    observation,
-                    Observation::Running {
-                        native_session_id: Some(_),
-                        ..
-                    } | Observation::Candidate {
-                        native_session_id: Some(_),
-                        ..
-                    }
-                )
-            {
-                return Err(invalid(
-                    "built-in execution cannot acquire an ACP session identity",
-                ));
+                Observation::Running { run_id, .. } => identifier(run_id)?,
             }
             if matches!(
                 observation,
@@ -1999,24 +1753,11 @@ fn apply(
             ) && !execution.dispatch_requested
             {
                 return Err(invalid(
-                    "execution mapping requires a durably admitted dispatch",
+                    "run mapping requires a durably admitted ACP dispatch",
                 ));
             }
             if let Some(run_id) = observation_run(observation) {
-                if task.spec.harness.is_none() {
-                    return Err(invalid(
-                        "built-in execution cannot acquire an ACP run identity",
-                    ));
-                }
                 identifier(run_id)?;
-            } else if matches!(
-                observation,
-                Observation::Running { .. } | Observation::Candidate { .. }
-            ) && (task.spec.harness.is_some() || execution.thread.is_none())
-            {
-                return Err(invalid(
-                    "built-in execution requires its accepted Thread/Turn identity",
-                ));
             }
             execution.observation = observation.clone();
         }
@@ -2026,9 +1767,7 @@ fn apply(
 
 fn observation_run(observation: &Observation) -> Option<&str> {
     match observation {
-        Observation::Running { run_id, .. } | Observation::Candidate { run_id, .. } => {
-            run_id.as_deref()
-        }
+        Observation::Running { run_id, .. } | Observation::Candidate { run_id, .. } => Some(run_id),
         Observation::Failed { run_id, .. } | Observation::Unknown { run_id, .. } => {
             run_id.as_deref()
         }

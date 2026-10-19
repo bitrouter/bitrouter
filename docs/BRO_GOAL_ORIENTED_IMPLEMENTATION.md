@@ -2,10 +2,6 @@
 
 目标：完整实现 [PRD v0.4](BRO_GOAL_ORIENTED_PRD.md)，遵循 [implementation spec](BRO_GOAL_ORIENTED_IMPLEMENTATION_SPEC.md)。开始日期：2026-10-12。
 
-本文保留原 MVP 的验收记录。2026-10-15 开始的执行重构与 Goal IPC v5，见
-[BRO 重构实施记录](BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md)；下列旧 head 的
-v4 和闭环证据不能证明重构后的共同执行路径已完成。
-
 ## 基线与进度
 
 - 实际起点：`9b9a176288896809040a6fce11c92d146a4f5909`。
