@@ -80,12 +80,14 @@ schemars.workspace = true
 [target.'cfg(windows)'.dependencies]
 atomicwrites.workspace = true
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(target_os = "macos")'.dependencies]
 # The 0.28 mio source can return a resize before draining TTY readiness.
-# Edge notifications then strand already-written keys until more input arrives
-# on both kqueue and epoll. Use the level-triggered Unix pollfd source.
+# kqueue's edge notification then strands already-written keys until more input
+# arrives. Use the same event API with its level-triggered Unix pollfd source.
 # This version's pollfd event-stream wake path requires the libc descriptor API.
 crossterm = { workspace = true, features = ["use-dev-tty", "libc"] }
+
+[target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process", "fs"] }
 
 [build-dependencies]
