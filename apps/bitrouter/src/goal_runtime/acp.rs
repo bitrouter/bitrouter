@@ -292,7 +292,6 @@ impl Coordinator {
         {
             Some(thread) => thread,
             None => {
-                super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
                 self.threads
                     .create_goal_acp_thread(
                         &ThreadTarget {
@@ -331,10 +330,6 @@ impl Coordinator {
         {
             Some(turn) => turn,
             None => {
-                // Thread metadata can outlive a missing Turn admission. Check
-                // the exact descriptors again before constructing its driver;
-                // an existing Turn receipt remains readable after config edits.
-                super::resources::verify_mcp_configuration(execution, &mcp_servers)?;
                 let driver = Arc::new(Adapter {
                     supervisor: self.supervisor.clone(),
                     threads: self.threads.clone(),

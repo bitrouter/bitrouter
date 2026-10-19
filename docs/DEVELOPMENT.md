@@ -70,10 +70,6 @@ Only monotonic ticks with the same process clock identity support overlap;
 wall timestamps, admission and provider elapsed time are insufficient. This
 does not attest physical provider compute or a complete execution timeline.
 Final live/provider, recovery and full-refactor qualification remain open.
-Before fresh native/ACP worker admission, selected MCP descriptors must match
-their saved preparation hash. ACP also checks the gap between accepted Thread
-metadata and Turn admission. Existing accepted receipts keep their original
-resource records when configuration later changes; these checks grant no tools.
 
 **`bitrouter-tui` must not depend on the `bitrouter` app crate.** That absence
 is the boundary, and Cargo enforces it: the app depends on the crate by path,

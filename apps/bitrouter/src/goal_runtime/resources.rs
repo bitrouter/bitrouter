@@ -153,21 +153,6 @@ pub(super) fn digest(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-pub(super) fn verify_mcp_configuration(
-    execution: &Execution,
-    descriptors: &[acp::McpServer],
-) -> Result<()> {
-    let prepared = execution
-        .resources
-        .as_ref()
-        .context("saved worker resources are missing")?;
-    ensure!(
-        digest(&serde_json::to_vec(descriptors)?) == prepared.mcp_configuration_sha256,
-        "selected MCP configuration changed since saved input; new worker admission is blocked"
-    );
-    Ok(())
-}
-
 impl Coordinator {
     pub(super) async fn prepare_resources(
         &self,
