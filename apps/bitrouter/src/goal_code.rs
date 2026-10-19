@@ -42,7 +42,7 @@ enum Job {
 }
 
 /// Test the UI's production reader against an archive produced by the live daemon.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) async fn read_archive_fixture(
     socket: &Path,
     root: &Path,
@@ -62,7 +62,7 @@ pub(crate) async fn read_archive_fixture(
 }
 
 /// Inspect the same persisted-input feedback rendered by the production UI.
-#[cfg(all(test, unix))]
+#[cfg(test)]
 pub(crate) fn input_feedback_fixture(goal: &GoalSnapshot) -> Vec<String> {
     projection::input_lines(goal)
 }

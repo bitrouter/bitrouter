@@ -1,6 +1,6 @@
 # Goal MVP acceptance audit
 
-All13 local check stages passed on the integrated bfc50f68 source:4,675 workspace tests passed,24 pre-existing opt-in tests skipped; doctests6 passed/1 existing ignored; strict Clippy, formatting, diff/source hashes and registry validate/build/check passed. This audit supersedes the historical midpoint table. Subsequent Windows CI found two unused test helpers; their cfg now matches the already Unix-only consumers (D260). That test-only change does not alter production/R16 behavior. Original local evidence retains its original source hashes; current-head platform CI is a separate required delivery check, not inferred from the local result.
+All13 final check stages passed on the integrated source:4,675 workspace tests passed,24 pre-existing opt-in tests skipped; doctests6 passed/1 existing ignored; strict Clippy, formatting, diff/source hashes and registry validate/build/check passed. This audit supersedes the historical midpoint table in the implementation ledger. Hosted CI is separate from these local results.
 
 The acceptance scope is a controlled local MVP, as defined by spec 9.3. A deterministic fixture can prove a guard or injected failure; it cannot prove model quality or an actual vendor campaign. Unknown external effects remain blocked. General external rollback, every harness/provider/platform, a global OS sandbox, production availability and complete external invoices are outside this evidence.
 
