@@ -114,7 +114,7 @@ impl Coordinator {
             &current,
             Change::Decision {
                 event: Event::Observe {
-                    decision: decision.clone(),
+                    decision: Box::new(decision.clone()),
                 },
             },
         )
