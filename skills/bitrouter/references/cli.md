@@ -750,9 +750,6 @@ seconds. Generic supervisor lease/control commands cannot take over those Turns.
 Actual session/model-route acknowledgements and public observations are retained;
 private context/provider/model usage remains unreported. Cold inspection alone
 does not resume a session; confirmed session recovery remains under qualification.
-Metadata that never accepted a Turn can recover its original Thread only after
-confirmed source-owner shutdown and ordinary workspace/source checks; it then
-creates its first session, without replaying an earlier prompt.
 
 The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
 use the existing approval, exclusive execution and durable result barriers;

@@ -12,8 +12,6 @@ use bitrouter_orchestrator::thread::{
 };
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
-#[path = "acp_recovery.rs"]
-mod acp_recovery;
 #[path = "native_recovery.rs"]
 mod native_recovery;
 

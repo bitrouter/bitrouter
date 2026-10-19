@@ -204,37 +204,19 @@ impl ThreadService {
             .await
             .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
         let view = self.load_thread(target, caller).await?;
+        if view.recovery.is_some() {
+            return Err(ServiceError::new(
+                ErrorCode::RecoveryRequired,
+                "ACP continuation requires the original session and stopped-owner evidence",
+            ));
+        }
         if view.thread.goal_work.as_ref() != Some(&source)
-            || !matches!(&view.config, crate::thread::executor::Config::Acp { .. })
+            || !matches!(view.config, crate::thread::executor::Config::Acp { .. })
         {
             return Err(ServiceError::new(
                 ErrorCode::Unauthorized,
                 "ACP source does not match this Thread",
             ));
-        }
-        if let Some(recovery) = view.recovery {
-            if view.latest_turn.is_some() || !recovery.terminal_checkpoint {
-                return Err(ServiceError::new(
-                    ErrorCode::RecoveryRequired,
-                    "ACP continuation requires the original session and stopped-owner evidence",
-                ));
-            }
-            // Reuse idle recovery only for metadata that never admitted a
-            // Turn. This cannot import private ACP state or resubmit a prompt.
-            self.recover_thread_controlled(
-                target,
-                caller,
-                crate::thread::ThreadRecoveryRequest {
-                    source_server_instance_id: recovery.source_server_instance_id,
-                    source_cursor: recovery.source_cursor,
-                    idempotency_key: format!(
-                        "{}-restore-{}",
-                        request.idempotency_key, recovery.source_cursor
-                    ),
-                },
-                Some(control.clone()),
-            )
-            .await?;
         }
         self.admit_turn(
             target,

@@ -123,7 +123,7 @@ Native `launch <agent>` accepts catalog harnesses; `claude`, `claude-code` and
 `codex` are shortcuts. User configuration is not edited. Existing harness processes
 need a new launch to adopt overrides; `bro acp serve <agent>` serves ACP clients.
 Background runs survive client exit; attach/stop/remove remain separate.
-Standalone native task APIs (local v17, opt-in HTTP `/agent/v2`) remain available; Native and managed ACP Goal workers share Thread/Turn ownership and Goal controls; generic supervisor controls cannot take over managed Turns. Never-started ACP metadata can recover after confirmed shutdown; private-session continuation remains limited.
+Standalone native task APIs (local v17, opt-in HTTP `/agent/v2`) remain available; Native and managed ACP Goal workers share Thread/Turn ownership and Goal controls; generic supervisor controls cannot take over managed Turns.
 See `references/sessions.md` for ownership and `references/decision-native.md`
 for bounded model/context routing, MCP/skills, token reservations and its cost scope.
 For the native BRO ACP endpoint, use bare `bro acp serve --model openai/gpt-5`.
