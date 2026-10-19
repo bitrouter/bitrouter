@@ -1418,7 +1418,8 @@ runner. Initialize a policy, run a coding agent or Terminal Bench normally,
 submit externally evaluated results, and advance the controller one step:
 
 ```bash
-bro policy init auto --preset auto --economy provider:model
+bro policy init auto --router auto \
+  --strong provider:strong-model --economy provider:economy-model
 # run the coding agent or Terminal Bench normally through bitrouter/auto
 bro eval result submit result.json --config bitrouter.yaml
 bro optimize run --policy auto --config bitrouter.yaml
