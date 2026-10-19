@@ -473,13 +473,8 @@ checkpoint atomically under admission plus the Thread gate. It drops global
 admission before joining that Thread's workers, then commits completion and a
 Paused checkpoint. Same-key retries replay the saved result and never wait for or
 cancel a newer Turn. Incomplete/malformed intent-completion pairs and storage or
-cleanup uncertainty remain recovery-bound. Readers accept formats 2/3/4/5/6/7/8;
+cleanup uncertainty remain recovery-bound. Readers accept formats 2/3/4/5/6/7;
 new appends upgrade only the envelope. No native protocol/API version changes.
-
-The later BRO owner-association batch uses runtime format **8** to preserve
-optional Goal ownership in Thread snapshots against older writers. Format 7
-resource/close facts retain their meaning; ordinary native ACP sessions do not
-automatically create a Goal. See [the refactor ledger](BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md).
 
 ## Acceptance criteria
 

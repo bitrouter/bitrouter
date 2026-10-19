@@ -133,13 +133,7 @@ impl ThreadService {
             drop(admission);
             return self.existing_steering(&key).await;
         }
-        let thread = self.read_thread(target, caller)?;
-        if thread.is_goal_coordination() || thread.goal_work.is_some() {
-            return Err(ServiceError::new(
-                ErrorCode::Unauthorized,
-                "submit Goal input through its versioned Goal operation",
-            ));
-        }
+        self.read_thread(target, caller)?;
         if request.text.trim().is_empty() || request.text.len() > self.inner.limits.request_bytes {
             return Err("nonempty steering within the input bound is required".into());
         }
@@ -225,7 +219,7 @@ impl ThreadService {
         });
         task.native.push(receipt.input_id.clone(), request.text);
         if let Some(pending) = task.pending.take() {
-            pending.cancel();
+            let _ = pending.response.send(false);
         }
         Ok(receipt)
     }

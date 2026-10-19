@@ -18,12 +18,8 @@ trace viewer. `apps/bitrouter` enables it for existing ACP commands and sessions
 | `acp/capture.rs` | Capture port and protocol events; the app supplies durable storage |
 | `acp/translate.rs`, `acp/telemetry.rs` | Typed session updates, NDJSON contract and context usage |
 
-The app injects route/cost services and retains CLI/UI adapters. Its managed Goal
-ACP adapter uses the same `ThreadService` admission, owner, permissions and stop
-facts as native workers, with explicit ACP settings and real session IDs. Generic
-supervisor controls cannot take over a managed Turn. Direct harness and transparent
-ACP modes retain their original behavior; complete managed session recovery is
-still under qualification. Agent configuration data remains in
+The app injects route/cost services and retains CLI/UI adapters. This extraction
+does not attach external ACP sessions to native `ThreadService` execution. Agent configuration data remains in
 `bitrouter_sdk::config::agent` beside the shared `Config`, without ACP runtime
 dependencies.
 
@@ -35,7 +31,7 @@ reattachment and durable cancel/close controls. The app supplies an authenticate
 local caller, host-authorized immutable resources and an OS-local stdio bridge.
 EOF affects observation only. The core owns single-Thread closure and records
 cancelled queued Turns before joining active cleanup; completion retries do not
-cancel newer work. Runtime format 9 retains supported 2/3/4/5/6/7/8 reads.
+cancel newer work. Runtime format 7 retains supported 2/3/4/5/6 reads.
 
 See [the native ACP contract](../../docs/BRO_NATIVE_ACP_SERVER_SPEC.md) and
 [local acceptance](../../docs/BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md). External
@@ -93,31 +89,7 @@ Recovery, store ownership and workspace exclusion remain in
 `service/{recovery,ownership,workspace,startup}.rs`. Reading or loading stored
 state does not by itself authorize replay or continuation.
 
-Trusted Goal work enters through `service/generation.rs` (tool-free model work)
-or `service/worker.rs` (native Agent/Core work), using the same admission, runner
-and durable owner. `control::WorkControl` supplies the host's live source and
-aggregate model/typed-decision accounting gates; it does not own another
-scheduler. Coordination Threads have no filesystem tools; native workers retain
-workspace grants, permissions, verification and checkpoints. The app's built-in
-worker dispatch links real Thread/Turn identities and original-key lookup is
-non-executing. Native Goal permissions reuse shared approval transactions;
-stopped local-effect reconciliation reads the original Thread history. Active
-cold recovery and worker quote waiting remain incomplete. Managed ACP uses
-`service/worker/acp.rs` with actual session/permission/stop observations; the
-supervisor does not own a second managed lifecycle. Requested worker changes
-retain old execution sources and transfer reconciled local results before a new
-Thread starts. Full session recovery and interruption qualification are pending.
-Generation, native and managed ACP capacity waits share one implementation, the same admission authority and stable key,
-with live source checks and a recorded-duration bound; see the
-[implementation ledger](../../docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md).
-
 ## Test organization
-
-Real ACP/MCP/PTY peers live in the unpublished
-[`bitrouter-test-fixtures`](../../helpers/bitrouter-test-fixtures/Cargo.toml)
-package. `tests/support/fixture_binary.rs` asks Cargo for their actual binary
-artifacts, including for filtered library runs. Building a peer does not compile
-the application/runtime or change test timeouts and assertions.
 
 Tests needing private runtime state remain child modules under `src/`, loaded
 with `#[cfg(test)] mod tests;`. A separate source file does not make such a test

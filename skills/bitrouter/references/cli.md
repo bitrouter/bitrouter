@@ -17,11 +17,13 @@ there is no automatic running-owner takeover. This entry opens no listener and
 has no Thread/Turn directory UI. See the managed-core skill reference for
 subscription output reservations and storage bounds.
 
-## Retained BRO native task APIs
+## BRO native coding conversations
 
 ```console
 bro task run "fix the failing test" --check "cargo test"
 bro task run "inspect this project" --read-only
+bro code --workspace /path/to/project
+bro code --thread-id THREAD_ID
 ```
 
 `task run` starts or connects to the local `bro serve` process through its
@@ -49,9 +51,52 @@ Every Thread operation checks its authenticated caller, stored permission
 profile, current workspace grant, and instance. Local and HTTP callers have
 distinct ownership. Knowing a Thread ID does not authorize access.
 
-Native task APIs retain their Thread/Turn, tools, MCP/skills, model/context
-routing, output reservation and recovery contracts. Goal interaction has a
-separate owner-local protocol and state authority; see the Goal interface below.
+The native conversation has a segmented status bar. Active classification,
+routing, generation and tool work show an animated spinner; approval, terminal,
+disconnected and recovery states stop it. Workflow labels show the router's
+accepted task family, next-step role and progress, or explicit unknown/default
+values. The model segment shows the current serving attempt or selected plan;
+while selection is pending, it labels the configured selector as `route`.
+Narrow terminals retain the activity, workflow and model with Unicode-safe
+clipping. New steps clear the previous judgment; parents awaiting descendants
+show `AGENTS`. Status updates stay in the dock and do not append transcript rows.
+
+Bare `bro code` keeps one Thread across prompts and inherits settled context.
+Enter starts a Turn when idle, and enqueues FIFO input while busy or paused.
+Ctrl-Enter explicitly steers the active Turn; Ctrl-R explicitly resumes a
+paused queue. `y`/`n` answers a pending identified approval only with an empty
+composer. Ctrl-C cancels the identified active Turn; Ctrl-D detaches. The draft
+clears only after acceptance. Same-instance reconnect uses the Thread cursor
+and preserves the in-process draft; instance loss never resubmits input.
+`--thread-id` reattaches stored configuration and permissions; `--task-id` has
+been removed. No draft persistence across process exit is provided.
+New native Threads default to `chat.model: bitrouter/auto` and the read-only
+policy bundled with the binary. No config file or `--model-policy` is needed.
+Named policy selectors automatically enable policy routing; an explicit physical
+`--model` pins generation. Existing `chat.model` and operator policy files win. See [decision-native.md](decision-native.md)
+for bounded model/context planning and its explicit price assumptions.
+Native `code` and `task run` accept an optional `--max-output-tokens` override.
+When omitted, each generation step reserves the selected model's declared output
+capacity. Both the omission and explicit overrides survive Thread continuation.
+Models without declared capacity use 4096; uncappable providers still require a
+known ceiling. See [decision-native.md](decision-native.md) for admission details.
+
+Conversation and Agents use the terminal's normal buffer and native scrollback.
+An empty composer permits plain Left to open the **BRO conversation directory**;
+a separate model editor is used when no model was supplied, retaining the draft.
+The directory shows authorized durable Threads, their current Turn state, queue,
+workspace, model and permission profile. It does not list ACP supervisor runs.
+Up/Down selects; Tab filters; `/` searches the current page; Enter previews;
+`o` in the preview explicitly opens the selected conversation; Esc returns.
+`r` refreshes directory membership; `n`/`p` change pages when available. A page
+scans at most 16 roots; unauthorized roots are omitted, so pages may be empty.
+The directory cutoff fixes membership, while status is refreshed every two seconds.
+Listing does not install model context, workers or observation subscriptions.
+Opening restores committed public history and subscribes to that Thread; it does
+not start a Turn, resume a queue, answer an approval, or replay tools. Pending
+acceptance must be resolved before switching. Recovery-blocked Threads remain
+inspectable without granting continuation. Client drafts are process-local and
+are not persisted on detach. Below 40×16, submission and approvals are disabled.
 
 The same Thread service can expose an optional HTTP listener:
 
@@ -101,7 +146,7 @@ loading or reconnecting never resumes a stored queue. No operator recovery
 command is published.
 
 Defaults: 8 active Turns, 32 hot Threads, 32 queued inputs per Thread, 2 MiB
-context per Thread / 256 MiB hot context, and 32 settled Turn snapshots / 64 MiB
+context per Thread / 64 MiB hot context, and 32 settled Turn snapshots / 64 MiB
 for up to 30 minutes. Thread observation caches retain 256 events / 2 MiB,
 with 8 subscribers and 32 queued events per subscriber. Live snapshots retain
 at most 32 KiB. Evicting a snapshot or hot Thread does not remove durable keys
@@ -119,7 +164,7 @@ Startup claims one database owner and completes bounded cold discovery before
 admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
-or prompts. New/updated roots use runtime format 9; formats 2/3/4/5/6/7/8 remain readable without history rewriting. Migration adds metadata with
+or prompts. New/updated roots use runtime format 5; formats 2/3/4 remain readable without history rewriting. Migration adds metadata with
 **default 0** for old roots; unsupported formats fail before payload decoding
 or execution, with `recovery_required` / `unsupported_runtime_format`.
 They are not converted or marked safe.
@@ -138,7 +183,7 @@ BitRouter Cloud sign-in is `bro cloud (login|logout|whoami)`.
 
 Every subcommand the v1 binary actually exposes. Anything not listed here doesn't exist — don't suggest `bro doctor`, `bro providers add`, `bro cloud connect`, or the old auth subcommand tree (cloud identity is `bro cloud whoami`, see below).
 
-Bare `bro` and `bro code` open Goals. Setup is explicit via `bro init`; credentials alone do not save setup. The wizard saves `chat.agent` and optional `chat.model` for retained native/headless paths, then opens Goals, starts the daemon, or exits. Configuration resolves from `./bitrouter.yaml`, then `$BITROUTER_HOME/bitrouter.yaml`, then `~/.bitrouter/bitrouter.yaml`. With no existing file, setup writes to the BitRouter home; `init -c PATH` selects a destination. Writes are atomic; existing values are preserved unless `--force` resets them. First-run defaults bind `127.0.0.1:4356` with `skip_auth: true`. `init --yes` exits by default and skips interactive credential prompts. The default harness is `codex-acp`; `--harness claude` selects `claude-acp`. `--after launch` opens Goals and requires a terminal, including after headless setup. Non-TTY bare/code invocations reject before config or daemon access; they do not run setup or start an agent.
+Bare `bro` opens first-run onboarding when no default ACP harness is saved. Credentials alone do not complete setup. The wizard saves `chat.agent` and optional `chat.model`, then either opens BitRouter's ACP TUI, starts the daemon, or exits. Subsequent bare invocations immediately open the saved TUI.  Configuration resolves from `./bitrouter.yaml`, then `$BITROUTER_HOME/bitrouter.yaml`, then `~/.bitrouter/bitrouter.yaml`. With no existing file, onboarding writes to the BitRouter home. `init -c PATH` selects an explicit destination. Existing configuration values are preserved while updating chat defaults; `--force` replaces them with the starter configuration. Writes are atomic. First-run defaults bind `127.0.0.1:4356` with `skip_auth: true`.  `init --yes` saves configuration without interactive credential prompts and exits by default. The default harness is `codex-acp`; `--harness claude` selects `claude-acp`. Repeated `--harness` flags use the first as the default. An explicit `--after launch` opens the ACP TUI even when setup itself was headless. Without a terminal, bare unconfigured invocation prints setup instructions and an inert onboarding envelope; it does not silently complete the wizard.
 
 Interactive onboarding offers every active public registry provider in one
 alphabetical, searchable list; BitRouter Cloud (`bitrouter`) is a normal row.
@@ -350,7 +395,7 @@ synthesized, and unmetered traffic (`--direct`, explicit `--base-url`, own-auth
 harnesses, sessions with no priced requests) is forwarded exactly as sent —
 never `$0.00`, never a daemon-wide figure.
 
-**External observability and turns**: `acp serve <agent>` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded. `run` drives the same controller in-process, so it gets identical forwarding; its OTel turn spans are re-derived from the prompt round-trip and correlate on the **harness-native** session id. `--turn-timeout` and cooperative cancellation belong to the headless client. Goals orchestrates separate supervised executions; its input is not a harness FIFO queue.
+**External observability and turns**: `acp serve <agent>` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded. `run` drives the same controller in-process, so it gets identical forwarding; its OTel turn spans are re-derived from the prompt round-trip and correlate on the **harness-native** session id. `--turn-timeout` and cooperative cancellation are the client's there, and in `code <agent>`: every command now drives the same controller through the same client, and no local `record_id` or controller-owned FIFO queue exists. Code may keep an explicit process-local next-turn queue.
 
 **NDJSON format**: every event carries `"version":1`, a monotonically increasing `"seq"`, and a `"type"`. The first success event is `session`; streamed events include `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage`, and `permission`; exactly one terminal `result` or `error` follows. The old `--format json` value remains an alias for `ndjson` during migration.
 
@@ -362,187 +407,91 @@ never `$0.00`, never a daemon-wide figure.
 
 See `references/sessions.md` for the controller/native-session boundary and what `run` adds on top of it.
 
-## Goal interface (bro / bro code)
+## Interactive interface (`bro code`)
 
-BRO orchestrates long-running, parallel workflows. The current refactor adds
-built-in workers over the existing native Thread/Turn runtime alongside ACP
-workers. A plan can omit an external harness; it then uses a configured native
-model route, isolated workspace, selected MCP servers and Ask permissions.
-Native Goal permission cards retain the original input/tool/arguments and offer
-one-time allow/deny through the shared approval transaction. The local-file policy
-may allow workspace-scoped operations once; shell/MCP require an explicit choice.
-An accepted reply does not prove execution. Cancellation is not consent, and
-pause/resume does not reauthorize an old request. Native stopped local-work
-reconciliation uses original admission, complete bounded Thread history and
-stable workspace evidence; shell/MCP/unknown effects require explicit reconciliation.
-Omitted search paths use the built-in tool's documented workspace default; the
-original permission arguments remain intact. This does not infer missing ACP scope.
-Tool-free Goal model work and native workers share a bounded admission wait for
-known Thread occupancy or active-Turn capacity; native workers also wait for a
-known live local workspace owner. They retain the original action key and
-rechecking source/budget authorization. The recorded Thread duration bounds this
-wait; input limits, content conflicts and recovery blockers fail directly.
-Waiting alone accepts no Turn or model call. Foreign OS locks without a known
-local owner and unresolved effects are refused directly. Native cold receipt lookup restores
-only the exact managed Goal/attempt directory registration; outside paths and
-symlink escapes fail, and existing revoked profiles remain revoked.
-For current Goal/work/control sources, the coordinator can request continuation
-of an already accepted native checkpoint through ThreadService. Original
-Thread/Turn, input and budgets are retained. The runtime requires stopped-owner,
-effect and checkpoint evidence and rechecks authorization before restoration.
-Unconfirmed old owners, pending tool results and paused/revoked sources do not
-resume. Ordinary start rejects a changed body on the original key before
-restoration; a readonly query itself never requests continuation. Local proof
-uses controlled SQLite checkpoint images after actual source shutdown/join;
-it does not qualify forced crash takeover or private ACP continuation.
-Native worker token-quote contention waits on provider reservations held by current
-workers, preserving its original attempt key, route order and frozen quote. The
-Workflow distinguishes this wait from exhausted budget. A settled outcome with
-missing usage retains its quote and cannot be treated as a temporary wait. Pause,
-revocation and SDK cancellation close admission; the executor is not polled after
-cancelled admission. A saved wait or reservation is not provider/model execution.
-Confirmed ACP continuation is limited to a complete pre-prompt journal, original stopped owner/process and negotiated session/load; private context beyond the protocol remains unverified. Do not treat
-controlled HTTP/tool fixtures as qualified self-driving coding. Native and ACP execution proof
-remain separate; a Thread/Turn admission is not evidence of model/tool dispatch.
-Both `bro` and `bro code` open Goals; reading the directory does not create or
-run a Goal. `bro init` is the explicit setup wizard. Saved `chat.agent` and native
-Thread records remain readable and do not select the default view.
+Bare `bro code` owns one native BRO Thread with retained context and multiple
+Turns. Enter starts/enqueues, Ctrl-Enter steers, Ctrl-R resumes a paused queue,
+empty-composer `y`/`n` answers approval, and Ctrl-D detaches. Reattach with
+`--thread-id`; `--task-id` is removed. Assistant/shell deltas are transient;
+complete model/tool facts and Thread events are committed together.
 
-```bash
-bro
-bro code [--workspace PATH] [--config PATH]
-```
+Coding declares `read`, `glob`, `grep`, `write`, `edit`, `shell` plus configured MCP tools;
+`--read-only` restricts workspace operations to the first three and rejects effectful calls before
+approval. `read` covers UTF-8 files and paginated directories (`path: "."` for
+root); offsets are one-based and complete output is capped at 50 KiB. Directories
+include hidden/ignored entries; searches respect project ignore rules and skip
+child symlinks. `edit` uses unique original-file spans. Shell is noninteractive,
+with a 30-second default and 120-second maximum. Coding selects Bash then sh
+on Unix, pwsh then powershell.exe on Windows before sampling; declaration,
+result and verification identify the same selected interpreter. Missing shells
+fail coding before sampling; read-only needs none. Loss after selection returns
+an error without retry under another interpreter. Old tool names have no aliases.
+Bounded read workers, exclusive effects and recovery blocking remain in force.
+Local protocol is v17; opt-in HTTP uses `/agent/v2`. Old execution-root formats
+are rejected rather than rewritten or replayed.
 
-Goals, current Goal and read-only Workflow have separate navigation. Directory
-Up/Down selects, Enter opens, n creates, / searches the current page, f filters,
-and r refreshes. Empty-composer Left/Right navigates; nonempty arrows edit.
-Ctrl-Left/Right navigates with a draft. Each Goal retains its own draft and
-reading position. New Goal is an explicit mode, not a side effect of a message.
+Explicit local `bro code <agent>` opens an ACP conversation.
+`bro code <agent>` asks the daemon supervisor to own the ACP controller from
+creation. There are no permanent tabs: foreground history stays in native
+scrollback, while the bottom control deck keeps the composer/status and a
+one- or two-line background-agent strip. Agent, confirmed route, activity, and
+attributed cost remain persistent foreground fields; missing cost is
+unreported, never zero. Background events never append to foreground history.
 
-The planner can select task-specific `mcp_servers` from configured IDs, skills
-by stable material ID plus advertised SHA-256 version, and relative context
-files. Context is read from the isolated workspace after checked dependency
-handoff; selected skill/context bytes and the prepared prompt are stored before
-ACP dispatch. At most 16 selections of each kind and 256 KiB of combined
-skill/context text are supplied. MCP descriptors preserve configured arguments,
-environment and headers; descriptor credentials are absent from public resource
-metadata. Unsupported HTTP/SSE transports fail after capability negotiation
-before `session/new`. The read-only branch view exposes supplied material and
-its version; configuration is not actual tool use, and private harness skill
-activation/model identity remain unreported without separate evidence. These
-resource selections do not broaden permission grants or resume paused work.
+Choose **Background agents** from `/` to expand the command center inside the
+normal-buffer dock. Its entire deck is capped at 40% of viewport rows and shows
+a compact preserved-draft summary while agent focus is active. The flat `/`
+launcher offers peek, target-labelled reply, new run, permission review,
+cancel, stop, and detach actions. Enter on a selected run attaches for long
+detail. Retained history/search and long permission/diff review use an
+alternate-screen inspector; **Detach from run** in `/` detaches
+without stopping. Foreground and background drafts never share a send target.
 
-Task `model_route` selects an advertised, resolvable BRO route when the
-configured adapter provides session route control. Actual negotiation and a
-matching controller acknowledgment are required before the first prompt;
-unsupported or rejected choices stop startup and retain the reason. The branch
-view distinguishes requested and acknowledged routes; neither identifies an
-actual upstream provider model. Generic ACP execution remains available without
-this optional control. Current-Goal input may replace a task's full resource
-selection: omitted/null preserves it, and an empty selection removes it. BRO
-validates configured IDs, skill versions, route control and scope before saving.
-Affected tasks and dependents receive new revisions; independent branches retain
-their version. Old execution is stopped and reconciled before replacement at
-the next safe boundary. A superseded running task may wait at most ten seconds for a tool permission or settled boundary before cancellation; no new old-version permissions are admitted. Pause, stop and budget exhaustion bypass this wait. Waiting is not stop confirmation or effect reconciliation. Paused work stays paused. Requested resources and actual
-provided material/controller acknowledgments are shown separately. This does
-not mutate a harness's private in-flight context or prove tool/skill use.
+Code has no default action hotkeys. `/` opens a temporary launcher without
+changing the draft; `Esc` restores the draft and prior surface. At the start
+of an editable field, `//` inserts a literal slash. `/new` starts a fresh
+native session, and `/hotkeys` shows active and unbound actions. Optional
+bindings are read from `$XDG_CONFIG_HOME/bitrouter/code-hotkeys.json` or
+`~/.config/bitrouter/code-hotkeys.json` if XDG config home is unset. The JSON
+object maps chords to action IDs, such as
+`{"F2":"review_permission","Ctrl-P":"hotkeys"}`. Invalid keymaps leave
+action hotkeys unbound and show a diagnostic.
 
-Middle Enter submits to the current Goal while workers run. Queries/hypotheses
-leave effective requirements and run intent unchanged. Runtime validates and
-persists accepted changes before coordination. `/task <id>` is an explicit task
-reference; `/decision <id> <reply>` references an actual permission request.
-A persistent allow requires the actual offered card choice or explicit
-`/option <offered-id>`. Saved replies, dispatch, controller selection and tool
-results are separate facts. Typed judgments are not execution authority.
-
-Unresolved questions retain their original input identity and source version
-across unrelated queries and reconnects. Reply naturally in the current Goal,
-or use `/input <id> <reply>` to reference one exact open question. That reference
-does not grant permission or change the Goal/task scope. Runtime validates a
-reasoned answer, committed change or explicit withdrawal before removing that
-request; ordinary queries do not clear it. Requirement/control ambiguity and
-failed understanding prevent completion, while independent work continues.
-Query-only clarification is retained without adding a new completion condition.
-Saved resolution means input disposition or intent was committed, not that a
-worker adopted it or its result passed verification. Permission consent still
-requires the current actual Decision reference/card and offered option.
-
-The exact three-token `/input <id> /withdraw` is a direct, version-checked
-withdrawal of one unresolved request, available without a model or budget.
-It does not undo committed requirements, cancel worker/tool effects, resume
-work or increase a cap; other accepted/in-flight inputs remain ordered.
-Additional words, quotes and hypothetical discussion use normal understanding.
-The receipt records your explicit action without claiming model use or adoption.
-Goal IPC is version 8; older outboxes are retained and rejected without replay
-or reinterpretation. Native/ACP protocol versions are separate.
-The managed Goal refactor records database migrations 000030/000031/000032/000033: older app
-versions reject that database at startup. Do not remove the version marker or
-run old and new Goal writers concurrently; it preserves existing history.
-Superseded reconciled executions without active references are archived into
-immutable Goal operation history. The current snapshot retains the archive count;
-history queries preserve full execution/source records without restarting work.
-Current-version attempt limits and cumulative budget/accounting are retained.
-
-Middle input can request a different configured ACP worker or built-in BRO
-execution for an existing task. This saves a versioned selection and invalidates
-dependent work. Old attempts retain their original requested worker and actual
-Thread/Turn/session references. New work needs the existing confirmed stop and
-effect reconciliation, and a new session has a new Thread. Unknown effects stay
-blocked; an unavailable worker or incompatible model-route control is clarified
-without dispatch. A paused Goal remains paused unless explicitly resumed.
-
-| Key in the current Goal | Effect |
+| Key | Effect |
 | --- | --- |
-| Enter | Submit current-Goal input; the draft clears after its original receipt |
-| Shift-Enter / Alt-Enter / Ctrl-J | Newline; paste only edits |
-| Ctrl-G | Open VISUAL/EDITOR for this draft; success replaces it, failure retains it; Enter still submits |
-| Ctrl-P / Ctrl-X / Ctrl-R | Explicit pause / stop / resume intent |
-| Ctrl-B | Exact elapsed-time and configured model-token estimate limits |
-| Ctrl-A | Actual permission requests, or explicit acceptance of the pinned delivery only when required; no default consent |
-| Ctrl-I | Goal requirements, budgets, delivery and pinned evidence |
-| Ctrl-O | Read-only persistent operation history; PgUp/PgDn pages, arrows read, Home oldest, r refresh |
-| Ctrl-Q | Detach; does not stop the Goal |
+| `Enter` | Send at idle; preserve draft and explain queueing during work |
+| `Shift-Enter` / `Alt-Enter` / `Ctrl-J` | Newline |
+| `/` | Search all available actions, labelled by owner; `Esc` restores the draft |
+| Arrows, Home/End, Up/Down at draft boundaries | Cursor editing and process-local history |
+| `PageUp` / `PageDown` | Read history without following new output |
+| Permission digits/arrows, then `Enter` | Explicitly select and confirm an offered choice |
+| `Esc` / `Ctrl-C` during work | Request cancellation and wait for settlement |
+| `Ctrl-C` at idle | Clear draft; exit when empty |
+| `Ctrl-D` at idle | Exit only with an empty draft |
+| `Ctrl-L` | Redraw |
 
-The middle transcript retains a bounded recent display; older persisted facts remain accessible with Ctrl-O. History pages pin their revision cutoff and never retarget input or submit controls. Refresh explicitly opens a new cutoff. Drafts and unresolved submissions remain retained while idle off-page caches are released.
+Paste retains exact line breaks and does not submit. Follow-up queueing is an
+explicit client feature, not native steering; abnormal stops pause the queue.
+Agent settings are ACP-reported and separate from `/route` session overrides.
+Load replays native history; resume does not. BitRouter keeps a minimal run
+ledger and a bounded daemon-lifetime journal, not a canonical transcript.
+Pending permissions use exact run/permission/option/lease/action identities,
+have no default approval, and never steal focus. A foreground permission makes
+background controls read-only until resolved. After daemon restart, live rows
+become Interrupted and are not silently relaunched.
 
-Workflow/detail is read-only: Enter opens pinned evidence, Space folds known
-node details, Ctrl-F opens a full-screen inspector and Esc returns. Evidence
-reads verify the private blob's hash and length. Looking at a branch does not
-retarget the middle input. Below 40x12, mutation submission is unavailable.
+Clean Ctrl-C/Ctrl-D from Ready with an empty draft stops the foreground
+controller. Explicit **Detach current session and exit** keeps it running;
+unexpected client loss also detaches after lease expiry. Every foreground and
+background run claims the canonical Git worktree root, so another run in a
+different subdirectory still collides by default.
 
-Requirements saved, execution arranged, delivered/adopted and verified remain
-separate. Default completion requires a verified, reviewable delivery; human
-acceptance applies only when the Goal explicitly requires it. Unknown effects,
-missing checks, blocking and budget exhaustion preserve an unfinished result.
-For a stopped branch, replacement requires a confirmed owned-process stop,
-complete tool/permission history, only finished declared read/edit/search in
-the private workspace, and an unchanged captured workspace. Pending BRO checks,
-missing tool endings, unscoped/persistent/external permissions or incomplete
-history remain blocked. Recovery reads the immutable permission submission history and matches the
-actual ACP request and selected response, including after closed permission
-cards leave the live view. A failed local tool may have no ACP permission request. Such a call remains separate from consent and can reconcile only with explicit workspace scope, a stable failed terminal state, complete unreused history, confirmed process termination and a stable workspace snapshot that includes possible partial local effects. An offered permission still needs its actual resolution; successful calls without a request and unknown/external effects remain outside this narrow recovery path. Failure alone never proves no effects. Reconciliation evidence, replacement dispatch and
-current-version verification are separate. Final review may read bounded prior public activity, including a hash- and receipt-verified archive, for historical workflow conditions such as parallel work. Such history never substitutes for current artifact checks or grants execution authority. Current upstream check outputs and handoffs are hash-verified, frozen in checked_dependencies and included in the dependent prompt before dispatch; the same exact supplied context is validated for review. Prepared context is distinct from a harness acknowledgment or private model use. Old local partial work stays
-inspectable; it does not satisfy a new task version by itself. Permission
-auto-allow excludes edits to Git/BRO control metadata. Local read/edit/search policy validates every explicit ACP location and original rawInput path/file_path/filePath argument together; missing paths, malformed values, outside targets, external symlinks and conflicting scope remain unapproved. Before permission, streamed non-path arguments may change; the actual offered request remains unchanged, and every earlier path declaration must stay consistent. Changes after permission still require a new decision. A path argument is not rewritten as a harness-reported location. Each prepared worker prompt names its actual isolated workspace and requests explicit tool paths, including searches with implicit working-directory defaults. This is context guidance; missing or contradictory scope still requires a decision and is never synthesized as reported permission evidence.
-
-A settled failed machine check or current semantic rejection with an actual report can trigger a fresh isolated repair after the same effect reconciliation. The worker receives bounded, hash-verified failed material and actual check/review evidence; requirements and checks remain unchanged. Each task version permits at most three executions (sixteen retained). Unknown checks, interrupted reviews without a result, incomplete tool scope and external effects remain blocked. Review also receives bounded original verifier inputs from the immutable dispatch baseline; omissions are explicit and never prove correctness.
-
-Budget time includes waiting/pauses; dollar limits cover configured managed
-model-token estimates, not all unknown harness/tool/provider invoices. Raising
-a limit does not resume work or clear cumulative consumption.
-
-Accepted operations have immutable identities. The private outbox preserves
-unresolved originals and queries their receipts without blind replay. The Goal
-coordinator can recover a missing execution mapping from the supervisor's
-persisted original start identity. This read does not start a session or resume
-paused work; harness and workspace must match. A recovered interrupted/stopped
-run still requires effect reconciliation. Legacy supervisor rows without that
-start identity remain unmapped and are not replayed.
-A Goal UI exit does not lose daemon-owned work. Remote Goals are unsupported; pipes
-are rejected before config/daemon startup. Use native harness launchers for
-their own interface, `run` for headless ACP and `acp serve` for ACP clients.
-Old `code <agent>`, `chat/tui` aliases and Thread/model/load/resume/socket flags
-are rejected on the Goal entry.
+`--context NAME code` and explicit `code --socket PATH` open operations-only
+inspectors, with no ACP execution or local fallback for remote errors. `/`
+offers the typed status, models, requests, route preview, providers, telemetry,
+policy, agent catalog, reload state, and explicit reload actions. Host requests
+remain clearly host-scoped. Hidden interactive `tui` and `chat` aliases share
+the Code loop; piped compatibility output stays plain.
 
 ## Setup helpers
 
@@ -557,8 +506,8 @@ selection; a physical-model-only allowlist does not authorize the alias.
 
 | Command | Effect |
 |---|---|
-| `bro init [--yes] [--force] [--reset] [-c PATH] [credential flags] [--harness claude\|codex] [--after launch\|serve\|exit] [--model ID]` | Save the default ACP harness and model in the resolved configuration, or BitRouter home when absent. Credential flags: `--cloud-login`, `--api-key`, `--provider`, `--provider-api-key`, `--use-detected`. Headless setup reports-and-skips interactive logins. `--after launch` opens Goals; `--force` resets existing configuration. |
-| `bro config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. Also reports `ignored_config` — `plugins.<id>` blocks the binary does not read and therefore ignores, which is otherwise silent (`bitrouter-policy` and `bitrouter-telemetry` are the supported ids). Unknown ids do **not** fail validation. The removed `plugins.bitrouter-guardrails` key is different: any presence fails validation and activation; see `references/guardrails.md` for migration and input-only coverage. The daemon, `bro acp serve`, and `bro run` log the same set on every start. |
+| `bro init [--yes] [--force] [--reset] [-c PATH] [credential flags] [--harness claude\|codex] [--after launch\|serve\|exit] [--model ID]` | Save the default ACP harness and model in the resolved configuration, or BitRouter home when absent. Credential flags: `--cloud-login`, `--api-key`, `--provider`, `--provider-api-key`, `--use-detected`. Headless setup reports-and-skips interactive logins. `--after launch` opens BitRouter ACP TUI; `--force` resets existing configuration. |
+| `bro config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. Also reports `ignored_config` — `plugins.<id>` blocks the binary does not read and therefore ignores, which is otherwise silent (`bitrouter-policy` and `bitrouter-telemetry` are the supported ids). Unknown ids do **not** fail validation. The removed `plugins.bitrouter-guardrails` key is different: any presence fails validation and activation; see `references/guardrails.md` for migration and input-only coverage. The daemon, `bro acp serve`, `bro run`, and `bro code <agent>` log the same set on every start. |
 | `bro skills list [--global] [--json\|--human]` | Inspect installed skills with the orchestrator's shared parser. The default root is the project; `--global` selects `~/.claude/`. Discovery covers direct `SKILL.md`, immediate skill children and `skills/`, `.claude/skills/`, `.agents/skills/`, `.codex/skills/` children. Invalid or over-256-KiB files are reported; child symlinks are skipped. Listing does not activate skills or execute scripts. |
 | `bro skills init <NAME> [--output PATH] [--json\|--human]` | Scaffold a spec-valid skill directory — writes `<NAME>/SKILL.md` unless `--output` names a path. `<NAME>` is written into the generated frontmatter. |
 | `bro policy create <id> [--dir DIR]` | Write a starter access-control policy file under `--dir` (default `./policies`). Bind to a key with `bro key sign --user <id> --policy <id>`. |
@@ -741,18 +690,7 @@ Turns, including an empty snapshot. A new Thread discovers again. After server
 restart, authorized continuation refreshes instructions only at a settled model
 boundary and records replacements/removals explicitly; known effects are never
 replayed. Completing an already settled outcome and cold browsing reread no
-instruction files. Runtime format 9 retains snapshots, private ACP bindings/close
-results and explicit native/managed ACP Goal execution associations; formats 2–8 remain readable.
-
-Managed ACP Goal workers share native Thread/Turn admission, workspace exclusion,
-permission commits and shutdown ownership. Their current Turn duration is 600
-seconds. Generic supervisor lease/control commands cannot take over those Turns.
-Actual session/model-route acknowledgements and public observations are retained;
-private context/provider/model usage remains unreported. Cold inspection alone
-does not resume a session. A complete pre-prompt journal can continue the same Thread/Turn only after confirmed source/process stop and negotiated load of its original session; duration and frozen MCP requirements are retained. Possibly submitted prompts, uncertain restore startup and missing history/private state remain blocked.
-Metadata that never accepted a Turn can recover its original Thread only after
-confirmed source-owner shutdown and ordinary workspace/source checks; it then
-creates its first session, without replaying an earlier prompt.
+instruction files. Runtime format 5 persists snapshots and private ACP bindings/close results; formats 2/3/4 remain readable.
 
 The daemon supplies its configured `mcp_servers` to native coding Turns. MCP tools
 use the existing approval, exclusive execution and durable result barriers;
@@ -768,11 +706,15 @@ bodies or MCP instructions into the prompt, install skills or execute scripts.
 
 `bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).
 
-### Goal presentation
+### Native conversation presentation
 
-Goals/current Goal/Workflow use normal-buffer history and a docked composer.
-Long right-side evidence can use an explicit alternate-screen inspector.
-The native task API continues to expose retained Thread history and artifacts.
+Bare `bro code` opens with a BRO banner at the top of the visible terminal.
+Conversation rows grow below it into native scrollback; the padded composer and
+status stay at the bottom. Each native tool occupies one compact row with its
+name, target or command, and running/done/failed/denied/unknown status. Long
+summaries are ellipsized, and error results include a short reason. Detailed results remain in Thread history and retained artifacts.
+Assistant text uses Markdown during
+streaming and after completion, with committed item IDs replacing live previews.
 
 ### Native model history across protocol boundaries
 

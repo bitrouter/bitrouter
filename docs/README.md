@@ -71,19 +71,13 @@ supply additional overrides. Contract scope and acceptance scope are separate.
 
 | Subject | Document |
 | --- | --- |
-| Proposed BRO execution refactor retaining existing persistence; future Core persistence deferred; review draft | [BRO_ORCHESTRATOR_REFACTOR_SPEC.md](BRO_ORCHESTRATOR_REFACTOR_SPEC.md) |
-| BRO refactor implementation stages, source boundaries and requirement-by-requirement remaining evidence | [BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md](BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md) |
-| Pre-refactor BRO Rust review at its pinned source baseline; current migration status is in the refactor implementation ledger | [BRO_RUST_DESIGN_REVIEW.md](BRO_RUST_DESIGN_REVIEW.md) |
-| Goal-oriented product design, default entry, input semantics, completion and stopping | [BRO_GOAL_ORIENTED_PRD.md](BRO_GOAL_ORIENTED_PRD.md) |
-| Codex Goal implementation contract, stages, fault matrix and evidence gates | [BRO_GOAL_ORIENTED_IMPLEMENTATION_SPEC.md](BRO_GOAL_ORIENTED_IMPLEMENTATION_SPEC.md) |
-| Goal implementation and final acceptance summary, reproduction and pinned evidence archive | [BRO_GOAL_ORIENTED_IMPLEMENTATION.md](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) |
 | Runtime identities, scheduling, context, durable commits, recovery and transport | [BRO_AGENT_RUNTIME_SPEC.md](BRO_AGENT_RUNTIME_SPEC.md) |
 | Six tool interfaces, filesystem bounds and interpreter rules | [BRO_BASE_TOOLS_SPEC.md](BRO_BASE_TOOLS_SPEC.md) |
 | AGENTS.md scopes and snapshots, native MCP and skills discovery | [BRO_HARNESS_RESOURCES.md](BRO_HARNESS_RESOURCES.md) |
-| Historical native Conversation UI; retained native Thread contract | [BRO_CONVERSATION_UI_SPEC.md](BRO_CONVERSATION_UI_SPEC.md) |
+| Native Conversation and durable Thread navigation | [BRO_CONVERSATION_UI_SPEC.md](BRO_CONVERSATION_UI_SPEC.md) |
 | Source-specific validation and historical checkpoints | [BRO_AGENT_RUNTIME_IMPLEMENTATION.md](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) |
 | Tool provider/platform experiments and reproduction | [BRO_BASE_TOOLS_ACCEPTANCE.md](BRO_BASE_TOOLS_ACCEPTANCE.md) |
-| Historical Conversation/main fixture acceptance | [BRO_CONVERSATION_UI_IMPLEMENTATION.md](BRO_CONVERSATION_UI_IMPLEMENTATION.md) |
+| Final Conversation/main fixture acceptance | [BRO_CONVERSATION_UI_IMPLEMENTATION.md](BRO_CONVERSATION_UI_IMPLEMENTATION.md) |
 | Raw exports, summaries and archive integrity | [Evidence README](evidence/bro-base-tools/README.md) |
 | Future core/harness separation, outside standalone acceptance | [BRO_AGENT_RUNTIME_HANDOFF.md](BRO_AGENT_RUNTIME_HANDOFF.md) |
 | Native ACP v1/draft v2 ingress, approval reattachment and durable cancel/close semantics; implemented locally | [BRO_NATIVE_ACP_SERVER_SPEC.md](BRO_NATIVE_ACP_SERVER_SPEC.md) |

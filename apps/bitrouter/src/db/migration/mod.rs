@@ -38,12 +38,6 @@ pub mod m20240101_000024_create_bro_runtime_ownership;
 pub mod m20240101_000025_create_bro_execution_index;
 mod m20240101_000026_bro_runtime_format;
 mod m20240101_000027_bro_managed_sessions;
-mod m20240101_000028_create_bro_goals;
-mod m20240101_000029_index_acp_resource_head;
-mod m20240101_000030_bro_goal_execution_format;
-mod m20240101_000031_bro_worker_source_format;
-mod m20240101_000032_bro_admission_verdict;
-mod m20240101_000033_bro_resource_wait;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -81,12 +75,6 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000025_create_bro_execution_index::Migration),
             Box::new(m20240101_000026_bro_runtime_format::Migration),
             Box::new(m20240101_000027_bro_managed_sessions::Migration),
-            Box::new(m20240101_000028_create_bro_goals::Migration),
-            Box::new(m20240101_000029_index_acp_resource_head::Migration),
-            Box::new(m20240101_000030_bro_goal_execution_format::Migration),
-            Box::new(m20240101_000031_bro_worker_source_format::Migration),
-            Box::new(m20240101_000032_bro_admission_verdict::Migration),
-            Box::new(m20240101_000033_bro_resource_wait::Migration),
         ]
     }
 }

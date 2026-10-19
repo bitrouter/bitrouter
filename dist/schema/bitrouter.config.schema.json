@@ -524,24 +524,6 @@
           "format": "double",
           "type": "number"
         },
-        "max_input_tokens": {
-          "description": "Operator-declared upper bound on aggregate input usage per attempt.\nAbsence leaves a nonzero input price unbounded for Goal admission.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "max_output_tokens": {
-          "description": "Aggregate output usage bound, required only for nonzero output prices.\nA zero output price has bounded monetary exposure without a token cap.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "output_usd_per_million": {
           "description": "USD per million output tokens.",
           "format": "double",

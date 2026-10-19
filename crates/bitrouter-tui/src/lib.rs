@@ -59,7 +59,6 @@ pub mod code;
 pub mod composer;
 pub mod cost;
 pub mod editor;
-pub mod goals;
 pub mod journal;
 pub mod lifecycle;
 pub mod log_tail;

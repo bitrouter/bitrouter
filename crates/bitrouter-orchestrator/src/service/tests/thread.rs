@@ -1118,12 +1118,6 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         approved: true,
         idempotency_key: "answer".into(),
     };
-    assert!(
-        service
-            .find_input_answer(&target, &caller, &answer())
-            .await?
-            .is_none()
-    );
     let foreign = CallerContext::new("foreign", "foreign");
     let mut stale_epoch = target.clone();
     stale_epoch.server_instance_id = "old-instance".into();
@@ -1185,14 +1179,6 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         receipt.turn_id
     );
     drop(readers);
-    assert_eq!(
-        service
-            .find_input_answer(&target, &caller, &answer())
-            .await?
-            .ok_or("accepted input reply lookup missing")?
-            .turn_id,
-        receipt.turn_id
-    );
     let mut conflicting = answer();
     conflicting.approved = false;
     assert_eq!(
@@ -1214,91 +1200,6 @@ async fn approval_answers_bind_owner_turn_epoch_and_key_in_the_decision_commit()
         std::fs::read_to_string(workspace.path().join("approved.txt"))?,
         "approved once"
     );
-    service.shutdown().await;
-    let reopened =
-        ThreadService::with_store(app(vec![])?, &[workspace.path().to_path_buf()], store)?;
-    let cold_target = crate::thread::ThreadTarget {
-        thread_id: thread.thread_id.clone(),
-        server_instance_id: reopened.inner.instance_id.clone(),
-    };
-    assert_eq!(
-        reopened
-            .find_input_answer(&cold_target, &caller, &answer())
-            .await?
-            .ok_or("cold original reply missing")?
-            .turn_id,
-        receipt.turn_id
-    );
-    assert!(reopened.lock_state().threads.is_empty());
-    reopened.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn cancelled_input_resolution_is_not_an_accepted_denial_reply()
--> Result<(), Box<dyn std::error::Error>> {
-    let workspace = TempDir::new()?;
-    let store = Arc::new(MemoryExecutionStore::default());
-    let service = ThreadService::with_store(
-        app(vec![
-            turn(vec![tool_call(
-                "write",
-                "write",
-                serde_json::json!({"path":"never-written.txt","content":"must remain absent"}),
-            )]),
-            final_turn(),
-        ])?,
-        &[workspace.path().to_path_buf()],
-        store.clone(),
-    )?;
-    let thread = service
-        .create_thread(
-            &service.inner.instance_id,
-            thread_request(&workspace, "cancel-approval-thread"),
-        )
-        .await?;
-    let target = target(&thread);
-    let caller = CallerContext::local();
-    let receipt = service
-        .start_turn(
-            &target,
-            &caller,
-            input("wait for a choice", "cancel-approval-turn"),
-        )
-        .await?;
-    let waiting = wait_for(&service, &receipt.turn_id, TurnStatus::WaitingForInput).await?;
-    let request_id = waiting.pending_input_id.ok_or("pending approval missing")?;
-    let absent = ApprovalAnswer {
-        turn_id: receipt.turn_id.clone(),
-        request_id: request_id.clone(),
-        approved: false,
-        idempotency_key: "never-selected-denial".into(),
-    };
-    service
-        .cancel_turn(
-            &target,
-            &caller,
-            CancelTurnRequest {
-                turn_id: receipt.turn_id.clone(),
-                idempotency_key: "cancel-pending-input".into(),
-            },
-        )
-        .await?;
-    wait_for(&service, &receipt.turn_id, TurnStatus::Cancelled).await?;
-    assert!(
-        service
-            .find_input_answer(&target, &caller, &absent)
-            .await?
-            .is_none()
-    );
-    let records = store
-        .load(&thread.thread_id)
-        .await?
-        .ok_or("cancelled Thread missing")?;
-    assert!(records.records.iter().any(|record| matches!(record,
-        ExecutionRecord::TurnRecord { fact, .. } if matches!(fact.as_ref(), ExecutionRecord::TurnLifecycle {
-            lifecycle: crate::turn::TurnLifecycle::InputResolved { request_id: id, approved: false }, .. } if id == &request_id))));
-    assert!(!workspace.path().join("never-written.txt").exists());
     service.shutdown().await;
     Ok(())
 }

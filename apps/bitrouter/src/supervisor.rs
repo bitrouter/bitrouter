@@ -31,12 +31,9 @@ use uuid::Uuid;
 
 use crate::acp_cli::{
     CapabilitySnapshot, LaunchOptions, RoutingOptions, SessionHandle, SessionHost,
-    SessionSelection, SpawnContext, is_lifecycle_before_session, is_lifecycle_cancelled,
-    is_lifecycle_teardown_unconfirmed,
+    SessionSelection, SpawnContext, is_lifecycle_cancelled, is_lifecycle_teardown_unconfirmed,
 };
 use crate::paths::ConfigSource;
-
-pub(crate) mod managed;
 
 /// Version of the local session-control JSON contract.
 pub const SESSION_PROTOCOL_VERSION: u16 = 1;
@@ -369,15 +366,6 @@ pub struct SessionEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PermissionResolutionOrigin {
-    ControllerChoice,
-    ConfiguredPolicy,
-    Cancellation,
-    Teardown,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum SessionEventKind {
     Lifecycle {
@@ -399,8 +387,6 @@ pub enum SessionEventKind {
         permission_id: String,
         option_id: Option<String>,
         automatic: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        origin: Option<PermissionResolutionOrigin>,
     },
     Activity {
         text: String,
@@ -429,8 +415,6 @@ pub enum SessionEventKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSnapshot {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
     pub run_id: String,
     pub label: String,
     pub agent_id: String,
@@ -453,29 +437,10 @@ pub struct RunSnapshot {
     pub attributed_cost: Option<AttributedCost>,
     pub pending_permissions: Vec<PendingPermissionSnapshot>,
     pub failure: Option<String>,
-    /// Positive lifecycle receipt: no native session request was made and the
-    /// owned controller was reaped. Missing legacy evidence defaults to false.
-    #[serde(default)]
-    pub startup_aborted_before_session: bool,
     pub lease: Option<ControlLease>,
     pub last_seq: u64,
     pub started_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-impl RunSnapshot {
-    pub(super) fn confirmed_startup_abort(&self) -> bool {
-        self.process == ProcessState::Failed
-            && self.startup_aborted_before_session
-            && self.native_session_id.is_none()
-            && self.agent_session_id.is_none()
-            && self.turn == TurnState::Idle
-            && self.pending_permissions.is_empty()
-    }
-
-    pub(super) fn owned_process_terminated(&self) -> bool {
-        self.process == ProcessState::Stopped || self.confirmed_startup_abort()
-    }
 }
 
 /// Metadata-only list projection. It intentionally excludes capabilities,
@@ -691,7 +656,6 @@ struct Run {
     startup_cancel: tokio_util::sync::CancellationToken,
     startup_completion: Mutex<StartupCompletion>,
     startup_finished: Notify,
-    tool_update_observed: Notify,
     handle: Mutex<Option<SessionHandle>>,
     session_commands: Mutex<Option<mpsc::UnboundedSender<SessionActorCommand>>>,
     pending_permissions:
@@ -764,8 +728,6 @@ struct LedgerFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LedgerEntry {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
     run_id: String,
     label: String,
     agent_id: String,
@@ -779,34 +741,8 @@ struct LedgerEntry {
     process: ProcessState,
     activity: String,
     failure: Option<String>,
-    #[serde(default)]
-    startup_aborted_before_session: bool,
     started_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    start: Option<StartReceipt>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    stopped_history: Option<StoppedHistory>,
-}
-
-const MAX_STOPPED_HISTORY_BYTES: usize = 8 * 1024 * 1024;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoppedHistory {
-    sequence: u64,
-    reference: bitrouter_orchestrator::goal::workflow::ArtifactRef,
-}
-
-#[derive(Serialize, Deserialize)]
-struct StoppedObservation {
-    snapshot: RunSnapshot,
-    replay: ReplayBatch,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StartReceipt {
-    action_request_id: String,
-    request_sha256: String,
 }
 
 struct LedgerStore {
@@ -856,121 +792,10 @@ impl LedgerStore {
     }
 
     async fn record(&self, snapshot: &RunSnapshot) -> Result<()> {
-        self.record_observation(snapshot, None).await
-    }
-
-    async fn record_observation(
-        &self,
-        snapshot: &RunSnapshot,
-        replay: Option<&ReplayBatch>,
-    ) -> Result<()> {
-        let observation = if snapshot.owned_process_terminated()
-            && let Some(replay) = replay
-        {
-            let bytes = serde_json::to_vec(&StoppedObservation {
-                snapshot: snapshot.clone(),
-                replay: replay.clone(),
-            })?;
-            if !replay.events.is_empty() && bytes.len() <= MAX_STOPPED_HISTORY_BYTES {
-                let root = self.path.with_extension("stopped-observations");
-                Some(StoppedHistory {
-                    sequence: replay.snapshot_seq,
-                    reference: crate::goal_artifacts::put(&root, &bytes).await?,
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let mut entries = self.entries.lock().await;
-        let mut entry = LedgerEntry::from(snapshot);
-        entry.start = entries
-            .get(&snapshot.run_id)
-            .and_then(|entry| entry.start.clone());
-        entry.stopped_history = observation.or_else(|| {
-            entries
-                .get(&snapshot.run_id)
-                .and_then(|previous| previous.stopped_history.clone())
-                .filter(|history| {
-                    snapshot.owned_process_terminated() && history.sequence == snapshot.last_seq
-                })
-        });
-        entries.insert(snapshot.run_id.clone(), entry);
-        drop(entries);
-        self.flush().await
-    }
-
-    async fn stopped_replay(&self, entry: &LedgerEntry) -> Result<Option<ReplayBatch>> {
-        let Some(history) = &entry.stopped_history else {
-            return Ok(None);
-        };
-        if entry.process != ProcessState::Stopped
-            && !(entry.process == ProcessState::Failed && entry.startup_aborted_before_session)
-        {
-            return Ok(None);
-        }
-        anyhow::ensure!(
-            history.reference.bytes <= u64::try_from(MAX_STOPPED_HISTORY_BYTES)?,
-            "stopped observation exceeds its bound"
-        );
-        let bytes = crate::goal_artifacts::read(
-            &self.path.with_extension("stopped-observations"),
-            &history.reference,
-        )
-        .await?;
-        let observation: StoppedObservation = serde_json::from_slice(&bytes)?;
-        let snapshot = &observation.snapshot;
-        let replay = &observation.replay;
-        anyhow::ensure!(
-            snapshot.owned_process_terminated()
-                && snapshot.process == entry.process
-                && snapshot.startup_aborted_before_session == entry.startup_aborted_before_session
-                && snapshot.managed_by == entry.managed_by
-                && snapshot.run_id == entry.run_id
-                && snapshot.agent_id == entry.agent_id
-                && snapshot.native_session_id == entry.native_session_id
-                && snapshot.agent_session_id == entry.agent_session_id
-                && snapshot.cwd == entry.cwd
-                && snapshot.claim_key == entry.claim_key
-                && snapshot.parent_run_id == entry.parent_run_id
-                && snapshot.presentation == entry.presentation
-                && snapshot.started_at == entry.started_at
-                && snapshot.pending_permissions.is_empty()
-                && snapshot.last_seq == history.sequence
-                && replay.snapshot_seq == history.sequence
-                && replay.events.first().map(|event| event.seq) == Some(replay.first_retained_seq)
-                && replay.events.last().map(|event| event.seq) == Some(replay.snapshot_seq),
-            "stopped observation does not match its original run and cutoff"
-        );
-        let mut previous = 0;
-        for event in &replay.events {
-            anyhow::ensure!(
-                event.seq > previous && event.seq <= replay.snapshot_seq,
-                "stopped observation has unordered events"
-            );
-            if replay.history_complete {
-                anyhow::ensure!(
-                    event.seq == previous.saturating_add(1),
-                    "complete stopped history has a gap"
-                );
-            }
-            previous = event.seq;
-        }
-        Ok(Some(observation.replay))
-    }
-
-    async fn record_start(&self, snapshot: &RunSnapshot, request: &StartRunRequest) -> Result<()> {
-        use sha2::{Digest, Sha256};
-        let mut entry = LedgerEntry::from(snapshot);
-        entry.start = Some(StartReceipt {
-            action_request_id: request.action_request_id.clone(),
-            request_sha256: hex::encode(Sha256::digest(serde_json::to_vec(request)?)),
-        });
         self.entries
             .lock()
             .await
-            .insert(snapshot.run_id.clone(), entry);
+            .insert(snapshot.run_id.clone(), LedgerEntry::from(snapshot));
         self.flush().await
     }
 
@@ -1012,7 +837,6 @@ impl LedgerStore {
 impl From<&RunSnapshot> for LedgerEntry {
     fn from(snapshot: &RunSnapshot) -> Self {
         Self {
-            managed_by: snapshot.managed_by.clone(),
             run_id: snapshot.run_id.clone(),
             label: snapshot.label.clone(),
             agent_id: snapshot.agent_id.clone(),
@@ -1026,48 +850,13 @@ impl From<&RunSnapshot> for LedgerEntry {
             process: snapshot.process,
             activity: snapshot.activity.clone(),
             failure: snapshot.failure.clone(),
-            startup_aborted_before_session: snapshot.startup_aborted_before_session,
             started_at: snapshot.started_at,
             updated_at: snapshot.updated_at,
-            start: None,
-            stopped_history: None,
         }
     }
 }
 
 impl Supervisor {
-    /// Read an original admitted start; this never launches or replays a request.
-    pub(super) async fn start_snapshot(
-        &self,
-        grant: &SessionGrant,
-        action_request_id: &str,
-    ) -> Result<Option<RunSnapshot>> {
-        validate_identifier("action request", action_request_id)?;
-        self.authorize_command(
-            Some(&grant.authorization),
-            &SessionCommand::Snapshot {
-                run_id: action_request_id.into(),
-            },
-        )
-        .await?;
-        let entries = self.inner.ledger.entries.lock().await;
-        let mut matching = entries.values().filter(|entry| {
-            entry
-                .start
-                .as_ref()
-                .is_some_and(|start| start.action_request_id == action_request_id)
-        });
-        let run_id = matching.next().map(|entry| entry.run_id.clone());
-        anyhow::ensure!(
-            matching.next().is_none(),
-            "original start identity has multiple run mappings"
-        );
-        drop(entries);
-        match run_id {
-            Some(id) => Ok(Some(self.run(&id).await?.snapshot().await)),
-            None => Ok(None),
-        }
-    }
     /// Restore the minimal ledger and mark every formerly live row interrupted.
     pub async fn open(source: ConfigSource, routing: Arc<ConfigRoutingTable>) -> Result<Self> {
         let identity = crate::daemon_locator::config_identity_digest(&source)?;
@@ -1076,36 +865,14 @@ impl Supervisor {
             .join(format!("supervisor-runs-v1-{identity}.json"));
         let (ledger, recovered) = LedgerStore::open(path).await?;
         let claims = Arc::new(Mutex::new(HashMap::new()));
-        let mut runs = HashMap::new();
-        for entry in recovered {
-            let restored = ledger.stopped_replay(&entry).await;
-            let id = entry.run_id.clone();
-            let mut run = Run::from_ledger(entry, ledger.clone(), claims.clone());
-            match restored {
-                Ok(Some(replay)) => {
-                    let state = run.state.get_mut();
-                    state.snapshot.last_seq = replay.snapshot_seq;
-                    state.next_seq = replay.snapshot_seq.saturating_add(1);
-                    state.history_complete = replay.history_complete;
-                    state.journal = replay
-                        .events
-                        .into_iter()
-                        .map(|event| JournalEntry {
-                            event,
-                            pinned: false,
-                        })
-                        .collect();
-                }
-                Err(_) => {
-                    let state = run.state.get_mut();
-                    state.snapshot.failure = Some("saved stopped observation could not be verified; history remains incomplete".into());
-                    state.snapshot.attention = AttentionState::Error;
-                    state.snapshot.review = ReviewState::Unread;
-                }
-                Ok(None) => {}
-            }
-            runs.insert(id, Arc::new(run));
-        }
+        let runs = recovered
+            .into_iter()
+            .map(|entry| {
+                let id = entry.run_id.clone();
+                let run = Run::from_ledger(entry, ledger.clone(), claims.clone());
+                (id, Arc::new(run))
+            })
+            .collect();
         Ok(Self {
             inner: Arc::new(SupervisorInner {
                 source,
@@ -1143,9 +910,7 @@ impl Supervisor {
             SessionCommand::Authorize { .. } => {
                 Err(anyhow::anyhow!("grant issuance was not dispatched"))
             }
-            // Keep process/session preparation out of every read-only query's
-            // future frame. Start remains the same awaited, owned operation.
-            SessionCommand::Start(request) => Box::pin(self.start(*request)).await,
+            SessionCommand::Start(request) => self.start(*request).await,
             SessionCommand::List => self.list().await,
             SessionCommand::PeekAll => self.peek_all().await,
             SessionCommand::Snapshot { run_id } => Ok(SessionResponse::Snapshot {
@@ -1271,20 +1036,12 @@ impl Supervisor {
                 cursor,
             } => {
                 let run = self.run(&run_id).await?;
-                anyhow::ensure!(
-                    run.snapshot().await.managed_by.is_none(),
-                    "managed ACP requests belong to its Thread/Turn"
-                );
                 let client = run.client().await?;
                 let response = client.list_sessions(cwd, cursor).await?;
                 Ok(SessionResponse::NativeSessions { response })
             }
             SessionCommand::RouteList { run_id } => {
                 let run = self.run(&run_id).await?;
-                anyhow::ensure!(
-                    run.snapshot().await.managed_by.is_none(),
-                    "managed ACP requests belong to its Thread/Turn"
-                );
                 let (client, session_id) = run.client_and_session().await?;
                 let state = client.route_list(&session_id).await?;
                 Ok(SessionResponse::RouteState {
@@ -1534,38 +1291,13 @@ impl Supervisor {
     }
 
     async fn start(&self, request: StartRunRequest) -> Result<SessionResponse> {
-        self.start_owned(request, None, None).await
-    }
-
-    pub(super) async fn start_managed(
-        &self,
-        request: StartRunRequest,
-        owner: bitrouter_orchestrator::service::worker::acp::Owner,
-        control: &dyn managed::DispatchGuard,
-    ) -> Result<SessionResponse> {
-        anyhow::ensure!(
-            request.prompt.is_none() && request.presentation == Presentation::Background,
-            "managed startup cannot submit a prompt or acquire another control lease"
-        );
-        self.start_owned(request, Some(owner), Some(control)).await
-    }
-
-    async fn start_owned(
-        &self,
-        request: StartRunRequest,
-        managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
-        control: Option<&dyn managed::DispatchGuard>,
-    ) -> Result<SessionResponse> {
         validate_identifier("action request", &request.action_request_id)?;
         anyhow::ensure!(
             !self.inner.shutting_down.load(Ordering::SeqCst),
             "the session supervisor is shutting down"
         );
-        let fingerprint = match &managed_by {
-            Some(owner) => serde_json::to_string(&(&request, owner)),
-            None => serde_json::to_string(&request),
-        }
-        .context("fingerprinting start request")?;
+        let fingerprint =
+            serde_json::to_string(&request).context("fingerprinting start request")?;
         loop {
             let wait = {
                 let mut starts = self.inner.starts.lock().await;
@@ -1606,42 +1338,6 @@ impl Supervisor {
                         Some(notify.clone())
                     }
                     None => {
-                        // The process cache is empty after a daemon restart.
-                        // A durable managed start still names the original Run;
-                        // never start another process under that action key.
-                        let existing = {
-                            let entries = self.inner.ledger.entries.lock().await;
-                            let mut found = entries.values().filter(|entry| {
-                                entry.start.as_ref().is_some_and(|start| {
-                                    start.action_request_id == request.action_request_id
-                                })
-                            });
-                            let entry = found.next().cloned();
-                            anyhow::ensure!(
-                                found.next().is_none(),
-                                "original start has multiple durable mappings"
-                            );
-                            entry
-                        };
-                        if let Some(entry) = existing
-                            && (entry.managed_by.is_some() || managed_by.is_some())
-                        {
-                            use sha2::{Digest, Sha256};
-                            let request_sha256 =
-                                hex::encode(Sha256::digest(serde_json::to_vec(&request)?));
-                            anyhow::ensure!(
-                                entry.managed_by == managed_by
-                                    && entry.start.as_ref().is_some_and(|start| {
-                                        start.request_sha256 == request_sha256
-                                    }),
-                                "original managed start belongs to another request or Thread/Turn owner"
-                            );
-                            drop(starts);
-                            return Ok(SessionResponse::Started {
-                                snapshot: Box::new(self.run(&entry.run_id).await?.snapshot().await),
-                                diagnostics: Vec::new(),
-                            });
-                        }
                         anyhow::ensure!(
                             !self.inner.shutting_down.load(Ordering::SeqCst),
                             "the session supervisor is shutting down"
@@ -1665,9 +1361,7 @@ impl Supervisor {
                 }
                 continue;
             }
-            let result = self
-                .start_new(request.clone(), managed_by.clone(), control)
-                .await;
+            let result = self.start_new(request.clone()).await;
             let mut starts = self.inner.starts.lock().await;
             let notify = match starts.get(&request.action_request_id) {
                 Some(StartState::Starting { notify, .. }) => Some(notify.clone()),
@@ -1709,12 +1403,7 @@ impl Supervisor {
         }
     }
 
-    async fn start_new(
-        &self,
-        request: StartRunRequest,
-        managed_by: Option<bitrouter_orchestrator::service::worker::acp::Owner>,
-        control: Option<&dyn managed::DispatchGuard>,
-    ) -> Result<SessionResponse> {
+    async fn start_new(&self, request: StartRunRequest) -> Result<SessionResponse> {
         anyhow::ensure!(
             !self.inner.shutting_down.load(Ordering::SeqCst),
             "the session supervisor is shutting down"
@@ -1751,7 +1440,6 @@ impl Supervisor {
         self.reserve_claim(&claim_key, &run_id, request.allow_shared_directory)
             .await?;
         let snapshot = RunSnapshot {
-            managed_by,
             run_id: run_id.clone(),
             label: request
                 .label
@@ -1782,7 +1470,6 @@ impl Supervisor {
             attributed_cost: None,
             pending_permissions: Vec::new(),
             failure: None,
-            startup_aborted_before_session: false,
             lease,
             last_seq: 0,
             started_at: now,
@@ -1802,12 +1489,7 @@ impl Supervisor {
             .write()
             .await
             .insert(run_id.clone(), run.clone());
-        if let Err(error) = self
-            .inner
-            .ledger
-            .record_start(&run.snapshot().await, &request)
-            .await
-        {
+        if let Err(error) = run.persist().await {
             run.fail_launch(format!("failed to persist starting session: {error:#}"))
                 .await;
             run.finish_startup(true).await;
@@ -1849,25 +1531,8 @@ impl Supervisor {
                 return Err(error);
             }
         };
-        // Preparation can await configuration, installation or credentials.
-        // Recheck the common owner/source before opening any ACP session.
-        if let Some(control) = control
-            && let Err(error) = control.authorize().await
-        {
-            run.state
-                .lock()
-                .await
-                .snapshot
-                .startup_aborted_before_session = true;
-            run.fail_launch(format!(
-                "managed dispatch closed before session open: {error:#}"
-            ))
-            .await;
-            run.finish_startup(true).await;
-            return Err(error);
-        }
         let mut handle = match host
-            .open_supervised_with_cancel(&request.session, cwd, &run.startup_cancel)
+            .open_with_cancel(&request.session, cwd, &run.startup_cancel)
             .await
         {
             Ok(handle) => handle,
@@ -1878,13 +1543,6 @@ impl Supervisor {
                     return Err(error);
                 }
                 if teardown_confirmed {
-                    if is_lifecycle_before_session(&error) {
-                        run.state
-                            .lock()
-                            .await
-                            .snapshot
-                            .startup_aborted_before_session = true;
-                    }
                     run.fail_launch(format!("agent failed to start: {error:#}"))
                         .await;
                 } else {
@@ -1895,6 +1553,7 @@ impl Supervisor {
             }
         };
         let updates = handle.take_sequenced_updates();
+        let permissions = handle.take_permissions();
         let closed = handle.closed();
         let route = if handle.capabilities.route_list {
             tokio::select! {
@@ -1994,6 +1653,7 @@ impl Supervisor {
             anyhow::bail!("supervised session startup was cancelled");
         }
         run.spawn_session_actor(updates).await;
+        run.spawn_permission_forwarder(permissions);
         run.spawn_closed_watcher(closed);
         run.finish_startup(true).await;
         if let Some(prompt) = request.prompt {
@@ -2132,10 +1792,6 @@ impl Supervisor {
         let run = self.run(run_id).await?;
         let snapshot = run.snapshot().await;
         anyhow::ensure!(
-            snapshot.managed_by.is_none(),
-            "managed ACP metadata belongs to its Thread/Turn"
-        );
-        anyhow::ensure!(
             matches!(
                 snapshot.process,
                 ProcessState::Stopped | ProcessState::Failed | ProcessState::Interrupted
@@ -2196,7 +1852,6 @@ impl Run {
             startup_cancel,
             startup_completion: Mutex::new(startup_completion),
             startup_finished: Notify::new(),
-            tool_update_observed: Notify::new(),
             handle: Mutex::new(None),
             session_commands: Mutex::new(None),
             pending_permissions: Mutex::new(HashMap::new()),
@@ -2214,7 +1869,6 @@ impl Run {
         claims: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
     ) -> Self {
         let snapshot = RunSnapshot {
-            managed_by: entry.managed_by,
             run_id: entry.run_id,
             label: entry.label,
             agent_id: entry.agent_id,
@@ -2245,7 +1899,6 @@ impl Run {
             attributed_cost: None,
             pending_permissions: Vec::new(),
             failure: entry.failure,
-            startup_aborted_before_session: entry.startup_aborted_before_session,
             lease: None,
             last_seq: 0,
             started_at: entry.started_at,
@@ -2278,15 +1931,7 @@ impl Run {
     }
 
     async fn persist(&self) -> Result<()> {
-        let state = self.state.lock().await;
-        if state.snapshot.owned_process_terminated() {
-            let replay = Self::replay_from_state(&state, None);
-            self.ledger
-                .record_observation(&state.snapshot, Some(&replay))
-                .await
-        } else {
-            self.ledger.record(&state.snapshot).await
-        }
+        self.ledger.record(&self.state.lock().await.snapshot).await
     }
 
     async fn finish_startup(&self, teardown_confirmed: bool) {
@@ -2584,9 +2229,23 @@ impl Run {
         if let Some(update) = entry.update {
             self.record_update(update).await;
         }
-        if let Some(permission) = entry.permission {
-            self.record_permission(permission).await;
-        }
+    }
+
+    fn spawn_permission_forwarder(
+        self: &Arc<Self>,
+        mut permissions: std::pin::Pin<
+            Box<
+                dyn futures::Stream<Item = bitrouter_orchestrator::acp::client::PendingPermission>
+                    + Send,
+            >,
+        >,
+    ) {
+        let run = self.clone();
+        tokio::spawn(async move {
+            while let Some(permission) = permissions.next().await {
+                run.record_permission(permission).await;
+            }
+        });
     }
 
     fn spawn_closed_watcher(self: &Arc<Self>, closed: futures::future::BoxFuture<'static, ()>) {
@@ -2657,7 +2316,6 @@ impl Run {
             });
         }
         state.append(event, false);
-        self.tool_update_observed.notify_one();
     }
 
     async fn record_permission(
@@ -2676,7 +2334,6 @@ impl Run {
                     permission_id: snapshot.permission_id,
                     option_id: None,
                     automatic: true,
-                    origin: Some(PermissionResolutionOrigin::Cancellation),
                 },
                 false,
             );
@@ -2698,7 +2355,6 @@ impl Run {
                     permission_id: snapshot.permission_id,
                     option_id: selected,
                     automatic: true,
-                    origin: Some(PermissionResolutionOrigin::Teardown),
                 },
                 false,
             );
@@ -2714,7 +2370,6 @@ impl Run {
                     permission_id: snapshot.permission_id,
                     option_id: selected,
                     automatic: true,
-                    origin: Some(PermissionResolutionOrigin::ConfiguredPolicy),
                 },
                 false,
             );
@@ -3045,11 +2700,6 @@ impl Run {
                     permission_id: permission_id.clone(),
                     option_id: option_id.clone(),
                     automatic: false,
-                    origin: Some(if cancelled {
-                        PermissionResolutionOrigin::Cancellation
-                    } else {
-                        PermissionResolutionOrigin::Teardown
-                    }),
                 },
                 false,
             );
@@ -3106,11 +2756,6 @@ impl Run {
                 permission_id: permission_id.to_string(),
                 option_id: Some(option_id.to_string()),
                 automatic,
-                origin: Some(if automatic {
-                    PermissionResolutionOrigin::ConfiguredPolicy
-                } else {
-                    PermissionResolutionOrigin::ControllerChoice
-                }),
             },
             false,
         );
@@ -3199,10 +2844,6 @@ impl Run {
         if prior == ProcessState::Stopped {
             return Ok(());
         }
-        anyhow::ensure!(
-            prior != ProcessState::Interrupted || self.handle.lock().await.is_some(),
-            "original controller handle is unavailable; interrupted process stop remains unconfirmed"
-        );
         let startup_pending = self.startup_pending().await;
         {
             let mut state = self.state.lock().await;
@@ -3240,15 +2881,7 @@ impl Run {
             self.persist().await?;
             anyhow::bail!("startup cleanup did not confirm");
         }
-        let abandoned = self
-            .pending_permissions
-            .lock()
-            .await
-            .values()
-            .map(|permission| permission.tool_call.tool_call_id.0.to_string())
-            .collect::<std::collections::BTreeSet<_>>();
         self.abandon_permissions(false).await;
-        self.wait_for_abandoned_tool_endings(&abandoned).await;
         let mut handle = self.handle.lock().await;
         let clean = match handle.as_mut() {
             Some(live) => live.shutdown().await,
@@ -3308,47 +2941,6 @@ impl Run {
         Ok(())
     }
 
-    async fn wait_for_abandoned_tool_endings(&self, tools: &std::collections::BTreeSet<String>) {
-        if tools.is_empty() {
-            return;
-        }
-        let deadline = tokio::time::Instant::now()
-            + bitrouter_orchestrator::acp::client::AcpClient::cancellation_grace();
-        loop {
-            let notified = self.tool_update_observed.notified();
-            let ended = self
-                .state
-                .lock()
-                .await
-                .journal
-                .iter()
-                .filter_map(|entry| {
-                    let SessionEventKind::Update {
-                        update: SessionUpdate::ToolCallUpdate(update),
-                    } = &entry.event.kind
-                    else {
-                        return None;
-                    };
-                    matches!(
-                        update.fields.status,
-                        Some(
-                            agent_client_protocol::schema::v1::ToolCallStatus::Completed
-                                | agent_client_protocol::schema::v1::ToolCallStatus::Failed
-                        )
-                    )
-                    .then(|| update.tool_call_id.0.to_string())
-                })
-                .collect::<std::collections::BTreeSet<_>>();
-            if tools.is_subset(&ended) {
-                return;
-            }
-            tokio::select! {
-                _ = notified => {},
-                _ = tokio::time::sleep_until(deadline) => return,
-            }
-        }
-    }
-
     async fn mark_reviewed(&self) {
         let mut state = self.state.lock().await;
         state.snapshot.review = ReviewState::Reviewed;
@@ -3383,10 +2975,6 @@ impl Run {
         validate_identifier("client", client_id)?;
         self.expire_lease().await;
         let mut state = self.state.lock().await;
-        anyhow::ensure!(
-            state.snapshot.managed_by.is_none(),
-            "managed ACP control belongs to its Thread/Turn"
-        );
         let lease = match &state.snapshot.lease {
             Some(lease) if lease.owner_client_id == client_id => ControlLease {
                 owner_client_id: client_id.to_string(),
@@ -3452,10 +3040,6 @@ impl Run {
         validate_identifier("action request", &fence.action_request_id)?;
         self.expire_lease().await;
         let state = self.state.lock().await;
-        anyhow::ensure!(
-            state.snapshot.managed_by.is_none(),
-            "managed ACP control belongs to its Thread/Turn"
-        );
         let lease = state
             .snapshot
             .lease
@@ -3936,7 +3520,6 @@ mod tests {
         let (ledger, _) = LedgerStore::open(temporary.path().join("ledger.json")).await?;
         let now = Utc::now();
         let snapshot = RunSnapshot {
-            managed_by: None,
             run_id: "run-1".to_string(),
             label: "test".to_string(),
             agent_id: "stub".to_string(),
@@ -3961,7 +3544,6 @@ mod tests {
             attributed_cost: None,
             pending_permissions: Vec::new(),
             failure: None,
-            startup_aborted_before_session: false,
             lease: Some(ControlLease {
                 owner_client_id: owner.to_string(),
                 generation: 1,
@@ -4572,26 +4154,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn legacy_permission_resolution_keeps_an_unknown_origin() -> Result<()> {
-        let legacy = serde_json::json!({"event":"permission_resolved", "permission_id":"original",
-            "option_id":"reject-exact", "automatic":false});
-        let decoded: SessionEventKind = serde_json::from_value(legacy.clone())?;
-        assert!(matches!(
-            decoded,
-            SessionEventKind::PermissionResolved { origin: None, .. }
-        ));
-        assert_eq!(serde_json::to_value(&decoded)?, legacy);
-        let actual = SessionEventKind::PermissionResolved {
-            permission_id: "original".into(),
-            option_id: Some("reject-exact".into()),
-            automatic: false,
-            origin: Some(PermissionResolutionOrigin::Teardown),
-        };
-        assert_eq!(serde_json::to_value(actual)?["origin"], "teardown");
-        Ok(())
-    }
-
     #[tokio::test]
     async fn attachment_snapshot_and_replay_share_one_sequence_boundary() -> Result<()> {
         let directory = tempfile::tempdir().context("creating work directory")?;
@@ -4693,309 +4255,6 @@ mod tests {
             !recovered_run.replay(None).await.history_complete,
             "minimal restart ledger masqueraded as a complete transcript"
         );
-        anyhow::ensure!(
-            recovered_run.stop().await.is_err(),
-            "interrupted run without its original handle falsely confirmed process stop"
-        );
-        anyhow::ensure!(
-            recovered_run.snapshot().await.process == ProcessState::Interrupted,
-            "unconfirmed interrupted process was relabelled stopped"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn startup_abort_requires_a_positive_receipt_and_preserves_failed_history() -> Result<()>
-    {
-        let directory = tempfile::tempdir()?;
-        let (_run_directory, run) = test_run(directory.path(), "client").await?;
-        {
-            let mut state = run.state.lock().await;
-            state.snapshot.native_session_id = None;
-            state.snapshot.startup_aborted_before_session = true;
-        }
-        run.fail_launch("fixture initialize failed after confirmed teardown".into())
-            .await;
-        let snapshot = run.snapshot().await;
-        assert!(snapshot.confirmed_startup_abort());
-        let entry = run
-            .ledger
-            .entries
-            .lock()
-            .await
-            .get(&snapshot.run_id)
-            .cloned()
-            .context("failed startup receipt missing")?;
-        let replay = run
-            .ledger
-            .stopped_replay(&entry)
-            .await?
-            .context("failed startup history not retained")?;
-        assert!(replay.history_complete);
-        assert_eq!(replay.snapshot_seq, snapshot.last_seq);
-        assert_eq!(snapshot.process, ProcessState::Failed);
-        let (reopened, recovered) = LedgerStore::open(run.ledger.path.clone()).await?;
-        let recovered = recovered
-            .into_iter()
-            .find(|row| row.run_id == snapshot.run_id)
-            .context("cold failed startup receipt missing")?;
-        assert!(reopened.stopped_replay(&recovered).await?.is_some());
-        let cold = Run::from_ledger(
-            recovered.clone(),
-            reopened,
-            Arc::new(Mutex::new(HashMap::new())),
-        );
-        assert!(cold.snapshot().await.confirmed_startup_abort());
-        let mut legacy = serde_json::to_value(&snapshot)?;
-        legacy
-            .as_object_mut()
-            .context("snapshot object missing")?
-            .remove("startup_aborted_before_session");
-        assert!(!serde_json::from_value::<RunSnapshot>(legacy)?.confirmed_startup_abort());
-        let mut missing = recovered;
-        missing.startup_aborted_before_session = false;
-        assert!(run.ledger.stopped_replay(&missing).await?.is_none());
-        for process in [
-            ProcessState::Starting,
-            ProcessState::Running,
-            ProcessState::Stopping,
-            ProcessState::Interrupted,
-        ] {
-            let mut unsafe_snapshot = snapshot.clone();
-            unsafe_snapshot.process = process;
-            assert!(!unsafe_snapshot.confirmed_startup_abort());
-        }
-        let mut opened = snapshot.clone();
-        opened.native_session_id = Some("already-opened".into());
-        assert!(!opened.confirmed_startup_abort());
-        let mut admitted = snapshot;
-        admitted.turn = TurnState::Working;
-        assert!(!admitted.confirmed_startup_abort());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn stopped_history_is_hash_bound_and_cannot_cross_run_or_live_state() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let (ledger, _) = LedgerStore::open(directory.path().join("ledger.json")).await?;
-        let (_run_directory, run) = test_run(directory.path(), "client").await?;
-        {
-            let mut state = run.state.lock().await;
-            state.snapshot.process = ProcessState::Stopped;
-            state.append(
-                SessionEventKind::Lifecycle {
-                    process: ProcessState::Stopped,
-                },
-                false,
-            );
-        }
-        let snapshot = run.snapshot().await;
-        let replay = run.replay(None).await;
-        ledger.record_observation(&snapshot, Some(&replay)).await?;
-        let entry = ledger
-            .entries
-            .lock()
-            .await
-            .get(&snapshot.run_id)
-            .cloned()
-            .context("stopped row missing")?;
-        assert!(ledger.stopped_replay(&entry).await?.is_some());
-        let mut other = entry.clone();
-        other.managed_by = Some(bitrouter_orchestrator::service::worker::acp::Owner {
-            server_instance_id: "different-owner".into(),
-            thread_id: "thread".into(),
-            turn_id: "turn".into(),
-        });
-        assert!(ledger.stopped_replay(&other).await.is_err());
-        other = entry.clone();
-        other.run_id = "different-run".into();
-        assert!(ledger.stopped_replay(&other).await.is_err());
-        other = entry.clone();
-        other.process = ProcessState::Interrupted;
-        assert!(ledger.stopped_replay(&other).await?.is_none());
-        other = entry.clone();
-        if let Some(history) = &mut other.stopped_history {
-            history.reference.bytes = u64::try_from(MAX_STOPPED_HISTORY_BYTES)?.saturating_add(1);
-        }
-        assert!(ledger.stopped_replay(&other).await.is_err());
-        other = entry.clone();
-        if let Some(history) = &mut other.stopped_history {
-            history.sequence = history.sequence.saturating_add(1);
-        }
-        assert!(ledger.stopped_replay(&other).await.is_err());
-        let history = entry.stopped_history.context("stopped pointer missing")?;
-        tokio::fs::write(&history.reference.path, b"changed observed history").await?;
-        assert!(
-            ledger
-                .stopped_replay(&LedgerEntry {
-                    stopped_history: Some(history),
-                    ..entry
-                })
-                .await
-                .is_err()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn managed_start_uses_durable_receipt_after_its_process_cache_is_lost() -> Result<()> {
-        struct Closed(std::sync::atomic::AtomicUsize);
-        #[async_trait::async_trait]
-        impl managed::DispatchGuard for Closed {
-            async fn authorize(&self) -> Result<()> {
-                self.0.fetch_add(1, Ordering::SeqCst);
-                anyhow::bail!("no new session is authorized")
-            }
-        }
-        let directory = tempfile::tempdir()?;
-        let (_ledger_directory, run) = test_run(directory.path(), "original-client").await?;
-        let supervisor = test_supervisor(directory.path(), run.clone());
-        let owner = bitrouter_orchestrator::service::worker::acp::Owner {
-            server_instance_id: "original-host".into(),
-            thread_id: "original-thread".into(),
-            turn_id: "original-turn".into(),
-        };
-        {
-            let mut state = run.state.lock().await;
-            state.snapshot.managed_by = Some(owner.clone());
-            state.snapshot.lease = None;
-            state.snapshot.process = ProcessState::Interrupted;
-        }
-        let request = StartRunRequest {
-            action_request_id: "original-managed-start".into(),
-            client_id: None,
-            label: None,
-            agent_id: "configured-peer".into(),
-            prompt: None,
-            cwd: directory.path().into(),
-            routing: Default::default(),
-            launch: Default::default(),
-            session: Default::default(),
-            presentation: Presentation::Background,
-            parent_run_id: None,
-            allow_shared_directory: false,
-            permission_policy: Default::default(),
-            result_schema: None,
-        };
-        let snapshot = run.snapshot().await;
-        supervisor
-            .inner
-            .ledger
-            .record_start(&snapshot, &request)
-            .await?;
-        let closed = Closed(std::sync::atomic::AtomicUsize::new(0));
-        assert!(supervisor.inner.starts.lock().await.is_empty());
-        let SessionResponse::Started {
-            snapshot: original, ..
-        } = supervisor
-            .start_managed(request.clone(), owner.clone(), &closed)
-            .await?
-        else {
-            anyhow::bail!("original receipt missing");
-        };
-        assert_eq!(original.run_id, snapshot.run_id);
-        assert_eq!(original.process, ProcessState::Interrupted);
-        assert!(supervisor.start(request.clone()).await.is_err());
-        let mut changed = request.clone();
-        changed.agent_id = "another-harness".into();
-        assert!(
-            supervisor
-                .start_managed(changed, owner.clone(), &closed)
-                .await
-                .is_err()
-        );
-        let mut another_owner = owner;
-        another_owner.server_instance_id = "another-host".into();
-        assert!(
-            supervisor
-                .start_managed(request, another_owner, &closed)
-                .await
-                .is_err()
-        );
-        assert_eq!(closed.0.load(Ordering::SeqCst), 0);
-        assert_eq!(supervisor.inner.runs.read().await.len(), 1);
-        assert!(supervisor.inner.starts.lock().await.is_empty());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn original_start_lookup_is_durable_readonly_and_credential_free() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let (_ledger_directory, run) = test_run(directory.path(), "original-client").await?;
-        let supervisor = test_supervisor(directory.path(), run.clone());
-        let request = StartRunRequest {
-            action_request_id: "original-dispatch".into(),
-            client_id: Some("original-client".into()),
-            label: Some("original goal branch".into()),
-            agent_id: "configured-peer".into(),
-            prompt: Some("private-prompt-marker-must-not-be-in-ledger".into()),
-            cwd: directory.path().into(),
-            routing: Default::default(),
-            launch: Default::default(),
-            session: Default::default(),
-            presentation: Presentation::Background,
-            parent_run_id: None,
-            allow_shared_directory: false,
-            permission_policy: Default::default(),
-            result_schema: None,
-        };
-        let snapshot = run.snapshot().await;
-        supervisor
-            .inner
-            .ledger
-            .record_start(&snapshot, &request)
-            .await?;
-        // Routine snapshot writes must preserve the original accepted identity.
-        run.persist().await?;
-        let grant = test_grant(&supervisor, "reader", [SessionScope::Peek]).await?;
-        let found = supervisor
-            .start_snapshot(&grant, "original-dispatch")
-            .await?
-            .context("original start mapping missing")?;
-        assert_eq!(found.run_id, snapshot.run_id);
-        assert_eq!(found.process, snapshot.process);
-        assert!(
-            supervisor
-                .start_snapshot(&grant, "missing-dispatch")
-                .await?
-                .is_none()
-        );
-        let denied = test_grant(&supervisor, "denied", [SessionScope::List]).await?;
-        assert!(
-            supervisor
-                .start_snapshot(&denied, "original-dispatch")
-                .await
-                .is_err()
-        );
-        assert!(supervisor.inner.starts.lock().await.is_empty());
-        let raw = tokio::fs::read(&supervisor.inner.ledger.path).await?;
-        assert!(!String::from_utf8(raw)?.contains("private-prompt-marker-must-not-be-in-ledger"));
-        let (ledger, recovered) = LedgerStore::open(supervisor.inner.ledger.path.clone()).await?;
-        let entry = recovered
-            .into_iter()
-            .find(|entry| entry.run_id == snapshot.run_id)
-            .context("persisted original run absent")?;
-        assert_eq!(
-            entry
-                .start
-                .as_ref()
-                .map(|start| start.action_request_id.as_str()),
-            Some("original-dispatch")
-        );
-        let restored = Arc::new(Run::from_ledger(
-            entry,
-            ledger,
-            Arc::new(Mutex::new(HashMap::new())),
-        ));
-        let restored = test_supervisor(directory.path(), restored);
-        let grant = test_grant(&restored, "new-reader", [SessionScope::Peek]).await?;
-        let found = restored
-            .start_snapshot(&grant, "original-dispatch")
-            .await?
-            .context("cold original mapping absent")?;
-        assert_eq!(found.run_id, snapshot.run_id);
-        assert_eq!(found.process, ProcessState::Interrupted);
-        assert!(restored.inner.starts.lock().await.is_empty());
         Ok(())
     }
 }

@@ -320,43 +320,6 @@ impl ToolKind {
 }
 
 impl WorkspaceTools {
-    pub(crate) async fn verify_command(
-        &self,
-        command: String,
-        timeout: u64,
-        cancel: &CancellationToken,
-        id: &str,
-    ) -> (ToolResultOutput, EffectStatus) {
-        if self.mode != ToolMode::Coding {
-            return (
-                ToolResultOutput::ExecutionDenied {
-                    reason: Some("verification command is not authorized in read-only mode".into()),
-                },
-                EffectStatus::NotExecuted,
-            );
-        }
-        let mut effect = EffectStatus::NotExecuted;
-        let result = self
-            .shell_with_limit(
-                ShellArgs {
-                    command,
-                    timeout: Some(timeout),
-                },
-                cancel,
-                id,
-                None,
-                &mut effect,
-                3600,
-            )
-            .await;
-        let output = match result {
-            Ok(output) => output,
-            Err(error) => ToolResultOutput::ErrorJson {
-                value: serde_json::json!({"error":error}),
-            },
-        };
-        (output, effect)
-    }
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }

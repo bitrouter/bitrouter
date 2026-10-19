@@ -13,40 +13,9 @@ use super::state::{State, ThreadRecord};
 use super::{ErrorCode, ServiceError, ThreadService, unknown_turn};
 use crate::agent::{Agent, ToolMode};
 use crate::store::{AcceptedKey, ExecutionRecord, ExecutionStore};
-use crate::thread::executor::{AcpThreadRequest, Config};
 use crate::thread::{
-    GoalWork, PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadStatus, ThreadTarget,
-    WorkspaceGrant,
+    PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadStatus, ThreadTarget, WorkspaceGrant,
 };
-
-struct Definition {
-    caller: CallerContext,
-    workspace: std::path::PathBuf,
-    config: Config,
-    permission_profile: PermissionProfile,
-    verification_command: Option<String>,
-    idempotency_key: String,
-}
-
-impl From<ThreadRequest> for Definition {
-    fn from(request: ThreadRequest) -> Self {
-        Self {
-            caller: request.caller,
-            workspace: request.workspace,
-            config: Config::Native(request.config),
-            permission_profile: request.permission_profile,
-            verification_command: request.verification_command,
-            idempotency_key: request.idempotency_key,
-        }
-    }
-}
-
-enum Binding<'a> {
-    Ordinary,
-    Owner(&'a str),
-    Input(&'a str),
-    Work(&'a GoalWork),
-}
 use crate::turn::{
     ApprovalAnswer, CancelTurnRequest, TurnEventPayload, TurnReceipt, TurnSnapshot, TurnStatus,
 };
@@ -143,12 +112,10 @@ impl ThreadService {
             entries.push(crate::thread::ThreadDirectoryEntry {
                 turn_status: view.latest_turn.as_ref().map(|turn| turn.status),
                 turn_id: view.latest_turn.as_ref().map(|turn| turn.turn_id.clone()),
-                needs_input: view.latest_turn.as_ref().is_some_and(|turn| {
-                    turn.pending_input_id.is_some()
-                        || turn.acp_permissions.iter().any(|permission| {
-                            !turn.acp_selected.contains_key(&permission.request_id)
-                        })
-                }),
+                needs_input: view
+                    .latest_turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.pending_input_id.is_some()),
                 thread: view.thread,
             });
         }
@@ -193,156 +160,6 @@ impl ThreadService {
         request: ThreadRequest,
         servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
     ) -> Result<ThreadSnapshot, ServiceError> {
-        self.create_thread_bound(
-            server_instance_id,
-            request.into(),
-            servers,
-            Binding::Ordinary,
-        )
-        .await
-    }
-
-    /// Admit the Goal's owner through the ordinary durable Thread path. Only a
-    /// trusted Goal host supplies this association; transports do not infer it.
-    pub async fn create_goal_owner_thread(
-        &self,
-        server_instance_id: &str,
-        goal_id: &str,
-        request: ThreadRequest,
-    ) -> Result<ThreadSnapshot, ServiceError> {
-        crate::goal::identifier(goal_id).map_err(|error| error.to_string())?;
-        if request.idempotency_key != crate::goal::workflow::owner_thread_key(goal_id) {
-            return Err("Goal owner requires its stable admission key".into());
-        }
-        self.create_thread_bound(
-            server_instance_id,
-            request.into(),
-            None,
-            Binding::Owner(goal_id),
-        )
-        .await
-    }
-
-    /// The input interpreter has its own sequential Turns, so a long planning
-    /// or review Turn cannot hide an explicit pause in a concurrent input.
-    pub async fn create_goal_input_thread(
-        &self,
-        owner: &ThreadTarget,
-        request: ThreadRequest,
-    ) -> Result<ThreadSnapshot, ServiceError> {
-        let view = self.read_stored_thread_view(owner, &request.caller).await?;
-        let goal_id = view
-            .thread
-            .owned_goal_id
-            .as_deref()
-            .ok_or("input Thread requires a Goal owner")?;
-        if request.idempotency_key != crate::goal::workflow::input_thread_key(goal_id) {
-            return Err("Goal input requires its stable admission key".into());
-        }
-        self.create_thread_bound(
-            &owner.server_instance_id,
-            request.into(),
-            None,
-            Binding::Input(&owner.thread_id),
-        )
-        .await
-    }
-
-    pub async fn create_goal_worker_thread(
-        &self,
-        owner: &ThreadTarget,
-        source: &GoalWork,
-        request: ThreadRequest,
-        servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
-    ) -> Result<ThreadSnapshot, ServiceError> {
-        source.validate()?;
-        let parent = self.read_stored_thread_view(owner, &request.caller).await?;
-        if parent.thread.owned_goal_id.as_ref() != Some(&source.goal_id)
-            || owner.thread_id != source.owner_thread_id
-            || request.idempotency_key != super::worker::thread_key(source)?
-        {
-            return Err("worker admission requires its original Goal owner and action key".into());
-        }
-        self.create_thread_bound(
-            &owner.server_instance_id,
-            request.into(),
-            servers,
-            Binding::Work(source),
-        )
-        .await
-    }
-
-    /// ACP workers share Thread creation and workspace grants without a dummy
-    /// native Agent. Only the trusted Goal host supplies this association.
-    pub async fn create_goal_acp_thread(
-        &self,
-        owner: &ThreadTarget,
-        source: &GoalWork,
-        request: AcpThreadRequest,
-    ) -> Result<ThreadSnapshot, ServiceError> {
-        source.validate()?;
-        let parent = self.read_stored_thread_view(owner, &request.caller).await?;
-        if parent.thread.owned_goal_id.as_ref() != Some(&source.goal_id)
-            || owner.thread_id != source.owner_thread_id
-            || request.idempotency_key != super::worker::thread_key(source)?
-        {
-            return Err("worker admission requires its original Goal owner and action key".into());
-        }
-        self.create_thread_bound(
-            &owner.server_instance_id,
-            Definition {
-                caller: request.caller,
-                workspace: request.workspace,
-                config: Config::Acp {
-                    acp: request.config,
-                },
-                permission_profile: request.permission_profile,
-                verification_command: None,
-                idempotency_key: request.idempotency_key,
-            },
-            None,
-            Binding::Work(source),
-        )
-        .await
-    }
-
-    /// Find an already accepted create by its original caller-scoped key.
-    /// Reconciliation reads no new request/config and never starts execution.
-    pub async fn find_thread_admission(
-        &self,
-        server_instance_id: &str,
-        caller: &CallerContext,
-        key: &str,
-    ) -> Result<Option<ThreadSnapshot>, ServiceError> {
-        self.ensure_instance(Some(server_instance_id))?;
-        let scope = key_scope(caller, None, "create_thread", key)?;
-        let Some(entry) = self
-            .inner
-            .store
-            .find_key(&scope, key)
-            .await
-            .map_err(ServiceError::storage)?
-        else {
-            return Ok(None);
-        };
-        let snapshot = self.existing_thread_receipt(&entry).await?;
-        self.check_snapshot_grant(&snapshot)?;
-        Ok(Some(snapshot))
-    }
-
-    async fn create_thread_bound(
-        &self,
-        server_instance_id: &str,
-        request: Definition,
-        servers: Option<Vec<bitrouter_sdk::mcp::transport::McpServerConfig>>,
-        binding: Binding<'_>,
-    ) -> Result<ThreadSnapshot, ServiceError> {
-        let (owned_goal_id, input_for_thread_id, goal_work) = match binding {
-            Binding::Ordinary => (None, None, None),
-            Binding::Owner(id) => (Some(id), None, None),
-            Binding::Input(id) => (None, Some(id), None),
-            Binding::Work(source) => (None, None, Some(source)),
-        };
         if let Some(servers) = &servers {
             if servers.len() > 32
                 || serde_json::to_vec(servers)
@@ -374,15 +191,6 @@ impl ThreadService {
             request.permission_profile,
             &request.verification_command,
         ))?;
-        if let Some(goal_id) = owned_goal_id {
-            hash = fingerprint(&(&hash, goal_id))?;
-        }
-        if let Some(parent_id) = input_for_thread_id {
-            hash = fingerprint(&(&hash, "goal_input", parent_id))?;
-        }
-        if let Some(source) = goal_work {
-            hash = fingerprint(&(&hash, "goal_work", source))?;
-        }
         if servers.is_some() {
             let mut bindings = serde_json::to_value(&servers).map_err(|error| error.to_string())?;
             bindings.sort_all_objects();
@@ -395,82 +203,40 @@ impl ThreadService {
             drop(admission);
             return self.existing_thread_receipt(&entry).await;
         }
-        let coordination = owned_goal_id.is_some() || input_for_thread_id.is_some();
-        if coordination
-            && (request.config.tool_mode() != ToolMode::ReadOnly
-                || request.permission_profile != PermissionProfile::ReadOnly
-                || request.verification_command.is_some()
-                || !request.workspace.is_absolute())
-        {
-            return Err(
-                "Goal coordination is tool-free and requires read-only metadata settings".into(),
-            );
-        }
-        let workspace = if coordination {
-            // A persisted Goal can outlive its original project directory.
-            // This path is a label, not a filesystem grant to this executor.
-            request.workspace.clone()
-        } else {
-            request
-                .workspace
-                .canonicalize()
-                .map_err(|error| error.to_string())?
-        };
+        let workspace = request
+            .workspace
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
         let profile = if request.config.tool_mode() == ToolMode::ReadOnly {
             PermissionProfile::ReadOnly
         } else {
             request.permission_profile
         };
-        let config = match request.config {
-            Config::Native(native) => {
-                let native = if profile == PermissionProfile::ReadOnly {
-                    native.read_only()
-                } else {
-                    native
-                };
-                if native.model.len()
-                    + native.instructions.len()
-                    + request.verification_command.as_ref().map_or(0, String::len)
-                    > self.inner.limits.request_bytes
-                    || native.max_steps > 256
-                    || native.max_tool_calls > 1024
-                    || native.max_context_bytes > self.inner.limits.context_bytes_per_thread
-                    || native.max_duration > Duration::from_secs(86400)
-                {
-                    return Err("Thread settings exceed runtime bounds".into());
-                }
-                if !coordination {
-                    Agent::new(
-                        Arc::clone(&self.inner.app),
-                        request.caller.clone(),
-                        &workspace,
-                        native.clone(),
-                    )?;
-                }
-                Config::Native(native)
-            }
-            Config::Acp { acp } => {
-                crate::goal::identifier(&acp.agent_id).map_err(|error| error.to_string())?;
-                if profile != PermissionProfile::Ask
-                    || request.verification_command.is_some()
-                    || acp.max_duration.is_zero()
-                    || acp.max_duration > Duration::from_secs(86400)
-                    || acp
-                        .requested_model_route
-                        .as_ref()
-                        .is_some_and(|route| route.trim().is_empty() || route.len() > 4096)
-                {
-                    return Err(
-                        "ACP Thread requires bounded settings and explicit permission requests"
-                            .into(),
-                    );
-                }
-                Config::Acp { acp }
-            }
+        let config = if profile == PermissionProfile::ReadOnly {
+            request.config.read_only()
+        } else {
+            request.config
         };
+        if config.model.len()
+            + config.instructions.len()
+            + request.verification_command.as_ref().map_or(0, String::len)
+            > self.inner.limits.request_bytes
+            || config.max_steps > 256
+            || config.max_tool_calls > 1024
+            || config.max_context_bytes > self.inner.limits.context_bytes_per_thread
+            || config.max_duration > Duration::from_secs(86400)
+        {
+            return Err("Thread settings exceed runtime bounds".into());
+        }
         if profile == PermissionProfile::ReadOnly && request.verification_command.is_some() {
             return Err("read-only Threads cannot run verification".into());
         }
+        Agent::new(
+            Arc::clone(&self.inner.app),
+            request.caller.clone(),
+            &workspace,
+            config.clone(),
+        )?;
         self.reclaim_hot_capacity(0)?;
         {
             let state = self.lock_state();
@@ -486,11 +252,10 @@ impl ThreadService {
                     "hot Thread limit reached",
                 ));
             }
-            if !coordination
-                && !state
-                    .workspace_profiles
-                    .get(&workspace)
-                    .is_some_and(|profiles| profiles.contains(&profile))
+            if !state
+                .workspace_profiles
+                .get(&workspace)
+                .is_some_and(|profiles| profiles.contains(&profile))
             {
                 return Err(ServiceError::new(
                     ErrorCode::Unauthorized,
@@ -503,12 +268,9 @@ impl ThreadService {
         let mut snapshot = ThreadSnapshot {
             server_instance_id: self.inner.instance_id.clone(),
             thread_id: thread_id.clone(),
-            owned_goal_id: owned_goal_id.map(str::to_owned),
-            input_for_thread_id: input_for_thread_id.map(str::to_owned),
-            goal_work: goal_work.cloned(),
             status: ThreadStatus::Idle,
             workspace,
-            model: config.model().into(),
+            model: config.model.clone(),
             permission_profile: profile,
             context_version: 0,
             cursor: 2,
@@ -920,34 +682,6 @@ impl ThreadService {
         self.existing_turn_receipt(&key).await
     }
 
-    /// Read the original accepted reply without resolving another input or
-    /// treating cancellation's InputResolved(false) as a user reply.
-    pub async fn find_input_answer(
-        &self,
-        target: &ThreadTarget,
-        caller: &CallerContext,
-        answer: &ApprovalAnswer,
-    ) -> Result<Option<TurnReceipt>, ServiceError> {
-        self.read_stored_thread_view(target, caller).await?;
-        let scope = key_scope(
-            caller,
-            Some(&target.thread_id),
-            "answer_approval",
-            &answer.idempotency_key,
-        )?;
-        let hash = fingerprint(&(&answer.turn_id, &answer.request_id, answer.approved))?;
-        let Some(entry) = self
-            .accepted_key(&scope, &answer.idempotency_key, &hash)
-            .await?
-        else {
-            return Ok(None);
-        };
-        if entry.thread_id != target.thread_id || entry.turn_id.as_ref() != Some(&answer.turn_id) {
-            return Err("input reply identity does not match this Thread/Turn".into());
-        }
-        self.existing_turn_receipt(&entry).await.map(Some)
-    }
-
     pub async fn answer_thread_input(
         &self,
         target: &ThreadTarget,
@@ -1041,9 +775,6 @@ impl ThreadService {
         state: &State,
         thread: &ThreadRecord,
     ) -> Result<(), ServiceError> {
-        if thread.snapshot.is_goal_coordination() {
-            return Ok(());
-        }
         if state
             .workspace_profiles
             .get(&thread.snapshot.workspace)
@@ -1062,9 +793,6 @@ impl ThreadService {
         &self,
         snapshot: &ThreadSnapshot,
     ) -> Result<(), ServiceError> {
-        if snapshot.is_goal_coordination() {
-            return Ok(());
-        }
         if self
             .lock_state()
             .workspace_profiles

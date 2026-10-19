@@ -58,22 +58,11 @@ struct Attempt {
     next_work: u32,
 }
 
-struct ActiveWork {
-    work: NativeProviderWork,
-    started: Option<Instant>,
-}
-
-#[derive(Default)]
-struct Observation {
-    active: Option<ActiveWork>,
-    pending: Option<NativeProviderWorkReport>,
-}
-
 /// Shared with the HTTP executor through a request-local context extension.
 pub(crate) struct NativeWorkRuntime {
     control: Arc<dyn NativeExecutionControl>,
     attempt: Mutex<Option<Attempt>>,
-    observation: tokio::sync::Mutex<Observation>,
+    pending: tokio::sync::Mutex<Option<NativeProviderWorkReport>>,
     gate_nanos: AtomicU64,
 }
 
@@ -82,33 +71,13 @@ impl NativeWorkRuntime {
         Self {
             control,
             attempt: Mutex::new(None),
-            observation: tokio::sync::Mutex::new(Observation::default()),
+            pending: tokio::sync::Mutex::new(None),
             gate_nanos: AtomicU64::new(0),
         }
     }
 
     pub(crate) async fn flush(&self) {
-        self.flush_report(true).await;
-    }
-
-    async fn flush_report(&self, finish_abandoned: bool) {
-        let pending = {
-            let mut observation = self.observation.lock().await;
-            observation.pending.take().or_else(|| {
-                if !finish_abandoned {
-                    return None;
-                }
-                observation
-                    .active
-                    .take()
-                    .map(|active| NativeProviderWorkReport {
-                        work: active.work,
-                        elapsed_ms: active.started.map_or(0, super::timing::elapsed_millis),
-                        http_status: None,
-                        error_code: Some(BitrouterError::Cancelled.error_code().into()),
-                    })
-            })
-        };
+        let pending = self.pending.lock().await.take();
         if let Some(report) = pending {
             let gate = Instant::now();
             self.control.after_provider_work(report).await;
@@ -185,7 +154,7 @@ pub(crate) async fn observe<T>(
     // Drain an accepted HTTP response body before waiting for its observation
     // ACK. Flush before the next integration operation, or at executor return.
     // This lets usage settle even if an ACK is lost after response headers.
-    runtime.flush_report(false).await;
+    runtime.flush().await;
     let work = {
         let mut state = runtime.attempt.lock().map_err(|_| unavailable())?;
         match state.as_mut() {
@@ -207,38 +176,11 @@ pub(crate) async fn observe<T>(
         return operation.await;
     };
     let _ = super::native_auxiliary::limit(runtime.control.as_ref(), &work.request_id)?;
-    {
-        let mut observation = runtime.observation.lock().await;
-        if observation.active.is_some() {
-            return Err(unavailable());
-        }
-        // Retain identity before the durable callback: cancellation can win
-        // after its intent committed but before its acknowledgement returned.
-        observation.active = Some(ActiveWork {
-            work: work.clone(),
-            started: None,
-        });
-    }
     let gate = Instant::now();
     let allowed = runtime.control.before_provider_work(&work).await;
     runtime.add_gate_time(gate.elapsed());
-    if let Err(error) = allowed {
-        let mut observation = runtime.observation.lock().await;
-        observation.active = None;
-        // A rejected admission may have no durable intent at all. Do not
-        // submit an outcome for it. A dropped callback instead leaves active
-        // identity for the enclosing attempt's cancellation settlement.
-        return Err(error);
-    }
+    allowed?;
     let started = Instant::now();
-    runtime
-        .observation
-        .lock()
-        .await
-        .active
-        .as_mut()
-        .ok_or_else(unavailable)?
-        .started = Some(started);
     let result = operation.await;
     let report = NativeProviderWorkReport {
         work,
@@ -249,167 +191,6 @@ pub(crate) async fn observe<T>(
             .err()
             .map(|error| error.error_code().to_owned()),
     };
-    let mut observation = runtime.observation.lock().await;
-    observation.active = None;
-    observation.pending = Some(report);
+    *runtime.pending.lock().await = Some(report);
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::super::native::{NativeAttemptReport, NativePlan, NativePlanAdmission};
-    use super::super::types::PipelineRequest;
-    use super::*;
-    use crate::caller::CallerContext;
-    use bitrouter_ai::types::Prompt;
-    use std::sync::atomic::AtomicBool;
-
-    #[derive(Default)]
-    struct Control {
-        stop_in_admission: bool,
-        reject_admission: bool,
-        entered: tokio::sync::Notify,
-        reports: tokio::sync::Mutex<Vec<NativeProviderWorkReport>>,
-    }
-
-    #[async_trait::async_trait]
-    impl NativeExecutionControl for Control {
-        async fn plan(&self, _: NativePlan) -> Result<NativePlanAdmission> {
-            Ok(NativePlanAdmission {
-                route_indices: vec![0],
-            })
-        }
-        async fn before_attempt(&self, _: &str, _: u32) -> Result<()> {
-            Ok(())
-        }
-        async fn after_attempt(&self, _: NativeAttemptReport) {}
-        async fn before_provider_work(&self, _: &NativeProviderWork) -> Result<()> {
-            if self.reject_admission {
-                return Err(unavailable());
-            }
-            if self.stop_in_admission {
-                self.entered.notify_one();
-                std::future::pending::<()>().await;
-            }
-            Ok(())
-        }
-        async fn after_provider_work(&self, report: NativeProviderWorkReport) {
-            self.reports.lock().await.push(report);
-        }
-    }
-
-    fn context(control: Arc<Control>) -> Result<(PipelineContext, Arc<NativeWorkRuntime>)> {
-        let prompt = Prompt {
-            model: "fixture".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: Vec::new(),
-            tools: Vec::new(),
-            params: Default::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        };
-        let mut ctx = PipelineContext::new(PipelineRequest::new(
-            "fixture",
-            CallerContext::local(),
-            prompt,
-        ));
-        let runtime = Arc::new(NativeWorkRuntime::new(control));
-        runtime.begin_attempt(0)?;
-        ctx.insert_extension(runtime.clone());
-        Ok((ctx, runtime))
-    }
-
-    async fn cancelled(admission: bool) -> Result<()> {
-        let control = Arc::new(Control {
-            stop_in_admission: admission,
-            ..Default::default()
-        });
-        let (ctx, runtime) = context(control.clone())?;
-        let dispatched = AtomicBool::new(false);
-        let mut operation = Box::pin(observe(
-            &ctx,
-            NativeProviderWorkKind::HttpDispatch,
-            async {
-                dispatched.store(true, Ordering::SeqCst);
-                control.entered.notify_one();
-                std::future::pending::<Result<()>>().await
-            },
-            |_| None,
-        ));
-        tokio::select! {
-            _ = control.entered.notified() => {},
-            _ = &mut operation => return Err(unavailable()),
-        }
-        drop(operation);
-        runtime.flush().await;
-        runtime.flush().await;
-        let reports = control.reports.lock().await;
-        assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0].work.request_id, ctx.request_id());
-        assert_eq!(reports[0].work.attempt_index, 0);
-        assert_eq!(reports[0].work.work_index, 0);
-        assert_eq!(reports[0].work.kind, NativeProviderWorkKind::HttpDispatch);
-        assert_eq!(reports[0].http_status, None);
-        assert_eq!(reports[0].error_code.as_deref(), Some("request_cancelled"));
-        assert_eq!(dispatched.load(Ordering::SeqCst), !admission);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn cancelled_http_future_records_one_unknown_outcome() -> Result<()> {
-        cancelled(false).await
-    }
-
-    #[tokio::test]
-    async fn cancelled_durable_admission_preserves_identity_without_dispatch() -> Result<()> {
-        cancelled(true).await
-    }
-
-    #[tokio::test]
-    async fn accepted_headers_keep_their_original_observation_after_flush() -> Result<()> {
-        let control = Arc::new(Control::default());
-        let (ctx, runtime) = context(control.clone())?;
-        let status = observe(
-            &ctx,
-            NativeProviderWorkKind::HttpDispatch,
-            async { Ok(201_u16) },
-            |status| Some(*status),
-        )
-        .await?;
-        assert_eq!(status, 201);
-        runtime.flush().await;
-        runtime.flush().await;
-        let reports = control.reports.lock().await;
-        assert_eq!(reports.len(), 1);
-        assert_eq!(reports[0].http_status, Some(201));
-        assert_eq!(reports[0].error_code, None);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn rejected_admission_does_not_report_an_uncommitted_intent() -> Result<()> {
-        let control = Arc::new(Control {
-            reject_admission: true,
-            ..Default::default()
-        });
-        let (ctx, runtime) = context(control.clone())?;
-        let dispatched = AtomicBool::new(false);
-        let result = observe(
-            &ctx,
-            NativeProviderWorkKind::HttpDispatch,
-            async {
-                dispatched.store(true, Ordering::SeqCst);
-                Ok(())
-            },
-            |_| None,
-        )
-        .await;
-        assert!(result.is_err());
-        runtime.flush().await;
-        assert!(!dispatched.load(Ordering::SeqCst));
-        assert!(control.reports.lock().await.is_empty());
-        Ok(())
-    }
 }

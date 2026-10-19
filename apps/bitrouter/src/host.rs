@@ -298,7 +298,6 @@ async fn serve_with_options(
             "agent API and control API must use distinct credential environment variables"
         );
         let agent_api = crate::agent_api::BoundAgentApi::bind(&cfg.agent_api, task_service.clone()).await?;
-        let goal_threads = task_service.clone();
         let remote_control = match remote_control {
             Some(server) => Some(
                 server
@@ -495,10 +494,6 @@ async fn serve_with_options(
             },
             daemon::LocalControlOptions {
                 administration: Some(administration),
-                threads: Some(goal_threads),
-                goals: Some(Arc::new(bitrouter_orchestrator::goal::GoalService::new(
-                    Arc::new(crate::goal_store::DatabaseGoalStore::new(assembled.db.clone())),
-                ))),
                 gate: handoff_gate.clone(),
                 cli_owned,
             },

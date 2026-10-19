@@ -352,7 +352,6 @@ mod tests {
             permission_id: "p1".into(),
             option_id: Some("allow".into()),
             automatic: false,
-            origin: None,
         };
         replay.events[2].kind = SessionEventKind::TurnSettled {
             result: crate::supervisor::TurnResult {

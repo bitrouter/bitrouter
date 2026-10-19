@@ -215,11 +215,6 @@ pub enum DaemonCommand {
     Sessions {
         request: crate::supervisor::SessionRequest,
     },
-    /// Goal operations exist only on the owner-scoped local IPC endpoint.
-    Goals {
-        protocol: u32,
-        command: bitrouter_orchestrator::goal::GoalCommand,
-    },
 }
 
 /// Passive live inspection operations accepted over the local control socket.
@@ -402,13 +397,6 @@ pub enum DaemonResponse {
     /// Versioned daemon-owned ACP session response.
     Sessions {
         response: crate::supervisor::SessionResponse,
-    },
-    Goals {
-        protocol: u32,
-        response: Result<
-            bitrouter_orchestrator::goal::GoalReply,
-            bitrouter_orchestrator::goal::GoalError,
-        >,
     },
     /// The command failed.
     Error {
@@ -722,8 +710,6 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
         acp,
         LocalControlOptions {
             administration,
-            goals: None,
-            threads: None,
             gate: crate::daemon_handoff::HandoffGate::default(),
             cli_owned: false,
         },
@@ -734,8 +720,6 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
 /// Optional owner-scoped services shared with the HTTP listener.
 pub struct LocalControlOptions {
     pub administration: Option<Administration>,
-    pub goals: Option<Arc<bitrouter_orchestrator::goal::GoalService>>,
-    pub threads: Option<bitrouter_orchestrator::service::ThreadService>,
     pub gate: crate::daemon_handoff::HandoffGate,
     pub cli_owned: bool,
 }
@@ -770,29 +754,8 @@ pub(crate) async fn run_bound_control_socket(
         ),
         None => None,
     };
-    let goal_runtime = match (
-        &options.goals,
-        &options.threads,
-        &supervisor,
-        &options.administration,
-    ) {
-        (Some(goals), Some(threads), Some(supervisor), Some(administration)) => Some(
-            crate::goal_runtime::GoalRuntime::start(
-                app.clone(),
-                goals.clone(),
-                threads.clone(),
-                supervisor.clone(),
-                administration.routing.clone(),
-                administration.source.home(),
-                options.gate.clone(),
-            )
-            .await?,
-        ),
-        _ => None,
-    };
     let services = LocalControlServices {
         administration: options.administration,
-        goals: options.goals,
         supervisor,
         gate: options.gate,
         cli_owned: options.cli_owned,
@@ -812,9 +775,6 @@ pub(crate) async fn run_bound_control_socket(
         &services,
     )
     .await;
-    if let Some(runtime) = goal_runtime {
-        runtime.shutdown().await;
-    }
     if let Some(supervisor) = &services.supervisor {
         supervisor.shutdown().await;
     }
@@ -825,7 +785,6 @@ pub(crate) async fn run_bound_control_socket(
 #[derive(Clone)]
 struct LocalControlServices {
     administration: Option<Administration>,
-    goals: Option<Arc<bitrouter_orchestrator::goal::GoalService>>,
     supervisor: Option<crate::supervisor::Supervisor>,
     gate: crate::daemon_handoff::HandoffGate,
     cli_owned: bool,
@@ -1401,29 +1360,6 @@ async fn dispatch(
                 Err(error) => DaemonResponse::Error {
                     message: format!("supervised session request failed: {error:#}"),
                 },
-            }
-        }
-        DaemonCommand::Goals { protocol, command } => {
-            use bitrouter_orchestrator::goal::{GoalError, PROTOCOL_VERSION};
-            let response = if protocol != PROTOCOL_VERSION {
-                Err(GoalError::Invalid {
-                    message: "unsupported Goal protocol version".into(),
-                })
-            } else if let Some(goals) = &services.goals {
-                // Identity comes from the owner-only local transport, never
-                // from a caller-supplied user field or remote read capability.
-                match bitrouter_orchestrator::store::owner_time_ms() {
-                    Ok(now) => goals.execute("local", command, now).await,
-                    Err(error) => Err(bitrouter_orchestrator::goal::storage_error(error)),
-                }
-            } else {
-                Err(GoalError::Invalid {
-                    message: "Goal service unavailable on this daemon".into(),
-                })
-            };
-            DaemonResponse::Goals {
-                protocol: PROTOCOL_VERSION,
-                response,
             }
         }
     }
@@ -2115,9 +2051,6 @@ pub async fn start_and_wait(
         tokio::time::sleep(READY_POLL_INTERVAL).await;
     }
 }
-
-#[cfg(test)]
-mod goal_tests;
 
 #[cfg(test)]
 mod tests {

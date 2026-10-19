@@ -494,8 +494,7 @@ impl ThreadService {
                 && task.storage_error.is_none()
         });
         let recovery = state.threads.values().any(|thread| {
-            !thread.snapshot.is_goal_coordination()
-                && thread.snapshot.workspace == workspace
+            thread.snapshot.workspace == workspace
                 && thread.snapshot.status == ThreadStatus::RecoveryRequired
         });
         Some(if known_active && !recovery {

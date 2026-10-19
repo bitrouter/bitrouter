@@ -14,8 +14,6 @@ mod cancellation;
 mod capacity;
 #[path = "core_execution/context_decisions.rs"]
 mod context_decisions;
-#[path = "core_execution/host_admission.rs"]
-mod host_admission;
 #[path = "core_execution/input_count.rs"]
 mod input_count;
 #[path = "core_execution/material_work.rs"]
@@ -88,7 +86,6 @@ use tokio::sync::{Mutex, Semaphore};
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
 struct Harness {
-    model_control: Option<Arc<dyn bitrouter_sdk::language_model::native::NativeExecutionControl>>,
     dispatch_allowed: AtomicBool,
     store: Mutex<DurableHarness>,
     sent: Mutex<Vec<ToolExecute>>,
@@ -115,7 +112,6 @@ struct Harness {
 impl Harness {
     fn new(fail_kind: Option<&'static str>, hold_kind: Option<&'static str>) -> Self {
         Self {
-            model_control: None,
             dispatch_allowed: AtomicBool::new(true),
             store: Mutex::new(DurableHarness::new(grant())),
             sent: Mutex::new(Vec::new()),
@@ -159,12 +155,6 @@ impl Harness {
 
 #[async_trait]
 impl HarnessPort for Harness {
-    fn model_control(
-        &self,
-    ) -> Option<Arc<dyn bitrouter_sdk::language_model::native::NativeExecutionControl>> {
-        self.model_control.clone()
-    }
-
     async fn authorize_dispatch(&self) -> Result<(), CoreError> {
         if self.dispatch_allowed.load(Ordering::SeqCst) {
             Ok(())

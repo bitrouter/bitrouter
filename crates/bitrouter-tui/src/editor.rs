@@ -159,16 +159,6 @@ impl Editor {
         self.reset_history_navigation();
     }
 
-    /// Goals can recover accepted inputs from durable history. Bound only
-    /// their process-local recall cache; the current draft is never trimmed.
-    pub(crate) fn retain_recent_history(&mut self) {
-        let mut bytes: usize = self.history.iter().map(String::len).sum();
-        while self.history.len() > 128 || bytes > 256 * 1024 {
-            bytes = bytes.saturating_sub(self.history.remove(0).len());
-        }
-        self.reset_history_navigation();
-    }
-
     /// Apply one key.
     pub fn apply(&mut self, key: KeyEvent) -> Edit {
         // Key release events exist on some platforms; acting on both would

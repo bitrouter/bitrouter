@@ -18,27 +18,15 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 [test-groups]
 core-tree-pressure = { max-threads = 1 }
 
-# Complete Goal coordinator fixtures run concurrent services and subprocesses
-# internally. Partial grouping still overlapped unrelated heavy tests, hitting
-# original waits and output-leak detection. Reserve global slots per complete
-# fixture, including native, ACP, input and handoff paths. Keep their internal
-# concurrency, all product/fixture/stack bounds, and nextest's leak detector.
-# Terminal Goal and SQLite/MCP resource fixtures own the same full workload;
-# ACP capability probes also own real subprocess lifecycles.
-# https://nexte.st/docs/configuration/threads-required/
-[[profile.default.overrides]]
-filter = 'test(goal_runtime::tests::) | binary(goal_tui_pty) | binary(native_harness_resources) | test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)'
-threads-required = "num-test-threads"
-
 [[profile.default.overrides]]
 filter = 'test(capacity::tree_limits::maximum_tree_)'
 test-group = 'core-tree-pressure'
 
-# Native long-loop, crash-journal and ACP replay cases serialize Core checkpoints too.
+# Native long-loop and ACP replay cases serialize growing Core checkpoints too.
 # Share the existing pressure group so they do not compete with full-tree and
 # cold-recovery workloads. Keep their ordinary timeout and product limits.
 [[profile.default.overrides]]
-filter = 'test(native_checkpoint_capacity_failure_reports_the_resource_cause) | test(native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(unicode_stream_reconciles_once_and_replays_beyond_hot_history) | test(stalled_replay_disconnects_observer_without_cancelling_native_history) | test(native_process_loss_at_commit_windows_never_retires_owner_or_replays_work)'
+filter = 'test(native_checkpoint_capacity_failure_reports_the_resource_cause) | test(native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(unicode_stream_reconciles_once_and_replays_beyond_hot_history) | test(stalled_replay_disconnects_observer_without_cancelling_native_history)'
 test-group = 'core-tree-pressure'
 
 # A native cold recovery replays several multi-megabyte checkpoints before
@@ -60,5 +48,5 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # The opt-in terminal campaign retains the product's 10% initial allocation and
 # real worker tool execution. Its per-operation and total workload are bounded.
 [[profile.default.overrides]]
-filter = 'test(session_coding_publication_and_rollback)'
+filter = 'test(tui_coding_publication_and_rollback)'
 slow-timeout = { period = "60s", terminate-after = 41 }

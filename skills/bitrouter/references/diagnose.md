@@ -27,7 +27,7 @@ An idle daemon with the handoff protocol and a compatible file SQLite database
 is handed over automatically. If it is busy, finish the agent run or request
 and retry. If the daemon is legacy or the database preflight fails, it stays
 running; inspect the reported reason before an explicit `bro restart`.
-`bro run <agent> --no-start` only diagnoses the mismatch. An unknown applied
+`bro code --no-start` only diagnoses the mismatch. An unknown applied
 migration requires a compatible binary or a reviewed schema repair; do not
 delete its migration ledger entry.
 

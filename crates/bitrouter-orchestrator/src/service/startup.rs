@@ -129,7 +129,6 @@ impl ThreadService {
                     self.inner.limits.clone(),
                 )?;
                 let workspace = audit.workspace().to_path_buf();
-                let coordination = audit.is_goal_coordination();
                 if !workspace.is_absolute() || workspace.to_str().is_none() {
                     return Err(storage("invalid stored startup workspace identity"));
                 }
@@ -210,8 +209,7 @@ impl ThreadService {
                     .map_err(storage)?;
                 let entry = ColdExecution {
                     workspace,
-                    requires_recovery: !coordination
-                        && (!writer_fenced || !audit.known_clean(owner.as_ref())),
+                    requires_recovery: !writer_fenced || !audit.known_clean(owner.as_ref()),
                     head,
                 };
                 metadata_bytes = metadata_bytes

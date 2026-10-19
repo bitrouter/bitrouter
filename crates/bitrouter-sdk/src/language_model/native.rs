@@ -457,31 +457,6 @@ pub struct NativeOutputUsage {
 /// Per-request durable controls supplied by a native embedding runtime.
 #[async_trait]
 pub trait NativeExecutionControl: Send + Sync {
-    /// Admit a typed routing/context decision separately from generation.
-    /// Hosts enforcing aggregate budgets must reserve its frozen price here.
-    async fn before_typed_decision(
-        &self,
-        _attempt_id: &str,
-        _request: &crate::decision_model::types::DecisionRequest,
-        _pricing: Option<&crate::decision_model::policy::DecisionPricing>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
-    /// Record decision usage even after cancellation or rejected admission.
-    /// A no-dispatch outcome may settle an intent committed before rejection.
-    async fn after_typed_decision(
-        &self,
-        _attempt_id: &str,
-        _outcome: &std::result::Result<
-            crate::decision_model::types::DecisionResponse,
-            crate::decision_model::types::DecisionError,
-        >,
-        _pricing: Option<&crate::decision_model::policy::DecisionPricing>,
-    ) -> Result<()> {
-        Ok(())
-    }
-
     /// Supply acknowledged semantic evidence and authorized context candidates
     /// after entry authentication and checks, before the shared policy planner.
     async fn prepare_routing(
@@ -619,16 +594,6 @@ pub trait NativeExecutionControl: Send + Sync {
     /// the frozen routes, or reject the plan before any provider attempt.
     async fn plan(&self, plan: NativePlan) -> Result<NativePlanAdmission>;
 
-    /// Quotes use the same final-route tariff as outcome accounting. They do
-    /// not price authentication, hooks, tools or an authoritative request bill.
-    async fn plan_with_token_reservations(
-        &self,
-        plan: NativePlan,
-        _reservations: Vec<Option<super::native_accounting::NativeTokenReservation>>,
-    ) -> Result<NativePlanAdmission> {
-        self.plan(plan).await
-    }
-
     /// After rejecting a plan with no provider attempt, optionally commit one
     /// rebuilt context. Complete messages or explicitly authorized Responses
     /// reasoning may be removed; arbitrary part rewrites, input additions,
@@ -646,22 +611,6 @@ pub trait NativeExecutionControl: Send + Sync {
     /// its identity and budget reservation. A previous uncommitted outcome
     /// must prevent authorization of the next attempt.
     async fn before_attempt(&self, request_id: &str, attempt_index: u32) -> Result<()>;
-
-    /// Commit admission with the exact attempt's optional frozen token quote.
-    /// A missing quote does not establish a bounded or known provider cost.
-    async fn before_attempt_with_token_reservation(
-        &self,
-        request_id: &str,
-        attempt_index: u32,
-        _reservation: Option<&super::native_accounting::NativeTokenReservation>,
-    ) -> Result<()> {
-        self.before_attempt(request_id, attempt_index).await
-    }
-
-    /// The SDK did not poll the provider executor: attempt admission was
-    /// rejected or cancelled. Reconcile only this exact pre-dispatch intent;
-    /// this callback says nothing about earlier attempts or external charges.
-    async fn admission_aborted(&self, _request_id: &str, _attempt_index: u32) {}
 
     /// Persist integration work before any actual authentication or HTTP I/O.
     /// Implementations recheck live dispatch gates and reserve internal retries.

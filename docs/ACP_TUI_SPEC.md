@@ -1,13 +1,5 @@
 # Spec: the ACP TUI — BitRouter owns the agent UX
 
-Current-entry status: the Goal implementation replaces this document's bare
-`bro`/`bro code`, `code <agent>` and hidden `chat/tui` product entry contracts.
-See [the Goal PRD](BRO_GOAL_ORIENTED_PRD.md) and
-[the implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) for current
-behavior and verification limits. This document retains historical design and
-evidence; native task and ACP protocol contracts remain separately supported.
-
-
 Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 
 > **Historical note (2026-08-16):** `status --watch` was later removed in favor

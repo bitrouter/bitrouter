@@ -20,7 +20,6 @@ impl ThreadService {
             if record.snapshot.status != TurnStatus::WaitingForInput
                 || record.snapshot.pending_input_id.as_deref() != Some(request_id)
                 || record.cancel.is_cancelled()
-                || record.pending.is_none()
             {
                 return Err(ServiceError::new(
                     ErrorCode::Conflict,
@@ -37,13 +36,13 @@ impl ThreadService {
             extra_facts,
         )
         .await?;
-        let pending = self
+        let sender = self
             .lock_state()
             .turns
             .get_mut(turn_id)
             .and_then(|record| record.pending.take())
-            .ok_or_else(|| "pending input channel is unavailable".to_string())?;
-        let sender = pending.response;
+            .ok_or_else(|| "pending input channel is unavailable".to_string())?
+            .response;
         sender.send(approved).map_err(|_| {
             ServiceError::new(ErrorCode::Conflict, "task stopped before accepting input")
         })

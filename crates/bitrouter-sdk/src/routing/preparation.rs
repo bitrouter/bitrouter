@@ -9,13 +9,12 @@ use super::{
 use crate::decision_model::{
     DecisionRuntime,
     policy::DecisionPolicy,
-    types::{DecisionError, DecisionRequest, DecisionResponse, DecisionUsage},
+    types::{DecisionError, DecisionFailure, DecisionUsage},
 };
-use crate::language_model::native::{NativeExecutionControl, NativePlan};
+use crate::language_model::native::NativePlan;
 use bitrouter_ai::types::Prompt;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use tokio_util::sync::CancellationToken;
 
 /// One semantic attempt, independent of the subsequent generation outcome.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,11 +85,57 @@ impl Prepared {
             .map(|runtime| runtime.policy.clone())
             .unwrap_or_default();
         let receipt = if let Some(runtime) = runtime {
-            let request = assessment_request(prompt, runtime);
-            let outcome = runtime
-                .execute_bounded(&request, &CancellationToken::new())
-                .await;
-            Some(receipt(id, &request, &policy, outcome))
+            let input = Input::from_prompt(prompt, policy.max_request_bytes / 4);
+            let request = assessment::request(&runtime.model, &input);
+            let token = tokio_util::sync::CancellationToken::new();
+            let outcome = match serde_json::to_vec(&request) {
+                Ok(bytes)
+                    if bytes.len() <= policy.max_request_bytes
+                        && policy.validate().is_ok()
+                        && request.validate().is_ok() =>
+                {
+                    runtime.executor.execute(&request, &token).await
+                }
+                _ => Err(DecisionError::invalid_request(
+                    "routing classifier request exceeds its admitted bound",
+                )),
+            };
+            let response_limit = policy
+                .max_request_bytes
+                .saturating_mul(2)
+                .saturating_add(8192);
+            let outcome = match outcome {
+                Ok(response)
+                    if serde_json::to_vec(&response)
+                        .is_ok_and(|bytes| bytes.len() <= response_limit) =>
+                {
+                    Ok(response)
+                }
+                Ok(response) => Err(DecisionError {
+                    kind: DecisionFailure::ResponseTooLarge,
+                    message: "routing classifier response exceeds its admitted bound".into(),
+                    usage: Some(response.usage),
+                    may_have_run: true,
+                }),
+                Err(error) => Err(error),
+            };
+            let usage = match &outcome {
+                Ok(response) => Some(response.usage),
+                Err(error) => error.usage,
+            };
+            let decoded = outcome.and_then(|response| {
+                assessment::decode(&request, &response, policy.confidence_threshold)
+            });
+            let (assessment, error) = match decoded {
+                Ok(value) => (Some(value), None),
+                Err(error) => (None, Some(error)),
+            };
+            Some(Receipt {
+                id: id.into(),
+                assessment,
+                error,
+                usage,
+            })
         } else {
             None
         };
@@ -106,57 +151,5 @@ impl Prepared {
             previous: None,
             hard_limit_bytes: usize::MAX,
         }
-    }
-
-    /// The same classifier under native host admission and outcome barriers.
-    /// Callback time is not token-cost evidence; the exact decision has its own
-    /// identity, frozen prices, usage and no-dispatch/cancellation observation.
-    pub(crate) async fn from_prompt_controlled(
-        prompt: &Prompt,
-        runtime: Option<&DecisionRuntime>,
-        id: &str,
-        control: &dyn NativeExecutionControl,
-    ) -> crate::Result<Self> {
-        let mut prepared = Self::from_prompt(prompt, None, id).await;
-        let Some(runtime) = runtime else {
-            return Ok(prepared);
-        };
-        prepared.policy = runtime.policy.clone();
-        let attempt_id = format!("{id}/routing-assessment");
-        let request = assessment_request(prompt, runtime);
-        let outcome = runtime
-            .execute_controlled(&attempt_id, &request, control)
-            .await?;
-        prepared.receipt = Some(receipt(&attempt_id, &request, &prepared.policy, outcome));
-        Ok(prepared)
-    }
-}
-
-fn assessment_request(prompt: &Prompt, runtime: &DecisionRuntime) -> DecisionRequest {
-    let input = Input::from_prompt(prompt, runtime.policy.max_request_bytes / 4);
-    assessment::request(&runtime.model, &input)
-}
-
-fn receipt(
-    id: &str,
-    request: &DecisionRequest,
-    policy: &DecisionPolicy,
-    outcome: Result<DecisionResponse, DecisionError>,
-) -> Receipt {
-    let usage = match &outcome {
-        Ok(response) => Some(response.usage),
-        Err(error) => error.usage,
-    };
-    let decoded = outcome
-        .and_then(|response| assessment::decode(request, &response, policy.confidence_threshold));
-    let (assessment, error) = match decoded {
-        Ok(value) => (Some(value), None),
-        Err(error) => (None, Some(error)),
-    };
-    Receipt {
-        id: id.into(),
-        assessment,
-        error,
-        usage,
     }
 }

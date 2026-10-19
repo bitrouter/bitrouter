@@ -246,8 +246,7 @@ impl ThreadService {
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
         self.load_thread(target, caller).await?;
-        self.admit_turn(target, caller, request, true, false, None)
-            .await
+        self.admit_turn(target, caller, request, true, false).await
     }
 
     pub async fn enqueue_turn(
@@ -257,8 +256,7 @@ impl ThreadService {
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
         self.load_thread(target, caller).await?;
-        self.admit_turn(target, caller, request, false, false, None)
-            .await
+        self.admit_turn(target, caller, request, false, false).await
     }
 
     /// An explicit fresh foreground prompt may clear a safely settled empty
@@ -270,8 +268,7 @@ impl ThreadService {
         request: TurnRequest,
     ) -> Result<TurnReceipt, ServiceError> {
         self.load_thread(target, caller).await?;
-        self.admit_turn(target, caller, request, true, true, None)
-            .await
+        self.admit_turn(target, caller, request, true, true).await
     }
 
     pub(super) async fn admit_turn(
@@ -281,52 +278,22 @@ impl ThreadService {
         request: TurnRequest,
         start: bool,
         resume_empty: bool,
-        managed: Option<super::worker::Managed>,
     ) -> Result<TurnReceipt, ServiceError> {
-        let generation = match &managed {
-            Some(super::worker::Managed::Generation(job)) => Some(job),
-            _ => None,
-        };
-        let worker = match &managed {
-            Some(super::worker::Managed::Native { source, control }) => Some((source, control)),
-            Some(super::worker::Managed::Acp(job)) => Some((&job.source, &job.control)),
-            _ => None,
-        };
         self.ensure_instance(Some(&target.server_instance_id))?;
         let admission = self.inner.admission.lock().await;
         let scope = key_scope(
             caller,
             Some(&target.thread_id),
-            if let Some(managed) = &managed {
-                managed.operation()
-            } else if start {
-                "start"
-            } else {
-                "enqueue"
-            },
+            if start { "start" } else { "enqueue" },
             &request.idempotency_key,
         )?;
-        let hash = match &managed {
-            Some(managed) => managed.fingerprint(&request.prompt)?,
-            None => fingerprint(&request.prompt)?,
-        };
+        let hash = fingerprint(&request.prompt)?;
         if let Some(entry) = self
             .accepted_key(&scope, &request.idempotency_key, &hash)
             .await?
         {
             drop(admission);
             return self.existing_turn_receipt(&entry).await;
-        }
-        // A caller may have passed its source check before waiting for this
-        // lock. Recheck under the same lock used by original-action recovery:
-        // once a Goal revokes an attempt, a later absent-receipt read can fence
-        // all new acceptances. Existing receipts remain readable above.
-        if let Some(managed) = &managed {
-            managed
-                .control()
-                .authorize()
-                .await
-                .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
         }
         if request.prompt.trim().is_empty()
             || request.prompt.len() > self.inner.limits.request_bytes
@@ -352,14 +319,6 @@ impl ThreadService {
                 .ok_or_else(unknown_thread)?;
             thread.authorize(caller)?;
             self.check_thread_grant(&state, thread)?;
-            if thread.snapshot.is_goal_coordination() != generation.is_some()
-                || thread.snapshot.goal_work.as_ref() != worker.map(|(source, _)| source)
-            {
-                return Err(ServiceError::new(
-                    ErrorCode::Unauthorized,
-                    "Goal coordination requires its managed generation entrypoint",
-                ));
-            }
             if state.closing {
                 return Err(ServiceError::new(
                     ErrorCode::ShuttingDown,
@@ -399,15 +358,7 @@ impl ThreadService {
                     "Thread queue is full",
                 ));
             }
-            let extra = match &generation {
-                Some(job) => serde_json::to_vec(&job.request.prompt)
-                    .map_err(|error| error.to_string())?
-                    .len(),
-                None => request.prompt.len().saturating_mul(2),
-            };
-            if generation.is_some() && extra > thread.config.native()?.max_context_bytes {
-                return Err("generation prompt exceeds the recorded Thread context bound".into());
-            }
+            let extra = request.prompt.len().saturating_mul(2);
             if thread.context_bytes().saturating_add(extra)
                 > self.inner.limits.context_bytes_per_thread
                 || state
@@ -424,11 +375,7 @@ impl ThreadService {
                 ));
             }
             if start {
-                if generation.is_some() {
-                    self.check_active_turn_limit(&state)?;
-                } else {
-                    self.check_turn_capacity(&state, &thread.snapshot.workspace)?;
-                }
+                self.check_turn_capacity(&state, &thread.snapshot.workspace)?;
             }
             let queued = QueuedTurn {
                 turn_id: uuid::Uuid::new_v4().to_string(),
@@ -450,28 +397,23 @@ impl ThreadService {
                 clear_pause,
             )
         };
-        let agent = if start
-            && generation.is_none()
-            && !matches!(managed, Some(super::worker::Managed::Acp(_)))
-        {
-            let agent = Agent::new(
-                Arc::clone(&self.inner.app),
-                caller.clone(),
-                &workspace,
-                config.native()?.clone(),
-            )?
-            .with_tool_workers(
-                Arc::clone(&self.inner.tool_workers),
-                self.inner.limits.tools_per_turn,
-            );
-            Some(match worker {
-                Some((_, control)) => agent.with_work_control(control.clone()),
-                None => agent,
-            })
+        let agent = if start {
+            Some(
+                Agent::new(
+                    Arc::clone(&self.inner.app),
+                    caller.clone(),
+                    &workspace,
+                    config.clone(),
+                )?
+                .with_tool_workers(
+                    Arc::clone(&self.inner.tool_workers),
+                    self.inner.limits.tools_per_turn,
+                ),
+            )
         } else {
             None
         };
-        if start && generation.is_none() {
+        if start {
             self.reserve_workspace(&workspace, &queued.turn_id).await?;
         }
         let payload = if start {
@@ -479,7 +421,7 @@ impl ThreadService {
                 user_item_id: queued.user_item_id.clone(),
                 prompt: queued.prompt.clone(),
                 workspace: workspace.clone(),
-                model: config.model().into(),
+                model: config.model.clone(),
                 tool_mode: config.tool_mode(),
                 idempotency_key: Some(request.idempotency_key.clone()),
                 request_fingerprint: Some(hash.clone()),
@@ -515,16 +457,6 @@ impl ThreadService {
             facts.push(ExecutionRecord::TurnActivated {
                 turn_id: queued.turn_id.clone(),
                 context_version: context_version.saturating_add(1),
-            });
-        }
-        if let Some(job) = &generation {
-            facts.push(ExecutionRecord::TurnRecord {
-                turn_id: queued.turn_id.clone(),
-                fact: Box::new(ExecutionRecord::GenerationInput {
-                    origin: job.request.origin.clone(),
-                    context_version: context_version.saturating_add(1),
-                    prompt: Box::new(job.request.prompt.clone()),
-                }),
             });
         }
         if let Err(error) = self
@@ -570,22 +502,12 @@ impl ThreadService {
                 thread.snapshot.queued.push(receipt.clone());
             }
             let snapshot = TurnSnapshot {
-                acp_permissions: Vec::new(),
-                acp_selected: Default::default(),
-                acp: None,
-                acp_stop: None,
-                generation: generation
-                    .as_ref()
-                    .map(|job| crate::turn::GenerationProgress {
-                        origin: job.request.origin.clone(),
-                        request_id: None,
-                    }),
                 context_routing: None,
                 resources: None,
                 steering: Vec::new(),
                 thread_id: target.thread_id.clone(),
                 server_instance_id: self.inner.instance_id.clone(),
-                model: config.model().into(),
+                model: config.model.clone(),
                 turn_id: queued.turn_id.clone(),
                 status: receipt.status,
                 cursor: 0,
@@ -603,7 +525,6 @@ impl ThreadService {
             state.turns.insert(
                 queued.turn_id.clone(),
                 TurnRecord {
-                    acp_replies: Default::default(),
                     queue_order: Some(queued.order),
                     user_item_id: Some(queued.user_item_id.clone()),
                     fence: Arc::new(crate::control::LaunchFence::default()),
@@ -621,11 +542,11 @@ impl ThreadService {
                 },
             );
             self.append_locked(&mut state, &queued.turn_id, payload)?;
-            if start && generation.is_none() {
+            if start {
                 state
                     .active_workspaces
                     .insert(workspace.clone(), queued.turn_id.clone());
-            } else if !start && !state.ready_threads.contains(&target.thread_id) {
+            } else if !state.ready_threads.contains(&target.thread_id) {
                 state.ready_threads.push_back(target.thread_id.clone());
             }
         }
@@ -637,38 +558,6 @@ impl ThreadService {
                 verification,
                 cancel,
             );
-        } else if let Some(super::worker::Managed::Acp(job)) = managed {
-            self.inner.workers.spawn(self.run_turn(
-                queued.turn_id,
-                super::runner::Driver::Acp(*job),
-                crate::agent::RunInput {
-                    prompt: queued.prompt,
-                    messages: Vec::new(),
-                    user_item_id: queued.user_item_id,
-                    context_version,
-                    checkpoint: None,
-                    complete_checkpoint: false,
-                    restored_verification: None,
-                },
-                None,
-                cancel,
-            ));
-        } else if let Some(super::worker::Managed::Generation(job)) = managed {
-            self.inner.workers.spawn(self.run_turn(
-                queued.turn_id,
-                super::runner::Driver::Generation(*job),
-                crate::agent::RunInput {
-                    prompt: queued.prompt,
-                    messages: Vec::new(),
-                    user_item_id: queued.user_item_id,
-                    context_version,
-                    checkpoint: None,
-                    complete_checkpoint: false,
-                    restored_verification: None,
-                },
-                None,
-                cancel,
-            ));
         }
         drop(guard);
         drop(admission);
@@ -686,22 +575,7 @@ impl ThreadService {
         if let Some(error) = self.workspace_owner_error(state, workspace) {
             return Err(error);
         }
-        self.check_active_turn_limit(state)
-    }
-
-    pub(super) fn check_active_turn_limit(&self, state: &State) -> Result<(), ServiceError> {
-        let generations = state
-            .turns
-            .values()
-            .filter(|turn| {
-                turn.snapshot.generation.is_some()
-                    && !turn.snapshot.status.terminal()
-                    && turn.snapshot.status != TurnStatus::Queued
-            })
-            .count();
-        if state.active_workspaces.len().saturating_add(generations)
-            >= self.inner.limits.active_turns
-        {
+        if state.active_workspaces.len() >= self.inner.limits.active_turns {
             return Err(ServiceError::new(
                 ErrorCode::Overloaded,
                 "active Turn limit reached",

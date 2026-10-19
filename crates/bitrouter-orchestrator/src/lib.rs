@@ -6,9 +6,8 @@
 pub mod acp;
 pub mod agent;
 mod context;
-pub mod control;
+mod control;
 pub mod core;
-pub mod goal;
 pub mod harness;
 pub mod item;
 pub mod service;

@@ -1,8 +1,7 @@
-//! Explicit configuration setup and the Goal directory entry point.
+//! First-run configuration and the default Code ACP entry point.
 //!
 //! Credentials alone do not complete onboarding: the selected ACP harness and
-//! optional model are saved in `chat` for retained execution paths. Bare `bro`
-//! opens Goals independently of a saved default harness.
+//! optional model are saved in `chat`, then reused by every bare invocation.
 
 use std::collections::BTreeSet;
 use std::io::IsTerminal;
@@ -190,7 +189,7 @@ pub struct Snippet {
     pub anthropic: String,
     /// `OPENAI_BASE_URL` + `OPENAI_API_KEY` export lines.
     pub openai: String,
-    /// The native Codex command with reversible BitRouter endpoint overrides.
+    /// The Codex command for Code's ACP conversation view.
     pub codex: String,
 }
 
@@ -304,7 +303,10 @@ impl OnboardingStatusReport {
             action: "status",
             configured: true,
             signals: parts,
-            hint: format!("run `{}` to open Goals", invocation::name()),
+            hint: format!(
+                "run `{}` to start an ACP coding session",
+                invocation::name()
+            ),
         }
     }
 }
@@ -327,9 +329,37 @@ impl CliReport for OnboardingStatusReport {
 // Entry points
 // =====================================================================
 
-/// Bare invocation opens Goals without selecting or launching an executor.
-pub async fn entry(_output: &Output) -> Result<()> {
-    crate::goal_code::run(None, None, None, None).await
+/// Bare invocation opens the saved default in Code, or the first-run wizard.
+pub async fn entry(output: &Output) -> Result<()> {
+    let path = config_path(None)?;
+    if path.is_file() {
+        let source = crate::paths::resolve_config(Some(&path))?;
+        let config = crate::paths::load_config(&source).await?;
+        if config
+            .chat
+            .agent
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        {
+            return start_default_chat(&source, config).await;
+        }
+    }
+    if std::io::stdin().is_terminal() {
+        let manager = crate::cloud::default_manager()?;
+        run_interactive(
+            OnboardingFlags {
+                config: Some(path),
+                ..Default::default()
+            },
+            &probe(),
+            output,
+            manager,
+        )
+        .await
+    } else {
+        print_hint();
+        emit(output, &empty_report())
+    }
 }
 
 /// Find the onboarding destination without requiring a config to exist yet.
@@ -346,12 +376,46 @@ fn config_path(explicit: Option<&std::path::Path>) -> Result<PathBuf> {
     )?)
 }
 
-async fn open_goals(source: &crate::paths::ConfigSource) -> Result<()> {
+async fn start_default_chat(
+    source: &crate::paths::ConfigSource,
+    config: bitrouter_sdk::config::Config,
+) -> Result<()> {
+    let agent =
+        config.chat.agent.clone().with_context(|| {
+            format!("no default ACP harness; run `{} init`", invocation::name())
+        })?;
+    let routing = crate::acp_cli::RoutingOptions {
+        model: config.chat.model.clone(),
+        ..Default::default()
+    };
+    // Preserve the pre-Code plain renderer for scripts and redirected output.
+    // Interactive users always enter the one full-screen Code lifecycle UI.
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return crate::acp_cli::chat(crate::acp_cli::SpawnContext {
+            source,
+            config,
+            agent_id: &agent,
+            options: crate::acp_cli::launch_options(None),
+            routing,
+        })
+        .await;
+    }
     let config_path = match source {
         crate::paths::ConfigSource::File(path) => Some(path.as_path()),
         crate::paths::ConfigSource::Default { .. } => None,
     };
-    crate::goal_code::run(config_path, None, None, None).await
+    crate::dashboard::run(
+        None,
+        config_path,
+        None,
+        Some(crate::dashboard::SessionRequest {
+            agent,
+            selection: crate::acp_cli::SessionSelection::New,
+            turn_timeout: None,
+            routing,
+        }),
+    )
+    .await
 }
 
 /// Persist onboarding atomically; an interrupted wizard never marks itself complete.
@@ -439,6 +503,18 @@ pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
         run_interactive(flags, &signals, output, manager).await
     } else {
         run_headless(flags, output, manager).await
+    }
+}
+
+fn empty_report() -> OnboardingReport {
+    OnboardingReport {
+        action: "onboarding",
+        providers_configured: Vec::new(),
+        providers_skipped_interactive: Vec::new(),
+        harnesses_installed: Vec::new(),
+        after: AfterAction::Exit.as_str().to_string(),
+        snippet: None,
+        config_activation: None,
     }
 }
 
@@ -654,7 +730,7 @@ async fn run_interactive(
     let installed = interactive_harness(&flags).await?;
 
     // --- Step 3: finish ---
-    let after = interactive_after(&flags).await?;
+    let after = interactive_after(&flags, &installed).await?;
 
     let agent = installed
         .first()
@@ -867,18 +943,20 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     ])
 }
 
-async fn interactive_after(flags: &OnboardingFlags) -> Result<AfterAction> {
+async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
     use bitrouter_tui::select::Item;
     if let Some(after) = flags.after {
         return Ok(after);
     }
     let mut actions = Vec::new();
     let mut items = Vec::new();
-    actions.push(AfterAction::Launch);
-    items.push(Item::new(
-        "Open Goals now",
-        "delegate long-running, parallel workflows",
-    ));
+    if !installed.is_empty() {
+        actions.push(AfterAction::Launch);
+        items.push(Item::new(
+            "Open BitRouter Code now",
+            "use the selected default ACP harness",
+        ));
+    }
     actions.extend([AfterAction::Serve, AfterAction::Exit]);
     items.extend([
         Item::new("Start the daemon", "print connection instructions"),
@@ -901,15 +979,16 @@ async fn interactive_after(flags: &OnboardingFlags) -> Result<AfterAction> {
 // Finish exits (a) launch / (b) serve+snippet
 // =====================================================================
 
-/// Open the same Goal directory as every subsequent bare invocation.
+/// Open the same unified Code TUI as every subsequent bare invocation.
 async fn finish_launch(
     path: &std::path::Path,
     report: OnboardingReport,
     output: &Output,
 ) -> Result<()> {
     let source = crate::paths::resolve_config(Some(path))?;
+    let config = crate::paths::load_config(&source).await?;
     emit(output, &report)?;
-    open_goals(&source).await
+    start_default_chat(&source, config).await
 }
 
 /// Exit (b): start the local daemon (best-effort, reusing the launch path's
@@ -944,7 +1023,7 @@ fn build_snippet(listen: &str) -> Snippet {
     let anthropic =
         format!("export ANTHROPIC_BASE_URL={base_url}\nexport ANTHROPIC_AUTH_TOKEN={token}");
     let openai = format!("export OPENAI_BASE_URL={v1}\nexport OPENAI_API_KEY={token}");
-    let codex = format!("{} codex --base-url {base_url}", invocation::name());
+    let codex = format!("{} code codex --base-url {base_url}", invocation::name());
     Snippet {
         base_url,
         anthropic,
@@ -1066,6 +1145,34 @@ async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
     )
     .await?;
     Ok(index == 0)
+}
+
+/// The multi-line onboarding hint (unconfigured, non-TTY). Mirrors the recovery
+/// chain of the former `print_onboarding_hint`.
+fn print_hint() {
+    let p = crate::style::Palette::for_stderr();
+    eprintln!(
+        "{cyan}{bold}info:{reset} setup is not complete. Run `{cli}` in a terminal or `{cli} init --yes`:",
+        cyan = p.cyan,
+        bold = p.bold,
+        reset = p.reset,
+        cli = invocation::name(),
+    );
+    eprintln!();
+    eprintln!(
+        "  {cli} init                 # guided setup wizard (interactive)",
+        cli = invocation::name()
+    );
+    eprintln!(
+        "  {cli} cloud login          # one BitRouter Cloud account, every model",
+        cli = invocation::name()
+    );
+    eprintln!(
+        "  {cli} providers login claude-code   # a subscription you already pay for",
+        cli = invocation::name()
+    );
+    eprintln!("  export OPENAI_API_KEY=…        # or any BYOK provider key, then re-run");
+    eprintln!();
 }
 
 #[cfg(test)]
@@ -1209,15 +1316,7 @@ mod tests {
 
     #[test]
     fn inert_envelope_does_not_claim_a_saved_configuration() -> Result<()> {
-        let report = OnboardingReport {
-            action: "onboarding",
-            providers_configured: Vec::new(),
-            providers_skipped_interactive: Vec::new(),
-            harnesses_installed: Vec::new(),
-            after: AfterAction::Exit.as_str().to_string(),
-            snippet: None,
-            config_activation: None,
-        };
+        let report = empty_report();
         let value = serde_json::to_value(&report)?;
         assert!(value.get("config_activation").is_none());
         let human =
@@ -1285,7 +1384,10 @@ mod tests {
                 .openai
                 .contains("OPENAI_BASE_URL=http://127.0.0.1:4356/v1")
         );
-        assert_eq!(snippet.codex, "bro codex --base-url http://127.0.0.1:4356");
+        assert_eq!(
+            snippet.codex,
+            "bro code codex --base-url http://127.0.0.1:4356"
+        );
     }
 
     #[test]
@@ -1337,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn status_report_lists_signals_and_hint() -> Result<()> {
+    fn status_report_lists_signals_and_hint() {
         let signals = ProbeSignals {
             env_keys: vec!["OPENAI_API_KEY".to_string()],
             cloud_session: true,
@@ -1345,11 +1447,9 @@ mod tests {
         };
         let report = OnboardingStatusReport::from_signals(&signals);
         assert!(report.configured);
-        assert!(report.hint.contains("open Goals"));
-        assert_eq!(report.signals, ["cloud session", "env: OPENAI_API_KEY"]);
-        let v = serde_json::to_value(&report)?;
+        assert!(report.hint.contains("ACP"));
+        let v = serde_json::to_value(&report).unwrap();
         assert_eq!(v["action"], "status");
         assert_eq!(v["configured"], true);
-        Ok(())
     }
 }

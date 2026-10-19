@@ -90,7 +90,8 @@ struct Cli {
     /// built-in `local` context keeps the normal local behavior.
     #[arg(long, global = true, hide = true, value_name = "NAME")]
     context: Option<String>,
-    /// No subcommand opens the Goals directory (`goal_code::run`).
+    /// No subcommand dispatches to the onboarding entry (`onboarding::entry`):
+    /// onboarding when no default ACP harness is saved, otherwise its TUI.
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -122,12 +123,53 @@ struct NativeLaunchArgs {
 
 #[derive(Args)]
 struct CodeArgs {
-    /// Path to bitrouter.yaml for the local Goal service.
+    /// ACP agent id. Omit for BRO's native coding view.
+    agent: Option<String>,
+    /// Load a harness-native session and replay its history.
+    #[arg(
+        long,
+        value_name = "NATIVE_SESSION_ID",
+        conflicts_with = "resume",
+        requires = "agent"
+    )]
+    load: Option<String>,
+    /// Resume a harness-native session without replaying history.
+    #[arg(
+        long,
+        value_name = "NATIVE_SESSION_ID",
+        conflicts_with = "load",
+        requires = "agent"
+    )]
+    resume: Option<String>,
+    /// Per-turn deadline in seconds for an agent session.
+    #[arg(long, value_name = "SECS")]
+    turn_timeout: Option<u64>,
+    #[command(flatten)]
+    routing: bitrouter::acp_cli::RoutingOptions,
+    /// Path to `bitrouter.yaml` for a local Code session.
     #[arg(short, long)]
     config: Option<PathBuf>,
-    /// Workspace for a newly created Goal; existing Goals retain their workspace.
+    /// Explicit local control socket for read-only operations.
+    #[arg(long)]
+    socket: Option<PathBuf>,
+    /// Reattach a BRO native Thread by its ID (bare `bro code` only).
+    #[arg(long)]
+    thread_id: Option<String>,
+    /// Bounded project verification command for new BRO native Threads.
+    #[arg(long)]
+    check: Option<String>,
+    /// Restrict new BRO native Threads to read, ls, find, and grep.
+    #[arg(long, conflicts_with_all = ["check", "thread_id"])]
+    read_only: bool,
+    /// Workspace for new BRO native Threads.
     #[arg(long)]
     workspace: Option<PathBuf>,
+    /// Allow the decision policy to choose a generation model for native BRO.
+    #[arg(long, conflicts_with_all = ["agent", "thread_id"])]
+    model_policy: bool,
+    /// Override the native output reservation; omitted follows the selected model.
+    #[arg(long, conflicts_with_all = ["agent", "thread_id"], value_parser = clap::value_parser!(u32).range(1..))]
+    max_output_tokens: Option<u32>,
 }
 
 #[derive(Args)]
@@ -671,10 +713,43 @@ enum Command {
         #[command(subcommand)]
         cmd: AcpCmd,
     },
-    /// Open the Goal directory for long-running, parallel ACP workflows.
+    /// Open BitRouter's coding conversation, or connect directly when an agent
+    /// id is supplied.
     Code {
         #[command(flatten)]
         options: CodeArgs,
+    },
+    /// Compatibility alias for `bro code`.
+    #[command(hide = true)]
+    Tui {
+        #[command(flatten)]
+        options: CodeArgs,
+    },
+    /// Compatibility alias for `bro code <agent>`.
+    ///
+    /// The interactive counterpart to `acp serve`: instead of exposing the
+    /// session to an ACP client over stdio, this renders it for you — messages,
+    /// tool calls, permission prompts, and what the turn cost.
+    ///
+    /// The session opens in the same terminal shell as bare `bro code`.
+    #[command(hide = true)]
+    Chat {
+        /// Agent id — a bundled-catalog id (`claude-acp`, `codex-acp`,
+        /// `opencode`, `pi-acp`, `hermes-acp`, `openclaw`)
+        /// or an entry under `agents:` in the config. A catalog id needs no
+        /// config entry.
+        agent: String,
+        /// Per-turn deadline in seconds. On elapse the agent is asked to
+        /// cancel cooperatively; a turn that still doesn't finish errors.
+        #[arg(long, value_name = "SECS")]
+        turn_timeout: Option<u64>,
+        #[command(flatten)]
+        routing: bitrouter::acp_cli::RoutingOptions,
+        /// Path to `bitrouter.yaml`. Resolves via the standard chain when
+        /// omitted: `./bitrouter.yaml` → `$BITROUTER_HOME` →
+        /// `~/.bitrouter/bitrouter.yaml` → zero-config defaults.
+        #[arg(short, long)]
+        config: Option<PathBuf>,
     },
 }
 
@@ -1834,13 +1909,6 @@ async fn async_main() {
 }
 
 async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
-    if matches!(&cli.command, None | Some(Command::Code { .. })) {
-        use std::io::IsTerminal as _;
-        anyhow::ensure!(
-            std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-            "BRO Goals requires an interactive terminal; use bro run <agent> for headless execution"
-        );
-    }
     // Subscriber init splits by command: the long-running `serve` defers
     // its init until after the OTel exporter has installed a real tracer
     // provider globally (see `serve` below). Every other command — and
@@ -1871,7 +1939,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
                 | Command::Run { .. }
                 | Command::Task { .. }
                 | Command::Spawn { .. }
+                | Command::Chat { .. }
                 | Command::Code { .. }
+                | Command::Tui { .. }
                 | Command::Agents {
                     action: None | Some(AgentsAction::Attach { .. })
                 }
@@ -1881,7 +1951,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     let owns_the_terminal = matches!(
         &cli.command,
         None | Some(
-            Command::Code { .. }
+            Command::Chat { .. }
+                | Command::Code { .. }
+                | Command::Tui { .. }
                 | Command::Agents {
                     action: None | Some(AgentsAction::Attach { .. })
                 }
@@ -1912,7 +1984,8 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             )
             .into());
         }
-        // Bare bro opens Goals; setup remains available through bro init.
+        // Bare `bro` — the onboarding front door (wizard when
+        // unconfigured; saved default ACP TUI when configured).
         return bitrouter::onboarding::entry(output).await;
     };
 
@@ -2460,7 +2533,65 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         Command::Mcp { action } => mcp_cmd(action, output).await,
         Command::WorkflowState { action } => workflow_state_cmd(action).await,
         Command::Acp { cmd } => acp_cmd(cmd, output).await,
-        Command::Code { options } => run_code(options, remote_context).await,
+        Command::Code { options } => {
+            run_code(options, remote_context, cli.context.as_deref()).await
+        }
+        Command::Tui { options } => {
+            eprintln!(
+                "note: `{cli} tui` is a compatibility alias; use `{cli} code`.",
+                cli = bitrouter_sdk::invocation::name()
+            );
+            run_code(options, remote_context, cli.context.as_deref()).await
+        }
+        Command::Chat {
+            agent,
+            turn_timeout,
+            routing,
+            config,
+        } => {
+            use std::io::IsTerminal as _;
+
+            eprintln!(
+                "note: `{cli} chat` is a compatibility alias; use `{cli} code {agent}`.",
+                cli = bitrouter_sdk::invocation::name()
+            );
+            // Keep the retired alias safe for existing scripts: the canonical
+            // `code <agent>` owns an interactive terminal, while a redirected
+            // legacy invocation retains its plain-text transcript renderer.
+            if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+                let source = bitrouter::paths::resolve_config(config.as_deref())?;
+                let cfg = bitrouter::paths::load_config(&source).await?;
+                let agent = bitrouter::acp_cli::resolve_agent_id(&cfg, &agent)?;
+                return bitrouter::acp_cli::chat(bitrouter::acp_cli::SpawnContext {
+                    source: &source,
+                    config: cfg,
+                    agent_id: &agent,
+                    options: bitrouter::acp_cli::launch_options(turn_timeout),
+                    routing,
+                })
+                .await;
+            }
+            run_code(
+                CodeArgs {
+                    agent: Some(agent),
+                    load: None,
+                    resume: None,
+                    turn_timeout,
+                    routing,
+                    config,
+                    socket: None,
+                    thread_id: None,
+                    check: None,
+                    read_only: false,
+                    workspace: None,
+                    model_policy: false,
+                    max_output_tokens: None,
+                },
+                None,
+                None,
+            )
+            .await
+        }
         Command::Update {
             check,
             tag,
@@ -3575,9 +3706,9 @@ fn validate_remote_invocation(command: &Command, remote: bool) -> Result<()> {
             "`agents check` launches an agent and is unavailable for a remote context",
         )
         .into()),
-        Command::Code { .. } => Err(bitrouter_sdk::BitrouterError::bad_request(
-            "BRO Goals runs on the local host; remote Goal execution is not supported",
-        ).into()),
+        Command::Code { options } | Command::Tui { options } if options.agent.is_none() => {
+            reject_remote_local_target_flags(options.config.as_deref(), options.socket.as_deref())
+        }
         _ => {
             if let Some(leaf) = remote_cli_leaf(command) {
                 bitrouter::remote_control::inventory::by_cli(leaf).ok_or_else(|| {
@@ -5840,12 +5971,118 @@ async fn run_native_launch(
 async fn run_code(
     options: CodeArgs,
     remote_context: Option<bitrouter::contexts::RemoteContext>,
+    context_name: Option<&str>,
 ) -> Result<()> {
+    let CodeArgs {
+        agent,
+        load,
+        resume,
+        turn_timeout,
+        routing,
+        config,
+        socket,
+        thread_id,
+        check,
+        read_only,
+        workspace,
+        model_policy,
+        max_output_tokens,
+    } = options;
+    if agent.is_none() && remote_context.is_none() {
+        if socket.is_some()
+            && routing.model.is_none()
+            && thread_id.is_none()
+            && check.is_none()
+            && !read_only
+            && workspace.is_none()
+            && !model_policy
+            && max_output_tokens.is_none()
+        {
+            return bitrouter::dashboard::run(None, config.as_deref(), socket.as_deref(), None)
+                .await;
+        }
+        anyhow::ensure!(
+            !routing.direct
+                && routing.base_url.is_none()
+                && !routing.no_start
+                && turn_timeout.is_none(),
+            "--direct, --base-url, --no-start, and --turn-timeout apply to `code <agent>`"
+        );
+        return bitrouter::native_code::run(
+            config.as_deref(),
+            socket.as_deref(),
+            routing.model,
+            thread_id,
+            check,
+            bitrouter::native_code::Options {
+                read_only,
+                model_policy,
+                max_output_tokens,
+            },
+            workspace,
+        )
+        .await;
+    }
     anyhow::ensure!(
-        remote_context.is_none(),
-        "BRO Goals runs on the local host; remote Goal execution is not supported"
+        thread_id.is_none()
+            && check.is_none()
+            && !read_only
+            && workspace.is_none()
+            && !model_policy
+            && max_output_tokens.is_none(),
+        "--thread-id, --check, --read-only, --workspace, --model-policy, and --max-output-tokens apply only to local bare `bro code`"
     );
-    bitrouter::goal_code::run(options.config.as_deref(), None, options.workspace, None).await
+    let initial_session = if let Some(agent) = agent {
+        if remote_context.is_some() {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "remote ACP conversations are not available; use bare `code` for operations",
+            )
+            .into());
+        }
+        if socket.is_some() {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "`code <agent>` does not accept --socket",
+            )
+            .into());
+        }
+        let selection = match (load, resume) {
+            (Some(session_id), None) => bitrouter::acp_cli::SessionSelection::Load(session_id),
+            (None, Some(session_id)) => bitrouter::acp_cli::SessionSelection::Resume(session_id),
+            (None, None) => bitrouter::acp_cli::SessionSelection::New,
+            (Some(_), Some(_)) => {
+                return Err(bitrouter_sdk::BitrouterError::bad_request(
+                    "--load and --resume are mutually exclusive",
+                )
+                .into());
+            }
+        };
+        Some(bitrouter::dashboard::SessionRequest {
+            agent,
+            selection,
+            turn_timeout,
+            routing,
+        })
+    } else {
+        if turn_timeout.is_some() || routing != bitrouter::acp_cli::RoutingOptions::default() {
+            return Err(bitrouter_sdk::BitrouterError::bad_request(
+                "--turn-timeout, --direct, --base-url, --model, and --no-start apply to \
+                 `code <agent>`, not the agent-selection screen",
+            )
+            .into());
+        }
+        None
+    };
+    let remote = remote_context.map(|context| {
+        let name = context_name.unwrap_or("remote").to_string();
+        (name, context)
+    });
+    bitrouter::dashboard::run(
+        remote,
+        config.as_deref(),
+        socket.as_deref(),
+        initial_session,
+    )
+    .await
 }
 
 async fn resolve_prompt_input(
@@ -6357,62 +6594,38 @@ mod tests {
     }
 
     #[test]
-    fn goals_entry_rejects_retired_agent_flags_and_aliases() -> anyhow::Result<()> {
-        let goals = Cli::try_parse_from([
-            "bro",
-            "code",
-            "--workspace",
-            "/tmp/project",
-            "--config",
-            "/tmp/bro.yaml",
-        ])?;
-        assert!(
-            matches!(goals.command, Some(Command::Code { options: CodeArgs { config: Some(config), workspace: Some(workspace) } })
-            if config.as_path() == Path::new("/tmp/bro.yaml") && workspace.as_path() == Path::new("/tmp/project"))
-        );
-        assert!(Cli::try_parse_from(["bro"])?.command.is_none());
-        for tail in [
-            vec!["codex"],
-            vec!["claude", "--load", "session"],
-            vec!["--thread-id", "thread"],
-            vec!["--model", "model"],
-            vec!["--model-policy"],
-            vec!["--max-output-tokens", "128"],
-            vec!["--check", "cargo test"],
-            vec!["--read-only"],
-            vec!["--socket", "/tmp/socket"],
-            vec!["--load", "session"],
-            vec!["--resume", "session"],
-            vec!["--turn-timeout", "30"],
-            vec!["--direct"],
-            vec!["--base-url", "http://127.0.0.1:4356"],
-            vec!["--no-start"],
-        ] {
-            let mut args = vec!["bro", "code"];
-            args.extend(tail);
-            assert!(
-                Cli::try_parse_from(&args).is_err(),
-                "retired Goal flag was accepted: {args:?}"
-            );
-        }
-        for args in [vec!["bro", "chat", "codex"], vec!["bro", "tui"]] {
-            assert!(Cli::try_parse_from(args).is_err());
-        }
-        let remote = Cli::try_parse_from(["bro", "--context", "work", "code"])?;
-        let command = remote.command.context("missing Goal command")?;
-        assert!(validate_remote_invocation(&command, true).is_err());
-        for args in [
-            vec!["bro", "claude"],
-            vec!["bro", "codex"],
-            vec!["bro", "launch", "codex"],
-            vec!["bro", "run", "codex", "a headless task"],
-            vec!["bro", "acp", "serve", "codex"],
-        ] {
-            assert!(
-                Cli::try_parse_from(&args).is_ok(),
-                "preserved interface failed: {args:?}"
-            );
-        }
+    fn code_distinguishes_dashboard_from_agent_session() -> anyhow::Result<()> {
+        let dashboard = Cli::try_parse_from(["bitrouter", "--context", "work", "code"])?;
+        assert_eq!(dashboard.context.as_deref(), Some("work"));
+        assert!(matches!(
+            dashboard.command,
+            Some(Command::Code {
+                options: CodeArgs { agent: None, .. }
+            })
+        ));
+
+        let session = Cli::try_parse_from(["bitrouter", "code", "codex"])?;
+        assert!(matches!(
+            session.command,
+            Some(Command::Code {
+                options: CodeArgs {
+                    agent: Some(agent),
+                    ..
+                }
+            }) if agent == "codex"
+        ));
+        let loaded =
+            Cli::try_parse_from(["bitrouter", "code", "claude", "--load", "native-session"])?;
+        assert!(matches!(
+            loaded.command,
+            Some(Command::Code {
+                options: CodeArgs {
+                    agent: Some(agent),
+                    load: Some(session),
+                    ..
+                }
+            }) if agent == "claude" && session == "native-session"
+        ));
         Ok(())
     }
 

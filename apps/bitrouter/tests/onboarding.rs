@@ -1,5 +1,5 @@
 //! Binary-level coverage for the `bitrouter` onboarding front door — bare
-//! invocation (Goal terminal gate), the `init --yes` headless contract,
+//! invocation (wizard-vs-status decision), the `init --yes` headless contract,
 //! and the network-free / `BITROUTER_HOME`-tolerant probe. Every case here is
 //! hermetic: an isolated `HOME` + `XDG_DATA_HOME`, all BYOK env vars removed,
 //! stdin nulled (non-TTY), and no network.
@@ -49,101 +49,64 @@ fn stdout_json(output: &Output) -> Value {
 }
 
 #[test]
-fn goals_on_a_pipe_reject_before_setup_config_or_daemon_access() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let data = TempDir::new()?;
-    let br_home = TempDir::new()?;
-    for args in [
-        vec![],
-        vec!["code"],
-        vec!["code", "--config", "/missing/bro.yaml"],
-    ] {
-        let out = run_cli(home.path(), data.path(), &args, &[]);
-        assert!(
-            !out.status.success(),
-            "Goal entry requires a terminal: {args:?}"
-        );
-        let value = stdout_json(&out);
-        let message = value["error"]["message"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("missing Goal terminal error: {value}"))?;
-        assert!(
-            message.contains("BRO Goals requires an interactive terminal"),
-            "{message}"
-        );
-        assert!(message.contains("bro run <agent>"), "{message}");
-        assert!(value.get("action").is_none());
-    }
-    for env in [
-        vec![("OPENAI_API_KEY", "fixture-detected")],
-        vec![(
-            "BITROUTER_HOME",
-            br_home
-                .path()
-                .to_str()
-                .ok_or_else(|| anyhow::anyhow!("non-UTF8 fixture path"))?,
-        )],
-    ] {
-        let out = run_cli(home.path(), data.path(), &[], &env);
-        assert!(!out.status.success());
-        assert!(
-            stdout_json(&out)["error"]["message"].as_str().is_some_and(
-                |message| message.contains("BRO Goals requires an interactive terminal")
-            )
-        );
-    }
-    assert!(std::fs::read_dir(home.path())?.next().is_none());
-    assert!(std::fs::read_dir(data.path())?.next().is_none());
-    assert!(std::fs::read_dir(br_home.path())?.next().is_none());
-    Ok(())
+fn bare_unconfigured_emits_inert_envelope_and_exits_zero() {
+    let home = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    // Nothing configured + no TTY: the wizard can't run, so onboarding prints
+    // the hint to stderr and emits an inert envelope — never hangs, exit 0.
+    let out = run_cli(home.path(), data.path(), &[], &[]);
+    assert!(out.status.success(), "bare bitrouter must exit 0");
+    let v = stdout_json(&out);
+    assert_eq!(v["action"], "onboarding");
+    assert_eq!(v["providers_configured"], serde_json::json!([]));
+    assert_eq!(v["after"], "exit");
+    assert!(v.get("config_activation").is_none());
 }
 
 #[test]
-fn removed_goal_agent_flags_and_aliases_reject_without_setup_or_daemon_access() -> anyhow::Result<()>
-{
-    let home = TempDir::new()?;
-    let data = TempDir::new()?;
-    let br_home = TempDir::new()?;
-    let env = [(
-        "BITROUTER_HOME",
-        br_home
-            .path()
-            .to_str()
-            .ok_or_else(|| anyhow::anyhow!("non-UTF8 fixture path"))?,
-    )];
-    for args in [
-        vec!["code", "codex"],
-        vec!["code", "claude", "--load", "session"],
-        vec!["code", "--thread-id", "thread"],
-        vec!["code", "--model", "model"],
-        vec!["code", "--model-policy"],
-        vec!["code", "--max-output-tokens", "128"],
-        vec!["code", "--check", "cargo test"],
-        vec!["code", "--read-only"],
-        vec!["code", "--socket", "/missing/socket"],
-        vec!["code", "--load", "session"],
-        vec!["code", "--resume", "session"],
-        vec!["code", "--turn-timeout", "30"],
-        vec!["code", "--direct"],
-        vec!["code", "--base-url", "http://127.0.0.1:4356"],
-        vec!["code", "--no-start"],
-        vec!["chat"],
-        vec!["chat", "codex"],
-        vec!["tui"],
-    ] {
-        let out = run_cli(home.path(), data.path(), &args, &env);
-        assert_eq!(out.status.code(), Some(2), "{args:?}");
-        let error = String::from_utf8_lossy(&out.stderr);
-        assert!(error.contains("error:"), "{args:?}: {error}");
-        assert!(
-            out.stdout.is_empty(),
-            "retired input reached dispatch: {args:?}"
-        );
-        assert!(std::fs::read_dir(home.path())?.next().is_none());
-        assert!(std::fs::read_dir(data.path())?.next().is_none());
-        assert!(std::fs::read_dir(br_home.path())?.next().is_none());
-    }
-    Ok(())
+fn credentials_alone_do_not_complete_onboarding() {
+    let home = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    // Provider credentials do not substitute for a saved default ACP harness.
+    let out = run_cli(
+        home.path(),
+        data.path(),
+        &[],
+        &[("OPENAI_API_KEY", "sk-detected")],
+    );
+    assert!(out.status.success());
+    let v = stdout_json(&out);
+    assert_eq!(v["action"], "onboarding");
+    // Non-interactive bare invocation does not silently save onboarding.
+    assert!(!home.path().join("bitrouter.yaml").exists());
+}
+
+#[test]
+fn bitrouter_home_set_but_missing_offers_onboarding_not_a_hard_error() {
+    let home = TempDir::new().unwrap();
+    let data = TempDir::new().unwrap();
+    // BITROUTER_HOME points at a directory with no bitrouter.yaml — which
+    // `resolve_config` treats as a hard error. The probe-based onboarding entry
+    // must sidestep that: exit 0, emit the envelope, and never surface the
+    // "BITROUTER_HOME is set … but … is missing" error.
+    let br_home = TempDir::new().unwrap();
+    let out = run_cli(
+        home.path(),
+        data.path(),
+        &[],
+        &[("BITROUTER_HOME", br_home.path().to_str().unwrap())],
+    );
+    assert!(
+        out.status.success(),
+        "BITROUTER_HOME-missing must not hard-error bare bitrouter"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("BITROUTER_HOME is set"),
+        "must not surface the resolve_config hard error: {stderr}"
+    );
+    let v = stdout_json(&out);
+    assert_eq!(v["action"], "onboarding");
 }
 
 #[test]
@@ -376,8 +339,7 @@ fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn onboarding_launch_and_goal_entries_do_not_start_acp_without_a_terminal()
--> anyhow::Result<()> {
+async fn onboarding_launch_and_next_bare_invocation_both_speak_acp() -> anyhow::Result<()> {
     let home = TempDir::new()?;
     let data = TempDir::new()?;
     let config_path = home.path().join("bitrouter.yaml");
@@ -405,7 +367,6 @@ done
     for args in [
         vec!["init", "--yes", "--harness", "codex", "--after", "launch"],
         vec![],
-        vec!["code"],
     ] {
         let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
         command
@@ -422,30 +383,15 @@ done
         let out =
             tokio::time::timeout(std::time::Duration::from_secs(15), command.output()).await??;
         assert!(
-            !out.status.success(),
+            out.status.success(),
             "args={args:?}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        let reports = serde_json::Deserializer::from_slice(&out.stdout)
-            .into_iter::<Value>()
-            .collect::<Result<Vec<_>, _>>()?;
-        assert!(reports.last().is_some_and(|value| {
-            value["error"]["message"].as_str().is_some_and(|message| {
-                message.contains("BRO Goals requires an interactive terminal")
-            })
-        }));
-        assert!(
-            !marker.exists(),
-            "opening Goals must not initialize a harness"
-        );
-        let saved: Value = serde_saphyr::from_str(&std::fs::read_to_string(&config_path)?)?;
-        assert_eq!(saved["chat"]["agent"], "codex-acp");
-        if args.first() == Some(&"init") {
-            assert_eq!(reports.len(), 2);
-            assert_eq!(reports[0]["action"], "onboarding");
-        } else {
-            assert_eq!(reports.len(), 1);
-        }
+        let wire = std::fs::read_to_string(&marker)?;
+        assert!(wire.contains("initialize"), "{wire}");
+        assert!(wire.contains("session/new"), "{wire}");
+        std::fs::remove_file(&marker)?;
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("\"action\":\"status\""));
     }
     Ok(())
 }

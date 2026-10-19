@@ -1,7 +1,6 @@
 //! Durable reconstruction and explicit checkpoint recovery. Loading alone never
 //! grants execution ownership, resolves effects or permits replay.
 
-mod acp;
 mod native;
 
 use std::collections::{HashMap, VecDeque};
@@ -50,8 +49,6 @@ struct Step {
 
 #[derive(Serialize)]
 struct Active {
-    generation: Option<crate::turn::GenerationOrigin>,
-    acp: acp::State,
     native: bool,
     native_runs: std::collections::BTreeMap<String, (u32, u64)>,
     native_unknown_usage: std::collections::BTreeSet<String>,
@@ -97,7 +94,7 @@ struct Rebuild {
 struct RecoveredRun {
     turn_id: String,
     input: RunInput,
-    driver: super::runner::Driver,
+    agent: Agent,
     verification: Option<String>,
     cancel: CancellationToken,
 }
@@ -111,29 +108,6 @@ impl ThreadService {
         target: &ThreadTarget,
         caller: &CallerContext,
         request: ThreadRecoveryRequest,
-    ) -> Result<ThreadView, ServiceError> {
-        self.recover_thread_controlled(target, caller, request, None)
-            .await
-    }
-
-    pub(super) async fn recover_thread_controlled(
-        &self,
-        target: &ThreadTarget,
-        caller: &CallerContext,
-        request: ThreadRecoveryRequest,
-        control: Option<Arc<dyn crate::control::WorkControl>>,
-    ) -> Result<ThreadView, ServiceError> {
-        self.recover_thread_with_acp(target, caller, request, control, None)
-            .await
-    }
-
-    pub(super) async fn recover_thread_with_acp(
-        &self,
-        target: &ThreadTarget,
-        caller: &CallerContext,
-        request: ThreadRecoveryRequest,
-        control: Option<Arc<dyn crate::control::WorkControl>>,
-        acp: Option<super::worker::acp::Job>,
     ) -> Result<ThreadView, ServiceError> {
         let (send, receive) = oneshot::channel();
         let service = self.clone();
@@ -149,7 +123,7 @@ impl ThreadService {
             }
             self.inner.workers.spawn(async move {
                 let result = service
-                    .recover_thread_owned(&target, &caller, request, control, acp)
+                    .recover_thread_owned(&target, &caller, request)
                     .await;
                 let _ = send.send(result);
             });
@@ -162,14 +136,9 @@ impl ThreadService {
         target: &ThreadTarget,
         caller: &CallerContext,
         request: ThreadRecoveryRequest,
-        control: Option<Arc<dyn crate::control::WorkControl>>,
-        acp: Option<super::worker::acp::Job>,
     ) -> Result<ThreadView, ServiceError> {
         self.ensure_instance(Some(&target.server_instance_id))?;
-        let coordination = self
-            .read_thread_view(target, caller)?
-            .thread
-            .is_goal_coordination();
+        self.read_thread_view(target, caller)?;
         let scope = admission::key_scope(
             caller,
             Some(&target.thread_id),
@@ -186,14 +155,6 @@ impl ThreadService {
             .is_some()
         {
             return self.read_thread_view(target, caller);
-        }
-        // A live Goal gate may have been revoked while this restoration waited
-        // for admission. Existing recovery receipts above remain readable.
-        if let Some(control) = &control {
-            control
-                .authorize()
-                .await
-                .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
         }
         let (report, mut snapshot, mut messages, fence, continuation) = {
             let state = self.lock_state();
@@ -224,48 +185,16 @@ impl ThreadService {
                     "recovery inspection is stale",
                 ));
             }
-            let coordination = thread.snapshot.is_goal_coordination();
-            if thread.snapshot.goal_work.is_some()
-                && !report.terminal_checkpoint
-                && control.is_none()
-            {
-                return Err(ServiceError::new(
-                    ErrorCode::Unauthorized,
-                    "Goal worker recovery requires its live source and budget control",
-                ));
-            }
-            let acp_continuation = acp.is_some()
-                && matches!(thread.config, crate::thread::executor::Config::Acp { .. })
-                && report
-                    .turn
-                    .as_ref()
-                    .is_some_and(|turn| turn.acp_continuation.is_some());
-            let settled_generation = coordination
-                && report.terminal_checkpoint
-                && report.turn.as_ref().is_none_or(|turn| {
-                    turn.outcome.is_some()
-                        && turn.unresolved_calls.is_empty()
-                        && !turn.budget.tool_calls_unknown
-                        && turn.budget.tool_calls_known == 0
-                });
             if !report.context_valid
-                || (coordination && !settled_generation)
                 || (report.terminal_checkpoint
                     && !matches!(
                         report.stored_status,
                         ThreadStatus::Idle | ThreadStatus::Paused
                     ))
-                || report.blockers.iter().any(|blocker| {
-                    !matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed)
-                        && !(acp_continuation
-                            && matches!(blocker, RecoveryBlocker::AcpSessionUnconfirmed))
-                        && !(settled_generation
-                            && matches!(
-                                blocker,
-                                RecoveryBlocker::BudgetUncertain { .. }
-                                    | RecoveryBlocker::ModelRequestIncomplete { .. }
-                            ))
-                })
+                || report
+                    .blockers
+                    .iter()
+                    .any(|blocker| !matches!(blocker, RecoveryBlocker::OwnershipUnconfirmed))
             {
                 return Err(ServiceError::new(
                     ErrorCode::RecoveryRequired,
@@ -277,82 +206,29 @@ impl ThreadService {
                 .active_turn_id
                 .as_deref()
                 .unwrap_or(&target.thread_id);
-            if !coordination
-                && state
-                    .active_workspaces
-                    .get(&thread.snapshot.workspace)
-                    .map(String::as_str)
-                    != Some(expected)
+            if state
+                .active_workspaces
+                .get(&thread.snapshot.workspace)
+                .map(String::as_str)
+                != Some(expected)
             {
                 return Err(ServiceError::new(
                     ErrorCode::Conflict,
                     "workspace inspection owner changed",
                 ));
             }
-            let fence = if coordination {
-                None
-            } else {
-                Some(
-                    state
-                        .workspace_fences
-                        .get(&thread.snapshot.workspace)
-                        .cloned()
-                        .ok_or_else(|| {
-                            ServiceError::new(
-                                ErrorCode::RecoveryRequired,
-                                "workspace is still held by another runtime",
-                            )
-                        })?,
-                )
-            };
-            let continuation = if report.terminal_checkpoint {
-                None
-            } else if let Some(mut job) = acp {
-                let turn = report.turn.as_ref().ok_or("ACP recovery has no Turn")?;
-                let saved = turn.acp_continuation.clone().ok_or_else(|| {
+            let fence = state
+                .workspace_fences
+                .get(&thread.snapshot.workspace)
+                .cloned()
+                .ok_or_else(|| {
                     ServiceError::new(
                         ErrorCode::RecoveryRequired,
-                        "ACP prompt/session continuity is unconfirmed",
+                        "workspace is still held by another runtime",
                     )
                 })?;
-                if thread.snapshot.active_turn_id.as_deref() != Some(&turn.turn_id) {
-                    return Err("ACP checkpoint differs from its accepted Turn".into());
-                }
-                if saved.owner.server_instance_id != report.source_server_instance_id
-                    || saved.owner.thread_id != target.thread_id
-                    || saved.owner.turn_id != turn.turn_id
-                {
-                    return Err(ServiceError::new(
-                        ErrorCode::RecoveryRequired,
-                        "ACP binding belongs to another source owner",
-                    ));
-                }
-                let deadline = saved.accepted_at_ms.saturating_add(
-                    u64::try_from(thread.config.max_duration().as_millis()).unwrap_or(u64::MAX),
-                );
-                if super::now_ms() >= deadline {
-                    return Err(ServiceError::new(
-                        ErrorCode::RecoveryRequired,
-                        "original ACP duration expired",
-                    ));
-                }
-                let prompt = saved.prompt.clone();
-                job.continuation = Some(saved);
-                Some(RecoveredRun {
-                    turn_id: turn.turn_id.clone(),
-                    input: RunInput {
-                        prompt,
-                        messages: Vec::new(),
-                        user_item_id: turn.user_item_id.clone(),
-                        context_version: thread.snapshot.context_version,
-                        checkpoint: None,
-                        complete_checkpoint: false,
-                        restored_verification: None,
-                    },
-                    driver: super::runner::Driver::Acp(job),
-                    verification: None,
-                    cancel: CancellationToken::new(),
-                })
+            let continuation = if report.terminal_checkpoint {
+                None
             } else {
                 let turn = report
                     .turn
@@ -401,7 +277,7 @@ impl ThreadService {
                     self.inner.app.clone(),
                     thread.caller.clone(),
                     &thread.snapshot.workspace,
-                    thread.config.native()?.clone(),
+                    thread.config.clone(),
                 )
                 .map_err(storage)?
                 .with_native_record_limit(self.inner.limits.recovery_page_bytes)
@@ -409,10 +285,6 @@ impl ThreadService {
                     self.inner.tool_workers.clone(),
                     self.inner.limits.tools_per_turn,
                 );
-                let agent = match &control {
-                    Some(control) => agent.with_work_control(control.clone()),
-                    None => agent,
-                };
                 Some(RecoveredRun {
                     turn_id: turn.turn_id.clone(),
                     input: RunInput {
@@ -444,7 +316,7 @@ impl ThreadService {
                             None
                         },
                     },
-                    driver: super::runner::Driver::Native(agent),
+                    agent,
                     verification: thread.verification_command.clone(),
                     cancel,
                 })
@@ -473,10 +345,12 @@ impl ThreadService {
             ));
         }
         let owner = self.initialize_execution().await?;
-        if let Some(checkpoint) = continuation
-            .as_ref()
-            .and_then(|run| run.input.checkpoint.as_ref())
-        {
+        if let Some(run) = &continuation {
+            let checkpoint = run
+                .input
+                .checkpoint
+                .as_ref()
+                .ok_or("recovered completion missing")?;
             messages = checkpoint.messages.clone();
             snapshot.context_version = checkpoint.context_version;
         }
@@ -539,13 +413,11 @@ impl ThreadService {
         let workspace_owner = owner.clone();
         let source = source_owner.ok_or("source ownership proof missing")?;
         let active_id = continuation.as_ref().map(|run| run.turn_id.clone());
-        if let Some(fence) = fence {
-            self.workspace_io(true, move || match active_id {
-                Some(id) => fence.activate_recovered_checkpoint(&source, &workspace_owner, &id),
-                None => fence.finish_idle_inspection(&workspace_owner),
-            })
-            .await?;
-        }
+        self.workspace_io(true, move || match active_id {
+            Some(id) => fence.activate_recovered_checkpoint(&source, &workspace_owner, &id),
+            None => fence.finish_idle_inspection(&workspace_owner),
+        })
+        .await?;
         snapshot.status = if continuation.is_some() {
             ThreadStatus::Busy
         } else if snapshot.queued.is_empty() {
@@ -665,7 +537,7 @@ impl ThreadService {
             task.snapshot.unknown_effect = false;
             task.snapshot.pending_input_id = None;
             task.snapshot.pending_input = None;
-        } else if !coordination {
+        } else {
             state.active_workspaces.remove(&workspace);
             state.workspace_fences.remove(&workspace);
         }
@@ -674,7 +546,7 @@ impl ThreadService {
         if let Some(run) = continuation {
             self.inner.workers.spawn(self.run_turn(
                 run.turn_id,
-                run.driver,
+                run.agent,
                 run.input,
                 run.verification,
                 run.cancel,
@@ -866,19 +738,17 @@ impl ThreadService {
         )?;
         rebuild.authorize(caller)?;
         self.check_snapshot_grant(&rebuild.view.thread)?;
-        if !rebuild.view.thread.is_goal_coordination() {
-            let canonical = rebuild
-                .view
-                .thread
-                .workspace
-                .canonicalize()
-                .map_err(|error| error.to_string())?;
-            if canonical != rebuild.view.thread.workspace || !canonical.is_dir() {
-                return Err(ServiceError::new(
-                    ErrorCode::Unauthorized,
-                    "stored workspace identity changed",
-                ));
-            }
+        let canonical = rebuild
+            .view
+            .thread
+            .workspace
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        if canonical != rebuild.view.thread.workspace || !canonical.is_dir() {
+            return Err(ServiceError::new(
+                ErrorCode::Unauthorized,
+                "stored workspace identity changed",
+            ));
         }
         rebuild.consume_page(first.records)?;
         while rebuild.sequence < cutoff {
@@ -932,10 +802,7 @@ impl ThreadService {
                 .ok_or("missing reconstruction report")?;
             // Optional historical usage cannot block a new Turn under the
             // same live owner. Lost/active continuation still needs every budget fact.
-            let optional_usage_only = thread
-                .config
-                .native()
-                .is_ok_and(|config| config.max_spend_microusd.is_none())
+            let optional_usage_only = thread.config.max_spend_microusd.is_none()
                 && report.turn.as_ref().is_some_and(|turn| {
                     !turn.budget.active_duration_unknown
                         && !turn.budget.tool_calls_unknown
@@ -1020,17 +887,6 @@ impl ThreadService {
             for (turn_id, mut turn) in tasks {
                 turn.storage_error = None;
                 state.turns.insert(turn_id, turn);
-            }
-            state.threads.insert(target.thread_id.clone(), thread);
-            return Ok(view);
-        }
-        if thread.snapshot.is_goal_coordination() {
-            // This driver has no filesystem authority. Inspection preserves
-            // recovery blockers without claiming a project workspace lock.
-            let view = thread.presentation.view.clone();
-            let mut state = self.lock_state();
-            for (id, task) in tasks {
-                state.turns.insert(id, task);
             }
             state.threads.insert(target.thread_id.clone(), thread);
             return Ok(view);
@@ -1131,26 +987,6 @@ impl Rebuild {
         if snapshot.thread_id != thread_id || snapshot.server_instance_id.is_empty() {
             return Err(storage("invalid Thread identity or epoch"));
         }
-        if let Some(goal_id) = &snapshot.owned_goal_id {
-            crate::goal::identifier(goal_id).map_err(|error| storage(error.to_string()))?;
-        }
-        if let Some(parent) = &snapshot.input_for_thread_id {
-            crate::goal::identifier(parent).map_err(|error| storage(error.to_string()))?;
-        }
-        if let Some(source) = &snapshot.goal_work {
-            source.validate().map_err(storage)?;
-            if snapshot.is_goal_coordination() {
-                return Err(storage("worker Thread cannot also own or interpret a Goal"));
-            }
-        }
-        if snapshot.is_goal_coordination()
-            && (snapshot.permission_profile != crate::thread::PermissionProfile::ReadOnly
-                || config.tool_mode() != crate::agent::ToolMode::ReadOnly
-                || verification_command.is_some()
-                || (snapshot.owned_goal_id.is_some() && snapshot.input_for_thread_id.is_some()))
-        {
-            return Err(storage("invalid Goal coordination Thread settings"));
-        }
         let mut view = ThreadView {
             recovery: None,
             thread: snapshot.clone(),
@@ -1174,7 +1010,7 @@ impl Rebuild {
             queued: VecDeque::new(),
             next_order: 0,
             active: None,
-            blockers: if snapshot.model != config.model()
+            blockers: if snapshot.model != config.model
                 || snapshot.status != ThreadStatus::Idle
                 || snapshot.active_turn_id.is_some()
                 || !snapshot.queued.is_empty()
@@ -1244,9 +1080,6 @@ impl Rebuild {
             }
             let native_snapshot = self.consume(&record)?;
             if let ExecutionRecord::ThreadEvent { event } = &record {
-                if let Some(active) = &mut self.active {
-                    active.acp.accepted_at_ms.get_or_insert(event.timestamp_ms);
-                }
                 if event.seq != self.sequence || event.thread_id != self.view.thread.thread_id {
                     self.invalid("public Thread event has a mismatched durable cursor or identity");
                 }
@@ -1320,19 +1153,8 @@ impl Rebuild {
                     .remove(position)
                     .ok_or("activation input disappeared")?;
                 let mut messages = self.messages.clone();
-                messages.push(Message::text(Role::User, entry.prompt.clone()));
+                messages.push(Message::text(Role::User, entry.prompt));
                 self.active = Some(Active {
-                    generation: None,
-                    acp: acp::State::new(
-                        if matches!(
-                            self.view.config,
-                            crate::thread::executor::Config::Acp { .. }
-                        ) {
-                            entry.prompt.clone()
-                        } else {
-                            String::new()
-                        },
-                    ),
                     native: false,
                     native_runs: Default::default(),
                     native_unknown_usage: Default::default(),
@@ -1370,9 +1192,6 @@ impl Rebuild {
             } => {
                 if self.unfinished_close.as_ref() != Some(idempotency_key)
                     || snapshot.thread_id != self.view.thread.thread_id
-                    || snapshot.owned_goal_id != self.view.thread.owned_goal_id
-                    || snapshot.input_for_thread_id != self.view.thread.input_for_thread_id
-                    || snapshot.goal_work != self.view.thread.goal_work
                     || snapshot.status != ThreadStatus::Paused
                     || snapshot.active_turn_id.is_some()
                     || !snapshot.queued.is_empty()
@@ -1409,11 +1228,10 @@ impl Rebuild {
                 if source_server_instance_id != &self.source_epoch
                     || source_cursor.checked_add(1) != Some(self.sequence)
                     || (self.view.thread.active_turn_id.is_some()
-                        && self.active.as_ref().is_none_or(|active| {
-                            !active.settled
-                                && !active.checkpointed
-                                && active.acp_continuation().is_none()
-                        }))
+                        && self
+                            .active
+                            .as_ref()
+                            .is_none_or(|active| !active.settled && !active.checkpointed))
                 {
                     self.invalid("recovery acceptance has the wrong source checkpoint");
                 }
@@ -1421,15 +1239,6 @@ impl Rebuild {
             ExecutionRecord::ThreadCheckpoint { snapshot, messages } => {
                 if snapshot.thread_id != self.view.thread.thread_id {
                     self.invalid("checkpoint belongs to another Thread");
-                }
-                if snapshot.owned_goal_id != self.view.thread.owned_goal_id {
-                    self.invalid("checkpoint changes Goal ownership without a handoff");
-                }
-                if snapshot.input_for_thread_id != self.view.thread.input_for_thread_id {
-                    self.invalid("checkpoint changes the Goal input parent");
-                }
-                if snapshot.goal_work != self.view.thread.goal_work {
-                    self.invalid("checkpoint changes the delegated work identity");
                 }
                 if let Err(error) = crate::context::validate_history(messages) {
                     self.invalid(format!("invalid retained checkpoint: {error}"));
@@ -1470,58 +1279,6 @@ impl Rebuild {
                 }
             }
             ExecutionRecord::TurnRecord { turn_id, fact } => {
-                if self.view.thread.is_goal_coordination() {
-                    match fact.as_ref() {
-                        ExecutionRecord::GenerationInput { origin, prompt, .. } => {
-                            if crate::goal::identifier(&origin.goal_id).is_err()
-                                || crate::goal::identifier(&origin.source_id).is_err()
-                                || origin.requirements_revision == 0
-                                || self
-                                    .view
-                                    .thread
-                                    .owned_goal_id
-                                    .as_ref()
-                                    .is_some_and(|id| id != &origin.goal_id)
-                                || origin.purpose.is_input()
-                                    != self.view.thread.input_for_thread_id.is_some()
-                                || !prompt.tools.is_empty()
-                                || prompt.tool_choice.is_some()
-                                || prompt.stream
-                            {
-                                self.invalid("invalid managed generation source or tool boundary");
-                            }
-                        }
-                        ExecutionRecord::ModelRequest { prompt, .. } => {
-                            if self
-                                .active
-                                .as_ref()
-                                .is_none_or(|active| active.generation.is_none())
-                                || !prompt.tools.is_empty()
-                                || prompt.tool_choice.is_some()
-                            {
-                                self.invalid(
-                                    "Goal model request has no tool-free generation admission",
-                                );
-                            }
-                        }
-                        ExecutionRecord::ToolIntent { .. }
-                        | ExecutionRecord::ToolResult { .. }
-                        | ExecutionRecord::VerificationResult { .. }
-                        | ExecutionRecord::CoreCheckpoint { .. } => {
-                            self.invalid("Goal coordination cannot execute native tools or restore a native loop");
-                        }
-                        _ => {}
-                    }
-                } else if matches!(
-                    fact.as_ref(),
-                    ExecutionRecord::GenerationInput { .. }
-                        | ExecutionRecord::GenerationDecisionIntent { .. }
-                        | ExecutionRecord::GenerationDecisionOutcome { .. }
-                        | ExecutionRecord::GenerationAttempt { .. }
-                        | ExecutionRecord::GenerationPlan { .. }
-                ) {
-                    self.invalid("ordinary native Thread contains managed generation facts");
-                }
                 if let ExecutionRecord::InstructionContext {
                     snapshot,
                     message,
@@ -1625,23 +1382,6 @@ impl Rebuild {
         }
         let stored_pause_reason = self.view.thread.pause_reason.clone();
         let mut context_valid = crate::context::validate_history(&self.messages).is_ok();
-        if matches!(
-            self.view.config,
-            crate::thread::executor::Config::Acp { .. }
-        ) && self.next_order != 0
-        {
-            // Before any Turn was accepted, this is only idle metadata: no
-            // harness session could have been started by this Thread. Its
-            // ordinary owner/workspace recovery still requires stopped proof.
-            self.blockers.push(RecoveryBlocker::AcpSessionUnconfirmed);
-            if let Some(active) = &mut self.active
-                && active.acp_continuation().is_some()
-            {
-                active.exact_budget = true;
-                active.budget.active_duration_ms =
-                    super::now_ms().saturating_sub(active.acp.accepted_at_ms.unwrap_or(0));
-            }
-        }
         let mut report_turn = None;
         if let Some(active) = &mut self.active {
             context_valid &= crate::context::validate_history(&active.messages).is_ok();
@@ -1657,11 +1397,7 @@ impl Rebuild {
                 .chain(active.native_unknown_usage.iter().cloned())
                 .collect();
             active.budget.usage_unknown_steps.sort();
-            active.budget.estimated_spend_available = self
-                .view
-                .config
-                .native()
-                .is_ok_and(|config| config.estimate_rates.is_some())
+            active.budget.estimated_spend_available = self.view.config.estimate_rates.is_some()
                 && active.budget.usage_unknown_steps.is_empty()
                 && active.native_unpriced_decisions.is_empty();
             active.budget.active_duration_unknown = !active.exact_budget;
@@ -1725,7 +1461,6 @@ impl Rebuild {
                 self.blockers.push(RecoveryBlocker::BudgetUncertain { detail: "lost execution has unconfirmed active time, call charging or provider usage".into() });
             }
             report_turn = Some(RecoveryTurn {
-                acp_continuation: active.acp_continuation(),
                 resources: active.resources.clone(),
                 turn_id: active.turn_id.clone(),
                 user_item_id: active.user_item_id.clone(),
@@ -1869,7 +1604,6 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
     let cancel = CancellationToken::new();
     cancel.cancel();
     TurnRecord {
-        acp_replies: Default::default(),
         queue_order: None,
         user_item_id: None,
         fence: Arc::new(crate::control::LaunchFence::default()),
@@ -1888,19 +1622,6 @@ fn recovered_task(snapshot: TurnSnapshot, view: &ThreadView, reason: &str) -> Tu
 }
 
 impl Active {
-    fn acp_continuation(&self) -> Option<super::worker::acp::Continuation> {
-        if self.native
-            || self.settled
-            || self.cancel_requested
-            || !self.steps.is_empty()
-            || !self.calls.is_empty()
-            || !self.steering.is_empty()
-        {
-            return None;
-        }
-        self.acp.continuation()
-    }
-
     fn consumed_model_steps(&self) -> Result<u32, String> {
         if self.native {
             // Core charges provider attempts, including fallbacks. A prepared
@@ -1923,14 +1644,7 @@ impl Active {
         if self.native && native::is_projection(fact, &self.calls) {
             return Ok(());
         }
-        self.acp.consume(fact)?;
         match fact {
-            ExecutionRecord::GenerationInput { origin, .. } => {
-                if self.generation.is_some() || !self.steps.is_empty() {
-                    return Err("generation source changed after admission".into());
-                }
-                self.generation = Some(origin.clone());
-            }
             ExecutionRecord::InstructionContext {
                 context_version,
                 message,
@@ -2325,9 +2039,6 @@ pub(super) struct StartupAudit {
 }
 
 impl StartupAudit {
-    pub(super) fn is_goal_coordination(&self) -> bool {
-        self.rebuild.view.thread.is_goal_coordination()
-    }
     pub(super) fn new(
         record: &ExecutionRecord,
         id: &str,

@@ -12,8 +12,8 @@ to native attempt records while guarded trajectory IDs remain owner-opaque.
 
 Codex has two deliberate BitRouter facets:
 
-- BRO Goals (`bro` / `bro code`) can orchestrate the `codex-acp` adapter.
-  `bro acp serve codex` exposes it transparently to another ACP client.
+- `bro code codex` drives the built-in `codex-acp` adapter inside
+  BitRouter's full-screen ACP lifecycle UI.
 - `bro codex` launches Codex's own native interface with reversible
   one-shot configuration overrides.
 
@@ -28,7 +28,7 @@ bro init --yes --harness codex --after exit
 ## ACP session
 
 ```bash
-bro code
+bro code codex
 bro run codex "summarize this repo"
 bro acp serve codex
 ```
@@ -47,7 +47,7 @@ Generic API calls still require an explicit subscription route; canonical ids,
 provider-qualified routes, presets, and user-defined virtual models retain
 their normal routing behavior. A daemon reload updates this mapping too.
 
-`init --model ID` saves the default model. `run codex --model ID` overrides it
+`init --model ID` saves the default model. `code codex --model ID` overrides it
 for one session. No vendor CLI config file is rewritten.
 
 ## Native interface
@@ -82,7 +82,7 @@ diagnostics live under the BitRouter home in `logs/session-*.log`.
 
 ## BRO native tools with a Codex subscription
 
-`bro task run` and the native task API use BRO's native harness; Goals orchestrates ACP harnesses.
+`bro code` (without an agent ID) and `bro task run` use BRO's native harness.
 With automatic context routing, the native harness permits a portable execution
 view when a model switch rejects authenticated Responses reasoning. Core retains
 the original source and public messages/tool pairs, omits Responses reasoning
@@ -94,7 +94,7 @@ After importing an existing subscription login, the shortest startup is:
 
 ```bash
 bro providers login openai-codex --import-existing
-bro task run "Inspect this project" --read-only
+bro code
 ```
 
 The native default is `bitrouter/auto`, using the policy shipped with the binary.
@@ -107,7 +107,7 @@ follows the selected model. A decision backend is optional; see
 To pin a model or run a headless task:
 
 ```bash
-bro task run "Inspect this workspace" --model openai-codex:openai/gpt-6.1-sol --workspace PATH
+bro code --model openai-codex:openai/gpt-6.1-sol --workspace PATH
 bro task run "Inspect this workspace" --read-only --workspace PATH
 ```
 

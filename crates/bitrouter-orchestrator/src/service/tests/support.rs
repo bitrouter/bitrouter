@@ -23,7 +23,7 @@ use crate::store::{ExecutionRecord, ExecutionStore};
 use crate::thread::{PermissionProfile, ThreadRequest, ThreadSnapshot, ThreadTarget};
 use crate::turn::{TurnEventPayload, TurnRequest, TurnSnapshot, TurnStatus};
 
-pub(super) fn routing_target() -> RoutingTarget {
+fn routing_target() -> RoutingTarget {
     RoutingTarget {
         provider_name: "fixture".into(),
         service_id: "fixture-model".into(),
@@ -60,28 +60,18 @@ pub(super) fn app_with_execution_mode(
     executor: Arc<dyn bitrouter_sdk::language_model::Executor>,
     native: bool,
 ) -> std::io::Result<Arc<App>> {
-    app_with_decision(
-        executor,
-        native.then(|| bitrouter_sdk::decision_model::DecisionRuntime {
-            model: "fixture-decision".into(),
-            executor: Arc::new(UnavailableDecision),
-            policy: Default::default(),
-            pricing: None,
-        }),
-    )
-}
-
-pub(super) fn app_with_decision(
-    executor: Arc<dyn bitrouter_sdk::language_model::Executor>,
-    decision: Option<bitrouter_sdk::decision_model::DecisionRuntime>,
-) -> std::io::Result<Arc<App>> {
     let table = StaticRoutingTable::new();
     table.insert("fixture-model", vec![routing_target()]);
     let mut builder = App::builder().language_model(|builder| {
         builder.routing_table(Arc::new(table)).executor(executor);
     });
-    if let Some(decision) = decision {
-        builder = builder.decision_model(decision);
+    if native {
+        builder = builder.decision_model(bitrouter_sdk::decision_model::DecisionRuntime {
+            model: "fixture-decision".into(),
+            executor: Arc::new(UnavailableDecision),
+            policy: Default::default(),
+            pricing: None,
+        });
     }
     builder.build().map(Arc::new).map_err(std::io::Error::other)
 }
@@ -366,7 +356,7 @@ impl ThreadService {
                 .get_mut(turn_id)
                 .and_then(|record| record.pending.take())
             {
-                pending.cancel();
+                let _ = pending.response.send(false);
             }
         }
         Ok(())

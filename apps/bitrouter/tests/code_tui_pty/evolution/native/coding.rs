@@ -8,7 +8,7 @@ mod publication;
 
 const PROMPT: &str = "NATIVE_CODE_EXERCISE: implement add(a, b) in native_sum.rs and run two unit tests, covering positive and negative inputs. Do not request a review or create a PR. Finish with a brief result.";
 
-pub(super) fn command() -> Result<String> {
+fn command() -> Result<String> {
     // Workers have an isolated HOME. Invoke the toolchain binary rather than
     // asking a rustup proxy to find the developer's toolchain from that home.
     let output = Command::new("rustc")
@@ -31,7 +31,7 @@ rustc --test native_sum.rs -o native_sum_tests && ./native_sum_tests"#
         ))
 }
 
-pub(super) fn tool_call(body: &Value) -> Result<Value> {
+fn tool_call(body: &Value) -> Result<Value> {
     let command = command()?;
     let command = if body.to_string().contains("NATIVE_FAILING_IMPLEMENTATION") {
         command.replace("a + b", "a - b")
@@ -185,9 +185,6 @@ fn rust_coding_judge_uses_executed_pass_and_fail_results() -> Result<()> {
 }
 
 fn response(request: &Request) -> Result<ResponseTemplate> {
-    if request.url.path() == "/responses" {
-        return responses::reply(request, true);
-    }
     let body: Value = serde_json::from_slice(&request.body)?;
     let model = body["model"].as_str().context("model missing")?;
     let (message, finish) = if model == "judge" {
@@ -253,25 +250,87 @@ fn response(request: &Request) -> Result<ResponseTemplate> {
     })))
 }
 
+fn finish_coding_turn(code: &mut CodeFixture, before: &PtyCheckpoint) -> Result<()> {
+    for _ in 0..4 {
+        let screen = code.pty.wait_for_screen_inner(
+            Some(before),
+            "coding completion or permission",
+            |screen| {
+                (screen.contains("Turn completed") && screen.contains("NATIVE_CODE_DONE"))
+                    || screen.contains("Permission needed")
+            },
+        )?;
+        if screen.contains("Turn completed") && screen.contains("NATIVE_CODE_DONE") {
+            return Ok(());
+        }
+        code.pty.send(b"/review permission\r")?;
+        let options = code.pty.wait_for_text("Enter confirms selection")?;
+        ensure!(
+            (options.contains("[1] Yes") || options.contains("[1] Allow"))
+                && (options.contains("rustc") || options.contains("native_sum.rs")),
+            "unexpected permission request: {options}"
+        );
+        let answered = code.pty.checkpoint();
+        code.pty.send(b"1\r")?;
+        code.pty.wait_for_screen_inner(
+            Some(&answered),
+            "accepted coding command resumed",
+            |screen| !screen.contains("Permission needed") && !screen.contains(" Permission ─"),
+        )?;
+    }
+    bail!("coding worker repeatedly requested permission")
+}
+
 fn launch(
     agent: &str,
     adapter: &str,
     worker: &str,
-) -> Result<(tokio::runtime::Runtime, NativeService, NativeFixture)> {
+) -> Result<(tokio::runtime::Runtime, NativeService, CodeFixture)> {
     let mock = MockAcp::new(MockScenario::Minimal)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(3)
         .enable_all()
         .build()?;
     let service = runtime.block_on(setup_with_reply(&mock, agent, adapter, worker, response))?;
-    let code = runtime.block_on(NativeFixture::start(mock, agent))?;
-    mode(&code, &runtime, "automatic")?;
+    let child_pid_path = mock._directory.path().join("code-child.pid");
+    let mut command = shell_command(&mock, None)?;
+    command.args([
+        "code",
+        agent,
+        "--model",
+        selector(agent),
+        "--no-start",
+        "--turn-timeout",
+        "30",
+        "--config",
+    ]);
+    command.arg(&mock.config_path);
+    let mut code = CodeFixture {
+        mock,
+        child_pid_path,
+        pty: PtyRunner::spawn(command, 120, 40)?,
+    };
+    code.pty.wait_for_text("activity: ready")?;
+    open_evolution(&mut code)?;
+    choose(&mut code, "Judge model", " Judge model ─")?;
+    choose(&mut code, "judge", "Checkpoint evaluation and evolution")?;
+    choose(&mut code, "Evolution mode", " Evolution mode ─")?;
+    choose_at(
+        &mut code,
+        "Automatic",
+        1,
+        "Checkpoint evaluation and evolution",
+    )?;
+    code.close_to_composer()?;
     Ok((runtime, service, code))
 }
 
 fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
-    let (runtime, service, code) = launch(agent, adapter, worker)?;
-    runtime.block_on(code.prompt(PROMPT, "NATIVE_CODE_DONE", true))?;
+    let (runtime, service, mut code) = launch(agent, adapter, worker)?;
+    let before = code.pty.checkpoint();
+    code.pty.paste(PROMPT)?;
+    code.pty.send(b"\r")?;
+    finish_coding_turn(&mut code, &before)?;
     let identity = match runtime.block_on(evaluated(&service, agent)) {
         Ok(identity) => identity,
         Err(error) => {
@@ -341,17 +400,18 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
         executions.len() >= 2,
         "missing model continuation after the tool result"
     );
-    runtime.block_on(code.stop())?;
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()?;
     println!(
         "{}",
-        json!({"agent":agent,"native_session":identity.native_session_id,"recorded_requests":executions.len(),"tool_tests_recorded":true,"worker_wrote_code":true,"process_stopped":true,"scope":"real worker tool execution, captured tests and fixture rubric evaluation"})
+        json!({"agent":agent,"native_session":identity.native_session_id,"recorded_requests":executions.len(),"tool_tests_recorded":true,"worker_wrote_code":true,"terminal_restored":true,"scope":"real worker tool execution, captured tests and fixture rubric evaluation"})
     );
     Ok(())
 }
 
 #[test]
 #[ignore = "requires the maintained Codex ACP adapter and isolated worker executable"]
-fn maintained_codex_session_coding_checkpoint() -> Result<()> {
+fn maintained_codex_tui_coding_checkpoint() -> Result<()> {
     run(
         "codex-acp",
         "BITROUTER_TEST_CODEX_ADAPTER",
@@ -361,7 +421,7 @@ fn maintained_codex_session_coding_checkpoint() -> Result<()> {
 
 #[test]
 #[ignore = "requires the maintained Claude ACP adapter and isolated worker executable"]
-fn maintained_claude_session_coding_checkpoint() -> Result<()> {
+fn maintained_claude_tui_coding_checkpoint() -> Result<()> {
     run(
         "claude-acp",
         "BITROUTER_TEST_CLAUDE_ADAPTER",

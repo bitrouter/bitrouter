@@ -78,25 +78,12 @@ impl WorkspaceTools {
         live: Option<&mpsc::Sender<RunEvent>>,
         effect: &mut EffectStatus,
     ) -> Result<ToolResultOutput, String> {
-        self.shell_with_limit(args, cancel, tool_id, live, effect, MAX_SHELL_SECONDS)
-            .await
-    }
-
-    pub(super) async fn shell_with_limit(
-        &self,
-        args: ShellArgs,
-        cancel: &CancellationToken,
-        tool_id: &str,
-        live: Option<&mpsc::Sender<RunEvent>>,
-        effect: &mut EffectStatus,
-        max_seconds: u64,
-    ) -> Result<ToolResultOutput, String> {
         if args.command.trim().is_empty() {
             return Err("command must not be empty".into());
         }
         let timeout = args.timeout.unwrap_or(30);
-        if timeout == 0 || timeout > max_seconds {
-            return Err(format!("timeout must be in 1..={max_seconds} seconds"));
+        if timeout == 0 || timeout > MAX_SHELL_SECONDS {
+            return Err("timeout must be in 1..=120 seconds".into());
         }
         let interpreter = self
             .interpreter
