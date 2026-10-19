@@ -112,10 +112,6 @@ impl Coordinator {
             .flat_map(|task| &task.executions)
             .find(|execution| execution.id == execution_id)
             .context("native work attempt is missing")?;
-        anyhow::ensure!(
-            task.execution_harness(execution).is_none(),
-            "attempt requested an external ACP worker"
-        );
         let source = source(goal, task, execution)?;
         let control = model_control::ModelControl::for_worker(self, goal, source.clone());
         control.gate().await?;
@@ -298,7 +294,7 @@ impl Coordinator {
                     )
                     .await?,
                 )?;
-                return match task.execution_harness(execution) {
+                return match &task.spec.harness {
                     Some(harness) => {
                         Box::pin(self.launch_acp(
                             goal,
@@ -330,10 +326,10 @@ impl Coordinator {
             .threads
             .read_stored_turn(&target, &caller, &binding.turn_id)
             .await?;
-        let external = task.execution_harness(execution).is_some();
+        let external = task.spec.harness.is_some();
         if let Some(session) = &turn.acp {
             anyhow::ensure!(
-                task.execution_harness(execution) == Some(session.agent_id.as_str()),
+                task.spec.harness.as_ref() == Some(&session.agent_id),
                 "worker session belongs to another harness"
             );
             if execution.confirmed_model_route.is_none()

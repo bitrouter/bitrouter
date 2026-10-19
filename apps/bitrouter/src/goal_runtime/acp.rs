@@ -252,7 +252,7 @@ impl Coordinator {
         anyhow::ensure!(
             snapshot.managed_by.as_ref().is_some_and(
                 |owner| owner.thread_id == link.thread_id && owner.turn_id == link.turn_id
-            ) && task.execution_harness(execution) == Some(snapshot.agent_id.as_str()),
+            ),
             "ACP process belongs to another accepted Turn"
         );
         Ok(*snapshot)
@@ -274,10 +274,6 @@ impl Coordinator {
             .flat_map(|task| &task.executions)
             .find(|execution| execution.id == execution_id)
             .context("ACP work attempt missing")?;
-        anyhow::ensure!(
-            task.execution_harness(execution) == Some(harness),
-            "ACP startup differs from the attempt's requested worker"
-        );
         let source = super::native::source(goal, task, execution)?;
         let control = model_control::ModelControl::for_worker(self, goal, source.clone());
         control.gate().await?;

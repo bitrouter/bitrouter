@@ -4,11 +4,7 @@ use super::*;
 use serde_json::{Value, json};
 use wiremock::{Request, ResponseTemplate};
 
-pub(super) fn completion(
-    body: &Value,
-    mut message: Value,
-    finish_reason: &str,
-) -> ResponseTemplate {
+fn completion(body: &Value, mut message: Value, finish_reason: &str) -> ResponseTemplate {
     if body["stream"] == true {
         for (index, call) in message["tool_calls"]
             .as_array_mut()

@@ -132,7 +132,7 @@ impl Coordinator {
         let request =
             Request::decode(&crate::goal_artifacts::read(&root, &decision.request).await?)?;
         anyhow::ensure!(
-            task.execution_harness(execution).is_none()
+            task.spec.harness.is_none()
                 && execution.thread.as_ref() == Some(&request.native)
                 && decision.permission_id == request.input.request_id,
             "native request does not match its original execution/input"

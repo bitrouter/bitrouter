@@ -352,15 +352,6 @@ provider/model use are unreported unless actually observed; cold inspection
 does not authorize session continuation. Full ACP recovery remains in progress;
 see the refactor implementation ledger for current validation limits.
 
-Goal protocol 6 permits explicit worker changes in versioned task updates.
-Attempts retain the requested worker independently of the current Task selection
-and actual accepted execution. Changing a worker never relabels an old session
-or bypasses its stop/effect gates. Legacy archive bytes remain unchanged; their
-prior declared selection is retained separately when necessary. Migration 000031
-is an additional application writer fence for this provenance, without new tables
-or history conversion. It rejects prior managed-runtime writers as well as old
-clients/outboxes; already running writers still require a quiescent cutover.
-
 ## Native ACP control
 
 `acp/native` adapts v1/draft v2 to this same service. Its app stdio bridge is local

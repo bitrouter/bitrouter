@@ -21,7 +21,7 @@ pub(super) async fn collect(
     execution: &Execution,
 ) -> serde_json::Value {
     let result = async {
-        if task.execution_harness(execution).is_none() {
+        if task.spec.harness.is_none() {
             return coordinator
                 .native_execution_evidence(goal, task, execution)
                 .await;
@@ -91,7 +91,7 @@ fn project_bound(
     };
     anyhow::ensure!(
         run_id == Some(&snapshot.run_id)
-            && task.execution_harness(execution) == Some(snapshot.agent_id.as_str())
+            && task.spec.harness.as_ref() == Some(&snapshot.agent_id)
             && snapshot.cwd.canonicalize()? == execution.workspace.canonicalize()?,
         "runtime observations do not match this execution, harness or workspace"
     );

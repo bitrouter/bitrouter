@@ -83,14 +83,6 @@ pub fn model(request: &Request) -> ResponseTemplate {
     {
         let mut result = json!({"answer":null,"objective":null,"task_updates":[{"task_id":"left","instruction":"Write and verify left.txt as LEFT newline. FIXTURE_NEW_LEFT_RULE: this exact version must be used by the replacement execution."}],"control":null,"permission_response":null,"clarification":null});
         let input = state["trusted_state"]["input"].as_str().unwrap_or_default();
-        if input.contains("WORKER_SWITCH_ACP_FIXTURE") {
-            result["task_updates"][0]["worker"] =
-                json!({"kind":"acp","harness":"replacement-peer"});
-        } else if input.contains("WORKER_SWITCH_NATIVE_FIXTURE") {
-            result["task_updates"][0]["worker"] = json!({"kind":"built_in"});
-        } else if input.contains("WORKER_SWITCH_MISSING_FIXTURE") {
-            result["task_updates"][0]["worker"] = json!({"kind":"acp","harness":"not-configured"});
-        }
         if input.contains("CHECK_CHANGE_FIXTURE") {
             result["task_updates"][0]["additional_checks"] =
                 json!([check("left-keeps-seed", "seed.txt", "original input")]);

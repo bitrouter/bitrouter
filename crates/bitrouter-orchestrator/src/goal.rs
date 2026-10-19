@@ -22,7 +22,7 @@ pub const MAX_PAGE_ITEMS: usize = 16;
 /// Bound on a serialized snapshot, operation or query page.
 pub const MAX_RECORD_BYTES: usize = 1024 * 1024;
 /// Goal requests are a separate local protocol from native Thread operations.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

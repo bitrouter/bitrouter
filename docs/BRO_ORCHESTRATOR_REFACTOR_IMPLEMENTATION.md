@@ -250,9 +250,8 @@ The unchanged assertion passes in the source6 full run below. S3–S6 remain inc
 
 ## Compatibility
 
-- Goal local protocol is **6** because history can contain worker choices in
-  task updates and per-attempt worker provenance as well as owner/input/model
-  execution links. Older clients/outboxes are explicitly rejected
+- Goal local protocol is **5** because history can contain the new
+  owner/input/model-execution link operations. Older clients/outboxes are explicitly rejected
   and retained without replay through the existing version check.
 - Existing Goal snapshots/history remain readable. Missing ownership fields
   default to `None`; saved IDs and receipts are not rewritten.
@@ -274,36 +273,7 @@ The unchanged assertion passes in the source6 full run below. S3–S6 remain inc
   running old writers still require the explicit quiescent cutover in S6;
   a startup marker alone cannot stop a process that initialized earlier.
 - No CLI command, flag, provider credential or listen port changes in this
-  batch. Shipped skill and CLI protocol documentation track version 6.
-
-Worker replacement is connected through existing middle-input task
-updates. A requested built-in/ACP worker versions the task and downstream
-requirements; each attempt keeps its original requested worker separately from
-actual Thread/Turn/session evidence. Existing stop, local-effect, dependency and
-budget gates still admit any replacement. Legacy live attempts are frozen from
-their previously recorded Task selection when that selection changes. Legacy
-archives retain their exact bytes; a narrow Task field preserves their original
-declared worker source. Neither field invents a session, accepted Thread or effect
-proof. Migration **000031** adds only an application writer fence so a prior
-managed-runtime binary cannot erase this provenance.
-
-The replacement's prepared input names its original stopped-effect transcript
-and frozen workspace. The app verifies artifact hashes and applies the local
-result bundle to the new private workspace before admitting a worker. Changed
-base/dependency versions or conflicting files block dispatch. These artifacts
-are evidence and local results, not private harness context or new permissions.
-Preparation-only retries retain the original transfer. Domain admission rejects
-missing or foreign transfer references without changing the accepted state.
-
-Controlled ACP-to-ACP/native replacement tests passed in worker-switch source4,
-source5 and the final source10 focused run. The ACP peer checks inherited LEFT content before session startup;
-the native path actually reads it before producing its own result. Independent
-right work keeps its original attempt, and root delivery still requires checks
-and semantic review. The one domain-test failure in those runs was subsequently
-isolated to an incorrect fixture control revision and a missing replacement
-workspace registration; source8 passes that corrected case. The required local
-checks and exact source applicability are recorded in the worker replacement
-checkpoint below. Remaining S3 recovery/interruption gates are still pending.
+  batch. Shipped skill and CLI protocol documentation track version 5.
 
 ## Stage status
 
@@ -312,7 +282,7 @@ checkpoint below. Remaining S3 recovery/interruption gates are still pending.
 | S0 | Mapped: current fact authority, owner/input scheduling and native/ACP execution/resource boundaries are documented; no core persistence dependency or placeholder executor. This mapping does not prove the remaining stages. |
 | S1 | In progress: owner/input association, model and worker Turn source links, stable binding operations and original-key lookup implemented. Full interruption/compatibility proof remains. |
 | S2 | In progress: managed generation and native workers use the common runner. Native permissions, scoped local effect reconciliation, pre-acceptance recovery and shared bounded generation/native capacity waiting are connected. Active cold recovery, worker quote waiting and full wait/effect projection remain pending. |
-| S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. ACP-to-ACP/native replacement transfers confirmed local results, retains old sources and preserves independent work. Confirmed same-session recovery, late reconciliation and the complete interruption matrix remain. |
+| S3 | In progress: explicit ACP configuration, common acceptance/control/permissions, actual session mapping, public observation and owned stop are connected. Full session recovery, late reconciliation and replacement/interruption qualification remain. |
 | S4 | In progress: generation SDK reports, requested worker material and public ACP session/route reports are linked; complete native policy/material/actual execution report association remains. |
 | S5 | In progress: native standalone Goal completion and managed ACP dependencies/review consume shared Turn observations in controlled fixtures. Native branch overlap/isolation, adoption and the full coordinated closure remain. |
 | S6 | In progress: protocol fixtures now have an unpublished minimal Cargo package; repeated test-time app/runtime builds are removed. Old execution-loop removal and final regression/live gates remain. |
@@ -728,8 +698,8 @@ size, timeout, assertion relaxation or test skip was introduced.
 
 ## Next execution work
 
-Complete managed ACP session recovery and original stop/effect reconciliation
-using the shared Thread/Turn authority. Preserve original
+Complete managed ACP session recovery, original stop/effect reconciliation and
+worker replacement using the shared Thread/Turn authority. Preserve original
 native/ACP action keys and transparent/direct harness behavior. A cold query is
 not confirmed same-session continuation; an original startup receipt alone does
 not authorize another prompt. Do not invent native context or repeat uncertain
@@ -774,47 +744,6 @@ remain outside the PR under the independent local archive's
 partial implementation checkpoint, without a push or hosted-CI claim. Final
 publication must retain a separately retrievable archive and the necessary
 Cargo-built Rust fixtures/reproduction instructions in the feature PR.
-
-## Worker replacement source10 checkpoint
-
-Worker selection now versions existing work through middle input. Existing
-attempts retain their original requested worker; actual Thread/Turn/session facts
-remain separate. New workers receive hash-verified stopped local results before
-admission, and preparation retries retain the same transfer. Unsupported workers,
-unknown old tool effects and stale permissions cannot bypass existing gates.
-Legacy archive payloads retain their exact bytes. Goal protocol **6** and
-application marker **000031** fence incompatible clients/writers.
-
-| Check | Actual result |
-| --- | --- |
-| Strict workspace/all-target/all-feature Clippy | Passed |
-| Workspace formatting check | Passed |
-| Full workspace/all-feature nextest | **4,735 passed**, 24 existing skips, six slow; no failures, aborts or leak reports; 572.290 seconds |
-| Workspace/all-feature rustdoc | Six passed, one existing ignored |
-| Source10 focused Goal/input/UI/compatibility/worker suite | **116 passed**, zero changed files throughout the run |
-
-The source9 before/after audit correctly reports one changed file and leaves
-its aggregate `passed` flag false: the preceding formatting process finished
-while the initial snapshot was captured. The only byte difference is line
-wrapping/indentation of one test expression. An exact replacement audit proves
-that no Rust token, assertion or production file changed between source9 and
-source10; both original snapshots and that applicability record remain intact.
-All four required commands passed, and source10's subsequent focused run has
-an unchanged file manifest. This is not a claim of zero drift for source9.
-Both source tars were independently extracted and all 41 saved files verified
-against their original SHA-256 manifests.
-
-Raw trials1–10, compile failures, failed assertions, source patches/tars and
-commands remain outside the PR under `WORKER_SWITCH_INDEX.md`. Six accidentally
-renamed foundation logs are explicitly mapped to their identical managed-ACP
-originals; they are not worker-switch proof. Necessary Rust fixture source and
-regressions remain in the feature branch. Normal trial temporary directories
-and in-memory databases were not captured; the archive does not claim otherwise.
-
-This closes a controlled replacement checkpoint, not the complete S3–S6 audit,
-same-session cold continuation, native parallel/resource evidence, live harness
-qualification or hosted CI. Subsequent implementation still needs appropriate
-fresh checks; unchanged broad checks need no immediate repetition.
 
 ## Delivery and evidence
 

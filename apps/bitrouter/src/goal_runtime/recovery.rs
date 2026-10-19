@@ -152,7 +152,7 @@ impl Coordinator {
                 )),
             "BRO check or semantic review is still unresolved"
         );
-        if task.execution_harness(execution).is_none() {
+        if task.spec.harness.is_none() {
             return self
                 .native_local_recovery_evidence(goal, task, execution)
                 .await;
@@ -176,28 +176,20 @@ impl Coordinator {
             } => run_id,
             _ => anyhow::bail!("the original dispatch has no actual run mapping"),
         };
-        let snapshot = if execution.thread.is_some() {
-            // Shared work must retain the original Thread/Turn and harness
-            // owner, including after the task's requested worker has changed.
-            self.acp_run_snapshot(goal, task, execution).await?
-        } else {
-            let SessionResponse::Snapshot { snapshot } = self
-                .supervisor
-                .dispatch(SessionRequest::authorized(
-                    &self.grant,
-                    SessionCommand::Snapshot {
-                        run_id: run_id.clone(),
-                    },
-                ))
-                .await?
-            else {
-                anyhow::bail!("stop snapshot is unavailable");
-            };
-            *snapshot
+        let snapshot = self
+            .supervisor
+            .dispatch(SessionRequest::authorized(
+                &self.grant,
+                SessionCommand::Snapshot {
+                    run_id: run_id.clone(),
+                },
+            ))
+            .await?;
+        let SessionResponse::Snapshot { snapshot } = snapshot else {
+            anyhow::bail!("stop snapshot is unavailable");
         };
         anyhow::ensure!(
             snapshot.run_id == *run_id
-                && task.execution_harness(execution) == Some(snapshot.agent_id.as_str())
                 && snapshot.owned_process_terminated()
                 && snapshot.pending_permissions.is_empty(),
             "owned process is not stopped or has unresolved permissions"

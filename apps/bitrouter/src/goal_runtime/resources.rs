@@ -263,7 +263,6 @@ impl Coordinator {
             "prepared Goal prompt exceeds 1 MiB"
         );
         let prepared = Prepared {
-            worker_handoff: None,
             selection: task.spec.resources.clone(),
             prompt: crate::goal_artifacts::put(&root, prompt.as_bytes()).await?,
             materials,

@@ -115,31 +115,14 @@ pub struct Prepared {
     pub materials: Vec<Material>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checked_dependencies: Option<ArtifactRef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_handoff: Option<WorkerHandoff>,
     /// Private descriptor digest: credentials are never included in the head.
     pub mcp_configuration_sha256: String,
-}
-
-/// Frozen local results supplied to a new worker, not private session transfer
-/// or renewed authority to repeat the predecessor's tool actions.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WorkerHandoff {
-    pub execution_id: String,
-    pub workspace: ArtifactRef,
-    pub transcript: ArtifactRef,
 }
 
 impl Prepared {
     pub fn validate(&self) -> Result<(), GoalError> {
         self.selection.validate()?;
         self.prompt.validate()?;
-        if let Some(handoff) = &self.worker_handoff {
-            super::identifier(&handoff.execution_id)?;
-            handoff.workspace.validate()?;
-            handoff.transcript.validate()?;
-        }
         if let Some(reference) = &self.checked_dependencies {
             reference.validate()?;
             if reference.bytes > 128 * 1024 {

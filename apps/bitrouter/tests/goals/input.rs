@@ -4,301 +4,6 @@ use bitrouter_orchestrator::goal::input::{
     TaskUpdate,
 };
 
-#[tokio::test]
-async fn worker_change_versions_work_without_relabeling_or_replaying_its_old_attempt() -> Result<()>
-{
-    use bitrouter_orchestrator::goal::workflow::{ExecutionAdmission, LocalReconciliation, Worker};
-    let goals = service(database().await?);
-    let workspace = tempfile::tempdir()?;
-    let id = planned(&goals, workspace.path()).await?;
-    for (key, change) in [
-        (
-            "original",
-            Change::RequestExecution {
-                task_id: "left".into(),
-                execution_id: "original".into(),
-                workspace: workspace.path().join("original"),
-            },
-        ),
-        (
-            "registered",
-            Change::RegisterWorkspace {
-                execution_id: "original".into(),
-                base_commit: "a".repeat(40),
-            },
-        ),
-        (
-            "dispatch",
-            Change::RequestDispatch {
-                execution_id: "original".into(),
-            },
-        ),
-        (
-            "running",
-            Change::ObserveExecution {
-                execution_id: "original".into(),
-                observation: Observation::Running {
-                    run_id: Some("old-run".into()),
-                    native_session_id: Some("old-session".into()),
-                },
-            },
-        ),
-    ] {
-        goals
-            .workflow_change(actor(), &id, key, 1, change, 40)
-            .await
-            .with_context(|| format!("original worker setup: {key}"))?;
-    }
-    let before = snapshot(&goals, &id).await?;
-    let old = before.workflow.tasks[0].executions[0].clone();
-    commit_task_update(
-        &goals,
-        &id,
-        "replace-left-worker",
-        TaskUpdate {
-            task_id: "left".into(),
-            instruction: before.workflow.tasks[0].spec.instruction.clone(),
-            worker: Some(Worker::BuiltIn),
-            resources: None,
-            additional_checks: Vec::new(),
-        },
-    )
-    .await
-    .context("save replacement request")?;
-    let saved = snapshot(&goals, &id).await?;
-    let left = &saved.workflow.tasks[0];
-    let control_source = saved
-        .control_source_revision
-        .max(left.control_source_revision);
-    assert!(left.spec.harness.is_none());
-    assert_eq!(left.executions[0], old);
-    assert_eq!(left.execution_harness(&old), Some("configured-acp"));
-    assert_eq!(
-        left.execution_admission(saved.requirements_revision, saved.control_source_revision),
-        ExecutionAdmission::Blocked
-    );
-    assert_eq!(saved.workflow.tasks[1], before.workflow.tasks[1]);
-    assert_eq!(saved.workflow.tasks[2].requirements_revision, 2);
-    assert_eq!(saved.run_intent, before.run_intent);
-    let replacement = Change::RequestExecution {
-        task_id: "left".into(),
-        execution_id: "new-native".into(),
-        workspace: workspace.path().join("new-native"),
-    };
-    assert!(
-        goals
-            .workflow_change(
-                actor(),
-                &id,
-                "premature-replacement",
-                2,
-                replacement.clone(),
-                150
-            )
-            .await
-            .is_err()
-    );
-    // Late original-source facts remain ACP facts despite the new requested worker.
-    goals
-        .workflow_change(
-            actor(),
-            &id,
-            "old-candidate",
-            1,
-            Change::ObserveExecution {
-                execution_id: "original".into(),
-                observation: Observation::Candidate {
-                    run_id: Some("old-run".into()),
-                    native_session_id: Some("old-session".into()),
-                    report: report(
-                        workspace.path(),
-                        "domain old candidate; not harness evidence",
-                    )?,
-                },
-            },
-            151,
-        )
-        .await
-        .context("observe original candidate")?;
-    for (key, change) in [
-        (
-            "stop",
-            Change::RequestStop {
-                execution_id: "original".into(),
-                operation_id: "old-stop".into(),
-            },
-        ),
-        (
-            "stopped",
-            Change::ObserveStop {
-                execution_id: "original".into(),
-                operation_id: "old-stop".into(),
-                confirmed: true,
-                detail: "domain fixture old stopped boundary".into(),
-            },
-        ),
-    ] {
-        goals
-            .workflow_change(actor(), &id, key, 2, change, 152)
-            .await
-            .with_context(|| format!("original stop boundary: {key}"))?;
-    }
-    assert!(
-        goals
-            .workflow_change(
-                actor(),
-                &id,
-                "still-no-effect-proof",
-                2,
-                replacement.clone(),
-                153
-            )
-            .await
-            .is_err()
-    );
-    goals
-        .workflow_change(
-            actor(),
-            &id,
-            "reconcile",
-            2,
-            Change::ReconcileStoppedExecution {
-                execution_id: "original".into(),
-                reconciliation: LocalReconciliation::Verified {
-                    task_revision: 2,
-                    control_source_revision: control_source,
-                    workspace: report(workspace.path(), "domain fixture frozen old workspace")?,
-                    transcript: report(
-                        workspace.path(),
-                        "domain fixture no unknown effects; actual runtime proof is separate",
-                    )?,
-                },
-            },
-            154,
-        )
-        .await
-        .context("reconcile stopped original worker")?;
-    goals
-        .workflow_change(actor(), &id, "new-native", 2, replacement, 155)
-        .await
-        .context("request replacement execution")?;
-    goals
-        .workflow_change(
-            actor(),
-            &id,
-            "new-native-workspace",
-            2,
-            Change::RegisterWorkspace {
-                execution_id: "new-native".into(),
-                base_commit: "a".repeat(40),
-            },
-            155,
-        )
-        .await?;
-    let admitted = snapshot(&goals, &id).await?;
-    let attempts = &admitted.workflow.tasks[0].executions;
-    assert_eq!(attempts.len(), 2);
-    assert_eq!(attempts[0].id, old.id);
-    assert_eq!(attempts[0].worker, old.worker);
-    assert_eq!(attempts[1].worker, Some(Worker::BuiltIn));
-    assert!(attempts[1].thread.is_none());
-    assert_eq!(attempts[1].observation, Observation::Requested);
-    assert_eq!(snapshot(&goals, &id).await?, admitted);
-    let source = admitted.workflow.tasks[0]
-        .worker_handoff(1, saved.control_source_revision)?
-        .context("retained handoff missing")?;
-    let prepared = bitrouter_orchestrator::goal::resources::Prepared {
-        selection: Default::default(),
-        prompt: report(workspace.path(), "domain prepared worker input")?,
-        materials: Vec::new(),
-        checked_dependencies: None,
-        worker_handoff: Some(source.clone()),
-        mcp_configuration_sha256: "b".repeat(64),
-    };
-    for (key, handoff) in [
-        ("missing-transfer", None),
-        (
-            "foreign-transfer",
-            Some(bitrouter_orchestrator::goal::resources::WorkerHandoff {
-                execution_id: "another-task".into(),
-                ..source.clone()
-            }),
-        ),
-    ] {
-        let mut invalid = prepared.clone();
-        invalid.worker_handoff = handoff;
-        assert!(
-            goals
-                .workflow_change(
-                    actor(),
-                    &id,
-                    key,
-                    2,
-                    Change::PrepareResources {
-                        execution_id: "new-native".into(),
-                        resources: invalid
-                    },
-                    156
-                )
-                .await
-                .is_err()
-        );
-    }
-    assert_eq!(snapshot(&goals, &id).await?, admitted);
-    goals
-        .workflow_change(
-            actor(),
-            &id,
-            "prepared-transfer",
-            2,
-            Change::PrepareResources {
-                execution_id: "new-native".into(),
-                resources: prepared,
-            },
-            157,
-        )
-        .await
-        .context("prepare replacement resources")?;
-    goals
-        .workflow_change(
-            actor(),
-            &id,
-            "preparation-failed",
-            2,
-            Change::ObserveExecution {
-                execution_id: "new-native".into(),
-                observation: Observation::Failed {
-                    run_id: None,
-                    reason: "domain fixture: no dispatch occurred".into(),
-                },
-            },
-            158,
-        )
-        .await
-        .context("observe undispatched preparation failure")?;
-    goals
-        .workflow_change(
-            actor(),
-            &id,
-            "retry-preparation",
-            2,
-            Change::RequestExecution {
-                task_id: "left".into(),
-                execution_id: "same-worker-next-attempt".into(),
-                workspace: workspace.path().join("same-worker-next-attempt"),
-            },
-            159,
-        )
-        .await
-        .context("retry replacement preparation")?;
-    let retry = snapshot(&goals, &id).await?;
-    assert_eq!(
-        retry.workflow.tasks[0].worker_handoff(2, saved.control_source_revision)?,
-        Some(source)
-    );
-    Ok(())
-}
-
 pub(super) async fn commit_task_update(
     goals: &GoalService,
     id: &str,
@@ -397,7 +102,6 @@ async fn task_check_additions_are_atomic_bounded_and_preserve_original_checks() 
         timeout_seconds: 10,
     };
     let update = |checks| TaskUpdate {
-        worker: None,
         task_id: "left".into(),
         instruction: "Keep original work and required verification".into(),
         resources: None,
@@ -539,7 +243,6 @@ async fn independent_candidate_reopens_review_in_new_goal_context_without_worker
         &id,
         "change-left-only",
         TaskUpdate {
-            worker: None,
             task_id: "left".into(),
             instruction: "Updated left requirement".into(),
             resources: None,
@@ -709,7 +412,6 @@ async fn clarification_resolution_preserves_scope_and_rejects_false_or_stale_clo
     let mut proposal = query("Save the specifically requested left requirement");
     proposal.resolutions = vec![resolution];
     proposal.task_updates = vec![TaskUpdate {
-        worker: None,
         task_id: "left".into(),
         instruction: "Original work plus the clarified left regression".into(),
         additional_checks: Vec::new(),
@@ -1139,7 +841,6 @@ async fn resource_edits_are_versioned_atomic_preserve_scope_and_do_not_resume() 
     begin(&goals, &id, operation).await?;
     let mut proposal = query("Configure context at the next controlled execution boundary");
     proposal.task_updates.push(TaskUpdate {
-        worker: None,
         task_id: "left".into(),
         instruction: "Original work and added context".into(),
         additional_checks: Vec::new(),
@@ -1218,7 +919,6 @@ async fn resource_edits_are_versioned_atomic_preserve_scope_and_do_not_resume() 
             .await?;
         let mut proposal = query("Save the explicitly requested update while remaining paused");
         proposal.task_updates.push(TaskUpdate {
-            worker: None,
             task_id: "left".into(),
             instruction: "Keep original work; use saved resource selection".into(),
             resources,
@@ -1349,7 +1049,6 @@ async fn selected_modification_scope_rejects_widening_and_keeps_independent_task
     };
     let proposal = Interpretation {
         task_updates: vec![TaskUpdate {
-            worker: None,
             task_id: "left".into(),
             instruction: "Reproduce the left failure without implementation changes".into(),
             additional_checks: Vec::new(),
@@ -1372,7 +1071,6 @@ async fn selected_modification_scope_rejects_widening_and_keeps_independent_task
         match mutation {
             "objective" => candidate.objective = Some("Change the entire Goal".into()),
             "independent" => candidate.task_updates.push(TaskUpdate {
-                worker: None,
                 task_id: "right".into(),
                 instruction: "New independent constraints".into(),
                 additional_checks: Vec::new(),
@@ -1656,7 +1354,6 @@ async fn paused_branch_edit_invalidates_dependents_and_preserves_execution_sourc
     begin(&goals, &id, operation).await?;
     let mut proposal = query("Save the added regression requirement");
     proposal.task_updates.push(TaskUpdate {
-        worker: None,
         task_id: "left".into(),
         instruction: "Fix expiry and verify the regression with the original API".into(),
         additional_checks: Vec::new(),
@@ -1713,7 +1410,6 @@ async fn newer_pause_supersedes_old_resume_but_keeps_its_valid_scoped_edit() -> 
         intent: RunIntent::Run,
     });
     proposal.task_updates.push(TaskUpdate {
-        worker: None,
         task_id: "left".into(),
         instruction: "Preserve original left work and add negative input coverage".into(),
         additional_checks: Vec::new(),
@@ -1835,7 +1531,6 @@ async fn explicit_task_reference_cannot_modify_another_task_or_control_goal() ->
     begin(&goals, &id, operation).await?;
     let mut wrong_task = query("Change the wrong task");
     wrong_task.task_updates.push(TaskUpdate {
-        worker: None,
         task_id: "right".into(),
         instruction: "Unauthorized target".into(),
         additional_checks: Vec::new(),

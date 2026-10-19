@@ -217,7 +217,7 @@ async fn changed_protocol_outbox_is_preserved_without_reinterpreting_or_replayin
         .join("outbox")
         .join(format!("{}.json", original.id()?));
     let current: serde_json::Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
-    for version in [1, 3, 5] {
+    for version in [1, 3] {
         let mut old = current.clone();
         old["protocol"] = serde_json::json!(version);
         if version == 1

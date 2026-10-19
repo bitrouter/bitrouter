@@ -27,10 +27,7 @@ pub(super) async fn assert_shared(
         let Config::Acp { acp } = &view.config else {
             anyhow::bail!("ACP worker was admitted as a native Agent");
         };
-        assert_eq!(
-            Some(acp.agent_id.as_str()),
-            task.execution_harness(execution)
-        );
+        assert_eq!(Some(&acp.agent_id), task.spec.harness.as_ref());
         assert!(view.config.native().is_err());
         assert_eq!(
             view.thread.goal_work.as_ref(),

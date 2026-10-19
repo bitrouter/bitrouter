@@ -46,19 +46,6 @@ mod tests {
         }
     }
 
-    struct BeforeWorkerSourcesMigrator;
-    #[async_trait::async_trait]
-    impl MigratorTrait for BeforeWorkerSourcesMigrator {
-        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-            Migrator::migrations()
-                .into_iter()
-                .take_while(|migration| {
-                    migration.name() != "m20240101_000031_bro_worker_source_format"
-                })
-                .collect()
-        }
-    }
-
     #[tokio::test]
     async fn legacy_startup_rejects_managed_goal_format_without_rewriting_old_goals()
     -> anyhow::Result<()> {
@@ -99,20 +86,6 @@ mod tests {
                 .contains("000030_bro_goal_execution_format")
         );
         assert!(Migration.down(&SchemaManager::new(&db)).await.is_err());
-        assert!(
-            BeforeWorkerSourcesMigrator::up(&db, None)
-                .await
-                .err()
-                .is_some_and(|error| error
-                    .to_string()
-                    .contains("000031_bro_worker_source_format"))
-        );
-        assert!(
-            crate::db::migration::m20240101_000031_bro_worker_source_format::Migration
-                .down(&SchemaManager::new(&db))
-                .await
-                .is_err()
-        );
         drop(goals);
         drop(store);
         db.close().await?;
@@ -125,11 +98,6 @@ mod tests {
             .await?;
         assert_eq!(history.operations, vec![operation]);
         assert!(LegacyMigrator::up(&reopened, None).await.is_err());
-        assert!(
-            BeforeWorkerSourcesMigrator::up(&reopened, None)
-                .await
-                .is_err()
-        );
         reopened.close().await?;
         Ok(())
     }

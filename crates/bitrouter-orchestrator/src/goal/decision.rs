@@ -125,8 +125,7 @@ pub(super) fn validate_response(
         || decision.task_revision != task.requirements_revision
         || execution.task_revision != task.requirements_revision
         || !matches!(&execution.observation, Observation::Running { run_id, .. } if run_id == &decision.run_id)
-        || decision.run_id.is_none()
-            && (task.execution_harness(execution).is_some() || execution.thread.is_none())
+        || decision.run_id.is_none() && (task.spec.harness.is_some() || execution.thread.is_none())
         || execution.stop.is_some()
         || option.allows && (goal.run_intent != RunIntent::Run || task.run_intent != RunIntent::Run)
         || decision.run_id.is_none()
@@ -197,7 +196,7 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event) -> Result<(), GoalEr
                 || decision.task_revision != execution.task_revision
                 || !matches!(&execution.observation, Observation::Running { run_id, .. } if run_id == &decision.run_id)
                 || decision.run_id.is_none()
-                    && (task.execution_harness(execution).is_some() || execution.thread.is_none())
+                    && (task.spec.harness.is_some() || execution.thread.is_none())
             {
                 return Err(GoalError::Conflict);
             }
