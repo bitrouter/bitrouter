@@ -2,11 +2,11 @@
   "createdAt": "2026-10-16T20:33:02.551Z",
   "scope": "BRO execution refactor v0.2 controlled local acceptance; not universal harness/provider qualification",
   "source": {
-    "evaluatedHead": "80c0aad0f1bccfcffdb0903659d94478fd4d484a",
+    "evaluatedHead": "25cbd553a075056879dcf8b5a356a95ddf206dd6",
     "dirtySource": true,
-    "sourceMap": "linux-pty-final62-source.json",
-    "sourceMapSha256": "a3ad9b38e7a25d2f1cae9e4983f0dfb3263ba61471e5a7878b426c0fcf147dec",
-    "evaluatedInputsSha256": "49dcd27de1492ae075a1315dcd66541c7c1d459444028600572a06d9122118b1",
+    "sourceMap": "ci-portability-final36-source.json",
+    "sourceMapSha256": "8d0cf262a30eaf2f51754fde5a606477333a38b955349288c46accae2d370930",
+    "evaluatedInputsSha256": "e1b52e2c9aceb0144985cd57382d05c1f3f1eb74cc89f5bb03ba9e02cf26004e",
     "metadataOnlyPaths": [
       "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
       "docs/DEVELOPMENT.md",
@@ -21,17 +21,41 @@
       ".agents/plugins/marketplace.json"
     ],
     "compiledJsonlFixturesRetained": true,
-    "functionalRustUnchangedSinceFinal36": true,
-    "changesSinceFinal36": [
-      ".github/workflows/ci.yml",
-      "apps/bitrouter/tests/goal_tui_pty.rs"
-    ]
+    "committedCheckpoint": "59d0cc4dcf5ec6696cc875b944f06732c8fd4cf6",
+    "committedInputsMatch": false,
+    "compiledInputsMatch": true,
+    "compiledInputsSha256": "ceea84b299af00103e1abb0bd4ba00f2dc0989ed5fc19e847f507300a267a755",
+    "postTestCiChange": {
+      "path": ".github/workflows/ci.yml",
+      "evaluatedSha256": "a88563d45201b3301078e23660497370396a5e3bfd010ee0c227af7cdc8b9062",
+      "currentSha256": "05d169608a9358b00ec6ab81244b8ec580d6c46c162cdae43edd7c1c75f4a7ea",
+      "kind": "CI selection only; all Rust, fixtures, Cargo inputs and nextest configuration match final36",
+      "integrationTargetsBefore": 26,
+      "integrationTargetsAfter": 36,
+      "newShard": "native-goals",
+      "newShardBuildJobs": 1,
+      "newShardRetries": 0,
+      "newTargets": [
+        "code_tui_pty",
+        "goal_tui_pty",
+        "goals",
+        "harness_mcp_check",
+        "invocation",
+        "native_agent_process",
+        "native_agent_tui",
+        "native_harness_resources",
+        "orchestrator_core",
+        "skill_cli_contract"
+      ],
+      "coverageReport": "bro-linux-integration-coverage53.json",
+      "coverageReportSha256": "cfa2d557749e8aec3ba7a3780bda19d02aef3fb2b2b1d03c90276600040c29e5",
+      "evidenceLocator": "The PR acceptance comment pins the later hosted/coverage archive; archive.commit retains the accepted local-run archive."
+    }
   },
   "local": {
-    "id": "linux-pty-final62",
+    "id": "ci-portability-final36",
     "runner": "v3 rejects code-zero LEAK reports",
     "passed": true,
-    "outerTestSlots": 2,
     "sourceDrift": [],
     "leaks": [],
     "jobs": [
@@ -113,7 +137,7 @@
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [   4.111s] 1 test run: 1 passed, 9 skipped"
+          "     Summary [   3.939s] 1 test run: 1 passed, 9 skipped"
         ],
         "leaks": []
       },
@@ -132,7 +156,7 @@
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [   4.133s] 1 test run: 1 passed, 9 skipped"
+          "     Summary [   3.925s] 1 test run: 1 passed, 9 skipped"
         ],
         "leaks": []
       },
@@ -151,26 +175,27 @@
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [   4.787s] 1 test run: 1 passed, 9 skipped"
+          "     Summary [   3.980s] 1 test run: 1 passed, 9 skipped"
         ],
         "leaks": []
       },
       {
-        "name": "goal-pty",
+        "name": "acp-recovery",
         "args": [
           "nextest",
           "run",
           "--workspace",
           "--all-features",
+          "--lib",
           "-E",
-          "binary(goal_tui_pty)",
+          "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session) | test(service::tests::worker::) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
           "--test-threads",
           "2"
         ],
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [  54.765s] 4 tests run: 4 passed, 0 skipped"
+          "     Summary [  29.407s] 14 tests run: 14 passed, 3652 skipped"
         ],
         "leaks": []
       },
@@ -190,7 +215,7 @@
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [   0.675s] 2 tests run: 2 passed, 3664 skipped"
+          "     Summary [   0.479s] 2 tests run: 2 passed, 3664 skipped"
         ],
         "leaks": []
       },
@@ -208,7 +233,7 @@
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [1176.131s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
+          "     Summary [1172.177s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
         ],
         "leaks": []
       },
@@ -277,13 +302,13 @@
       }
     ],
     "nativeTreeContainsAcp": false,
-    "sourceTarFilesVerified": 1
+    "sourceTarFilesVerified": 7
   },
   "archive": {
     "repository": "https://github.com/bitrouter/bitrouter",
     "branch": "codex/pr981-refactor-evidence-20261016",
     "commit": "d20f5ca7833dd10618dee7137fe297f6ef23ddf2",
-    "publication": "Prior local archive remains pinned; latest PTY/coverage annex publication pending.",
+    "publication": "published and remote head verified",
     "priorArchive": "382c2b58c5c25b02805175a33d60707dc4227b46",
     "url": "https://github.com/bitrouter/bitrouter/tree/d20f5ca7833dd10618dee7137fe297f6ef23ddf2",
     "checksumManifest": "SHA256SUMS",
@@ -295,7 +320,7 @@
     "independentGitArchiveChecksumsVerified": 1187
   },
   "hostedCi": {
-    "status": "Actual latest-head expanded Linux/native-goals and platform results are recorded in the PR acceptance comment.",
+    "status": "Exact final CI head must validate the expanded Linux integration selection; actual results are posted in the PR acceptance comment.",
     "checks": "https://github.com/bitrouter/bitrouter/pull/981/checks"
   },
   "limits": [
@@ -305,55 +330,20 @@
     "Core persistence migration, complete Turn-fixed routing, dynamic graph edits, subgoals and Goal owner handoff are deferred."
   ],
   "priorLocal": {
-    "acceptedBeforePty": {
-      "id": "ci-portability-final36",
-      "tests": 4757,
-      "skipped": 24,
+    "parallelRun": {
+      "id": "ci-portability-final31",
+      "qualification": "Reported onboarding public help output LEAK; assertions/status recorded in exact raw result. Same executable/test inputs as final36. Cause not claimed proven."
+    },
+    "id": "acp-continuation-final15",
+    "scope": "4757 tests passed on earlier inputs; original hosted feature-isolation, compiler and Linux aggregate-wait failures bind their own head.",
+    "interrupted": {
+      "id": "ci-portability-final26",
+      "passed": 781,
+      "signalCases": 1,
+      "unrun": 3975,
+      "sourceDrift": [],
       "leaks": [],
-      "scope": "Earlier exact source before the Linux inventory and PTY correction, not current-source proof."
-    },
-    "ciCoverageAudit": {
-      "path": ".github/workflows/ci.yml",
-      "evaluatedSha256": "a88563d45201b3301078e23660497370396a5e3bfd010ee0c227af7cdc8b9062",
-      "currentSha256": "05d169608a9358b00ec6ab81244b8ec580d6c46c162cdae43edd7c1c75f4a7ea",
-      "kind": "CI selection only; all Rust, fixtures, Cargo inputs and nextest configuration match final36",
-      "integrationTargetsBefore": 26,
-      "integrationTargetsAfter": 36,
-      "newShard": "native-goals",
-      "newShardBuildJobs": 1,
-      "newShardRetries": 0,
-      "newTargets": [
-        "code_tui_pty",
-        "goal_tui_pty",
-        "goals",
-        "harness_mcp_check",
-        "invocation",
-        "native_agent_process",
-        "native_agent_tui",
-        "native_harness_resources",
-        "orchestrator_core",
-        "skill_cli_contract"
-      ],
-      "coverageReport": "bro-linux-integration-coverage53.json",
-      "coverageReportSha256": "cfa2d557749e8aec3ba7a3780bda19d02aef3fb2b2b1d03c90276600040c29e5",
-      "evidenceLocator": "The PR acceptance comment pins the later hosted/coverage archive; archive.commit retains the accepted local-run archive."
-    },
-    "earlier": {
-      "parallelRun": {
-        "id": "ci-portability-final31",
-        "qualification": "Reported onboarding public help output LEAK; assertions/status recorded in exact raw result. Same executable/test inputs as final36. Cause not claimed proven."
-      },
-      "id": "acp-continuation-final15",
-      "scope": "4757 tests passed on earlier inputs; original hosted feature-isolation, compiler and Linux aggregate-wait failures bind their own head.",
-      "interrupted": {
-        "id": "ci-portability-final26",
-        "passed": 781,
-        "signalCases": 1,
-        "unrun": 3975,
-        "sourceDrift": [],
-        "leaks": [],
-        "reason": "Stopped explicitly before the separate Linux acceptance-phase correction; not a complete pass."
-      }
+      "reason": "Stopped explicitly before the separate Linux acceptance-phase correction; not a complete pass."
     }
   }
 }
