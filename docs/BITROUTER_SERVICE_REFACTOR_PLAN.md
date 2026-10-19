@@ -1,7 +1,7 @@
 # BitRouter service architecture refactor plan
 
-Status: **P0 implemented; integration with post-revert main `e972d5e` is being
-revalidated. P1 remains a separate milestone.**
+Status: **P0 implemented and locally revalidated at `a51effd` against post-revert
+main `e972d5e`; fresh hosted checks are pending. P1 remains separate.**
 
 See the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md#post-revert-main-integration-2026-10-20)
 for current integration evidence. Earlier accepted revisions retain their dated

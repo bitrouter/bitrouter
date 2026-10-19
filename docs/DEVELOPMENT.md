@@ -8,8 +8,8 @@ The table below describes the completed P0 implementation. Core, harness,
 TUI, telemetry, model/provider runtime and the old SDK server have moved into
 the application. The SDK provides gateway HTTP/SSE, control, evaluation, harness
 HTTP/SSE and managed core transport clients. Feature/profile and delivery
-acceptance passed locally and in hosted CI at `1527bc2`. The current post-revert
-main integration is being revalidated; see the
+acceptance passed locally and in hosted CI at `1527bc2`. The post-revert main
+integration is locally revalidated at `a51effd`, with fresh hosted checks pending; see the
 [current progress record](BITROUTER_SERVICE_REFACTOR_PROGRESS.md#post-revert-main-integration-2026-10-20).
 The architecture and migration gates are in the
 [service architecture refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).

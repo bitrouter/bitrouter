@@ -6,8 +6,9 @@ completing one extraction does not complete the milestone.
 
 Current status: P0 previously passed local and hosted acceptance. Main has now
 reverted the Goal implementation in #987, and the PR is being refreshed against
-that main revision (`e972d5e`). New artifact/performance evidence and exact-head
-hosted checks are pending. Earlier acceptance retains its dated source identity;
+that main revision (`e972d5e`). New committed artifact/performance checks passed
+at `a51effd`; exact-head hosted checks are pending. Earlier acceptance retains its
+dated source identity;
 it is not a claim about a newer PR head. P1 remains outside this PR.
 
 ## Post-revert main integration (2026-10-20)
@@ -24,10 +25,46 @@ the previously validated P0 head; the registry snapshots intentionally advance.
 The five-package workspace, runtime format 7 and original feature/CLI ownership
 are preserved. The reverted Goal runtime and its fixture package are not restored.
 
-New committed artifacts will be built against this exact integration, with a
-separate baseline built from `e972d5e`. Registry/dist checking, process transitions,
-independent SDK acceptance and comparable measurements remain explicit gates.
-Fresh hosted checks will validate the final PR head across supported platforms.
+The committed artifacts and independently rebuilt `e972d5e` baseline now have
+the local acceptance evidence below. Fresh hosted checks will validate the final
+PR head across supported platforms.
+
+### Committed artifact and local acceptance
+
+Final runtime source: `a51effdc114bee5d0500d2231dc6b105f0fcee36`. The full,
+minimum, harness and core-only executables all report this source and their
+exact feature sets. The comparison baseline is independently built from
+`e972d5e`. [Artifact identities](evidence/service-refactor/artifacts-postrevert-2026-10-20.json)
+and [validation evidence](evidence/service-refactor/validation-postrevert-2026-10-20.json)
+record the source, commands, log hashes and package contents.
+
+- Five-member workspace, formatting, registry source and generated distribution
+  checks passed. Independent review found no issue in the eight upstream files;
+  all Rust source, manifests/lock, CI and nextest configuration remain identical
+  to the previously validated P0 head `08b5dcc`.
+- Eleven artifact identity/handoff tests and two real-process transition tests
+  passed. The latter include full → minimum → full → harness → full transitions
+  over the unchanged baseline-written database and resident/replacement checks.
+- Three full/minimum/full cases passed for published policy and accounting,
+  reserved judge charges, and trajectory cost guards/outbox state.
+- The independent core SDK process and prehashed-manifest fidelity cases passed.
+  Default/core consumer dependency trees exclude service implementation packages.
+- Gateway archive checksum, extraction and independent SDK process acceptance
+  passed. Package inventories contain all required assets and no target files.
+- Measurement fixture tests, strict Clippy and explicit interruption cleanup
+  passed. The final nine-sample comparison ran with builds/tests/lints stopped.
+
+Full idle RSS is **61.46875 → 64.109375 MiB**, a **2.640625 MiB / 4.30%**
+increase, below the recorded accepted overhead. Minimum gateway idle RSS is
+**42.59375 MiB**. Full ordinary/SSE throughput medians differ by **+1.70% / -2.50%**.
+The [measurement report](evidence/service-refactor/README.md#post-revert-integration-comparison-2026-10-20)
+retains every sample, startup outlier and after-load variation. Preserve the
+idle-memory optimization item and the SSE follow-up measurement item.
+
+This source-equivalent merge does not claim a new local full-workspace test run.
+The earlier completed source/platform gates retain their exact revisions;
+fresh full-suite and platform checks on the updated PR head remain the final
+merge-readiness gate. No release or actual PR merge has been performed.
 
 ## Baseline
 

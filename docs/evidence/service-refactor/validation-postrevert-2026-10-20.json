@@ -1,0 +1,292 @@
+{
+  "schema_version": 1,
+  "local_date": "2026-10-20",
+  "timezone": "Asia/Shanghai",
+  "runtime_source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+  "integrated_main_revision": "e972d5ebb8215a51dbe88d404616087b940250ca",
+  "previous_validated_p0_head": "08b5dcc2e8f19bf7f273c40b9e939f7bd043ab44",
+  "status": "local_post_revert_acceptance_complete_hosted_checks_pending",
+  "source_note": "All Rust source, Cargo manifests/lock, CI and nextest configuration are byte-identical to the previously validated P0 head. The merge carries eight upstream README/CLI/catalog files and updates current status documentation. Superseded4cfa/c215 Goal integration results are not acceptance evidence for this candidate. Full workspace/platform checks will run on the updated PR head; no new local full-suite run is claimed here.",
+  "host": "macOS arm64, Apple M4 (Mac16,12), 24 GiB",
+  "build_environment": {
+    "RUSTUP_TOOLCHAIN": "1.99.0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "review": {
+    "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+    "upstream_revision": "e972d5ebb8215a51dbe88d404616087b940250ca",
+    "previous_p0_head": "08b5dcc2e8f19bf7f273c40b9e939f7bd043ab44",
+    "review_scope": "Eight integrated README/CLI, registry source and generated catalog files",
+    "result": "No actionable findings",
+    "verified": [
+      "All eight integrated patches match upstream54c822..e972",
+      "Rust source, Cargo manifests/lock and CI are identical to08b5",
+      "Reverted Goal behavior is not reintroduced",
+      "CLI policy example arguments are valid",
+      "Both generated catalog copies agree with sources; existing entries remain intact"
+    ],
+    "limit": "The review does not replace pending committed-artifact, performance or hosted checks."
+  },
+  "workspace_membership": [
+    "bitrouter",
+    "bitrouter-ai",
+    "bitrouter-sdk",
+    "bitrouter-guardrails",
+    "dist-helper"
+  ],
+  "independent_sdk_graphs": {
+    "default": "passed",
+    "core": "passed"
+  },
+  "package": {
+    "archive": "/tmp/bitrouter-p0-postrevert-final-20261020/packaged/bitrouter-gateway-aarch64-apple-darwin.tar.gz",
+    "archive_sha256": "e564da051dda3caf90881a6135e3628b71229ba457c1470efe749476eb92ea49",
+    "manifest": {
+      "identity": {
+        "version": "1.0.0-alpha.33",
+        "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+        "target": "aarch64-apple-darwin",
+        "features": [],
+        "profile": "gateway",
+        "handoff_build_id": "20f656dd07b628112102eadf624a0d3fd610baa20dcdac33eeb3a3a54bae41ce"
+      },
+      "cargo_profile": "dev",
+      "binary": {
+        "path": "bro",
+        "bytes": 115981792,
+        "sha256": "9485ec629deb56d82571f464d16dda4e2d0e2abd1baf391d23134cde71d5ca56"
+      }
+    },
+    "required_assets": {
+      "bitrouter": [
+        "Cargo.toml",
+        "src/lib.rs",
+        "src/main.rs",
+        "build.rs",
+        "build_artifact.rs",
+        "registry-dist/agents.json",
+        "registry-dist/runtimes.json",
+        "registry-dist/providers.json",
+        "registry-dist/models.json",
+        "providers/bitrouter.toml",
+        "policy/default.yaml",
+        "examples/config_schema.rs",
+        "examples/legacy_guardrails.rs"
+      ],
+      "bitrouter-ai": [
+        "Cargo.toml",
+        "README.md",
+        "src/lib.rs",
+        "src/core/protocol.rs",
+        "src/core/checkpoint.rs",
+        "span-schema.json"
+      ],
+      "bitrouter-sdk": [
+        "Cargo.toml",
+        "README.md",
+        "src/lib.rs",
+        "src/gateway.rs",
+        "src/control.rs",
+        "src/harness.rs",
+        "src/core.rs"
+      ],
+      "bitrouter-guardrails": [
+        "Cargo.toml",
+        "src/lib.rs"
+      ]
+    },
+    "file_counts": {
+      "bitrouter": 1007,
+      "bitrouter-ai": 64,
+      "bitrouter-sdk": 22,
+      "bitrouter-guardrails": 8
+    }
+  },
+  "performance": {
+    "report": "gateway-postrevert-2026-10-20.json",
+    "samples": 9,
+    "builds_tests_and_lints_stopped": true,
+    "unrelated_existing_processes_untouched": true
+  },
+  "warnings": [
+    "Existing proc-macro-error2 future-incompatibility warning.",
+    "macOS development linker reports compact-unwind offset limitations for large baseline/full binaries; builds and process acceptance succeeded."
+  ],
+  "records": [
+    {
+      "name": "membership",
+      "command": "cargo +1.99.0 metadata --offline --locked --no-deps --format-version 1; assert exactly five workspace members",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-membership.log",
+      "output_sha256": "a17fcf0a2f50e2d495e4f90ce263410edc183add6c62699a2facbccf60410f74",
+      "summaries": []
+    },
+    {
+      "name": "format",
+      "command": "cargo +1.99.0 fmt --all -- --check",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-format.log",
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "name": "registry",
+      "command": "cargo +1.99.0 run --offline --locked -p dist-helper -- registry validate",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-registry.log",
+      "output_sha256": "8bab7c2dda1e90c87d0b0ed1c2075211899fd7e8b93f701fc069a5066f989726",
+      "summaries": [
+        "Finished `dev` profile [unoptimized] target(s) in 5.66s"
+      ]
+    },
+    {
+      "name": "dist",
+      "command": "cargo +1.99.0 run --offline --locked -p dist-helper -- check",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-dist.log",
+      "output_sha256": "5002cdaf74f89c97a57aaf2a371f299531cdb0ea896f7b8d1ea26f159128e64a",
+      "summaries": [
+        "Finished `dev` profile [unoptimized] target(s) in 0.09s",
+        "schema is up to date: /Users/archer/.codex/worktrees/d8dc/bitrouter-ws/repos/bitrouter-p0-sync/dist/schema/bitrouter.config.schema.json",
+        "registry dist is up to date: 45 providers, 60 canonical models, 1 runtimes, 6 agents"
+      ]
+    },
+    {
+      "name": "source-equality",
+      "command": "git diff --exit-code 08b5dcc HEAD -- *.rs **/Cargo.toml Cargo.toml Cargo.lock .github .config/nextest.toml",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-source-equality.log",
+      "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summaries": []
+    },
+    {
+      "name": "artifact-metadata",
+      "command": "cargo +1.99.0 test --offline --locked -p bitrouter --no-default-features --test artifact_build_metadata",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/artifact-metadata.log",
+      "output_sha256": "07c1b35c1524dfae5e07f93fb4896d1c5c7c608f1db6d1781417725d86eae11d",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 33.86s",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s"
+      ]
+    },
+    {
+      "name": "artifact-transitions",
+      "command": "cargo +1.99.0 test --offline --locked -p bitrouter --no-default-features --test artifact_profiles -- --ignored --test-threads=1",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/artifact-transitions.log",
+      "output_sha256": "61f60714cd63f42491fe0219b138c0bcde72a31a3a6e9b5eabb79abe4aa42d83",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 0.93s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.89s"
+      ]
+    },
+    {
+      "name": "artifact-gateway-state",
+      "command": "cargo +1.99.0 test --offline --locked -p bitrouter --test artifact_profiles gateway_state:: -- --ignored --test-threads=1",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/artifact-gateway-state.log",
+      "output_sha256": "cd3a08ca98f4a484af855a4cf19370a4da9f687f3cce8dab39ab0cc780d3092d",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 1m 07s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 3.40s"
+      ]
+    },
+    {
+      "name": "sdk-default-tests",
+      "command": "cargo +1.99.0 test --offline --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --target-dir /tmp/bitrouter-p0-sdk-consumer-target",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/sdk-default-tests.log",
+      "output_sha256": "cdbc084a8368161f7d1a171dff7b162a5bb89755d4a7d5994d45b7d31fde7569",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 6.11s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "sdk-core-tests",
+      "command": "cargo +1.99.0 test --offline --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --features core --target-dir /tmp/bitrouter-p0-sdk-consumer-target",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/sdk-core-tests.log",
+      "output_sha256": "a00a002e492c9ac4fa245c7af8082a04437a93a9b09bd49495c1d0c96fc162e7",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 3.37s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "core-sdk",
+      "command": "cargo +1.99.0 test --offline --locked -p bitrouter --no-default-features --test core_sdk independent_core_sdk_preserves_harness_authority -- --ignored --exact --nocapture",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/core-sdk.log",
+      "output_sha256": "df07ff131c62810deae720ed057cd0c19133562a39857f0514236a5d9175e2f1",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 1.34s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.27s"
+      ]
+    },
+    {
+      "name": "manifest-fidelity",
+      "command": "Run the application sdk_manifest_fixture writer, then the isolated sdk_consumer manifest_fidelity test with that generated file",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/manifest-fidelity.log",
+      "output_sha256": "c8f03cde3871e8d304a0a2659055f161ba450496850e4e68104414f4dfd1b251",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 0.05s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "packaged-sdk",
+      "command": "Build dist-helper gateway archive, verify checksum, extract, then run packaged_gateway_independent_sdk_consumer against it with a separately built client",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/packaged-sdk.log",
+      "output_sha256": "141db51d7810e6da3c0b8af72fc1485126be17b47a42bf85a1678a32996d6e1e",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 0.98s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s"
+      ]
+    },
+    {
+      "name": "measurement-tests",
+      "command": "cargo +1.99.0 test --offline --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/measurement-tests.log",
+      "output_sha256": "c2b650723c3bb59484fd4356bece1e499cd0dabb7b2f215cc151d330adc5cd38",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 0.09s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "measurement-cancellation",
+      "command": "cargo +1.99.0 test --offline --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --test cancellation -- --ignored --test-threads=1",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/measurement-cancellation.log",
+      "output_sha256": "c65726f1a0114ddd01d0f3d3244e116bff5a6988005fd64a03858fc8a374cbdb",
+      "summaries": [
+        "Finished `test` profile [unoptimized] target(s) in 0.03s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.03s"
+      ]
+    },
+    {
+      "name": "measurement-clippy",
+      "command": "cargo +1.99.0 clippy --offline --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --all-targets -- -D warnings",
+      "status": "passed",
+      "log": "/tmp/bitrouter-p0-postrevert-final-20261020/measurement-clippy.log",
+      "output_sha256": "fcce12e8e9a3743502ec98eb1888a43a32489c10219b715f931aa40675ed5311",
+      "summaries": [
+        "Finished `dev` profile [unoptimized] target(s) in 0.13s"
+      ]
+    }
+  ]
+}

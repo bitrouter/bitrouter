@@ -110,3 +110,58 @@ are excluded. The corresponding rendered entry counts are 1,353 / 1,286 / 799.
 These isolated product closures are distinct from the earlier workspace-wide,
 all-features baseline in the progress ledger. No dependency reduction is
 inferred from the reduced number of workspace packages alone.
+
+## Post-revert integration comparison (2026-10-20)
+
+Final runtime source: `a51effdc114bee5d0500d2231dc6b105f0fcee36`, integrating
+main `e972d5ebb8215a51dbe88d404616087b940250ca`. Main reverted the Goal
+implementation in #987 before the earlier attempted integration was pushed.
+Results for the superseded `4cfa4b5` / `c215cb7` pair are not final acceptance
+evidence for this PR. The new comparison uses a rebuilt `e972d5e` baseline.
+
+[Raw samples](gateway-postrevert-2026-10-20.json),
+[artifact identities](artifacts-postrevert-2026-10-20.json), and
+[validation evidence](validation-postrevert-2026-10-20.json) record the exact
+source, bytes, feature sets, dependency counts and process checks. The gateway
+archive is a separate explicit-target build with its own verified binary hash;
+the native minimum build is the executable used for measurement.
+
+Settings match the earlier comparison: Mac16,12 / Apple M4 / 24 GiB, Rust 1.99.0,
+unoptimized development builds, incremental compilation and debug symbols off,
+and two build jobs. All executables were built and copied before sampling. Three
+rotating rounds each use 16 warmups, 4,096 ordinary and 4,096 SSE requests at
+concurrency eight, fresh SQLite state, exact body/usage/framing checks and exactly
+8,208 upstream calls. Only one benchmark gateway runs at a time; unrelated
+existing processes remain untouched. No build, test or lint ran during samples.
+
+| Metric (median unless stated) | Post-revert main full | P0 full | Minimum gateway |
+| --- | ---: | ---: | ---: |
+| Executable bytes | 317,131,456 | 316,986,944 | 116,019,360 |
+| Startup ms | 65.406 | 62.018 | 55.275 |
+| Warmed idle RSS MiB | 61.469 | 64.109 | 42.594 |
+| After-load RSS MiB | 196.094 | 204.172 | 176.125 |
+| Ordinary requests/s | 4,075.186 | 4,144.505 | 4,159.999 |
+| Streaming requests/s | 5,447.858 | 5,311.691 | 5,449.623 |
+| Ordinary p95 latency ms | 3.003 | 2.983 | 2.956 |
+| Streaming p95 latency ms | 1.962 | 2.022 | 1.957 |
+| Normal/build dependency name-version pairs | 435 | 431 | 304 |
+
+Full idle RSS increases by **2.640625 MiB / 4.30%**, below the previously accepted
+measured increase in both absolute and relative terms. The minimum uses
+**30.71% less** idle memory than the matching baseline. Ordinary throughput
+medians differ by **+1.70%**, while SSE differs by **-2.50%**. Retain the idle-memory
+optimization follow-up and record the SSE difference for follow-up measurement;
+these samples do not establish a production-performance change.
+
+No sample is discarded. One baseline startup took **2,037.536 ms**, versus
+60.679 and 65.406 ms for the other two; this report does not diagnose its cause
+or claim a startup improvement. Ordinary throughput spans 3,999–4,088 requests/s
+for the baseline and 4,077–4,149 for P0. SSE spans 5,404–5,483 and 5,296–5,392,
+respectively. After-load RSS medians differ by +4.12%, with ranges of
+190.578–199.516 MiB and 192.219–212.703 MiB. The three-sample workload does not
+establish long-running retained-memory behavior or cover remote provider latency.
+
+The existing proc-macro-error2 future warning and macOS development-linker
+compact-unwind warning remain visible in build logs. These builds and their
+process acceptance pass; exception-unwinding performance is not measured.
+Dependency counts retain the isolated normal/build name-version method above.
