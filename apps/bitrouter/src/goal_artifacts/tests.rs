@@ -179,6 +179,140 @@ async fn goal_artifacts_merge_diamond_dependencies_and_reject_conflicts() -> Res
     Ok(())
 }
 
+#[tokio::test]
+async fn goal_artifacts_integrate_dependent_overwrites_and_deletions() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let store = root.path().join("artifacts");
+    let source = root.path().join("source");
+    let downstream = root.path().join("downstream");
+    let delivery = root.path().join("delivery");
+    let head = repository(&source).await?;
+    worktree(&source, &downstream, &head).await?;
+    worktree(&source, &delivery, &head).await?;
+    tokio::fs::write(source.join("tracked.txt"), b"intermediate\n").await?;
+    tokio::fs::write(source.join("new.bin"), [0, 1, 2]).await?;
+    tokio::fs::write(source.join("deleted.txt"), b"temporary\n").await?;
+    let upstream = capture(&store, &source, &head).await?;
+    apply(&store, &upstream, &downstream, &head).await?;
+    tokio::fs::write(downstream.join("tracked.txt"), b"finished\n").await?;
+    tokio::fs::write(downstream.join("new.bin"), [0, 3, 4]).await?;
+    tokio::fs::remove_file(downstream.join("deleted.txt")).await?;
+    let downstream = capture(&store, &downstream, &head).await?;
+    // Deliberately not topologically ordered; dependency edges determine order.
+    merge::integrate(
+        &store,
+        &[
+            merge::Input {
+                id: "b",
+                dependencies: &["a".into()],
+                artifact: &downstream,
+            },
+            merge::Input {
+                id: "a",
+                dependencies: &[],
+                artifact: &upstream,
+            },
+        ],
+        &delivery,
+        &head,
+    )
+    .await?;
+    assert_eq!(
+        tokio::fs::read(delivery.join("tracked.txt")).await?,
+        b"finished\n"
+    );
+    assert_eq!(tokio::fs::read(delivery.join("new.bin")).await?, [0, 3, 4]);
+    assert!(!tokio::fs::try_exists(delivery.join("deleted.txt")).await?);
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_artifacts_integrate_diamond_using_actual_common_ancestor() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let store = root.path().join("artifacts");
+    let source = root.path().join("source");
+    let left = root.path().join("left");
+    let right = root.path().join("right");
+    let delivery = root.path().join("delivery");
+    let head = repository(&source).await?;
+    for path in [&left, &right, &delivery] {
+        worktree(&source, path, &head).await?;
+    }
+    tokio::fs::write(source.join("tracked.txt"), b"common ancestor\n").await?;
+    let ancestor = capture(&store, &source, &head).await?;
+    apply(&store, &ancestor, &left, &head).await?;
+    apply(&store, &ancestor, &right, &head).await?;
+    tokio::fs::write(left.join("tracked.txt"), b"left updates ancestor\n").await?;
+    tokio::fs::write(right.join("right.txt"), b"independent right edit\n").await?;
+    let left_artifact = capture(&store, &left, &head).await?;
+    let right_artifact = capture(&store, &right, &head).await?;
+    merge::integrate(
+        &store,
+        &[
+            merge::Input {
+                id: "left",
+                dependencies: &["ancestor".into()],
+                artifact: &left_artifact,
+            },
+            merge::Input {
+                id: "right",
+                dependencies: &["ancestor".into()],
+                artifact: &right_artifact,
+            },
+            merge::Input {
+                id: "ancestor",
+                dependencies: &[],
+                artifact: &ancestor,
+            },
+        ],
+        &delivery,
+        &head,
+    )
+    .await?;
+    assert_eq!(
+        tokio::fs::read(delivery.join("tracked.txt")).await?,
+        b"left updates ancestor\n"
+    );
+    assert_eq!(
+        tokio::fs::read(delivery.join("right.txt")).await?,
+        b"independent right edit\n"
+    );
+    // Genuine sibling conflicts still fail without changing the destination.
+    tokio::fs::write(right.join("tracked.txt"), b"incompatible right edit\n").await?;
+    let conflicting = capture(&store, &right, &head).await?;
+    assert!(
+        merge::integrate(
+            &store,
+            &[
+                merge::Input {
+                    id: "ancestor",
+                    dependencies: &[],
+                    artifact: &ancestor
+                },
+                merge::Input {
+                    id: "left",
+                    dependencies: &["ancestor".into()],
+                    artifact: &left_artifact
+                },
+                merge::Input {
+                    id: "right",
+                    dependencies: &["ancestor".into()],
+                    artifact: &conflicting
+                },
+            ],
+            &delivery,
+            &head
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        tokio::fs::read(delivery.join("tracked.txt")).await?,
+        b"left updates ancestor\n"
+    );
+    Ok(())
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn goal_artifacts_never_write_through_workspace_symlinks() -> Result<()> {

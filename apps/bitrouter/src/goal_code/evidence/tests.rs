@@ -57,6 +57,7 @@ async fn archive_inspector_reads_committed_chain_and_rejects_uncommitted_or_fore
     let goal_id = operation.goal_id;
     let material = crate::goal_artifacts::put(&root, b"original scoped tool evidence").await?;
     let decision = PermissionDecision {
+        check: None,
         id: "retired-decision".into(),
         execution_id: "original-1".into(),
         run_id: Some("domain-run".into()),

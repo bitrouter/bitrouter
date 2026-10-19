@@ -108,6 +108,19 @@ impl Coordinator {
             anyhow::bail!("unexpected permission Goal snapshot");
         };
         for decision in &current.workflow.decisions {
+            // The live check runner consumes its exact one-time decision. It
+            // must never be auto-approved or sent to a finished worker Turn.
+            if let Some(check) = &decision.check {
+                if decision.state == PermissionState::Pending
+                    && check.validate(&current, decision).is_err()
+                {
+                    self.change(&current, Change::Decision { event: Event::Obsolete {
+                        decision_id: decision.id.clone(),
+                        reason: "Command-check scope or owner changed; the old request cannot authorize execution".into(),
+                    }}).await?;
+                }
+                continue;
+            }
             match &decision.state {
                 PermissionState::Pending => {
                     let task = current.workflow.tasks.iter().find(|task| {
@@ -304,6 +317,7 @@ impl Coordinator {
             Change::Decision {
                 event: Event::Observe {
                     decision: PermissionDecision {
+                        check: None,
                         id,
                         execution_id: execution.id.clone(),
                         run_id: Some(run_id.into()),

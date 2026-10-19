@@ -2,6 +2,8 @@ use super::*;
 use bitrouter_orchestrator::goal::verification::{CheckOutput, CheckSpec};
 use bitrouter_orchestrator::goal::workflow::CheckState;
 
+mod permission;
+
 pub(super) async fn passed(
     root: &Path,
     task: &Task,
@@ -151,7 +153,7 @@ impl Coordinator {
     ) -> Result<(ArtifactRef, CheckOutput, ArtifactRef)> {
         let root = crate::goal_artifacts::root(&self.workspaces, &goal.id);
         let output = self
-            .run_workspace_check(goal, workspace, task, spec, attempt_id)
+            .run_workspace_check(goal, workspace, task, spec, attempt_id, baseline)
             .await
             .unwrap_or_else(|error| unavailable(&bounded_error(&error)));
         let report = crate::goal_artifacts::put(&root, &serde_json::to_vec(&output)?).await?;
@@ -171,32 +173,93 @@ impl Coordinator {
         task: Option<(&str, u64)>,
         spec: &CheckSpec,
         attempt_id: &str,
+        baseline: Option<&str>,
     ) -> Result<CheckOutput> {
         let cancellation = CancellationToken::new();
-        let future = bitrouter_orchestrator::goal::verification::run(
-            workspace,
-            spec,
-            attempt_id,
-            &cancellation,
-        );
+        let future = async {
+            use bitrouter_orchestrator::goal::verification;
+            if spec.command().is_some() {
+                let permit = self
+                    .check_permission(goal, attempt_id, baseline, &cancellation)
+                    .await?;
+                verification::run_approved(workspace, spec, attempt_id, &cancellation, permit)
+                    .await
+                    .map_err(anyhow::Error::msg)
+            } else {
+                verification::run(workspace, spec, attempt_id, &cancellation)
+                    .await
+                    .map_err(anyhow::Error::msg)
+            }
+        };
         tokio::pin!(future);
-        let mut tick = tokio::time::interval(Duration::from_millis(500));
-        loop {
-            tokio::select! {
-                result = &mut future => return result.map_err(anyhow::Error::msg),
-                _ = tick.tick() => {
-                    let time = now()?;
-                    let result = self.goals.execute("local", GoalCommand::Get { goal_id: goal.id.clone() }, time).await;
-                    let allowed = match result {
-                        Ok(GoalReply::Snapshot { goal: current }) => current.run_intent == RunIntent::Run
-                            && current.budget.admission(current.created_at_ms, time).is_ok()
+        // Keep polling admission while the control read awaits storage: the
+        // admission future may itself hold the database's only connection.
+        let monitor = async {
+            let mut tick = tokio::time::interval(Duration::from_millis(500));
+            loop {
+                tick.tick().await;
+                let time = now()?;
+                let result = self
+                    .goals
+                    .execute(
+                        "local",
+                        GoalCommand::Get {
+                            goal_id: goal.id.clone(),
+                        },
+                        time,
+                    )
+                    .await;
+                let allowed = match result {
+                    Ok(GoalReply::Snapshot { goal: current }) => {
+                        current.run_intent == RunIntent::Run
+                            && current
+                                .budget
+                                .admission(current.created_at_ms, time)
+                                .is_ok()
                             && current.requirements_revision == goal.requirements_revision
-                            && task.is_none_or(|(id, revision)| current.workflow.tasks.iter().find(|current| current.spec.id == id).is_some_and(|current| current.run_intent == RunIntent::Run && current.requirements_revision == revision))
-                            && current.workflow.coordinator.as_ref().is_some_and(|lease| lease.id == self.id && lease.expires_at_ms > time),
-                        _ => false,
-                    };
-                    if !allowed { cancellation.cancel(); }
+                            && current.control_source_revision == goal.control_source_revision
+                            && task.is_none_or(|(id, revision)| {
+                                current
+                                    .workflow
+                                    .tasks
+                                    .iter()
+                                    .find(|current| current.spec.id == id)
+                                    .is_some_and(|current| {
+                                        current.run_intent == RunIntent::Run
+                                            && current.requirements_revision == revision
+                                    })
+                            })
+                            && task.is_none_or(|(id, _)| {
+                                current
+                                    .workflow
+                                    .tasks
+                                    .iter()
+                                    .find(|current| current.spec.id == id)
+                                    .zip(goal.workflow.tasks.iter().find(|task| task.spec.id == id))
+                                    .is_some_and(|(current, original)| {
+                                        current.control_source_revision
+                                            == original.control_source_revision
+                                    })
+                            })
+                            && current.workflow.coordinator.as_ref().is_some_and(|lease| {
+                                lease.id == self.id && lease.expires_at_ms > time
+                            })
+                    }
+                    _ => false,
+                };
+                if !allowed {
+                    return Ok::<(), anyhow::Error>(());
                 }
+            }
+        };
+        tokio::select! {
+            result = &mut future => result,
+            result = monitor => {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "workspace-check control monitor failed");
+                }
+                cancellation.cancel();
+                future.await
             }
         }
     }
