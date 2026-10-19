@@ -28,30 +28,6 @@ pub(super) async fn collect(
     let mut value = serde_json::json!({"historical_only":true,"current_artifact_authority":false,
         "goal_id":goal.id,"task_id":task.spec.id,"entries":entries,"omitted_executions":omitted,
         "scope":"Bounded earlier execution activity from live records or an exact committed archive receipt. Complete ordered activity boundaries may support a historical workflow condition such as parallel work. These observations do not verify the current delivery, satisfy current task checks, approve a handoff, grant permissions or authorize replay. Omitted, changed or incomplete observations remain unknown."});
-    if serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() > 48 * 1024) {
-        // Native SDK reports retain actual content intervals independently of
-        // these public display details. Omit details before discarding every
-        // execution identity/report; ACP timing still needs its original events.
-        for entry in value["entries"].as_array_mut().into_iter().flatten() {
-            if entry["executor"] != "built_in" {
-                continue;
-            }
-            let Some(observations) = entry["observations"].as_array_mut() else {
-                continue;
-            };
-            let removed = observations.len() as u64;
-            observations.clear();
-            entry["omitted_observations"] = entry["omitted_observations"]
-                .as_u64()
-                .unwrap_or(0)
-                .saturating_add(removed)
-                .into();
-            entry["public_history_scan_complete"] = false.into();
-            entry["history_complete"] = false.into();
-            entry["timeline_complete"] = false.into();
-            entry["observation_detail"] = "Selected native public details omitted to fit the historical byte bound; original Thread history and SDK reports are retained".into();
-        }
-    }
     if serde_json::to_vec(&value).map_or(true, |bytes| bytes.len() > 48 * 1024) {
         value["entries"] = serde_json::json!([]);
         value["omitted_executions"] = (previous as u64 + task.archived_executions).into();

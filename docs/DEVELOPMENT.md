@@ -38,7 +38,7 @@ Clients reach BitRouter through its external **interfaces** — the ways *in*. T
 | **MCP gateway**           | `bitrouter-sdk` `mcp` feature plus app assembly: downstream `/mcp` aggregation, configured upstream clients, Skills-over-MCP relay, and server-side tool execution | `POST /mcp`; `bro mcp check` |
 | **ACP**                   | `bitrouter-orchestrator` `acp` feature (`crates/bitrouter-orchestrator/src/acp/`): controller, transport-generic client, agent-process transport and typed updates. The transparent stdio bridge, headless runner and Goal workers share these contracts. Subcommand glue lives in `apps/bitrouter/src/acp_cli.rs`. | `bro acp serve <agent>`; `bro run` |
 | **Native ACP** | `bitrouter-orchestrator::acp::native`: negotiated v1/v2 handlers over the host's ThreadService. App `native_acp.rs` owns the local endpoint and stdio bridge; EOF detaches. | bare `bro acp serve` |
-| **BRO Goals** | `bitrouter-tui::goals` draws Goals/current Goal/read-only Workflow; app `goal_code` submits identified local operations. Daemon `goal_runtime` coordinates Goal input and native/managed ACP workers through ThreadService; `GoalService` and app `goal_store` commit versioned requirements, arrangements and receipts. Superseded reconciled executions without active references move atomically to immutable operation history. | Bare `bro`; `bro code [--config PATH] [--workspace PATH]`; local Goal protocol v8 |
+| **BRO Goals** | `bitrouter-tui::goals` draws Goals/current Goal/read-only Workflow; app `goal_code` submits identified local operations. Daemon `goal_runtime` coordinates Goal input and native/managed ACP workers through ThreadService; `GoalService` and app `goal_store` commit versioned requirements, arrangements and receipts. Superseded reconciled executions without active references move atomically to immutable operation history. | Bare `bro`; `bro code [--config PATH] [--workspace PATH]`; local Goal protocol v7 |
 | **Native harness interface** | App `spawn` injects per-process router settings and starts the harness's own interface. | `bro claude`; `bro codex`; `bro launch <agent>` |
 | **BRO native agent** | `bitrouter-orchestrator::service::ThreadService` owns retained Thread/Turn execution, durable context, FIFO/steering and owner/workspace fencing for standalone native work and linked Goal workers. Standalone native APIs do not automatically create Goals or bypass managed work controls. | `bro task run`; local v17 native socket; opt-in `/agent/v2` HTTP API |
 | **CLI**                   | `apps/bitrouter` — the composition-root binary                                                            | `bro <subcommand>` |
@@ -85,11 +85,6 @@ native content now carries bounded intervals in the existing accounting report.
 Only monotonic ticks with the same process clock identity support overlap;
 wall timestamps, admission and provider elapsed time are insufficient. This
 does not attest physical provider compute or a complete execution timeline.
-Receipt-verified native archives also use the production historical/UI readers.
-The historical 48 KiB limit is unchanged: native public display details may be
-explicitly omitted before discarding all identities/reports, while original
-Thread history and SDK reports remain. Completeness stays false, ACP timing
-events are untouched, and a still-oversized projection remains unavailable.
 Final live/provider, recovery and full-refactor qualification remain open.
 Before fresh native/ACP worker admission, selected MCP descriptors must match
 their saved preparation hash. ACP also checks the gap between accepted Thread

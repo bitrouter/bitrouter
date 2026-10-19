@@ -16,7 +16,6 @@ pub(super) struct Setup {
 
 pub(super) struct Fixture {
     setup: Setup,
-    app: Arc<App>,
     pub socket: PathBuf,
     pub supervisor: Supervisor,
     pub source: crate::paths::ConfigSource,
@@ -262,7 +261,7 @@ impl Setup {
         let bound = bind_control_socket(&socket).await?;
         let ipc = tokio::spawn(run_bound_control_socket(
             bound,
-            app.clone(),
+            app,
             "127.0.0.1:0".into(),
             Arc::new(NoopReloader),
             Arc::new(NoopObserveStatus { compiled_in: false }),
@@ -282,7 +281,6 @@ impl Setup {
         ));
         Ok(Fixture {
             setup: self,
-            app,
             socket,
             supervisor,
             source,
@@ -299,40 +297,6 @@ impl Setup {
 impl Fixture {
     pub fn root(&self, id: &str) -> PathBuf {
         crate::goal_artifacts::root(&self.temporary.path().join("goal-workspaces"), id)
-    }
-
-    pub async fn historical_runtime(
-        &self,
-        goal: &GoalSnapshot,
-        task: &Task,
-    ) -> Result<serde_json::Value> {
-        let SessionResponse::Authorized { grant } = self
-            .supervisor
-            .dispatch(SessionRequest::authorize(
-                "native-history-reader".into(),
-                BTreeSet::from([SessionScope::Peek, SessionScope::Transcript]),
-            ))
-            .await?
-        else {
-            anyhow::bail!("history reader grant missing")
-        };
-        // Exercise the production reader with the actual stores and app, without
-        // claiming a coordinator lease, starting its job loop or authorizing work.
-        let reader = Coordinator {
-            id: "native-history-reader".into(),
-            app: self.app.clone(),
-            goals: self.goals.clone(),
-            threads: self.threads.clone(),
-            supervisor: self.supervisor.clone(),
-            routing: self.routing.clone(),
-            workspaces: self.temporary.path().join("goal-workspaces"),
-            home: self.temporary.path().into(),
-            grant,
-            workspace_gate: tokio::sync::Mutex::new(()),
-            stop_gate: tokio::sync::Mutex::new(()),
-            gate: crate::daemon_handoff::HandoffGate::default(),
-        };
-        Ok(runtime_evidence::historical(&reader, goal, task).await)
     }
 
     pub async fn create(&self) -> Result<String> {
