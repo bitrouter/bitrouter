@@ -94,7 +94,12 @@ fn pending() -> (GoalSnapshot, PermissionDecision) {
 #[test]
 fn explicit_check_consent_is_bound_and_consumed() -> Result<(), GoalError> {
     let (mut goal, decision) = pending();
-    apply(&mut goal, &Event::Observe { decision })?;
+    apply(
+        &mut goal,
+        &Event::Observe {
+            decision: Box::new(decision),
+        },
+    )?;
     assert!(authorize(&goal, "decision", 2).is_err());
     assert!(
         apply(
@@ -182,7 +187,12 @@ fn explicit_check_consent_is_bound_and_consumed() -> Result<(), GoalError> {
 #[test]
 fn denial_cannot_authorize_a_command() -> Result<(), GoalError> {
     let (mut goal, decision) = pending();
-    apply(&mut goal, &Event::Observe { decision })?;
+    apply(
+        &mut goal,
+        &Event::Observe {
+            decision: Box::new(decision),
+        },
+    )?;
     apply(
         &mut goal,
         &Event::Respond {

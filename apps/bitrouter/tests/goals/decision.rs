@@ -78,7 +78,7 @@ pub(super) async fn pending(
             1,
             Change::Decision {
                 event: Event::Observe {
-                    decision: decision.clone(),
+                    decision: Box::new(decision.clone()),
                 },
             },
             60,

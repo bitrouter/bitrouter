@@ -46,7 +46,7 @@ impl Coordinator {
                     Change::Decision {
                         event: PermissionEvent::Observe { decision },
                     } if decision.execution_id == execution.id => {
-                        requests.insert(decision.id.clone(), (decision, None));
+                        requests.insert(decision.id.clone(), (*decision, None));
                     }
                     Change::Decision {
                         event:
