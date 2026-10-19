@@ -208,7 +208,7 @@ jobs:
           TEST_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
         run: |
           read -r -a test_targets <<< "$TEST_TARGETS"
-          cargo nextest run -p bitrouter --all-features --no-fail-fast --build-jobs "$TEST_BUILD_JOBS" \
+          cargo nextest run -p bitrouter --all-features --build-jobs "$TEST_BUILD_JOBS" \
             --retries "$TEST_RETRIES" \
             "${test_targets[@]}"
 

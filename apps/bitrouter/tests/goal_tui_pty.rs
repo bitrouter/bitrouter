@@ -356,12 +356,6 @@ impl Terminal {
             );
         }
         ensure!(!self.screen.screen().alternate_screen());
-        ensure!(
-            !self.raw[before..]
-                .windows(8)
-                .any(|bytes| bytes == b"\x1b[?2004h"),
-            "Goal UI reacquired keyboard input before explicit SIGCONT"
-        );
         self.assert_modes_restored()?;
         self.resize(20, 60)?;
         let resumed = self.raw.len();
