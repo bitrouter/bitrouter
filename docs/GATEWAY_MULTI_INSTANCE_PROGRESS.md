@@ -27,7 +27,7 @@ Status: **in progress; no P1 delivery gate is accepted yet**.
 | 1 Authority foundation | Store/key foundation implemented; startup pending | Real PostgreSQL foundation passed | Store/key foundation approved |
 | 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
 | 3 Gateway integration | Pending | Pending | Pending |
-| 4 Published authority | Pending | Pending | Pending |
+| 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
 | 6 Delivery and operations | Pending | Pending | Pending |
 | 7 Aggregate acceptance and PR | Pending | Pending | Pending |
@@ -119,3 +119,35 @@ lease timeout is never proof of stopped upstream work.
   `c215cb7`. Its old head remains CI-green, but is no longer merge ready.
   Integration is proceeding on the P0 branch in a separate checkout before
   this P1 branch is updated to the corrected base.
+
+## Updated P0 base and immutable publications (2026-10-20)
+
+- P0 integrated post-revert main `e972d5e` and was pushed on its original PR
+  branch at `effc842f438144857a974eaaef8b2ac02afcac11`. P1 was rebased onto
+  that head; its foundation checkpoint is now `cd3d385`. Full P0 hosted CI
+  is still running at the time of this entry. Superseded Goals integration
+  work is not part of this branch.
+- Implemented encrypted immutable routing publications, compare-and-set head
+  advancement under the exclusive authority fence, complete credential-account
+  binding, and independent-replica reads of retained generations. Aliases refer
+  to the same imported credential/resource authority. Failed preparation or
+  missing credentials do not advance the active generation.
+- Publication preparation uses resolved configuration without interpreting
+  environment references again. It accepts embedded access policies and policy
+  locks, rejecting process configuration, local file references, dynamic model
+  discovery, inline provider credentials, native extensions and unsupported
+  local spend/rate limits. It does not load per-worker files or credentials.
+- Independent review found two issues and approved the fixes: validation errors
+  now discard source diagnostics that could include secret values, and provider
+  count/derivation depth are checked before recursive resolution. Regression
+  cases include Display/Debug redaction, sub-megabyte chains of 33, 257 and 4,000
+  providers, cycles and valid shallow inheritance.
+- `/tmp/bitrouter-p1-publication-reviewed-tests.log`: **6 passed**, including
+  the real PostgreSQL publication campaign, 7.87 seconds. The same minimal
+  `multi-instance` test profile is used as the earlier foundation campaign.
+  `/tmp/bitrouter-p1-publication-config-regression.log`: **101 passed** for
+  existing configuration parsing. After the final native-extension guard,
+  `/tmp/bitrouter-p1-publication-final-unit.log`: **3 passed**, 0.04 seconds.
+  These results do not close a process-level
+  P1 gate. Operator commands, serving snapshot installation, lifecycle wiring,
+  shared trajectory reconciliation and final process acceptance remain pending.

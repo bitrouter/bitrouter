@@ -265,7 +265,7 @@ impl Authority {
         Ok(())
     }
 
-    fn validate_head(&self, head: &Head) -> Result<()> {
+    pub(super) fn validate_head(&self, head: &Head) -> Result<()> {
         ensure!(head.format == 1, "unsupported shared authority format");
         ensure!(
             head.deployment_key_id == self.key.id(),

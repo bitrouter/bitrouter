@@ -1789,7 +1789,13 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let substituted = substitute_with(yaml, lookup)?;
-    let mut config: Config = serde_saphyr::from_str(&substituted)
+    parse_resolved(&substituted)
+}
+
+/// Validate an already resolved document without interpreting environment references
+/// again. Shared publications must not depend on a joining worker's environment.
+pub(crate) fn parse_resolved(document: &str) -> Result<Config> {
+    let mut config: Config = serde_saphyr::from_str(document)
         .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
     resolve_derivations(&mut config)?;
     config

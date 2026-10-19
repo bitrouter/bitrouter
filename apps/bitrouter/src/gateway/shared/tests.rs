@@ -13,6 +13,7 @@ use super::engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits}
 use super::schema;
 use super::store::{self, Kind, NewRecord, Store, Stored};
 
+mod publication;
 mod races;
 mod refresh;
 
@@ -50,6 +51,7 @@ async fn foundation() -> Result<()> {
         shared_recovery(&first, &second).await?;
         races::exercise(&first, &second).await?;
         refresh::exercise(&first, &second).await?;
+        publication::exercise(&first, &second).await?;
         Ok::<(), anyhow::Error>(())
     }
     .await;
