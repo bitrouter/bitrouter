@@ -27,9 +27,7 @@
       "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs",
       "apps/bitrouter/tests/code_tui_pty.rs",
       "crates/bitrouter-orchestrator/tests/support/fixture_binary.rs"
-    ],
-    "committedCheckpoint": "3de44d2c3baaf6618f9769da43d906514e9240bf",
-    "committedInputsMatch": true
+    ]
   },
   "local": {
     "id": "fixture-image-final123",
@@ -328,17 +326,17 @@
   "archive": {
     "repository": "https://github.com/bitrouter/bitrouter",
     "branch": "codex/pr981-refactor-evidence-20261016",
-    "commit": "a5b49254addd8d75e61ac915b6a3e9f69a23258e",
-    "publication": "published and remote head verified",
+    "commit": "0aa96eaaa31d3c1cfd40982ef8f834780949b1dd",
+    "publication": "Prior archive remains pinned; complete DAG-phase acceptance annex pending.",
     "priorArchive": "382c2b58c5c25b02805175a33d60707dc4227b46",
-    "url": "https://github.com/bitrouter/bitrouter/tree/a5b49254addd8d75e61ac915b6a3e9f69a23258e",
+    "url": "https://github.com/bitrouter/bitrouter/tree/0aa96eaaa31d3c1cfd40982ef8f834780949b1dd",
     "checksumManifest": "SHA256SUMS",
-    "checksumManifestSha256": "b3f98679688d229e175c14bef43eca935e3073f91b8bd614435a4457e903d842",
-    "originalPayloadFiles": 4259,
-    "originalPayloadBytes": 90797722,
-    "publishedFiles": 1418,
+    "checksumManifestSha256": "f27742dc25646c46010897a26f59b31eb9b79079afd477d61d65edb813e323f3",
+    "originalPayloadFiles": 4157,
+    "originalPayloadBytes": 84205457,
+    "publishedFiles": 1314,
     "packedDirectories": 5,
-    "independentGitArchiveChecksumsVerified": 1418
+    "independentGitArchiveChecksumsVerified": 1314
   },
   "hostedCi": {
     "status": "Exact final-head result is reported in the PR acceptance comment; separate from local proof.",
