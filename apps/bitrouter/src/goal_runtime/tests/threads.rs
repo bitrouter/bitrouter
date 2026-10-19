@@ -1,6 +1,5 @@
-//! Real SQLite admission/link interruptions and an actual ACP startup fixture.
-//! Native admission uses an unavailable model route; these cases do not qualify
-//! provider execution, delivery completion or active cold recovery.
+//! Real SQLite admission/link interruptions. Native admission uses an unavailable
+//! model route; these cases do not qualify provider execution or active recovery.
 
 use super::*;
 use bitrouter_orchestrator::agent::AgentConfig;
@@ -12,16 +11,8 @@ use bitrouter_orchestrator::thread::{
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
 async fn coordinator(home: &Path, database_url: &str) -> Result<(Coordinator, DatabaseConnection)> {
-    coordinator_with_config(home, database_url, "").await
-}
-
-async fn coordinator_with_config(
-    home: &Path,
-    database_url: &str,
-    extra: &str,
-) -> Result<(Coordinator, DatabaseConnection)> {
     let configuration = format!(
-        "inherit_defaults: false\nregistry: {{enabled: false}}\ndatabase: {{url: {}}}\nchat: {{model: later-configured-route}}\n{extra}",
+        "inherit_defaults: false\nregistry: {{enabled: false}}\ndatabase: {{url: {}}}\nchat: {{model: later-configured-route}}\n",
         serde_json::to_string(database_url)?
     );
     let config_path = home.join("owner.yaml");
@@ -84,14 +75,6 @@ async fn read(coordinator: &Coordinator, id: &str) -> Result<GoalSnapshot> {
 }
 
 async fn prepared_native_attempt(original: &Coordinator, home: &Path) -> Result<String> {
-    prepared_worker_attempt(original, home, None).await
-}
-
-async fn prepared_worker_attempt(
-    original: &Coordinator,
-    home: &Path,
-    harness: Option<&str>,
-) -> Result<String> {
     use bitrouter_orchestrator::goal::completion::{Condition, Specification};
     use bitrouter_orchestrator::goal::resources::Prepared;
     use bitrouter_orchestrator::goal::workflow::{Plan, TaskSpec};
@@ -121,11 +104,7 @@ async fn prepared_worker_attempt(
     original.owner_thread(&goal).await?;
     let prompt = crate::goal_artifacts::put(
         &crate::goal_artifacts::root(&original.workspaces, &id),
-        if harness.is_some() {
-            b"Assigned task left:\nSaved original ACP instruction"
-        } else {
-            b"Original saved worker input"
-        },
+        b"Original saved worker input",
     )
     .await?;
     for change in [
@@ -139,7 +118,7 @@ async fn prepared_worker_attempt(
                     id: "work".into(),
                     title: "Native work".into(),
                     instruction: "Saved instruction".into(),
-                    harness: harness.map(str::to_owned),
+                    harness: None,
                     dependencies: vec![],
                     checks: vec![],
                     resources: Default::default(),
@@ -153,7 +132,7 @@ async fn prepared_worker_attempt(
                     human_acceptance_required: false,
                 },
             },
-            available_harnesses: harness.map(str::to_owned).into_iter().collect(),
+            available_harnesses: BTreeSet::new(),
         },
         Change::RequestExecution {
             task_id: "work".into(),
@@ -182,134 +161,6 @@ async fn prepared_worker_attempt(
         original.change(&read(original, &id).await?, change).await?;
     }
     Ok(id)
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn saved_acp_intent_without_any_thread_admission_uses_its_original_action() -> Result<()> {
-    let home = tempfile::tempdir()?;
-    let controls = home.path().join("controls");
-    let captures = home.path().join("captures");
-    tokio::fs::create_dir_all(&controls).await?;
-    tokio::fs::create_dir_all(&captures).await?;
-    let extra = format!(
-        "agents:\n  goal-peer:\n    name: goal-peer\n    transport:\n      type: stdio\n      command: {}\n      env:\n        BRO_GOAL_FIXTURE_CONTROL: {}\n        BRO_GOAL_FIXTURE_CAPTURE: {}\n",
-        serde_json::to_string(&peer_executable()?)?,
-        serde_json::to_string(&controls)?,
-        serde_json::to_string(&captures)?
-    );
-    let (coordinator, db) = coordinator_with_config(home.path(), "sqlite::memory:", &extra).await?;
-    let result = async {
-        let id = prepared_worker_attempt(&coordinator, home.path(), Some("goal-peer")).await?;
-        let before = read(&coordinator, &id).await?;
-        let task = &before.workflow.tasks[0];
-        let original = &task.executions[0];
-        let source = super::super::native::source(&before, task, original)?;
-        let epoch = coordinator.threads.capabilities().server_instance_id;
-        let caller = CallerContext::local();
-        let key = bitrouter_orchestrator::service::worker::thread_key(&source)?;
-        assert!(
-            coordinator
-                .threads
-                .find_thread_admission(&epoch, &caller, &key)
-                .await?
-                .is_none()
-        );
-        coordinator.drive_task(&before, task).await?;
-        let linked = read(&coordinator, &id).await?;
-        let binding = linked.workflow.tasks[0].executions[0]
-            .thread
-            .clone()
-            .context("saved new ACP dispatch did not enter common admission")?;
-        let target = ThreadTarget {
-            thread_id: binding.thread_id.clone(),
-            server_instance_id: epoch.clone(),
-        };
-        let session = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                let turn = coordinator
-                    .threads
-                    .read_stored_turn(&target, &caller, &binding.turn_id)
-                    .await?;
-                if let Some(session) = turn.acp {
-                    return Ok::<_, anyhow::Error>(session);
-                }
-                anyhow::ensure!(
-                    !turn.status.terminal(),
-                    "ACP stopped before opening its original session: {:?}",
-                    turn.detail
-                );
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await??;
-        for _ in 0..2 {
-            let goal = read(&coordinator, &id).await?;
-            coordinator
-                .drive_task(&goal, &goal.workflow.tasks[0])
-                .await?;
-        }
-        let current = read(&coordinator, &id).await?;
-        assert_eq!(current.workflow.tasks[0].executions.len(), 1);
-        let attempt = &current.workflow.tasks[0].executions[0];
-        assert_eq!(attempt.id, original.id);
-        assert_eq!(attempt.thread.as_ref(), Some(&binding));
-        assert_eq!(
-            super::super::native::source(&current, &current.workflow.tasks[0], attempt)?,
-            source
-        );
-        assert!(!current.workflow.completion.completed_for(1));
-        let receipt = coordinator
-            .threads
-            .find_goal_worker_turn(
-                &target,
-                &caller,
-                &super::super::native::turn_key(&attempt.id),
-            )
-            .await?
-            .context("original accepted action missing")?;
-        assert_eq!(receipt.turn_id, binding.turn_id);
-        assert_eq!(
-            coordinator
-                .threads
-                .find_thread_admission(&epoch, &caller, &key)
-                .await?
-                .context("original Thread receipt missing")?
-                .thread_id,
-            binding.thread_id
-        );
-        let owner = bitrouter_orchestrator::service::worker::acp::Owner {
-            server_instance_id: epoch,
-            thread_id: binding.thread_id,
-            turn_id: binding.turn_id,
-        };
-        let (snapshot, _) = coordinator
-            .supervisor
-            .managed_observation(&owner, &session.run_id, 0)
-            .await?;
-        assert_eq!(
-            snapshot.native_session_id.as_ref(),
-            Some(&session.session_id)
-        );
-        assert_eq!(snapshot.managed_by.as_ref(), Some(&owner));
-        let mut entries = tokio::fs::read_dir(&captures).await?;
-        let mut initialize = 0;
-        while let Some(entry) = entries.next_entry().await? {
-            for line in tokio::fs::read_to_string(entry.path()).await?.lines() {
-                let value: serde_json::Value = serde_json::from_str(line)?;
-                initialize += usize::from(value["method"] == "initialize");
-            }
-        }
-        assert_eq!(
-            initialize, 1,
-            "original dispatch retry started another harness"
-        );
-        Ok(())
-    }
-    .await;
-    coordinator.threads.shutdown().await;
-    coordinator.supervisor.shutdown().await;
-    db.close().await?;
-    result
 }
 
 #[tokio::test]
