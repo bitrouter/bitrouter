@@ -259,12 +259,7 @@ impl MockAcp {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        let mut child = command.spawn().with_context(|| {
-            format!(
-                "starting mock ACP process {}",
-                self.fixture_binary.display()
-            )
-        })?;
+        let mut child = command.spawn().context("starting mock ACP process")?;
         let stdin = child.stdin.take().context("taking mock ACP stdin")?;
         let stdout = child.stdout.take().context("taking mock ACP stdout")?;
         MockProcess::new(child, stdin, stdout)

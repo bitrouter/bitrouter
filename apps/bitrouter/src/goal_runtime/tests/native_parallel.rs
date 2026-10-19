@@ -242,12 +242,8 @@ async fn native_branches_overlap_isolate_conflicting_local_writes_and_read_check
     let fixture = setup.start().await?;
     let result=async {
         let id=fixture.create_with("Deliver LEFT and RIGHT files with actual overlapping native branches in isolated workspaces, then read their checked contents and join them. Keep ignored branch-local scratch files isolated. Verify all delivery files; no external harness or human acceptance is needed.").await?;
-        // Each dependency stage has its own 45s wait: concurrent branches,
-        // their dependent join, then root acceptance. Combining both worker
-        // stages exceeded 45s on Linux after the join Turn had completed.
-        wait_for(&fixture.socket,&id,|goal| goal.workflow.tasks.len() == 3
-            && goal.workflow.tasks.iter().filter(|task| task.spec.id != "join").all(|task|
-                task.executions.last().is_some_and(|execution| execution.handoff.is_some()))).await?;
+        // Bound worker handoff and root acceptance separately. The full path
+        // exceeded one shared 45s wait on Linux after every worker succeeded.
         wait_for(&fixture.socket,&id,|goal| goal.workflow.tasks.len() == 3
             && goal.workflow.tasks.iter().all(|task| task.executions.last()
                 .is_some_and(|execution| execution.handoff.is_some()))).await?;

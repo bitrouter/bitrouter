@@ -2,11 +2,11 @@
   "createdAt": "2026-10-16T20:33:02.551Z",
   "scope": "BRO execution refactor v0.2 controlled local acceptance; not universal harness/provider qualification",
   "source": {
-    "evaluatedHead": "b32fc1174974c4bee06a7dcde203b096985d0743",
+    "evaluatedHead": "d0da0ac37fb4cb4005ee284fdb6abd1faf0fddb1",
     "dirtySource": true,
-    "sourceMap": "fixture-image-final123-source.json",
-    "sourceMapSha256": "33c339008c19252e62ab25fc752214c3afa41ae351aa29461e784405e41f4b6a",
-    "evaluatedInputsSha256": "37216aa0c0b4b3a2bf2a13299baff2ac1267984c37c695776746646c5bc0760e",
+    "sourceMap": "unix-tty-focused88-source.json",
+    "sourceMapSha256": "fb8972699d33b8c09638780833d70c688368e980e4a9478bfe61c4e96c2ee010",
+    "evaluatedInputsSha256": "278c2de2294d241926474510bc04b6a92c571ce2174099e5626018ff76cad421",
     "metadataOnlyPaths": [
       "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
       "docs/DEVELOPMENT.md",
@@ -21,34 +21,21 @@
       ".agents/plugins/marketplace.json"
     ],
     "compiledJsonlFixturesRetained": true,
-    "productionRustUnchangedSinceFocused88": true,
-    "changesSinceFocused88": [
-      ".github/workflows/ci.yml",
-      "apps/bitrouter/src/goal_runtime/tests/native_parallel.rs",
-      "apps/bitrouter/tests/code_tui_pty.rs",
-      "crates/bitrouter-orchestrator/tests/support/fixture_binary.rs"
-    ]
+    "functionalRustUnchangedSinceFinal77": true,
+    "changesSinceFinal77": [
+      "apps/bitrouter/Cargo.toml"
+    ],
+    "committedCheckpoint": "b3460031343400c465211ec1b17c3e933e8209b1",
+    "committedInputsMatch": true
   },
   "local": {
-    "id": "fixture-image-final123",
+    "id": "unix-tty-focused88",
     "runner": "v3 rejects code-zero LEAK reports",
     "passed": true,
     "outerTestSlots": 2,
     "sourceDrift": [],
     "leaks": [],
     "jobs": [
-      {
-        "name": "fmt-preflight",
-        "args": [
-          "fmt",
-          "--",
-          "--check"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [],
-        "leaks": []
-      },
       {
         "name": "native-features",
         "args": [
@@ -113,63 +100,6 @@
         "leaks": []
       },
       {
-        "name": "mock-acp-1",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "-E",
-          "binary(code_tui_pty) & test(mock_acp_)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [   0.457s] 3 tests run: 3 passed, 35 skipped"
-        ],
-        "leaks": []
-      },
-      {
-        "name": "mock-acp-2",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "-E",
-          "binary(code_tui_pty) & test(mock_acp_)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [   0.289s] 3 tests run: 3 passed, 35 skipped"
-        ],
-        "leaks": []
-      },
-      {
-        "name": "mock-acp-3",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "-E",
-          "binary(code_tui_pty) & test(mock_acp_)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [   0.290s] 3 tests run: 3 passed, 35 skipped"
-        ],
-        "leaks": []
-      },
-      {
         "name": "goal-pty",
         "args": [
           "nextest",
@@ -184,65 +114,7 @@
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [  53.888s] 4 tests run: 4 passed, 0 skipped"
-        ],
-        "leaks": []
-      },
-      {
-        "name": "typed-startup",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "--lib",
-          "-E",
-          "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [   0.260s] 2 tests run: 2 passed, 3664 skipped"
-        ],
-        "leaks": []
-      },
-      {
-        "name": "native-parallel-1",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "--lib",
-          "-E",
-          "test(goal_runtime::tests::native_parallel::native_branches_overlap_)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [  24.844s] 1 test run: 1 passed, 3665 skipped"
-        ],
-        "leaks": []
-      },
-      {
-        "name": "workspace",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "--no-fail-fast",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [1146.178s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
+          "     Summary [  54.313s] 4 tests run: 4 passed, 0 skipped"
         ],
         "leaks": []
       },
@@ -311,23 +183,28 @@
       }
     ],
     "nativeTreeContainsAcp": false,
-    "sourceTarFilesVerified": 4,
-    "fixtureImageProbe": {
-      "fixtureFileMetadata": "fixture-image-executable113.json",
-      "result": "fixture-image-stability113-result.json",
-      "missingChecks": 0,
-      "inodes": 1,
-      "builds": 160,
-      "starts": 2000,
-      "spawnErrors": 0,
-      "scope": "Public-path sampling observed gaps but spawn probes did not directly reproduce original errno; original causality remains inferred. This proves image stability during Cargo public refreshes."
+    "sourceTarFilesVerified": 1,
+    "fullRegression": {
+      "id": "terminal-continue-final77",
+      "tests": 4757,
+      "skipped": 24,
+      "leaks": [],
+      "result": "terminal-continue-final77-results.json",
+      "resultSha256": "e5bc2a4f8919f9ecfabcbb562b16937983fd4a7fc92089a3d40be065c8f87c3c",
+      "scope": "Full regression ran before manifest-only Linux source selection change; not a fresh full88 run. All Rust/tests match, macOS feature graph is identical. Actual Linux qualification requires next exact-head CI."
+    },
+    "macosFeatures": {
+      "before": "unix-tty-macos-tree-before87.log",
+      "after": "unix-tty-macos-tree-after87.log",
+      "sha256": "c36fb3eb1aee15179b5d63847574d323a3e153911521a36653fbb8dbb9739349",
+      "identical": true
     }
   },
   "archive": {
     "repository": "https://github.com/bitrouter/bitrouter",
     "branch": "codex/pr981-refactor-evidence-20261016",
     "commit": "0aa96eaaa31d3c1cfd40982ef8f834780949b1dd",
-    "publication": "Prior archive remains pinned; complete DAG-phase acceptance annex pending.",
+    "publication": "published and remote head verified",
     "priorArchive": "382c2b58c5c25b02805175a33d60707dc4227b46",
     "url": "https://github.com/bitrouter/bitrouter/tree/0aa96eaaa31d3c1cfd40982ef8f834780949b1dd",
     "checksumManifest": "SHA256SUMS",
@@ -349,37 +226,14 @@
     "Core persistence migration, complete Turn-fixed routing, dynamic graph edits, subgoals and Goal owner handoff are deferred."
   ],
   "priorLocal": {
-    "interrupted112": {
-      "id": "fixture-image-final112",
-      "passed": 749,
-      "signalCases": 1,
-      "unrun": 4007,
-      "skipped": 24,
-      "sourceDrift": [],
-      "leaks": [],
-      "qualification": "Explicitly stopped for early formatting correction; not a complete pass."
-    },
-    "failedLocal99": {
-      "id": "dag-phase-final99",
-      "passed": 4756,
-      "failed": 1,
-      "skipped": 24,
-      "sourceDrift": [],
-      "leaks": [],
-      "qualification": "Failed pre-protocol fixture spawn ENOENT; not a complete acceptance. All original logs/source maps remain."
-    },
-    "compile111": {
-      "id": "fixture-image-final111",
-      "qualification": "Digest LowerHex compile error; no tests ran; original source/logs retained."
-    },
-    "acceptedBeforeDagPhase": {
-      "id": "unix-tty-focused88",
+    "acceptedBeforeUnixInputSource": {
+      "id": "terminal-continue-final77",
       "source": {
-        "evaluatedHead": "d0da0ac37fb4cb4005ee284fdb6abd1faf0fddb1",
+        "evaluatedHead": "02f372c9eb979a5fd99e03b2ba4bbb91617bb6a9",
         "dirtySource": true,
-        "sourceMap": "unix-tty-focused88-source.json",
-        "sourceMapSha256": "fb8972699d33b8c09638780833d70c688368e980e4a9478bfe61c4e96c2ee010",
-        "evaluatedInputsSha256": "278c2de2294d241926474510bc04b6a92c571ce2174099e5626018ff76cad421",
+        "sourceMap": "terminal-continue-final77-source.json",
+        "sourceMapSha256": "00177e3b49a253a9038768d1baa02a86306d679c2ef1b9fe1f311fa01b9c6173",
+        "evaluatedInputsSha256": "ff9f669007a0669e60488f75de80d0c795f435db0b351b82cdbb2a374c176604",
         "metadataOnlyPaths": [
           "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
           "docs/DEVELOPMENT.md",
@@ -394,24 +248,30 @@
           ".agents/plugins/marketplace.json"
         ],
         "compiledJsonlFixturesRetained": true,
-        "functionalRustUnchangedSinceFinal77": true,
-        "changesSinceFinal77": [
-          "apps/bitrouter/Cargo.toml"
+        "functionalRustUnchangedSinceFinal36": false,
+        "changesSinceFinal62": [
+          ".github/workflows/ci.yml",
+          "apps/bitrouter/src/agent_sessions.rs",
+          "apps/bitrouter/src/chat/code.rs",
+          "apps/bitrouter/src/chat/signals.rs",
+          "apps/bitrouter/src/goal_code.rs",
+          "apps/bitrouter/src/native_code.rs",
+          "apps/bitrouter/tests/goal_tui_pty.rs"
         ],
-        "committedCheckpoint": "b3460031343400c465211ec1b17c3e933e8209b1",
+        "committedCheckpoint": "cc9673ab286d11bfbe2373fe9196412a44458d61",
         "committedInputsMatch": true
       },
-      "scope": "Focused88 and earlier full77 retain their exact source; b32fc Linux native-goals212 passed, then library failed after completed join Turn but before its checked handoff at45s."
+      "scope": "Full4757 macOS proof before the Linux-only feature activation; production Rust/tests are byte-identical and macOS feature graph unchanged."
     },
     "earlier": {
-      "acceptedBeforeUnixInputSource": {
-        "id": "terminal-continue-final77",
+      "acceptedBeforeContinuation": {
+        "id": "linux-pty-final62",
         "source": {
-          "evaluatedHead": "02f372c9eb979a5fd99e03b2ba4bbb91617bb6a9",
+          "evaluatedHead": "80c0aad0f1bccfcffdb0903659d94478fd4d484a",
           "dirtySource": true,
-          "sourceMap": "terminal-continue-final77-source.json",
-          "sourceMapSha256": "00177e3b49a253a9038768d1baa02a86306d679c2ef1b9fe1f311fa01b9c6173",
-          "evaluatedInputsSha256": "ff9f669007a0669e60488f75de80d0c795f435db0b351b82cdbb2a374c176604",
+          "sourceMap": "linux-pty-final62-source.json",
+          "sourceMapSha256": "a3ad9b38e7a25d2f1cae9e4983f0dfb3263ba61471e5a7878b426c0fcf147dec",
+          "evaluatedInputsSha256": "49dcd27de1492ae075a1315dcd66541c7c1d459444028600572a06d9122118b1",
           "metadataOnlyPaths": [
             "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
             "docs/DEVELOPMENT.md",
@@ -426,108 +286,68 @@
             ".agents/plugins/marketplace.json"
           ],
           "compiledJsonlFixturesRetained": true,
-          "functionalRustUnchangedSinceFinal36": false,
-          "changesSinceFinal62": [
+          "functionalRustUnchangedSinceFinal36": true,
+          "changesSinceFinal36": [
             ".github/workflows/ci.yml",
-            "apps/bitrouter/src/agent_sessions.rs",
-            "apps/bitrouter/src/chat/code.rs",
-            "apps/bitrouter/src/chat/signals.rs",
-            "apps/bitrouter/src/goal_code.rs",
-            "apps/bitrouter/src/native_code.rs",
             "apps/bitrouter/tests/goal_tui_pty.rs"
           ],
-          "committedCheckpoint": "cc9673ab286d11bfbe2373fe9196412a44458d61",
+          "committedCheckpoint": "a338943cb32e09722fad7c6edf6123fad7f4ba64",
           "committedInputsMatch": true
         },
-        "scope": "Full4757 macOS proof before the Linux-only feature activation; production Rust/tests are byte-identical and macOS feature graph unchanged."
+        "scope": "Accepted on macOS; next exact-head Linux run exposed terminal continuation ordering. Original results remain applicable only to their own source."
       },
       "earlier": {
-        "acceptedBeforeContinuation": {
-          "id": "linux-pty-final62",
-          "source": {
-            "evaluatedHead": "80c0aad0f1bccfcffdb0903659d94478fd4d484a",
-            "dirtySource": true,
-            "sourceMap": "linux-pty-final62-source.json",
-            "sourceMapSha256": "a3ad9b38e7a25d2f1cae9e4983f0dfb3263ba61471e5a7878b426c0fcf147dec",
-            "evaluatedInputsSha256": "49dcd27de1492ae075a1315dcd66541c7c1d459444028600572a06d9122118b1",
-            "metadataOnlyPaths": [
-              "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
-              "docs/DEVELOPMENT.md",
-              "docs/evidence/bro-goal-workflow/README.md",
-              "docs/evidence/bro-goal-workflow/REPRODUCE.md",
-              "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
-              "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json",
-              "skills/bitrouter/SKILL.md",
-              "skills/bitrouter/references/cli.md",
-              ".claude-plugin/plugin.json",
-              ".codex-plugin/plugin.json",
-              ".agents/plugins/marketplace.json"
-            ],
-            "compiledJsonlFixturesRetained": true,
-            "functionalRustUnchangedSinceFinal36": true,
-            "changesSinceFinal36": [
-              ".github/workflows/ci.yml",
-              "apps/bitrouter/tests/goal_tui_pty.rs"
-            ],
-            "committedCheckpoint": "a338943cb32e09722fad7c6edf6123fad7f4ba64",
-            "committedInputsMatch": true
-          },
-          "scope": "Accepted on macOS; next exact-head Linux run exposed terminal continuation ordering. Original results remain applicable only to their own source."
+        "acceptedBeforePty": {
+          "id": "ci-portability-final36",
+          "tests": 4757,
+          "skipped": 24,
+          "leaks": [],
+          "scope": "Earlier exact source before the Linux inventory and PTY correction, not current-source proof."
+        },
+        "ciCoverageAudit": {
+          "path": ".github/workflows/ci.yml",
+          "evaluatedSha256": "a88563d45201b3301078e23660497370396a5e3bfd010ee0c227af7cdc8b9062",
+          "currentSha256": "05d169608a9358b00ec6ab81244b8ec580d6c46c162cdae43edd7c1c75f4a7ea",
+          "kind": "CI selection only; all Rust, fixtures, Cargo inputs and nextest configuration match final36",
+          "integrationTargetsBefore": 26,
+          "integrationTargetsAfter": 36,
+          "newShard": "native-goals",
+          "newShardBuildJobs": 1,
+          "newShardRetries": 0,
+          "newTargets": [
+            "code_tui_pty",
+            "goal_tui_pty",
+            "goals",
+            "harness_mcp_check",
+            "invocation",
+            "native_agent_process",
+            "native_agent_tui",
+            "native_harness_resources",
+            "orchestrator_core",
+            "skill_cli_contract"
+          ],
+          "coverageReport": "bro-linux-integration-coverage53.json",
+          "coverageReportSha256": "cfa2d557749e8aec3ba7a3780bda19d02aef3fb2b2b1d03c90276600040c29e5",
+          "evidenceLocator": "The PR acceptance comment pins the later hosted/coverage archive; archive.commit retains the accepted local-run archive."
         },
         "earlier": {
-          "acceptedBeforePty": {
-            "id": "ci-portability-final36",
-            "tests": 4757,
-            "skipped": 24,
+          "parallelRun": {
+            "id": "ci-portability-final31",
+            "qualification": "Reported onboarding public help output LEAK; assertions/status recorded in exact raw result. Same executable/test inputs as final36. Cause not claimed proven."
+          },
+          "id": "acp-continuation-final15",
+          "scope": "4757 tests passed on earlier inputs; original hosted feature-isolation, compiler and Linux aggregate-wait failures bind their own head.",
+          "interrupted": {
+            "id": "ci-portability-final26",
+            "passed": 781,
+            "signalCases": 1,
+            "unrun": 3975,
+            "sourceDrift": [],
             "leaks": [],
-            "scope": "Earlier exact source before the Linux inventory and PTY correction, not current-source proof."
-          },
-          "ciCoverageAudit": {
-            "path": ".github/workflows/ci.yml",
-            "evaluatedSha256": "a88563d45201b3301078e23660497370396a5e3bfd010ee0c227af7cdc8b9062",
-            "currentSha256": "05d169608a9358b00ec6ab81244b8ec580d6c46c162cdae43edd7c1c75f4a7ea",
-            "kind": "CI selection only; all Rust, fixtures, Cargo inputs and nextest configuration match final36",
-            "integrationTargetsBefore": 26,
-            "integrationTargetsAfter": 36,
-            "newShard": "native-goals",
-            "newShardBuildJobs": 1,
-            "newShardRetries": 0,
-            "newTargets": [
-              "code_tui_pty",
-              "goal_tui_pty",
-              "goals",
-              "harness_mcp_check",
-              "invocation",
-              "native_agent_process",
-              "native_agent_tui",
-              "native_harness_resources",
-              "orchestrator_core",
-              "skill_cli_contract"
-            ],
-            "coverageReport": "bro-linux-integration-coverage53.json",
-            "coverageReportSha256": "cfa2d557749e8aec3ba7a3780bda19d02aef3fb2b2b1d03c90276600040c29e5",
-            "evidenceLocator": "The PR acceptance comment pins the later hosted/coverage archive; archive.commit retains the accepted local-run archive."
-          },
-          "earlier": {
-            "parallelRun": {
-              "id": "ci-portability-final31",
-              "qualification": "Reported onboarding public help output LEAK; assertions/status recorded in exact raw result. Same executable/test inputs as final36. Cause not claimed proven."
-            },
-            "id": "acp-continuation-final15",
-            "scope": "4757 tests passed on earlier inputs; original hosted feature-isolation, compiler and Linux aggregate-wait failures bind their own head.",
-            "interrupted": {
-              "id": "ci-portability-final26",
-              "passed": 781,
-              "signalCases": 1,
-              "unrun": 3975,
-              "sourceDrift": [],
-              "leaks": [],
-              "reason": "Stopped explicitly before the separate Linux acceptance-phase correction; not a complete pass."
-            }
+            "reason": "Stopped explicitly before the separate Linux acceptance-phase correction; not a complete pass."
           }
         }
       }
     }
-  },
-  "updatedAt": "2026-10-17T00:44:24.697Z"
+  }
 }
