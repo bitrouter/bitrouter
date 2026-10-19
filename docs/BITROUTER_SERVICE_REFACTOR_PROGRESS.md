@@ -4,12 +4,30 @@ Implementation follows the [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 P1 remains out of scope. This ledger records evidence for the full P0 delivery;
 completing one extraction does not complete the milestone.
 
-Current status: P0 implementation, local acceptance and final independent review
-passed. Required hosted OS checks also passed at `1527bc2`; the
-[hosted closure record](#hosted-p0-acceptance-closure-2026-10-19) closes the remaining
-cross-platform gates and preserves the limits of the evidence. Dated entries
-below retain their original status and source identities. P1, merging,
-publication and external consumers' releases are not part of this result.
+Current status: P0 previously passed local and hosted acceptance. Main has now
+reverted the Goal implementation in #987, and the PR is being refreshed against
+that main revision (`e972d5e`). New artifact/performance evidence and exact-head
+hosted checks are pending. Earlier acceptance retains its dated source identity;
+it is not a claim about a newer PR head. P1 remains outside this PR.
+
+## Post-revert main integration (2026-10-20)
+
+Main #987 (`e972d5ebb8215a51dbe88d404616087b940250ca`) reverts the Goal
+implementation before the attempted integration was pushed. That superseded
+candidate and its measurements are not final acceptance evidence for this PR.
+
+The final integration starts from the previously published P0 head `08b5dcc`.
+Relative to its main merge base `54c822a`, the post-revert main changes only eight
+README/CLI, registry-source and generated-catalog files. They merge without
+conflicts. All Rust source, Cargo manifests/lock and CI remain byte-identical to
+the previously validated P0 head; the registry snapshots intentionally advance.
+The five-package workspace, runtime format 7 and original feature/CLI ownership
+are preserved. The reverted Goal runtime and its fixture package are not restored.
+
+New committed artifacts will be built against this exact integration, with a
+separate baseline built from `e972d5e`. Registry/dist checking, process transitions,
+independent SDK acceptance and comparable measurements remain explicit gates.
+Fresh hosted checks will validate the final PR head across supported platforms.
 
 ## Baseline
 

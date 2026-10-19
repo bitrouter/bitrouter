@@ -1744,6 +1744,40 @@
       "release_date": "2026-09-10"
     },
     {
+      "id": "deepseek/deepseek-v4.1-flash-1017",
+      "input_modalities": [
+        "image",
+        "text"
+      ],
+      "max_input_tokens": 1048576,
+      "max_output_tokens": 393216,
+      "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "deepseek/deepseek-v4.1-flash-1017"
+        }
+      ],
+      "release_date": "2026-10-17"
+    },
+    {
       "deprecation_date": "2026-11-13",
       "id": "google/gemini-3.7-flash",
       "input_modalities": [

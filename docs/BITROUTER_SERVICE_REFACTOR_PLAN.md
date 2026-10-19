@@ -1,10 +1,11 @@
 # BitRouter service architecture refactor plan
 
-Status: **P0 implemented; local and hosted acceptance passed at `1527bc2`.
-P1 remains a separate milestone.**
+Status: **P0 implemented; integration with post-revert main `e972d5e` is being
+revalidated. P1 remains a separate milestone.**
 
-See the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md#hosted-p0-acceptance-closure-2026-10-19)
-for the final P0 evidence, revision identities and remaining nonblocking limits.
+See the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md#post-revert-main-integration-2026-10-20)
+for current integration evidence. Earlier accepted revisions retain their dated
+records; fresh hosted checks remain required for the updated PR head.
 The P1 target tables below do not describe implemented multi-instance behavior.
 
 Updated: 2026-10-19. Source inventory: `9956a427bd5d4316b3bf2359f88e293b158781d5`
