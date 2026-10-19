@@ -224,7 +224,7 @@ async fn native_binding_survives_pause_without_an_acp_identity_or_replacement() 
                 1,
                 Change::Decision {
                     event: Event::Observe {
-                        decision: Box::new(persistent)
+                        decision: persistent
                     }
                 },
                 51
@@ -242,9 +242,7 @@ async fn native_binding_survives_pause_without_an_acp_identity_or_replacement() 
                 "confuse-native-and-acp",
                 1,
                 Change::Decision {
-                    event: Event::Observe {
-                        decision: Box::new(acp)
-                    }
+                    event: Event::Observe { decision: acp }
                 },
                 52
             )
@@ -259,7 +257,7 @@ async fn native_binding_survives_pause_without_an_acp_identity_or_replacement() 
             1,
             Change::Decision {
                 event: Event::Observe {
-                    decision: Box::new(decision.clone()),
+                    decision: decision.clone(),
                 },
             },
             53,

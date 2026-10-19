@@ -316,7 +316,7 @@ impl Coordinator {
             goal,
             Change::Decision {
                 event: Event::Observe {
-                    decision: Box::new(PermissionDecision {
+                    decision: PermissionDecision {
                         check: None,
                         id,
                         execution_id: execution.id.clone(),
@@ -327,7 +327,7 @@ impl Coordinator {
                         request,
                         options,
                         state: PermissionState::Pending,
-                    }),
+                    },
                 },
             },
         )

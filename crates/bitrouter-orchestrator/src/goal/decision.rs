@@ -71,7 +71,7 @@ pub enum Event {
         operation_id: String,
     },
     Observe {
-        decision: Box<PermissionDecision>,
+        decision: PermissionDecision,
     },
     Respond {
         decision_id: String,
@@ -227,7 +227,7 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event) -> Result<(), GoalEr
             if goal.workflow.decisions.len() >= 64 {
                 return Err(invalid("too many unresolved permission requests"));
             }
-            goal.workflow.decisions.push(decision.as_ref().clone());
+            goal.workflow.decisions.push(decision.clone());
         }
         Event::Respond {
             decision_id,
