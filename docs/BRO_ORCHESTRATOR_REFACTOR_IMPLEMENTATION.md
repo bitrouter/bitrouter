@@ -896,8 +896,7 @@ a leak report. The cause is unconfirmed; the earlier report is retained rather
 than described as fixed.
 
 Setting the test-only `BRO_GOAL_FIXTURE_KEEP_FAILURES=1` retains failed fixture
-files; returned errors additionally capture a bounded read of existing
-Goal/Thread/Turn facts and diagnostic errors.
+files, a bounded read of existing Goal/Thread/Turn facts, and diagnostic errors.
 It does not change the fixture's storage profile or execute new work. File-backed
 fixtures additionally reuse the existing preflight SQLite snapshot helper before
 and after normal shutdown. Memory fixtures explicitly record that no full database
@@ -1003,33 +1002,6 @@ source manifests remain in the independent archive under `ADMISSION_RECOVERY_IND
 Archive filenames are unique per run and refuse reuse. The preceding all-feature
 rustdoc result is from the native activity checkpoint; the final full workspace,
 live harness/provider and complete refactor gates remain pending.
-
-## Panic fixture retention checkpoint
-
-Assertion unwinding could bypass `Fixture.finish` and delete its temporary
-files despite the failure-retention flag. Setup now disables cleanup as soon
-as that test-only flag is observed. A normally successful finish reenables
-ordinary cleanup after all shutdown steps. Default runs keep their ordinary
-cleanup. Returned failures still collect bounded runtime facts and, for the
-explicit file-backed case, the existing SQLite copy. Unwinding alone preserves
-the filesystem; it cannot capture a memory database or run asynchronous cleanup.
-
-A controlled probe temporarily inverted one observation assertion after actual
-native Goal completion. The expected panic left **251 files** available. Their
-independent tar extraction verifies file contents and modes; read-only access to
-the extracted SQLite copy finds the completed Goal and **285 records** for its
-accepted worker Thread. No structured `failure-runtime.json` was produced by
-that unwind. This is a filesystem preservation/readability proof, not a global
-transaction, process snapshot or active execution recovery claim.
-
-The original assertion was restored byte-for-byte and verified against the
-checkpoint Git blob. Final native test source is unchanged. On the restored
-source, strict workspace/all-target/all-feature Clippy, formatting and all
-**77 Goal runtime tests** pass with zero changed hashes and no leak reports.
-Raw expected failure, original assertion hash/restoration, preserved filesystem,
-extraction/SQLite audit, exact source snapshots and green logs remain outside
-the feature PR under `FIXTURE_RETENTION_INDEX.md`. No assertion, product limit,
-timeout or test skip was relaxed in the committed change.
 
 ## Delivery and evidence
 
