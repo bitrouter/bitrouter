@@ -73,10 +73,11 @@ impl ThreadService {
                 .iter()
                 .find(|permission| permission.request_id == answer.request_id)
                 .ok_or("ACP permission is not pending on this Turn")?;
-            if !permission.options.iter().any(|option| {
-                option.get("optionId").and_then(serde_json::Value::as_str)
-                    == Some(answer.option_id.as_str())
-            }) {
+            if !permission
+                .options
+                .iter()
+                .any(|option| option.option_id.0.as_ref() == answer.option_id)
+            {
                 return Err("ACP option was not offered by the original request".into());
             }
         }

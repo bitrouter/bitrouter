@@ -178,7 +178,7 @@ Goal 默认交付经过验证、可 review 的结果即完成；人工验收只�
 | 当前 native 历史 checkpoint | 86 项 Goal runtime 检查、6 项证据检查、归档矩阵 3 次重复、严格全 workspace Clippy 与 fmt |
 | 前一预算 checkpoint | 735 项 SDK 检查、4 项 Goal PTY、编辑器 10 次重复、6 个 doctest（1 ignored）；源码适用性单独核对 |
 
-最终源码结果：**Summary [1172.177s] 4757 tests run: 4757 passed (5 slow), 24 skipped**。严格全 workspace / all-target / all-feature Clippy、fmt、6 个 doctest（1 ignored）与 dist-helper check 通过，源码无漂移，nextest 未报告 LEAK。完整 coordinator / TUI / SQLite-resource 夹具预留全局测试资源；场景内部并行、栈与产品上限保持原值；native 并行交付测试将原单个 45 秒等待拆为 worker handoff 与根验收两个各 45 秒的阶段，总允许等待因此增加。大型测试 future 使用堆分配，缺失的正向阶段收据仍按未知处理。原始超时、栈溢出、过强断言、初始化断开、LEAK 和中断运行均保留；真实 harness/provider 与 hosted CI 另列，不由本地 fixture 代替。
+最终源码结果：**Summary [ 916.362s] 4757 tests run: 4757 passed (7 slow), 24 skipped**。严格全 workspace / all-target / all-feature Clippy、fmt、6 个 doctest（1 ignored）与 dist-helper check 通过，源码无漂移，nextest 未报告 LEAK。完整 coordinator / TUI / SQLite-resource 夹具预留全局测试资源；场景内部并行、原 45 秒等等待、栈与产品上限保持原值。大型测试 future 使用堆分配，缺失的正向阶段收据仍按未知处理。原始超时、栈溢出、过强断言、初始化断开、LEAK 和中断运行均保留；真实 harness/provider 与 hosted CI 另列，不由本地 fixture 代替。
 
 必要的 Rust fixtures、输入评测案例与测试驱动保留在仓库。执行与测试夹具不要求 Python。常用本地入口：
 
@@ -193,12 +193,6 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 CARGO_INCREMENTAL=0 \
 失败保留使用测试专用 `BRO_GOAL_FIXTURE_KEEP_FAILURES=1`。失败 filesystem/SQLite copy 不是进程图像或全部外部效果快照；历史未保留的文件和内存数据库不宣称已恢复。
 
 独立本地归档根目录为 `/Users/kelsen/.codex/archives/bro-refactor/2026-10-16/`。各批次索引保存源码哈希、配置、原始失败、通过结果、独立解包校验及 Git bundle；归档发布状态和不可变 commit 见最终摘要。`native-history-prior-ledger5.md` 保存本文重写前的完整 1,339 行记录。主 PR 不复制这些多轮日志和快照。
-
-首轮 hosted CI 暴露了全特性构建未覆盖的可选 ACP 依赖引用，以及新 Rust stable 对测试中旧原子 API 的弃用错误。本轮修正后，native 默认依赖图不含 ACP crate，关闭/开启 ACP 与 Rust 1.93 构建通过；共享执行仅保存原始权限材料，适配器解释协议类型，未提供的选项被拒绝且不产生选择记录。
-
-Linux 还证明三个 worker 已完成但根验收未结束时，总 45 秒的测试等待偏短；现在分别等待交接与根验收，每阶段仍为 45 秒，整条测试的允许时间增加。实际并行/隔离/依赖与验收断言均保留，产品预算不变。
-
-本地 full final31 的 help 用例报告一次输出 LEAK，原记录保留；随后同源码以两个外层测试槽运行完整回归，工作流内部并行与检测器保持原值，help 另作三次复核。完整回归、严格检查与原始 CI 失败分别保存在 `CI_PORTABILITY_INDEX.md` 及 `ci-portability-final36`。
 
 ## 8 阶段结论与后续边界
 

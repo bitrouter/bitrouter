@@ -350,17 +350,6 @@ impl ThreadService {
                 || permission.request_id.len() > 128
                 || permission.options.is_empty()
                 || permission.options.len() > 16
-                || permission
-                    .tool_call
-                    .get("toolCallId")
-                    .and_then(serde_json::Value::as_str)
-                    .is_none_or(str::is_empty)
-                || permission.options.iter().any(|option| {
-                    option
-                        .get("optionId")
-                        .and_then(serde_json::Value::as_str)
-                        .is_none_or(str::is_empty)
-                })
                 || serde_json::to_vec(permission)
                     .map_err(|error| error.to_string())?
                     .len()

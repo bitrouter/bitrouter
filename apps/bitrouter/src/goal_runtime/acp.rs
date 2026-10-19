@@ -276,21 +276,14 @@ impl Driver for Adapter {
             permissions: snapshot
                 .pending_permissions
                 .into_iter()
-                .map(|permission| {
-                    Ok::<_, serde_json::Error>(
-                        bitrouter_orchestrator::service::worker::acp::Permission {
-                            request_id: permission.permission_id,
-                            tool_call: serde_json::to_value(permission.tool_call)?,
-                            options: permission
-                                .options
-                                .into_iter()
-                                .map(serde_json::to_value)
-                                .collect::<Result<Vec<_>, _>>()?,
-                        },
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| error.to_string())?,
+                .map(
+                    |permission| bitrouter_orchestrator::service::worker::acp::Permission {
+                        request_id: permission.permission_id,
+                        tool_call: permission.tool_call,
+                        options: permission.options,
+                    },
+                )
+                .collect(),
         })
     }
 }

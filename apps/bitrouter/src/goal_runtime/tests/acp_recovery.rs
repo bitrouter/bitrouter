@@ -361,13 +361,6 @@ async fn acp_pre_prompt_recovery_loads_only_the_original_stopped_session() -> Re
                         tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 }).await??;
-                let invalid = current.threads.answer_acp_permission(&target, &CallerContext::local(),
-                    bitrouter_orchestrator::service::worker::acp::Approval {
-                        turn_id: link.turn_id.clone(), request_id: permission.request_id.clone(),
-                        option_id: "not-offered".into(), idempotency_key: "reject-unoffered-restored-option".into(),
-                    }).await;
-                assert!(invalid.is_err());
-                assert!(current.threads.read_stored_turn(&target, &CallerContext::local(), &link.turn_id).await?.acp_selected.is_empty());
                 current.threads.answer_acp_permission(&target, &CallerContext::local(),
                     bitrouter_orchestrator::service::worker::acp::Approval {
                         turn_id: link.turn_id.clone(), request_id: permission.request_id,

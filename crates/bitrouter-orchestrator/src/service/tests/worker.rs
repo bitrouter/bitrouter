@@ -71,24 +71,14 @@ impl NativeExecutionControl for SharedBudget {
         })
     }
     async fn before_attempt(&self, _: &str, _: u32) -> bitrouter_sdk::Result<()> {
-        // Keep the concurrent admission fixture compatible with the workspace MSRV.
-        let mut admitted = self.admitted.load(Ordering::SeqCst);
-        loop {
-            if admitted >= self.limit {
-                return Err(bitrouter_sdk::error::BitrouterError::bad_request(
-                    "shared Goal budget exhausted",
-                ));
-            }
-            match self.admitted.compare_exchange_weak(
-                admitted,
-                admitted + 1,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => return Ok(()),
-                Err(current) => admitted = current,
-            }
-        }
+        self.admitted
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                (value < self.limit).then_some(value + 1)
+            })
+            .map(|_| ())
+            .map_err(|_| {
+                bitrouter_sdk::error::BitrouterError::bad_request("shared Goal budget exhausted")
+            })
     }
     async fn after_attempt(&self, _: NativeAttemptReport) {
         self.observed.fetch_add(1, Ordering::SeqCst);

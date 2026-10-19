@@ -2,11 +2,11 @@
   "createdAt": "2026-10-16T20:33:02.551Z",
   "scope": "BRO execution refactor v0.2 controlled local acceptance; not universal harness/provider qualification",
   "source": {
-    "evaluatedHead": "25cbd553a075056879dcf8b5a356a95ddf206dd6",
+    "evaluatedHead": "ebbbc000a500486889be80dfc87bf180cc0d7a69",
     "dirtySource": true,
-    "sourceMap": "ci-portability-final36-source.json",
-    "sourceMapSha256": "8d0cf262a30eaf2f51754fde5a606477333a38b955349288c46accae2d370930",
-    "evaluatedInputsSha256": "e1b52e2c9aceb0144985cd57382d05c1f3f1eb74cc89f5bb03ba9e02cf26004e",
+    "sourceMap": "acp-continuation-final15-source.json",
+    "sourceMapSha256": "f8ab281d8d10d6d0895422117a1ef99e29ed807c03b38ae55c3900c4bac09715",
+    "evaluatedInputsSha256": "b346263f814a409f04a4e8f531bc53a55d0287f9707d2c25fc14846bd5490b9e",
     "metadataOnlyPaths": [
       "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
       "docs/DEVELOPMENT.md",
@@ -20,155 +20,30 @@
       ".codex-plugin/plugin.json",
       ".agents/plugins/marketplace.json"
     ],
-    "compiledJsonlFixturesRetained": true
+    "compiledJsonlFixturesRetained": true,
+    "postTestMetadataDelta": [
+      "docs/evidence/bro-goal-workflow/2026-10-16-refactor-acceptance.md",
+      "docs/evidence/bro-goal-workflow/2026-10-16-refactor-summary.json",
+      ".agents/plugins/marketplace.json",
+      ".claude-plugin/plugin.json",
+      ".codex-plugin/plugin.json",
+      "docs/BRO_ORCHESTRATOR_REFACTOR_IMPLEMENTATION.md",
+      "docs/DEVELOPMENT.md",
+      "docs/evidence/bro-goal-workflow/README.md",
+      "docs/evidence/bro-goal-workflow/REPRODUCE.md",
+      "skills/bitrouter/SKILL.md",
+      "skills/bitrouter/references/cli.md"
+    ],
+    "committedCheckpoint": "6a72cfb1da0e2d4641a96097e09a507d7d032189",
+    "committedInputsMatch": true
   },
   "local": {
-    "id": "ci-portability-final36",
+    "id": "acp-continuation-final15",
     "runner": "v3 rejects code-zero LEAK reports",
     "passed": true,
     "sourceDrift": [],
     "leaks": [],
     "jobs": [
-      {
-        "name": "native-features",
-        "args": [
-          "check",
-          "--locked",
-          "-p",
-          "bitrouter-orchestrator",
-          "--no-default-features"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [],
-        "leaks": []
-      },
-      {
-        "name": "acp-features",
-        "args": [
-          "check",
-          "--locked",
-          "-p",
-          "bitrouter-orchestrator",
-          "--no-default-features",
-          "--features",
-          "acp"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [],
-        "leaks": []
-      },
-      {
-        "name": "native-tree",
-        "args": [
-          "tree",
-          "--locked",
-          "-p",
-          "bitrouter-orchestrator",
-          "--no-default-features",
-          "-e",
-          "normal,build",
-          "--prefix",
-          "none"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [],
-        "leaks": []
-      },
-      {
-        "name": "msrv-native",
-        "args": [
-          "+1.93",
-          "check",
-          "--locked",
-          "-p",
-          "bitrouter-orchestrator",
-          "--no-default-features"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [],
-        "leaks": []
-      },
-      {
-        "name": "help-output-1",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "-E",
-          "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [   3.939s] 1 test run: 1 passed, 9 skipped"
-        ],
-        "leaks": []
-      },
-      {
-        "name": "help-output-2",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "-E",
-          "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [   3.925s] 1 test run: 1 passed, 9 skipped"
-        ],
-        "leaks": []
-      },
-      {
-        "name": "help-output-3",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "-E",
-          "binary(onboarding) & test(public_help_exposes_canonical_agent_entry_points)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [   3.980s] 1 test run: 1 passed, 9 skipped"
-        ],
-        "leaks": []
-      },
-      {
-        "name": "acp-recovery",
-        "args": [
-          "nextest",
-          "run",
-          "--workspace",
-          "--all-features",
-          "--lib",
-          "-E",
-          "test(acp_pre_prompt_recovery_loads_only_the_original_stopped_session) | test(service::tests::worker::) | test(native_branches_overlap_isolate_conflicting_local_writes_and_read_checked_dependencies)",
-          "--test-threads",
-          "2"
-        ],
-        "code": 0,
-        "status": "passed",
-        "summaries": [
-          "     Summary [  29.407s] 14 tests run: 14 passed, 3652 skipped"
-        ],
-        "leaks": []
-      },
       {
         "name": "typed-startup",
         "args": [
@@ -178,14 +53,12 @@
           "--all-features",
           "--lib",
           "-E",
-          "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)",
-          "--test-threads",
-          "2"
+          "test(goal_runtime::resources::tests::unsupported_mcp_transports_) | test(goal_runtime::resources::tests::unconfirmed_model_route_)"
         ],
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [   0.479s] 2 tests run: 2 passed, 3664 skipped"
+          "     Summary [   0.640s] 2 tests run: 2 passed, 3664 skipped"
         ],
         "leaks": []
       },
@@ -196,14 +69,12 @@
           "run",
           "--workspace",
           "--all-features",
-          "--no-fail-fast",
-          "--test-threads",
-          "2"
+          "--no-fail-fast"
         ],
         "code": 0,
         "status": "passed",
         "summaries": [
-          "     Summary [1172.177s] 4757 tests run: 4757 passed (5 slow), 24 skipped"
+          "     Summary [ 916.362s] 4757 tests run: 4757 passed (7 slow), 24 skipped"
         ],
         "leaks": []
       },
@@ -271,14 +142,21 @@
         "leaks": []
       }
     ],
-    "nativeTreeContainsAcp": false,
-    "sourceTarFilesVerified": 7
+    "docResults": [
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+      "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+    ]
   },
   "archive": {
     "repository": "https://github.com/bitrouter/bitrouter",
     "branch": "codex/pr981-refactor-evidence-20261016",
     "commit": "0fc618e2594586da5f480a30fb9f2f035b1acb47",
-    "publication": "prior immutable archive published; correction annex pin pending",
+    "publication": "published and remote head verified",
     "priorArchive": "382c2b58c5c25b02805175a33d60707dc4227b46",
     "url": "https://github.com/bitrouter/bitrouter/tree/0fc618e2594586da5f480a30fb9f2f035b1acb47",
     "checksumManifest": "SHA256SUMS",
@@ -298,22 +176,5 @@
     "ACP same-session continuation covers confirmed pre-prompt journals only. Private context/provider/cost beyond protocol is not attested.",
     "Native/ACP cold proofs use controlled SQLite images after actual source join, not forced crash takeover.",
     "Core persistence migration, complete Turn-fixed routing, dynamic graph edits, subgoals and Goal owner handoff are deferred."
-  ],
-  "priorLocal": {
-    "parallelRun": {
-      "id": "ci-portability-final31",
-      "qualification": "Reported onboarding public help output LEAK; assertions/status recorded in exact raw result. Same executable/test inputs as final36. Cause not claimed proven."
-    },
-    "id": "acp-continuation-final15",
-    "scope": "4757 tests passed on earlier inputs; original hosted feature-isolation, compiler and Linux aggregate-wait failures bind their own head.",
-    "interrupted": {
-      "id": "ci-portability-final26",
-      "passed": 781,
-      "signalCases": 1,
-      "unrun": 3975,
-      "sourceDrift": [],
-      "leaks": [],
-      "reason": "Stopped explicitly before the separate Linux acceptance-phase correction; not a complete pass."
-    }
-  }
+  ]
 }
