@@ -386,16 +386,7 @@ Waiting alone accepts no Turn or model call. Foreign OS locks without a known
 local owner and unresolved effects are refused directly. Native cold receipt lookup restores
 only the exact managed Goal/attempt directory registration; outside paths and
 symlink escapes fail, and existing revoked profiles remain revoked.
-For current Goal/work/control sources, the coordinator can request continuation
-of an already accepted native checkpoint through ThreadService. Original
-Thread/Turn, input and budgets are retained. The runtime requires stopped-owner,
-effect and checkpoint evidence and rechecks authorization before restoration.
-Unconfirmed old owners, pending tool results and paused/revoked sources do not
-resume. Ordinary start rejects a changed body on the original key before
-restoration; a readonly query itself never requests continuation. Local proof
-uses controlled SQLite checkpoint images after actual source shutdown/join;
-it does not qualify forced crash takeover or private ACP continuation.
-Confirmed ACP continuation and worker token-quote waiting remain incomplete. Do not treat
+Active cold recovery and worker token-quote waiting remain incomplete. Do not treat
 controlled HTTP/tool fixtures as qualified self-driving coding. Native and ACP execution proof
 remain separate; a Thread/Turn admission is not evidence of model/tool dispatch.
 Both `bro` and `bro code` open Goals; reading the directory does not create or

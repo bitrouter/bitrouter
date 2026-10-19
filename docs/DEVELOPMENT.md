@@ -50,11 +50,8 @@ through its shared admission, runner, writer fencing and shutdown authority,
 retaining the existing Goal model-control accounting. Native Goal workers now have an app dispatch path and explicit Thread/Turn
 links. Native permission replies use the shared approval transaction; stopped
 local effects use original-history/workspace reconciliation. Shared generation
-admission and native worker admission share bounded capacity waiting. Current native Goal
-sources can request continuation of an accepted checkpoint through the same recovery
-engine, retaining Thread/Turn identity and recorded budgets. Owner/effect uncertainty
-remains blocked; confirmed ACP continuation and worker quote waiting still need closure.
-Managed ACP uses the same acceptance/control owner;
+admission and native worker admission share bounded capacity waiting; active cold recovery and worker quote
+waiting still need closure. Managed ACP uses the same acceptance/control owner;
 the supervisor supplies protocol/process facts. Historical unbound runs retain
 their reconciliation path. Worker changes version the existing work and create
 a new Thread after old stop/effects are confirmed; known local results are

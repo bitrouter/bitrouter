@@ -172,14 +172,6 @@ impl ThreadService {
         {
             return self.read_thread_view(target, caller);
         }
-        // A live Goal gate may have been revoked while this restoration waited
-        // for admission. Existing recovery receipts above remain readable.
-        if let Some(control) = &control {
-            control
-                .authorize()
-                .await
-                .map_err(|error| ServiceError::new(ErrorCode::Unauthorized, error.to_string()))?;
-        }
         let (report, mut snapshot, mut messages, fence, continuation) = {
             let state = self.lock_state();
             let thread = state
