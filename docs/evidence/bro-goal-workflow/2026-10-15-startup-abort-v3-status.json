@@ -1,0 +1,36 @@
+{
+  "nextest": {
+    "exit": 0,
+    "seconds": 407.402
+  },
+  "goals": {
+    "exit": 0,
+    "seconds": 145.511
+  },
+  "clippy": {
+    "exit": 0,
+    "seconds": 142.46
+  },
+  "bro-build": {
+    "exit": 0,
+    "seconds": 142.513
+  },
+  "fmt": {
+    "exit": 0,
+    "seconds": 6.101
+  },
+  "diff": {
+    "exit": 0,
+    "seconds": 0.102
+  },
+  "hashes": {
+    "exit": 0,
+    "seconds": 0.09
+  },
+  "workspace-nextest": {
+    "exit": null,
+    "seconds": 456.295,
+    "interrupted_by": "Codex: actual Node review cancellation and missing executable check-update support require a new source candidate; no full-suite result claimed",
+    "signal": 2
+  }
+}

@@ -1,0 +1,818 @@
+{
+  "binary": {
+    "binary_sha256": "9270297b9c3973e7162dc3ddf2f2d6f2a95f635dd8f3eeadf9fe83460ddb3425",
+    "source_manifest": "docs/evidence/bro-goal-workflow/2026-10-15-task-review-checks-v5-source.sha256",
+    "runner": "copied current Rust libtest executable; no concurrent Cargo"
+  },
+  "test_status": {
+    "corpus": {
+      "exit": 0,
+      "seconds": 277.104,
+      "output": "/tmp/bro-goal-live-eval-20261014/input-review-v5-corpus"
+    },
+    "sequences": {
+      "exit": 101,
+      "seconds": 70.209,
+      "output": "/tmp/bro-goal-live-eval-20261014/input-review-v5-sequences"
+    }
+  },
+  "label_authority": "q03 and q07 human reviewed; remaining labels are Codex-proposed, including q21 status-only default",
+  "evidence_scope": "Real reasoning and System One providers over persisted domain fixtures; no worker-adoption or calibrated accuracy claim",
+  "corpus": {
+    "rows": 54,
+    "effect_mismatches": 0,
+    "row_effects": [
+      {
+        "case": "q01",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q01",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q02",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q02",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q03",
+        "lane": "rules-reasoning",
+        "annotation_status": {
+          "status": "human_reviewed_clarification",
+          "date": "2026-10-14",
+          "decision": "Clarify the failed attempt or log when current Goal has no failure evidence; do not invent a cause or change execution",
+          "previous_clarification": false
+        },
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q03",
+        "lane": "typed-upgrade",
+        "annotation_status": {
+          "status": "human_reviewed_clarification",
+          "date": "2026-10-14",
+          "decision": "Clarify the failed attempt or log when current Goal has no failure evidence; do not invent a cause or change execution",
+          "previous_clarification": false
+        },
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q04",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q04",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q05",
+        "lane": "rules-reasoning",
+        "annotation_status": {
+          "status": "codex_proposed_from_approved_spec",
+          "basis": "PRD 7.5 and spec mixed-intent/query clarification rules; no new human gold claim"
+        },
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q05",
+        "lane": "typed-upgrade",
+        "annotation_status": {
+          "status": "codex_proposed_from_approved_spec",
+          "basis": "PRD 7.5 and spec mixed-intent/query clarification rules; no new human gold claim"
+        },
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q06",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q06",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q07",
+        "lane": "rules-reasoning",
+        "annotation_status": {
+          "status": "human_reviewed_control_intent",
+          "date": "2026-10-14",
+          "decision": "Temporary hold defaults to pause and retains resumption intent",
+          "previous_intent": "stop"
+        },
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q07",
+        "lane": "typed-upgrade",
+        "annotation_status": {
+          "status": "human_reviewed_control_intent",
+          "date": "2026-10-14",
+          "decision": "Temporary hold defaults to pause and retains resumption intent",
+          "previous_intent": "stop"
+        },
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q08",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": true
+      },
+      {
+        "case": "q08",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": true
+      },
+      {
+        "case": "q09",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": true
+      },
+      {
+        "case": "q09",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": true
+      },
+      {
+        "case": "q10",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q10",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q11",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q11",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q12",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q12",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q13",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q13",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q14",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q14",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q15",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q15",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q16",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q16",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q17",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q17",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q18",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q18",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q19",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q19",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q20",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q20",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q21",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q21",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q22",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q22",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q23",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q23",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q24",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q24",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q25",
+        "lane": "rules-reasoning",
+        "annotation_status": {
+          "status": "codex_proposed_from_approved_spec",
+          "basis": "PRD 7.5 and spec mixed-intent/query clarification rules; no new human gold claim"
+        },
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": true
+      },
+      {
+        "case": "q25",
+        "lane": "typed-upgrade",
+        "annotation_status": {
+          "status": "codex_proposed_from_approved_spec",
+          "basis": "PRD 7.5 and spec mixed-intent/query clarification rules; no new human gold claim"
+        },
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": true
+      },
+      {
+        "case": "q26",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "q26",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "q27",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": true
+      },
+      {
+        "case": "q27",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": true
+      }
+    ]
+  },
+  "sequences": {
+    "rows": 18,
+    "effect_mismatches": 0,
+    "row_effects": [
+      {
+        "case": "s01-step-1",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": true
+      },
+      {
+        "case": "s01-step-2",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": true
+      },
+      {
+        "case": "s01-step-1",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": true
+      },
+      {
+        "case": "s01-step-2",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": {
+          "kind": "invalid_response",
+          "message": "answers do not match the requested rubric",
+          "usage": {
+            "input_tokens": 7820,
+            "output_tokens": 217
+          },
+          "may_have_run": true
+        },
+        "requirements_saved": true
+      },
+      {
+        "case": "s02-step-1",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": true
+      },
+      {
+        "case": "s02-step-2",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": true
+      },
+      {
+        "case": "s02-step-1",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": true
+      },
+      {
+        "case": "s02-step-2",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": true
+      },
+      {
+        "case": "s03-step-1",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "s03-step-2",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "s03-step-1",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "s03-step-2",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": "valid",
+        "requirements_saved": false
+      },
+      {
+        "case": "s06",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "s06",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": {
+          "kind": "timeout",
+          "message": "attempt deadline exceeded",
+          "usage": null,
+          "may_have_run": true
+        },
+        "requirements_saved": false
+      },
+      {
+        "case": "s07",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "s07",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": {
+          "kind": "invalid_response",
+          "message": "answers do not match the requested rubric",
+          "usage": {
+            "input_tokens": 10,
+            "output_tokens": 3
+          },
+          "may_have_run": true
+        },
+        "requirements_saved": false
+      },
+      {
+        "case": "s08",
+        "lane": "rules-reasoning",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": null,
+        "requirements_saved": false
+      },
+      {
+        "case": "s08",
+        "lane": "typed-upgrade",
+        "annotation_status": "codex_proposed_unreviewed",
+        "effect_violations": [
+
+        ],
+        "native_outcome": {
+          "kind": "http",
+          "message": "provider response is not valid JSON",
+          "usage": null,
+          "may_have_run": true
+        },
+        "requirements_saved": false
+      }
+    ]
+  },
+  "native_sequence_conformance": {
+    "normal_rows": 6,
+    "valid": 5,
+    "failed_case": "s01-step-2",
+    "injected_fault_rows": 3,
+    "status": "failed; first failure retained and not waived"
+  }
+}

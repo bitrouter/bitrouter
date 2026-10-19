@@ -1,0 +1,63 @@
+{
+  "source_files": 944,
+  "pty": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 262.378
+  },
+  "clippy": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 116.821
+  },
+  "bro-build": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 116.701
+  },
+  "fmt": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 5.157
+  },
+  "diff": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.076
+  },
+  "hashes": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.123
+  },
+  "workspace-nextest": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 1713.192
+  },
+  "doctests": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 129.138
+  },
+  "dist": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 16.372
+  },
+  "final-fmt": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 4.938
+  },
+  "final-diff": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.07
+  },
+  "final-hashes": {
+    "exit": 0,
+    "signal": null,
+    "seconds": 0.115
+  }
+}

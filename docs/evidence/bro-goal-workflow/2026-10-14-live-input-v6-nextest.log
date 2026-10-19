@@ -1,0 +1,25 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 08s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID b49d65e8-e09c-4123-9372-323511b0efd8 with nextest profile: default
+    Starting 1 test across 1 binary (1754 tests skipped)
+        PASS [  19.092s] (1/1) bitrouter goal_runtime::tests::live_input::live_current_goal_hypothetical_and_explicit_pause_use_real_models_and_durable_effects
+────────────
+     Summary [  19.101s] 1 test run: 1 passed, 1754 skipped
+        PASS [  19.092s] (1/1) bitrouter goal_runtime::tests::live_input::live_current_goal_hypothetical_and_explicit_pause_use_real_models_and_durable_effects
+  stdout ───
+
+    running 1 test
+    test goal_runtime::tests::live_input::live_current_goal_hypothetical_and_explicit_pause_use_real_models_and_durable_effects ... ok
+
+    test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1754 filtered out; finished in 19.08s
+
+  stderr ───
+    Two live cases completed in both lanes; domain workflow fixtures, no harness-adoption or calibrated-accuracy claim. Evidence: /private/tmp/bro-goal-live-eval-20261014/runtime-v6

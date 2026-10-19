@@ -1,0 +1,101 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling rmcp v3.3.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling axoupdater v0.10.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 22s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 9b8ccf31-29f8-48aa-a25a-20c7e6ee8af0 with nextest profile: default
+    Starting 5 tests across 2 binaries (50 tests skipped)
+        PASS [  15.802s] (1/5) bitrouter::goal_tui_pty bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+        SLOW [> 60.000s] (───) bitrouter::code_tui_pty evolution::session_api_failed_settings_retain_the_last_confirmed_value
+        SLOW [> 60.000s] (───) bitrouter::code_tui_pty evolution::session_api_settings_apply_only_the_actual_confirmed_configuration
+        SLOW [> 60.000s] (───) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        SLOW [> 60.000s] (───) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        PASS [  95.976s] (2/5) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        FAIL [ 101.920s] (3/5) bitrouter::code_tui_pty evolution::session_api_settings_apply_only_the_actual_confirmed_configuration
+  stdout ───
+
+    running 1 test
+    test evolution::session_api_settings_apply_only_the_actual_confirmed_configuration has been running for over 60 seconds
+    test evolution::session_api_settings_apply_only_the_actual_confirmed_configuration ... FAILED
+
+    failures:
+
+    failures:
+        evolution::session_api_settings_apply_only_the_actual_confirmed_configuration
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 52 filtered out; finished in 101.90s
+
+  stderr ───
+    Error: data did not match any variant of untagged enum SessionConfigOptionValue
+
+        FAIL [ 101.925s] (4/5) bitrouter::code_tui_pty evolution::session_api_failed_settings_retain_the_last_confirmed_value
+  stdout ───
+
+    running 1 test
+    test evolution::session_api_failed_settings_retain_the_last_confirmed_value has been running for over 60 seconds
+    test evolution::session_api_failed_settings_retain_the_last_confirmed_value ... FAILED
+
+    failures:
+
+    failures:
+        evolution::session_api_failed_settings_retain_the_last_confirmed_value
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 52 filtered out; finished in 101.91s
+
+  stderr ───
+    Error: data did not match any variant of untagged enum SessionConfigOptionValue
+
+        FAIL [ 115.339s] (5/5) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+  stdout ───
+
+    running 1 test
+    test active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution has been running for over 60 seconds
+    test active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution ... FAILED
+
+    failures:
+
+    failures:
+        active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1 filtered out; finished in 115.33s
+
+  stderr ───
+    Error: missing "UNSENT_ACTIVE_DRAFT"; screen: "revision 47 / requirements 1 / 93fcb8ef-4dad-49fb-9cc3-30073f104d5b: Committed workflow fact:       \nRegisterWorkspace { execution_id: \"ae666627-0133-4cdf-947b-dfb8ec278ff1\", base_commit:              \n\"d2a31c98d8f447e79236bc960237f0412e05aaf3\" }                                                        \n                                                                                                    \nrevision 48 / requirements 1 / 00ab61c8-b455-4ea8-b1a5-cbaa647baa8f: Committed workflow fact:       \nRequestDispatch { execution_id: \"ae666627-0133-4cdf-947b-dfb8ec278ff1\" }                            \nTask / evidence · read only                                                                         \nOperation 4b5644c5-8bd8-465f-bbc5-3f6a77947308 saved for Goal 5a995754-2b96-4dcc-852e-6709eb14ed42;…\nleft · Fixture left · last observed running                                                         \nACP harness: goal-peer · model/context details: unreported                                          \nTask requirements revision: 1 · Goal requirements: 1                                                \nWrite and verify left.txt                                                                           \nExecution: ae666627-0133-4cdf-947b-dfb8ec278ff1 · source Goal requirements 1 · task revision 1      \nWorkspace:                                                                                          \n/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpkBBZXK/goal-workspaces/5a995754-2b96-4dcc-852e-\n6709eb14ed42/ae666627-0133-4cdf-947b-dfb8ec278ff1                                                   \nDispatch admitted: true · stop fact: None                                                           \nSupervisor run: d14fa95f-6fad-4a42-af54-d104fe0994e2                                                \nPermission 90afa98cfe606fdf374f5027df28aa45f67b4d61d56b2540e9a7ff831772eabf · source requirements 1 \n/ task 1 · Submitted { operation_id: \"5705a7bb-fdde-43f2-af54-8df1dffc5a40\", option_id: \"allow-once\"\n}                                                                                                   \nEvidence 1/1: Actual permission request · SHA                                                       \ndcda905c6a3dd0e27b6501cd0e8103fce14c8ea029683374e5fe3256b20fa07a · 532 bytes                        \n↑↓ read · Tab evidence · Enter inspect · Ctrl-F fullscreen · Esc back · read only                   "; output: "eer · model/context details: unreported                                          \u{1b}[11;1HTask requirements revision: 1 · Goal requirements: 1                                                \u{1b}[12;1HWrite and verify left.txt                                                                           \u{1b}[13;1HExecution: ae666627-0133-4cdf-947b-dfb8ec278ff1 · source Goal requirements 1 · task revision 1      \u{1b}[14;1HWorkspace:                                                                                          \u{1b}[15;1H/var/folders/q1/xrnmtfy96_30yfqx4sqkh6l40000gn/T/.tmpkBBZXK/goal-workspaces/5a995754-2b96-4dcc-852e-\u{1b}[16;1H6709eb14ed42/ae666627-0133-4cdf-947b-dfb8ec278ff1                                                   \u{1b}[17;1HDispatch admitted: true · stop fact: None                                                           \u{1b}[18;1HSupervisor run: d14fa95f-6fad-4a42-af54-d104fe0994e2                                                \u{1b}[19;1HPermission 90afa98cfe606fdf374f5027df28aa45f67b4d61d56b2540e9a7ff831772eabf · source requirements 1 \u{1b}[20;1H/ task 1 · Submitted { operation_id: \"5705a7bb-fdde-43f2-af54-8df1dffc5a40\", option_id: \"allow-once\"\u{1b}[21;1H}                                                                                                   \u{1b}[22;1HEvidence 1/1: Actual permission request · SHA                                                       \u{1b}[23;1Hdcda905c6a3dd0e27b6501cd0e8103fce14c8ea029683374e5fe3256b20fa07a · 532 bytes                        \u{1b}[m\u{1b}[m\u{1b}[m\u{1b}[0m\u{1b}[?2026l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l\u{1b}[?25l"
+
+────────────
+     Summary [ 115.346s] 5 tests run: 2 passed (1 slow), 3 failed, 50 skipped
+        FAIL [ 101.920s] (3/5) bitrouter::code_tui_pty evolution::session_api_settings_apply_only_the_actual_confirmed_configuration
+        FAIL [ 101.925s] (4/5) bitrouter::code_tui_pty evolution::session_api_failed_settings_retain_the_last_confirmed_value
+        FAIL [ 115.339s] (5/5) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+error: test run failed

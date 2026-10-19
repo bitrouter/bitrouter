@@ -1,0 +1,3 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running `target/debug/dist-helper registry build`
+wrote dist/registry: 45 providers, 59 canonical models, 1 runtimes, 6 agents

@@ -1,0 +1,122 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling sqlx-core v0.8.6
+   Compiling hyper-rustls v0.27.9
+   Compiling reqwest v0.13.4
+   Compiling rmcp v3.3.0
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling opentelemetry-http v0.32.0
+   Compiling axoasset v2.0.1
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling axoupdater v0.10.0
+   Compiling sqlx v0.8.6
+   Compiling sea-query-binder v0.7.0
+   Compiling sea-orm v1.1.20
+   Compiling sea-schema v0.16.2
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+warning: `bitrouter` (lib test) generated 1 warning (1 duplicate)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 27s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID 9bc3c4bf-51ea-4c41-897f-76f1fa5c4ef2 with nextest profile: default
+    Starting 71 tests across 7 binaries (2076 tests skipped)
+        PASS [   0.025s] ( 1/71) bitrouter goal_code::tests::unresolved_input_blocks_only_its_lane_and_never_blocks_explicit_stop
+        PASS [   0.028s] ( 2/71) bitrouter goal_code::tests::receipt_recovery_rotates_lanes_without_replaying_or_replacing_identity
+        PASS [   0.029s] ( 3/71) bitrouter goal_code::tests::old_receipt_with_identical_text_cannot_clear_a_different_pending_draft
+        PASS [   0.059s] ( 4/71) bitrouter goal_code::tests::permission_preview_uses_actual_harness_request_bytes_and_never_reports_execution
+        PASS [   0.060s] ( 5/71) bitrouter goal_code::tests::changed_protocol_outbox_is_preserved_without_reinterpreting_or_replaying
+        PASS [   0.061s] ( 6/71) bitrouter goal_code::tests::outbox_retains_exact_identity_scope_and_text_without_replaying
+        PASS [   0.080s] ( 7/71) bitrouter goal_code::tests::actual_database_receipt_must_match_the_original_client_payload
+        PASS [   0.083s] ( 8/71) bitrouter goal_code::tests::projection_preserves_incomplete_budget_and_unknown_effects_as_separate_dimensions
+        PASS [   0.090s] ( 9/71) bitrouter goal_code::tests::real_goal_client_refuses_stale_budget_forms_and_runtime_refuses_racing_updates
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        SLOW [> 60.000s] (─────) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        SLOW [> 60.000s] (─────) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        PASS [  79.131s] (10/71) bitrouter::code_tui_pty background::foreground_api_claim_rejects_a_background_subdirectory_of_the_same_worktree
+        PASS [   0.067s] (11/71) bitrouter::code_tui_pty background::remote_context_rejects_background_and_session_mutations_before_local_start
+        PASS [  79.219s] (12/71) bitrouter::code_tui_pty background::failed_run_stop_is_idempotent_and_remove_preserves_native_session
+        PASS [  79.197s] (13/71) bitrouter::code_tui_pty background::no_wait_is_rejected_and_non_tty_management_is_escape_free
+        PASS [  79.422s] (14/71) bitrouter::code_tui_pty background::background_load_and_resume_use_advertised_native_capabilities
+        PASS [  79.958s] (15/71) bitrouter::code_tui_pty background::background_permissions_default_to_ask_and_explicit_modes_win
+        PASS [  80.127s] (16/71) bitrouter::code_tui_pty background::permission_wait_counts_toward_background_turn_timeout
+        PASS [   1.422s] (17/71) bitrouter::code_tui_pty background::schema_failure_never_becomes_ready_for_review
+        PASS [   1.240s] (18/71) bitrouter::code_tui_pty evolution::evolution_api_restore_reviews_current_identity_and_retains_publication
+        PASS [   1.564s] (19/71) bitrouter::code_tui_pty background_cli_returns_before_settlement_and_run_survives_client_exit
+        PASS [   1.582s] (20/71) bitrouter::code_tui_pty evolution::evolution_api_checkpoint_history_keeps_current_reward_and_original_revisions
+        PASS [   0.847s] (21/71) bitrouter::code_tui_pty evolution::session_api_client_loss_during_startup_keeps_daemon_ownership_until_explicit_stop
+        PASS [   0.665s] (22/71) bitrouter::code_tui_pty evolution::session_api_detach_preserves_pending_permissions_without_answering_or_stopping
+        PASS [  81.319s] (23/71) bitrouter goal_runtime::tests::stopped_process_without_terminal_tool_evidence_cannot_restart_or_complete
+        PASS [   1.043s] (24/71) bitrouter::code_tui_pty evolution::session_api_explicit_detach_keeps_accepted_turn_running_and_delivers_after_client_exit
+        PASS [   1.127s] (25/71) bitrouter::code_tui_pty evolution::session_api_failed_settings_retain_the_last_confirmed_value
+        PASS [   1.389s] (26/71) bitrouter::code_tui_pty evolution::session_api_late_adapter_failure_keeps_completed_transcript_and_native_identity
+        PASS [   1.376s] (27/71) bitrouter::code_tui_pty evolution::session_api_overlapping_permissions_keep_identity_and_require_explicit_answers
+        PASS [   0.020s] (28/71) bitrouter::code_tui_pty pty_runner_reads_writes_and_resizes_without_a_sleep
+        PASS [   0.024s] (29/71) bitrouter::code_tui_pty remote_cli_failure_keeps_the_remote_error_without_local_model_fallback
+        PASS [   0.987s] (30/71) bitrouter::code_tui_pty evolution::session_api_settings_apply_only_the_actual_confirmed_configuration
+        PASS [   0.069s] (31/71) bitrouter::code_tui_pty remote_cli_read_actions_preserve_authentication_and_never_start_local_work
+        PASS [   0.704s] (32/71) bitrouter::code_tui_pty explicit_socket_status_is_readonly_without_starting_an_agent
+        PASS [   1.663s] (33/71) bitrouter::code_tui_pty evolution::session_api_load_replays_history_and_resume_preserves_distinct_native_ids
+        PASS [   0.863s] (34/71) bitrouter::code_tui_pty mock_acp_minimal_lifecycle_logs_exact_multiline_prompt_text
+        PASS [   0.801s] (35/71) bitrouter::code_tui_pty mock_acp_models_delayed_cancellation_and_overlapping_permissions
+        PASS [   2.268s] (36/71) bitrouter::code_tui_pty evolution::session_api_fresh_session_preserves_direct_routing_and_turn_timeout
+        PASS [   1.042s] (37/71) bitrouter::code_tui_pty standalone_agents_and_attach_restore_terminal_without_stopping_runs
+        PASS [   0.046s] (38/71) bitrouter::onboarding goals_on_a_pipe_reject_before_setup_config_or_daemon_access
+        PASS [   0.042s] (39/71) bitrouter::onboarding onboarding_launch_and_goal_entries_do_not_start_acp_without_a_terminal
+        PASS [   0.014s] (40/71) bitrouter::onboarding public_help_exposes_canonical_agent_entry_points
+        PASS [   0.126s] (41/71) bitrouter::onboarding removed_goal_agent_flags_and_aliases_reject_without_setup_or_daemon_access
+        PASS [   0.041s] (42/71) bitrouter::bin/bro tests::canonical_agent_commands_are_positional
+        PASS [   0.027s] (43/71) bitrouter::bin/bro tests::goals_entry_rejects_retired_agent_flags_and_aliases
+        PASS [   0.017s] (44/71) bitrouter-tui goals::tests::acceptance_requires_explicit_confirmation_of_the_pinned_artifact
+        PASS [   0.007s] (45/71) bitrouter-tui goals::tests::allow_requires_loaded_request_and_explicit_deny_remains_available
+        PASS [   0.007s] (46/71) bitrouter-tui goals::tests::budget_form_pins_goal_and_limits_without_editing_the_goal_draft
+        PASS [   0.008s] (47/71) bitrouter-tui goals::tests::busy_enter_targets_the_current_goal_and_preserves_the_draft_until_acceptance
+        PASS [   0.007s] (48/71) bitrouter-tui goals::tests::decision_browsing_uses_pinned_identities_and_ignores_late_foreign_evidence
+        PASS [   0.007s] (49/71) bitrouter-tui goals::tests::decision_has_no_default_consent_and_preserves_the_offered_version
+        PASS [   0.008s] (50/71) bitrouter-tui goals::tests::directory_filters_use_facts_and_never_start_or_retarget_work
+        PASS [   0.006s] (51/71) bitrouter-tui goals::tests::drafts_pending_scope_and_read_positions_are_independent_per_goal
+        PASS [   0.008s] (52/71) bitrouter-tui goals::tests::empty_arrows_navigate_but_nonempty_arrows_edit
+        PASS [   0.007s] (53/71) bitrouter-tui goals::tests::expanded_readonly_nodes_preserve_status_scope_draft_and_per_goal_state
+        PASS [   0.007s] (54/71) bitrouter-tui goals::tests::external_editor_targets_only_the_visible_goal_composer
+        PASS [   0.007s] (55/71) bitrouter-tui goals::tests::fullscreen_browsing_preserves_the_pinned_version_read_position_and_draft
+        PASS [   0.006s] (56/71) bitrouter-tui goals::tests::initial_budget_is_part_of_create_and_invalid_forms_cannot_submit
+        PASS [   0.006s] (57/71) bitrouter-tui goals::tests::multiline_paste_shift_enter_and_key_release_do_not_submit
+        PASS [   0.007s] (58/71) bitrouter-tui goals::tests::permission_options_stay_visible_when_requests_and_choices_are_long
+        PASS [   0.008s] (59/71) bitrouter-tui goals::tests::rendering_names_readonly_scope_and_neutralizes_terminal_control_data
+        PASS [   0.006s] (60/71) bitrouter-tui goals::tests::right_view_keys_and_paste_cannot_mutate_or_retarget_the_middle
+        PASS [   0.010s] (61/71) bitrouter-tui goals::tests::selected_directory_and_workflow_rows_remain_visible_in_short_viewports
+        PASS [   0.006s] (62/71) bitrouter-tui goals::tests::snapshots_preserve_selection_and_pin_opened_evidence
+        PASS [  85.539s] (63/71) bitrouter goal_runtime::tests::daemon_goal_runs_parallel_acp_handoff_input_and_verified_delivery
+        PASS [   4.320s] (64/71) bitrouter::native_agent_tui native_api_cold_directory_history_and_open_preserve_context_without_execution
+        PASS [  88.153s] (65/71) bitrouter goal_runtime::tests::active_branch_edit_preserves_independent_run_and_renews_pending_permission
+        PASS [  88.282s] (66/71) bitrouter goal_runtime::tests::paused_goal_edit_stays_paused_and_resumes_with_current_branch_versions
+        PASS [   5.260s] (67/71) bitrouter::native_agent_tui native_api_reports_classifier_generation_and_final_routing_facts
+        PASS [   7.051s] (68/71) bitrouter::goal_tui_pty goal_external_editor_retains_exact_drafts_requires_enter_and_reaps_on_signal
+        PASS [   7.519s] (69/71) bitrouter::native_agent_tui native_api_approvals_disconnect_queue_context_and_cancel_remain_durable
+        PASS [  13.353s] (70/71) bitrouter::goal_tui_pty active_goal_enter_permission_readonly_workflow_and_detach_use_actual_execution
+        PASS [  20.703s] (71/71) bitrouter::goal_tui_pty bare_and_code_open_goals_without_work_and_preserve_unsent_drafts
+────────────
+     Summary [ 103.167s] 71 tests run: 71 passed (10 slow), 2076 skipped

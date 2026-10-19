@@ -1,0 +1,174 @@
+{
+  "binary": {
+    "binary_sha256": "d282d13e872b0ab2ae0caef307e5ffc8ef8999e4a22ea2c570b6013eacd0a218",
+    "source_manifest": "2026-10-15-dependency-proof-v1-source.sha256",
+    "source_files": 951,
+    "stack_setting": "default; RUST_MIN_STACK absent",
+    "worker_configured_model": "anthropic/claude-opus-5.5"
+  },
+  "goal_id": "7931abe8-1476-4301-abeb-e868fea7a700",
+  "requirements_revision": 2,
+  "run_intent": "pause",
+  "input": {
+    "input_id": "88fdf144-f560-4974-aeb8-60b1cd710861",
+    "effective_requirements_revision": 2,
+    "requirements_saved": true,
+    "affected_tasks": [
+      "integration",
+      "text"
+    ],
+    "control_saved": null
+  },
+  "attempts": [
+    {
+      "task": "numbers",
+      "execution": "3e422d73-0914-4011-8d39-56daee9e47dd",
+      "archived": false,
+      "run": "13992c4e-0ff0-4563-b428-454e9b4b7df4",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 65,
+      "marker_in_prompt": false,
+      "checks": [
+
+      ],
+      "review": null,
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "9c650091-719e-4543-8a91-e790a801e09a",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "6fb6199d-ba9a-4922-86b6-157b0c48ecac",
+      "archived": false,
+      "run": "7e449c26-3768-4422-9f1e-a1b91f7a0ffe",
+      "task_revision": 2,
+      "source_requirements": 2,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 115,
+      "marker_in_prompt": true,
+      "checks": [
+        {
+          "id": "text-npm",
+          "recipe": "npm_test",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v10/home/goal-workspaces/7931abe8-1476-4301-abeb-e868fea7a700/artifacts/c4e75f297f236e124f01b05b029f861736e9513ba44478a8d9090ccee3ce97b7.blob",
+              "sha256": "c4e75f297f236e124f01b05b029f861736e9513ba44478a8d9090ccee3ce97b7",
+              "bytes": 1041
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        },
+        {
+          "id": "text-marker-r14",
+          "recipe": "file_contains",
+          "state": {
+            "state": "observed",
+            "report": {
+              "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v10/home/goal-workspaces/7931abe8-1476-4301-abeb-e868fea7a700/artifacts/2ec13d18c4f5c4b649c2ce81ec62bfe36bed1a23fc29c510f99010bbae4a519d.blob",
+              "sha256": "2ec13d18c4f5c4b649c2ce81ec62bfe36bed1a23fc29c510f99010bbae4a519d",
+              "bytes": 525
+            },
+            "passed": true,
+            "completed": true
+          },
+          "task_revision": 2
+        }
+      ],
+      "review": {
+        "state": "approved",
+        "attempt_id": "fd7af0e9-84ff-4c07-9692-3a6df9230c79",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "handoff": {
+        "attempt_id": "fd7af0e9-84ff-4c07-9692-3a6df9230c79",
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v10/home/goal-workspaces/7931abe8-1476-4301-abeb-e868fea7a700/artifacts/70a2582622c7de339c79c9785dacb49fb12b7d64f6a1649ea2e8f434c1dc5eaa.blob",
+          "sha256": "70a2582622c7de339c79c9785dacb49fb12b7d64f6a1649ea2e8f434c1dc5eaa",
+          "bytes": 703
+        },
+        "review": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v10/home/goal-workspaces/7931abe8-1476-4301-abeb-e868fea7a700/artifacts/91d6cc6c1c705c385911d22f1b2c4ad9ab9c6ea4aee02aa37f15ec28c0b9c87e.blob",
+          "sha256": "91d6cc6c1c705c385911d22f1b2c4ad9ab9c6ea4aee02aa37f15ec28c0b9c87e",
+          "bytes": 880
+        },
+        "review_request_id": "6b6012e5-90d7-4f49-9db3-bb0f94463cef",
+        "candidate_sha256": "f760a06f009b2c26bcd0f37b553a3e04bc7d977bd86d96f1997142ea178a7baa",
+        "requirements_revision": 2,
+        "task_revision": 2
+      },
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "1eb182c7-7c97-4852-ab0c-158f428d963c",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": null
+    },
+    {
+      "task": "text",
+      "execution": "58ae496f-f7c2-43c7-927c-ac09ec92d4e7",
+      "archived": true,
+      "run": "dc76e5bf-9035-4ab7-ad0c-14903807ba2b",
+      "task_revision": 1,
+      "source_requirements": 1,
+      "process": "stopped",
+      "startup_aborted_before_session": false,
+      "history_complete": true,
+      "events": 66,
+      "marker_in_prompt": false,
+      "checks": [
+
+      ],
+      "review": null,
+      "handoff": null,
+      "stop": {
+        "state": "confirmed",
+        "operation_id": "2f973c69-6cd5-47b7-b5a5-e161cbeee0c4",
+        "detail": "Owned ACP process is Stopped; existing workspace and external effects have not been reconciled"
+      },
+      "reconciliation": {
+        "state": "verified",
+        "task_revision": 2,
+        "control_source_revision": 1,
+        "workspace": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v10/home/goal-workspaces/7931abe8-1476-4301-abeb-e868fea7a700/artifacts/38bba1908dc8c9611baf308d535ce528aabce5e13e392db45b94df9276f4da29.blob",
+          "sha256": "38bba1908dc8c9611baf308d535ce528aabce5e13e392db45b94df9276f4da29",
+          "bytes": 365
+        },
+        "transcript": {
+          "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v10/home/goal-workspaces/7931abe8-1476-4301-abeb-e868fea7a700/artifacts/34fe6709a13db673caf60d27a7ebb5f1313927b628a25b54b0e588ad2cf89480.blob",
+          "sha256": "34fe6709a13db673caf60d27a7ebb5f1313927b628a25b54b0e588ad2cf89480",
+          "bytes": 70439
+        }
+      }
+    }
+  ],
+  "operations_exported": 261,
+  "final_delivery": null,
+  "acceptance_passed": false,
+  "observed": [
+    "Observed two independent Working runs with completed public tool activity before actual middle Enter.",
+    "Actual Enter saved requirements2 and the text marker check with control=null; original numbers execution was retained.",
+    "Numbers received actual upstream API failure after announcing a Write; its incomplete tool outcome was not retried or claimed safe.",
+    "Independent text2 continued, passed npm and marker checks and semantic review, and produced its checked handoff.",
+    "Diagnostic Pause confirmed owned process stop, retained unknown effects and incomplete delivery; no replay."
+  ],
+  "limitations": [
+    "No successful final delivery; upstream stream error retained with original unknown effects.",
+    "This case does not reach dependent checked-context review."
+  ]
+}

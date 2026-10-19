@@ -1,0 +1,370 @@
+{
+  "scope": "Only trailing horizontal whitespace and extra final blank lines normalized in public diagnostic copies; original bytes retained privately. Outcomes, diagnostics and assertions unchanged. Raw SSE wire captures stay binary and unmodified.",
+  "files": [
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-denied-local-order-red.log",
+      "original_sha256": "8b46e83aee159b1463fe2e179caa916d07b492c33ac45b56ece7ba6a01d283e8",
+      "normalized_sha256": "3c55a06fdef3be23b2d02aa25ca0ddf7d5001713f8665d15a40ab1edf4402982"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-denied-local-terminal-red.log",
+      "original_sha256": "2d2d7951017e5b080cf96bc72e1f27cd517713e04790efd73fcc0c6335666103",
+      "normalized_sha256": "dc47654bd3a785a6cf22d3882905b07e1627e6b64ba6012abe82685dee6bba8b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-denied-local-terminal-runtime-v1-failed.log",
+      "original_sha256": "00d9f0c90eec86467b25def7dcba9ae5a3c5209b884330cecbd282402f61511b",
+      "normalized_sha256": "cbe9820f554cbfdd261e58d217302221f942e924037413a4a9d7c56611c0b704"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-denied-local-terminal-runtime-v2-failed-diagnostic.log",
+      "original_sha256": "eeae94be1488b0e84c89ecbd6c408494a83d05780593a9a79ac535eab3023f57",
+      "normalized_sha256": "51799c29e4e35debedf6b8541fe707366b98d664d21f33e7c40fbc00131b7845"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-denied-local-terminal-v1-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-denied-local-terminal-v1-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-goal-editor-fresh-v1-nextest.log",
+      "original_sha256": "51d9d529a769a3fee00bcbfb2889ce5dcae2b096a198ed785c432a19f0724811",
+      "normalized_sha256": "b8f630af643193fce43d1d6eb6379531498503fec981f4d9ce7a4616b47f20c1"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-goal-wal-multiple-pools-red.log",
+      "original_sha256": "eba88f0e623f7d47999ca7112b2349c81e3d0c11ff6fe863f18c47dab399b6e4",
+      "normalized_sha256": "b388b61963a1f106cefd69f34e485a2de971d0f040713300d5544eae528f8ee2"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-input-corpus-v2-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-input-corpus-v2-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-input-corpus-v2-nextest.log",
+      "original_sha256": "799d89174bd1a47460f78c048f6361511e31fe2a1912148c7a892b6cbb83ee2d",
+      "normalized_sha256": "96368e3a67d789e537c4175bfce3e6260abcfaded97469261857f66d32dd44fc"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-input-corpus-v3-doc-recheck.log",
+      "original_sha256": "753559a7306a09e10bddf700ec39d62f7e3b346b14686873dfc95e6bc4d18ae6",
+      "normalized_sha256": "ee9b432fca07bd15bbfa3f67d6d49ac693e396c120b2acd1a9a29a6db09b0f55"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-input-sequences-v3-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-input-sequences-v3-doctests.log",
+      "original_sha256": "d729c52e2df6960e2ebc56318168382a6903a456cd856d2cccc50d06a711c9ac",
+      "normalized_sha256": "7a0904d0b826c8cd9a6b1ee1af5c63ca6912d2690ebd429240aa97de9a776eba"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-input-sequences-v3-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-interrupted-stop-red.log",
+      "original_sha256": "a604d9ae2dc4322465e47edbafbb482d006840cb21c08bef6601a964204b32c1",
+      "normalized_sha256": "8e8da48c3d8c8d8f90cc2006761d74ed7f583c38a3857fad2a8342b9462d6e94"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-live-input-v6-nextest.log",
+      "original_sha256": "e9c60e38d7d950b29ea875cd83728944c2bc68eb904fa1472124e7d892f753de",
+      "normalized_sha256": "2714189298c19ba0afeee8425b445a55fba824858df99b0aa867b873308a3b73"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-live-input-v7-doctests.log",
+      "original_sha256": "cee7b5e1481f699cd11317ac038f15411a4589f4682096903b822aba0f2808db",
+      "normalized_sha256": "51a848c727df0402719a408d077ea24cfaaf4466063f442ec9113d207ba073af"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-live-input-v7-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-live-input-v7-nextest.log",
+      "original_sha256": "7086144276fdbf24c9287e160d7ef5f9b0cc63060d698319e32f4f5b7287ff6a",
+      "normalized_sha256": "b5c3b6e73dfa311a553ed02eb58ca101a3932c818db80d65849a6161c66340d0"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-mixed-query-closed-permission-v3-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-mixed-query-closed-permission-v3-doctests.log",
+      "original_sha256": "bf186380e4fa7eb6ee87f5767b688a8bfb1f92afd3bc3077d2e7d9a807bf8eee",
+      "normalized_sha256": "7897bde8dea0644b20fa868deae2686d7ef7b2b613ff99481b2f181562bb2d5b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-mixed-query-closed-permission-v3-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-named-scope-v1-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-named-scope-v1-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-named-scope-v2-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-named-scope-v2-doctests.log",
+      "original_sha256": "593bdf7f9e948bc1c39f20a6bba912264e17420b2762a289b2ef253f2678d624",
+      "normalized_sha256": "2fa2570c149c604a2d1301499415fdd3fa255b2830f39d950b0eb380194cac12"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-named-scope-v2-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-native-quote-forwarding-red.log",
+      "original_sha256": "f06c1101b0860b85527c1927e93565f8ef0e4b8e208599ec91a9de8139bbe02f",
+      "normalized_sha256": "97406d0bc6fab4b3802da03a979c496e0fa0f2851c0960ac180f9917d8dce83f"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-context-red.log",
+      "original_sha256": "805cbfb8cd757952f6873a50148479026278cb7c1229da559d1f7983ec6e21c9",
+      "normalized_sha256": "05d3f097e63babe1c70505cea16825698686f652dd4b88bca2b4009b36f53957"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-context-v1-failed-nextest.log",
+      "original_sha256": "27eb6a9783053bf6ce5b7028300bfff490eae1a9963b3ca7cbdde2dc942f20ec",
+      "normalized_sha256": "ae332799f2c329bfb190fee9a487486b96e6c34385af610edff4c13009843480"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-context-v2-failed-diagnostic.log",
+      "original_sha256": "fe5e21e069ef229495d05cb4c8f85ed69094a4ab232c1732583209f3f36443b4",
+      "normalized_sha256": "5bdc9212e3a1b1624cab5bd26b865df40b94719f748eb64f7b27e395502b6fb9"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-context-v3-failed-assertion.log",
+      "original_sha256": "3e63eee8d03503d3113b14c72245f79c5f88451c62d5e619a3d339fbbf5a01df",
+      "normalized_sha256": "8b19e552dc91ac25d85889d8e7791c9c338a8a7be2a40efd3b281f9c6e7adf5f"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-context-v5-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-context-v5-doctests.log",
+      "original_sha256": "781c04b3e787ca9af2a89bf5aa96546c33fd8f4f16d1a1c9cd78a3ca885a8a9f",
+      "normalized_sha256": "e4ba584f89558e1bae079d9b5ffbaf6ae9b08fc6c701de3161597c13a6cba465"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-context-v5-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-denial-origin-red.log",
+      "original_sha256": "59de5de13072b7d6ec7a2bff65a29cde2d528b063a89ec6cf158ac82b9e5a170",
+      "normalized_sha256": "536201de24be63ecb1f9e7ae3aa5e2af0a0940a19fc495ec763c88985af471ed"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-stop-history-red.log",
+      "original_sha256": "6716d1d4b2345c04d09246ccc55f5bc4f2d9bc5a3aa7ae52caef915dec3a9d62",
+      "normalized_sha256": "bf237811f44b89cc8f36e907eea9e4ed562b674dbb86f6a6fcd3ec49b532a051"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-stop-history-v1-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-stop-history-v1-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-stop-history-v2-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-stop-history-v2-doctests.log",
+      "original_sha256": "75e4effc5a3b202c0782be833b1e72dca972b70244d68feb8e749db850c447f0",
+      "normalized_sha256": "fc64231afae6fc422b6faf795b3d6f9f080345b7c6a77220ff003df6f29ab2dc"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-permission-stop-history-v2-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-responses-terminator-red.log",
+      "original_sha256": "daaaa21e687c1e22e8898bda0ea4a4658bbe39add439037cac5d1feb0bfcf142",
+      "normalized_sha256": "5192954514bbca35d3946a9b5a6f37f21dc5b436b2c83db6f7ddf6de102f6dbc"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-start-recovery-v1-failed-nextest.log",
+      "original_sha256": "fa590cd022e3b75edab31fe3fe0c5367cee653dabf830caefcbb0641716c8498",
+      "normalized_sha256": "995c599916be4c8a4023e951ca6d6f34d6a4de389a5e625b1ecad94cc60abb2d"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-start-recovery-v3-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-start-recovery-v3-doctests.log",
+      "original_sha256": "bebbd03a969f2057776ce94a8cfa09ff66a9a89946108ca3f26644dbbc9958bc",
+      "normalized_sha256": "c93c2217ac111b6e3dd7a45c0c5b6bae013ea719768af774f1345db53e36d95d"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-14-start-recovery-v3-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-completion-evidence-v2-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-completion-evidence-v2-doctests.log",
+      "original_sha256": "fd6f864b1dc9a3d2b65abc9ad78d46877a5ca11d6471fa8c5357cd08e1917007",
+      "normalized_sha256": "49695687ffd68685bb1f38bb12cab622e5af7493a230cf21b55c691a570cf675"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-completion-evidence-v2-final-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-completion-evidence-v2-final-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-completion-evidence-v2-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-dependency-proof-v1-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-dependency-proof-v1-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-explicit-path-scope-red.log",
+      "original_sha256": "4959b66b309b1871f38862f838886a9c5e24eb7b2f5a34bc54678cd93a407710",
+      "normalized_sha256": "5a8f1a1fb1b000e0a82b045e27ec31a384b90cd1c9425e34a0221920ca4f5621"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-historical-runtime-v1-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-historical-runtime-v1-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-runtime-evidence-v1-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-runtime-evidence-v1-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-runtime-evidence-v2-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-runtime-evidence-v2-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-scoped-worker-v1-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-startup-abort-v1-nextest.log",
+      "original_sha256": "a1206d8f52642ee3926276cefc65f5895cf939f82beed5adeefce76df17eb94d",
+      "normalized_sha256": "4f45b74ed7075d408a7fd24cb6bdbb49cccbc4728c9f8d98bc912b70ed1de993"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-startup-abort-v3-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-startup-abort-v3-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-stop-repair-v1-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-stop-repair-v1-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-stop-repair-v2-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-stop-repair-v2-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-task-review-checks-v3-diagnostic.log",
+      "original_sha256": "3ebec1f399bd495bf3f2a7ac682a48f1fc30c55b82bc9e9edd450995fe8c8cda",
+      "normalized_sha256": "44499b52964ba15fedb05dd821c84d1cfbb46910d95d0563f1ad8898f99e1834"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-task-review-checks-v5-diff.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    },
+    {
+      "path": "docs/evidence/bro-goal-workflow/2026-10-15-task-review-checks-v5-fmt.log",
+      "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "normalized_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b"
+    }
+  ]
+}

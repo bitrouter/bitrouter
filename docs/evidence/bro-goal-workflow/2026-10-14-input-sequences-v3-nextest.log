@@ -1,0 +1,16 @@
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (lib test) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 04s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID aa2a2c9b-15d2-44fb-9da3-92edf6b23777 with nextest profile: default
+    Starting 1 test across 7 binaries (3561 tests skipped)
+        SLOW [> 60.000s] (───) bitrouter goal_runtime::tests::live_input::live_continuous_goal_inputs_use_persisted_state_and_durable_effects
+        PASS [  64.615s] (1/1) bitrouter goal_runtime::tests::live_input::live_continuous_goal_inputs_use_persisted_state_and_durable_effects
+────────────
+     Summary [  64.635s] 1 test run: 1 passed (1 slow), 3561 skipped

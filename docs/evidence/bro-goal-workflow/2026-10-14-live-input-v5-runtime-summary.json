@@ -1,0 +1,185 @@
+[
+  {
+    "case": "q01",
+    "lane": "rules-reasoning",
+    "input": "暂停会怎样？",
+    "annotation_status": "codex_proposed_unreviewed",
+    "harness_effects": "not_exercised_domain_fixture_only",
+    "input_result": {
+      "input_id": "live-input-q01",
+      "source_requirements_revision": 1,
+      "effective_requirements_revision": 1,
+      "answer": "暂停整个目标会暂停其下所有任务的推进；只暂停某个任务，则会影响该任务及依赖它的下游任务，独立分支不受影响。例如，暂停 left 会影响 left 和 join，但不会暂停 right。暂停不改变现有要求，也不代表正在执行的操作已立即停止；实际停止情况需要执行记录确认。恢复任务不会自动恢复已暂停的整个目标。你现在只是询问暂停的影响，我没有发出暂停指令；当前记录中目标仍为运行意图，left 和 right 的最近执行状态均为 running。",
+      "clarification": null,
+      "requirements_saved": false,
+      "affected_tasks": [],
+      "control_saved": null,
+      "controlled_tasks": [],
+      "control_superseded": false,
+      "permission_response_saved": null,
+      "classification": null,
+      "reasoning_request_id": "7798574f-beaa-4e37-adb4-c547e3d4796c",
+      "clarification_kind": "unknown",
+      "resolutions": []
+    },
+    "run_intent": "run",
+    "requirements_revision": 1,
+    "budget": {
+      "limits": {
+        "elapsed_ms": null,
+        "managed_token_estimates_micro_usd": 6000000
+      },
+      "elapsed_ms": 0,
+      "held": [],
+      "halt": null,
+      "resume_required": false
+    },
+    "provider_attempts": 1,
+    "estimated_model_tokens_micro_usd": 14264
+  },
+  {
+    "case": "q01",
+    "lane": "typed-upgrade",
+    "input": "暂停会怎样？",
+    "annotation_status": "codex_proposed_unreviewed",
+    "harness_effects": "not_exercised_domain_fixture_only",
+    "input_result": {
+      "input_id": "live-input-q01",
+      "source_requirements_revision": 1,
+      "effective_requirements_revision": 1,
+      "answer": "如果暂停整个目标，会暂停后续任务推进，包括 left、right 和汇总任务 join；正在执行的操作不一定立即停止，需要等待运行时在安全边界处理并确认。暂停不会取消原有要求或删除已保存的工作，之后需要明确请求恢复运行。如果只暂停某个任务，其下游依赖也会受影响，但独立分支保持不变。你现在是在询问暂停的影响，我没有发出暂停指令；当前记录仍显示 left 和 right 正在运行，join 尚未启动。",
+      "clarification": null,
+      "requirements_saved": false,
+      "affected_tasks": [],
+      "control_saved": null,
+      "controlled_tasks": [],
+      "control_superseded": false,
+      "permission_response_saved": null,
+      "classification": {
+        "path": "/private/tmp/bro-goal-live-eval-20261014/runtime-v5/q01-typed-upgrade/goal-workspaces/1197bded-d360-4e28-9f8b-89f49832697e/artifacts/4f1ffdf7ee1618d0c28b24c2ebd76e9aaeda4334919691b7f12504bf407574cd.blob",
+        "sha256": "4f1ffdf7ee1618d0c28b24c2ebd76e9aaeda4334919691b7f12504bf407574cd",
+        "bytes": 17170
+      },
+      "reasoning_request_id": "4e9936da-9dc9-4ae3-ac22-8b32c76c3bb5",
+      "clarification_kind": "unknown",
+      "resolutions": []
+    },
+    "run_intent": "run",
+    "requirements_revision": 1,
+    "budget": {
+      "limits": {
+        "elapsed_ms": null,
+        "managed_token_estimates_micro_usd": 6000000
+      },
+      "elapsed_ms": 0,
+      "held": [],
+      "halt": null,
+      "resume_required": false
+    },
+    "provider_attempts": 1,
+    "estimated_model_tokens_micro_usd": 27233,
+    "typed_outcome": {
+      "Ok": {
+        "model": "typesafe/jev-1.13-20260917",
+        "answers": {
+          "control": {
+            "type": "choice",
+            "choice": "pause",
+            "confidence": 0.31,
+            "probabilities": {
+              "none": 0.09,
+              "pause": 0.45,
+              "run": 0.36,
+              "stop": 0,
+              "unknown": 0.1
+            }
+          },
+          "modify": {
+            "type": "choice",
+            "choice": "absent",
+            "confidence": 0.97,
+            "probabilities": {
+              "absent": 0.98,
+              "present": 0.02,
+              "unknown": 0
+            }
+          },
+          "permission_response": {
+            "type": "choice",
+            "choice": "absent",
+            "confidence": 0.98,
+            "probabilities": {
+              "absent": 0.99,
+              "present": 0,
+              "unknown": 0.01
+            }
+          },
+          "query": {
+            "type": "choice",
+            "choice": "absent",
+            "confidence": 0.55,
+            "probabilities": {
+              "absent": 0.7,
+              "present": 0.26,
+              "unknown": 0.04
+            }
+          },
+          "target": {
+            "type": "choice",
+            "choice": "unknown",
+            "confidence": 0.42,
+            "probabilities": {
+              "goal": 0.44,
+              "task:join": 0.01,
+              "task:left": 0.01,
+              "task:right": 0,
+              "unknown": 0.54
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 6872,
+          "output_tokens": 217
+        }
+      }
+    }
+  },
+  {
+    "case": "q02",
+    "lane": "rules-reasoning",
+    "input": "可以先暂停吗？",
+    "annotation_status": "codex_proposed_unreviewed",
+    "harness_effects": "not_exercised_domain_fixture_only",
+    "input_result": {
+      "input_id": "live-input-q02",
+      "source_requirements_revision": 1,
+      "effective_requirements_revision": 1,
+      "answer": null,
+      "clarification": "你想暂停整个 Goal，还是某个具体任务（left、right 或 join）？",
+      "requirements_saved": false,
+      "affected_tasks": [],
+      "control_saved": null,
+      "controlled_tasks": [],
+      "control_superseded": false,
+      "permission_response_saved": null,
+      "classification": null,
+      "reasoning_request_id": "abb38597-672a-4b4f-883c-ddc3b3f5ca31",
+      "clarification_kind": "change",
+      "resolutions": []
+    },
+    "run_intent": "run",
+    "requirements_revision": 1,
+    "budget": {
+      "limits": {
+        "elapsed_ms": null,
+        "managed_token_estimates_micro_usd": 6000000
+      },
+      "elapsed_ms": 0,
+      "held": [],
+      "halt": null,
+      "resume_required": false
+    },
+    "provider_attempts": 1,
+    "estimated_model_tokens_micro_usd": 14011
+  }
+]

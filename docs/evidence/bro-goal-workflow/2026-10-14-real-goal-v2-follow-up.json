@@ -1,0 +1,32 @@
+{
+  "goal_id": "7a2b3b61-f0ea-4af9-8d48-84698562d377",
+  "status": "unfinished; paused",
+  "text_review": {
+    "state": "rejected",
+    "attempt_id": "0d8ab039-52cc-4fbd-b976-3a04a828ef8f",
+    "reason": "The supplied workspace contains only the new text.mjs, exporting normalizeWhitespace with Unicode whitespace collapsing and trimming; no original-file changes are recorded. The persisted BRO text-npm check ran npm test successfully: text contract passed, failures and skips were zero, and the sole TODO was the permitted missing-numbers contract. However, the required controller acknowledgment, configured BRO route evidence, and runtime-recorded concurrent execution are absent. This branch is therefore not yet a verified handoff despite passing its applicable tests.; missing checks: Negotiated controller acknowledgment for opencode-live ACP obtained before the worker prompt., Controller evidence that gpt-6.1-chat is configured while preserving the uncontrolled harness default and omitting model_route., Runtime evidence that text and numbers executions overlapped in separate assigned isolated workspaces.",
+    "report": {
+      "path": "/private/tmp/bro-goal-live-eval-20261014/harness-v2/home/goal-workspaces/7a2b3b61-f0ea-4af9-8d48-84698562d377/artifacts/9f70d569e840769c30f5c4a8c2c2993c4d4d54672903f9955efd217d8c57f159.blob",
+      "sha256": "9f70d569e840769c30f5c4a8c2c2993c4d4d54672903f9955efd217d8c57f159",
+      "bytes": 947
+    },
+    "requirements_revision": 1,
+    "task_revision": 1
+  },
+  "verified_facts": [
+    "The actual text.mjs was written. The persisted BRO text-npm npm_test check passed the original text contract with zero failures/skips and the permitted missing-numbers TODO.",
+    "The original concurrent-work requirement remains unproven after numbers initialization failed.",
+    "The plan injected an unconditional controller-ack prerequisite even while explicitly preserving uncontrolled model routing and omitting model_route."
+  ],
+  "source_finding": {
+    "path": "apps/bitrouter/src/goal_runtime.rs",
+    "scope": "planning model instructions",
+    "problem": "The sentence requiring negotiated controller acknowledgment before any prompt is unconditional. Actual resource enforcement only requires model-route confirmation for a selected supported route; uncontrolled defaults must be reported honestly, not converted into an invented worker prerequisite.",
+    "next": "After the frozen complete check ends, narrow the planning instruction to selected supported route/resource control. Keep Goal-wide orchestration evidence in runtime/completion responsibility, without dropping the original actual-overlap condition."
+  },
+  "causal_limits": [
+    "The startup transport closure cause is not established.",
+    "A later fs/write_text_file closure message does not establish that writing failed: actual file and BRO checks provide positive text evidence.",
+    "No completed Goal, actual overlapping pair, running edit adoption or combined original Node delivery has been demonstrated."
+  ]
+}

@@ -2,7 +2,7 @@
 
 状态：v0.2，基于已 review 的 [PRD v0.4](BRO_GOAL_ORIENTED_PRD.md)，供 Codex Goal 实现时遵循。更新日期：2026-10-13。
 
-本 spec 把产品要求转成工程合同、实施阶段和可核对的完成条件。实现及受控本地 MVP 验收已完成，最终结果、范围和源码绑定见 [implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md)。原始日志及逐轮评测见其固定提交归档；文档清理不代表重跑原 campaign。源码基线为 `9b9a176288896809040a6fce11c92d146a4f5909`；继续实现时必须重新核对实际 checkout、未提交修改与相关代码。
+本 spec 把产品要求转成工程合同、实施阶段和可核对的完成条件。实现已开始，当前证据见 [implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md)，完整 Goal 产品路径尚未交付。源码基线为 `9b9a176288896809040a6fce11c92d146a4f5909`；继续实现时必须重新核对实际 checkout、未提交修改与相关代码。
 
 这里有两种不同的 Goal：**Codex Goal** 是驱动本次开发的持久目标；**BRO Goal** 是需要实现的产品对象。Codex 的完成状态、token 预算与停止规则不能代替 BRO 的运行时状态或产品验收。
 
@@ -458,7 +458,7 @@ Codex Goal 只有同时满足以下条件才能标记完成：
 - 已实现、仍未完成、限制、复现步骤、最终检查与交付状态。
 ```
 
-开发中的原始长日志和多轮快照放在私有输出目录；交付时迁入独立、可追溯的归档并固定提交与逐文件校验值。`docs/evidence/bro-goal-workflow/` 只保留最终验收摘要、必要复现材料和归档定位；ledger 保存摘要和引用。不要将凭据、token、私有用户内容写入文档或 fixture。
+长日志放在实现时创建的 `docs/evidence/bro-goal-workflow/` 下，ledger 保存摘要和引用。不要将凭据、token、私有用户内容写入文档或 fixture。
 
 ## 12 参考
 

@@ -1,0 +1,31 @@
+Analysis of sampling probe (pid 44833) every 1 millisecond
+Process:         probe [44833]
+Path:            /private/tmp/*/probe
+Load Address:    0x104bb8000
+Identifier:      probe
+Version:         ???
+Code Type:       ARM64
+Parent Process:  codex [41230]
+Target Type:     live task
+
+Date/Time:       2026-10-13 12:21:24.286 -0400
+Launch Time:     2026-10-13 12:19:59.334 -0400
+OS Version:      macOS 26.2 (25C56)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         96K
+Physical footprint (peak):  96K
+Idle exit:                  untracked
+----
+
+Call graph:
+    877 Thread_21865835: Main Thread   DispatchQueue_<multiple>
+      877 _dyld_start  (in dyld) + 0  [0x104c909c0]
+
+Total number in stack (recursive counted multiple, when >=5):
+
+Sort by top of stack, same collapsed (when >= 5):
+        _dyld_start  (in dyld)        877
+
+Binary images description not available

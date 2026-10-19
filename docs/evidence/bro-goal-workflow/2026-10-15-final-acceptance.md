@@ -4,15 +4,13 @@ All13 local check stages passed on the integrated bfc50f68 source:4,675 workspac
 
 The acceptance scope is a controlled local MVP, as defined by spec 9.3. A deterministic fixture can prove a guard or injected failure; it cannot prove model quality or an actual vendor campaign. Unknown external effects remain blocked. General external rollback, every harness/provider/platform, a global OS sandbox, production availability and complete external invoices are outside this evidence.
 
-Archived raw captures and failure history are pinned by [archive.json](archive.json); see [reproduction instructions](REPRODUCE.md). Pre-cleanup functional head `4772d9e09deb9c69f539e97d2b24dda9ca770e0c` passed [hosted CI](https://github.com/bitrouter/bitrouter/actions/runs/38737081691). Moving evidence does not rerun or relabel the original campaigns.
-
 Evidence keys:
 
-- **P**: [final workspace run](https://github.com/bitrouter/bitrouter/blob/382c2b58c5c25b02805175a33d60707dc4227b46/docs/evidence/bro-goal-workflow/2026-10-15-main-goal-final-v1-workspace-nextest.log), including actual process/IPC/database/HTTP/PTY tests; [source identity](2026-10-15-main-goal-final-v1-source.sha256) binds 1,023 source/config/catalog inputs.
+- **P**: [final workspace run](2026-10-15-main-goal-final-v1-workspace-nextest.log), including actual process/IPC/database/HTTP/PTY tests; [source identity](2026-10-15-main-goal-final-v1-source.sha256) binds 1,023 source/config/catalog inputs.
 - **S**: [final check status](2026-10-15-main-goal-final-v1-status.json), strict all-feature/all-target Clippy, formatting, diff checks, doctests and registry checks. An unfinished step is not a pass.
 - **R**: [actual R16 workflow](2026-10-15-real-goal-v16-summary.json), [original delivery patch/checks/assessment](2026-10-15-real-goal-v16-delivery-proof.json), [actual UI reconnection](2026-10-15-real-goal-v16-ui-reconnect.json). Claude ACP adapter 0.75.1, real configured OpenRouter native Messages route; default Tokio stack. Four original runs, no manual permission choice. Actual worker provider/model identity remains unreported.
 - **I**: [54 corpus and 18 sequence records](2026-10-15-input-dependency-proof-v1-summary.json), [separate semantic audit](2026-10-15-input-semantic-audit.json). Real typed/reasoning calls, durable fixture Goal state, no harness dispatch. q03/q07 human-reviewed; other labels are drafts. Input code/labels are unchanged by the later permission-only fix and upstream catalog/test merge; the evaluated binary is still identified by its original manifest.
-- **B**: [actual R10 bounded repair exhaustion](https://github.com/bitrouter/bitrouter/blob/382c2b58c5c25b02805175a33d60707dc4227b46/docs/evidence/bro-goal-workflow/2026-10-15-real-goal-v10-summary.json), [R14 failed upstream call and independent continuation](https://github.com/bitrouter/bitrouter/blob/382c2b58c5c25b02805175a33d60707dc4227b46/docs/evidence/bro-goal-workflow/2026-10-15-real-goal-v14-summary.json), [R15 pre-permission streaming block](https://github.com/bitrouter/bitrouter/blob/382c2b58c5c25b02805175a33d60707dc4227b46/docs/evidence/bro-goal-workflow/2026-10-15-real-goal-v15-summary.json). These remain failures, not successful deliveries.
+- **B**: [actual R10 bounded repair exhaustion](2026-10-15-real-goal-v10-summary.json), [R14 failed upstream call and independent continuation](2026-10-15-real-goal-v14-summary.json), [R15 pre-permission streaming block](2026-10-15-real-goal-v15-summary.json). These remain failures, not successful deliveries.
 
 ## Product gates
 

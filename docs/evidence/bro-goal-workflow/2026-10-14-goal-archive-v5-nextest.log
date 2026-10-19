@@ -1,0 +1,117 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.41
+   Compiling bitrouter v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/apps/bitrouter)
+   Compiling rustls-webpki v0.103.13
+   Compiling tokio-rustls v0.26.4
+   Compiling hyper-rustls v0.27.9
+   Compiling rustls-platform-verifier v0.7.0
+   Compiling reqwest v0.13.4
+   Compiling sqlx-core v0.8.6
+   Compiling bitrouter-ai v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-ai)
+   Compiling sqlx-mysql v0.8.6
+   Compiling sqlx-sqlite v0.8.6
+   Compiling sqlx-postgres v0.8.6
+   Compiling sqlx v0.8.6
+   Compiling rmcp v3.3.0
+   Compiling sea-query-binder v0.7.0
+   Compiling opentelemetry-http v0.32.0
+   Compiling opentelemetry-otlp v0.32.0
+   Compiling sea-schema v0.16.2
+   Compiling sea-orm v1.1.20
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-sdk)
+   Compiling axoasset v2.0.1
+   Compiling axoupdater v0.10.0
+   Compiling sea-orm-migration v1.1.20
+   Compiling bitrouter-telemetry v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-telemetry)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/crates/bitrouter-orchestrator)
+   Compiling bitrouter-guardrails v1.0.0-alpha.33 (/Users/kelsen/.codex/worktrees/d91b/bitrouter/extensions/regex-checker/matcher)
+warning: linker stderr: ld: __eh_frame section too large (max 16MB) to encode dwarf unwind offsets in compact unwind table, performance of exception handling might be affected
+  |
+  = note: `#[warn(linker_messages)]` on by default
+
+warning: `bitrouter` (bin "bro") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 37s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+────────────
+ Nextest run ID b88b1c7c-aa93-4630-95c6-6e1643bda9f7 with nextest profile: default
+    Starting 77 tests across 1 binary
+        PASS [   0.055s] ( 1/77) bitrouter::goals accounting_tests::estimates_and_unpriced_work_remain_distinct_and_duplicates_do_not_add
+        PASS [   0.088s] ( 2/77) bitrouter::goals archive_tests::archive_receipt_failure_rolls_back_head_and_can_retry_original_identity
+        PASS [   0.089s] ( 3/77) bitrouter::goals archive_tests::archive_does_not_reset_current_version_retry_admission
+        PASS [   0.098s] ( 4/77) bitrouter::goals archive_tests::archive_keeps_unknown_effects_active_work_permissions_and_delivery_sources_in_head
+        PASS [   0.052s] ( 5/77) bitrouter::goals budget_tests::competing_reservations_cannot_exceed_one_goal_cap
+        PASS [   0.051s] ( 6/77) bitrouter::goals budget_tests::creation_commits_limits_before_any_coordinator_work_can_be_admitted
+        PASS [   0.120s] ( 7/77) bitrouter::goals archive_tests::execution_archive_is_atomic_idempotent_cold_and_owner_scoped
+        PASS [   0.054s] ( 8/77) bitrouter::goals budget_tests::elapsed_limit_includes_waits_and_cannot_reset_with_clock_or_restart
+        PASS [   0.055s] ( 9/77) bitrouter::goals budget_tests::unknown_usage_retains_its_full_reservation_across_restart
+        PASS [   0.212s] (10/77) bitrouter::goals archive_tests::goal_history_page_includes_envelope_in_byte_bound_and_advances_without_losing_inputs
+        PASS [   0.061s] (11/77) bitrouter::goals budget_tests::verified_usage_releases_unused_reservation_but_deviations_seal_admission
+        PASS [   0.100s] (12/77) bitrouter::goals completion_tests::accepted_input_and_new_requirements_fence_old_completion
+        PASS [   0.095s] (13/77) bitrouter::goals completion_tests::already_verified_delivery_can_complete_at_the_budget_boundary
+        PASS [   0.098s] (14/77) bitrouter::goals completion_tests::artifact_change_and_commit_storage_failure_preserve_unfinished_goal
+        PASS [   0.095s] (15/77) bitrouter::goals completion_tests::completion_is_autonomous_and_immutable_for_the_current_version
+        PASS [   0.100s] (16/77) bitrouter::goals completion_tests::explicit_acceptance_is_bound_to_the_exact_delivery
+        PASS [   0.105s] (17/77) bitrouter::goals completion_tests::explicit_withdrawal_allows_already_verified_completion_after_budget_exhaustion
+        PASS [   0.103s] (18/77) bitrouter::goals completion_tests::in_flight_work_prevents_completion_until_its_outcome_is_observed
+        PASS [   0.090s] (19/77) bitrouter::goals completion_tests::missing_required_check_and_false_success_cannot_reach_assessment
+        PASS [   0.106s] (20/77) bitrouter::goals completion_tests::query_only_clarification_is_retained_without_becoming_a_completion_condition
+        PASS [   0.114s] (21/77) bitrouter::goals completion_tests::unresolved_change_survives_a_query_and_fences_ready_completion
+        PASS [   0.063s] (22/77) bitrouter::goals decision_tests::actual_option_admission_is_idempotent_and_distinct_from_submission
+        PASS [   0.061s] (23/77) bitrouter::goals decision_tests::automatic_response_cannot_grant_a_persistent_permission
+        PASS [   0.060s] (24/77) bitrouter::goals decision_tests::newer_requirements_reject_stale_permission_response
+        PASS [   0.174s] (25/77) bitrouter::goals completion_tests::unverified_condition_or_original_requirement_prevents_completion
+        PASS [   0.063s] (26/77) bitrouter::goals decision_tests::permission_cannot_select_an_unoffered_option_or_approve_while_paused
+        PASS [   0.055s] (27/77) bitrouter::goals goals_cold_queries_are_owner_scoped_and_membership_cutoff_is_stable
+        PASS [   0.052s] (28/77) bitrouter::goals goals_competing_create_identity_does_not_leave_orphan_heads
+        PASS [   0.058s] (29/77) bitrouter::goals goals_concurrent_task_admission_persists_only_one_execution
+        PASS [   0.058s] (30/77) bitrouter::goals goals_dispatch_receipt_failure_does_not_admit_start_or_run_mapping
+        PASS [   0.052s] (31/77) bitrouter::goals goals_failed_receipt_insert_rolls_back_head_and_does_not_accept_input
+        PASS [   0.055s] (32/77) bitrouter::goals goals_invalid_graph_never_replaces_committed_planning_attempt
+        PASS [   0.059s] (33/77) bitrouter::goals goals_late_execution_facts_keep_original_requirements_version
+        PASS [   0.078s] (34/77) bitrouter::goals goals_handoff_requires_exact_review_and_candidate_versions
+        PASS [   0.055s] (35/77) bitrouter::goals goals_lost_response_replays_receipt_without_changing_later_state
+        PASS [   0.057s] (36/77) bitrouter::goals goals_only_current_coordinator_can_admit_effects
+        PASS [   0.067s] (37/77) bitrouter::goals goals_only_known_pre_dispatch_failures_have_bounded_automatic_retries
+        PASS [   0.056s] (38/77) bitrouter::goals goals_operation_identity_cannot_be_reused_for_different_input
+        PASS [   0.063s] (39/77) bitrouter::goals goals_pause_and_unverified_candidate_cannot_admit_dependents
+        PASS [   0.066s] (40/77) bitrouter::goals goals_rejected_review_cannot_be_promoted_to_handoff
+        PASS [   0.066s] (41/77) bitrouter::goals goals_requirements_change_prevents_old_review_from_unlocking_dependents
+        PASS [   0.054s] (42/77) bitrouter::goals goals_revision_conflict_does_not_overwrite_concurrent_control
+        PASS [   0.063s] (43/77) bitrouter::goals goals_stop_confirmation_does_not_overwrite_candidate_result
+        PASS [   0.060s] (44/77) bitrouter::goals input_tests::branch_control_cannot_retarget_an_explicit_reference_or_missing_task
+        PASS [   0.060s] (45/77) bitrouter::goals input_tests::branch_pause_seals_its_dependency_closure_and_keeps_independent_work_eligible
+        PASS [   0.062s] (46/77) bitrouter::goals input_tests::branch_resume_does_not_resume_a_paused_goal
+        PASS [   1.144s] (47/77) bitrouter::goals archive_tests::archived_history_crosses_snapshot_bound_without_resetting_versions_or_budget
+        PASS [   0.069s] (48/77) bitrouter::goals input_tests::clarification_resolution_preserves_scope_and_rejects_false_or_stale_closure
+        PASS [   0.073s] (49/77) bitrouter::goals input_tests::direct_withdrawal_works_without_model_or_budget_and_preserves_other_inputs
+        PASS [   0.060s] (50/77) bitrouter::goals input_tests::explicit_task_reference_cannot_modify_another_task_or_control_goal
+        PASS [   0.071s] (51/77) bitrouter::goals input_tests::explicit_clarification_reference_closes_only_that_request_and_never_another_goal
+        PASS [   0.011s] (52/77) bitrouter::goals input_tests::only_an_exact_unquoted_withdrawal_uses_the_direct_path
+        PASS [   0.063s] (53/77) bitrouter::goals input_tests::legacy_latest_only_question_retains_its_original_scope_after_query_and_reload
+        PASS [   0.060s] (54/77) bitrouter::goals input_tests::newer_explicit_pause_dominates_older_model_resume
+        PASS [   0.062s] (55/77) bitrouter::goals input_tests::obsolete_planning_is_retained_and_only_new_requirements_can_rearm_it
+        PASS [   0.070s] (56/77) bitrouter::goals input_tests::paused_branch_edit_invalidates_dependents_and_preserves_execution_source
+        PASS [   0.059s] (57/77) bitrouter::goals input_tests::query_does_not_mutate_requirements_or_run_intent
+        PASS [   0.068s] (58/77) bitrouter::goals input_tests::resource_edits_are_versioned_atomic_preserve_scope_and_do_not_resume
+        PASS [   0.058s] (59/77) bitrouter::goals input_tests::typed_classification_cannot_directly_pause_execution
+        PASS [   0.064s] (60/77) bitrouter::goals input_tests::understanding_cannot_forge_or_reorder_original_input
+        PASS [   0.065s] (61/77) bitrouter::goals permission_input_tests::asking_about_a_permission_does_not_choose_an_option
+        PASS [   0.068s] (62/77) bitrouter::goals permission_input_tests::changed_requirements_finish_the_reply_without_granting_the_old_request
+        PASS [   0.010s] (63/77) bitrouter::goals permission_input_tests::permission_scope_comes_from_the_original_explicit_reference
+        PASS [   0.067s] (64/77) bitrouter::goals permission_input_tests::exhausted_budget_rejects_late_allow_without_blocking_a_recorded_denial
+        PASS [   0.065s] (65/77) bitrouter::goals permission_input_tests::permission_reply_persistence_failure_rolls_back_the_choice_and_input_result
+        PASS [   0.068s] (66/77) bitrouter::goals permission_input_tests::paused_goal_rejects_late_allow_but_can_save_an_explicit_denial
+        PASS [   0.065s] (67/77) bitrouter::goals permission_input_tests::reply_is_saved_with_original_input_identity_before_permission_delivery
+        PASS [   0.064s] (68/77) bitrouter::goals permission_input_tests::typed_classification_cannot_grant_permission_even_with_a_valid_reference
+        PASS [   0.011s] (69/77) bitrouter::goals resource_tests::legacy_task_serialization_does_not_change_empty_resource_receipt_payloads
+        PASS [   0.011s] (70/77) bitrouter::goals resource_tests::resource_material_cannot_expand_selection_or_omit_the_selected_bytes
+        PASS [   0.071s] (71/77) bitrouter::goals recovery_tests::replacement_requires_confirmed_stop_and_current_control_proof
+        PASS [   0.166s] (72/77) bitrouter::goals permission_input_tests::persistent_allow_requires_the_explicit_offered_option_identity
+        PASS [   0.064s] (73/77) bitrouter::goals resource_tests::selected_resources_must_be_frozen_before_dispatch_and_survive_reload
+        PASS [   0.066s] (74/77) bitrouter::goals verification_tests::exact_successful_check_allows_the_bound_handoff
+        PASS [   0.062s] (75/77) bitrouter::goals verification_tests::nonzero_exit_and_changed_artifact_never_support_handoff
+        PASS [   0.058s] (76/77) bitrouter::goals verification_tests::positive_exit_requires_the_exact_checked_workspace_version
+        PASS [   0.207s] (77/77) bitrouter::goals permission_input_tests::unscoped_foreign_unoffered_and_cross_scope_proposals_cannot_grant_permission
+────────────
+     Summary [   1.684s] 77 tests run: 77 passed, 0 skipped
