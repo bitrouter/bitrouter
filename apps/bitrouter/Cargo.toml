@@ -72,7 +72,7 @@ semver = "1"
 # dependency is what makes that a compile error rather than a convention.
 bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.33" }
 # Terminal *I/O*, which is this process's: owning stdin, bracketed paste, and
-# reading key events for Goals. Not drawing — see above.
+# reading key events for `bro chat`. Not drawing — see above.
 crossterm.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
 schemars.workspace = true
@@ -80,15 +80,8 @@ schemars.workspace = true
 [target.'cfg(windows)'.dependencies]
 atomicwrites.workspace = true
 
-[target.'cfg(target_os = "macos")'.dependencies]
-# The 0.28 mio source can return a resize before draining TTY readiness.
-# kqueue's edge notification then strands already-written keys until more input
-# arrives. Use the same event API with its level-triggered Unix pollfd source.
-# This version's pollfd event-stream wake path requires the libc descriptor API.
-crossterm = { workspace = true, features = ["use-dev-tty", "libc"] }
-
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["process", "fs"] }
+rustix = { workspace = true, features = ["process"] }
 
 [build-dependencies]
 # Reads the committed registry artifacts to generate the ACP harness catalog.
@@ -119,7 +112,3 @@ prost.workspace = true
 portable-pty = "0.9"
 # Reconstructs cursor-addressed ratatui frames for semantic PTY assertions.
 vt100 = "0.15"
-
-[target.'cfg(unix)'.dev-dependencies]
-# Typed termios snapshots from portable-pty, including complete mode comparison.
-nix = { version = "0.28", default-features = false, features = ["term", "fs"] }

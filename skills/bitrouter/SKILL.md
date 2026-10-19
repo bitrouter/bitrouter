@@ -5,7 +5,7 @@ description: >
   its CLI — a self-hosted LLM proxy on 127.0.0.1:4356 routing OpenAI- or
   Anthropic-shaped traffic to any provider, via a coding-agent subscription,
   hosted BitRouter, or your own keys. Covers bro init, provider
-  credentials, BRO Goals, native task APIs, ACP harnesses, routing, and spend.
+  credentials, native BRO tasks, ACP harnesses, routing, and spend.
   Trigger on bitrouter.yaml, port 4356, brk_ keys, "replace litellm", or
   pointing a coding agent at a proxy.
 license: Apache-2.0
@@ -44,8 +44,8 @@ Verify with `bro --version`; on failure read `references/diagnose.md`.
 
 ### 3. Configure
 
-A human runs `bro init` to configure providers (including BitRouter Cloud),
-ACP harnesses and the finish action. Bare `bro` opens Goals. Credentials alone do not mark setup complete.
+A human runs `bro` to complete onboarding using searchable Up/Down lists of registry
+providers (including BitRouter Cloud), ACP harnesses and actions. Credentials alone do not mark setup complete.
 For scripted setup:
 ```bash
 bro init --yes --use-detected --harness codex --after exit
@@ -80,52 +80,56 @@ Detected vars: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` (not `GOO
 `providers login` also takes `--api-key` / `--key-stdin`; `references/cloud-setup.md`
 covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supplements subscriptions.
 
-### 5. Choose the work interface
+### 5. Start the desired agent interface
 
-BRO orchestrates long-running, parallel workflows through ACP-compatible harnesses.
-The Goal directory, current Goal and read-only Workflow have separate navigation;
-viewing never creates work. Enter submits to the current Goal even while workers run.
-Queries and hypotheses do not modify requirements; accepted changes and actual
-execution evidence are reported separately. Pause, stop, resume, budgets and permission
-responses use explicit controls. Finished, declared local tool work can be
-replaced after stop/history/workspace reconciliation; incomplete or external
-effects remain blocked. Saved edits do not resume paused work. Exit detaches. Read `references/cli.md` for keys,
-resource limits, unknown costs and recovery boundaries.
-
-Goal tasks select configured MCP IDs, versioned skill material IDs and relative
-workspace context. BRO freezes supplied bytes before dispatch; ACP MCP transport
-support is negotiated. Configuration/material delivery does not prove tool use,
-private skill activation or an actual provider model.
-Tasks may select a configured BRO model route when session route control is
-available. BRO requires controller confirmation before sending work; requested
-and confirmed routes remain distinct from an actual upstream model identity.
+BitRouter uses native scrollback and explicit inspectors. Empty-composer Left
+opens Agents; Enter previews and `o` explicitly opens a BRO conversation.
+Esc returns; browsing never submits, approves, resumes or stops work:
 
 ```bash
-bro                         # Goals; no Goal or agent starts from a directory read
-bro code --workspace PATH   # Goals; workspace applies to new Goals only
-bro claude                  # Claude's own interface with per-process overrides
-bro codex -- --search       # Codex's own interface; arguments are forwarded
-bro run codex "audit this repo" --background  # supervised headless ACP
-bro acp serve codex          # transparent ACP stdio endpoint for another client
-bro task run "inspect this project" --read-only  # retained native task API
-bro agents sessions --json   # supervised-run inventory
+bro code --model openai/gpt-5  # BRO scrollback Conversation; ← opens durable Threads
+bro code codex              # explicit interactive ACP session
+bro run claude "summarize this repo"  # headless ACP turn
+bro task run "fix the failing test" --check "cargo test"  # BRO native task
+bro task run "inspect this project" --read-only  # no shell or writes
+bro run codex "audit this repo" --background  # supervised; returns run id
+bro agents sessions --json  # scriptable supervised-run inventory
+bro agents                 # standalone manager; TTY only
 ```
 
-`code <agent>` and the old `chat/tui` aliases are removed. Goal `code` accepts
-`--config` and `--workspace`; native Thread/model/load/resume flags belong to
-retained task/run interfaces, not Goals. Remote Goal execution is unsupported;
-non-TTY callers should use `run` or the native task API.
+Background runs survive client exit. Attach with `bro agents attach <run-id>`; stop and
+remove are separate. Foreground `run` denies unmatched permissions; background asks.
+Same-worktree runs require the warned override. Read `references/sessions.md` first.
 
-Native `launch <agent>` accepts catalog harnesses; `claude`, `claude-code` and
-`codex` are shortcuts. User configuration is not edited. Existing harness processes
-need a new launch to adopt overrides; `bro acp serve <agent>` serves ACP clients.
-Background runs survive client exit; attach/stop/remove remain separate.
-Native Threads, local v17 and opt-in HTTP `/agent/v2` stay distinct from Goals.
-See `references/sessions.md` for ownership and `references/decision-native.md`
-for bounded model/context routing, MCP/skills, token reservations and its cost scope.
-For the native BRO ACP endpoint, use bare `bro acp serve --model openai/gpt-5`.
-It negotiates v1/draft v2 on the retained ThreadService; EOF detaches, cancel
-pauses inputs and close retains history. External harnesses use `acp serve <agent>`.
+`bro task run` joins `bro serve`, creates a Thread and starts one Turn, streams NDJSON,
+defaults to the bundled `bitrouter/auto` policy, and approves its own tools. `--check` adds verification; otherwise
+it is `not_requested`. Bare `bro code` keeps one Thread: Enter starts/enqueues,
+Ctrl-Enter steers, Ctrl-R resumes a paused queue, empty-composer `y`/`n` approves,
+and Ctrl-D detaches. The docked status bar animates active work and shows accepted routing workflow labels plus the selected serving model. Reattach with `--thread-id`; `--task-id` is removed.
+`--read-only` permits `read`, `glob`, `grep`; coding adds `write`, unique-span `edit`, and `shell`.
+Native Threads load global and ancestor `AGENTS.md` into durable user context, using overrides and model-read nested rules; see [wiring](references/cli.md#native-project-instructions-mcp-and-skills-wiring). Coding also exposes configured MCP tools through the same approvals; read-only does not connect to MCP. Skills discovery publishes metadata without prompt injection. `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `code <agent>` / `run <agent>` remain ACP. Local protocol is v17; opt-in HTTP uses `/agent/v2`. Durable history/keys
+survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.
+See `references/cli.md` for permissions, controls, retries and recovery.
+Resident BRO daemons defer automatic replacement; finish work and use explicit `bro restart` after binary updates.
+Built-in ACP adapters require Node.js 22+ and `npx`. For the harness's native
+interface, use the reversible per-process launcher:
+
+```bash
+bro claude
+bro codex -- --search
+```
+
+`launch <agent>` accepts catalog native harnesses; `claude`, `claude-code`, and
+`codex` are shortcuts. Everything after `--` is forwarded verbatim, and user
+configuration is not edited. Keep the harness's model on its subscription by default; use BitRouter for
+subagents, bulk work, and models the plan lacks.
+
+**The restart handoff — say it every time.** Existing harness processes need a
+restart; tell the user to run `bro claude` to route the new session.
+
+For a native BRO ACP client, use `bro acp serve --model openai/gpt-5` (v1 or draft v2).
+EOF detaches; cancel pauses inputs; close keeps history. For external harnesses, use `bro acp serve claude` or `bro acp serve codex`.
+Their IDs/history stay harness-owned; see `references/sessions.md`.
 
 ### 6. Verify
 ```bash
@@ -159,7 +163,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 | `references/harness-*.md` | Durable per-harness wiring instead of `launch`: `-claude-code`, `-codex`, `-hermes-agent`, `-openclaw`, `-terminus-2` |
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
-| `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON); `bro update` and channels |
+| `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON, Code); `bro update` and channels |
 | `references/decision-native.md` | TypeSafe decision configuration, native BRO context views, evidence recall and decision accounting |
 
 ## Gotchas

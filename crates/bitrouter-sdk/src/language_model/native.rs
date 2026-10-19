@@ -594,16 +594,6 @@ pub trait NativeExecutionControl: Send + Sync {
     /// the frozen routes, or reject the plan before any provider attempt.
     async fn plan(&self, plan: NativePlan) -> Result<NativePlanAdmission>;
 
-    /// Quotes use the same final-route tariff as outcome accounting. They do
-    /// not price authentication, hooks, tools or an authoritative request bill.
-    async fn plan_with_token_reservations(
-        &self,
-        plan: NativePlan,
-        _reservations: Vec<Option<super::native_accounting::NativeTokenReservation>>,
-    ) -> Result<NativePlanAdmission> {
-        self.plan(plan).await
-    }
-
     /// After rejecting a plan with no provider attempt, optionally commit one
     /// rebuilt context. Complete messages or explicitly authorized Responses
     /// reasoning may be removed; arbitrary part rewrites, input additions,
@@ -621,17 +611,6 @@ pub trait NativeExecutionControl: Send + Sync {
     /// its identity and budget reservation. A previous uncommitted outcome
     /// must prevent authorization of the next attempt.
     async fn before_attempt(&self, request_id: &str, attempt_index: u32) -> Result<()>;
-
-    /// Commit admission with the exact attempt's optional frozen token quote.
-    /// A missing quote does not establish a bounded or known provider cost.
-    async fn before_attempt_with_token_reservation(
-        &self,
-        request_id: &str,
-        attempt_index: u32,
-        _reservation: Option<&super::native_accounting::NativeTokenReservation>,
-    ) -> Result<()> {
-        self.before_attempt(request_id, attempt_index).await
-    }
 
     /// Persist integration work before any actual authentication or HTTP I/O.
     /// Implementations recheck live dispatch gates and reserve internal retries.

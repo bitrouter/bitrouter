@@ -3,105 +3,12 @@
 
 use bitrouter_sdk::language_model::native::NativeAttemptReport;
 use bitrouter_sdk::language_model::native_accounting::{
-    NativeCostEstimator, NativeTokenCost, NativeTokenRates, NativeTokenReservation,
-    validated_provider_usage,
+    NativeCostEstimator, NativeTokenCost, NativeTokenRates, validated_provider_usage,
 };
 
 use super::pricing::{MAX_TRUSTED_TOKENS, PricingSource, PricingTable};
 
 impl NativeCostEstimator for PricingTable {
-    fn reservation_for_attempt(
-        &self,
-        route: &bitrouter_sdk::language_model::native::NativeRoute,
-        prompt: &bitrouter_ai::types::Prompt,
-        ctx: &bitrouter_sdk::language_model::context::PipelineContext,
-        target: &bitrouter_sdk::language_model::types::RoutingTarget,
-    ) -> Option<NativeTokenReservation> {
-        use bitrouter_sdk::language_model::native::{NativeInputCount, NativeProtocolValidation};
-        if route.provider != target.provider_name
-            || route.model != target.service_id
-            || route.protocol != target.api_protocol
-            || route.protocol_validation != NativeProtocolValidation::Compatible
-        {
-            return None;
-        }
-        let key = bitrouter_sdk::language_model::stream::PricingTargetKey::from_target(target);
-        let snapshot = ctx
-            .get_events::<super::tariff::TargetTariffSnapshot>()
-            .into_iter()
-            .rev()
-            .find(|snapshot| snapshot.target == key)?;
-        if !snapshot.tariff.guarantees_known_price() {
-            return None;
-        }
-        let input = match &route.input_count {
-            Some(NativeInputCount::Counted { input_tokens, .. }) => *input_tokens,
-            Some(NativeInputCount::Unavailable { .. }) => return None,
-            None => route.constraints.token_limits.max_input_tokens?,
-        };
-        let output = u64::from(prompt.params.max_tokens?);
-        if input == 0
-            || input > MAX_TRUSTED_TOKENS
-            || output == 0
-            || output > MAX_TRUSTED_TOKENS
-            || !(route.output_token_limit_supported == Some(true)
-                || route
-                    .constraints
-                    .token_limits
-                    .output_reservation_covers_model(prompt.params.max_tokens?))
-        {
-            return None;
-        }
-        let pricing = snapshot.tariff.pricing.as_ref()?;
-        let mut brackets = vec![pricing.clone()];
-        for tier in &pricing.context_tiers {
-            if tier.above_input_tokens < input {
-                brackets.push(
-                    pricing.resolve_for_input_tokens(tier.above_input_tokens.checked_add(1)?),
-                );
-            }
-        }
-        let mut input_rate = 0.0_f64;
-        let mut output_rate = 0.0_f64;
-        for bracket in brackets {
-            for rate in [
-                bracket.input_micro_usd_per_token?,
-                bracket.cache_read_micro_usd_per_token?,
-                bracket.cache_write_micro_usd_per_token?,
-            ] {
-                if !rate.is_finite() || rate < 0.0 {
-                    return None;
-                }
-                input_rate = input_rate.max(rate);
-            }
-            let rate = bracket.output_micro_usd_per_token?;
-            if !rate.is_finite() || rate < 0.0 {
-                return None;
-            }
-            output_rate = output_rate.max(rate);
-        }
-        let amount = (input as f64 * input_rate + output as f64 * output_rate).ceil();
-        // At most five nonnegative bucket products/additions enter settlement.
-        // Keep their magnitude below 2^52 and cover floating-point rounding;
-        // authoritative zero rates still have a zero token reservation.
-        if !amount.is_finite() || amount < 0.0 || amount > (1_u64 << 52) as f64 {
-            return None;
-        }
-        Some(NativeTokenReservation {
-            micro_usd: (amount as u64).checked_add(if input_rate == 0.0 && output_rate == 0.0 {
-                0
-            } else {
-                8
-            })?,
-            pricing_version: snapshot.tariff.pricing_version.clone(),
-            provider: target.provider_name.clone(),
-            model: target.service_id.clone(),
-            input_tokens_bound: input,
-            output_tokens_bound: output,
-            evidence: serde_json::json!({"tariff":snapshot.tariff,"input_count":route.input_count,"limits":route.constraints.token_limits,"output_token_limit_supported":route.output_token_limit_supported}),
-        })
-    }
-
     fn estimate(&self, _report: &NativeAttemptReport) -> NativeTokenCost {
         NativeTokenCost::unknown("pricing_snapshot_unavailable")
     }
@@ -322,54 +229,6 @@ mod tests {
         table.insert("execution-provider", "served-model", pricing);
         table.configure_endpoint("execution-provider", None, "https://api.openai.com/v1");
         table
-    }
-
-    #[test]
-    fn token_reservation_uses_frozen_endpoint_and_all_relevant_price_brackets() -> anyhow::Result<()>
-    {
-        let mut pricing = ModelPricing::cache_aware(Some(1.0), Some(2.0), Some(4.0), Some(3.0));
-        pricing.context_tiers.push(ContextTier {
-            above_input_tokens: 50,
-            input_micro_usd_per_token: Some(5.0),
-            cache_read_micro_usd_per_token: None,
-            cache_write_micro_usd_per_token: Some(9.0),
-            output_micro_usd_per_token: Some(7.0),
-        });
-        let table = table(pricing);
-        let target = target();
-        let ctx = fixture_context(&table, &target);
-        let mut prompt = ctx.require_generation_prompt()?.clone();
-        prompt.params.max_tokens = Some(10);
-        let mut route = report().route;
-        route.provider.clone_from(&target.provider_name);
-        route.model.clone_from(&target.service_id);
-        route.protocol_validation =
-            bitrouter_sdk::language_model::native::NativeProtocolValidation::Compatible;
-        route.constraints.token_limits.max_input_tokens = Some(100);
-        let quote = table
-            .reservation_for_attempt(&route, &prompt, &ctx, &target)
-            .ok_or_else(|| anyhow::anyhow!("missing conservative reservation"))?;
-        assert!(quote.micro_usd >= 970);
-        assert_eq!(quote.input_tokens_bound, 100);
-        assert_eq!(quote.output_tokens_bound, 10);
-        assert_eq!(
-            quote.pricing_version,
-            table.snapshot(&target).tariff.pricing_version
-        );
-        let mut changed_endpoint = target.clone();
-        changed_endpoint.api_base = "https://example.invalid/v1".into();
-        assert!(
-            table
-                .reservation_for_attempt(&route, &prompt, &ctx, &changed_endpoint)
-                .is_none()
-        );
-        route.output_token_limit_supported = None;
-        assert!(
-            table
-                .reservation_for_attempt(&route, &prompt, &ctx, &target)
-                .is_none()
-        );
-        Ok(())
     }
 
     fn pricing() -> ModelPricing {

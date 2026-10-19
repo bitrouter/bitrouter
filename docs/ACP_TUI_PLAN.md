@@ -1,13 +1,5 @@
 # Execution plan: the ACP TUI (v1)
 
-Current-entry status: the Goal implementation replaces this document's bare
-`bro`/`bro code`, `code <agent>` and hidden `chat/tui` product entry contracts.
-See [the Goal PRD](BRO_GOAL_ORIENTED_PRD.md) and
-[the implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) for current
-behavior and verification limits. This document retains historical design and
-evidence; native task and ACP protocol contracts remain separately supported.
-
-
 Companion to [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md). The spec holds the
 *decisions and rationale*; this file holds the *ordered work and its
 completion criteria*. Scope is the spec's **v1 column only** (§12) — every v2

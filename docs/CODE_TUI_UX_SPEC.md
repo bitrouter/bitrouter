@@ -1,13 +1,5 @@
 # Spec: scrollback-native conversation TUI
 
-Current-entry status: the Goal implementation replaces this document's bare
-`bro`/`bro code`, `code <agent>` and hidden `chat/tui` product entry contracts.
-See [the Goal PRD](BRO_GOAL_ORIENTED_PRD.md) and
-[the implementation ledger](BRO_GOAL_ORIENTED_IMPLEMENTATION.md) for current
-behavior and verification limits. This document retains historical design and
-evidence; native task and ACP protocol contracts remain separately supported.
-
-
 Status: **implemented** · Date: 2026-09-09
 
 Current entry/navigation: [Codex-style navigation spec](CODE_TUI_CODEX_NAVIGATION_SPEC.md)

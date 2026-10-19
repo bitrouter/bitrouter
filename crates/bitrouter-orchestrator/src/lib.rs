@@ -8,7 +8,6 @@ pub mod agent;
 mod context;
 mod control;
 pub mod core;
-pub mod goal;
 pub mod harness;
 pub mod item;
 pub mod service;

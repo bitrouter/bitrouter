@@ -2031,7 +2031,6 @@ impl SessionHost {
             return Err(lifecycle_cancelled());
         }
         let mcp_servers = self.options.mcp_servers.clone();
-        let required_route = self.options.required_session_route.clone();
         let terminal_auth = self.options.terminal_auth;
         let mut session = launch_controlled_with_cancel(
             &self.config,
@@ -2047,29 +2046,6 @@ impl SessionHost {
         // request, and a later subscription would lose it.
         let updates = session.client.subscribe_lifecycle_notifications();
         let permissions = session.client.subscribe_permissions();
-        let supported = mcp_servers.iter().all(|server| match server {
-            agent_client_protocol::schema::v1::McpServer::Stdio(_) => true,
-            agent_client_protocol::schema::v1::McpServer::Http(_) => {
-                session.client.agent_capabilities().mcp_capabilities.http
-            }
-            agent_client_protocol::schema::v1::McpServer::Sse(_) => {
-                session.client.agent_capabilities().mcp_capabilities.sse
-            }
-            _ => false,
-        });
-        if !supported {
-            let clean = session.shutdown().await;
-            return if clean {
-                Err(anyhow::anyhow!(
-                    "selected MCP transport is not supported by the negotiated ACP harness"
-                ))
-            } else {
-                Err(anyhow::anyhow!(
-                    "selected MCP transport is unsupported; startup cleanup did not confirm"
-                )
-                .context(LifecycleTeardownUnconfirmed))
-            };
-        }
         let opened = tokio::select! {
             biased;
             _ = cancel.cancelled() => None,
@@ -2092,29 +2068,6 @@ impl SessionHost {
                 };
             }
         };
-        if let Some(route) = required_route {
-            let confirmed = tokio::select! {
-                biased;
-                _ = cancel.cancelled() => Err(lifecycle_cancelled()),
-                result = session.client.route_set(&ids.acp_session_id, &route) => result.map_err(anyhow::Error::new),
-            };
-            let result = confirmed.and_then(|confirmed| {
-                anyhow::ensure!(
-                    confirmed == route,
-                    "harness route confirmation differs from selected route"
-                );
-                Ok(())
-            });
-            if let Err(error) = result {
-                return if session.shutdown().await {
-                    Err(error.context(
-                        "selected BRO model route was not confirmed; no prompt dispatched",
-                    ))
-                } else {
-                    Err(error.context(LifecycleTeardownUnconfirmed))
-                };
-            }
-        }
         let client = session.client.clone();
         let capabilities = CapabilitySnapshot::from_client(&client, terminal_auth);
         let updates = updates.session_updates_sequenced(&ids);
@@ -3771,10 +3724,6 @@ fn drain_telemetry_record(r: RequestCompleted) {
 /// one SDK type it belongs to.
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct LaunchOptions {
-    /// Internal workflow admission requirement. Must be acknowledged by the
-    /// negotiated session route controller before a prompt may be submitted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required_session_route: Option<String>,
     /// Inherited environment names to remove before applying the explicit
     /// transport and launch overlays. This lets isolated callers prevent
     /// ambient credentials from crossing into an agent process while still

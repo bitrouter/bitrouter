@@ -1,98 +1,566 @@
-//! Retained native API contracts migrated from the retired Code product UI.
-//! Goal terminal coverage lives in goal_tui_pty; model judgments here are fixtures.
+//! Real terminal proof that bare `bro code` projects BRO task events and sends
+//! identified input through the local task contract.
+
 #![cfg(unix)]
 
-use anyhow::{Context, Result, ensure};
-use bitrouter::agent_local::{Operation, ReplyResult, ThreadClient};
-use bitrouter_orchestrator::agent::AgentConfig;
-use bitrouter_orchestrator::thread::{ThreadObservation, ThreadStatus};
+use std::io::{Read, Write};
+use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
+
+use anyhow::{Result, ensure};
+use bitrouter::agent_local::{Operation, ReplyResult};
 use bitrouter_orchestrator::turn::{TurnStatus, VerificationStatus};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde_json::json;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
 use tokio::process::Command;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-struct Server {
-    home: tempfile::TempDir,
-    workspace: PathBuf,
-    control: PathBuf,
-    socket: PathBuf,
-    child: tokio::process::Child,
+struct TerminalClient {
+    writer: Box<dyn Write + Send>,
+    output: Receiver<Vec<u8>>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+    screen: vt100::Parser,
+    raw: Vec<u8>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
 }
-impl Server {
-    async fn start(upstream: &MockServer, extra: &str, managed: bool) -> Result<Self> {
-        let home = tempfile::tempdir()?;
-        let workspace = home.path().join("project");
-        std::fs::create_dir(&workspace)?;
-        let config = home.path().join("bitrouter.yaml");
-        std::fs::write(
-            &config,
-            format!(
-                "inherit_defaults: false\nregistry: {{enabled: false}}\nserver: {{listen: '127.0.0.1:0', skip_auth: true}}\ndatabase: {{url: 'sqlite://{}?mode=rwc'}}\nproviders:\n  mock:\n    api_base: {}\n    api_key: fixture\n    api_protocol: [{{'*': chat_completions}}]\n    models: [{{id: test-model}}]\n{}",
-                home.path().join("state.db").display(),
-                upstream.uri(),
-                extra
-            ),
-        )?;
-        let source = bitrouter::paths::ConfigSource::File(config.clone());
-        let cfg = bitrouter::paths::load_config(&source).await?;
-        let control = bitrouter::daemon::socket_path_for(&source, &cfg);
-        let socket = bitrouter::agent_local::socket_path(&control);
-        let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
-        command.args(["serve", "--config"]).arg(&config);
-        if managed {
-            command.arg("--managed-child");
+
+impl TerminalClient {
+    fn open(binary: &str, config: &std::path::Path, execution: &Execution) -> Result<Self> {
+        Self::open_at(binary, config, execution, None)
+    }
+
+    fn open_at(
+        binary: &str,
+        config: &std::path::Path,
+        execution: &Execution,
+        control: Option<&std::path::Path>,
+    ) -> Result<Self> {
+        Self::open_with_policy(binary, config, execution, control, false)
+    }
+
+    fn open_with_policy(
+        binary: &str,
+        config: &std::path::Path,
+        execution: &Execution,
+        control: Option<&std::path::Path>,
+        policy: bool,
+    ) -> Result<Self> {
+        let pty = native_pty_system().openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        let mut command = CommandBuilder::new(binary);
+        command.arg("code");
+        command.arg("--model");
+        command.arg("test-model");
+        if !execution.thread_id.is_empty() {
+            command.arg("--thread-id");
+            command.arg(&execution.thread_id);
         }
-        let mut child = command
-            .current_dir(home.path())
-            .env("HOME", home.path())
-            .env("BRO_UI_TEST_DECISION_KEY", "fixture")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-        loop {
-            if matches!(
-                bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
-                Ok(ReplyResult::Capabilities { .. })
-            ) {
-                break;
-            }
-            ensure!(child.try_wait()?.is_none(), "native fixture daemon exited");
-            ensure!(
-                tokio::time::Instant::now() < deadline,
-                "native fixture daemon unavailable"
+        command.arg("--config");
+        command.arg(config);
+        if let Some(control) = control {
+            command.arg("--socket");
+            command.arg(control);
+        }
+        if policy {
+            command.arg("--model-policy");
+            command.arg("--read-only");
+            command.arg("--workspace");
+            command.arg(
+                config
+                    .parent()
+                    .ok_or_else(|| anyhow::anyhow!("fixture config has no parent"))?,
             );
-            tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        let child = pty.slave.spawn_command(command)?;
+        let writer = pty.master.take_writer()?;
+        let mut reader = pty.master.try_clone_reader()?;
+        let (sender, output) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            while let Ok(count) = reader.read(&mut buffer) {
+                if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
         Ok(Self {
-            home,
-            workspace,
-            control,
-            socket,
+            writer,
+            output,
             child,
+            screen: vt100::Parser::new(24, 100, 2000),
+            raw: Vec::new(),
+            master: pty.master,
         })
     }
-    async fn stop(mut self) -> Result<()> {
-        bitrouter::daemon::send_command(&self.control, &bitrouter::daemon::DaemonCommand::Stop)
-            .await?;
-        tokio::time::timeout(Duration::from_secs(15), self.child.wait()).await??;
+
+    fn wait_for(&mut self, needle: &str) -> Result<()> {
+        self.wait_for_presence(needle, true)
+    }
+
+    fn frame_complete(&self) -> bool {
+        // PTY reads can split synchronized updates; observe only committed frames.
+        // https://github.com/contour-terminal/vt-extensions/blob/master/synchronized-output.md
+        let begin = self
+            .raw
+            .windows(b"\x1b[?2026h".len())
+            .rposition(|window| window == b"\x1b[?2026h");
+        let end = self
+            .raw
+            .windows(b"\x1b[?2026l".len())
+            .rposition(|window| window == b"\x1b[?2026l");
+        begin.is_none_or(|begin| end.is_some_and(|end| end > begin))
+    }
+
+    fn wait_for_presence(&mut self, needle: &str, present: bool) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            if self.screen.screen().contents().contains(needle) == present && self.frame_complete()
+            {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            match self.output.recv_timeout(remaining) {
+                Ok(bytes) => {
+                    self.raw.extend_from_slice(&bytes);
+                    self.screen.process(&bytes);
+                }
+                Err(error) => anyhow::bail!(
+                    "PTY output did not reach {needle:?} presence={present}: {error}; screen: {:?}",
+                    self.screen.screen().contents()
+                ),
+            }
+        }
+        anyhow::bail!(
+            "PTY output did not reach {needle:?} presence={present}; screen: {:?}",
+            self.screen.screen().contents()
+        )
+    }
+
+    fn wait_for_raw_since(&mut self, offset: usize, needle: &[u8]) -> Result<usize> {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(position) = self.raw[offset..]
+                .windows(needle.len())
+                .position(|window| window == needle)
+            {
+                return Ok(offset + position + needle.len());
+            }
+            let bytes = self
+                .output
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+            self.raw.extend_from_slice(&bytes);
+            self.screen.process(&bytes);
+        }
+    }
+
+    fn wait_for_frame_since(&mut self, offset: usize) -> Result<()> {
+        let end = b"\x1b[?2026l";
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if self.raw[offset..]
+                .windows(end.len())
+                .any(|window| window == end)
+                && self.frame_complete()
+            {
+                return Ok(());
+            }
+            let bytes = self
+                .output
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))?;
+            self.raw.extend_from_slice(&bytes);
+            self.screen.process(&bytes);
+        }
+    }
+
+    fn wait_for_spinner_change(&mut self, phase: &str) -> Result<()> {
+        let glyphs = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let current = |screen: &vt100::Parser| {
+            screen
+                .screen()
+                .contents()
+                .lines()
+                .find(|line| line.contains(phase))
+                .and_then(|line| glyphs.iter().find(|glyph| line.contains(**glyph)).copied())
+        };
+        let first = current(&self.screen)
+            .ok_or_else(|| anyhow::anyhow!("{phase} has no visible spinner"))?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if current(&self.screen).is_some_and(|glyph| glyph != first) && self.frame_complete() {
+                return Ok(());
+            }
+            let bytes = self
+                .output
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "{phase} spinner did not change: {error}; screen: {:?}",
+                        self.screen.screen().contents()
+                    )
+                })?;
+            self.raw.extend_from_slice(&bytes);
+            self.screen.process(&bytes);
+        }
+    }
+
+    fn send(&mut self, bytes: &[u8]) -> Result<()> {
+        self.writer.write_all(bytes)?;
+        self.writer.flush()?;
+        Ok(())
+    }
+
+    fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
+        self.master.resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })?;
+        self.screen.set_size(rows, cols);
+        Ok(())
+    }
+
+    fn close(mut self) -> Result<()> {
+        self.send(b"\x04")?;
+        let _ = self.child.wait()?;
         Ok(())
     }
 }
+
+impl Drop for TerminalClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tui_approves_reattaches_and_cancels_server_tasks() -> Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(|request: &Request| {
+            let saw_tool = serde_json::from_slice::<serde_json::Value>(&request.body)
+                .ok()
+                .and_then(|body| body["messages"].as_array().cloned())
+                .is_some_and(|messages| messages.iter().any(|message| message["role"] == "tool"));
+            let (delta, reason) = if saw_tool {
+                (json!({"role": "assistant", "content": "Done in the TUI."}), "stop")
+            } else {
+                (json!({"role": "assistant", "tool_calls": [{
+                    "index": 0, "id": "edit-tui", "type": "function", "function": {
+                        "name": "edit", "arguments": json!({"path": "note.txt", "edits": [{"oldText": "before", "newText": "after"}]}).to_string()
+                    }
+                }]}), "tool_calls")
+            };
+            let chunk = |delta, reason| format!("data: {}\n\n", json!({
+                "id": "chatcmpl-tui", "object": "chat.completion.chunk", "model": "test-model",
+                "choices": [{"index": 0, "delta": delta, "finish_reason": reason}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
+            }));
+            ResponseTemplate::new(200).set_body_raw(
+                format!("{}{}data: [DONE]\n\n", chunk(delta, None::<&str>), chunk(json!({}), Some(reason))),
+                "text/event-stream",
+            )
+        })
+        .mount(&upstream)
+        .await;
+    let home = tempfile::tempdir()?;
+    let workspace = home.path().join("project");
+    std::fs::create_dir(&workspace)?;
+    std::fs::write(workspace.join("note.txt"), "before\n")?;
+    let config = home.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\n  skip_auth: true\ndatabase:\n  url: 'sqlite://{}?mode=rwc'\nproviders:\n  mock:\n    api_base: {}\n    api_key: fixture\n    api_protocol:\n      - '*': chat_completions\n    models: [{{id: test-model}}]\n",
+            home.path().join("bitrouter.db").display(),
+            upstream.uri()
+        ),
+    )?;
+    let binary = env!("CARGO_BIN_EXE_bro");
+    let mut server = Command::new(binary)
+        .arg("serve")
+        .arg("--config")
+        .arg(&config)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let source = bitrouter::paths::ConfigSource::File(config.clone());
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let socket =
+        bitrouter::agent_local::socket_path(&bitrouter::daemon::socket_path_for(&source, &cfg));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if matches!(
+            bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
+            Ok(ReplyResult::Capabilities { .. })
+        ) {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "server did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let mut fresh = TerminalClient::open(
+        binary,
+        &config,
+        &Execution {
+            thread_id: String::new(),
+            turn_id: String::new(),
+        },
+    )?;
+    fresh.wait_for("Ctrl-D detach")?;
+    fresh.wait_for_frame_since(0)?;
+    let initial = fresh.screen.screen().contents();
+    ensure!(
+        initial
+            .lines()
+            .nth(1)
+            .is_some_and(|line| line.starts_with("  >_ BRO")),
+        "banner did not start at the top: {initial:?}"
+    );
+    ensure!(
+        initial
+            .lines()
+            .nth(20)
+            .is_some_and(|line| line.starts_with("  › Ask")),
+        "composer was not docked: {initial:?}"
+    );
+    ensure!(!fresh.screen.screen().alternate_screen());
+    fresh.send("中文 draft".as_bytes())?;
+    fresh.wait_for("中文 draft")?;
+    fresh.resize(20, 60)?;
+    fresh.send(b"\x0c")?;
+    fresh.wait_for("中文 draft")?;
+    fresh.send(b"\x15")?;
+    fresh.close()?;
+    let turn_id = submit(
+        &socket,
+        &workspace,
+        Some("test \"$(cat note.txt)\" = after".into()),
+    )
+    .await?;
+    wait_status(&socket, &turn_id, TurnStatus::WaitingForInput).await?;
+    // Drop a real observation connection while preserving an unsubmitted draft,
+    // a pending approval and a durable queue, then reconnect in this same TUI.
+    let proxy_control = home.path().join("proxy.sock");
+    let proxy_socket = bitrouter::agent_local::socket_path(&proxy_control);
+    let listener = tokio::net::UnixListener::bind(&proxy_socket)?;
+    let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (disconnect, _) = tokio::sync::watch::channel(0_u64);
+    let proxy = tokio::spawn(observation_proxy(
+        listener,
+        socket.clone(),
+        blocked.clone(),
+        disconnect.clone(),
+    ));
+    let local = bitrouter::agent_local::ThreadClient::connect(&socket).await?;
+    let queued = local
+        .request(Operation::EnqueueTurn {
+            thread_id: turn_id.thread_id.clone(),
+            prompt: "queued before detach".into(),
+            idempotency_key: "queue-before-detach".into(),
+        })
+        .await?;
+    let ReplyResult::Receipt { receipt: queued } = queued else {
+        anyhow::bail!("missing queued receipt");
+    };
+    let mut reconnecting =
+        TerminalClient::open_at(binary, &config, &turn_id, Some(&proxy_control))?;
+    reconnecting.wait_for("Approve edit")?;
+    reconnecting.send(b"draft y n retained")?;
+    reconnecting.wait_for("draft y n retained")?;
+    blocked.store(true, std::sync::atomic::Ordering::SeqCst);
+    disconnect.send(1)?;
+    reconnecting.wait_for("OFFLINE")?;
+    reconnecting.wait_for("draft y n retained")?;
+    let pending = wait_status(&socket, &turn_id, TurnStatus::WaitingForInput).await?;
+    ensure!(
+        pending.pending_input.is_some(),
+        "typing draft answered approval"
+    );
+    blocked.store(false, std::sync::atomic::Ordering::SeqCst);
+    reconnecting.wait_for("APPROVAL")?;
+    reconnecting.wait_for("draft y n retained")?;
+    reconnecting.close()?;
+    let ReplyResult::View { view } = local
+        .request(Operation::ReadThread {
+            thread_id: turn_id.thread_id.clone(),
+        })
+        .await?
+    else {
+        anyhow::bail!("missing Thread view");
+    };
+    ensure!(view.thread.queued.len() == 1 && view.thread.queued[0].turn_id == queued.turn_id);
+    ensure!(
+        view.latest_turn
+            .as_ref()
+            .is_some_and(|turn| turn.pending_input.is_some())
+    );
+    let requests = upstream
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing requests"))?;
+    ensure!(
+        !requests
+            .iter()
+            .any(|request| String::from_utf8_lossy(&request.body).contains("draft y n retained")),
+        "detach submitted draft"
+    );
+    local
+        .request(Operation::CancelQueuedTurn {
+            thread_id: turn_id.thread_id.clone(),
+            turn_id: queued.turn_id,
+            idempotency_key: "withdraw-before-continuing".into(),
+        })
+        .await?;
+    proxy.abort();
+    let _ = proxy.await;
+    // Detach while there are no events to write: the server must observe EOF,
+    // release each subscription, and keep the approval and task alive.
+    for _ in 0..9 {
+        let mut tui = TerminalClient::open(binary, &config, &turn_id)?;
+        tui.wait_for("Approve edit")?;
+        tui.close()?;
+        ensure!(
+            wait_status(&socket, &turn_id, TurnStatus::WaitingForInput)
+                .await?
+                .pending_input
+                .is_some()
+        );
+    }
+    let mut tui = TerminalClient::open(binary, &config, &turn_id)?;
+    tui.wait_for("Approve edit")?;
+    tui.send(b"y")?;
+    tui.wait_for("Approve shell")?;
+    tui.send(b"y")?;
+    let completed = wait_status(&socket, &turn_id, TurnStatus::Completed).await?;
+    ensure!(completed.verification == VerificationStatus::Passed);
+    ensure!(std::fs::read_to_string(workspace.join("note.txt"))? == "after\n");
+    tui.wait_for("Done in the TUI.")?;
+    tui.wait_for("DONE")?;
+    ensure!(!tui.screen.screen().contents().contains("ToolResult {"));
+    ensure!(
+        tui.screen
+            .screen()
+            .contents()
+            .matches("Done in the TUI.")
+            .count()
+            == 1
+    );
+    tui.send(b"Remember prior answer\r")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let reply = bitrouter::agent_local::request(
+            &socket,
+            Operation::ReadThread {
+                thread_id: turn_id.thread_id.clone(),
+            },
+        )
+        .await?;
+        let ReplyResult::View { view } = reply else {
+            anyhow::bail!("expected Thread view");
+        };
+        if view.latest_turn.as_ref().is_some_and(|turn| {
+            turn.turn_id != turn_id.turn_id && turn.status == TurnStatus::WaitingForInput
+        }) {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "second verification approval did not arrive"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tui.wait_for("APPROVAL")?;
+    tui.send(b"y")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let reply = bitrouter::agent_local::request(
+            &socket,
+            Operation::ReadThread {
+                thread_id: turn_id.thread_id.clone(),
+            },
+        )
+        .await?;
+        let ReplyResult::View { view } = reply else {
+            anyhow::bail!("expected Thread view");
+        };
+        if view.latest_turn.as_ref().is_some_and(|turn| {
+            turn.turn_id != turn_id.turn_id && turn.status == TurnStatus::Completed
+        }) {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "second TUI turn did not settle"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let requests = upstream
+        .received_requests()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing model requests"))?;
+    ensure!(
+        requests.iter().any(
+            |request| serde_json::from_slice::<serde_json::Value>(&request.body).is_ok_and(
+                |body| {
+                    let text = body["messages"].to_string();
+                    text.contains("Remember prior answer")
+                        && text.contains("Done in the TUI.")
+                        && text.contains("Change note.txt")
+                }
+            )
+        ),
+        "second TUI input lost settled first-turn context"
+    );
+    tui.close()?;
+
+    let mut tui = TerminalClient::open(binary, &config, &turn_id)?;
+    tui.wait_for("DONE")?;
+    tui.close()?;
+
+    std::fs::write(workspace.join("note.txt"), "before\n")?;
+    let cancelled_id = submit(&socket, &workspace, None).await?;
+    wait_status(&socket, &cancelled_id, TurnStatus::WaitingForInput).await?;
+    let mut tui = TerminalClient::open(binary, &config, &cancelled_id)?;
+    tui.wait_for("Approve edit")?;
+    tui.send(b"\x03")?;
+    wait_status(&socket, &cancelled_id, TurnStatus::Cancelled).await?;
+    ensure!(std::fs::read_to_string(workspace.join("note.txt"))? == "before\n");
+    tui.close()?;
+    let _ = Command::new(binary)
+        .arg("stop")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .await;
+    let _ = server.wait().await;
+    Ok(())
+}
+
 struct Execution {
     thread_id: String,
     turn_id: String,
 }
-async fn submit(socket: &Path, workspace: &Path, check: Option<String>) -> Result<Execution> {
-    let client = ThreadClient::connect(socket).await?;
+async fn submit(
+    socket: &std::path::Path,
+    workspace: &std::path::Path,
+    check: Option<String>,
+) -> Result<Execution> {
+    let client = bitrouter::agent_local::ThreadClient::connect(socket).await?;
     let (thread, turn) = client
         .create_and_start(
             workspace.into(),
-            AgentConfig::fixed("test-model", None),
+            bitrouter_orchestrator::agent::AgentConfig::fixed("test-model", None),
             check,
             "Change note.txt".into(),
         )
@@ -102,362 +570,36 @@ async fn submit(socket: &Path, workspace: &Path, check: Option<String>) -> Resul
         turn_id: turn.turn_id,
     })
 }
-async fn read(
-    socket: &Path,
+
+async fn wait_status(
+    socket: &std::path::Path,
     execution: &Execution,
-) -> Result<bitrouter_orchestrator::turn::TurnSnapshot> {
-    let ReplyResult::Turn { snapshot } = bitrouter::agent_local::request(
-        socket,
-        Operation::ReadTurn {
-            thread_id: execution.thread_id.clone(),
-            turn_id: execution.turn_id.clone(),
-        },
-    )
-    .await?
-    else {
-        anyhow::bail!("expected native Turn");
-    };
-    Ok(*snapshot)
-}
-async fn wait(
-    socket: &Path,
-    execution: &Execution,
-    predicate: impl Fn(&bitrouter_orchestrator::turn::TurnSnapshot) -> bool,
+    wanted: TurnStatus,
 ) -> Result<bitrouter_orchestrator::turn::TurnSnapshot> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let snapshot = read(socket, execution).await?;
-        if predicate(&snapshot) {
-            return Ok(snapshot);
+        let snapshot = match bitrouter::agent_local::request(
+            socket,
+            Operation::ReadTurn {
+                thread_id: execution.thread_id.clone(),
+                turn_id: execution.turn_id.clone(),
+            },
+        )
+        .await?
+        {
+            ReplyResult::Turn { snapshot } => snapshot,
+            _ => anyhow::bail!("unexpected read reply"),
+        };
+        if snapshot.status == wanted {
+            return Ok(*snapshot);
         }
         ensure!(
             tokio::time::Instant::now() < deadline,
-            "native state not reached: {snapshot:?}"
+            "task never reached {wanted:?}: {:?}",
+            snapshot.status
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-}
-async fn wait_status(
-    socket: &Path,
-    execution: &Execution,
-    status: TurnStatus,
-) -> Result<bitrouter_orchestrator::turn::TurnSnapshot> {
-    wait(socket, execution, |snapshot| snapshot.status == status).await
-}
-async fn approve(
-    client: &ThreadClient,
-    execution: &Execution,
-    snapshot: &bitrouter_orchestrator::turn::TurnSnapshot,
-    key: &str,
-) -> Result<()> {
-    let request = snapshot
-        .pending_input
-        .as_ref()
-        .context("approval request missing")?;
-    client
-        .request(Operation::Input {
-            thread_id: execution.thread_id.clone(),
-            turn_id: execution.turn_id.clone(),
-            request_id: request.request_id.clone(),
-            approved: true,
-            idempotency_key: key.into(),
-        })
-        .await?;
-    Ok(())
-}
-
-#[derive(Clone, Copy)]
-enum QueueEnding {
-    Completed,
-    Cancelled,
-    Refused,
-}
-
-fn queue_request(request: &Request) -> Result<(String, bool)> {
-    let body: serde_json::Value = serde_json::from_slice(&request.body)?;
-    let messages = body["messages"]
-        .as_array()
-        .context("queue model messages missing")?;
-    let index = messages
-        .iter()
-        .rposition(|message| message["role"] == "user")
-        .context("queue user message missing")?;
-    let content = &messages[index]["content"];
-    let prompt = if let Some(text) = content.as_str() {
-        text.to_owned()
-    } else {
-        content
-            .as_array()
-            .context("queue user content unsupported")?
-            .iter()
-            .filter_map(|part| part["text"].as_str())
-            .collect()
-    };
-    Ok((
-        prompt,
-        messages[index + 1..]
-            .iter()
-            .any(|message| message["role"] == "tool"),
-    ))
-}
-
-async fn verify_native_queue(ending: QueueEnding) -> Result<()> {
-    let upstream = MockServer::start().await;
-    Mock::given(method("POST")).and(path("/chat/completions")).respond_with(move |request: &Request| {
-        let Ok((prompt,after_tool)) = queue_request(request) else { return ResponseTemplate::new(400); };
-        let first = prompt == "queue first";
-        let (delta,reason) = if first && !after_tool {
-            (json!({"role":"assistant","tool_calls":[{"index":0,"id":"queue-write","type":"function","function":{
-                "name":"write","arguments":json!({"path":"first.txt","content":"FIRST\n"}).to_string()
-            }}]}),"tool_calls")
-        } else if first && matches!(ending, QueueEnding::Refused) {
-            (json!({"role":"assistant","content":"This fixture refuses to continue."}),"content_filter")
-        } else {
-            (json!({"role":"assistant","content":format!("Finished {prompt}")}),"stop")
-        };
-        let chunk = |delta,reason| format!("data: {}\n\n",json!({"id":"queue-model","object":"chat.completion.chunk","model":"test-model",
-            "choices":[{"index":0,"delta":delta,"finish_reason":reason}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}));
-        ResponseTemplate::new(200).set_body_raw(format!("{}{}data: [DONE]\n\n",chunk(delta,None::<&str>),chunk(json!({}),Some(reason))),"text/event-stream")
-    }).mount(&upstream).await;
-    let server = Server::start(&upstream, "", false).await?;
-    let client = ThreadClient::connect(&server.socket).await?;
-    let (thread, turn) = client
-        .create_and_start(
-            server.workspace.clone(),
-            AgentConfig::fixed("test-model", None),
-            None,
-            "queue first".into(),
-        )
-        .await?;
-    let first = Execution {
-        thread_id: thread.thread_id.clone(),
-        turn_id: turn.turn_id,
-    };
-    let pending = wait_status(&server.socket, &first, TurnStatus::WaitingForInput).await?;
-    let second_prompt = "  queued second 中文 👩‍💻\nkeep trailing spaces  ";
-    let mut queued = Vec::new();
-    for (index, prompt) in [second_prompt, "queued third"].into_iter().enumerate() {
-        let operation = || Operation::EnqueueTurn {
-            thread_id: first.thread_id.clone(),
-            prompt: prompt.into(),
-            idempotency_key: format!("queue-{index}"),
-        };
-        let ReplyResult::Receipt { receipt } = client.request(operation()).await? else {
-            anyhow::bail!("queue receipt missing");
-        };
-        let ReplyResult::Receipt { receipt: duplicate } = client.request(operation()).await? else {
-            anyhow::bail!("duplicate receipt missing");
-        };
-        ensure!(
-            serde_json::to_value(&receipt)? == serde_json::to_value(&duplicate)?,
-            "retry replaced queue identity"
-        );
-        ensure!(receipt.status == TurnStatus::Queued);
-        queued.push(receipt);
-    }
-    ensure!(queued[0].queue_order < queued[1].queue_order);
-    let ReplyResult::View { view: before } = client
-        .request(Operation::ReadThread {
-            thread_id: first.thread_id.clone(),
-        })
-        .await?
-    else {
-        anyhow::bail!("thread view missing");
-    };
-    ensure!(
-        before.thread.status == ThreadStatus::Busy
-            && before.thread.active_turn_id.as_deref() == Some(&first.turn_id)
-    );
-    ensure!(
-        before
-            .thread
-            .queued
-            .iter()
-            .map(|receipt| &receipt.turn_id)
-            .collect::<Vec<_>>()
-            == queued
-                .iter()
-                .map(|receipt| &receipt.turn_id)
-                .collect::<Vec<_>>()
-    );
-    ensure!(
-        !server.workspace.join("first.txt").exists(),
-        "unapproved tool executed"
-    );
-    let expected = match ending {
-        QueueEnding::Completed => TurnStatus::Completed,
-        QueueEnding::Cancelled => {
-            let cancel = || Operation::CancelTurn {
-                thread_id: first.thread_id.clone(),
-                turn_id: first.turn_id.clone(),
-                idempotency_key: "cancel-queue-first".into(),
-            };
-            client.request(cancel()).await?;
-            wait_status(&server.socket, &first, TurnStatus::Cancelled).await?;
-            client.request(cancel()).await?;
-            TurnStatus::Cancelled
-        }
-        QueueEnding::Refused => TurnStatus::Failed,
-    };
-    if !matches!(ending, QueueEnding::Cancelled) {
-        approve(&client, &first, &pending, "approve-queue-first").await?;
-    }
-    wait_status(&server.socket, &first, expected).await?;
-    if !matches!(ending, QueueEnding::Completed) {
-        let ReplyResult::View { view } = client
-            .request(Operation::ReadThread {
-                thread_id: first.thread_id.clone(),
-            })
-            .await?
-        else {
-            anyhow::bail!("paused queue missing");
-        };
-        ensure!(view.thread.status == ThreadStatus::Paused && view.thread.active_turn_id.is_none());
-        ensure!(
-            view.thread
-                .queued
-                .iter()
-                .map(|receipt| &receipt.turn_id)
-                .collect::<Vec<_>>()
-                == queued
-                    .iter()
-                    .map(|receipt| &receipt.turn_id)
-                    .collect::<Vec<_>>()
-        );
-        let count = upstream
-            .received_requests()
-            .await
-            .context("queue requests unavailable")?
-            .len();
-        drop(client);
-        for _ in 0..3 {
-            let reader = ThreadClient::connect(&server.socket).await?;
-            let mut observation = reader.observe(&first.thread_id, None).await?;
-            tokio::time::timeout(Duration::from_secs(5), observation.next())
-                .await??
-                .context("paused queue observation missing")?;
-            for receipt in &queued {
-                ensure!(
-                    read(
-                        &server.socket,
-                        &Execution {
-                            thread_id: first.thread_id.clone(),
-                            turn_id: receipt.turn_id.clone()
-                        }
-                    )
-                    .await?
-                    .status
-                        == TurnStatus::Queued
-                );
-            }
-        }
-        ensure!(
-            upstream
-                .received_requests()
-                .await
-                .context("queue requests unavailable")?
-                .len()
-                == count,
-            "observer drained paused queue"
-        );
-        if matches!(ending, QueueEnding::Refused) {
-            ensure!(std::fs::read_to_string(server.workspace.join("first.txt"))? == "FIRST\n");
-            let prompts = upstream
-                .received_requests()
-                .await
-                .context("queue requests unavailable")?
-                .iter()
-                .map(queue_request)
-                .collect::<Result<Vec<_>>>()?;
-            ensure!(
-                prompts
-                    .iter()
-                    .map(|(prompt, _)| prompt.as_str())
-                    .collect::<Vec<_>>()
-                    == vec!["queue first", "queue first"],
-                "refusal replayed or drained queued work"
-            );
-            server.stop().await?;
-            return Ok(());
-        }
-        ensure!(
-            !server.workspace.join("first.txt").exists(),
-            "cancelled tool executed or replayed"
-        );
-        let controller = ThreadClient::connect(&server.socket).await?;
-        controller
-            .request(Operation::ResumeQueue {
-                thread_id: first.thread_id.clone(),
-                idempotency_key: "explicit-resume".into(),
-            })
-            .await?;
-    }
-    for receipt in &queued {
-        wait_status(
-            &server.socket,
-            &Execution {
-                thread_id: first.thread_id.clone(),
-                turn_id: receipt.turn_id.clone(),
-            },
-            TurnStatus::Completed,
-        )
-        .await?;
-    }
-    let ReplyResult::View { view } = bitrouter::agent_local::request(
-        &server.socket,
-        Operation::ReadThread {
-            thread_id: first.thread_id.clone(),
-        },
-    )
-    .await?
-    else {
-        anyhow::bail!("settled queue view missing");
-    };
-    ensure!(
-        view.thread.status == ThreadStatus::Idle
-            && view.thread.queued.is_empty()
-            && view.thread.active_turn_id.is_none()
-    );
-    let prompts = upstream
-        .received_requests()
-        .await
-        .context("queue requests unavailable")?
-        .iter()
-        .map(queue_request)
-        .collect::<Result<Vec<_>>>()?;
-    let expected_prompts = if matches!(ending, QueueEnding::Cancelled) {
-        vec!["queue first", second_prompt, "queued third"]
-    } else {
-        vec!["queue first", "queue first", second_prompt, "queued third"]
-    };
-    ensure!(
-        prompts
-            .iter()
-            .map(|(prompt, _)| prompt.as_str())
-            .collect::<Vec<_>>()
-            == expected_prompts,
-        "queue did not dispatch in exact FIFO order"
-    );
-    ensure!(
-        server.workspace.join("first.txt").exists() == matches!(ending, QueueEnding::Completed)
-    );
-    server.stop().await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn native_api_queue_drains_in_exact_fifo_order_after_normal_completion() -> Result<()> {
-    verify_native_queue(QueueEnding::Completed).await
-}
-
-#[tokio::test]
-async fn native_api_cancel_pauses_fifo_until_explicit_resume_without_replay() -> Result<()> {
-    verify_native_queue(QueueEnding::Cancelled).await
-}
-
-#[tokio::test]
-async fn native_api_refusal_preserves_paused_fifo_without_replay_or_drain() -> Result<()> {
-    verify_native_queue(QueueEnding::Refused).await
 }
 
 async fn observation_proxy(
@@ -496,224 +638,7 @@ async fn observation_proxy(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_api_approvals_disconnect_queue_context_and_cancel_remain_durable() -> Result<()> {
-    let upstream = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .respond_with(|request: &Request| {
-            let saw_tool = serde_json::from_slice::<serde_json::Value>(&request.body)
-                .ok()
-                .and_then(|body| body["messages"].as_array().cloned())
-                .is_some_and(|messages| messages.iter().any(|message| message["role"] == "tool"));
-            let (delta, reason) = if saw_tool {
-                (json!({"role": "assistant", "content": "Done through native API."}), "stop")
-            } else {
-                (json!({"role": "assistant", "tool_calls": [{
-                    "index": 0, "id": "edit-tui", "type": "function", "function": {
-                        "name": "edit", "arguments": json!({"path": "note.txt", "edits": [{"oldText": "before", "newText": "after"}]}).to_string()
-                    }
-                }]}), "tool_calls")
-            };
-            let chunk = |delta, reason| format!("data: {}\n\n", json!({
-                "id": "chatcmpl-tui", "object": "chat.completion.chunk", "model": "test-model",
-                "choices": [{"index": 0, "delta": delta, "finish_reason": reason}],
-                "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}
-            }));
-            ResponseTemplate::new(200).set_body_raw(
-                format!("{}{}data: [DONE]\n\n", chunk(delta, None::<&str>), chunk(json!({}), Some(reason))),
-                "text/event-stream",
-            )
-        })
-        .mount(&upstream)
-        .await;
-
-    let server = Server::start(&upstream, "", false).await?;
-    std::fs::write(server.workspace.join("note.txt"), "before\n")?;
-    let execution = submit(
-        &server.socket,
-        &server.workspace,
-        Some("test \"$(cat note.txt)\" = after".into()),
-    )
-    .await?;
-    let pending = wait_status(&server.socket, &execution, TurnStatus::WaitingForInput).await?;
-    ensure!(
-        pending
-            .pending_input
-            .as_ref()
-            .is_some_and(|input| input.tool_name == "edit")
-    );
-    let client = ThreadClient::connect(&server.socket).await?;
-    let ReplyResult::Receipt { receipt: queued } = client
-        .request(Operation::EnqueueTurn {
-            thread_id: execution.thread_id.clone(),
-            prompt: "queued before detach".into(),
-            idempotency_key: "queue-before-detach".into(),
-        })
-        .await?
-    else {
-        anyhow::bail!("queued receipt missing");
-    };
-    let proxy_control = server.home.path().join("proxy.sock");
-    let proxy_socket = bitrouter::agent_local::socket_path(&proxy_control);
-    let listener = tokio::net::UnixListener::bind(&proxy_socket)?;
-    let blocked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (disconnect, _) = tokio::sync::watch::channel(0_u64);
-    let proxy = tokio::spawn(observation_proxy(
-        listener,
-        server.socket.clone(),
-        blocked.clone(),
-        disconnect.clone(),
-    ));
-    let proxy_client = ThreadClient::connect(&proxy_socket).await?;
-    let mut stream = proxy_client.observe(&execution.thread_id, None).await?;
-    let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
-        .await??
-        .context("initial observation missing")?;
-    let ThreadObservation::Snapshot { view, .. } = first else {
-        anyhow::bail!("initial snapshot missing");
-    };
-    ensure!(view.thread.queued.len() == 1 && view.thread.queued[0].turn_id == queued.turn_id);
-    let cursor = view.thread.cursor;
-    blocked.store(true, std::sync::atomic::Ordering::SeqCst);
-    disconnect.send(1)?;
-    let ended = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if stream.next().await?.is_none() {
-                break;
-            }
-        }
-        Result::<()>::Ok(())
-    })
-    .await?;
-    ended?;
-    drop(stream);
-    let still_pending =
-        wait_status(&server.socket, &execution, TurnStatus::WaitingForInput).await?;
-    ensure!(
-        still_pending.pending_input_id == pending.pending_input_id,
-        "observation disconnect changed approval"
-    );
-    blocked.store(false, std::sync::atomic::Ordering::SeqCst);
-    let mut stream = proxy_client
-        .observe(&execution.thread_id, Some(cursor))
-        .await?;
-    let ThreadObservation::Snapshot { view, .. } =
-        tokio::time::timeout(Duration::from_secs(5), stream.next())
-            .await??
-            .context("reconnection missing")?
-    else {
-        anyhow::bail!("reconnection snapshot missing");
-    };
-    ensure!(
-        view.thread.queued.len() == 1
-            && view
-                .latest_turn
-                .as_ref()
-                .is_some_and(|turn| turn.pending_input_id == pending.pending_input_id)
-    );
-    drop(stream);
-    proxy.abort();
-    let _ = proxy.await;
-    let before = upstream
-        .received_requests()
-        .await
-        .context("requests unavailable")?
-        .len();
-    for _ in 0..9 {
-        let reader = ThreadClient::connect(&server.socket).await?;
-        let mut stream = reader.observe(&execution.thread_id, None).await?;
-        tokio::time::timeout(Duration::from_secs(5), stream.next())
-            .await??
-            .context("subscription missing")?;
-        drop(stream);
-        ensure!(
-            read(&server.socket, &execution).await?.pending_input_id == pending.pending_input_id
-        );
-    }
-    ensure!(
-        upstream
-            .received_requests()
-            .await
-            .context("requests unavailable")?
-            .len()
-            == before,
-        "observation ran a model"
-    );
-    client
-        .request(Operation::CancelQueuedTurn {
-            thread_id: execution.thread_id.clone(),
-            turn_id: queued.turn_id,
-            idempotency_key: "withdraw-queue".into(),
-        })
-        .await?;
-    approve(&client, &execution, &pending, "approve-edit").await?;
-    let checking = wait(&server.socket, &execution, |snapshot| {
-        snapshot
-            .pending_input
-            .as_ref()
-            .is_some_and(|input| input.tool_name == "shell")
-    })
-    .await?;
-    approve(&client, &execution, &checking, "approve-check").await?;
-    let completed = wait_status(&server.socket, &execution, TurnStatus::Completed).await?;
-    ensure!(
-        completed.verification == VerificationStatus::Passed
-            && completed.final_answer.as_deref() == Some("Done through native API.")
-    );
-    ensure!(std::fs::read_to_string(server.workspace.join("note.txt"))? == "after\n");
-    let ReplyResult::Receipt { receipt } = client
-        .request(Operation::StartTurn {
-            thread_id: execution.thread_id.clone(),
-            prompt: "Remember prior answer".into(),
-            idempotency_key: "followup".into(),
-        })
-        .await?
-    else {
-        anyhow::bail!("followup receipt missing");
-    };
-    let followup = Execution {
-        thread_id: execution.thread_id.clone(),
-        turn_id: receipt.turn_id,
-    };
-    let check = wait_status(&server.socket, &followup, TurnStatus::WaitingForInput).await?;
-    approve(&client, &followup, &check, "followup-check").await?;
-    wait_status(&server.socket, &followup, TurnStatus::Completed).await?;
-    ensure!(
-        upstream
-            .received_requests()
-            .await
-            .context("requests unavailable")?
-            .iter()
-            .any(
-                |request| serde_json::from_slice::<serde_json::Value>(&request.body).is_ok_and(
-                    |body| {
-                        let messages = body["messages"].to_string();
-                        messages.contains("Remember prior answer")
-                            && messages.contains("Done through native API.")
-                            && messages.contains("Change note.txt")
-                    }
-                )
-            ),
-        "continuation lost settled context"
-    );
-    std::fs::write(server.workspace.join("note.txt"), "before\n")?;
-    let cancel = submit(&server.socket, &server.workspace, None).await?;
-    wait_status(&server.socket, &cancel, TurnStatus::WaitingForInput).await?;
-    client
-        .request(Operation::CancelTurn {
-            thread_id: cancel.thread_id.clone(),
-            turn_id: cancel.turn_id.clone(),
-            idempotency_key: "cancel-before-edit".into(),
-        })
-        .await?;
-    wait_status(&server.socket, &cancel, TurnStatus::Cancelled).await?;
-    ensure!(std::fs::read_to_string(server.workspace.join("note.txt"))? == "before\n");
-    server.stop().await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn native_api_cold_directory_history_and_open_preserve_context_without_execution()
--> Result<()> {
+async fn native_agents_navigation_opens_durable_history_without_submitting() -> Result<()> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/chat/completions"))
         .respond_with(|_: &Request| ResponseTemplate::new(200).set_body_raw(format!("data: {}\n\ndata: [DONE]\n\n", json!({
@@ -721,131 +646,211 @@ async fn native_api_cold_directory_history_and_open_preserve_context_without_exe
             "choices":[{"index":0,"delta":{"role":"assistant","content":"Retained answer for this conversation."},"finish_reason":"stop"}],
             "usage":{"prompt_tokens":4,"completion_tokens":4,"total_tokens":8}
         })), "text/event-stream")).mount(&upstream).await;
-
-    let server = Server::start(&upstream, "", true).await?;
-    let first = submit(&server.socket, &server.workspace, None).await?;
-    wait_status(&server.socket, &first, TurnStatus::Completed).await?;
-    let second = submit(&server.socket, &server.workspace, None).await?;
-    wait_status(&server.socket, &second, TurnStatus::Completed).await?;
+    let home = tempfile::tempdir()?;
+    let workspace = home.path().join("project");
+    std::fs::create_dir(&workspace)?;
+    let config = home.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "inherit_defaults: false\nserver:\n  listen: '127.0.0.1:0'\n  skip_auth: true\ndatabase:\n  url: 'sqlite://{}?mode=rwc'\nproviders:\n  mock:\n    api_base: {}\n    api_key: fixture\n    api_protocol:\n      - '*': chat_completions\n    models: [{{id: test-model}}]\n",
+            home.path().join("bitrouter.db").display(),
+            upstream.uri()
+        ),
+    )?;
+    let binary = env!("CARGO_BIN_EXE_bro");
+    let mut server = Command::new(binary)
+        .arg("serve")
+        .arg("--managed-child")
+        .arg("--config")
+        .arg(&config)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let source = bitrouter::paths::ConfigSource::File(config.clone());
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let socket =
+        bitrouter::agent_local::socket_path(&bitrouter::daemon::socket_path_for(&source, &cfg));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if matches!(
+            bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
+            Ok(ReplyResult::Capabilities { .. })
+        ) {
+            break;
+        }
+        ensure!(tokio::time::Instant::now() < deadline, "server unavailable");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let first = submit(&socket, &workspace, None).await?;
+    wait_status(&socket, &first, TurnStatus::Completed).await?;
+    let second = submit(&socket, &workspace, None).await?;
+    wait_status(&socket, &second, TurnStatus::Completed).await?;
     let handoff = bitrouter::daemon::send_command(
-        &server.control,
+        &bitrouter::daemon::socket_path_for(&source, &cfg),
         &bitrouter::daemon::DaemonCommand::HandoffPrepare,
     )
     .await?;
     ensure!(
-        matches!(handoff,bitrouter::daemon::DaemonResponse::HandoffBusy {ref reason} if reason.contains("operations")),
-        "native residency did not fence replacement: {handoff:?}"
+        matches!(handoff, bitrouter::daemon::DaemonResponse::HandoffBusy { ref reason } if reason.contains("operations")),
+        "resident native runtime did not block automatic daemon replacement: {handoff:?}"
     );
-    let client = ThreadClient::connect(&server.socket).await?;
-    for id in [&first.thread_id, &second.thread_id] {
-        client
-            .request(Operation::UnloadThread {
-                thread_id: id.clone(),
-            })
-            .await?;
-    }
-    let requests = upstream
+    let requests_before = upstream
         .received_requests()
         .await
-        .context("requests unavailable")?
+        .ok_or_else(|| anyhow::anyhow!("missing requests"))?
         .len();
-    let ReplyResult::Directory { page } = client
-        .request(Operation::ListThreads {
-            after: 0,
-            cutoff: None,
-            limit: 16,
-        })
-        .await?
-    else {
-        anyhow::bail!("directory missing");
-    };
+    let mut tui = TerminalClient::open(binary, &config, &first)?;
+    tui.wait_for("Retained answer for this conversation.")?;
+    tui.wait_for("← agents")?;
+    tui.send(b"\x1b[D")?;
+    tui.wait_for("Agents")?;
+    tui.wait_for("Enter view")?;
+    tui.resize(16, 40)?;
+    tui.send(b"\x0c")?;
+    tui.wait_for("Agents")?;
+    tui.wait_for("Enter view")?;
+    let pid = tui
+        .child
+        .process_id()
+        .ok_or_else(|| anyhow::anyhow!("PTY process has no PID"))?;
     ensure!(
-        page.entries
-            .iter()
-            .any(|row| row.thread.thread_id == first.thread_id)
-            && page
-                .entries
-                .iter()
-                .any(|row| row.thread.thread_id == second.thread_id)
+        Command::new("kill")
+            .arg("-TSTP")
+            .arg(pid.to_string())
+            .status()
+            .await?
+            .success()
     );
-    let ReplyResult::View { view } = client
-        .request(Operation::ReadThread {
-            thread_id: second.thread_id.clone(),
-        })
-        .await?
-    else {
-        anyhow::bail!("cold view missing");
-    };
-    ensure!(view.latest_turn.as_ref().is_some_and(
-        |turn| turn.final_answer.as_deref() == Some("Retained answer for this conversation.")
-    ));
-    let ReplyResult::History { page } = client
-        .request(Operation::History {
-            thread_id: second.thread_id.clone(),
-            after: 0,
-            cutoff: None,
-            limit: 16,
-        })
-        .await?
-    else {
-        anyhow::bail!("history missing");
-    };
-    ensure!(!page.events.is_empty());
-    let mut stream = client.observe(&second.thread_id, None).await?;
-    tokio::time::timeout(Duration::from_secs(5), stream.next())
-        .await??
-        .context("durable observation missing")?;
-    drop(stream);
+    let stopped_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let status = Command::new("ps")
+            .args(["-o", "state=", "-p"])
+            .arg(pid.to_string())
+            .output()
+            .await?;
+        if String::from_utf8_lossy(&status.stdout).contains('T') {
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < stopped_deadline,
+            "native UI did not suspend"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let frame_offset = tui.raw.len();
+    // Resize while stopped, then wait for raw mode and the resumed frame before
+    // sending keys, so input cannot be buffered by the restored canonical mode.
+    tui.resize(24, 100)?;
+    ensure!(
+        Command::new("kill")
+            .arg("-CONT")
+            .arg(pid.to_string())
+            .status()
+            .await?
+            .success()
+    );
+    let resume_frame = tui.wait_for_raw_since(frame_offset, b"\x1b[?2004h")?;
+    tui.wait_for_frame_since(resume_frame)?;
+    tui.wait_for("Enter view")?;
+    let redraw_offset = tui.raw.len();
+    tui.send(b"\x0c")?;
+    tui.wait_for_frame_since(redraw_offset)?;
+    tui.send(b"/")?;
+    tui.wait_for("Agents · search:")?;
+    tui.send(second.thread_id.as_bytes())?;
+    tui.wait_for(&format!("{}▏", second.thread_id))?;
+    // Acknowledge leaving the search editor before requesting the preview.
+    // PTY writes and terminal redraws do not share message boundaries.
+    tui.send(b"\r")?;
+    tui.wait_for_presence(&format!("{}▏", second.thread_id), false)?;
+    tui.send(b"\r")?;
+    tui.wait_for("o Open conversation")?;
+    tui.wait_for(&format!("Thread: {}", second.thread_id))?;
     ensure!(
         upstream
             .received_requests()
             .await
-            .context("requests unavailable")?
+            .ok_or_else(|| anyhow::anyhow!("missing requests"))?
             .len()
-            == requests,
-        "reading cold history executed a turn"
+            == requests_before,
+        "preview submitted or executed"
     );
-    let ReplyResult::Receipt { receipt } = client
-        .request(Operation::StartTurn {
-            thread_id: second.thread_id.clone(),
-            prompt: "Continue the opened conversation".into(),
-            idempotency_key: "continue-second".into(),
-        })
-        .await?
-    else {
-        anyhow::bail!("continuation receipt missing");
-    };
-    wait_status(
-        &server.socket,
-        &Execution {
-            thread_id: second.thread_id,
-            turn_id: receipt.turn_id,
-        },
-        TurnStatus::Completed,
-    )
-    .await?;
+    tui.send(b"o")?;
+    tui.wait_for(&format!(
+        "{} q:0",
+        second
+            .thread_id
+            .get(..8)
+            .ok_or_else(|| anyhow::anyhow!("short Thread ID"))?
+    ))?;
+    tui.wait_for("Retained answer for this conversation.")?;
     ensure!(
         upstream
             .received_requests()
             .await
-            .context("requests unavailable")?
-            .iter()
-            .any(
-                |request| serde_json::from_slice::<serde_json::Value>(&request.body).is_ok_and(
-                    |body| body["messages"]
-                        .to_string()
-                        .contains("Continue the opened conversation")
-                        && body["messages"]
-                            .to_string()
-                            .contains("Retained answer for this conversation.")
-                )
-            )
+            .ok_or_else(|| anyhow::anyhow!("missing requests"))?
+            .len()
+            == requests_before,
+        "opening history started a Turn"
     );
-    server.stop().await
+    ensure!(
+        !tui.screen.screen().alternate_screen(),
+        "native view entered alternate screen"
+    );
+    for forbidden in [
+        b"\x1b[?1049h".as_slice(),
+        b"\x1b[?1047h",
+        b"\x1b[?47h",
+        b"\x1b[3J",
+    ] {
+        ensure!(
+            !tui.raw
+                .windows(forbidden.len())
+                .any(|window| window == forbidden),
+            "native view cleared/replaced terminal history"
+        );
+    }
+    tui.send(b"Continue the opened conversation\r")?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let requests = upstream
+            .received_requests()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing requests"))?;
+        if let Some(last) = requests.last()
+            && requests.len() > requests_before
+        {
+            let body: serde_json::Value = serde_json::from_slice(&last.body)?;
+            let messages = body["messages"].to_string();
+            ensure!(
+                messages.contains("Continue the opened conversation")
+                    && messages.contains("Retained answer for this conversation.")
+                    && messages.contains("Change note.txt"),
+                "opened Thread lost context"
+            );
+            break;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "next Turn not submitted"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    tui.close()?;
+    let _ = Command::new(binary)
+        .arg("stop")
+        .arg("--config")
+        .arg(&config)
+        .output()
+        .await;
+    let _ = server.wait().await;
+    Ok(())
 }
 
 #[tokio::test]
-async fn native_api_reports_classifier_generation_and_final_routing_facts() -> Result<()> {
+async fn native_status_bar_shows_classifier_workflow_model_and_live_spinner() -> Result<()> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &Request| {
         let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else { return ResponseTemplate::new(400) };
@@ -859,73 +864,94 @@ async fn native_api_reports_classifier_generation_and_final_routing_facts() -> R
     }).mount(&upstream).await;
     Mock::given(method("POST")).and(path("/chat/completions")).respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(2)).set_body_raw(
         format!("data: {}\n\ndata: {}\n\ndata: [DONE]\n\n", json!({"id":"ui-generation","object":"chat.completion.chunk","model":"test-model","choices":[{"index":0,"delta":{"content":"Status bar complete."},"finish_reason":null}]}), json!({"id":"ui-generation","object":"chat.completion.chunk","model":"test-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}})), "text/event-stream")).mount(&upstream).await;
-
-    let extra = format!(
-        "decision_model:\n  model: ui-classifier\n  base_url: {}\n  api_key_env: BRO_UI_TEST_DECISION_KEY\n",
-        upstream.uri()
-    );
-    let server = Server::start(&upstream, &extra, false).await?;
-    let client = ThreadClient::connect(&server.socket).await?;
-    let config = AgentConfig::fixed("test-model", None)
-        .read_only()
-        .with_model_mode(bitrouter_orchestrator::core::protocol::ModelMode::Policy);
-    let (thread, turn) = client
-        .create_and_start(
-            server.workspace.clone(),
-            config,
-            None,
-            "Improve the frontend UI. Reply briefly without tools.".into(),
-        )
-        .await?;
-    let execution = Execution {
-        thread_id: thread.thread_id,
-        turn_id: turn.turn_id,
-    };
-    use bitrouter_orchestrator::core::context_router::inspection::RoutingPhase;
-    for phase in [RoutingPhase::Classifying, RoutingPhase::Generating] {
-        let snapshot = wait(&server.socket, &execution, |snapshot| {
-            snapshot.context_routing.as_ref().is_some_and(|inspection| {
-                inspection.tasks.iter().any(|task| {
-                    task.routing
-                        .as_ref()
-                        .is_some_and(|routing| routing.phase == phase)
-                })
-            })
-        })
-        .await?;
-        if phase == RoutingPhase::Generating {
-            ensure!(
-                snapshot
-                    .context_routing
-                    .as_ref()
-                    .is_some_and(|inspection| inspection.tasks.iter().any(|task| task
-                        .routing
-                        .as_ref()
-                        .is_some_and(|routing| routing.model.as_deref()
-                            == Some("mock:test-model")
-                            && routing.workflow.as_ref().is_some_and(|workflow| workflow
-                                .task_family
-                                .key()
-                                == "code:frontend_ui"
-                                && workflow.next_step_role.key() == "implement")))),
-                "generation facts missing"
-            );
+    let home = tempfile::tempdir()?;
+    let config = home.path().join("bitrouter.yaml");
+    std::fs::write(
+        &config,
+        format!(
+            "inherit_defaults: false\nserver: {{listen: '127.0.0.1:0', skip_auth: true}}\ndatabase: {{url: 'sqlite://{}?mode=rwc'}}\nproviders:\n  mock:\n    api_base: {}\n    api_key: fixture\n    api_protocol: [{{'*': chat_completions}}]\n    models: [{{id: test-model}}]\ndecision_model:\n  model: ui-classifier\n  base_url: {}\n  api_key_env: BRO_UI_TEST_DECISION_KEY\n",
+            home.path().join("state.db").display(),
+            upstream.uri(),
+            upstream.uri()
+        ),
+    )?;
+    let binary = env!("CARGO_BIN_EXE_bro");
+    let mut server = Command::new(binary)
+        .arg("serve")
+        .arg("--config")
+        .arg(&config)
+        .env("BRO_UI_TEST_DECISION_KEY", "fixture")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()?;
+    let source = bitrouter::paths::ConfigSource::File(config.clone());
+    let cfg = bitrouter::paths::load_config(&source).await?;
+    let socket =
+        bitrouter::agent_local::socket_path(&bitrouter::daemon::socket_path_for(&source, &cfg));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if matches!(
+            bitrouter::agent_local::request(&socket, Operation::Capabilities).await,
+            Ok(ReplyResult::Capabilities { .. })
+        ) {
+            break;
         }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "server did not start"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let final_snapshot = wait_status(&server.socket, &execution, TurnStatus::Completed).await?;
-    ensure!(final_snapshot.final_answer.as_deref() == Some("Status bar complete."));
+    let mut client = TerminalClient::open_with_policy(
+        binary,
+        &config,
+        &Execution {
+            thread_id: String::new(),
+            turn_id: String::new(),
+        },
+        Some(&bitrouter::daemon::socket_path_for(&source, &cfg)),
+        true,
+    )?;
+    client.wait_for("← agents")?;
+    client
+        .writer
+        .write_all(b"Improve the frontend UI. Reply briefly without tools.\r")?;
+    client.writer.flush()?;
+    client.wait_for("CLASSIFYING")?;
+    client.wait_for_spinner_change("CLASSIFYING")?;
+    client.wait_for("GENERATING")?;
+    client.wait_for("frontend/implement")?;
+    client.wait_for("mock:test-model")?;
+    if let Some(path) = std::env::var_os("BRO_UI_CAPTURE") {
+        let mut cells = Vec::new();
+        for row in 0..24 {
+            for column in 0..100 {
+                if let Some(cell) = client.screen.screen().cell(row, column) {
+                    cells.push(json!({"row":row,"column":column,"text":cell.contents(),"foreground":format!("{:?}",cell.fgcolor()),"background":format!("{:?}",cell.bgcolor()),"bold":cell.bold()}));
+                }
+            }
+        }
+        std::fs::write(
+            path,
+            serde_json::to_vec(&json!({"columns":100,"rows":24,"cells":cells}))?,
+        )?;
+    }
+    client.wait_for_spinner_change("GENERATING")?;
+    client.wait_for("Status bar complete.")?;
+    client.wait_for("DONE")?;
     ensure!(
-        final_snapshot
-            .context_routing
-            .as_ref()
-            .is_some_and(|inspection| inspection.tasks.iter().any(|task| task
-                .routing
-                .as_ref()
-                .is_some_and(|routing| routing
-                    .workflow
-                    .as_ref()
-                    .is_some_and(|workflow| workflow.task_family.key() == "code:frontend_ui"
-                        && workflow.next_step_role.key() == "implement"))))
+        client
+            .screen
+            .screen()
+            .contents()
+            .contains("frontend/implement"),
+        "final workflow lost"
     );
-    server.stop().await
+    client.writer.write_all(b"\x04")?;
+    client.writer.flush()?;
+    client.child.wait()?;
+    server.start_kill()?;
+    server.wait().await?;
+    Ok(())
 }

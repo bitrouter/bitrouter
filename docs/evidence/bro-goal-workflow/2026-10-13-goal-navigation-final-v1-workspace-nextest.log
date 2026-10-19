@@ -1,8 +1,0 @@
-error: unexpected argument '--cargo-jobs' found
-
-  tip: a similar argument exists: '--cargo-verbose'
-  tip: to pass '--cargo-jobs' as a value, use '-- --cargo-jobs'
-
-Usage: cargo nextest run --workspace --all-features --no-fail-fast --cargo-verbose... [FILTERS]... [-- <FILTERS_AND_ARGS>...]
-
-For more information, try '--help'.

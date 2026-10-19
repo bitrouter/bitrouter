@@ -182,17 +182,6 @@ impl Default for NativeTokenCost {
 /// settlement write. It runs after every actual managed attempt, before its
 /// outcome is checkpointed, including failed fallback attempts.
 pub trait NativeCostEstimator: Send + Sync {
-    /// Conservative token estimate for the exact frozen target and bounded
-    /// request. Absence is unknown, never a zero price or a request-bill cap.
-    fn reservation_for_attempt(
-        &self,
-        _route: &super::native::NativeRoute,
-        _prompt: &bitrouter_ai::types::Prompt,
-        _ctx: &super::context::PipelineContext,
-        _target: &super::types::RoutingTarget,
-    ) -> Option<NativeTokenReservation> {
-        None
-    }
     /// Estimate token cost from this attempt's serving identity and evidence.
     fn estimate(&self, report: &NativeAttemptReport) -> NativeTokenCost;
 
@@ -207,26 +196,6 @@ pub trait NativeCostEstimator: Send + Sync {
     ) -> NativeTokenCost {
         self.estimate(report)
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-/// Frozen conservative estimate for a single configured model-token attempt.
-/// This excludes unknown provider invoices, tools and external harness fees.
-pub struct NativeTokenReservation {
-    /// Reserved token estimate in integer micro-USD.
-    pub micro_usd: u64,
-    /// Identity of the tariff snapshot used to compute the reservation.
-    pub pricing_version: String,
-    /// Exact provider identity to compare with the reported outcome.
-    pub provider: String,
-    /// Exact model identity to compare with the reported outcome.
-    pub model: String,
-    /// Maximum aggregate input tokens covered by the frozen quote.
-    pub input_tokens_bound: u64,
-    /// Maximum aggregate output and reasoning tokens covered by the quote.
-    pub output_tokens_bound: u64,
-    /// Original tariff and endpoint evidence retained for review.
-    pub evidence: serde_json::Value,
 }
 
 /// Cache counters explicitly present in the serving protocol's raw usage.
