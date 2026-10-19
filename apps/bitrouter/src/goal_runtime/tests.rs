@@ -25,7 +25,6 @@ pub(super) fn peer_executable() -> Result<PathBuf> {
 #[path = "../../tests/support/goal_provider.rs"]
 mod provider;
 
-mod command_checks;
 mod fixture;
 mod live_input;
 mod managed_acp;

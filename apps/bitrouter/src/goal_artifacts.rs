@@ -11,8 +11,6 @@ use tokio::io::AsyncWriteExt;
 const MAX_BLOB_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 4096;
 
-pub(super) mod merge;
-
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkspaceBundle {

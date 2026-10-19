@@ -2,51 +2,6 @@
 use super::*;
 
 impl Coordinator {
-    pub(super) async fn integrate_handoffs(
-        &self,
-        goal: &GoalSnapshot,
-        task_ids: &[String],
-        workspace: &Path,
-        base: &str,
-    ) -> Result<()> {
-        let root = crate::goal_artifacts::root(&self.workspaces, &goal.id);
-        let mut selected = BTreeSet::new();
-        let mut pending = task_ids.to_vec();
-        let mut inputs = Vec::new();
-        while let Some(id) = pending.pop() {
-            if !selected.insert(id.clone()) {
-                continue;
-            }
-            let task = goal
-                .workflow
-                .tasks
-                .iter()
-                .find(|task| task.spec.id == id)
-                .context("integration dependency is missing")?;
-            let execution = task
-                .executions
-                .last()
-                .context("integration execution is missing")?;
-            let handoff = execution
-                .handoff
-                .as_ref()
-                .context("integration handoff is missing")?;
-            anyhow::ensure!(
-                handoff.task_revision == task.requirements_revision
-                    && execution.base_commit.as_deref() == Some(base),
-                "integration handoff has a stale revision or different baseline"
-            );
-            crate::goal_artifacts::read(&root, &handoff.review).await?;
-            inputs.push(crate::goal_artifacts::merge::Input {
-                id: &task.spec.id,
-                dependencies: &task.spec.dependencies,
-                artifact: &handoff.workspace,
-            });
-            pending.extend(task.spec.dependencies.iter().cloned());
-        }
-        crate::goal_artifacts::merge::integrate(&root, &inputs, workspace, base).await
-    }
-
     pub(super) async fn checked_dependencies(
         &self,
         goal: &GoalSnapshot,

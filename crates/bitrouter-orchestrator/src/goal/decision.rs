@@ -20,9 +20,6 @@ pub struct PermissionDecision {
     /// External ACP identity only; built-in decisions use execution.thread.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<String>,
-    /// Command-check scope; absent for native and ACP worker permissions.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub check: Option<Box<super::verification::permission::CheckPermission>>,
     pub permission_id: String,
     pub requirements_revision: u64,
     pub task_revision: u64,
@@ -108,13 +105,6 @@ pub(super) fn validate_response(
         .iter()
         .find(|option| option.id == option_id)
         .ok_or_else(|| invalid("permission option was not offered"))?;
-    if let Some(check) = &decision.check {
-        check.validate(goal, decision)?;
-        if decision.state != PermissionState::Pending || automatic || option.persistent {
-            return Err(GoalError::Conflict);
-        }
-        return Ok(());
-    }
     let task = goal
         .workflow
         .tasks
@@ -188,33 +178,28 @@ pub(super) fn apply(goal: &mut GoalSnapshot, event: &Event) -> Result<(), GoalEr
             {
                 return Err(GoalError::Conflict);
             }
-            if let Some(check) = &decision.check {
-                check.validate(goal, decision)?;
-            } else {
-                let task = goal
-                    .workflow
-                    .tasks
-                    .iter()
-                    .find(|task| {
-                        task.executions
-                            .iter()
-                            .any(|execution| execution.id == decision.execution_id)
-                    })
-                    .ok_or(GoalError::NotFound)?;
-                let execution = task
-                    .executions
-                    .iter()
-                    .find(|execution| execution.id == decision.execution_id)
-                    .ok_or(GoalError::NotFound)?;
-                if decision.requirements_revision != goal.requirements_revision
-                    || decision.task_revision != execution.task_revision
-                    || !matches!(&execution.observation, Observation::Running { run_id, .. } if run_id == &decision.run_id)
-                    || decision.run_id.is_none()
-                        && (task.execution_harness(execution).is_some()
-                            || execution.thread.is_none())
-                {
-                    return Err(GoalError::Conflict);
-                }
+            let task = goal
+                .workflow
+                .tasks
+                .iter()
+                .find(|task| {
+                    task.executions
+                        .iter()
+                        .any(|execution| execution.id == decision.execution_id)
+                })
+                .ok_or(GoalError::NotFound)?;
+            let execution = task
+                .executions
+                .iter()
+                .find(|execution| execution.id == decision.execution_id)
+                .ok_or(GoalError::NotFound)?;
+            if decision.requirements_revision != goal.requirements_revision
+                || decision.task_revision != execution.task_revision
+                || !matches!(&execution.observation, Observation::Running { run_id, .. } if run_id == &decision.run_id)
+                || decision.run_id.is_none()
+                    && (task.execution_harness(execution).is_some() || execution.thread.is_none())
+            {
+                return Err(GoalError::Conflict);
             }
             // Closed decisions remain in immutable receipts; the live projection
             // only needs current and unresolved requests.

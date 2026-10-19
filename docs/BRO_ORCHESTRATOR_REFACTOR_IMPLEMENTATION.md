@@ -118,20 +118,6 @@ Native 与 ACP 冷恢复证明使用受控 SQLite checkpoint 图像；只有实�
 
 ## 4 资源、预算与证据
 
-Command checks (`cargo`, `npm`, `pnpm`, and `bun`) require a separate one-time
-Goal permission card for both task verification and integrated delivery. The
-card binds the recipe, timeout, workspace artifact, requirement/control versions,
-and live coordinator. Scoped worker edit approval does not authorize repository
-scripts. Denial, pause, changed artifacts, expired ownership, or exhausted budget
-prevent dispatch; consumed or interrupted checks are never automatically replayed.
-
-Dependency integration reconstructs Git ancestry from immutable checked artifacts
-and the task graph. Each cumulative artifact is materialized against the frozen
-Goal base, then attached to its checked dependency parents. This preserves sequential
-overwrites and deletions while merging diamond dependencies against their actual
-common ancestor; genuine sibling conflicts still block delivery. Worker replacement
-reuses its verified dependency closure without reapplying ancestor patches.
-
 当前记录 selector、准备材料、可控资源绑定与实际报告。core 仍可能逐 step 准备 context，SDK fallback 保留；**完整的整 Turn 固定 model/context 尚未强制**。
 
 首次派发前，实际 MCP descriptors 必须匹配已冻结的内容摘要。配置改变不能冒充旧执行已采用新配置；原接纳收据仍可查询。依赖材料、worker handoff 和检查都绑定具体要求与产物版本。

@@ -16,20 +16,6 @@ pub(crate) fn decision_value(
     bytes: &[u8],
     decision: &bitrouter_orchestrator::goal::decision::PermissionDecision,
 ) -> Result<Value> {
-    if let Some(check) = &decision.check {
-        let material: bitrouter_orchestrator::goal::verification::permission::CheckPermission =
-            serde_json::from_slice(bytes)?;
-        anyhow::ensure!(
-            &material == check.as_ref(),
-            "check permission material changed"
-        );
-        return Ok(serde_json::json!({
-            "permission_id":decision.permission_id,
-            "command":check.specification.command(),
-            "scope":check,
-            "warning":"Repository-controlled commands can execute arbitrary code with the host's privileges. This permission applies only to this check and artifact."
-        }));
-    }
     match decision.run_id.as_deref() {
         Some(run_id) => {
             let material = checked_value(bytes, Some(run_id))?;
@@ -55,11 +41,6 @@ pub(crate) fn decision_tool(
     decision: &bitrouter_orchestrator::goal::decision::PermissionDecision,
 ) -> Result<Option<Value>> {
     let material = decision_value(bytes, decision)?;
-    if decision.check.is_some() {
-        return Ok(Some(
-            serde_json::json!({"kind":"execute","title":material["command"],"rawInput":material}),
-        ));
-    }
     match decision.run_id.as_deref() {
         Some(_) => effective_tool_from_checked(&material),
         None => Ok(native::tool_scope(

@@ -64,7 +64,6 @@ pub(super) async fn seed_state(
         )
         .await?;
         goal.workflow.decisions = vec![PermissionDecision {
-            check: None,
             id: "d1".into(),
             execution_id: "domain-left".into(),
             run_id: Some("domain-left".into()),

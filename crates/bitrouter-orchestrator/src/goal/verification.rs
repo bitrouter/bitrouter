@@ -7,8 +7,6 @@ use tokio_util::sync::CancellationToken;
 
 use super::{GoalError, identifier, invalid, message};
 
-pub mod permission;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CheckSpec {
@@ -37,19 +35,6 @@ pub enum CheckRecipe {
 }
 
 impl CheckSpec {
-    /// Command that requires explicit effect permission, or `None` for a file check.
-    pub fn command(&self) -> Option<&'static str> {
-        match self.recipe {
-            CheckRecipe::CargoTest => Some("cargo test --all-features"),
-            CheckRecipe::CargoClippy => Some("cargo clippy --all-features -- -D warnings"),
-            CheckRecipe::CargoFmt => Some("cargo fmt -- --check"),
-            CheckRecipe::NpmTest => Some("npm test"),
-            CheckRecipe::PnpmTest => Some("pnpm test"),
-            CheckRecipe::BunTest => Some("bun test"),
-            _ => None,
-        }
-    }
-
     pub fn validate(&self) -> Result<(), GoalError> {
         identifier(&self.id)?;
         message(&self.description)?;
@@ -104,42 +89,13 @@ impl CheckOutput {
     }
 }
 
-/// Run a bounded file check. Command recipes fail closed without a permit;
-/// use [`run_approved`] after explicit command permission admission.
-/// Caller must persist check admission and its applicable artifact beforehand,
-/// and retain the outcome even when source conditions change.
-///
-/// # Errors
-/// Rejects executable recipes without permission and invalid file-check inputs.
+/// Caller must persist check admission and its applicable artifact before this
+/// function, and retain the outcome even when source conditions change.
 pub async fn run(
     workspace: &Path,
     check: &CheckSpec,
     attempt_id: &str,
     cancellation: &CancellationToken,
-) -> Result<CheckOutput, String> {
-    run_inner(workspace, check, attempt_id, cancellation, None).await
-}
-
-/// Execute a command with a consumed, artifact-bound permission.
-///
-/// # Errors
-/// Rejects mismatched permission scope or invalid check/workspace inputs.
-pub async fn run_approved(
-    workspace: &Path,
-    check: &CheckSpec,
-    attempt_id: &str,
-    cancellation: &CancellationToken,
-    permit: permission::CommandPermit,
-) -> Result<CheckOutput, String> {
-    run_inner(workspace, check, attempt_id, cancellation, Some(permit)).await
-}
-
-async fn run_inner(
-    workspace: &Path,
-    check: &CheckSpec,
-    attempt_id: &str,
-    cancellation: &CancellationToken,
-    permit: Option<permission::CommandPermit>,
 ) -> Result<CheckOutput, String> {
     check.validate().map_err(|error| error.to_string())?;
     let root = workspace
@@ -149,14 +105,16 @@ async fn run_inner(
     if cancellation.is_cancelled() {
         return Err("check cancelled before execution".into());
     }
-    if let Some(command) = check.command() {
-        let permit = permit.ok_or("command check requires explicit effect permission")?;
-        if permit.scope.specification != *check
-            || permit.attempt_id != attempt_id
-            || permit.scope.workspace != workspace
-        {
-            return Err("command permission does not match this check invocation".into());
-        }
+    let command = match &check.recipe {
+        CheckRecipe::CargoTest => Some("cargo test --all-features"),
+        CheckRecipe::CargoClippy => Some("cargo clippy --all-features -- -D warnings"),
+        CheckRecipe::CargoFmt => Some("cargo fmt -- --check"),
+        CheckRecipe::NpmTest => Some("npm test"),
+        CheckRecipe::PnpmTest => Some("pnpm test"),
+        CheckRecipe::BunTest => Some("bun test"),
+        _ => None,
+    };
+    if let Some(command) = command {
         let tools = crate::tools::WorkspaceTools::new(&root, crate::agent::ToolMode::Coding)
             .map_err(|error| error.to_string())?;
         let (output, effect) = tools
@@ -186,7 +144,7 @@ async fn run_inner(
             passed: completed && exit_status == Some(0),
             exit_status,
             timed_out,
-            environment: serde_json::json!({"host":environment,"command":command,"permission":permit.scope,"interpreter":observed.and_then(|value| value.get("interpreter"))}),
+            environment: serde_json::json!({"host":environment,"command":command,"interpreter":observed.and_then(|value| value.get("interpreter"))}),
             output: value,
         });
     }

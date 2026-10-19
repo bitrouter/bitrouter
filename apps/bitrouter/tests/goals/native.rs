@@ -191,7 +191,6 @@ async fn native_binding_survives_pause_without_an_acp_identity_or_replacement() 
         Event, PermissionDecision, PermissionOption, PermissionState,
     };
     let decision = PermissionDecision {
-        check: None,
         id: "native-choice".into(),
         execution_id: execution.id.clone(),
         run_id: None,

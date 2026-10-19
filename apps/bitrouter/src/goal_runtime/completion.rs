@@ -139,19 +139,16 @@ impl Coordinator {
             ],
         )
         .await?;
-        self.integrate_handoffs(
-            goal,
-            &goal
-                .workflow
-                .tasks
-                .iter()
-                .map(|task| task.spec.id.clone())
-                .collect::<Vec<_>>(),
-            workspace,
-            base,
-        )
-        .await?;
         let root = crate::goal_artifacts::root(&self.workspaces, &goal.id);
+        for task in &goal.workflow.tasks {
+            let handoff = task
+                .executions
+                .last()
+                .and_then(|execution| execution.handoff.as_ref())
+                .context("missing checked handoff")?;
+            crate::goal_artifacts::read(&root, &handoff.review).await?;
+            crate::goal_artifacts::apply(&root, &handoff.workspace, workspace, base).await?;
+        }
         let delivery = crate::goal_artifacts::capture(&root, workspace, base).await?;
         Ok((base.into(), delivery))
     }
