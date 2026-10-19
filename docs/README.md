@@ -5,6 +5,11 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [Gateway multi-instance contract](GATEWAY_MULTI_INSTANCE_SPEC.md) and
+  [progress ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md) — P1 shared PostgreSQL
+  authority, admission, idempotency, recovery, credentials, trajectory guards
+  and nine independent acceptance gates; implementation in progress.
+
 - [Service refactor source inventory](BITROUTER_SERVICE_REFACTOR_INVENTORY.md) —
   revision-scoped reconciliation of baseline modules with actual destinations;
   coverage and remaining gaps are explicit, separate from acceptance results.

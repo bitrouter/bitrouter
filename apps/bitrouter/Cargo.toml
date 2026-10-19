@@ -29,6 +29,7 @@ tui = ["harness", "dep:ratatui", "dep:crossterm"]
 guardrails = ["dep:bitrouter-guardrails"]
 db-postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
 db-mysql = ["sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
+multi-instance = ["db-postgres"]
 
 otel = ["otel-http"]
 otel-http = [

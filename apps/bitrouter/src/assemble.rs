@@ -277,6 +277,17 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry
 /// This belongs to the product host, not the SDK parser: trusted custom hosts
 /// may still explicitly install the compatibility guardrails plugin.
 pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    config
+        .gateway_state
+        .validate(&config.database.url, config.server.skip_auth)?;
+    anyhow::ensure!(
+        cfg!(feature = "multi-instance")
+            || matches!(
+                config.gateway_state,
+                crate::config::gateway_state::GatewayStateConfig::Local {}
+            ),
+        "gateway_state.mode=shared requires the multi-instance feature"
+    );
     crate::db::validate_backend_availability(&config.database.url)?;
     let tools = &config.server_tools;
     anyhow::ensure!(

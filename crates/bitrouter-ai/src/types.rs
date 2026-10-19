@@ -1480,6 +1480,7 @@ pub enum UsageNormalizationError {
 
 /// Provenance of the canonical usage counters.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum UsageOrigin {
     /// The upstream provider supplied this usage payload.

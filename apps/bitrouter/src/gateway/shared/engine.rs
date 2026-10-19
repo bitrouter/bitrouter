@@ -1,0 +1,362 @@
+//! Shared admission and provider execution state transitions.
+
+mod admission;
+mod attempts;
+mod finalization;
+mod outbox;
+mod recovery;
+mod resolution;
+
+use std::collections::BTreeSet;
+
+use super::credentials::CredentialStamp;
+use anyhow::{Context, Result, ensure};
+use bitrouter_ai::gateway::execution::{GatewayAttempt, GatewayExecution, GatewayTerminalEvent};
+use bitrouter_ai::types::ModelOperation;
+use sea_orm::DatabaseTransaction;
+use serde::{Deserialize, Serialize};
+
+use super::authority::Authority;
+use super::store::{Kind, NewRecord, Store, Stored};
+
+/// Stable classifications exposed by HTTP without backend diagnostics.
+#[derive(Debug, thiserror::Error)]
+pub(super) enum Rejection {
+    #[error("shared gateway authentication failed")]
+    Unauthorized,
+    #[error("shared gateway resource scope denies this request")]
+    Forbidden,
+    #[error("shared gateway quota is exhausted")]
+    Quota,
+    #[error("idempotency key is already bound to a different request")]
+    IdempotencyConflict,
+    #[error("shared gateway authority changed before dispatch")]
+    AuthorityChanged,
+    #[error("shared gateway worker is not accepting work")]
+    Unavailable,
+    #[error("shared gateway execution was not found")]
+    NotFound,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TenantLimits {
+    pub concurrent_executions: u32,
+    pub requests_per_minute: u32,
+    pub resource_pools: BTreeSet<String>,
+}
+
+impl TenantLimits {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            self.concurrent_executions <= 1_000_000 && self.requests_per_minute <= 1_000_000,
+            "shared tenant limit exceeds supported bound"
+        );
+        ensure!(
+            self.resource_pools.len() <= 256,
+            "shared tenant has too many resource pools"
+        );
+        for pool in &self.resource_pools {
+            validate_id(pool)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Tenant {
+    limits: TenantLimits,
+    policy_revision: u64,
+    active: u32,
+    minute: i64,
+    accepted: u32,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RateBucket {
+    minute: i64,
+    accepted: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Resource {
+    concurrent_attempts: u32,
+    policy_revision: u64,
+    active: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Attempt {
+    execution_id: String,
+    credential: CredentialStamp,
+    resource_revision: u64,
+    view: GatewayAttempt,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Instance {
+    expires_at_ms: i64,
+    accepting: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Execution {
+    tenant_id: String,
+    principal_id: String,
+    authorization_revision: String,
+    tenant_revision: u64,
+    owner: String,
+    trajectory: Option<TrajectoryBinding>,
+    view: GatewayExecution,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TrajectoryBinding {
+    pub owner_user_id: String,
+    pub episode_id: String,
+    pub request_id: String,
+    pub correlation_epoch: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EpisodeFence {
+    owner_user_id: String,
+    episode_id: String,
+    pending: BTreeSet<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Outbox {
+    event: GatewayTerminalEvent,
+    lease: Option<OutboxLease>,
+    deliveries: u32,
+    acknowledged_at_ms: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OutboxLease {
+    token: String,
+    expires_at_ms: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Idempotency {
+    tenant_id: String,
+    principal_id: String,
+    fingerprint: String,
+    operation: ModelOperation,
+    execution_id: String,
+}
+
+/// Raw credentials and request content never enter durable admission records.
+pub(super) struct Admission<'a> {
+    pub key_hash: &'a str,
+    pub correlation_id: &'a str,
+    pub idempotency_key: Option<&'a str>,
+    pub fingerprint: &'a str,
+    pub operation: ModelOperation,
+    pub config_generation: u64,
+}
+
+pub(super) enum AdmissionResult {
+    Accepted(GatewayExecution),
+    Existing(GatewayExecution),
+}
+
+#[derive(Clone)]
+pub(super) struct Engine {
+    authority: Authority,
+    /// Random incarnation identity. Reusing a human display name cannot reclaim work.
+    owner: String,
+    lease_ms: i64,
+}
+
+impl Engine {
+    pub async fn join(authority: Authority, lease_ms: u64) -> Result<Self> {
+        ensure!(
+            (1_000..=300_000).contains(&lease_ms),
+            "shared lease must be 1..300 seconds"
+        );
+        let engine = Self {
+            authority,
+            owner: uuid::Uuid::new_v4().to_string(),
+            lease_ms: i64::try_from(lease_ms)?,
+        };
+        engine
+            .store()
+            .retry(|| async {
+                let tx = engine.store().begin().await?;
+                engine.authority.fence(&tx).await?;
+                let now = Store::now(&tx).await?;
+                ensure!(
+                    engine
+                        .store()
+                        .create(
+                            &tx,
+                            NewRecord {
+                                kind: Kind::Instance,
+                                key: &engine.owner,
+                                status: "live",
+                                due_at_ms: Some(engine.deadline(now)?),
+                                now_ms: now,
+                                value: &Instance {
+                                    expires_at_ms: engine.deadline(now)?,
+                                    accepting: true
+                                },
+                            }
+                        )
+                        .await?,
+                    "shared worker incarnation already exists"
+                );
+                tx.commit().await?;
+                Ok(())
+            })
+            .await?;
+        Ok(engine)
+    }
+
+    fn store(&self) -> &Store {
+        self.authority.store()
+    }
+
+    fn deadline(&self, now: i64) -> Result<i64> {
+        now.checked_add(self.lease_ms)
+            .context("shared lease clock overflow")
+    }
+
+    /// A heartbeat cannot resurrect an incarnation after its lease expired.
+    pub async fn heartbeat(&self) -> Result<()> {
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                let mut instance: Stored<Instance> =
+                    self.store().lock(&tx, Kind::Instance, &self.owner).await?;
+                let now = Store::now(&tx).await?;
+                ensure!(instance.value.expires_at_ms > now, Rejection::Unavailable);
+                instance.value.expires_at_ms = self.deadline(now)?;
+                let status = if instance.value.accepting {
+                    "live"
+                } else {
+                    "draining"
+                };
+                let due = instance.value.expires_at_ms;
+                self.store()
+                    .save(&tx, &mut instance, status, Some(due), now)
+                    .await?;
+                tx.commit().await?;
+                Ok(())
+            })
+            .await
+    }
+
+    pub async fn drain(&self) -> Result<()> {
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                let mut instance: Stored<Instance> =
+                    self.store().lock(&tx, Kind::Instance, &self.owner).await?;
+                let now = Store::now(&tx).await?;
+                instance.value.accepting = false;
+                let due = instance.value.expires_at_ms;
+                self.store()
+                    .save(&tx, &mut instance, "draining", Some(due), now)
+                    .await?;
+                tx.commit().await?;
+                Ok(())
+            })
+            .await
+    }
+
+    async fn live_owner(&self, tx: &DatabaseTransaction, admission: bool) -> Result<i64> {
+        let instance: Stored<Instance> = self
+            .store()
+            .lock_shared(tx, Kind::Instance, &self.owner)
+            .await?;
+        let now = Store::now(tx).await?;
+        ensure!(
+            instance.value.expires_at_ms > now && (!admission || instance.value.accepting),
+            Rejection::Unavailable
+        );
+        Ok(instance.value.expires_at_ms)
+    }
+
+    /// Limits may fall below occupancy; they never erase existing reservations.
+    pub async fn set_tenant(
+        &self,
+        tenant_id: &str,
+        expected_revision: Option<u64>,
+        limits: &TenantLimits,
+    ) -> Result<u64> {
+        validate_id(tenant_id)?;
+        limits.validate()?;
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                self.authority.fence(&tx).await?;
+                let now = Store::now(&tx).await?;
+                if expected_revision.is_none() {
+                    ensure!(
+                        self.store()
+                            .create(
+                                &tx,
+                                NewRecord {
+                                    kind: Kind::Tenant,
+                                    key: tenant_id,
+                                    status: "active",
+                                    due_at_ms: None,
+                                    now_ms: now,
+                                    value: &Tenant {
+                                        limits: limits.clone(),
+                                        policy_revision: 1,
+                                        active: 0,
+                                        minute: now.div_euclid(60_000),
+                                        accepted: 0
+                                    },
+                                }
+                            )
+                            .await?,
+                        Rejection::AuthorityChanged
+                    );
+                    tx.commit().await?;
+                    return Ok(1);
+                }
+                let mut tenant: Stored<Tenant> =
+                    self.store().lock(&tx, Kind::Tenant, tenant_id).await?;
+                ensure!(
+                    Some(tenant.value.policy_revision) == expected_revision,
+                    Rejection::AuthorityChanged
+                );
+                tenant.value.policy_revision = tenant
+                    .value
+                    .policy_revision
+                    .checked_add(1)
+                    .context("tenant policy revision exhausted")?;
+                tenant.value.limits = limits.clone();
+                self.store()
+                    .save(&tx, &mut tenant, "active", None, now)
+                    .await?;
+                tx.commit().await?;
+                Ok(tenant.value.policy_revision)
+            })
+            .await
+    }
+}
+
+fn validate_id(value: &str) -> Result<()> {
+    ensure!(
+        !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control),
+        "shared identity must contain 1..256 bytes without control characters"
+    );
+    Ok(())
+}

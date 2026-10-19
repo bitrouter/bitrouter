@@ -1,5 +1,7 @@
 //! Public HTTP gateway discovery and error contracts.
 
+pub mod execution;
+
 use serde::{Deserialize, Serialize};
 
 /// The model discovery response; optional client-specific additions are retained.

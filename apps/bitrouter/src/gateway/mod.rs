@@ -13,3 +13,5 @@ pub mod observability;
 pub mod pipeline;
 pub mod providers;
 pub mod routing;
+#[cfg(feature = "multi-instance")]
+pub(crate) mod shared;

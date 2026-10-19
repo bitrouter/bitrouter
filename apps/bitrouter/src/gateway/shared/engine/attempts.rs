@@ -1,0 +1,438 @@
+//! Reserve the actual account, then fence dispatch before any provider I/O.
+
+use anyhow::{Context, Result, ensure};
+use bitrouter_ai::gateway::execution::{
+    AttemptState, ExecutionState, GatewayAttempt, TerminalObservation,
+};
+use sea_orm::DatabaseTransaction;
+
+use super::{
+    Attempt, Engine, Execution, Rejection, Resource, Tenant, admission::authenticate, validate_id,
+};
+use crate::gateway::shared::credentials::{CredentialStamp, Credentials};
+use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
+
+const MAX_ATTEMPTS: usize = 32;
+
+impl Engine {
+    pub async fn set_resource(
+        &self,
+        pool_id: &str,
+        expected_revision: Option<u64>,
+        concurrent_attempts: u32,
+    ) -> Result<u64> {
+        validate_id(pool_id)?;
+        ensure!(
+            concurrent_attempts <= 1_000_000,
+            "shared resource limit exceeds supported bound"
+        );
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                self.authority.fence(&tx).await?;
+                let now = Store::now(&tx).await?;
+                if expected_revision.is_none() {
+                    ensure!(
+                        self.store()
+                            .create(
+                                &tx,
+                                NewRecord {
+                                    kind: Kind::Resource,
+                                    key: pool_id,
+                                    status: "active",
+                                    due_at_ms: None,
+                                    now_ms: now,
+                                    value: &Resource {
+                                        concurrent_attempts,
+                                        policy_revision: 1,
+                                        active: 0
+                                    },
+                                }
+                            )
+                            .await?,
+                        Rejection::AuthorityChanged
+                    );
+                    tx.commit().await?;
+                    return Ok(1);
+                }
+                let mut resource: Stored<Resource> =
+                    self.store().lock(&tx, Kind::Resource, pool_id).await?;
+                ensure!(
+                    Some(resource.value.policy_revision) == expected_revision,
+                    Rejection::AuthorityChanged
+                );
+                resource.value.policy_revision = resource
+                    .value
+                    .policy_revision
+                    .checked_add(1)
+                    .context("resource policy revision exhausted")?;
+                resource.value.concurrent_attempts = concurrent_attempts;
+                self.store()
+                    .save(&tx, &mut resource, "active", None, now)
+                    .await?;
+                tx.commit().await?;
+                Ok(resource.value.policy_revision)
+            })
+            .await
+    }
+
+    pub async fn prepare_attempt(
+        &self,
+        key_hash: &str,
+        execution_id: &str,
+        credential: &CredentialStamp,
+    ) -> Result<GatewayAttempt> {
+        let attempt_id = uuid::Uuid::new_v4().to_string();
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                let (tenant, mut execution, principal_expiry) = self
+                    .authorized_execution(&tx, key_hash, execution_id)
+                    .await?;
+                ensure!(
+                    tenant
+                        .value
+                        .limits
+                        .resource_pools
+                        .contains(&credential.pool_id),
+                    Rejection::Forbidden
+                );
+                ensure!(
+                    execution.value.view.attempts.len() < MAX_ATTEMPTS,
+                    "shared attempt count bound reached"
+                );
+                ensure!(
+                    execution.value.view.attempts.iter().all(|attempt| matches!(
+                        attempt.state,
+                        AttemptState::Terminal { .. } | AttemptState::NotDispatched
+                    )),
+                    "prior provider attempt is unresolved"
+                );
+                let mut resource: Stored<Resource> = self
+                    .store()
+                    .lock(&tx, Kind::Resource, &credential.pool_id)
+                    .await?;
+                Credentials::new(self.authority.clone())
+                    .fence(&tx, credential)
+                    .await?;
+                ensure!(
+                    resource.value.active < resource.value.concurrent_attempts,
+                    Rejection::Quota
+                );
+                let due = self.live_owner(&tx, false).await?;
+                let now = Store::now(&tx).await?;
+                ensure!(
+                    principal_expiry.is_none_or(|expiry| expiry > now),
+                    Rejection::Unauthorized
+                );
+                resource.value.active = resource
+                    .value
+                    .active
+                    .checked_add(1)
+                    .context("resource concurrency overflow")?;
+                self.store()
+                    .save(&tx, &mut resource, "active", None, now)
+                    .await?;
+                let view = GatewayAttempt {
+                    attempt_id: attempt_id.clone(),
+                    resource_pool_id: credential.pool_id.clone(),
+                    credential_revision: credential.version,
+                    state: AttemptState::Prepared,
+                };
+                let attempt = Attempt {
+                    execution_id: execution_id.into(),
+                    credential: credential.clone(),
+                    resource_revision: resource.value.policy_revision,
+                    view: view.clone(),
+                };
+                ensure!(
+                    self.store()
+                        .create(
+                            &tx,
+                            NewRecord {
+                                kind: Kind::Attempt,
+                                key: &attempt_id,
+                                status: "prepared",
+                                due_at_ms: Some(due),
+                                now_ms: now,
+                                value: &attempt,
+                            }
+                        )
+                        .await?,
+                    "provider attempt identity collision"
+                );
+                execution.value.view.attempts.push(view.clone());
+                execution.value.view.state = ExecutionState::Running;
+                self.save_execution(&tx, &mut execution, "running", Some(due), now)
+                    .await?;
+                tx.commit().await?;
+                Ok(view)
+            })
+            .await
+    }
+
+    /// A successful return authorizes one send. Repeating this operation after
+    /// an ambiguous commit never grants another send for an existing intent.
+    pub async fn dispatch(
+        &self,
+        key_hash: &str,
+        execution_id: &str,
+        attempt_id: &str,
+    ) -> Result<()> {
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                let (_, mut execution, principal_expiry) = self
+                    .authorized_execution(&tx, key_hash, execution_id)
+                    .await?;
+                let selected = execution
+                    .value
+                    .view
+                    .attempts
+                    .iter()
+                    .find(|attempt| attempt.attempt_id == attempt_id)
+                    .ok_or(Rejection::NotFound)?;
+                let resource: Stored<Resource> = self
+                    .store()
+                    .lock(&tx, Kind::Resource, &selected.resource_pool_id)
+                    .await?;
+                let prior: Stored<Attempt> = self
+                    .store()
+                    .read(&tx, Kind::Attempt, attempt_id)
+                    .await?
+                    .context("reserved attempt is missing")?;
+                Credentials::new(self.authority.clone())
+                    .fence(&tx, &prior.value.credential)
+                    .await?;
+                let mut attempt: Stored<Attempt> =
+                    self.store().lock(&tx, Kind::Attempt, attempt_id).await?;
+                ensure!(
+                    attempt.value.execution_id == execution_id
+                        && attempt.value.resource_revision == resource.value.policy_revision,
+                    Rejection::AuthorityChanged
+                );
+                ensure!(
+                    matches!(attempt.value.view.state, AttemptState::Prepared),
+                    "provider dispatch intent is already consumed"
+                );
+                let due = self.live_owner(&tx, false).await?;
+                let now = Store::now(&tx).await?;
+                ensure!(
+                    principal_expiry.is_none_or(|expiry| expiry > now),
+                    Rejection::Unauthorized
+                );
+                attempt.value.view.state = AttemptState::Dispatched;
+                self.store()
+                    .save(&tx, &mut attempt, "dispatched", Some(due), now)
+                    .await?;
+                replace_attempt(&mut execution.value, &attempt.value.view)?;
+                self.save_execution(&tx, &mut execution, "running", Some(due), now)
+                    .await?;
+                tx.commit().await?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Late provider evidence belongs to the original owner even after its lease
+    /// expires. It may resolve unknown state, but cannot reverse a terminal fact.
+    pub async fn record_terminal(
+        &self,
+        execution_id: &str,
+        attempt_id: &str,
+        observation: &TerminalObservation,
+    ) -> Result<()> {
+        super::finalization::validate_outcome(&observation.outcome)?;
+        self.conclude_attempt(execution_id, attempt_id, Some(observation))
+            .await
+    }
+
+    /// Only a prepared reservation proves that no send was authorized.
+    pub async fn abandon_prepared(&self, execution_id: &str, attempt_id: &str) -> Result<()> {
+        self.conclude_attempt(execution_id, attempt_id, None).await
+    }
+
+    async fn conclude_attempt(
+        &self,
+        execution_id: &str,
+        attempt_id: &str,
+        observation: Option<&TerminalObservation>,
+    ) -> Result<()> {
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                self.authority.fence(&tx).await?;
+                let prior: Stored<Execution> = self
+                    .store()
+                    .read(&tx, Kind::Execution, execution_id)
+                    .await?
+                    .ok_or(Rejection::NotFound)?;
+                let _: Stored<Tenant> = self
+                    .store()
+                    .lock(&tx, Kind::Tenant, &prior.value.tenant_id)
+                    .await?;
+                let mut execution: Stored<Execution> = self
+                    .store()
+                    .lock(&tx, Kind::Execution, execution_id)
+                    .await?;
+                ensure!(execution.value.owner == self.owner, Rejection::Forbidden);
+                let selected = execution
+                    .value
+                    .view
+                    .attempts
+                    .iter()
+                    .find(|attempt| attempt.attempt_id == attempt_id)
+                    .ok_or(Rejection::NotFound)?;
+                let mut resource: Stored<Resource> = self
+                    .store()
+                    .lock(&tx, Kind::Resource, &selected.resource_pool_id)
+                    .await?;
+                let mut attempt: Stored<Attempt> =
+                    self.store().lock(&tx, Kind::Attempt, attempt_id).await?;
+                ensure!(
+                    attempt.value.execution_id == execution_id,
+                    "provider attempt identity mismatch"
+                );
+                if let (AttemptState::Terminal { result }, Some(observation)) =
+                    (&attempt.value.view.state, observation)
+                {
+                    ensure!(
+                        result.outcome == observation.outcome && result.usage == observation.usage,
+                        "conflicting provider terminal evidence"
+                    );
+                    tx.commit().await?;
+                    return Ok(());
+                }
+                if observation.is_none()
+                    && matches!(attempt.value.view.state, AttemptState::NotDispatched)
+                {
+                    tx.commit().await?;
+                    return Ok(());
+                }
+                if observation.is_some() {
+                    ensure!(
+                        matches!(
+                            attempt.value.view.state,
+                            AttemptState::Dispatched | AttemptState::Unknown { .. }
+                        ),
+                        "provider terminal requires a dispatch intent"
+                    );
+                } else {
+                    ensure!(
+                        matches!(attempt.value.view.state, AttemptState::Prepared),
+                        "dispatched provider work cannot be abandoned safely"
+                    );
+                }
+                ensure!(
+                    matches!(
+                        execution.value.view.state,
+                        ExecutionState::Running | ExecutionState::Unknown { .. }
+                    ),
+                    "execution is already finalized"
+                );
+                let now = Store::now(&tx).await?;
+                if observation.is_some() {
+                    self.install_projection_fence(&tx, &execution.value, now)
+                        .await?;
+                }
+                attempt.value.view.state = if let Some(observation) = observation {
+                    let mut terminal = observation.clone();
+                    terminal.recorded_at_ms = now;
+                    AttemptState::Terminal { result: terminal }
+                } else {
+                    AttemptState::NotDispatched
+                };
+                let status = if observation.is_some() {
+                    "terminal"
+                } else {
+                    "not_dispatched"
+                };
+                self.store()
+                    .save(&tx, &mut attempt, status, None, now)
+                    .await?;
+                resource.value.active = resource
+                    .value
+                    .active
+                    .checked_sub(1)
+                    .context("resource reservation underflow")?;
+                self.store()
+                    .save(&tx, &mut resource, "active", None, now)
+                    .await?;
+                replace_attempt(&mut execution.value, &attempt.value.view)?;
+                execution.value.view.state = ExecutionState::Running;
+                self.save_execution(&tx, &mut execution, "running", Some(now), now)
+                    .await?;
+                tx.commit().await?;
+                Ok(())
+            })
+            .await
+    }
+
+    async fn authorized_execution(
+        &self,
+        tx: &DatabaseTransaction,
+        key_hash: &str,
+        execution_id: &str,
+    ) -> Result<(Stored<Tenant>, Stored<Execution>, Option<i64>)> {
+        let head = self.authority.fence(tx).await?;
+        let principal = authenticate(tx, key_hash).await?;
+        let tenant: Stored<Tenant> = self
+            .store()
+            .lock(tx, Kind::Tenant, &principal.tenant)
+            .await?;
+        let execution: Stored<Execution> =
+            self.store().lock(tx, Kind::Execution, execution_id).await?;
+        ensure!(
+            execution.value.tenant_id == principal.tenant
+                && execution.value.principal_id == principal.id
+                && execution.value.owner == self.owner,
+            Rejection::Forbidden
+        );
+        ensure!(
+            execution.value.authorization_revision == principal.revision
+                && execution.value.tenant_revision == tenant.value.policy_revision
+                && execution.value.view.config_generation == head.value.config_generation,
+            Rejection::AuthorityChanged
+        );
+        let now = Store::now(tx).await?;
+        ensure!(
+            principal.valid_until_ms.is_none_or(|expires| expires > now),
+            Rejection::Unauthorized
+        );
+        ensure!(
+            matches!(
+                execution.value.view.state,
+                ExecutionState::Accepted | ExecutionState::Running
+            ),
+            "execution does not allow new provider work"
+        );
+        Ok((tenant, execution, principal.valid_until_ms))
+    }
+
+    pub(super) async fn save_execution(
+        &self,
+        tx: &DatabaseTransaction,
+        execution: &mut Stored<Execution>,
+        status: &str,
+        due: Option<i64>,
+        now: i64,
+    ) -> Result<()> {
+        execution.value.view.updated_at_ms = now;
+        execution.value.view.revision = execution
+            .revision()?
+            .checked_add(1)
+            .context("execution revision exhausted")?;
+        self.store().save(tx, execution, status, due, now).await
+    }
+}
+
+pub(super) fn replace_attempt(execution: &mut Execution, attempt: &GatewayAttempt) -> Result<()> {
+    let existing = execution
+        .view
+        .attempts
+        .iter_mut()
+        .find(|existing| existing.attempt_id == attempt.attempt_id)
+        .context("execution attempt binding is missing")?;
+    *existing = attempt.clone();
+    Ok(())
+}
