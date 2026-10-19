@@ -12,7 +12,9 @@
 
 **The minimal interpretable model router that learns & adapts to your agent workflows.**
 
-Point any OpenAI-compatible agent at your local BitRouter instance, choose `bitrouter/auto`, and keep working.
+Point an OpenAI-compatible agent at your local BitRouter instance and choose
+`bitrouter/auto` after configuring an `auto` router and policy. See the
+[routing guide](https://bitrouter.ai/docs/models-routing/bitrouter-auto) for setup.
 
 ```diff
 - OPENAI_BASE_URL=https://api.openai.com/v1
@@ -33,7 +35,7 @@ You can also give your coding agent the `/bitrouter` skill to install, configure
 npx skills add bitrouter/bitrouter
 ```
 
-> **[Try BitRouter Cloud →](https://cloud.bitrouter.ai):** Don’t want to run the router locally? Use `https://api.bitrouter.ai/v1` as your base URL instead.
+> **[Try BitRouter Cloud →](https://cloud.bitrouter.ai):** Use `https://api.bitrouter.ai/v1` with a Cloud credential and a catalog model ID. Hosted routing presets use `@<name>`; the local `bitrouter/auto` selector requires a local router.
 
 ## Core features
 
@@ -101,14 +103,15 @@ cargo install bitrouter
 
 ## Quick start
 
-`bro code` (aka. BitRouter Orchestrator) is BitRouter's CLI workspace for coding-agent conversations. On the
-first run, `bro` guides you through setup and opens the default agent. Use
-`bro code` directly for a BRO conversation or to reopen a durable Thread.
-Use `bro code <agent>` for an explicit ACP harness.
+`bro code` is BitRouter's CLI workspace for coding-agent conversations. On the
+first run, `bro` guides you through setup and opens the default agent. The
+current source opens a BRO conversation with bare `bro code` and can reopen a
+durable Thread; `bro code <agent>` connects an explicit ACP harness. In the
+published alpha.33 release, bare `bro code` opens an agent picker instead.
 
 ```bash
 bro                                  # first-run setup, then the default agent
-bro code                             # BRO conversation; ← browses durable Threads
+bro code                             # conversation (source: ← browses durable Threads)
 bro code codex                       # start an interactive Codex ACP session
 bro code claude                      # start an interactive Claude ACP session
 bro run claude "summarize this repo" # run one headless agent turn
@@ -145,10 +148,11 @@ Ready-made **policy specs** for common agentic workflows start in [`templates/au
 ## Models & providers
 
 BitRouter routes to a *model*, not a provider. Each model below is served by many
-providers — its own lab, hyperscalers (AWS Bedrock, Alibaba Cloud), gateways
-(OpenRouter, OpenCode), and serverless clouds — and BitRouter picks the cheapest
-route per call. The bars are those routes: the more providers serve a model, the
-more room the router has to move.
+providers — its own lab, hyperscalers, gateways, and serverless clouds. BitRouter
+orders eligible routes by configured provider priority and can fall back on
+retryable failures. The bars are those routes: the more providers serve a model,
+the more room the router has to move. Current cost and latency sort options use
+the same deterministic priority order rather than live price or latency scoring.
 
 <p align="center">
   <picture>
