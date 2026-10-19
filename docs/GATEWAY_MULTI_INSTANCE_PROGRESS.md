@@ -163,3 +163,36 @@ lease timeout is never proof of stopped upstream work.
   missing bound policy, trajectory-mode mismatch and explicit-path rejection.
 - Independent source review approved this helper substage. It is not yet wired
   into the served shared gateway and does not close a P1 delivery gate.
+
+## Injected shared assembly (2026-10-20)
+
+- P1 is now based on P0 follow-up `2240b7dc6e99fa8374076e33c1e92c64c8d344a6`.
+  Rebased private foundation/publication/policy checkpoints are `ecb4079`,
+  `503636d` and `80983eb`. P0's fresh hosted CI remains in progress.
+- Added an internal shared constructor accepting the prepared PostgreSQL pool,
+  auth registry, continuation/correlation keys, access policies and policy lock.
+  It rejects a local injected backend before initialization and refuses ordinary
+  local assembly of shared process configuration. It does not connect/migrate a
+  database, discover local credentials/models or read a local policy lock.
+- Local credential activation, bundled provider defaults, key generation,
+  retention, continuation maintenance and local evaluation-outbox workers remain
+  on the local path. The shared coordinator must explicitly own its maintenance
+  and clock/authority fences; this helper does not provide that coordinator.
+- Independent review found two initialization leaks: local-clock continuation
+  maintenance and an unused filesystem-backed JSONL recorder. Both are now
+  excluded in shared mode. Re-review approved these fixes, the injected-backend
+  guard and preservation of local initialization behavior.
+- All-features compilation passed. `/tmp/bitrouter-p1-shared-assembly-regression-final.log`:
+  **41 assembly tests passed**, 0.21 seconds, including existing local trajectory,
+  key-lifecycle and telemetry behavior. The original fixture compile failure
+  (`Config::parse` instead of the existing free parser) remains recorded in
+  `/tmp/bitrouter-p1-shared-assembly-regression.log`; it was corrected before the run.
+- `/tmp/bitrouter-p1-shared-assembly-minimum.log`: the injected SQLite rejection
+  test also passed under `--no-default-features --features multi-instance`, 0.01 s.
+  These are scoped local regressions, not successful shared serving or process
+  acceptance. Internal authority/runtime code is still being connected, so its
+  unused-code warnings are not suppressed or represented as a final lint pass.
+
+All P1-A01–A09 delivery gates remain pending. Actual shared authentication,
+dispatch, durable settlement, trajectory catch-up, operator APIs, workers and
+multi-process acceptance are still required.

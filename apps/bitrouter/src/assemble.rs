@@ -182,6 +182,85 @@ pub struct Assembled {
     pub ignored_config: Vec<String>,
 }
 
+/// Authority already validated and loaded for one immutable shared generation.
+/// The coordinator owns migrations, publication and process lifecycle.
+#[cfg(feature = "multi-instance")]
+pub(crate) struct SharedAssembly {
+    pub database: DatabaseConnection,
+    pub auth_appliers: AuthAppliers,
+    pub continuation_key: crate::continuation::ContinuationKey,
+    pub correlation_key: crate::trajectory::canonical::CorrelationKey,
+    pub policies: Vec<crate::policy::Policy>,
+    pub policy_lock: Option<crate::policy_lock::PolicyLock>,
+}
+
+#[cfg(feature = "multi-instance")]
+pub(crate) async fn build_shared_app(
+    config: &Config,
+    inputs: &SharedAssembly,
+) -> Result<Assembled> {
+    use sea_orm::{ConnectionTrait, DatabaseBackend};
+
+    anyhow::ensure!(
+        matches!(
+            config.gateway_state,
+            crate::config::gateway_state::GatewayStateConfig::Shared(_)
+        ),
+        "shared assembly requires explicit shared process configuration"
+    );
+    anyhow::ensure!(
+        !config.inherit_defaults && !config.registry.enabled,
+        "shared assembly requires a complete published routing snapshot"
+    );
+    anyhow::ensure!(
+        inputs.database.get_database_backend() == DatabaseBackend::Postgres,
+        "shared assembly requires an injected PostgreSQL connection"
+    );
+    assemble_app(config, None, Default::default(), Some(inputs)).await
+}
+
+#[cfg(all(test, feature = "multi-instance"))]
+mod shared_assembly_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shared_assembly_rejects_a_local_database_before_initialization() -> Result<()> {
+        let config = crate::config::parse_with(
+            r#"
+inherit_defaults: false
+registry:
+  enabled: false
+database:
+  url: "postgres://127.0.0.1/not-opened"
+gateway_state:
+  mode: shared
+  namespace: assembly-test
+  deployment_key_env: BITROUTER_ASSEMBLY_TEST_KEY
+"#,
+            |_| None,
+        )?;
+        let inputs = SharedAssembly {
+            database: crate::db::connect("sqlite::memory:").await?,
+            auth_appliers: AuthAppliers::new(),
+            continuation_key: crate::continuation::ContinuationKey::from_bytes(rand::random())?,
+            correlation_key: crate::trajectory::canonical::CorrelationKey::from_bytes(
+                rand::random(),
+            )?,
+            policies: Vec::new(),
+            policy_lock: None,
+        };
+        let error = build_shared_app(&config, &inputs)
+            .await
+            .err()
+            .context("shared construction accepted a local database")?;
+        assert_eq!(
+            error.to_string(),
+            "shared assembly requires an injected PostgreSQL connection"
+        );
+        Ok(())
+    }
+}
+
 pub(crate) fn resolved_upstream_timeouts(
     config: &Config,
 ) -> (
@@ -489,7 +568,14 @@ pub async fn build_app_with_extensions(
     let native = extensions
         .into_registrations()
         .context("registering extensions")?;
-    assemble_app(config, config_path, native).await
+    assemble_app(
+        config,
+        config_path,
+        native,
+        #[cfg(feature = "multi-instance")]
+        None,
+    )
+    .await
 }
 
 async fn assemble_app(
@@ -499,7 +585,20 @@ async fn assemble_app(
         String,
         crate::gateway::extensions::registry::registration::Registration,
     >,
+    #[cfg(feature = "multi-instance")] shared: Option<&SharedAssembly>,
 ) -> Result<Assembled> {
+    #[cfg(feature = "multi-instance")]
+    let is_shared = shared.is_some();
+    #[cfg(not(feature = "multi-instance"))]
+    let is_shared = false;
+    anyhow::ensure!(
+        is_shared
+            || matches!(
+                config.gateway_state,
+                crate::config::gateway_state::GatewayStateConfig::Local {}
+            ),
+        "shared gateway requires the managed shared serving lifecycle"
+    );
     let mut effective_config = config.clone();
     crate::policy_lock::apply_defaults(&mut effective_config, config_path);
     let config = &effective_config;
@@ -553,25 +652,61 @@ async fn assemble_app(
     // first-run conveniences (a SQLite file URL is created on demand).
     // The schema is applied from `crate::db::migration` — Rust code, not
     // SQL — so it lands identically on whichever backend is configured.
-    let db = crate::db::connect(&config.database.url)
-        .await
-        .context("connecting to database")?;
-    crate::db::run_migrations(&db)
-        .await
-        .context("running database migrations")?;
+    #[cfg(feature = "multi-instance")]
+    let shared_db = shared.map(|inputs| inputs.database.clone());
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_db: Option<DatabaseConnection> = None;
+    let db = match shared_db {
+        Some(database) => database,
+        None => {
+            let database = crate::db::connect(&config.database.url)
+                .await
+                .context("connecting to database")?;
+            crate::db::run_migrations(&database)
+                .await
+                .context("running database migrations")?;
+            database
+        }
+    };
     #[cfg(feature = "harness")]
     let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
     // continuation route matching and the HTTP executor. This lets mapped
     // Responses requests preflight the provider's stable credential authority
     // and lets transport return the exact proof used by the sent request.
-    let cloud_manager = crate::cloud::default_manager()?;
-    let auth_appliers = build_auth_appliers(config, Arc::clone(&cloud_manager))?;
-    let runtime_home = match config_path.and_then(std::path::Path::parent) {
-        Some(home) => home.to_path_buf(),
-        None => std::env::current_dir().context("resolve continuation key home")?,
+    let cloud_manager = if is_shared {
+        None
+    } else {
+        Some(crate::cloud::default_manager()?)
     };
-    let continuation_keys = ContinuationKeySource::lazy(runtime_home);
+    #[cfg(feature = "multi-instance")]
+    let shared_auth = shared.map(|inputs| inputs.auth_appliers.clone());
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_auth: Option<AuthAppliers> = None;
+    let auth_appliers = match shared_auth {
+        Some(auth) => auth,
+        None => build_auth_appliers(
+            config,
+            cloud_manager
+                .clone()
+                .context("local credential manager is unavailable")?,
+        )?,
+    };
+    #[cfg(feature = "multi-instance")]
+    let shared_continuation =
+        shared.map(|inputs| ContinuationKeySource::fixed(inputs.continuation_key.clone()));
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_continuation: Option<ContinuationKeySource> = None;
+    let continuation_keys = match shared_continuation {
+        Some(keys) => keys,
+        None => {
+            let runtime_home = match config_path.and_then(std::path::Path::parent) {
+                Some(home) => home.to_path_buf(),
+                None => std::env::current_dir().context("resolve continuation key home")?,
+            };
+            ContinuationKeySource::lazy(runtime_home)
+        }
+    };
     let private_context =
         crate::continuation::native_context::PrivateContextPolicy::new(continuation_keys.clone());
     let continuation_registry = ContinuationRegistry::new(
@@ -580,14 +715,16 @@ async fn assemble_app(
         config.continuation.retention_days,
         config.continuation.prune_batch_size,
     )?;
-    let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
-    if continuation_pruned > 0 {
-        tracing::info!(
-            deleted_rows = continuation_pruned,
-            "pruned expired provider continuations at startup"
-        );
+    if !is_shared {
+        let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
+        if continuation_pruned > 0 {
+            tracing::info!(
+                deleted_rows = continuation_pruned,
+                "pruned expired provider continuations at startup"
+            );
+        }
+        continuation_registry.start_reconciler();
     }
-    continuation_registry.start_reconciler();
     let continuation_runtime = ContinuationRuntime::with_auth_appliers(
         continuation_registry.clone(),
         auth_appliers.clone(),
@@ -617,15 +754,17 @@ async fn assemble_app(
     // Fill empty fields on built-in providers from the compiled-in catalog
     // (api_base / api_protocol / api_key-from-env). No-op when
     // `inherit_defaults: false`, and never overrides user-set fields.
-    crate::providers::apply::apply_builtin_defaults(&mut resolved);
-    // Subscription / "use your Claude Code session" logins persist their
-    // credential in the store (not the config), so apply_builtin_defaults would
-    // mark a keyless provider like `anthropic` inactive. Re-activate any
-    // provider that has a stored credential so it stays routable.
-    if let Ok(store) = crate::provider_credentials::load_default() {
-        crate::providers::apply::activate_stored_credential_providers(&mut resolved, &store);
+    if !is_shared {
+        crate::providers::apply::apply_builtin_defaults(&mut resolved);
+        // Subscription / "use your Claude Code session" logins persist their
+        // credential in the store (not the config), so apply_builtin_defaults would
+        // mark a keyless provider like `anthropic` inactive. Re-activate any
+        // provider that has a stored credential so it stays routable.
+        if let Ok(store) = crate::provider_credentials::load_default() {
+            crate::providers::apply::activate_stored_credential_providers(&mut resolved, &store);
+        }
+        crate::config::discover_models(&mut resolved).await;
     }
-    crate::config::discover_models(&mut resolved).await;
     let routing_table = Arc::new(match config_path {
         Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),
         None => ConfigRoutingTable::from_config(resolved),
@@ -664,7 +803,14 @@ async fn assemble_app(
     let metering_for_native_costs = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
     let pricing_for_native = pricing.clone();
-    let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
+    #[cfg(feature = "multi-instance")]
+    let shared_policies = shared.map(|inputs| PolicyStore::from_policies(inputs.policies.clone()));
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_policies: Option<PolicyStore> = None;
+    let policy_store: Arc<PolicyStore> = Arc::new(match shared_policies {
+        Some(policies) => policies,
+        None => load_policy_store(config).await?,
+    });
     let policy_store_for_reload = policy_store.clone();
 
     // Metrics are now pushed via OTLP, not pulled from /metrics
@@ -693,11 +839,16 @@ async fn assemble_app(
                 let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
                     match bearer_plan {
                         BearerPlan::LiveSource { warn_if_unmet } => {
-                            let source = crate::cloud::cloud_bearer_source(
-                                Arc::clone(&cloud_manager),
-                                otel_config.endpoint.clone(),
-                            )
-                            .await;
+                            let source = match cloud_manager.as_ref() {
+                                Some(manager) => {
+                                    crate::cloud::cloud_bearer_source(
+                                        Arc::clone(manager),
+                                        otel_config.endpoint.clone(),
+                                    )
+                                    .await
+                                }
+                                None => None,
+                            };
                             if source.is_none() && warn_if_unmet {
                                 tracing::warn!(
                                     "telemetry: attribution=account but no signed-in session \
@@ -863,10 +1014,13 @@ async fn assemble_app(
     let server_tool_loop =
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
-    let policy_decision_recorder =
+    let policy_decision_recorder = if is_shared {
+        None
+    } else {
         crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder::from_env()
             .map_err(anyhow::Error::from)?
-            .map(Arc::new);
+            .map(Arc::new)
+    };
     if policy_decision_recorder.is_some() {
         tracing::info!(
             env = crate::gateway::routing::workflow::decision::POLICY_DECISION_JSONL_ENV,
@@ -888,9 +1042,13 @@ async fn assemble_app(
             .checked_sub_signed(retention)
             .ok_or_else(|| anyhow::anyhow!("trajectory retention cutoff exceeds time range"))?
             .to_rfc3339();
-        let pruned = trajectory_store
-            .prune_before(&cutoff, false, config.trajectory.outbox_batch_size)
-            .await?;
+        let pruned = if is_shared {
+            crate::trajectory::store::PruneSummary::default()
+        } else {
+            trajectory_store
+                .prune_before(&cutoff, false, config.trajectory.outbox_batch_size)
+                .await?
+        };
         if pruned != crate::trajectory::store::PruneSummary::default() {
             tracing::info!(
                 cutoff,
@@ -904,34 +1062,47 @@ async fn assemble_app(
         let notify_outbox = {
             #[cfg(feature = "core")]
             {
-                let publisher = TrajectoryOutboxPublisher::new(
-                    trajectory_store.clone(),
-                    eval_store.clone(),
-                    config.eval.clone(),
-                    config.trajectory.outbox_batch_size,
-                )?;
-                let startup_publication = publisher.drain_pending().await?;
-                if startup_publication.attempted > 0 {
-                    tracing::info!(
-                        attempted = startup_publication.attempted,
-                        delivered = startup_publication.delivered,
-                        failed = startup_publication.failed,
-                        "drained durable trajectory evaluation outbox at startup"
-                    );
+                if is_shared {
+                    None
+                } else {
+                    let publisher = TrajectoryOutboxPublisher::new(
+                        trajectory_store.clone(),
+                        eval_store.clone(),
+                        config.eval.clone(),
+                        config.trajectory.outbox_batch_size,
+                    )?;
+                    let startup_publication = publisher.drain_pending().await?;
+                    if startup_publication.attempted > 0 {
+                        tracing::info!(
+                            attempted = startup_publication.attempted,
+                            delivered = startup_publication.delivered,
+                            failed = startup_publication.failed,
+                            "drained durable trajectory evaluation outbox at startup"
+                        );
+                    }
+                    trajectory_outbox_publisher = Some(publisher.clone());
+                    Some(Arc::new(move || publisher.kick()) as Arc<dyn Fn() + Send + Sync>)
                 }
-                trajectory_outbox_publisher = Some(publisher.clone());
-                Some(Arc::new(move || publisher.kick()) as Arc<dyn Fn() + Send + Sync>)
             }
             #[cfg(not(feature = "core"))]
             {
                 None
             }
         };
-        let home = match config_path.and_then(std::path::Path::parent) {
-            Some(home) => home.to_path_buf(),
-            None => std::env::current_dir().context("resolve trajectory key home")?,
+        #[cfg(feature = "multi-instance")]
+        let shared_correlation = shared.map(|inputs| inputs.correlation_key.clone());
+        #[cfg(not(feature = "multi-instance"))]
+        let shared_correlation: Option<crate::trajectory::canonical::CorrelationKey> = None;
+        let correlation_key = match shared_correlation {
+            Some(key) => key,
+            None => {
+                let home = match config_path.and_then(std::path::Path::parent) {
+                    Some(home) => home.to_path_buf(),
+                    None => std::env::current_dir().context("resolve trajectory key home")?,
+                };
+                crate::paths::get_or_create_correlation_key(&home)?
+            }
         };
-        let correlation_key = crate::paths::get_or_create_correlation_key(&home)?;
         let runtime = Arc::new(TrajectoryRuntime::new(
             trajectory_store.clone(),
             Canonicalizer::new(correlation_key.clone()),
@@ -948,15 +1119,31 @@ async fn assemble_app(
     let trajectory_for_settlement = trajectory_services
         .as_ref()
         .map(|(_, settlement)| settlement.clone());
-    let policy_runtime = crate::policy_lock::PolicyRuntime::new(
-        config,
-        config_path,
-        policy_decision_recorder.clone(),
-        pending_eval_decisions.clone(),
-        trajectory_runtime,
-    )
-    .await
-    .context("loading policy-lock.yaml")?;
+    #[cfg(feature = "multi-instance")]
+    let shared_policy_runtime = shared
+        .map(|inputs| {
+            crate::policy_lock::PolicyRuntime::from_document(
+                config,
+                inputs.policy_lock.clone(),
+                pending_eval_decisions.clone(),
+                trajectory_runtime.clone(),
+            )
+        })
+        .transpose()?;
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>> = None;
+    let policy_runtime = match shared_policy_runtime {
+        Some(runtime) => runtime,
+        None => crate::policy_lock::PolicyRuntime::new(
+            config,
+            config_path,
+            policy_decision_recorder.clone(),
+            pending_eval_decisions.clone(),
+            trajectory_runtime,
+        )
+        .await
+        .context("loading policy-lock.yaml")?,
+    };
     let policy_runtime_for_selector = policy_runtime.clone();
     #[cfg(feature = "core")]
     let evolution = crate::core::evolution::runtime::EvolutionRuntime::new(
