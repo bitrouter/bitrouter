@@ -240,13 +240,13 @@
 <text class="lab" x="914.0" y="533.0">DEEPSEEK</text>
 <text class="lab-count" x="1162.0" y="533.0" text-anchor="end">2</text>
 <rect x="914.0" y="552.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="914.0" y="552.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
+<rect x="914.0" y="552.0" width="85.6" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="922.0" y="567.0">deepseek-v4.1-flash</text>
-<text class="routes" x="1162.0" y="567.0" text-anchor="end">7</text>
+<text class="routes" x="1162.0" y="567.0" text-anchor="end">8</text>
 <rect x="914.0" y="578.0" width="214.0" height="22.0" rx="4" fill="#161b22"/>
-<rect x="914.0" y="578.0" width="10.7" height="22.0" rx="4" fill="#30363d"/>
+<rect x="914.0" y="578.0" width="21.4" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="922.0" y="593.0">deepseek-v4.1-flash-1017</text>
-<text class="routes" x="1162.0" y="593.0" text-anchor="end">1</text>
+<text class="routes" x="1162.0" y="593.0" text-anchor="end">2</text>
 <rect x="28.0" y="704.0" width="268.0" height="30.0" rx="5" fill="#e6edf3"/>
 <text class="lab" x="38.0" y="723.0">KIMI</text>
 <text class="lab-count" x="286.0" y="723.0" text-anchor="end">2</text>
@@ -287,5 +287,5 @@
 <rect x="914.0" y="742.0" width="74.9" height="22.0" rx="4" fill="#30363d"/>
 <text class="model" x="922.0" y="757.0">grok-4.7</text>
 <text class="routes" x="1162.0" y="757.0" text-anchor="end">7</text>
-<text class="caption" x="28.0" y="824.0">60 models · 45 providers · 386 model→provider routes · 11 providers billed by subscription</text>
+<text class="caption" x="28.0" y="824.0">60 models · 45 providers · 388 model→provider routes · 11 providers billed by subscription</text>
 </svg>
