@@ -3,7 +3,7 @@ use crate::continuation::tests::{static_authority, target};
 
 use sea_orm::{ConnectOptions, Database, TransactionTrait};
 
-async fn isolated_database() -> Result<DatabaseConnection> {
+pub(super) async fn isolated_database() -> Result<DatabaseConnection> {
     let url = std::env::var("BITROUTER_TEST_DATABASE_URL")
         .context("BITROUTER_TEST_DATABASE_URL is required")?;
     let mut options = ConnectOptions::new(url.clone());
@@ -27,7 +27,7 @@ async fn isolated_database() -> Result<DatabaseConnection> {
     Ok(Database::connect(options).await?)
 }
 
-async fn bind(native: &SharedNative, request: &str) -> Result<Bound> {
+pub(super) async fn bind(native: &SharedNative, request: &str) -> Result<Bound> {
     native
         .bind(
             "owner",
@@ -47,7 +47,7 @@ async fn bind(native: &SharedNative, request: &str) -> Result<Bound> {
         .await
 }
 
-fn publication(row: &continuation_entity::Model) -> PendingPublication {
+pub(super) fn publication(row: &continuation_entity::Model) -> PendingPublication {
     PendingPublication {
         continuation_identity: row.continuation_identity.clone(),
         generation: row.publication_generation.clone(),
@@ -58,7 +58,10 @@ fn publication(row: &continuation_entity::Model) -> PendingPublication {
     }
 }
 
-async fn read(native: &SharedNative, identity: &str) -> Result<continuation_entity::Model> {
+pub(super) async fn read(
+    native: &SharedNative,
+    identity: &str,
+) -> Result<continuation_entity::Model> {
     let tx = native.authority.begin_cleanup(identity).await?;
     let row = native
         .lock_row(&tx, identity)
@@ -71,7 +74,7 @@ async fn read(native: &SharedNative, identity: &str) -> Result<continuation_enti
 
 /// Install authenticated fixture metadata without waiting a thirty-second lease.
 /// This deliberately bypasses the production liveness guard, never its AEAD.
-async fn fixture_lease(
+pub(super) async fn fixture_lease(
     native: &SharedNative,
     old: &continuation_entity::Model,
     remaining_ms: i64,
@@ -107,7 +110,7 @@ async fn fixture_lease(
     Ok(row)
 }
 
-async fn wait_past(native: &SharedNative, deadline: &str) -> Result<()> {
+pub(super) async fn wait_past(native: &SharedNative, deadline: &str) -> Result<()> {
     let deadline = parse_timestamp(deadline)?;
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
@@ -277,6 +280,7 @@ async fn renewal_reseals_metadata_and_preserves_retention() -> Result<()> {
         let same_key_other_namespace = SharedNative {
             key: native.key.clone(),
             authority: other.authority,
+            maintenance_cursor: Mutex::new(None),
         };
         ensure!(same_key_other_namespace.decrypt(&renewed).is_err());
         ensure!(

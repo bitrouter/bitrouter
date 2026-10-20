@@ -15,10 +15,29 @@ const MAX_NATIVE_PLAINTEXT_BYTES: usize = MAX_NATIVE_BYTES / 2;
 const SHARED_IDENTITY_DOMAIN: &[u8] = b"bitrouter.shared-continuation.identity.v1";
 const SHARED_OWNER_DOMAIN: &[u8] = b"bitrouter.shared-continuation.owner.v1";
 const SHARED_TARGET_DOMAIN: &[u8] = b"bitrouter.shared-continuation.target.v1";
+const PUBLICATION_EXPIRED: &str = "expired";
+
+#[path = "shared_lifecycle.rs"]
+mod lifecycle;
 
 pub(super) struct SharedNative {
     authority: SharedContinuationDb,
     key: ContinuationKey,
+    maintenance_cursor: Mutex<Option<String>>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum ForwardTransition {
+    Delivering,
+    Active,
+}
+
+#[derive(Default)]
+pub(super) struct Maintenance {
+    pub scanned: usize,
+    pub scrubbed: u64,
+    pub purged: u64,
+    pub failed: u64,
 }
 
 pub(super) struct Bound {
@@ -45,7 +64,11 @@ struct Snapshot {
 impl SharedNative {
     pub(super) fn new(authority: SharedContinuationDb) -> Self {
         let key = authority.key();
-        Self { authority, key }
+        Self {
+            authority,
+            key,
+            maintenance_cursor: Mutex::new(None),
+        }
     }
 
     fn identity(&self, owner: &str, request: &str) -> Result<String> {
@@ -80,31 +103,7 @@ impl SharedNative {
         target: &RoutingTarget,
         authority: &ContinuationAuthority,
     ) -> Result<String> {
-        let endpoint = target
-            .api_base_override
-            .as_deref()
-            .unwrap_or(&target.api_base);
-        let scheme = match authority.effective_scheme() {
-            crate::gateway::model::target::AuthScheme::XApiKey => "x-api-key",
-            crate::gateway::model::target::AuthScheme::Bearer => "bearer",
-        };
-        let fields = serde_json::to_string(&(
-            self.authority.namespace(),
-            &target.provider_name,
-            target.account_label.as_deref().unwrap_or(""),
-            target.api_protocol.to_string(),
-            endpoint,
-            scheme,
-            hex::encode(authority.credential().proof_bytes()),
-        ))?;
-        Ok(format!(
-            "shared-continuation-target-{}",
-            hex::encode(hmac_bytes(
-                &self.key.secret,
-                SHARED_TARGET_DOMAIN,
-                &[&fields]
-            )?)
-        ))
+        target_fingerprint(&self.key, self.authority.namespace(), target, authority)
     }
 
     /// The random intent is allocated before SQL; authoritative times are not.
@@ -153,14 +152,19 @@ impl SharedNative {
                 let now = SharedContinuationDb::now(&tx).await?;
                 if let Some(existing) = existing {
                     let row = existing.row;
-                    let actual = decode_payload(self.decrypt(&row)?)?;
+                    let plaintext = self.decrypt(&row)?;
+                    ensure!(
+                        row.publication_state != PUBLICATION_EXPIRED
+                            && parse_timestamp(&row.expires_at)? > now,
+                        Rejection::Expired
+                    );
+                    let actual = decode_payload(plaintext)?;
                     ensure!(
                         row.owner_identity == owner_identity
                             && row.target_fingerprint == fingerprint
                             && actual == payload,
                         "shared continuation identity has a different binding"
                     );
-                    ensure!(parse_timestamp(&row.expires_at)? > now, Rejection::Expired);
                     let outcome = if row.publication_generation == generation
                         && row.publication_instance_id == self.authority.producer_id()
                         && row.publication_state == state
@@ -236,6 +240,10 @@ impl SharedNative {
                 // Authentication precedes ownership/expiry-based mutation.
                 let plaintext = self.decrypt(&snapshot.row)?;
                 ensure!(
+                    snapshot.row.publication_state != PUBLICATION_EXPIRED,
+                    Rejection::Expired
+                );
+                ensure!(
                     publication_owns_row(publication, &snapshot.row),
                     Rejection::Changed
                 );
@@ -268,7 +276,18 @@ impl SharedNative {
     }
 
     fn decrypt(&self, row: &continuation_entity::Model) -> Result<Vec<u8>> {
-        decrypt_authenticated(&self.key, row, &self.aad(row)?)
+        let plaintext = decrypt_authenticated(&self.key, row, &self.aad(row)?)?;
+        // Shared expiry is authenticated empty plaintext. Never let that shape
+        // enter the local decoder's legacy raw-ID fallback as a live mapping.
+        if row.publication_state == PUBLICATION_EXPIRED {
+            ensure!(
+                plaintext.is_empty(),
+                "shared native tombstone retained content"
+            );
+        } else {
+            ensure!(!plaintext.is_empty(), "shared native live payload is empty");
+        }
+        Ok(plaintext)
     }
 
     fn aad(&self, row: &continuation_entity::Model) -> Result<Vec<u8>> {
@@ -293,9 +312,12 @@ impl SharedNative {
                 [self.authority.namespace().into(), identity.into()],
             ))
             .await?;
-        let Some(record) = record else {
-            return Ok(None);
-        };
+        record
+            .map(|record| self.decode_row(record, identity))
+            .transpose()
+    }
+
+    fn decode_row(&self, record: sea_orm::QueryResult, identity: &str) -> Result<Snapshot> {
         let body: String = record.try_get("", "body")?;
         ensure!(
             body.len() <= MAX_NATIVE_BYTES,
@@ -314,6 +336,16 @@ impl SharedNative {
                 && row.purge_after == record.try_get::<String>("", "purge_after")?,
             "shared native record metadata mismatch"
         );
+        ensure!(
+            matches!(
+                row.publication_state.as_str(),
+                PUBLICATION_PROVISIONAL
+                    | PUBLICATION_DELIVERING
+                    | PUBLICATION_ACTIVE
+                    | PUBLICATION_EXPIRED
+            ),
+            "unsupported shared native publication state"
+        );
         for value in [
             &row.created_at,
             &row.publication_lease_until,
@@ -325,11 +357,11 @@ impl SharedNative {
                 "noncanonical native timestamp"
             );
         }
-        Ok(Some(Snapshot {
+        Ok(Snapshot {
             body,
             revision,
             row,
-        }))
+        })
     }
 
     async fn insert(
@@ -412,6 +444,35 @@ impl SharedNative {
         ensure!(saved.rows_affected() == 1, Rejection::Expired);
         Ok(())
     }
+}
+
+pub(super) fn target_fingerprint(
+    key: &ContinuationKey,
+    namespace: &str,
+    target: &RoutingTarget,
+    authority: &ContinuationAuthority,
+) -> Result<String> {
+    let endpoint = target
+        .api_base_override
+        .as_deref()
+        .unwrap_or(&target.api_base);
+    let scheme = match authority.effective_scheme() {
+        crate::gateway::model::target::AuthScheme::XApiKey => "x-api-key",
+        crate::gateway::model::target::AuthScheme::Bearer => "bearer",
+    };
+    let fields = serde_json::to_string(&(
+        namespace,
+        &target.provider_name,
+        target.account_label.as_deref().unwrap_or(""),
+        target.api_protocol.to_string(),
+        endpoint,
+        scheme,
+        hex::encode(authority.credential().proof_bytes()),
+    ))?;
+    Ok(format!(
+        "shared-continuation-target-{}",
+        hex::encode(hmac_bytes(&key.secret, SHARED_TARGET_DOMAIN, &[&fields])?)
+    ))
 }
 
 #[cfg(test)]

@@ -939,3 +939,66 @@ multi-process acceptance are still required.
   pruning, expired cleanup claims and uncertain `Reserved` recovery are still
   open. The new backend currently implements private bind/renew only. These
   fixtures are not official-process acceptance; all P1 gates remain open.
+
+## Shared native publication and retention (2026-10-21)
+
+- Private forward transitions now enforce provisional-to-delivering-to-active
+  order and exact producer/generation/lease authority at each database
+  transaction. Delivery waits remain outside those transactions. Closing the
+  producer rejects forward publication while allowing retained active lookups.
+- Active resolution uses database retention time independently of the old
+  publication lease. Resolved targets use the shared namespace-framed
+  fingerprint; local persisted target matching remains unchanged.
+- Expiry replaces native content with authenticated empty plaintext in an
+  `expired` row, preserving original publication and retention metadata.
+  Physical purge has its own database-time condition. Scans process at most
+  32 records per total deadline and advance their cursor past errors. Mutations
+  reacquire locks and compare full body plus revision, protecting a re-created
+  identity even when both incarnations have revision zero.
+- Initial minimal continuation/shared tests passed **146/146**, zero retries,
+  in 19.242 seconds (`/tmp/bitrouter-p1-native-lifecycle-minimal.log`).
+  A subsequent adversarial payload test then failed as intended: authenticated
+  empty plaintext in an active shared row entered the legacy raw-ID fallback
+  (`/tmp/bitrouter-p1-native-lifecycle-payload-red.log`). Shared decryption now
+  rejects empty live payloads and nonempty expired payloads before any caller
+  can interpret them. Local decoding is unchanged.
+- Independent review identified `NL-I01`: advancing the cursor for a whole
+  scanned batch could repeatedly skip its unattempted suffix after a lock
+  timeout or cancellation. A PostgreSQL regression observes the actual blocked
+  query before cancellation and fails against the original cursor behavior
+  (`/tmp/bitrouter-p1-native-lifecycle-cursor-red.log`). The repaired cursor
+  advances immediately before each attempted row and wraps only after the
+  suffix is exhausted. The regression covers cancellation with two due rows
+  and a total-deadline expiry with 32; it keeps the first lock held until the
+  later rows are scrubbed, then verifies the first is retried after wraparound.
+  The pre-fix failing run reaches the cancellation case first; it does not
+  separately establish a pre-fix failure of the deadline case.
+- The final repaired minimal continuation/shared regression passed **148/148**,
+  2,175 filtered, zero retries in 21.309 seconds
+  (`/tmp/bitrouter-p1-native-lifecycle-compact-minimal.log`). Final full-feature
+  continuation/pipeline/shared/config regression passed **535/535**, 3,068
+  filtered, zero retries in 23.590 seconds
+  (`/tmp/bitrouter-p1-native-lifecycle-compact-full.log`). The real-lock
+  cancellation/deadline regression passed both cases. Darwin's linker warned
+  that this full-feature test image exceeded its compact-unwind section limit;
+  these tests do not establish production artifact size or unwind performance.
+- Pure local continuation regression passed **93/93**, 2,160 filtered, zero
+  retries in 3.771 seconds
+  (`/tmp/bitrouter-p1-native-lifecycle-compact-local.log`). All three final
+  profiles include the subsequent compact-string adjustment.
+- Clippy identified that adding namespace storage made the resolution enum too
+  large. The private immutable fingerprint and optional namespace now use
+  boxed strings, preserving the public enum and local matching behavior. Final
+  Rust 1.97 all-feature library/test Clippy exited 0 in 1m02s with no
+  Clippy-specific diagnostics
+  (`/tmp/bitrouter-p1-native-lifecycle-compact-clippy.log`). The 167 library
+  and one library-test unused-code warnings remain staged integration work;
+  no suppression was added. This is not final strict P1 lint acceptance.
+- Independent source review approved the cursor and compact-storage repairs
+  with no open source findings
+  (`/tmp/bitrouter-p1-native-lifecycle-review.json`). The candidate manifest
+  records eight source/document fingerprints and four final validation logs
+  (`/tmp/bitrouter-p1-native-lifecycle-candidate.json`). Formatting and
+  whitespace checks passed. Registry/assembly integration, cleanup-only
+  recovery, uncertain `Reserved` resolution and official-process acceptance
+  remain open. No P1 acceptance gate is closed by this substage.

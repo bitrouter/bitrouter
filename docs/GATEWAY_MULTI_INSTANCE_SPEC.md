@@ -416,6 +416,35 @@ expired token. Every forward boundary must validate exact ownership afresh;
 neither a cached future lease nor a cleanup token authorizes forward publication.
 Renewal never extends retention.
 
+Forward publication proceeds from provisional to delivering, then active. Each
+boundary independently locks and authenticates the exact generation, producer
+and observed lease, checks database time, and commits before the caller resumes
+its delivery handshake. Cleanup or unobserved intent cannot advance these
+states. Retrying an already completed transition still validates its authority.
+An active lookup uses retention, not the publication lease, and returns a
+point-in-time authenticated result; it does not grant permission for a later
+provider operation to skip its own checks.
+
+Retention expiry replaces the shared payload with authenticated empty plaintext
+under the `expired` state. Owner, target, publication and original retention
+metadata remain authenticated until physical removal. Empty live payloads and
+nonempty expired payloads are invalid. Local payload compatibility and local
+NULL-based scrubbing remain unchanged. An expired identity is not rebound until
+its tombstone has been purged. Expiry state cannot resurrect when the database
+clock moves backward.
+
+Each maintenance pass shares one total database deadline and processes at most
+32 rows. Its namespace-scoped cursor advances immediately before each row
+attempt and wraps only after exhausting the suffix. Cancellation or a lock
+timeout preserves the unattempted suffix for the next pass. Corrupt rows remain
+reported and do not starve later identities. Scanning supplies hints only.
+Mutation reacquires identity and row locks, authenticates the current
+snapshot, and compares its full body and revision before acting. Final SQL
+predicates independently recheck database expiry or purge time. This prevents
+a stale scan from deleting a replacement even when both rows have revision
+zero. Existing tombstones are excluded from expiry scans until physical purge
+is due.
+
 The producer record is a durable bind gate. Bind transactions hold its shared
 lock through commit; closing takes an exclusive lock and commits irreversibly.
 After the actual pipeline producers/tasks join, the generation owner closes this
@@ -427,11 +456,11 @@ Closure proves only that this producer cannot insert later; worker joining,
 marker compensation and complete generation resource ownership remain separate
 requirements. A closed producer identity is never reused or recreated.
 
-Implementation is staged: the private native bind/renew backend and transaction
-gate do not yet replace the registry's local paths. Shared activation, resolution,
-maintenance, cleanup and `Reserved` recovery must be integrated before enabling
-this backend through official startup. The internal tests do not close a P1
-independent-process acceptance gate.
+Implementation is staged: private bind/renew, forward transitions, resolution,
+retention maintenance and the transaction gate do not yet replace the registry's
+local paths. Cleanup, `Reserved` recovery and Registry/assembly integration must
+be completed before enabling this backend through official startup. The
+internal tests do not close a P1 independent-process acceptance gate.
 
 ## Trajectory identity, key epochs and guards
 

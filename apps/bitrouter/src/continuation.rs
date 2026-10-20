@@ -270,8 +270,10 @@ pub struct ResolvedContinuation {
     /// provider-default treatment.
     pub effort_authoritative: bool,
     pub causal_prefix_commitment: Option<CausalPrefixCommitment>,
-    target_fingerprint: String,
+    target_fingerprint: Box<str>,
     key: ContinuationKey,
+    #[cfg(feature = "multi-instance")]
+    target_namespace: Option<Box<str>>,
 }
 
 impl std::fmt::Debug for ResolvedContinuation {
@@ -295,7 +297,22 @@ impl ResolvedContinuation {
         target: &RoutingTarget,
         credential_authority: &ContinuationAuthority,
     ) -> Result<bool> {
-        Ok(self.key.target_fingerprint(target, credential_authority)? == self.target_fingerprint)
+        #[cfg(feature = "multi-instance")]
+        if let Some(namespace) = &self.target_namespace {
+            return Ok(shared::target_fingerprint(
+                &self.key,
+                namespace,
+                target,
+                credential_authority,
+            )?
+            .as_str()
+                == self.target_fingerprint.as_ref());
+        }
+        Ok(self
+            .key
+            .target_fingerprint(target, credential_authority)?
+            .as_str()
+            == self.target_fingerprint.as_ref())
     }
 }
 
@@ -1881,8 +1898,10 @@ impl ContinuationRegistry {
                     .causal_prefix_commitment
                     .as_deref()
                     .and_then(CausalPrefixCommitment::parse),
-                target_fingerprint: row.target_fingerprint,
+                target_fingerprint: row.target_fingerprint.into_boxed_str(),
                 key,
+                #[cfg(feature = "multi-instance")]
+                target_namespace: None,
             }));
         }
     }
@@ -2877,6 +2896,8 @@ mod tests {
             causal_prefix_commitment: None,
             target_fingerprint: "fingerprint-debug-private-sentinel".into(),
             key: ContinuationKey::from_bytes([74; 32]).expect("continuation key"),
+            #[cfg(feature = "multi-instance")]
+            target_namespace: None,
         };
         let debug = format!("{resolved:?}");
 

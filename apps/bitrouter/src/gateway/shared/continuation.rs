@@ -145,10 +145,17 @@ impl SharedContinuationDb {
 
     /// Cleanup can proceed after closing a producer, but can never reopen it.
     pub(crate) async fn begin_cleanup(&self, identity: &str) -> Result<DatabaseTransaction> {
+        let tx = self.begin_read().await?;
+        self.lock_identity(&tx, identity).await?;
+        Ok(tx)
+    }
+
+    /// A bounded hint scan has no identity authority. Mutations must subsequently
+    /// acquire their identity and row locks and revalidate the current snapshot.
+    pub(crate) async fn begin_read(&self) -> Result<DatabaseTransaction> {
         let tx = self.authority.store().begin().await?;
         self.fence_key(&tx).await?;
         self.lock_producer(&tx).await?;
-        self.lock_identity(&tx, identity).await?;
         Ok(tx)
     }
 
