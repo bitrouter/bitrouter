@@ -15,6 +15,31 @@ use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 const MAX_ATTEMPTS: usize = 32;
 
 impl Engine {
+    /// Called only after the request's sending future is gone. A lost prepare
+    /// acknowledgement can hide an attempt ID, so inspect the durable execution.
+    /// Prepared work is provably unsent; dispatch intent remains conservative.
+    pub async fn interrupt_attempts(&self, execution_id: &str) -> Result<()> {
+        let execution: Stored<Execution> = self
+            .store()
+            .get(Kind::Execution, execution_id)
+            .await?
+            .ok_or(Rejection::NotFound)?;
+        ensure!(execution.value.owner == self.owner, Rejection::Forbidden);
+        for attempt in execution.value.view.attempts {
+            match attempt.state {
+                AttemptState::Prepared => {
+                    self.abandon_prepared(execution_id, &attempt.attempt_id)
+                        .await?
+                }
+                AttemptState::Dispatched => {
+                    self.mark_unknown(execution_id, &attempt.attempt_id).await?
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// Revalidate the original admission without reserving another rate unit or
     /// adopting a different principal/policy snapshot. Dispatch repeats this
     /// check in its own resource transaction immediately before authorization.

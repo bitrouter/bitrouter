@@ -157,6 +157,13 @@ as unsupported; no local hard-limit implementation may silently remain active
 in shared mode. Operator business billing and account-balance policy remain
 outside this milestone.
 
+Shared inference bounds decoded upstream response bytes to 16 MiB per attempt,
+including JSON, Decisions and the complete SSE stream. A narrower native request
+bound still applies. Exceeding the bound rejects delivery; it does not authorize
+replay of a dispatched attempt or discard an already validated terminal fact.
+Hidden HTTP retries and redirects are disabled for shared sends. Input-count
+requests owned by the core controller are outside this gateway milestone.
+
 Transactions take the concurrent shared publication fence and lock only the
 affected tenant/execution/resource rows exclusively, in a fixed order. They end
 before credential refresh, inference, stream delivery or webhook I/O. No exclusive

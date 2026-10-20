@@ -565,6 +565,12 @@ pub trait StreamDecoder: Send {
     /// Feed one SSE event; emit zero or more canonical parts.
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>>;
 
+    /// Validated provider termination held back for trailing usage. Observing
+    /// this fact does not authorize delivery or flush/consume decoder state.
+    fn pending_terminal(&self) -> Option<StreamPart> {
+        None
+    }
+
     /// Called once at stream end; flush any buffered state.
     fn finish(&mut self) -> Result<Vec<StreamPart>> {
         Ok(Vec::new())

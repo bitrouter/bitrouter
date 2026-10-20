@@ -74,12 +74,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     };
     ensure!(principal.api_key_id == principal_id && principal.user_id == tenant);
     ensure!(principal.policy_id.as_deref() == Some("original-policy"));
-    let snapshot = SharedAdmission::new(
-        engine.clone(),
-        key.hash,
-        execution.execution_id.clone(),
-        principal,
-    );
+    let snapshot = SharedAdmission::new(engine.clone(), key.hash, execution.clone(), principal);
     let prompt = Prompt {
         model: "fixture".into(),
         system: None,

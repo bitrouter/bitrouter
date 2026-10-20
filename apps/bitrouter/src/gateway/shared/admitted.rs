@@ -12,24 +12,28 @@ use super::engine::{Engine, Rejection};
 /// Created only after shared admission commits. The original policy and tenant
 /// cannot be replaced by a later API-key lookup while preparing the pipeline.
 pub(crate) struct SharedAdmission {
-    engine: Engine,
-    key_hash: String,
-    execution_id: String,
+    pub(super) engine: Engine,
+    pub(super) key_hash: String,
+    pub(super) execution_id: String,
+    operation: bitrouter_ai::types::ModelOperation,
     principal: Authenticated,
+    pub(super) dispatch: super::dispatched::Tracker,
 }
 
 impl SharedAdmission {
     pub(super) fn new(
         engine: Engine,
         key_hash: String,
-        execution_id: String,
+        execution: bitrouter_ai::gateway::execution::GatewayExecution,
         principal: Authenticated,
     ) -> Arc<Self> {
         Arc::new(Self {
             engine,
             key_hash,
-            execution_id,
+            execution_id: execution.execution_id,
+            operation: execution.operation,
             principal,
+            dispatch: Default::default(),
         })
     }
 
@@ -77,6 +81,7 @@ impl SharedAdmission {
             .is_some_and(|key| crate::auth::keys::hash_key(&key) == self.key_hash);
         if !key_matches
             || ctx.request_id() != self.execution_id
+            || ctx.operation() != self.operation
             || ctx.caller().is_local()
             || ctx.caller().api_key_id() != self.principal.api_key_id
             || ctx.caller().user_id() != self.principal.user_id

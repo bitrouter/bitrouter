@@ -26,7 +26,7 @@ Status: **in progress; no P1 delivery gate is accepted yet**.
 | --- | --- | --- | --- |
 | 1 Authority foundation | Store/key foundation implemented; startup pending | Real PostgreSQL foundation passed | Store/key foundation approved |
 | 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
-| 3 Gateway integration | Credential binding and admission context implemented; served dispatch/settlement pending | Scoped auth/executor and PostgreSQL context regressions passed | Authentication/context substages approved |
+| 3 Gateway integration | Credential binding, admission context and executor dispatch fences implemented; HTTP/settlement pending | Scoped protocol/executor and PostgreSQL regressions passed | Authentication/context/dispatch substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
 | 6 Delivery and operations | Pending | Pending | Pending |
@@ -280,3 +280,43 @@ multi-process acceptance are still required.
   Independent review approved this substage. No process-level P1 gate is closed;
   shared provider dispatch, HTTP/SDK integration and all aggregate gates remain
   pending.
+
+## Provider dispatch and observed terminal facts (2026-10-20)
+
+- Every shared JSON, Decisions and SSE send now reserves its selected account
+  and commits dispatch intent before provider I/O. The executor requires both
+  typed admission and the exact authenticated credential revision. Redirects and
+  hidden client retries are disabled. Local execution retains its existing path.
+- Request-owned attempt guards retain bounded, content-free terminal and usage
+  evidence across cancellation. Definite HTTP/provider rejection is distinct
+  from malformed/truncated/transport-ambiguous work. Ambiguity blocks fallback
+  and retains capacity; guards do not spawn detached database tasks. A later
+  bounded owner still must retain and reconcile interrupted admissions.
+- Shared generation, Decisions and SSE use the same 16 MiB decoded-response
+  bound, honoring narrower native bounds. Shared input-count requests fail
+  closed because distributing the core controller is outside this milestone.
+- Independent review closed four findings: observe complete decoded batches
+  before yielding; retain final error-frame usage before committing failure;
+  recognize validated failed Responses JSON as terminal; and prevent rejected
+  trailing Responses frames from replacing previously validated usage. Real
+  HTTP/PostgreSQL cases cover client drop inside a Messages/Chat event, partial
+  versus final counts, malformed failure identities and cross-response trailing
+  data. Existing secret-redaction and provider-status assertions are retained.
+- `/tmp/bitrouter-p1-dispatch-terminal-identity-tests.log`: **83 passed**, 2,179
+  filtered out, zero retries, 9.719 seconds; real PostgreSQL foundation campaign
+  9.269 seconds. `/tmp/bitrouter-p1-dispatch-local-final.log`: **99 passed**, 2,177
+  filtered out, zero retries, 1.562 seconds with `--no-default-features`, including
+  independent model invocation and gateway protocol boundary regressions.
+- All-feature/all-target `cargo check --locked -p bitrouter` passed in
+  `/tmp/bitrouter-p1-dispatch-all-targets.log`. Runtime helpers still awaiting
+  serving integration emit unused-code warnings; this is not a final strict
+  lint pass and no warning is suppressed.
+- The initial enlarged PostgreSQL fixture overflowed its test stack. Independent
+  scenarios are now separate boxed futures under the original stack and deadline;
+  neither limit was raised. The initial pending-terminal failure and later helper
+  name-shadowing compile error remain in their local logs. Final independent
+  dispatch review approved the corrected source with no remaining findings.
+- This is executor integration, not process-level acceptance. HTTP admission,
+  immutable serving snapshots, durable execution finalization before delivery,
+  bounded ownership/reconciliation, trajectory catch-up, operator/SDK/startup
+  wiring and all P1-A01–A09 gates remain pending.

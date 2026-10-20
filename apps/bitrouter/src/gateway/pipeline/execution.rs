@@ -2849,6 +2849,16 @@ impl Pipeline {
         err: &BitrouterError,
         target: &RoutingTarget,
     ) -> FallbackDecision {
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) =
+            ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+            && admission.blocks_fallback()
+        {
+            // This also persists observed terminal evidence on an interrupted
+            // stream. A storage outage never permits another upstream send.
+            let _ = admission.reconcile_dispatch().await;
+            return FallbackDecision::Fail(err.clone());
+        }
         if ctx.has_completed_decision_failure()
             || (ctx.operation() == ModelOperation::Decisions
                 && matches!(err, BitrouterError::UpstreamInvalidResponse { .. }))

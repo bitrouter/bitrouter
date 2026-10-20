@@ -14,6 +14,7 @@ use super::schema;
 use super::store::{self, Kind, NewRecord, Store, Stored};
 
 mod admitted;
+mod dispatched;
 mod publication;
 mod races;
 mod refresh;
@@ -55,6 +56,7 @@ async fn foundation() -> Result<()> {
         publication::exercise(&first, &second).await?;
         super::authentication::tests::exercise(&first, &second).await?;
         admitted::exercise(&first, &second).await?;
+        Box::pin(dispatched::exercise(&first, &second)).await?;
         Ok::<(), anyhow::Error>(())
     }
     .await;

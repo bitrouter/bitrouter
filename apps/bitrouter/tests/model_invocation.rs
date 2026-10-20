@@ -337,9 +337,16 @@ async fn codex_generate_rejects_truncated_failed_and_post_terminal_streams() -> 
         (
             delta.clone()
                 + &event(
-                    json!({"type":"response.failed","response":{"error":{"type":"rate_limit_error","message":"late selected-secret failure"}}}),
+                    json!({"type":"response.failed","response":{"id":"response","status":"failed","output":[],"error":{"type":"rate_limit_error","message":"late selected-secret failure"}}}),
                 ),
             true,
+        ),
+        (
+            delta.clone()
+                + &event(
+                    json!({"type":"response.failed","response":{"error":{"type":"rate_limit_error","message":"missing terminal identity"}}}),
+                ),
+            false,
         ),
         (delta.clone() + &terminal + &delta, false),
     ] {

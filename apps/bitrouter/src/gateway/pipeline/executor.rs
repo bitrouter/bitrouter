@@ -37,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 
 mod input_count;
 mod response_body;
+mod shared;
 mod stream_bridge;
 
 use stream_bridge::BridgeCapture;
@@ -715,6 +716,7 @@ pub struct HttpExecutor {
     clients: RwLock<HttpClientSet>,
     dispatch: Arc<OutboundDispatch>,
     auth_appliers: AuthAppliers,
+    shared_authority: bool,
 }
 
 struct HttpClientSet {
@@ -867,7 +869,14 @@ impl HttpExecutor {
             clients: RwLock::new(clients),
             dispatch,
             auth_appliers,
+            shared_authority: false,
         })
+    }
+
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn require_shared_authority(mut self) -> Self {
+        self.shared_authority = true;
+        self
     }
 
     /// Replace the global/per-provider timeout clients in-place. Existing
@@ -911,7 +920,7 @@ impl HttpExecutor {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if managed {
+        if managed || self.shared_authority {
             let client = guard
                 .managed_provider_clients
                 .get(&target.provider_name)
@@ -1339,8 +1348,8 @@ impl HttpExecutor {
         request: &DecisionRequest,
         transport: &Arc<dyn crate::gateway::model::protocol::Transport>,
         ctx: &PipelineContext,
-    ) -> Result<(String, UpstreamErrorScrubber, u64)> {
-        let (client, _) = self.client_for(target, false);
+    ) -> Result<(String, UpstreamErrorScrubber, u64, shared::Attempt)> {
+        let (client, _) = self.client_for(target, shared::has_admission(ctx));
         let cancellation = CancellationToken::new();
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -1368,6 +1377,8 @@ impl HttpExecutor {
                 })
                 .await
                 .map_err(|error| scrubber.scrub_error(error))?;
+            let mut attempt =
+                shared::Attempt::begin(self.shared_authority, &request, target, ctx).await?;
             let (request, _) = request.into_parts();
             scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
@@ -1379,13 +1390,21 @@ impl HttpExecutor {
                 .await
                 .map_err(|error| scrubber.scrub_error(error.into()))?;
             let status = response.status();
+            if !status.is_success() {
+                attempt.rejected(status.as_u16()).await?;
+            }
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
-            let text = ModelClient::read_body(response, &cancellation)
+            let text = response_body::read(response, ctx)
                 .await
-                .map_err(|error| scrubber.scrub_error(error.into()))?;
+                .map_err(|error| scrubber.scrub_error(error))?;
             if status.is_success() {
-                return Ok((text, scrubber, started.elapsed().as_millis() as u64));
+                return Ok((
+                    text,
+                    scrubber,
+                    started.elapsed().as_millis() as u64,
+                    attempt,
+                ));
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !refreshed
@@ -1714,7 +1733,8 @@ impl Executor for HttpExecutor {
         let (client, _) = self.client_for(
             target,
             ctx.extension::<super::native::NativeManagedRequest>()
-                .is_some(),
+                .is_some()
+                || shared::has_admission(ctx),
         );
 
         let initial_gate = native_work::gate_duration(ctx);
@@ -1726,7 +1746,7 @@ impl Executor for HttpExecutor {
                     ContinuationFailure::BindingChanged,
                 )
             })?;
-        let (text, successful_authority, storage_allowed, effort_bound) = loop {
+        let (text, successful_authority, storage_allowed, effort_bound, mut shared_attempt) = loop {
             let mut body = self.render_execution_request(
                 adapter.as_ref(),
                 target,
@@ -1767,6 +1787,8 @@ impl Executor for HttpExecutor {
                 .build_authenticated_request(&request_input)
                 .await
                 .map_err(|error| error_scrubber.scrub_error(error))?;
+            let mut shared_attempt =
+                shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
             let (request, authority) = applied.into_parts();
             let wire: Option<serde_json::Value> = request
                 .body()
@@ -1801,6 +1823,9 @@ impl Executor for HttpExecutor {
             .await?;
 
             let status = response.status();
+            if !status.is_success() {
+                shared_attempt.rejected(status.as_u16()).await?;
+            }
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
             let text = response_body::read(response, ctx)
@@ -1808,7 +1833,13 @@ impl Executor for HttpExecutor {
                 .map_err(|error| error_scrubber.scrub_error(error))?;
 
             if status.is_success() {
-                break (text, authority, storage_allowed, effort_bound);
+                break (
+                    text,
+                    authority,
+                    storage_allowed,
+                    effort_bound,
+                    shared_attempt,
+                );
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
@@ -1835,6 +1866,13 @@ impl Executor for HttpExecutor {
             })
         })?;
         if target.api_protocol == ApiProtocol::Responses {
+            if shared_attempt.is_shared()
+                && let Some((failure, usage)) =
+                    crate::gateway::model::protocol::responses::failed_terminal(&json)
+            {
+                shared_attempt.complete(false, usage.as_ref()).await?;
+                return Err(error_scrubber.scrub_error(failure.into()));
+            }
             validate_nonstream_responses_terminal(&json)
                 .map_err(|error| error_scrubber.scrub_error(error))?;
         }
@@ -1847,6 +1885,21 @@ impl Executor for HttpExecutor {
         let mut result =
             crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
                 .map_err(|error| error_scrubber.scrub_error(error.into()))?;
+        if shared_attempt.is_shared() && result.finish_reason.is_none() {
+            return Err(BitrouterError::UpstreamInvalidResponse {
+                message: "shared response has no provider terminal".into(),
+                usage: result.usage.clone().map(Box::new),
+            });
+        }
+        shared_attempt
+            .complete(
+                !matches!(
+                    result.finish_reason,
+                    Some(bitrouter_ai::types::FinishReason::Error(_))
+                ),
+                result.usage.as_ref(),
+            )
+            .await?;
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
         {
@@ -1887,14 +1940,20 @@ impl Executor for HttpExecutor {
         self.preflight_decisions(target, request)?;
         let transport: Arc<dyn crate::gateway::model::protocol::Transport> =
             Arc::new(DecisionsTransport);
-        let (text, scrubber, elapsed) = self.execute_json(target, request, &transport, ctx).await?;
-        let result = ModelClient::parse_decision_response(&text, request).map_err(|error| {
-            let error = scrubber.redactor.scrub_error(error);
-            if error.is_completed_decision_failure() {
-                ctx.record_decision_failure_usage(error.decision_usage().cloned());
+        let (text, scrubber, elapsed, mut attempt) =
+            self.execute_json(target, request, &transport, ctx).await?;
+        let result = match ModelClient::parse_decision_response(&text, request) {
+            Ok(result) => result,
+            Err(error) => {
+                let error = scrubber.redactor.scrub_error(error);
+                if error.is_completed_decision_failure() {
+                    ctx.record_decision_failure_usage(error.decision_usage().cloned());
+                    attempt.complete(false, error.decision_usage()).await?;
+                }
+                return Err(BitrouterError::from(error));
             }
-            BitrouterError::from(error)
-        })?;
+        };
+        attempt.complete(true, Some(&result.usage)).await?;
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),

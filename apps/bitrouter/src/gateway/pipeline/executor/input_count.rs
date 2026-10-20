@@ -136,6 +136,11 @@ impl HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<NativeInputCount> {
+        if self.shared_authority || super::shared::has_admission(ctx) {
+            return Err(invalid(
+                "managed input counting is unavailable on a shared gateway",
+            ));
+        }
         if target.api_protocol != ApiProtocol::Responses
             || target.model_constraints.input_token_counting != Some(InputTokenCounting::Responses)
             || self.auth_appliers.lookup(&target.provider_name).is_some()

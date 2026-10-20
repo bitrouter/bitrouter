@@ -784,15 +784,20 @@ async fn assemble_app(
     let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
     let dispatch = OutboundDispatch::builtin();
 
-    let executor = Arc::new(
-        HttpExecutor::with_provider_timeouts(
-            global_timeouts,
-            provider_timeouts,
-            dispatch,
-            auth_appliers,
-        )
-        .context("building the upstream HTTP executor")?,
-    );
+    let executor = HttpExecutor::with_provider_timeouts(
+        global_timeouts,
+        provider_timeouts,
+        dispatch,
+        auth_appliers,
+    )
+    .context("building the upstream HTTP executor")?;
+    #[cfg(feature = "multi-instance")]
+    let executor = if shared.is_some() {
+        executor.require_shared_authority()
+    } else {
+        executor
+    };
+    let executor = Arc::new(executor);
     let executor_for_reload = executor.clone();
 
     // ---- pricing, metering, policy — all derived from config ----
