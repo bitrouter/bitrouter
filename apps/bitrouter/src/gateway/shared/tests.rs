@@ -13,6 +13,7 @@ use super::engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits}
 use super::schema;
 use super::store::{self, Kind, NewRecord, Store, Stored};
 
+mod admitted;
 mod publication;
 mod races;
 mod refresh;
@@ -53,6 +54,7 @@ async fn foundation() -> Result<()> {
         refresh::exercise(&first, &second).await?;
         publication::exercise(&first, &second).await?;
         super::authentication::tests::exercise(&first, &second).await?;
+        admitted::exercise(&first, &second).await?;
         Ok::<(), anyhow::Error>(())
     }
     .await;
@@ -130,11 +132,11 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
     let left = left?;
     let right = right?;
     let (execution_id, first_owner, second_owner) = match (left, right) {
-        (AdmissionResult::Accepted(first), AdmissionResult::Existing(second)) => {
+        (AdmissionResult::Accepted(first, _), AdmissionResult::Existing(second)) => {
             ensure!(first.execution_id == second.execution_id);
             (first.execution_id, &a, &b)
         }
-        (AdmissionResult::Existing(first), AdmissionResult::Accepted(second)) => {
+        (AdmissionResult::Existing(first), AdmissionResult::Accepted(second, _)) => {
             ensure!(first.execution_id == second.execution_id);
             (first.execution_id, &b, &a)
         }
@@ -165,7 +167,7 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
         ..submission
     };
     let second_execution = match second_owner.admit(&fresh).await? {
-        AdmissionResult::Accepted(execution) => execution.execution_id,
+        AdmissionResult::Accepted(execution, _) => execution.execution_id,
         AdmissionResult::Existing(_) => anyhow::bail!("fresh request unexpectedly deduplicated"),
     };
     ensure!(matches!(
@@ -224,7 +226,7 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
     ));
     ensure!(matches!(
         b.admit(&other).await?,
-        AdmissionResult::Accepted(_)
+        AdmissionResult::Accepted(_, _)
     ));
     Ok(())
 }
@@ -451,7 +453,7 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
             })
             .await?
         {
-            AdmissionResult::Accepted(execution) => executions.push(execution.execution_id),
+            AdmissionResult::Accepted(execution, _) => executions.push(execution.execution_id),
             AdmissionResult::Existing(_) => {
                 anyhow::bail!("external correlation ID unexpectedly deduplicated a request")
             }
@@ -614,7 +616,7 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
         })
         .await?
     {
-        AdmissionResult::Accepted(execution) => execution.execution_id,
+        AdmissionResult::Accepted(execution, _) => execution.execution_id,
         AdmissionResult::Existing(_) => anyhow::bail!("operator fixture unexpectedly deduplicated"),
     };
     let uncertain = reconciler

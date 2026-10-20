@@ -15,6 +15,28 @@ use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 const MAX_ATTEMPTS: usize = 32;
 
 impl Engine {
+    /// Revalidate the original admission without reserving another rate unit or
+    /// adopting a different principal/policy snapshot. Dispatch repeats this
+    /// check in its own resource transaction immediately before authorization.
+    pub async fn revalidate(&self, key_hash: &str, execution_id: &str) -> Result<()> {
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                let (_, _, expiry) = self
+                    .authorized_execution(&tx, key_hash, execution_id)
+                    .await?;
+                self.live_owner(&tx, false).await?;
+                let now = Store::now(&tx).await?;
+                ensure!(
+                    expiry.is_none_or(|expiry| expiry > now),
+                    Rejection::Unauthorized
+                );
+                tx.commit().await?;
+                Ok(())
+            })
+            .await
+    }
+
     pub async fn set_resource(
         &self,
         pool_id: &str,

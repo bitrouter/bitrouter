@@ -3831,6 +3831,7 @@ mod tests {
             serde_json::Value::String(previous_response_id.into()),
         );
         PipelineContext::new(PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: "next-gateway".into(),
             original_model: "openai:gpt-5".into(),
             model: "openai:gpt-5".into(),
@@ -7130,6 +7131,7 @@ mod tests {
             );
         }
         PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: request_id.into(),
             original_model: "gpt-5".into(),
             model: "gpt-5".into(),

@@ -17,6 +17,7 @@ pub(super) struct Principal {
     pub(super) id: String,
     pub(super) tenant: String,
     pub(super) revision: String,
+    policy_id: Option<String>,
     rpm: Option<u32>,
     pub(super) valid_until_ms: Option<i64>,
 }
@@ -190,8 +191,8 @@ impl Engine {
                                     due_at_ms: None,
                                     now_ms: now,
                                     value: &Idempotency {
-                                        tenant_id: principal.tenant,
-                                        principal_id: principal.id,
+                                        tenant_id: principal.tenant.clone(),
+                                        principal_id: principal.id.clone(),
                                         fingerprint: request.fingerprint.into(),
                                         operation: request.operation,
                                         execution_id: execution_id.clone()
@@ -203,7 +204,14 @@ impl Engine {
                     );
                 }
                 tx.commit().await?;
-                Ok(AdmissionResult::Accepted(view))
+                Ok(AdmissionResult::Accepted(
+                    view,
+                    crate::auth::events::Authenticated {
+                        api_key_id: principal.id,
+                        user_id: principal.tenant,
+                        policy_id: principal.policy_id,
+                    },
+                ))
             })
             .await
     }
@@ -290,6 +298,7 @@ pub(super) async fn authenticate(
         id: row.id,
         tenant: row.user_id,
         revision,
+        policy_id: row.policy_id,
         rpm,
         valid_until_ms,
     })

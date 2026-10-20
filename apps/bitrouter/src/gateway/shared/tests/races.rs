@@ -147,7 +147,7 @@ async fn submit(
 
 async fn accepted(engine: &Engine, principal: &Principal, generation: u64) -> Result<String> {
     match submit(engine, principal, generation, None).await? {
-        AdmissionResult::Accepted(execution) => Ok(execution.execution_id),
+        AdmissionResult::Accepted(execution, _) => Ok(execution.execution_id),
         AdmissionResult::Existing(_) => {
             anyhow::bail!("new fixture request unexpectedly deduplicated")
         }
@@ -249,7 +249,7 @@ async fn rate_budgets(first: &Store, second: &Store) -> Result<()> {
         tokio::time::sleep(Duration::from_millis(u64::try_from(remaining)? + 20)).await;
     }
     let admitted = match submit(&fixture.a, &limited, fixture.generation, Some("once")).await? {
-        AdmissionResult::Accepted(execution) => execution.execution_id,
+        AdmissionResult::Accepted(execution, _) => execution.execution_id,
         _ => anyhow::bail!("first quota fixture deduplicated"),
     };
     fixture

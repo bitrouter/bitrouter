@@ -2204,6 +2204,7 @@ mod tests {
         invocation: &EvalInvocation,
     ) -> PipelineContext {
         let mut context = PipelineContext::new(PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: request_id.into(),
             original_model: "model".into(),
             model: "model".into(),

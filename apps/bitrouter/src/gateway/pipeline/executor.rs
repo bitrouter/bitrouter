@@ -2340,6 +2340,7 @@ mod beta_forward_tests {
             stream: false,
         };
         PipelineContext::new(PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: "t".into(),
             original_model: "claude".into(),
             model: "claude".into(),

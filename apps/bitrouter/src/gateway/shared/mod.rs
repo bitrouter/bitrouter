@@ -1,5 +1,6 @@
 //! Shared gateway authority. Local operation never initializes this backend.
 
+pub(crate) mod admitted;
 mod authentication;
 mod authority;
 pub(crate) mod credentials;

@@ -170,7 +170,7 @@ pub(super) struct Admission<'a> {
 }
 
 pub(super) enum AdmissionResult {
-    Accepted(GatewayExecution),
+    Accepted(GatewayExecution, crate::auth::events::Authenticated),
     Existing(GatewayExecution),
 }
 

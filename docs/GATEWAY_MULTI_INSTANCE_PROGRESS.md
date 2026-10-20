@@ -26,7 +26,7 @@ Status: **in progress; no P1 delivery gate is accepted yet**.
 | --- | --- | --- | --- |
 | 1 Authority foundation | Store/key foundation implemented; startup pending | Real PostgreSQL foundation passed | Store/key foundation approved |
 | 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
-| 3 Gateway integration | Pending | Pending | Pending |
+| 3 Gateway integration | Credential binding and admission context implemented; served dispatch/settlement pending | Scoped auth/executor and PostgreSQL context regressions passed | Authentication/context substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
 | 6 Delivery and operations | Pending | Pending | Pending |
@@ -230,6 +230,32 @@ multi-process acceptance are still required.
   this substage does not close any P1-A01–A09 gate or establish multi-process
   serving acceptance. The registry is consumed by its real-backend campaign
   while the serving snapshot coordinator is being connected.
+
+## Original admission context (2026-10-20)
+
+- The accepted transaction now returns the original locked API-principal and
+  policy snapshot alongside its public execution view. A private request object
+  carries that authority through pipeline-input cloning, detached execution and
+  stream context creation. Inbound JSON cannot construct this typed authority.
+- `AuthHook` uses the shared admission's original database authority, checks its
+  execution/caller/credential binding and emits the original policy identity.
+  Revalidation fences the current principal, tenant/config revision, owner and
+  database-clock expiry without reserving another quota unit. A changed policy
+  or revoked key fails rather than silently adopting a new snapshot.
+- `/tmp/bitrouter-p1-admitted-context-tests-fixed.log`: **117 passed**, 16.999 s,
+  including the real PostgreSQL context campaign and existing auth/context tests.
+  The campaign deliberately gives the ordinary auth hook a disconnected local
+  backend, checks cloned and streamed authority, detects request tampering and
+  key changes from an independent connection, and verifies unchanged counters.
+- `/tmp/bitrouter-p1-admitted-context-local.log`: **109 passed**, 5.487 s, under
+  `--no-default-features`, with no shared backend requirement. All-features,
+  all-targets `cargo check --locked -p bitrouter` passed in
+  `/tmp/bitrouter-p1-admitted-context-all-targets.log`. Unselected tests and
+  staged runtime dead-code warnings are not represented as final acceptance.
+- Independent review approved this substage with no findings. The initial
+  ownership/accessor compile errors remain in
+  `/tmp/bitrouter-p1-admitted-context-tests.log`; they were fixed before validation.
+  All process-level P1 gates remain pending.
 
 ## Direct credential reader release (2026-10-20)
 
