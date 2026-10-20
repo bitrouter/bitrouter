@@ -49,6 +49,7 @@ use crate::{
 };
 
 mod delivery;
+mod ingress;
 
 #[derive(Clone)]
 struct Upstream {
@@ -122,14 +123,14 @@ async fn upstream(State(state): State<Upstream>, uri: Uri, headers: HeaderMap) -
             let rejected = serde_json::json!({"type":"response.failed","response":{"id":"unrelated-response","status":"failed","error":{"code":"server_error","message":"unrelated failure"},"usage":{"input_tokens":70,"output_tokens":30,"total_tokens":100}}});
             ([("content-type", "text/event-stream")], format!("event: response.completed\ndata: {terminal}\n\nevent: response.failed\ndata: {rejected}\n\n")).into_response()
         }
-        Some("stream") | Some("dropped") | Some("truncated") => {
+        Some("stream") | Some("dropped") | Some("truncated") | Some("live") => {
             let start = "data: {\"id\":\"stream-fixture\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n";
             let terminal = "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
             let usage = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,\"total_tokens\":10}}\n\ndata: [DONE]\n\n";
-            let data = if uri.path().starts_with("/truncated/") { start.to_owned() }
+            let data = if uri.path().starts_with("/truncated/") || uri.path().starts_with("/live/") { start.to_owned() }
                 else if uri.path().starts_with("/dropped/") { format!("{start}{terminal}") }
                 else { format!("{start}{terminal}{usage}") };
-            let mut response = if uri.path().starts_with("/dropped/") {
+            let mut response = if uri.path().starts_with("/dropped/") || uri.path().starts_with("/live/") {
                 let body = futures::stream::once(async move { Ok::<_, std::io::Error>(data) })
                     .chain(futures::stream::pending());
                 Response::new(Body::from_stream(body))
@@ -166,6 +167,7 @@ impl Drop for Server {
     }
 }
 
+#[derive(Clone)]
 struct Fixture {
     engine: Engine,
     custody: Arc<Registry>,
@@ -354,6 +356,21 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     Box::pin(streaming(&fixture)).await?;
     Box::pin(batch_drop(&fixture)).await?;
     Box::pin(failed_responses(&fixture)).await?;
+    // Poll HTTP handlers on an owned task, as the real connection service does,
+    // without the cumulative stack frames of the surrounding database campaign.
+    let mut ingress = tokio::task::JoinSet::new();
+    let inputs = (
+        fixture.clone(),
+        state.clone(),
+        first.clone(),
+        tenant.clone(),
+    );
+    ingress
+        .spawn(async move { ingress::exercise(&inputs.0, &inputs.1, &inputs.2, &inputs.3).await });
+    ingress
+        .join_next()
+        .await
+        .context("missing ingress task")???;
     ensure!(state.calls.load(Ordering::SeqCst) == state.fenced.load(Ordering::SeqCst));
     let before = first
         .get::<serde_json::Value>(Kind::Resource, &fixture.pool)

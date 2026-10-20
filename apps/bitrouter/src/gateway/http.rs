@@ -331,7 +331,7 @@ async fn health() -> impl IntoResponse {
 
 /// `GET /metrics` — Prometheus text-exposition. Returns 404 when
 /// no [`MetricsRenderer`] is wired into the app, so scrapers can probe.
-async fn prometheus_metrics(State(state): State<AppState>) -> Response {
+pub(crate) async fn prometheus_metrics(State(state): State<AppState>) -> Response {
     match &state.metrics_renderer {
         Some(renderer) => Response::builder()
             .status(StatusCode::OK)
@@ -1258,7 +1258,10 @@ fn mcp_error_response_with_data(
         .into_response()
 }
 
-async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+pub(crate) async fn list_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
     let models = state.language_model.routing_table().list_models();
     let data: Vec<_> = models
         .into_iter()
@@ -1333,6 +1336,69 @@ async fn handle(
     {
         return BitrouterError::from(error).into_response();
     }
+    let input = match parse_input(&inbound, body) {
+        Ok(input) => input,
+        Err(error) => return error.into_response(),
+    };
+    execute_input(
+        state,
+        headers,
+        inbound,
+        input,
+        request_id,
+        #[cfg(feature = "multi-instance")]
+        None,
+    )
+    .await
+}
+
+/// Validate the original protocol document before shared admission. Configurable
+/// prompt transforms and route/default expansion run only after that boundary.
+pub(crate) fn parse_input(inbound: &ApiProtocol, body: serde_json::Value) -> Result<PipelineInput> {
+    if *inbound == ApiProtocol::Decisions {
+        DecisionsCodec::parse_request(body)
+            .map(PipelineInput::Decisions)
+            .map_err(BitrouterError::from)
+    } else {
+        inbound_adapter_for(inbound)
+            .ok_or_else(|| BitrouterError::bad_request("unsupported inbound model protocol"))?
+            .parse_request(body)
+            .map(|prompt| PipelineInput::Generation(Box::new(prompt)))
+            .map_err(BitrouterError::from)
+    }
+}
+
+#[cfg(feature = "multi-instance")]
+pub(crate) async fn handle_shared(
+    state: AppState,
+    mut headers: HeaderMap,
+    inbound: ApiProtocol,
+    input: PipelineInput,
+    correlation_id: String,
+    admission: Arc<crate::gateway::shared::admitted::SharedAdmission>,
+) -> Response {
+    add_inbound_protocol_hint(&mut headers, &inbound);
+    execute_input(
+        state,
+        headers,
+        inbound,
+        input,
+        correlation_id,
+        Some(admission),
+    )
+    .await
+}
+
+async fn execute_input(
+    state: AppState,
+    headers: HeaderMap,
+    inbound: ApiProtocol,
+    input: PipelineInput,
+    request_id: String,
+    #[cfg(feature = "multi-instance")] admission: Option<
+        Arc<crate::gateway::shared::admitted::SharedAdmission>,
+    >,
+) -> Response {
     let adapter = if inbound == ApiProtocol::Decisions {
         None
     } else {
@@ -1344,23 +1410,16 @@ async fn handle(
             }
         }
     };
-    let (input, original_model) = if let Some(adapter) = &adapter {
-        match adapter.parse_request(body).map_err(BitrouterError::from) {
-            Ok(prompt) => {
-                let (prompt, original_model) =
-                    prepare_model_prompt(prompt, &headers, &state.prompt_transforms);
-                (PipelineInput::Generation(Box::new(prompt)), original_model)
-            }
-            Err(error) => return error.into_response(),
+    let (input, original_model) = match input {
+        PipelineInput::Generation(prompt) => {
+            let (prompt, original_model) =
+                prepare_model_prompt(*prompt, &headers, &state.prompt_transforms);
+            (PipelineInput::Generation(Box::new(prompt)), original_model)
         }
-    } else {
-        match DecisionsCodec::parse_request(body).map_err(BitrouterError::from) {
-            Ok(mut request) => {
-                request.model = sanitize_model_name(&request.model);
-                let original_model = request.model.clone();
-                (PipelineInput::Decisions(request), original_model)
-            }
-            Err(error) => return error.into_response(),
+        PipelineInput::Decisions(mut request) => {
+            request.model = sanitize_model_name(&request.model);
+            let original_model = request.model.clone();
+            (PipelineInput::Decisions(request), original_model)
         }
     };
 
@@ -1399,6 +1458,10 @@ async fn handle(
     // same-protocol upstream — a faithful round-trip instead of a lossy
     // cross-protocol translation.
     req.inbound_protocol = Some(inbound.clone());
+    #[cfg(feature = "multi-instance")]
+    if let Some(admission) = &admission {
+        admission.attach(&mut req);
+    }
 
     let mut response = if input
         .generation_prompt()

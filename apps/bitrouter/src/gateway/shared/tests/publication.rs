@@ -34,6 +34,53 @@ fn candidate() -> Configuration {
 }
 
 #[test]
+fn publication_restricts_header_passthrough_to_fixed_request_identity() -> Result<()> {
+    for name in ["user-agent", "OpenAI-Organization", "x-codex-turn-metadata"] {
+        let mut document = candidate();
+        document.routing["providers"]["fixture"]["headers"] =
+            json!({name: {"passthrough":true,"default":"fixed-fallback"}});
+        document.prepare()?;
+    }
+    for name in [
+        "x-unlisted-routing",
+        "traceparent",
+        "authorization",
+        "x-bitrouter-request-id",
+    ] {
+        let mut document = candidate();
+        document.routing["providers"]["fixture"]["headers"] =
+            json!({name: {"passthrough":true,"default":"private-sentinel"}});
+        let error = document
+            .prepare()
+            .err()
+            .context("accepted unbound passthrough")?;
+        ensure!(!format!("{error:#}").contains("private-sentinel"));
+        ensure!(
+            error.to_string().contains("passthrough")
+                || error.to_string() == "invalid shared routing configuration"
+        );
+    }
+    let mut inherited = candidate();
+    inherited.routing["providers"]["base"] = json!({
+        "api_base":"https://example.com/v1","auto_discover":false,
+        "headers":{"x-unlisted-routing":{"passthrough":true}}
+    });
+    inherited.routing["providers"]["fixture"]["derives"] = json!("base");
+    inherited.credentials.push(CredentialBinding {
+        provider: "base".into(),
+        account: "default".into(),
+        credential_provider: "fixture-account".into(),
+        credential_account: "primary".into(),
+    });
+    let error = inherited
+        .prepare()
+        .err()
+        .context("accepted inherited unbound passthrough")?;
+    ensure!(error.to_string().contains("passthrough"));
+    Ok(())
+}
+
+#[test]
 fn publication_has_no_ambient_authority() -> Result<()> {
     let document = candidate();
     let prepared = document.prepare()?;

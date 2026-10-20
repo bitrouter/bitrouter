@@ -116,11 +116,69 @@ returns 202 with the same durable execution status and a query location, rather
 than replaying inference or pretending to resume a stream. Ordinary first
 submissions retain their protocol response/SSE behavior.
 
+Version 1 uses the following fixed lowercase header names, in this order:
+
+```text
+anthropic-beta
+anthropic-workspace-id
+chatgpt-account-id
+openai-organization
+openai-project
+session-id
+thread-id
+user-agent
+x-bitrouter-acp-session-id
+x-bitrouter-benchmark-run-id
+x-bitrouter-controller-id
+x-bitrouter-harness
+x-bitrouter-parent-session-id
+x-bitrouter-trial-id
+x-bitrouter-workflow-session
+x-claude-code-agent-id
+x-claude-code-parent-agent-id
+x-claude-code-session-id
+x-codex-turn-metadata
+x-goog-user-project
+x-session-id
+x-smithers-node-id
+x-smithers-workflow-id
+```
+
+The SHA-256 input is the compact UTF-8 JSON array
+`["gateway-request-v1", endpoint, [[name, [raw_value_bytes, ...]], ...], body]`.
+Each header value is an array of byte integers. Duplicate value order and
+multiplicity are retained, including empty values; an absent header has no
+values. JSON object keys are sorted recursively, while array order and scalar
+values are preserved. No body serialization is retained alongside the parsed
+body. This encoding and header set cannot change silently across replicas.
+Publication rejects resolved provider passthrough rules outside this set;
+static provider headers remain supported. Shared session context does not use
+process-local ACP route leases.
+
+A compatibility vector uses `/v1/responses`, `openai-project` values `p1`, `p2`
+in that order, one empty `session-id`, all other listed headers absent, and body
+`{"seed":7,"model":"fixture","input":["雪",{"z":null,"a":false}]}`.
+Its digest is
+`b8140196b302d60f648816e372820e1c133e96d73d6158df89b172b557972777`.
+
+Shared Responses accepts ordinary inference only. Any `BitRouter-Beta` header,
+any top-level `bitrouter` field, or `multi_agent.enabled: true` is rejected with
+`unsupported_capability` before admission or duplicate lookup. Capacity is
+reserved before inspecting either headers or the bounded JSON body.
+`multi_agent.enabled: false` alone does not select the managed profile.
+
 `GET /v1/gateway/executions/{id}` returns a bounded, tenant-authorized status
 projection. Every response after acceptance, including an error response, exposes
 `x-bitrouter-execution-id` and the query location in addition to the existing
 correlation header. Recovering after loss of the entire response requires an
 idempotency key, because the client may never have learned the generated ID.
+An admission storage failure may leave the commit outcome unconfirmed. That 503
+also exposes the candidate execution ID and status location; these headers
+permit investigation and do not assert that acceptance committed. A query can
+return 404 if no execution committed. The caller's correlation ID remains
+separate from the execution ID used by pipeline hooks, metering and public
+continuation handles. Duplicate responses echo the current request correlation
+in their header while retaining the original correlation in the execution DTO.
 The SDK explicitly distinguishes
 an existing execution from a model response. Unknown executions are queryable;
 the service does not promise provider-side exactly-once execution.

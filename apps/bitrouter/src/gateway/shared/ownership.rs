@@ -45,6 +45,11 @@ pub(super) enum Submission {
 }
 
 impl Reservation {
+    /// Available before the admission await, including an uncertain commit.
+    pub fn execution_id(&self) -> &str {
+        &self.0.execution_id
+    }
+
     pub async fn admit(self, request: &Admission<'_>) -> Result<Submission> {
         *lock(&self.0.phase) = AdmissionPhase::UnknownAck;
         match self

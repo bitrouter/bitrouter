@@ -125,6 +125,13 @@ impl Configuration {
         let mut accounts = BTreeSet::new();
         for (id, provider) in &config.providers {
             ensure!(
+                provider.headers.iter().all(|(name, policy)| {
+                    !matches!(policy, crate::config::ProviderHeaderConfig::Policy(policy) if policy.passthrough)
+                        || super::http::fingerprint::allows_header(name)
+                }),
+                "shared provider passthrough is outside the request identity contract"
+            );
+            ensure!(
                 provider
                     .models
                     .iter()

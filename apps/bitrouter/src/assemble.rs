@@ -1184,7 +1184,12 @@ async fn assemble_app(
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
     #[cfg(feature = "harness")]
-    let session_context = SessionContextHook::new(Arc::clone(&acp_runtime));
+    let session_context = if is_shared {
+        // A replica-local ACP route lease is not shared gateway authority.
+        SessionContextHook::default()
+    } else {
+        SessionContextHook::new(Arc::clone(&acp_runtime))
+    };
     #[cfg(not(feature = "harness"))]
     let session_context = SessionContextHook::default();
     let request_checks_for_pipeline = request_checks.clone();

@@ -32,10 +32,10 @@ review threads remained unresolved. This does not close any P1 gate.
 | --- | --- | --- | --- |
 | 1 Authority foundation | Store/key foundation implemented; startup pending | Real PostgreSQL foundation passed | Store/key foundation approved |
 | 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
-| 3 Gateway integration | Credential binding, admission context, dispatch and delivery accounting implemented; HTTP integration pending | Scoped protocol/executor and PostgreSQL regressions passed | Authentication/context/dispatch/custody substages approved |
+| 3 Gateway integration | Credential binding, admission, dispatch, delivery and private HTTP router implemented; official startup pending | Scoped HTTP/protocol/executor and PostgreSQL regressions passed | Authentication/context/dispatch/custody/HTTP substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
-| 6 Delivery and operations | Bounded custody and transport helper implemented; serving/workers pending | Scoped custody/transport regressions passed | Custody and transport substages approved |
+| 6 Delivery and operations | Bounded custody, transport and HTTP admission implemented; runtime/workers pending | Scoped custody/transport/HTTP regressions passed | Custody, transport and HTTP substages approved |
 | 7 Aggregate acceptance and PR | Pending | Pending | Pending |
 
 ## Acceptance ledger
@@ -518,3 +518,86 @@ multi-process acceptance are still required.
   heartbeat/recovery workers, operator/SDK surfaces, trajectory integration,
   independent-process faults/load, final performance and aggregate review
   remain open.
+
+## Shared HTTP admission substage (2026-10-20)
+
+- Added a private shared HTTP router for the four inference protocols, execution
+  queries, models, health and metrics. It uses the existing model parser,
+  transforms, pipeline and renderers. It is not yet wired to official process
+  startup; this substage does not establish independent-process acceptance.
+- Nonqueueing custody reservation precedes JSON aggregation. One immutable
+  application/generation pair supplies both admission and execution. First
+  submissions retain JSON/SSE responses, duplicates return 202 with the original
+  execution, and conflicting key reuse returns 409. Execution queries and
+  duplicates require fresh database-backed authentication.
+- Caller correlation is separate from the service ID installed before pipeline
+  hooks, provider dispatch and continuation encoding. Accepted responses,
+  including errors, carry execution/query metadata and hold custody through
+  response-body ownership. Unconfirmed admission errors expose a candidate ID;
+  a subsequent 404 can establish that it did not commit. No response causes
+  automatic inference replay.
+- The request fingerprint is computed from the original JSON and a fixed set of
+  23 semantic headers before mutable transforms or route selection. It preserves
+  duplicate/raw header values and distinguishes absent from empty headers.
+  Resolved provider passthrough outside that set is rejected at publication.
+  Shared session context retains session evidence without local ACP route leases.
+  The encoding and an independently calculated golden vector are in the spec.
+- Independent review found a missing managed Responses profile guard. Before
+  the fix, `/tmp/bitrouter-p1-http-managed-before.log` reproduced a beta-header
+  retry incorrectly returning the ordinary execution with 202. Shared ingress
+  now reuses managed-profile detection and the unsupported-capability response,
+  inside the reserved path and before admission/duplicate lookup. Regression
+  coverage checks beta variants, body markers, allowed ordinary requests,
+  unchanged durable record counts/tenant state and no provider dispatch.
+- The first HTTP fixture incorrectly scoped its auth hook to Generation.
+  Changing it to the official Both/pre-resolution scope fixed Decisions.
+  A later streaming case overflowed the cumulative debug stack of the enclosing
+  PostgreSQL campaign. LLDB captured that call chain in
+  `/tmp/bitrouter-p1-http-stack-backtrace.log`; boxing the common execution future
+  did not fix it and was reverted. Running HTTP scenarios in one owned, joined
+  task, like real connections, passed with the ordinary stack budget.
+  `/tmp/bitrouter-p1-http-owned-task.log` also exercised real TCP JSON and SSE.
+  No stack-size override or test deadline increase was used.
+- Additional regressions cover a 256-byte caller correlation with a continuation
+  handle that decodes to the service execution ID; body abandonment with observed
+  terminal/usage versus genuinely unknown work; retained shared occupancy for
+  unknown work; tenant-scoped status and revoked credentials; and a real
+  database admission timeout exposing a candidate ID without automatic replay.
+  The initial abandonment assertion incorrectly expected a terminal before the
+  provider terminal was read; the fixture now explicitly distinguishes those
+  two outcomes. Post-commit lost-ACK injection and real publication/snapshot
+  replacement during serving remain aggregate/runtime validation work.
+- `/tmp/bitrouter-p1-http-boundaries-tests.log`, Rust 1.99,
+  `--locked -p bitrouter --no-default-features --features multi-instance --lib`,
+  explicit shared/HTTP/executor/continuation/config selection, `--run-ignored all`,
+  two test threads and zero retries: **175/175 passed**, 2,110 filtered in
+  17.647 seconds; PostgreSQL 13.631 seconds.
+- `/tmp/bitrouter-p1-http-full-tests.log`, `--all-features` with the same library
+  selection plus `model_invocation`, `gateway_model_boundary` and
+  `gateway_anthropic_authority`: **208/208 passed**, 3,384 filtered, zero retries
+  in 17.909 seconds; PostgreSQL 13.636 seconds. The existing Apple development
+  linker warning appeared again; this was not a performance run.
+- `/tmp/bitrouter-p1-http-local-tests.log`, pure local `--no-default-features`
+  without a PostgreSQL test URL, HTTP/execution/continuation/config selection:
+  **146/146 passed**, 2,107 filtered, zero retries in 3.967 seconds.
+- Clippy identified one unnecessary comparator; the equivalent key-based sort
+  preserves the fingerprint. The final fingerprint/golden selection passed
+  **3/3**, zero retries, 0.035 seconds
+  (`/tmp/bitrouter-p1-http-final-fingerprint.log`). Independent review verified
+  that this was the only source delta after the broader successful runs.
+- Final Rust 1.97 all-feature library/test Clippy completed with exit 0 in
+  1m01s (`/tmp/bitrouter-p1-http-final-clippy.log`) and no Clippy-specific
+  diagnostics. It still reports 122 staged unused-code diagnostics in the
+  library and one in the library tests, plus the existing dependency
+  future-compatibility notice. These remain runtime-integration work and were
+  not suppressed; this is not final strict P1 lint acceptance.
+- Independent rereview approved the HTTP substage, closed the profile finding,
+  and verified the sort equivalence. All 16 reviewed source/spec file hashes
+  match the final candidate
+  (`/tmp/bitrouter-p1-http-stage-review-20261020.json`,
+  `/tmp/bitrouter-p1-http-review-hashes.json`). Formatting and whitespace checks
+  passed. The progress ledger alone was updated after the reviewed snapshot.
+- Runtime publication/drain ownership, dedicated
+  heartbeat/recovery workers, operator/SDK clients, trajectory integration,
+  independent-process faults/load, performance and final aggregate review remain
+  open. No P1-A01–A09 gate is closed here.
