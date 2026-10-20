@@ -8,6 +8,7 @@ use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::{context::PipelineContext, types::PipelineRequest};
 
 use super::engine::{Engine, Rejection};
+use super::ownership::Custody;
 
 /// Created only after shared admission commits. The original policy and tenant
 /// cannot be replaced by a later API-key lookup while preparing the pipeline.
@@ -17,24 +18,66 @@ pub(crate) struct SharedAdmission {
     pub(super) execution_id: String,
     operation: bitrouter_ai::types::ModelOperation,
     principal: Authenticated,
-    pub(super) dispatch: super::dispatched::Tracker,
+    pub(super) dispatch: Arc<super::dispatched::Tracker>,
+    custody: Arc<Custody>,
 }
 
 impl SharedAdmission {
+    #[cfg(test)]
     pub(super) fn new(
         engine: Engine,
         key_hash: String,
         execution: bitrouter_ai::gateway::execution::GatewayExecution,
         principal: Authenticated,
+    ) -> anyhow::Result<Arc<Self>> {
+        let custody = Custody::fixture(engine, execution.execution_id.clone())?;
+        Ok(Self::with_custody(custody, key_hash, execution, principal))
+    }
+
+    pub(super) fn with_custody(
+        custody: Arc<Custody>,
+        key_hash: String,
+        execution: bitrouter_ai::gateway::execution::GatewayExecution,
+        principal: Authenticated,
     ) -> Arc<Self> {
         Arc::new(Self {
-            engine,
+            engine: custody.engine.clone(),
             key_hash,
             execution_id: execution.execution_id,
             operation: execution.operation,
             principal,
-            dispatch: Default::default(),
+            dispatch: custody.dispatch.clone(),
+            custody,
         })
+    }
+
+    pub(crate) fn record_pipeline_outcome(&self, successful_terminal: bool) {
+        self.custody.record_pipeline_outcome(successful_terminal);
+    }
+
+    /// Required continuation activation precedes this authoritative commit;
+    /// HTTP success may only become visible after it has acknowledged.
+    pub(crate) async fn finish_delivery(&self, successful_terminal: bool) -> Result<()> {
+        use bitrouter_ai::gateway::execution::TerminalOutcome;
+
+        self.record_pipeline_outcome(successful_terminal);
+        if self.blocks_fallback() {
+            return Err(BitrouterError::UpstreamUnavailable);
+        }
+        let execution = self
+            .engine
+            .owned_execution(&self.execution_id)
+            .await
+            .map_err(public_error)?;
+        let outcome = self.custody.terminal_outcome(&execution);
+        if successful_terminal && !matches!(outcome, TerminalOutcome::Succeeded) {
+            return Err(BitrouterError::UpstreamUnavailable);
+        }
+        self.engine
+            .finish(&self.execution_id, &outcome)
+            .await
+            .map_err(public_error)?;
+        Ok(())
     }
 
     pub fn attach(self: &Arc<Self>, request: &mut PipelineRequest) {

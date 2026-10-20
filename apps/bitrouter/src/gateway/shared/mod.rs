@@ -7,6 +7,7 @@ pub(crate) mod credentials;
 mod crypto;
 pub(crate) mod dispatched;
 mod engine;
+mod ownership;
 mod publication;
 mod schema;
 mod store;

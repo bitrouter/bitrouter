@@ -17,6 +17,7 @@ use crate::metering::{
 use super::{
     admitted::{SharedAdmission, public_error},
     credentials::CredentialStamp,
+    engine::Engine,
 };
 
 #[derive(Default)]
@@ -37,6 +38,32 @@ impl Tracker {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
+
+    pub(super) async fn reconcile(
+        &self,
+        engine: &Engine,
+        execution_id: &str,
+        require_quiescent: bool,
+    ) -> anyhow::Result<()> {
+        let pending = {
+            let state = self.lock();
+            anyhow::ensure!(
+                !require_quiescent || !state.occupied || state.dropped,
+                "quiescent custody still has a live provider attempt"
+            );
+            if !state.occupied || !state.dropped {
+                return Ok(());
+            }
+            (state.attempt_id.clone(), state.evidence.clone())
+        };
+        if let (Some(id), Some(evidence)) = pending {
+            engine.record_terminal(execution_id, &id, &evidence).await?;
+        } else {
+            engine.interrupt_attempts(execution_id).await?;
+        }
+        // Persistence cannot authorize replay after the provider future ended.
+        Ok(())
+    }
 }
 
 impl SharedAdmission {
@@ -47,27 +74,10 @@ impl SharedAdmission {
     /// The owner retains this admission until pending evidence is reconciled.
     /// A dropped attempt never spawns an unbounded detached database task.
     pub async fn reconcile_dispatch(&self) -> Result<()> {
-        let pending = {
-            let state = self.dispatch.lock();
-            if !state.occupied || !state.dropped {
-                return Ok(());
-            }
-            (state.attempt_id.clone(), state.evidence.clone())
-        };
-        if let (Some(id), Some(evidence)) = pending {
-            self.engine
-                .record_terminal(&self.execution_id, &id, &evidence)
-                .await
-                .map_err(public_error)?;
-            // Even successful late persistence does not authorize replay of a
-            // request whose owning provider future was already interrupted.
-        } else {
-            self.engine
-                .interrupt_attempts(&self.execution_id)
-                .await
-                .map_err(public_error)?;
-        }
-        Ok(())
+        self.dispatch
+            .reconcile(&self.engine, &self.execution_id, false)
+            .await
+            .map_err(public_error)
     }
 }
 

@@ -4,6 +4,12 @@ Implementation follows the [P1 contract](GATEWAY_MULTI_INSTANCE_SPEC.md) and the
 [original P1 gates](BITROUTER_SERVICE_REFACTOR_PLAN.md#p1-acceptance).
 Status: **in progress; no P1 delivery gate is accepted yet**.
 
+Current P0 base (2026-10-20): `9cbe512d101e777470d113b0086ab9e331b3a638`.
+[#984](https://github.com/bitrouter/bitrouter/pull/984) is merge ready and remains
+unmerged: [CI](https://github.com/bitrouter/bitrouter/actions/runs/39421381228)
+passed 57/57 jobs, all checks were 63 successful/8 configured skips, and no
+review threads remained unresolved. This does not close any P1 gate.
+
 ## Baseline and scope (2026-10-19)
 
 - Branch: `codex/gateway-multi-instance`, based on P0 PR #984 at
@@ -26,10 +32,10 @@ Status: **in progress; no P1 delivery gate is accepted yet**.
 | --- | --- | --- | --- |
 | 1 Authority foundation | Store/key foundation implemented; startup pending | Real PostgreSQL foundation passed | Store/key foundation approved |
 | 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
-| 3 Gateway integration | Credential binding, admission context and executor dispatch fences implemented; HTTP/settlement pending | Scoped protocol/executor and PostgreSQL regressions passed | Authentication/context/dispatch substages approved |
+| 3 Gateway integration | Credential binding, admission context, dispatch and delivery accounting implemented; HTTP integration pending | Scoped protocol/executor and PostgreSQL regressions passed | Authentication/context/dispatch/custody substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
-| 6 Delivery and operations | Pending | Pending | Pending |
+| 6 Delivery and operations | Bounded custody implemented; transport/workers pending | Scoped custody/cancellation regressions passed | Custody approved; transport/worker implementation pending |
 | 7 Aggregate acceptance and PR | Pending | Pending | Pending |
 
 ## Acceptance ledger
@@ -320,3 +326,120 @@ multi-process acceptance are still required.
   immutable serving snapshots, durable execution finalization before delivery,
   bounded ownership/reconciliation, trajectory catch-up, operator/SDK/startup
   wiring and all P1-A01–A09 gates remain pending.
+
+## Bounded custody and delivery accounting (2026-10-20)
+
+- P1 is based on P0 `9cbe512`; the eight existing P1 patches rebased unchanged
+  (`git range-diff` reported eight equivalent patches). The inherited P0 fix
+  retains a prepared finalizer receipt until its consumer acknowledges custody,
+  or rolls back with the original receipt when the consumer disappears.
+  This candidate adds a nonqueueing local reservation before admission, retains
+  a server-generated execution ID across cancellation and lost acknowledgements,
+  and preserves the original admitted principal. Duplicate submissions never
+  acquire custody of the existing execution.
+- The registry retains each permit and content-free dispatch tracker until all
+  request/provider/finalization owners have dropped. It never stores an admission
+  or lends existing custody handles. A fair queue visits one entry at a time;
+  a synchronous candidate guard requeues on cancellation without spawning I/O.
+  Only verified terminal/unknown/resolved state or proven non-admission releases
+  the local permit. Unknown shared tenant/provider reservations remain binding.
+- An uncertain admission uses a two-statement READ COMMITTED probe: acquire its
+  instance's exclusive fence after all local work ends, then read from a fresh
+  snapshot. Confirmed admissions use an internal owner-checked read instead;
+  normal completion does not acquire that exclusive instance fence. Revocation
+  does not prevent the original owner from reconciling accepted work.
+- Shared successful delivery now awaits authoritative execution finalization
+  inside the existing delivery permit, after continuation activation and before
+  the synchronous terminal-commit signal and return. Private custody follows
+  detached finalizer preparation, authorization and compensation. Public
+  finalization contracts remain unchanged.
+- `/tmp/bitrouter-p1-custody-delivery-tests.log`: **74 passed**, 2,189 filtered,
+  zero retries, 9.807 seconds; PostgreSQL campaign 9.471 seconds. This includes
+  real pipeline/HTTP execution, blocked accounting, cancellation during delivery,
+  detached preparation/rollback, duplicate and revoked-key retirement, cancelled
+  queue candidates, lost admission acknowledgement and post-lock SQL snapshots.
+- `/tmp/bitrouter-p1-custody-local-tests.log`: **65 passed**, 2,214 filtered,
+  zero retries, 1.524 seconds, using the minimum local profile. The selected
+  protocol/authority/finalization regressions do not represent a full suite.
+  `/tmp/bitrouter-p1-custody-all-targets.log`: all-feature/all-target check passed,
+  53.26 seconds. Unwired runtime code still emits warnings; no strict lint pass
+  or full shared serving claim is made. The initial missing test import is
+  retained in `/tmp/bitrouter-p1-custody-initial-tests.log` and was corrected.
+- Independent review identified two cancellation/failure boundaries. The queued
+  preparation regression now verifies that shared custody survives until the
+  original receipt is compensated exactly once. A failure-bearing pipeline
+  result also cannot reuse an earlier successful provider attempt as execution
+  success: terminal validation uses the latest observed terminal attempt, and
+  delivery and retirement share the same outcome decision.
+- A frozen pipeline failure is recorded synchronously in bounded registry-owned
+  custody before exposing the delivery permit or awaiting finalization. Dropping
+  that permit unpolled or cancelling a blocked terminal transaction therefore
+  retains the failure decision. This does not rewrite provider observations or
+  reverse an already committed terminal/operator result. The local marker is not
+  a claim that uncommitted decisions survive a hard process kill.
+- `/tmp/bitrouter-p1-custody-outcome-before.log` reproduced the original
+  failure-bearing result incorrectly committing success. The narrower
+  `/tmp/bitrouter-p1-custody-cancelled-outcome-before.log` reproduced the remaining
+  unpolled-permit failure before the custody-owned marker was implemented.
+  `/tmp/bitrouter-p1-custody-cancelled-outcome-tests.log`: **117 passed**, 2,147
+  filtered, zero retries, 13.213 seconds; PostgreSQL campaign 9.413 seconds.
+  Cases preserve original attempt/usage facts, restore exact tenant/resource
+  occupancy, retain one stable outbox event and verify idempotent retirement.
+- An adjacent HTTP-rendering path was then reproduced in
+  `/tmp/bitrouter-p1-custody-render-failure-before.log`: explicit delivery failure
+  still retired a successful provider observation as execution success. The
+  failure API now records its decision synchronously before returning its future,
+  waits for required compensation, and awaits the authoritative failed terminal
+  before signalling completion. Known preparation/activation, execution and
+  stream failures likewise retain their decision before cancellable work.
+  A bare disconnect remains distinct from an explicit failure.
+- `/tmp/bitrouter-p1-custody-explicit-failure-final-tests.log`: **117 passed**,
+  2,147 filtered, zero retries, 13.761 seconds; PostgreSQL campaign 10.054 seconds.
+  Additional cases cover unpolled rendering-failure futures, blocked failed
+  terminal commits, prepare/activation rejection with cancellation during
+  compensation, direct execution errors and unsuccessful stream terminals.
+  The local result check borrows the finish reason; it does not construct or
+  hash another continuation context on the ordinary request path.
+- Re-review found an earlier hop-observer cancellation window. The deterministic
+  `/tmp/bitrouter-p1-custody-observer-before.log` regression failed at that exact
+  signalled boundary. The selected failure-bearing generation result is now
+  recorded before report/observer awaits, while ordinary retryable attempt errors
+  remain eligible for successful fallback. The new scenarios also retain a
+  successful-result cancellation control and a retryable-error/success control.
+- Final C2-R3 shared selection, `/tmp/bitrouter-p1-custody-observer-tests.log`:
+  **117 passed**, 2,147 filtered, zero retries, 13.571 seconds; PostgreSQL 9.925
+  seconds. All-feature selection with the three protocol integration binaries,
+  `/tmp/bitrouter-p1-custody-observer-full-tests.log`: **150 passed**, 3,421
+  filtered, zero retries, 13.936 seconds; PostgreSQL 10.053 seconds.
+  The same selected local regressions with `--no-default-features`,
+  `/tmp/bitrouter-p1-custody-observer-local-tests.log`, passed **136/136**, 2,144
+  filtered, zero retries, 4.891 seconds without a shared backend requirement.
+  Rust 1.97 all-feature library/test Clippy completed with exit 0 in 2m32s
+  (`/tmp/bitrouter-p1-custody-observer-clippy.log`), with only staged unused-code
+  diagnostics and the existing dependency future-compatibility notice. No
+  diagnostics were suppressed; this is not final strict P1 lint acceptance.
+  Formatting and whitespace checks passed. The 13 Rust source hashes match the
+  independent review; only the progress/specification records changed afterward.
+- An earlier broad `--run-ignored all` selection unintentionally included two
+  external-adapter opt-in tests without their required environment. Its log,
+  `/tmp/bitrouter-p1-custody-all-features-tests.log`, contains 176 passes and two
+  failures and is not an aggregate pass. Subsequent selections name only the
+  intended shared/finalization tests and protocol integration binaries.
+- Final independent source re-review approved the bounded custody/delivery
+  substage, closing the receipt handoff, failure-bearing result, cancellation,
+  explicit failure and hop-observer findings. This is scoped source acceptance;
+  it does not close HTTP/runtime integration or aggregate acceptance.
+  Design review requires
+  transport-owned buffering to be bounded beyond response-body lifetime and
+  heartbeats to be scheduled independently of slow reconciliation batches.
+  These remain explicit serving/lifecycle obligations. Native continuation
+  compensation has its own bounded owner and drain; an empty gateway registry
+  alone does not prove that compensation has drained.
+- The transport design review additionally found that early HTTP/1 responses
+  can accumulate response headers across pipelined requests despite Hyper's
+  body-buffer threshold. Shared transport must disable keep-alive or enforce a
+  proved finite connection-reuse/flush bound, in addition to bounded outgoing
+  chunks, metadata, connection/task counts and no-progress write deadlines.
+- HTTP pre-extractor reservation, transport bounds, heartbeat/recovery tasks,
+  startup, publication, operator/SDK APIs and trajectory integration remain
+  pending. No P1-A01–A09 acceptance gate is closed by this substage.

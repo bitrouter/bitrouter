@@ -111,30 +111,81 @@ impl EntryPreparationFailure {
     }
 }
 
+/// Private ownership follows detached preparation and compensation without
+/// adding service implementation details to RequiredFinalizationContext.
+#[derive(Clone, Default)]
+struct ExecutionCustody {
+    #[cfg(feature = "multi-instance")]
+    admission: Option<Arc<crate::gateway::shared::admitted::SharedAdmission>>,
+}
+
+impl ExecutionCustody {
+    fn from_context(ctx: &PipelineContext) -> Self {
+        #[cfg(feature = "multi-instance")]
+        {
+            Self {
+                admission: ctx.extension(),
+            }
+        }
+        #[cfg(not(feature = "multi-instance"))]
+        {
+            let _ = ctx;
+            Self::default()
+        }
+    }
+
+    fn record_pipeline_outcome(&self, successful_terminal: bool) {
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) = &self.admission {
+            admission.record_pipeline_outcome(successful_terminal);
+        }
+        let _ = successful_terminal;
+    }
+
+    async fn finish_delivery(&self, successful_terminal: bool) -> Result<()> {
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) = &self.admission {
+            admission.finish_delivery(successful_terminal).await?;
+        }
+        let _ = successful_terminal;
+        Ok(())
+    }
+}
+
 pub(crate) struct DeliveryPermit {
     ready: tokio::sync::oneshot::Receiver<Result<()>>,
     acknowledged: Option<tokio::sync::oneshot::Sender<DeliveryAcknowledgement>>,
     activation_completed: tokio::sync::oneshot::Receiver<Result<()>>,
     terminal_committed: Option<tokio::sync::oneshot::Sender<()>>,
+    custody: ExecutionCustody,
+    successful_terminal: bool,
 }
 
 impl DeliveryPermit {
     pub(crate) async fn deliver(mut self) -> Result<()> {
         match self.ready.await {
             Ok(Ok(())) => {
-                // Activation follows the acknowledgement. Once it completes,
-                // the terminal-commit signal and Ready return happen in this
-                // same poll with no intervening await.
+                // Activation and authoritative accounting precede delivery.
+                // The terminal-commit signal and Ready return still happen in
+                // one poll, so cancellation cannot expose provisional success.
                 let acknowledged = self
                     .acknowledged
                     .take()
                     .is_some_and(|ack| ack.send(DeliveryAcknowledgement::Delivered).is_ok());
                 if acknowledged {
-                    self.activation_completed.await.map_err(|error| {
-                        BitrouterError::internal(format!(
-                            "delivery activation ended unexpectedly: {error}"
-                        ))
-                    })??;
+                    self.activation_completed
+                        .await
+                        .map_err(|error| {
+                            BitrouterError::internal(format!(
+                                "delivery activation ended unexpectedly: {error}"
+                            ))
+                        })?
+                        .inspect_err(|_| {
+                            self.custody.record_pipeline_outcome(false);
+                        })?;
+                    self.custody
+                        .finish_delivery(self.successful_terminal)
+                        .await?;
                     self.terminal_committed
                         .take()
                         .ok_or_else(|| {
@@ -151,14 +202,27 @@ impl DeliveryPermit {
                     ))
                 }
             }
-            Ok(Err(error)) => Err(error),
+            Ok(Err(error)) => {
+                self.custody.record_pipeline_outcome(false);
+                Err(error)
+            }
             Err(error) => Err(BitrouterError::internal(format!(
                 "delivery authorization ended unexpectedly: {error}"
             ))),
         }
     }
 
-    pub(crate) async fn fail(mut self, failure: BitrouterError) -> Result<()> {
+    pub(crate) fn fail(
+        self,
+        failure: BitrouterError,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        // The caller already knows rendering/encoding failed. Freeze that
+        // decision before returning a future that can be dropped unpolled.
+        self.custody.record_pipeline_outcome(false);
+        self.fail_recorded(failure)
+    }
+
+    async fn fail_recorded(mut self, failure: BitrouterError) -> Result<()> {
         match self.ready.await {
             Ok(Ok(())) => {
                 let acknowledged = self
@@ -171,6 +235,7 @@ impl DeliveryPermit {
                             "delivery compensation ended unexpectedly: {error}"
                         ))
                     })??;
+                    self.custody.finish_delivery(false).await?;
                     self.terminal_committed
                         .take()
                         .ok_or_else(|| {
@@ -224,7 +289,11 @@ enum DeliveryAuthorizationOutcome {
     Failed(BitrouterError),
 }
 
-fn delivery_handshake() -> (DeliveryPermit, RequiredDeliveryHandshake) {
+fn delivery_handshake(
+    custody: ExecutionCustody,
+    successful_terminal: bool,
+) -> (DeliveryPermit, RequiredDeliveryHandshake) {
+    custody.record_pipeline_outcome(successful_terminal);
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let (acknowledged_tx, acknowledged_rx) = tokio::sync::oneshot::channel();
     let (activation_completed_tx, activation_completed_rx) = tokio::sync::oneshot::channel();
@@ -235,6 +304,8 @@ fn delivery_handshake() -> (DeliveryPermit, RequiredDeliveryHandshake) {
             acknowledged: Some(acknowledged_tx),
             activation_completed: activation_completed_rx,
             terminal_committed: Some(terminal_committed_tx),
+            custody,
+            successful_terminal,
         },
         RequiredDeliveryHandshake::new_with_completion(
             ready_tx,
@@ -833,6 +904,15 @@ impl Pipeline {
                     );
                 ctx.set_nonstream_native_response_completed(native_response_completed);
                 ctx.execution_result = Some(result);
+                if matches!(
+                    ctx.execution_result
+                        .as_ref()
+                        .and_then(|result| result.result.generation())
+                        .and_then(|result| result.finish_reason.as_ref()),
+                    Some(bitrouter_ai::types::FinishReason::Error(_))
+                ) {
+                    ExecutionCustody::from_context(&ctx).record_pipeline_outcome(false);
+                }
                 self.observe_after(Phase::Execution, &ctx).await;
             }
             Err(e) => {
@@ -1790,13 +1870,14 @@ impl Pipeline {
             applicable(&self.required_finalizers, ctx.operation()),
             finalization.clone(),
             self.pending_settlements.clone(),
+            ExecutionCustody::from_context(ctx),
         );
         if !finalization.successful_terminal {
             guard.disarm();
             return Ok(guard);
         }
         guard.receipt = self
-            .prepare_required_finalizer_tracked(&finalization)
+            .prepare_required_finalizer_tracked(&finalization, ExecutionCustody::from_context(ctx))
             .await?;
         Ok(guard)
     }
@@ -1804,6 +1885,7 @@ impl Pipeline {
     async fn prepare_required_finalizer_tracked(
         &self,
         finalization: &RequiredFinalizationContext,
+        custody: ExecutionCustody,
     ) -> Result<Option<RequiredFinalizationReceipt>> {
         let Some(finalizer) = self
             .required_finalizers
@@ -1819,6 +1901,7 @@ impl Pipeline {
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
         let (consumed_tx, consumed_rx) = tokio::sync::oneshot::channel();
         self.spawn_stream_finalization(async move {
+            let preparation_custody = custody;
             match finalizer
                 .finalize_with_receipt(&task_finalization, &task_receipt)
                 .await
@@ -1839,6 +1922,7 @@ impl Pipeline {
                     }
                 }
                 Err(error) => {
+                    preparation_custody.record_pipeline_outcome(false);
                     if let Err(rollback_error) = finalizer
                         .rollback_with_receipt(&task_finalization, &task_receipt)
                         .await
@@ -2490,6 +2574,20 @@ impl Pipeline {
                 }
                 Ok(result)
             });
+            // An Ok generation result is selected terminal work, even when
+            // its finish reason is an error. Preserve that decision before
+            // report/observer awaits; ordinary Err attempts may still recover
+            // through fallback and must not poison a later successful result.
+            if matches!(
+                outcome
+                    .as_ref()
+                    .ok()
+                    .and_then(|result| result.result.generation())
+                    .and_then(|result| result.finish_reason.as_ref()),
+                Some(bitrouter_ai::types::FinishReason::Error(_))
+            ) {
+                ExecutionCustody::from_context(ctx).record_pipeline_outcome(false);
+            }
             let output_limit =
                 attempt_control.and_then(|(control, _)| control.canonical_output_byte_limit());
             // Count without allocating an encoded copy, before private-output
@@ -2887,6 +2985,9 @@ impl Pipeline {
         streamed: bool,
         error: Option<BitrouterError>,
     ) {
+        if error.is_some() {
+            ExecutionCustody::from_context(ctx).record_pipeline_outcome(false);
+        }
         ctx.finalize_request_duration();
         let mut settle = ctx.settlement_context();
         settle.streamed = streamed;
@@ -3313,6 +3414,7 @@ struct RequiredFinalizationGuard {
     pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
     receipt: Option<RequiredFinalizationReceipt>,
     armed: bool,
+    custody: ExecutionCustody,
 }
 
 impl RequiredFinalizationGuard {
@@ -3320,13 +3422,16 @@ impl RequiredFinalizationGuard {
         finalizers: Vec<Arc<dyn RequiredFinalizer>>,
         finalization: RequiredFinalizationContext,
         pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+        custody: ExecutionCustody,
     ) -> Self {
+        custody.record_pipeline_outcome(finalization.successful_terminal);
         Self {
             finalizers,
             finalization,
             pending_settlements,
             receipt: None,
             armed: true,
+            custody,
         }
     }
 
@@ -3341,11 +3446,13 @@ impl RequiredFinalizationGuard {
         DeliveryPermit,
         tokio::sync::oneshot::Receiver<DeliveryAuthorizationOutcome>,
     ) {
-        let (permit, delivery) = delivery_handshake();
+        let (permit, delivery) =
+            delivery_handshake(self.custody.clone(), self.finalization.successful_terminal);
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
         let finalizers = self.finalizers.clone();
         let finalization = self.finalization.clone();
         let receipt = self.receipt.clone();
+        let custody = self.custody.clone();
         self.disarm();
         let authorization = async move {
             let authorization_result = match receipt.as_ref() {
@@ -3359,6 +3466,7 @@ impl RequiredFinalizationGuard {
             let delivered = match authorization_result {
                 Ok(delivered) => delivered,
                 Err(error) => {
+                    custody.record_pipeline_outcome(false);
                     delivery.reject(error.clone());
                     if let Some(receipt) = receipt.as_ref()
                         && let Err(rollback_error) = finalizers[0]
@@ -3409,8 +3517,10 @@ impl Drop for RequiredFinalizationGuard {
         let finalizers = self.finalizers.clone();
         let finalization = self.finalization.clone();
         let receipt = self.receipt.clone();
+        let custody = self.custody.clone();
         self.disarm();
         let rollback = async move {
+            let _custody = custody;
             if let Some(receipt) = receipt.as_ref()
                 && let Err(error) = finalizers[0]
                     .rollback_with_receipt(&finalization, receipt)
@@ -3528,6 +3638,12 @@ impl StreamSettlementGuard {
                 "stream context has already been taken",
             ));
         };
+        if matches!(
+            outcome,
+            StreamOutcome::Aborted(_) | StreamOutcome::UpstreamError(_)
+        ) {
+            ExecutionCustody::from_context(&ctx).record_pipeline_outcome(false);
+        }
         let disconnected = Arc::new(AtomicBool::new(false));
         let task_disconnected = disconnected.clone();
         let prepared = Arc::new(std::sync::Mutex::new(None));
@@ -3545,6 +3661,10 @@ impl StreamSettlementGuard {
             sync_execution_target(&mut ctx, &latest_attempt);
             ctx.absorb_stream(processor.into_context());
             ctx.finalize_stream_upstream_duration();
+            if matches!(task_outcome, StreamOutcome::Completed) && !ctx.stream_terminal_succeeded()
+            {
+                ExecutionCustody::from_context(&ctx).record_pipeline_outcome(false);
+            }
 
             if task_disconnected.load(Ordering::Acquire)
                 && matches!(task_outcome, StreamOutcome::Completed)
@@ -3606,7 +3726,7 @@ impl StreamSettlementGuard {
         }
         self.required_finalizer_receipt = self
             .pipeline
-            .prepare_required_finalizer_tracked(&finalization)
+            .prepare_required_finalizer_tracked(&finalization, ExecutionCustody::from_context(ctx))
             .await?;
         Ok(())
     }
@@ -3655,6 +3775,7 @@ impl StreamSettlementGuard {
             let Some(StreamDeliveryState::Ready(ctx)) = self.state.take() else {
                 return Err(error);
             };
+            ExecutionCustody::from_context(&ctx).record_pipeline_outcome(false);
             let settlement_error = error.clone();
             let pipeline = self.pipeline.clone();
             let receipt = self.required_finalizer_receipt.take();
@@ -3677,6 +3798,7 @@ impl StreamSettlementGuard {
             ));
         };
         if settlement_error.is_some() {
+            ExecutionCustody::from_context(&ctx).record_pipeline_outcome(false);
             let pipeline = self.pipeline.clone();
             self.pipeline.spawn_stream_finalization(async move {
                 settle_prepared_stream(pipeline, *ctx, settlement_error, request_outcome).await;
@@ -3689,7 +3811,10 @@ impl StreamSettlementGuard {
         let pipeline = self.pipeline.clone();
         let receipt = self.required_finalizer_receipt.take();
         let finalization = ctx.required_finalization_context(true);
-        let (permit, delivery) = delivery_handshake();
+        let (permit, delivery) = delivery_handshake(
+            ExecutionCustody::from_context(&ctx),
+            finalization.successful_terminal,
+        );
         self.pipeline.spawn_stream_finalization(async move {
             let authorization_result = match receipt.as_ref() {
                 Some(receipt) => {
@@ -3702,6 +3827,7 @@ impl StreamSettlementGuard {
             let delivered = match authorization_result {
                 Ok(delivered) => delivered,
                 Err(error) => {
+                    ExecutionCustody::from_context(&ctx).record_pipeline_outcome(false);
                     delivery.reject(error.clone());
                     rollback_required_finalizer(&pipeline, &ctx, true, receipt).await;
                     settle_prepared_stream(
@@ -3942,7 +4068,7 @@ mod stream_outcome_tests {
     use std::sync::Arc;
 
     use super::{
-        RequestOutcome, StreamOutcome, StreamSettlementGuard, delivery_handshake,
+        ExecutionCustody, RequestOutcome, StreamOutcome, StreamSettlementGuard, delivery_handshake,
         stream_terminal_metadata,
     };
     use crate::gateway::error::BitrouterError;
@@ -4027,7 +4153,7 @@ mod stream_outcome_tests {
 
     #[tokio::test]
     async fn explicit_wire_failure_is_not_classified_as_disconnect() {
-        let (permit, delivery) = delivery_handshake();
+        let (permit, delivery) = delivery_handshake(ExecutionCustody::default(), true);
         let authorization = tokio::spawn(async move { delivery.wait_for_delivery().await });
         permit
             .fail(BitrouterError::internal("terminal encoder failed"))
@@ -4042,7 +4168,7 @@ mod stream_outcome_tests {
 
     #[tokio::test]
     async fn delivered_permit_waits_for_finalizer_post_ack_commit() {
-        let (permit, delivery) = delivery_handshake();
+        let (permit, delivery) = delivery_handshake(ExecutionCustody::default(), true);
         let (ack_observed_tx, ack_observed_rx) = tokio::sync::oneshot::channel();
         let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
         let authorization = tokio::spawn(async move {
@@ -4074,7 +4200,7 @@ mod stream_outcome_tests {
 
     #[tokio::test]
     async fn dropping_permit_after_activation_signal_closes_terminal_commit() {
-        let (permit, delivery) = delivery_handshake();
+        let (permit, delivery) = delivery_handshake(ExecutionCustody::default(), true);
         let mut authorization = Box::pin(async move {
             assert!(delivery.wait_for_delivery_acknowledgement().await?);
             assert!(delivery.complete_activation(Ok(())));

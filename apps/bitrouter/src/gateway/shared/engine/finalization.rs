@@ -191,7 +191,23 @@ impl Engine {
             "unresolved provider attempt cannot be finalized"
         );
         if matches!(outcome, TerminalOutcome::Succeeded) {
-            ensure!(execution.value.view.attempts.iter().any(|attempt| matches!(&attempt.state, AttemptState::Terminal {result} if matches!(result.outcome, TerminalOutcome::Succeeded))), "execution success requires observed provider success");
+            let last = execution
+                .value
+                .view
+                .attempts
+                .iter()
+                .rev()
+                .find_map(|attempt| {
+                    if let AttemptState::Terminal { result } = &attempt.state {
+                        Some(&result.outcome)
+                    } else {
+                        None
+                    }
+                });
+            ensure!(
+                matches!(last, Some(TerminalOutcome::Succeeded)),
+                "execution success requires the latest provider terminal to succeed"
+            );
         }
         let now = Store::now(tx).await?;
         let mut prepared = execution

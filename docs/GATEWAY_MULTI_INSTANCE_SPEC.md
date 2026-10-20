@@ -1,7 +1,7 @@
 # Native gateway multi-instance implementation
 
 Status: implementation contract; delivery is not yet accepted.
-Updated: 2026-10-19. P0 base: `08b5dcc2e8f19bf7f273c40b9e939f7bd043ab44`
+Updated: 2026-10-20. P0 base: `9cbe512d101e777470d113b0086ab9e331b3a638`
 ([#984](https://github.com/bitrouter/bitrouter/pull/984)).
 
 This implements the complete P1 milestone in the

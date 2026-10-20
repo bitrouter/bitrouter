@@ -26,7 +26,8 @@ use super::super::{
     authority::Authority,
     credentials::Credentials,
     crypto::DeploymentKey,
-    engine::{Admission, AdmissionResult, Engine, TenantLimits},
+    engine::{Admission, Engine, TenantLimits},
+    ownership::{Registry, Submission},
     publication::{Configuration, CredentialBinding},
     store::{Kind, Store},
 };
@@ -46,6 +47,8 @@ use crate::{
         providers::auth::{credentials::Credential, store::CredentialKey},
     },
 };
+
+mod delivery;
 
 #[derive(Clone)]
 struct Upstream {
@@ -165,10 +168,11 @@ impl Drop for Server {
 
 struct Fixture {
     engine: Engine,
+    custody: Arc<Registry>,
     key: GeneratedKey,
     pool: String,
     generation: u64,
-    executor: HttpExecutor,
+    executor: Arc<HttpExecutor>,
     base: String,
 }
 
@@ -181,8 +185,9 @@ impl Fixture {
         &self,
         operation: ModelOperation,
     ) -> Result<(Arc<SharedAdmission>, PipelineContext, Prompt)> {
-        let (view, principal) = match self
-            .engine
+        let admission = match self
+            .custody
+            .reserve()?
             .admit(&Admission {
                 key_hash: &self.key.hash,
                 correlation_id: "untrusted-correlation",
@@ -193,11 +198,9 @@ impl Fixture {
             })
             .await?
         {
-            AdmissionResult::Accepted(view, principal) => (view, principal),
-            AdmissionResult::Existing(_) => anyhow::bail!("unexpected fixture duplicate"),
+            Submission::Accepted(admission) => admission,
+            Submission::Existing(_) => anyhow::bail!("unexpected fixture duplicate"),
         };
-        let admission =
-            SharedAdmission::new(self.engine.clone(), self.key.hash.clone(), view, principal);
         let prompt = Prompt {
             model: "fixture".into(),
             system: None,
@@ -329,17 +332,19 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         let _ = axum::serve(listener, router).await;
     }));
     let fixture = Fixture {
+        custody: Registry::new(engine.clone(), 64)?,
         engine,
         key,
         pool,
         generation,
-        executor,
+        executor: Arc::new(executor),
         base,
     };
 
     // Keep each independent protocol scenario out of the enclosing future's
     // stack layout. The PostgreSQL campaign retains its ordinary stack budget.
     Box::pin(generation_success(&fixture)).await?;
+    Box::pin(delivery::exercise(&fixture, second, &tenant)).await?;
     Box::pin(decisions(&fixture)).await?;
     Box::pin(stream_failure(&fixture)).await?;
     Box::pin(responses_drop(&fixture)).await?;
@@ -350,12 +355,34 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     Box::pin(batch_drop(&fixture)).await?;
     Box::pin(failed_responses(&fixture)).await?;
     ensure!(state.calls.load(Ordering::SeqCst) == state.fenced.load(Ordering::SeqCst));
+    let before = first
+        .get::<serde_json::Value>(Kind::Resource, &fixture.pool)
+        .await?
+        .context("pool missing")?
+        .value;
+    for _ in 0..fixture.custody.pending() {
+        ensure!(fixture.custody.reconcile_one().await?);
+    }
+    ensure!(fixture.custody.pending() == 0);
+    let after = first
+        .get::<serde_json::Value>(Kind::Resource, &fixture.pool)
+        .await?
+        .context("pool missing")?
+        .value;
+    ensure!(
+        before["active"] == after["active"],
+        "local retirement released unknown provider capacity"
+    );
     Ok(())
 }
 
 async fn generation_success(fixture: &Fixture) -> Result<()> {
     // A separate database connection observes intent before responding at all.
     let (admission, ctx, prompt) = fixture.context().await?;
+    ensure!(
+        admission.finish_delivery(true).await.is_err(),
+        "no provider success was observed"
+    );
     fixture
         .executor
         .execute(&fixture.target("ok"), &prompt, &ctx)
@@ -375,10 +402,19 @@ async fn generation_success(fixture: &Fixture) -> Result<()> {
             && result.usage.cache_read_tokens == Some(2)
             && result.usage.cost_micro_usd.is_none()
     );
-    fixture
-        .engine
-        .finish(ctx.request_id(), &TerminalOutcome::Succeeded)
-        .await?;
+    admission.finish_delivery(true).await?;
+    admission.finish_delivery(true).await?;
+    ensure!(
+        !fixture.custody.reconcile_one().await?,
+        "live context retired early"
+    );
+    drop(admission);
+    ensure!(
+        !fixture.custody.reconcile_one().await?,
+        "context lost custody"
+    );
+    drop(ctx);
+    ensure!(fixture.custody.reconcile_one().await?);
     Ok(())
 }
 

@@ -2,14 +2,14 @@
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::gateway::execution::{ExecutionState, GatewayExecution};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{ColumnTrait, EntityTrait, IsolationLevel, QueryFilter, QuerySelect};
 use sha2::{Digest, Sha256};
 
 use crate::auth::entities::api_keys;
 
 use super::{
-    Admission, AdmissionResult, Engine, Execution, Idempotency, RateBucket, Rejection, Tenant,
-    validate_id,
+    Admission, AdmissionResult, Engine, Execution, Idempotency, Instance, RateBucket, Rejection,
+    Tenant, validate_id,
 };
 use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 
@@ -23,15 +23,27 @@ pub(super) struct Principal {
 }
 
 impl Engine {
+    #[cfg(test)]
     pub async fn admit(&self, request: &Admission<'_>) -> Result<AdmissionResult> {
+        self.admit_with_id(&uuid::Uuid::new_v4().to_string(), request)
+            .await
+    }
+
+    /// The bounded execution owner allocates and retains this service identity
+    /// before awaiting admission, including across a lost commit acknowledgement.
+    pub async fn admit_with_id(
+        &self,
+        execution_id: &str,
+        request: &Admission<'_>,
+    ) -> Result<AdmissionResult> {
+        validate_id(execution_id)?;
         validate_id(request.correlation_id)?;
         validate_digest(request.key_hash)?;
         validate_digest(request.fingerprint)?;
         if let Some(key) = request.idempotency_key {
             validate_id(key)?;
         }
-        // Retry only the transaction, using one stable server-generated identity.
-        let execution_id = uuid::Uuid::new_v4().to_string();
+        // Retry only the transaction, using the same retained service identity.
         self.store()
             .retry(|| async {
                 let tx = self.store().begin().await?;
@@ -144,7 +156,7 @@ impl Engine {
                     .save(&tx, &mut tenant, "active", None, now)
                     .await?;
                 let view = GatewayExecution {
-                    execution_id: execution_id.clone(),
+                    execution_id: execution_id.to_owned(),
                     correlation_id: request.correlation_id.into(),
                     revision: 0,
                     operation: request.operation,
@@ -169,7 +181,7 @@ impl Engine {
                             &tx,
                             NewRecord {
                                 kind: Kind::Execution,
-                                key: &execution_id,
+                                key: execution_id,
                                 status: "accepted",
                                 due_at_ms: Some(due),
                                 now_ms: now,
@@ -195,7 +207,7 @@ impl Engine {
                                         principal_id: principal.id.clone(),
                                         fingerprint: request.fingerprint.into(),
                                         operation: request.operation,
-                                        execution_id: execution_id.clone()
+                                        execution_id: execution_id.to_owned()
                                     },
                                 }
                             )
@@ -214,6 +226,54 @@ impl Engine {
                 ))
             })
             .await
+    }
+
+    /// Probe only after the local owner proves that every request/provider
+    /// future has dropped. Admission holds a shared instance lock through its
+    /// commit; this exclusive lock waits for an unacknowledged commit/rollback.
+    /// A fresh READ COMMITTED statement then distinguishes an accepted request
+    /// from an absent one without reusing a snapshot from before that wait.
+    /// No tenant/resource lock is acquired while holding this instance lock.
+    /// <https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED>
+    /// <https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS>
+    pub async fn quiescent_execution(
+        &self,
+        execution_id: &str,
+    ) -> Result<Option<GatewayExecution>> {
+        validate_id(execution_id)?;
+        self.store()
+            .bounded(async {
+                let tx = self
+                    .store()
+                    .begin_with_isolation(IsolationLevel::ReadCommitted)
+                    .await?;
+                let _: Stored<Instance> =
+                    self.store().lock(&tx, Kind::Instance, &self.owner).await?;
+                let execution: Option<Stored<Execution>> = self
+                    .store()
+                    .read(&tx, Kind::Execution, execution_id)
+                    .await?;
+                if let Some(execution) = &execution {
+                    ensure!(execution.value.owner == self.owner, Rejection::Forbidden);
+                }
+                let view = execution.map(project).transpose()?;
+                tx.commit().await?;
+                Ok(view)
+            })
+            .await
+    }
+
+    /// Internal retirement preserves the original owner even after revocation.
+    /// This read is not exposed as an unauthenticated execution-status surface.
+    pub async fn owned_execution(&self, execution_id: &str) -> Result<GatewayExecution> {
+        validate_id(execution_id)?;
+        let execution: Stored<Execution> = self
+            .store()
+            .get(Kind::Execution, execution_id)
+            .await?
+            .ok_or(Rejection::NotFound)?;
+        ensure!(execution.value.owner == self.owner, Rejection::Forbidden);
+        project(execution)
     }
 
     /// Fresh authentication and tenant ownership apply on every status read.

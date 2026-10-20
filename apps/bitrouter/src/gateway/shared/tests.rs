@@ -57,6 +57,7 @@ async fn foundation() -> Result<()> {
         super::authentication::tests::exercise(&first, &second).await?;
         admitted::exercise(&first, &second).await?;
         Box::pin(dispatched::exercise(&first, &second)).await?;
+        Box::pin(super::ownership::tests::exercise(&first, &second)).await?;
         Ok::<(), anyhow::Error>(())
     }
     .await;
