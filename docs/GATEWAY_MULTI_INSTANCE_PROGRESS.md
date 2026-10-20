@@ -35,7 +35,7 @@ review threads remained unresolved. This does not close any P1 gate.
 | 3 Gateway integration | Credential binding, admission context, dispatch and delivery accounting implemented; HTTP integration pending | Scoped protocol/executor and PostgreSQL regressions passed | Authentication/context/dispatch/custody substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
-| 6 Delivery and operations | Bounded custody implemented; transport/workers pending | Scoped custody/cancellation regressions passed | Custody approved; transport/worker implementation pending |
+| 6 Delivery and operations | Bounded custody and transport helper implemented; serving/workers pending | Scoped custody/transport regressions passed | Custody and transport substages approved |
 | 7 Aggregate acceptance and PR | Pending | Pending | Pending |
 
 ## Acceptance ledger
@@ -443,3 +443,78 @@ multi-process acceptance are still required.
 - HTTP pre-extractor reservation, transport bounds, heartbeat/recovery tasks,
   startup, publication, operator/SDK APIs and trajectory integration remain
   pending. No P1-A01–A09 acceptance gate is closed by this substage.
+
+## Shared transport substage (2026-10-20)
+
+- Added a shared-only HTTP/1 transport helper under the `multi-instance` feature.
+  Local serving remains on its existing Axum path. The new helper is not yet
+  attached to the official shared runtime; this stage closes neither serving
+  integration nor any P1-A01–A09 gate.
+- The earlier design finding about accumulated response heads is addressed by
+  permitting one request per connection and disabling upgrades/HTTP/2. This
+  deliberately gives up connection reuse in the initial shared transport.
+  Connection setup cost and independent-process load remain acceptance work.
+  Connection permits persist beyond response-body EOF. Both live connections
+  and unreaped owned task records are capped; overload creates no waiting task.
+  Shutdown closes the listener, then drains or aborts and joins connection tasks.
+- Outgoing DATA is copied into independently owned chunks of at most 64 KiB,
+  including narrow slices of large backing allocations. The wrapper retains
+  at most one original source frame/remainder and preserves body hints, EOS and
+  trailers. Metadata counts duplicates and bounds serialized size with framing
+  overhead reserved. These limits are not an exact connection/RSS budget.
+- Added independent header, ingress and output-stall deadlines, plus a connection
+  cap, to validated process configuration and the operator skill reference.
+  Generated configuration schema now includes the shared-mode contract.
+  Oversized known request lengths are rejected before dispatch; body allocation
+  hints cannot exceed the remaining byte allowance. Ingress completion ends its
+  deadline, while legitimate inference has no added whole-request timeout.
+- Real pinned-Hyper regressions cover final JSON/SSE frame consumption before a
+  blocked flush, pipelined early responses, scalar/vectored writes, incomplete
+  ingress, overload and owned shutdown. Unit tests cover source allocation
+  release, pending remainder/EOS/hints, trailers and no-progress timing.
+- The first run (`/tmp/bitrouter-p1-transport-first.log`) had 11 passes and one
+  failing allocation-lifetime assertion. The fixture retained an independent
+  original `Bytes` reference beside its narrow slice; replacing that reference
+  corrected the fixture. The subsequent shared selection passed 129 tests.
+- Initial independent review confirmed the single-request limit closes the
+  response-head accumulation finding, but found premature transport shutdown.
+  `/tmp/bitrouter-p1-transport-shutdown-before.log` reproduced all three cases:
+  shutdown skipped a pending write; real Hyper released a blocked graceful
+  response; and an early response closed before its write deadline.
+- Pending writes/flushes now form a shutdown barrier. Their timers remain
+  registered while Hyper retries its own buffered flush. A separate underlying
+  shutdown timer prevents a no-op flush from restarting that deadline.
+  Scalar/vectored real-Hyper regressions verify complete response bytes when
+  reading resumes, plus retained capacity until timeout when it does not.
+  Additional tests cover pending flush and underlying shutdown timing.
+- `/tmp/bitrouter-p1-transport-shutdown-fixed-tests.log`, Rust 1.99,
+  `--locked -p bitrouter --no-default-features --features multi-instance --lib`,
+  explicit shared/executor/continuation/config selection, `--run-ignored all`,
+  two test threads and zero retries: **135 passed**, 2,146 filtered, 13.721
+  seconds; real PostgreSQL fixture 10.151 seconds.
+- Final source under `--all-features` with the same library selection and the
+  `model_invocation`, `gateway_model_boundary` and `gateway_anthropic_authority`
+  integration binaries passed **168/168**, 3,420 filtered, zero retries in
+  13.933 seconds; PostgreSQL 10.068 seconds
+  (`/tmp/bitrouter-p1-transport-shutdown-full-tests.log`). The existing Apple
+  development-linker `__eh_frame` size warning also appeared in the prior
+  custody-stage run; this is not a release-performance measurement.
+  Pure local `--no-default-features` selection passed **137/137**, 2,143
+  filtered, zero retries in 4.914 seconds without a PostgreSQL test URL
+  (`/tmp/bitrouter-p1-transport-local-tests.log`).
+- Final Rust 1.97 all-feature library/test Clippy completed with exit 0 in
+  1m01s (`/tmp/bitrouter-p1-transport-final-clippy.log`). It reported no
+  Clippy-specific findings, but still reports 88 staged unused-code diagnostics
+  for the not-yet-wired shared runtime, one library-test unused item, and the
+  existing dependency future-compatibility notice. None were suppressed; this
+  is not final strict P1 lint acceptance.
+- Independent re-review approved the transport substage and closed both the
+  response-head accumulation and premature-shutdown findings. The 16 reviewed
+  repository-file hashes match the final source/schema/reference files
+  (`/tmp/bitrouter-p1-transport-review-hashes.json`); only progress evidence is
+  updated afterward. The frozen review is
+  `/tmp/bitrouter-p1-transport-stage-review-20261020.json`.
+  Formatting and whitespace checks passed. Full shared serving, dedicated
+  heartbeat/recovery workers, operator/SDK surfaces, trajectory integration,
+  independent-process faults/load, final performance and aggregate review
+  remain open.

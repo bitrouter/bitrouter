@@ -11,6 +11,7 @@ mod ownership;
 mod publication;
 mod schema;
 mod store;
+mod transport;
 
 #[cfg(test)]
 mod tests;

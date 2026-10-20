@@ -285,6 +285,41 @@ queue or cause stream migration. Cluster/outbox workers are owned tasks with
 explicit cancellation and joins. Backend failure makes shared readiness false
 and rejects new shared admissions, while existing work retains truthful state.
 
+Shared serving initially permits one request per HTTP/1 connection, with no
+upgrades or HTTP/2. This deliberate connection-reuse limit prevents accumulated
+early-response heads from escaping Hyper's DATA buffering threshold. Local mode
+retains its existing transport. Reuse can be added only with a proved finite
+response-head/flush bound and corresponding slow-reader regression coverage.
+The additional connection setup cost belongs in P1 process-load acceptance.
+
+`max_connections` defaults to 256 and bounds both live connection permits and
+unreaped task records. Admission is nonqueueing. The connection owner holds its
+permit through Hyper's final flush and shutdown, independently of request-body
+or execution-custody lifetime. The listener closes before draining; cancellation
+aborts and joins outstanding connection tasks after the configured drain bound.
+Application-spawned inference/finalization tasks remain covered by their own
+custody and drain owners.
+
+Shared transport uses a 64 KiB buffering threshold and copies outgoing DATA
+into independently owned chunks no larger than 64 KiB, including small slices
+of larger producer allocations. At most one original source frame/remainder is
+held by the splitter, under request custody. Metadata limits count repeated
+header values and reserve generated framing overhead; oversized heads fail
+before encoding, oversized trailers terminate the body. This is not an exact
+RSS budget: retained read capacity, framing/threshold overshoot, application
+serialization allocations, task state and OS buffers remain separate costs.
+
+Header, body-ingress and write-stall deadlines default to 30 seconds and accept
+100–300000 milliseconds. The ingress deadline ends at consumed body completion;
+it is not an inference deadline. Known oversized lengths are rejected before
+service dispatch, and collector size hints cannot exceed the ingress byte limit.
+Write timers start only on actual backpressure. Repeated Pending, reads and
+no-op flushes do not extend the timer; positive write progress does. A healthy
+long-running stream is allowed, without a peer-receipt or bounded-total-duration
+claim. Real pinned-Hyper tests must cover body EOF before a blocked final flush,
+single-request handling of pipelined early responses, both vectored and flattened
+writes, ingress timeout separation and owned overload/shutdown behavior.
+
 ## Implementation stages and evidence
 
 1. **Authority foundation:** configuration/feature boundary, public execution

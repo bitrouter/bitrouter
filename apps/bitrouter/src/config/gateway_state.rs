@@ -55,6 +55,18 @@ pub struct SharedGatewayConfig {
     /// Maximum accepted ingress bytes (1024..16777216).
     #[serde(default = "default_max_request_bytes")]
     pub max_request_bytes: usize,
+    /// Maximum live or unreaped HTTP connections (1..65536); no waiting queue.
+    #[serde(default = "default_local_max_in_flight")]
+    pub max_connections: usize,
+    /// Request header deadline in milliseconds (100..300000).
+    #[serde(default = "default_transport_timeout_ms")]
+    pub header_timeout_ms: u64,
+    /// Body ingress deadline in milliseconds (100..300000), excluding inference.
+    #[serde(default = "default_transport_timeout_ms")]
+    pub request_timeout_ms: u64,
+    /// Output backpressure deadline in milliseconds (100..300000).
+    #[serde(default = "default_transport_timeout_ms")]
+    pub write_stall_timeout_ms: u64,
 }
 
 impl GatewayStateConfig {
@@ -114,6 +126,10 @@ impl GatewayStateConfig {
             || !(1..=256).contains(&shared.worker_batch_size)
             || !(100..=300_000).contains(&shared.drain_timeout_ms)
             || !(1_024..=16_777_216).contains(&shared.max_request_bytes)
+            || !(1..=65_536).contains(&shared.max_connections)
+            || !(100..=300_000).contains(&shared.header_timeout_ms)
+            || !(100..=300_000).contains(&shared.request_timeout_ms)
+            || !(100..=300_000).contains(&shared.write_stall_timeout_ms)
         {
             return Err(invalid(
                 "invalid shared gateway bounds; owner lease must exceed three heartbeats plus one transaction deadline",
@@ -150,6 +166,9 @@ fn default_drain_timeout_ms() -> u64 {
 fn default_max_request_bytes() -> usize {
     4_194_304
 }
+fn default_transport_timeout_ms() -> u64 {
+    30_000
+}
 
 #[cfg(test)]
 mod tests {
@@ -175,6 +194,10 @@ mod tests {
             ("owner_lease_ms", serde_json::json!(15000)),
             ("local_max_in_flight", serde_json::json!(0)),
             ("worker_batch_size", serde_json::json!(257)),
+            ("max_connections", serde_json::json!(0)),
+            ("header_timeout_ms", serde_json::json!(99)),
+            ("request_timeout_ms", serde_json::json!(300001)),
+            ("write_stall_timeout_ms", serde_json::json!(0)),
         ] {
             let mut value = base.clone();
             value[field] = invalid;
