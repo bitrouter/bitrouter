@@ -1,6 +1,11 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
 pub mod native_context;
+#[cfg(feature = "multi-instance")]
+pub(crate) mod owned;
+#[cfg(all(test, feature = "multi-instance"))]
+#[path = "continuation/tests_owned.rs"]
+mod owned_tests;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -335,6 +340,8 @@ struct ReconcilerControl {
     task: Mutex<Option<ReconcilerTask>>,
     pending_cursor: Mutex<Option<u64>>,
     stale_offset: Mutex<u64>,
+    #[cfg(feature = "multi-instance")]
+    owned: Option<owned::Control>,
 }
 
 struct ReconcilerTask {
@@ -503,6 +510,8 @@ impl ContinuationRegistry {
                     task: Mutex::new(None),
                     pending_cursor: Mutex::new(None),
                     stale_offset: Mutex::new(0),
+                    #[cfg(feature = "multi-instance")]
+                    owned: None,
                 },
                 #[cfg(test)]
                 ambiguous_insert_fault: Arc::new(Mutex::new(None)),
@@ -587,6 +596,12 @@ impl ContinuationRegistry {
     }
 
     pub(crate) fn start_reconciler(&self) {
+        #[cfg(feature = "multi-instance")]
+        if let Some(control) = &self.inner.reconciler.owned {
+            control.start(|| self.spawn_reconciler());
+            self.inner.reconciler.notify.notify_one();
+            return;
+        }
         let mut task = match self.inner.reconciler.task.lock() {
             Ok(task) => task,
             Err(poisoned) => poisoned.into_inner(),
@@ -599,6 +614,10 @@ impl ContinuationRegistry {
             return;
         }
         let _ = task.take();
+        *task = Some(self.spawn_reconciler());
+    }
+
+    fn spawn_reconciler(&self) -> ReconcilerTask {
         let cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled = cancelled.clone();
         let notify = self.inner.reconciler.notify.clone();
@@ -632,10 +651,15 @@ impl ContinuationRegistry {
                 }
             }
         });
-        *task = Some(ReconcilerTask { cancelled, handle });
+        ReconcilerTask { cancelled, handle }
     }
 
     async fn stop_reconciler(&self) -> Result<()> {
+        #[cfg(feature = "multi-instance")]
+        anyhow::ensure!(
+            self.inner.reconciler.owned.is_none(),
+            "shared continuation requires its owned lifecycle drain"
+        );
         let shutdown_deadline = tokio::time::Instant::now() + RECONCILIATION_SHUTDOWN_GRACE;
         let task = {
             let mut task = match self.inner.reconciler.task.lock() {
@@ -2849,7 +2873,7 @@ mod tests {
         assert!(debug.contains("<redacted>"));
     }
 
-    async fn registry(secret: u8) -> anyhow::Result<ContinuationRegistry> {
+    pub(super) async fn registry(secret: u8) -> anyhow::Result<ContinuationRegistry> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         ContinuationRegistry::new(
@@ -2956,7 +2980,7 @@ mod tests {
         }
     }
 
-    fn pending_publication_count(registry: &ContinuationRegistry) -> usize {
+    pub(super) fn pending_publication_count(registry: &ContinuationRegistry) -> usize {
         match registry.inner.pending_publications.lock() {
             Ok(publications) => publications.len(),
             Err(poisoned) => poisoned.into_inner().len(),
@@ -4155,7 +4179,7 @@ mod tests {
         Ok(())
     }
 
-    fn finalization_context(
+    pub(super) fn finalization_context(
         request_id: &str,
         delivery_attempt_id: u64,
         provider_response_id: &str,

@@ -123,6 +123,18 @@ merely because a waiter timed out. Native continuation reconciliation, custody
 retirement and complete application/exporter ownership remain independent
 barriers after pipeline tasks have joined.
 
+Shared continuation workers have a separate, irreversible drain gate. Stopping
+or forcing the worker never moves its join handle into a temporary waiter.
+Cancelled waits retain that handle and the closed restart gate. A worker panic
+is joined and recorded; it does not silently start another worker. After the
+pipeline producer barrier, graceful continuation drain uses the same absolute
+deadline for worker completion, identity locks and every reconciliation batch.
+Retrying an expired deadline cannot start another batch. A later, explicitly
+selected retirement attempt can use a new deadline on the retained owner.
+All pending markers count toward unresolved ownership, including `Reserved`;
+drain must not delete such markers just to report success. Forced joining
+starts no database compensation and preserves all unresolved markers.
+
 Tenant identity is the authenticated virtual key's owning user, never a caller
 supplied tenant header. Principal identity is the virtual-key ID. The existing
 `api_keys` authority is read from the database; its effective authorization

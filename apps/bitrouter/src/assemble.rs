@@ -715,6 +715,12 @@ async fn assemble_app(
         config.continuation.retention_days,
         config.continuation.prune_batch_size,
     )?;
+    #[cfg(feature = "multi-instance")]
+    let continuation_registry = if is_shared {
+        continuation_registry.with_owned_lifecycle()?
+    } else {
+        continuation_registry
+    };
     if !is_shared {
         let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
         if continuation_pruned > 0 {

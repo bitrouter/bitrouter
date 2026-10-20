@@ -818,3 +818,54 @@ multi-process acceptance are still required.
   bounded retained generations, continuation worker/marker drain, startup
   supervisor or process shutdown. A joined pipeline is not sufficient to
   release its application resources. All P1 acceptance gates remain open.
+
+## Owned continuation-worker drain (2026-10-21)
+
+- Shared assembly selects the continuation lifecycle before sharing its
+  registry. Local worker startup/drain behavior remains unchanged. The shared
+  worker can start once; withdrawal or failure cannot silently create a new
+  worker. Readiness supervision can distinguish a healthy lazy/running worker
+  from a finished worker or a withdrawn registry.
+- The original join handle stays in its owner until completion is observed.
+  Cancelled waits preserve that handle, its irreversible restart gate and
+  pending marker map. One active waiter performs joins. Panic payloads are
+  destroyed outside the control lock after the restart gate closes.
+- Graceful drain applies the caller's single absolute deadline across worker
+  joining, asynchronous identity locks and every database reconciliation
+  batch. An expired retry starts no additional reconciliation; a deliberately
+  later attempt can retry on the same retained owner. Backend failures and
+  no-progress outcomes retain their markers and stopped-worker evidence.
+- All marker phases count, including `Reserved`. Force aborts and joins the
+  original worker without starting database compensation; unresolved markers
+  remain recorded. Pipeline producer/task barriers must precede this drain.
+- Initial focused lifecycle tests passed **6/6**, 2,298 filtered, zero retries
+  in 0.620 seconds (`/tmp/bitrouter-p1-continuation-owned-tests.log`). They use
+  existing isolated SQLite fixtures plus controlled worker/identity-lock waits
+  to test cancellation, force, panic, multi-batch deadlines and a cancelled
+  bind retaining a `Reserved` marker. A seventh backend-failure/retry case was
+  then added.
+- Final all-feature continuation/pipeline/shared/config regression passed
+  **518/518**, 3,067 filtered, zero retries in 19.790 seconds; the PostgreSQL
+  campaign took 13.705 seconds
+  (`/tmp/bitrouter-p1-continuation-owned-full-tests.log`).
+  Pure local `--no-default-features` continuation regression passed **93/93**,
+  2,160 filtered, zero retries in 3.766 seconds
+  (`/tmp/bitrouter-p1-continuation-owned-local-tests.log`). Minimal shared
+  continuation regression passed **100/100**, 2,205 filtered, zero retries in
+  4.184 seconds (`/tmp/bitrouter-p1-continuation-owned-minimal-tests.log`).
+- Rust 1.97 all-feature library/test Clippy exited 0 in 1m02s with no
+  Clippy-specific diagnostics (`/tmp/bitrouter-p1-continuation-owned-clippy.log`).
+  The 148 library and one library-test unused-code warnings remain staged
+  runtime integration work; no suppression was introduced. This is not final
+  strict P1 lint acceptance. Formatting and whitespace checks passed.
+- Independent review approved the narrow substage with no actionable findings
+  (`/tmp/bitrouter-p1-continuation-owned-review.json`). The future resource
+  owner must retain the original registry and attempt deadline, join pipeline
+  producers first, and preserve panic/forced/error evidence separately from
+  marker counts. `retained == None` or an empty marker map alone is insufficient
+  to claim a clean drain.
+- This stage does not migrate continuation lease decisions to the database
+  clock, establish independent-process fencing, or implement complete
+  generation resource ownership and the process supervisor. The fixture
+  results are not PostgreSQL concurrency/process acceptance. All P1 gates
+  remain open.
