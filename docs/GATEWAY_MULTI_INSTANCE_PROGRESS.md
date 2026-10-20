@@ -196,3 +196,27 @@ lease timeout is never proof of stopped upstream work.
 All P1-A01–A09 delivery gates remain pending. Actual shared authentication,
 dispatch, durable settlement, trajectory catch-up, operator APIs, workers and
 multi-process acceptance are still required.
+
+## Direct credential reader release (2026-10-20)
+
+- P1 is now based on P0 runtime source `6218709`; the shared assembly checkpoint
+  rebased to `66dac32`. P0 hosted checks and the P1 serving integration remain
+  separate requirements.
+- Anthropic API-key resolution and Copilot exchange/cache paths now await the
+  credential transaction's release. Invalid or missing credentials and exchange
+  failures also release their read leases. A release failure prevents exposing
+  authenticated requests or derived tokens. Copilot retains the transaction
+  through exchange, preserving local account serialization and cache behavior.
+- The regression store deliberately retains its lease after transaction drop,
+  modeling the explicit-release requirement of persistent shared storage.
+  Consecutive requests cover valid, invalid and absent credentials, successful
+  exchange, cache hits, provider errors and release failures. Existing refresh,
+  authority and provider regressions remain included.
+- `/tmp/bitrouter-p1-read-lease-tests.log`: Rust 1.99, `cargo nextest run
+  --locked -p bitrouter --no-default-features --features multi-instance
+  --test model_auth --test model_providers --test model_anthropic
+  --test gateway_anthropic_authority --test-threads 2 --retries 0
+  --no-fail-fast`: **21 passed, zero skipped or retries**, 0.115 seconds.
+  Independent review approved this substage. No process-level P1 gate is closed;
+  shared provider dispatch, HTTP/SDK integration and all aggregate gates remain
+  pending.

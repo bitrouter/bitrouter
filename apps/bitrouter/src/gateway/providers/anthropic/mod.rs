@@ -66,19 +66,24 @@ impl AnthropicApiKeyApplier {
                 .unwrap_or(DEFAULT_ACCOUNT)
                 .to_owned(),
         };
-        let transaction = self
+        let mut transaction = self
             .store
             .begin(&key)
             .await
             .map_err(|failure| ModelError::CredentialStorage { failure })?;
-        match transaction.credential() {
+        let result = match transaction.credential() {
             Some(Credential::ApiKey { value }) if !value.is_empty() => Ok(value.clone()),
             None if target.fallback_credential().is_some() => Ok(target.api_key.clone()),
             _ => Err(ModelError::Provider {
                 status: 401,
                 message: "selected anthropic account requires an API key; explicitly provide or store an API-key credential".into(),
             }),
-        }
+        };
+        transaction
+            .release()
+            .await
+            .map_err(|failure| ModelError::CredentialStorage { failure })?;
+        result
     }
 }
 
