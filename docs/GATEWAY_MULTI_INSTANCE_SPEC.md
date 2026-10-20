@@ -611,10 +611,21 @@ The additional connection setup cost belongs in P1 process-load acceptance.
 `max_connections` defaults to 256 and bounds both live connection permits and
 unreaped task records. Admission is nonqueueing. The connection owner holds its
 permit through Hyper's final flush and shutdown, independently of request-body
-or execution-custody lifetime. The listener closes before draining; cancellation
-aborts and joins outstanding connection tasks after the configured drain bound.
-Application-spawned inference/finalization tasks remain covered by their own
-custody and drain owners.
+or execution-custody lifetime. A retained transport owner holds the accept task
+and a separate connection task set. Accept cancellation or panic cannot destroy
+the connection owner. Registration and force use one gate, so a previously
+accepted socket cannot register a task after shutdown closes that gate.
+
+Graceful stop selects the process's absolute deadline, releases the listener and
+notifies existing connections. The owner joins the accept task before taking
+over connection reaping. Expiry or cancellation retains every unobserved join;
+retrying cannot extend the deadline. Force signals all retained transport roots
+before awaiting any, permanently prevents further graceful attempts and requires
+actual joins. Reports distinguish quiescence from forced, cancelled or panicked
+history and include returned panic-payload destruction in the join barrier.
+Application-spawned inference/finalization tasks still require their separate
+custody and task owners; transport quiescence alone does not establish a clean
+process shutdown.
 
 Shared transport uses a 64 KiB buffering threshold and copies outgoing DATA
 into independently owned chunks no larger than 64 KiB, including small slices

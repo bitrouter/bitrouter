@@ -16,7 +16,7 @@ mod bodies;
 mod deadlines;
 mod shutdown;
 
-fn limits() -> Limits {
+pub(super) fn limits() -> Limits {
     Limits {
         connections: 1,
         request_bytes: 1024,

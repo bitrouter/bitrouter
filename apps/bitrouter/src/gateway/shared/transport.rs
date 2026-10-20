@@ -7,11 +7,13 @@
 
 mod body;
 mod io;
+pub(super) mod owned;
 
 #[cfg(test)]
 mod tests;
 
 use std::convert::Infallible;
+#[cfg(test)]
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,7 +29,6 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{Semaphore, watch};
-use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
@@ -50,6 +51,7 @@ pub(super) struct Limits {
     header_timeout: Duration,
     request_timeout: Duration,
     write_timeout: Duration,
+    #[cfg(test)]
     drain_timeout: Duration,
 }
 
@@ -61,13 +63,15 @@ impl From<&SharedGatewayConfig> for Limits {
             header_timeout: Duration::from_millis(config.header_timeout_ms),
             request_timeout: Duration::from_millis(config.request_timeout_ms),
             write_timeout: Duration::from_millis(config.write_stall_timeout_ms),
+            #[cfg(test)]
             drain_timeout: Duration::from_millis(config.drain_timeout_ms),
         }
     }
 }
 
-/// No waiting task is spawned for an overloaded socket. Completed task records
-/// count toward the same bound until reaped; the permit outlives body EOF.
+/// Fixture compatibility wrapper. Production supplies one process deadline to
+/// the retained transport owner instead of creating a relative drain timeout.
+#[cfg(test)]
 pub(super) async fn serve<S>(
     listener: TcpListener,
     router: Router,
@@ -77,69 +81,24 @@ pub(super) async fn serve<S>(
 where
     S: Future<Output = ()>,
 {
-    let slots = Arc::new(Semaphore::new(limits.connections));
-    let stopping = CancellationToken::new();
-    let mut tasks = JoinSet::new();
+    let owner = owned::Transport::start(listener, router, limits).map_err(std::io::Error::other)?;
     tokio::pin!(shutdown);
-    let result = loop {
-        while let Some(result) = tasks.try_join_next() {
-            joined(result);
-        }
-        tokio::select! {
-            biased;
-            () = &mut shutdown => break Ok(()),
-            result = tasks.join_next(), if !tasks.is_empty() => {
-                if let Some(result) = result {
-                    joined(result);
-                }
-            }
-            accepted = listener.accept() => {
-                let (socket, _) = match accepted {
-                    Ok(accepted) => accepted,
-                    Err(error) => break Err(error),
-                };
-                if tasks.len() >= limits.connections {
-                    drop(socket);
-                    continue;
-                }
-                let Ok(permit) = slots.clone().try_acquire_owned() else {
-                    drop(socket);
-                    continue;
-                };
-                let router = router.clone();
-                let stopping = stopping.clone();
-                tasks.spawn(async move {
-                    let _permit = permit;
-                    connection(socket, router, limits, stopping).await;
-                });
-            }
-        }
-    };
-    // Listener ownership ends before draining. Neither overload nor shutdown
-    // creates detached connection/service tasks.
-    drop(listener);
-    stopping.cancel();
-    let drained = tokio::time::timeout(limits.drain_timeout, async {
-        while let Some(result) = tasks.join_next().await {
-            joined(result);
-        }
-    })
-    .await;
-    if drained.is_err() {
-        tasks.abort_all();
-        while let Some(result) = tasks.join_next().await {
-            joined(result);
-        }
+    tokio::select! {
+        () = &mut shutdown => {},
+        result = owner.wait_driver() => { result.map_err(std::io::Error::other)?; },
     }
-    result
-}
-
-fn joined(result: Result<(), tokio::task::JoinError>) {
-    if let Err(error) = result
-        && !error.is_cancelled()
-    {
-        tracing::error!(%error, "shared HTTP connection task failed");
+    let mut report = owner
+        .drain_until(Instant::now() + limits.drain_timeout)
+        .await
+        .map_err(std::io::Error::other)?;
+    if !report.is_quiescent() {
+        owner.request_force();
+        report = owner.join_forced().await.map_err(std::io::Error::other)?;
     }
+    if report.driver.failed || report.driver.panicked {
+        return Err(std::io::Error::other("shared HTTP accept driver failed"));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]

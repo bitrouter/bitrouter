@@ -1192,3 +1192,53 @@ multi-process acceptance are still required.
   `/tmp/bitrouter-p1-candidate-build-map.json`.
 - This stage does not implement forced process shutdown, startup/publication
   supervision or official independent-process acceptance. P1-A01–A09 remain open.
+
+## Retained shared transport roots (2026-10-21)
+
+- The shared transport now retains its accept handle and a separate connection
+  task set. Accept cancellation or panic leaves connection ownership intact.
+  Registration and force share a permanent gate, preventing insertion of a
+  previously accepted socket after shutdown. Completed tasks still count toward
+  the connection bound until reaped, and socket permits survive response EOF.
+- Graceful waits borrow the retained handles and use one immutable absolute
+  deadline. A cancelled or expired waiter does not force or discard connections.
+  Force broadcasts abort to both roots before waiting, is available while a
+  graceful waiter exists, and cannot be reversed into a new graceful attempt.
+  The accept driver joins before the shutdown waiter reaps connections, avoiding
+  competing task-set wakers. The previous relative-timeout serving function is
+  now a fixture wrapper around this owner; local HTTP serving is unchanged.
+- Reports preserve accept/connection cancellation and panic history separately
+  from quiescence. Returned panic payloads are destroyed outside owner locks;
+  an active join observer remains a barrier while those destructors execute.
+  Reentrant payload fixtures check that a momentarily empty task set cannot
+  report quiescence before destruction finishes.
+- Tests cover real held HTTP handlers, normal completed responses, cancellation
+  of both graceful and forced waits, deadline-extension rejection, closed-gate
+  registration, accept cancellation, accept-reaper panic and retained siblings.
+  The first compile exposed a test-helper visibility error, corrected by exposing
+  the existing bounds fixture to its parent test scope. No production behavior
+  was involved in that correction.
+- The first transport selection passed **25/25**. After the two payload-barrier
+  regressions and permanent-force guard, the minimal shared selection passed
+  **34/34**, 2,325 filtered, zero retries in 0.279 seconds
+  (`/tmp/bitrouter-p1-owned-transport-minimal.log`). It comprises 27 transport and
+  seven generation-manager tests. Shared ingress helpers are exercised by the
+  aggregate PostgreSQL test, not independently selected tests.
+- Final Rust 1.97 all-feature library/test Clippy exited 0 in 1m02s, with no
+  Clippy-specific diagnostics (`/tmp/bitrouter-p1-owned-transport-clippy.log`).
+  The 191 library and one library-test unused-code warnings reflect staged
+  integration; no suppression was added and strict P1 lint acceptance is open.
+- Independent source review approved this bounded owner contract and resolved
+  `OT-I01` (panic-payload destruction as an observation barrier). The narrow
+  accept/gate audit also found no actionable issue. Final all-feature shared,
+  continuation, pipeline-owner, assembly and configuration regressions passed
+  **239/239**, 3,412 filtered, zero retries in 16.062 seconds, including the real
+  PostgreSQL aggregate and its HTTP transport campaign
+  (`/tmp/bitrouter-p1-owned-transport-full.log`). Formatting and whitespace
+  checks passed. Files and logs are pinned in
+  `/tmp/bitrouter-p1-owned-transport-candidate.json`; the bounded review is
+  `/tmp/bitrouter-p1-owned-transport-review.json`.
+- Process-wide force ordering, generation/native fan-out, telemetry ordering,
+  startup and all P1 acceptance gates remain open. These owner fixtures are not
+  independent-process shutdown acceptance or a claim of transport-internal
+  dependency-task closure.
