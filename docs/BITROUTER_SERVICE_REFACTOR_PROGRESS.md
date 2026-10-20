@@ -3813,3 +3813,34 @@ cold build while still passing tests. Only its total budget increases to 75
 minutes; individual deadlines and retries are preserved. The final PR head
 still needs fresh hosted CI. See the
 [complete evidence](evidence/service-refactor/README.md#terminal-input-custody-follow-up-2026-10-20).
+
+## Cryptographic source follow-up (2026-10-20)
+
+The [main CI run](https://github.com/bitrouter/bitrouter/actions/runs/39399884813)
+passed all 57 jobs at `b25909a`, including platform tests and packaging. Its
+separate [CodeQL check](https://github.com/bitrouter/bitrouter/runs/118551914372)
+reported 45 hard-coded-cryptographic-value alerts, so main CI success alone did
+not establish merge readiness.
+
+Runtime source `bbee2e7c955444bc26a76cf9f9fdf9195d767818` addresses the reported
+sources: 40 fixed correlation-key fixtures now use random keys, with one shared
+key retained wherever a test compares equivalent or restarted runtimes. Two
+production key generators express their existing random 32-byte output directly.
+Control authentication now uses a private random HMAC comparison key per immutable
+configuration snapshot; token matching, duplicate rejection, complete credential
+scanning, cloning and reload behavior are preserved. Persisted key formats do
+not change.
+
+Two alerts trace health streak integers through a tuple-valued test fixture into
+an unrelated identity key. Health behavior is unchanged; the fixture now names
+its independent fields. Fresh hosted analysis must verify whether these false
+paths are eliminated. No alerts were dismissed and no security checks suppressed.
+
+The corrected selected all-feature run passed **385 tests, zero retries**;
+3,146 other tests were filtered out. The initial run exposed a fixture-key
+equivalence regression, which was fixed without weakening either equality
+assertion. Strict all-feature library/test Clippy on Rust 1.97 and formatting
+passed. Independent scoped review approved the corrected implementation.
+The [follow-up evidence](evidence/service-refactor/README.md#cryptographic-source-follow-up-2026-10-20)
+records final artifacts and measurements. Hosted CI and CodeQL on the new PR
+head remain separate required gates.

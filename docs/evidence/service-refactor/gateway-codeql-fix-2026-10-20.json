@@ -1,0 +1,241 @@
+{
+  "architecture": "aarch64",
+  "artifacts": [
+    {
+      "bytes": 317131456,
+      "label": "baseline",
+      "path": "/private/tmp/bitrouter-p0-postrevert-final-20261020/baseline/bro",
+      "sha256": "f1e5381cfcfa07e3624a29f3d5d9505561afea2b0142e1704b1688fbb1a6bbe7"
+    },
+    {
+      "bytes": 317108816,
+      "label": "full",
+      "path": "/private/tmp/bitrouter-p0-codeql-final-20261020/full/bro",
+      "sha256": "8f03595f54cd523b7100c02fd872c6da89828ffa440062b201a940548f58a85a"
+    },
+    {
+      "bytes": 116040960,
+      "label": "gateway",
+      "path": "/private/tmp/bitrouter-p0-codeql-final-20261020/gateway/bro",
+      "sha256": "9fb5f342609bdb8e59a6a6af75abb891a40c1bb22670bc96c2c110fdc3c3d49c"
+    }
+  ],
+  "platform": "macos",
+  "samples": [
+    {
+      "after_load_rss_kib": 222704,
+      "idle_rss_kib": [
+        62992,
+        62992,
+        62992
+      ],
+      "label": "baseline",
+      "ordinary": {
+        "elapsed_ms": 1205.46575,
+        "latency_p50_ms": 2.1965410000000003,
+        "latency_p95_ms": 3.632208,
+        "requests_per_second": 3397.8568034803143
+      },
+      "round": 0,
+      "startup_ms": 82.220916,
+      "streaming": {
+        "elapsed_ms": 1042.365416,
+        "latency_p50_ms": 1.9445409999999999,
+        "latency_p95_ms": 2.831625,
+        "requests_per_second": 3929.5240777635317
+      }
+    },
+    {
+      "after_load_rss_kib": 217168,
+      "idle_rss_kib": [
+        65904,
+        65904,
+        65904
+      ],
+      "label": "full",
+      "ordinary": {
+        "elapsed_ms": 1791.67175,
+        "latency_p50_ms": 2.968,
+        "latency_p95_ms": 5.53475,
+        "requests_per_second": 2286.133048645769
+      },
+      "round": 0,
+      "startup_ms": 81.761291,
+      "streaming": {
+        "elapsed_ms": 1549.711125,
+        "latency_p50_ms": 2.819333,
+        "latency_p95_ms": 4.307208,
+        "requests_per_second": 2643.0732372783345
+      }
+    },
+    {
+      "after_load_rss_kib": 178608,
+      "idle_rss_kib": [
+        43536,
+        43536,
+        43536
+      ],
+      "label": "gateway",
+      "ordinary": {
+        "elapsed_ms": 1536.836334,
+        "latency_p50_ms": 2.841292,
+        "latency_p95_ms": 4.809792,
+        "requests_per_second": 2665.2154880664084
+      },
+      "round": 0,
+      "startup_ms": 79.811,
+      "streaming": {
+        "elapsed_ms": 1400.109625,
+        "latency_p50_ms": 2.541959,
+        "latency_p95_ms": 3.7864999999999998,
+        "requests_per_second": 2925.4852097741987
+      }
+    },
+    {
+      "after_load_rss_kib": 206064,
+      "idle_rss_kib": [
+        44368,
+        44368,
+        44368
+      ],
+      "label": "gateway",
+      "ordinary": {
+        "elapsed_ms": 1526.641,
+        "latency_p50_ms": 2.8661250000000003,
+        "latency_p95_ms": 4.574041,
+        "requests_per_second": 2683.0145397640963
+      },
+      "round": 1,
+      "startup_ms": 61.523,
+      "streaming": {
+        "elapsed_ms": 1664.021416,
+        "latency_p50_ms": 2.936625,
+        "latency_p95_ms": 4.828334,
+        "requests_per_second": 2461.5067814728172
+      }
+    },
+    {
+      "after_load_rss_kib": 226176,
+      "idle_rss_kib": [
+        65984,
+        65984,
+        65984
+      ],
+      "label": "full",
+      "ordinary": {
+        "elapsed_ms": 1440.331541,
+        "latency_p50_ms": 2.672542,
+        "latency_p95_ms": 4.217791999999999,
+        "requests_per_second": 2843.7896993883855
+      },
+      "round": 1,
+      "startup_ms": 66.622292,
+      "streaming": {
+        "elapsed_ms": 1737.172959,
+        "latency_p50_ms": 2.720166,
+        "latency_p95_ms": 4.883875000000001,
+        "requests_per_second": 2357.8538790736498
+      }
+    },
+    {
+      "after_load_rss_kib": 214000,
+      "idle_rss_kib": [
+        63040,
+        63040,
+        63040
+      ],
+      "label": "baseline",
+      "ordinary": {
+        "elapsed_ms": 1568.284583,
+        "latency_p50_ms": 2.910209,
+        "latency_p95_ms": 4.576208,
+        "requests_per_second": 2611.770876536124
+      },
+      "round": 1,
+      "startup_ms": 77.360042,
+      "streaming": {
+        "elapsed_ms": 1406.587,
+        "latency_p50_ms": 2.574917,
+        "latency_p95_ms": 3.863416,
+        "requests_per_second": 2912.0132633104104
+      }
+    },
+    {
+      "after_load_rss_kib": 201584,
+      "idle_rss_kib": [
+        65392,
+        65392,
+        65392
+      ],
+      "label": "full",
+      "ordinary": {
+        "elapsed_ms": 1465.939417,
+        "latency_p50_ms": 2.7285,
+        "latency_p95_ms": 4.242792,
+        "requests_per_second": 2794.1127392442577
+      },
+      "round": 2,
+      "startup_ms": 76.721958,
+      "streaming": {
+        "elapsed_ms": 1544.440916,
+        "latency_p50_ms": 2.732333,
+        "latency_p95_ms": 4.691875,
+        "requests_per_second": 2652.0923899169734
+      }
+    },
+    {
+      "after_load_rss_kib": 213504,
+      "idle_rss_kib": [
+        62800,
+        62800,
+        62800
+      ],
+      "label": "baseline",
+      "ordinary": {
+        "elapsed_ms": 1509.252791,
+        "latency_p50_ms": 2.803125,
+        "latency_p95_ms": 4.434457999999999,
+        "requests_per_second": 2713.925741549283
+      },
+      "round": 2,
+      "startup_ms": 80.28741600000001,
+      "streaming": {
+        "elapsed_ms": 1464.035875,
+        "latency_p50_ms": 2.666916,
+        "latency_p95_ms": 4.0714999999999995,
+        "requests_per_second": 2797.7456495046613
+      }
+    },
+    {
+      "after_load_rss_kib": 186864,
+      "idle_rss_kib": [
+        43792,
+        43792,
+        43792
+      ],
+      "label": "gateway",
+      "ordinary": {
+        "elapsed_ms": 1431.043834,
+        "latency_p50_ms": 2.670375,
+        "latency_p95_ms": 4.076792,
+        "requests_per_second": 2862.246356599025
+      },
+      "round": 2,
+      "startup_ms": 62.444291,
+      "streaming": {
+        "elapsed_ms": 1425.16825,
+        "latency_p50_ms": 2.595166,
+        "latency_p95_ms": 3.982958,
+        "requests_per_second": 2874.0466257229627
+      }
+    }
+  ],
+  "schema": "bitrouter.gateway-local-measurements.v1",
+  "workload": {
+    "concurrency": 8,
+    "provider": "local wiremock; fixed small response",
+    "requests_per_mode": 4096,
+    "rss_unit": "KiB",
+    "warmup_requests": 16
+  }
+}

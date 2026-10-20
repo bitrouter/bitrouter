@@ -258,3 +258,47 @@ absolute-throughput change; neither campaign is excluded. Startup also varied,
 including a repeat full median of 133.078ms versus 89.644ms baseline. Post-campaign
 host load observations are recorded, but do not establish the cause of variation.
 These samples do not support a production throughput or startup improvement claim.
+
+## Cryptographic source follow-up (2026-10-20)
+
+Runtime source `bbee2e7c955444bc26a76cf9f9fdf9195d767818` removes fixed test keys,
+preserves shared-key equivalence across compared/restarted fixtures, and gives
+each immutable control-auth snapshot a private random HMAC comparison key.
+Production correlation/continuation key creation uses the same random source and
+persisted 32-byte format directly. A tuple test fixture now has named independent
+fields; health streak logic is unchanged. No CodeQL finding was dismissed and
+no check was suppressed.
+
+The preceding main CI passed all 57 jobs at `b25909a`, but a separate CodeQL check
+reported 45 hard-coded-cryptographic-value alerts. Fresh hosted CI and CodeQL on
+the new head remain required. The selected local all-feature suite passed
+**385 tests with zero retries**, with 3,146 other tests filtered out. Independent
+review caught the initial metadata-equivalence fixture regression; the fix
+retains its original equality assertions. Strict all-feature library/test Clippy
+on Rust 1.97 and formatting passed. Exact commands, initial failure, source/log
+hashes and compiled identities are in
+[validation-codeql-fix-2026-10-20.json](validation-codeql-fix-2026-10-20.json).
+
+Both full/minimum executables were rebuilt from the runtime source above. The
+same immutable post-revert main baseline, Rust 1.99 development profile, counted
+local provider, fresh SQLite, 4,096 ordinary plus 4,096 SSE requests, concurrency
+eight and three rotating orders apply. No build, test or lint ran during either
+measurement campaign. All **18 samples** are retained in the
+[initial](gateway-codeql-fix-2026-10-20.json) and
+[repeat](gateway-codeql-repeat-2026-10-20.json) records.
+
+| Median | Initial baseline | Initial full | Initial minimum | Repeat baseline | Repeat full | Repeat minimum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Startup ms | 80.287 | 76.722 | 62.444 | 59.582 | 61.289 | 57.252 |
+| Idle RSS MiB | 61.516 | 64.359 | 42.766 | 61.406 | 63.875 | 42.219 |
+| After-load RSS MiB | 208.984 | 212.078 | 182.484 | 202.141 | 197.281 | 178.500 |
+| Ordinary requests/s | 2713.926 | 2794.113 | 2683.015 | 3329.571 | 3359.511 | 3520.883 |
+| SSE requests/s | 2912.013 | 2643.073 | 2874.047 | 3930.794 | 4144.536 | 4189.513 |
+
+Full idle RSS overhead is **4.62% / 4.02%**, within the accepted small increase;
+the memory optimization follow-up remains open. Ordinary/SSE median differences
+are **+2.95% / -9.24%** initially and **+0.90% / +5.44%** in the repeat. The first
+SSE result prompted the repeat; neither campaign is excluded. The changing sign
+and absolute throughput do not establish a stable regression or improvement.
+Host-load observations are retained without assigning a cause. These local
+development samples do not constitute a production-performance claim.
