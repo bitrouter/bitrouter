@@ -19,6 +19,9 @@ use tokio::{net::TcpListener, sync::Mutex, task::JoinHandle};
 
 type TestResult<T = ()> = Result<T, Box<dyn StdError + Send + Sync>>;
 
+#[path = "gateway_http/execution.rs"]
+mod execution;
+
 struct Reply {
     status: u16,
     headers: Vec<(&'static str, String)>,
@@ -42,6 +45,9 @@ impl Reply {
 }
 struct Recorded {
     path: String,
+    target: String,
+    method: String,
+    headers: axum::http::HeaderMap,
     credential: Option<String>,
     beta: Option<String>,
     body: Vec<u8>,
@@ -71,6 +77,9 @@ async fn serve(replies: Vec<Reply>) -> TestResult<Server> {
                 let body = axum::body::to_bytes(body, 1024 * 1024).await?;
                 records.lock().await.push(Recorded {
                     path: parts.uri.path().into(),
+                    target: parts.uri.to_string(),
+                    method: parts.method.to_string(),
+                    headers: parts.headers.clone(),
                     credential: parts
                         .headers
                         .get("authorization")

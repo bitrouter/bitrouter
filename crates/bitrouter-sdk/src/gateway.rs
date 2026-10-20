@@ -2,6 +2,7 @@
 
 mod core;
 mod eval;
+pub mod execution;
 
 use std::time::Duration;
 
@@ -197,6 +198,7 @@ impl GatewayClient {
             .send()
             .await
             .map_err(Error::transport)?;
+        let response = execution::reject_existing(response)?;
         self.json(response).await
     }
 
@@ -223,6 +225,7 @@ impl GatewayClient {
             .send()
             .await
             .map_err(Error::transport)?;
+        let response = execution::reject_existing(response)?;
         let response = transport::successful(response, self.options.max_response_bytes).await?;
         if !transport::has_content_type(&response, "text/event-stream") {
             return Err(Error::Response("expected text/event-stream"));

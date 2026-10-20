@@ -35,7 +35,7 @@ review threads remained unresolved. This does not close any P1 gate.
 | 3 Gateway integration | Credential binding, admission, dispatch, delivery and private HTTP router implemented; official startup pending | Scoped HTTP/protocol/executor and PostgreSQL regressions passed | Authentication/context/dispatch/custody/HTTP substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
-| 6 Delivery and operations | Bounded custody, transport and HTTP admission implemented; runtime/workers pending | Scoped custody/transport/HTTP regressions passed | Custody, transport and HTTP substages approved |
+| 6 Delivery and operations | Shared submission/query SDK, bounded custody/transport/HTTP implemented; runtime/workers/operator pending | Scoped service regressions and independent SDK tests passed | Custody/transport/HTTP/SDK substages approved |
 | 7 Aggregate acceptance and PR | Pending | Pending | Pending |
 
 ## Acceptance ledger
@@ -601,3 +601,75 @@ multi-process acceptance are still required.
   heartbeat/recovery workers, operator/SDK clients, trajectory integration,
   independent-process faults/load, performance and final aggregate review remain
   open. No P1-A01–A09 gate is closed here.
+
+## Shared gateway SDK substage (2026-10-20)
+
+- Added `gateway::execution::{SubmissionOptions, ExecutionMetadata, Submission}`
+  and explicit shared-gateway submission methods: four JSON protocols, three
+  streaming protocols, plus `GatewayClient::execution(id)`. No new crate,
+  dependency or SDK feature is required. `bitrouter-ai` remains unchanged.
+- HTTP 200 returns ordinary output/stream with its identity; 202 returns the
+  original execution projection before any model or SSE decoding. The existing
+  model methods remain local-compatible and explicitly reject 202 while keeping
+  its HTTP evidence. The existing `Error` enum and failure fields are unchanged.
+- New calls preserve HTTP status and headers on malformed, oversized or
+  truncated 200/202 responses using `Error::Service` with `body_error`. Status
+  locations are validated against the configured origin/prefix and execution
+  ID, but never used to choose a credential destination. Explicit queries encode
+  IDs as one path segment. Duplicate response correlation can differ from the
+  original correlation in the execution DTO.
+- Options are validated on every call against the fixed 23-header contract.
+  Duplicate order, empty values and typed identity normalization are preserved.
+  New submissions have a stable default User-Agent; legacy calls retain their
+  versioned default. Managed-profile markers and authority/framing overrides
+  are rejected before sending. New Debug implementations redact options,
+  metadata and generic outputs without requiring payloads to implement Debug.
+- The SDK never retries, follows status Location, generates idempotency keys,
+  polls or synthesizes model results. A shared submission sent to a local
+  gateway can execute before missing metadata is detected; README/rustdoc and
+  the specification document this limitation and explicit recovery semantics.
+- Independent design review identified status classification, evidence loss,
+  duplicate correlation, proxy-prefix routing, header identity, local-mode
+  semantics, source compatibility and diagnostic-redaction requirements.
+  The implementation follows those requirements. The existing-execution DTO
+  is boxed to bound the enum variant size.
+- After correcting integration-module file paths, the first complete SDK
+  `--all-features` suite passed **72/72**, zero skips/retries in 0.472 seconds
+  (`/tmp/bitrouter-p1-sdk-http-tests.log`). Added Location, truncated-success
+  and legacy/User-Agent regressions raised this to **75/75**, zero skips/retries
+  in 0.497 seconds (`/tmp/bitrouter-p1-sdk-boundaries-tests.log`).
+- `--no-default-features` passed **61/61**, zero skips/retries in 0.398 seconds
+  (`/tmp/bitrouter-p1-sdk-minimal-tests.log`). Rustdoc compiled **6/6** examples
+  in each profile (`/tmp/bitrouter-p1-sdk-doc-tests.log` and
+  `/tmp/bitrouter-p1-sdk-minimal-doc-tests.log`). These fixtures import only the
+  SDK/public contracts and run isolated HTTP servers, not application assembly.
+- Strict Rust 1.97 SDK `--all-features --all-targets` Clippy with `-D warnings`
+  passed in 11.34 seconds (`/tmp/bitrouter-p1-sdk-clippy.log`). Formatting and
+  whitespace checks passed. The forward production dependency tree contains
+  no service/database/UI crate, and the SDK's 23 header names/order exactly
+  match the service contract (`/tmp/bitrouter-p1-sdk-dependencies.txt`).
+- Independent implementation review found three validation defects: flattened
+  `extra.stream` could override the typed mode, a duplicate's original DTO
+  correlation was not independently validated, and a comma-coalesced Content-Type
+  could hide after a parameter. Regression tests reproduced all three before
+  production repairs, with two positive controls passing
+  (`/tmp/bitrouter-p1-sdk-review-red.log`). The repaired methods reject reserved
+  stream extensions before HTTP, validate both correlations independently, and
+  parse complete textual media types including quoted escapes/commas and empty
+  parameters without adding dependencies.
+- After repairs, the SDK all-feature suite passed **81/81**, zero skips/retries
+  in 0.247 seconds (`/tmp/bitrouter-p1-sdk-review-green.log`), and the minimal
+  profile passed **67/67**, zero skips/retries in 0.235 seconds
+  (`/tmp/bitrouter-p1-sdk-review-minimal.log`). Strict Rust 1.97 all-feature,
+  all-target Clippy passed in 1.04 seconds
+  (`/tmp/bitrouter-p1-sdk-review-clippy.log`).
+- Both final Rustdoc profiles passed **6/6** examples
+  (`/tmp/bitrouter-p1-sdk-review-doc.log`,
+  `/tmp/bitrouter-p1-sdk-review-minimal-doc.log`); formatting and whitespace
+  checks passed. Independent rereview approved the substage and closed all
+  three findings (`/tmp/bitrouter-p1-sdk-repair-review.json`). All 31 reviewed
+  file hashes match (`/tmp/bitrouter-p1-sdk-review-hashes.json`).
+- This is shared
+  inference/status client delivery, not the operator API or official process
+  runtime. Publication/drain workers, trajectory integration, independent
+  process acceptance, performance and final aggregate review remain open.

@@ -183,6 +183,34 @@ The SDK explicitly distinguishes
 an existing execution from a model response. Unknown executions are queryable;
 the service does not promise provider-side exactly-once execution.
 
+The SDK's additive `gateway::execution` surface provides `SubmissionOptions`,
+`ExecutionMetadata`, `Submission<T>` and `GatewayClient::execution(id)`. The four
+`submit_*` JSON methods and three `submit_stream_*` methods require shared
+metadata and distinguish 200 output from 202 status before protocol decoding.
+Original model methods remain local-compatible and reject 202 with its HTTP
+metadata retained. No new SDK feature or service dependency is required.
+
+Options accept only the fixed semantic header set above, preserving duplicate
+values; authentication and managed-profile overrides are rejected locally.
+Generation methods reject an extension-map `stream` field before sending, so it
+cannot override the typed stream mode during serialization. Original correlation
+in a 202 execution DTO is independently validated as normalized 1–256 ASCII bytes;
+it need not equal the current response correlation. Successful response
+Content-Type must be one complete media type with valid parameter syntax.
+New submission methods use a stable default `bitrouter-sdk` User-Agent so an SDK
+version string alone does not change the request fingerprint. Explicit caller
+values remain semantic. This does not promise serialization stability across
+arbitrary SDK upgrades.
+
+Status URLs are constructed from the client's configured origin and proxy prefix
+with one encoded execution-ID segment. Validated Location is evidence, never a
+credential-routing authority. Shared response metadata survives malformed,
+oversized or truncated 200/202 responses in the existing `Error::Service`
+container with the actual wire status and a `body_error`. Calling a shared-only
+submission method against a local server may execute inference before missing
+metadata is detected; the SDK never probes, retries or falls back automatically.
+See the [SDK usage and recovery contract](../crates/bitrouter-sdk/README.md).
+
 ## Shared admission
 
 The initial hard resource dimensions are tenant concurrent executions, tenant

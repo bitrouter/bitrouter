@@ -7,6 +7,9 @@ use reqwest::header::HeaderMap;
 ///
 /// Callers may inspect authentication challenges and retry hints, but the SDK
 /// never retries a request automatically. Debug output excludes headers/body.
+/// Shared gateway calls also retain a successful HTTP status here when response
+/// validation or reading fails. Inspect `body_error`; execution may have started,
+/// and the headers can still contain its durable or candidate identity.
 pub struct ServiceFailure<Body = GatewayErrorEnvelope> {
     pub status: u16,
     pub headers: HeaderMap,
