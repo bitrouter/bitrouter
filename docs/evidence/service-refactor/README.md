@@ -210,3 +210,51 @@ throughput medians differ by **+0.79% / +0.87%**. Minimum SSE samples span
 These small local samples do not prove either an improvement or a regression in
 production throughput. Earlier performance records and their limitations remain
 available above rather than being overwritten.
+
+## Terminal input custody follow-up (2026-10-20)
+
+Runtime source `6218709fdb24f8c4a1e1136f6651c9f00fa3e6a7` supersedes the preceding candidate.
+The next Ubuntu run exposed an external-editor return/input race. The application
+now owns its terminal reader and confirms its termination before transferring
+custody. Stop is asynchronous and bounded; a stuck reader rejects the handoff
+and never blocks a destructor. Editors retain custody across SIGCONT, and each
+interactive client stops input before restoring shell modes.
+
+The final selected run passed **53 tests, zero retries**: 51 terminal tests and
+two reader lifecycle tests. Six terminal cases remain explicitly skipped; the
+other 3,528 library tests were filtered out of this scoped command. A later
+test-only assertion correction passed both reader unit tests and strict
+all-feature library/test Clippy. Independent review approved the lifecycle fix.
+The initial local candidate’s synchronization and shutdown defects, their fixes,
+and command/log identities are retained in
+[validation-reader-fix-2026-10-20.json](validation-reader-fix-2026-10-20.json).
+
+The prior hosted macOS job compiled for 23m52s and continued passing tests until
+the 45-minute job limit canceled it near test 3869/4693. Its total budget is now
+75 minutes; individual test deadlines and retry settings remain unchanged.
+Fresh hosted checks on the follow-up head remain required.
+
+Both full/minimum binaries were rebuilt from the source above. The baseline
+remains immutable post-revert main `e972d5e`. Two campaigns use the same
+Rust 1.99 development profile, counted provider, fresh SQLite, 4,096 ordinary plus
+4,096 SSE requests at concurrency eight and three rotating orders. No build,
+test or lint ran during either campaign. All **18 samples** are retained in
+[initial measurements](gateway-reader-fix-2026-10-20.json) and
+[repeat measurements](gateway-reader-repeat-2026-10-20.json).
+
+| Median | Initial baseline | Initial full | Initial minimum | Repeat baseline | Repeat full | Repeat minimum |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Startup ms | 87.141 | 87.215 | 77.712 | 89.644 | 133.078 | 80.608 |
+| Idle RSS MiB | 61.391 | 63.656 | 42.172 | 61.563 | 63.641 | 41.922 |
+| After-load RSS MiB | 209.969 | 208.094 | 183.953 | 223.313 | 211.219 | 185.500 |
+| Ordinary requests/s | 2980.969 | 2969.349 | 2932.924 | 2974.869 | 2891.691 | 2939.453 |
+| SSE requests/s | 3195.728 | 3030.966 | 3235.623 | 3052.352 | 3026.638 | 3123.444 |
+
+Full idle overhead is **3.69% / 3.38%** across the two campaigns, within the
+accepted small increase; the memory optimization follow-up remains open.
+Ordinary/SSE differences are **-0.39% / -5.16%** initially and **-2.80% / -0.84%**
+in the repeat. The repeat was prompted by the initial SSE result and the common
+absolute-throughput change; neither campaign is excluded. Startup also varied,
+including a repeat full median of 133.078ms versus 89.644ms baseline. Post-campaign
+host load observations are recorded, but do not establish the cause of variation.
+These samples do not support a production throughput or startup improvement claim.

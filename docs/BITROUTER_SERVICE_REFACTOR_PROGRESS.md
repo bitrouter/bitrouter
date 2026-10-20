@@ -3789,3 +3789,27 @@ for source/artifact identities, original failure, log hashes and complete ranges
 Previous ownership, package, SDK, persistence and feature evidence remains
 separate; no new full-workspace local run is claimed. The follow-up PR head still
 requires fresh hosted platform, packaging and CodeQL results before merge ready.
+
+## Terminal input custody candidate (2026-10-20)
+
+Runtime source `6218709fdb24f8c4a1e1136f6651c9f00fa3e6a7` addresses the next hosted Ubuntu
+external-editor failure. The owned input reader stops before custody changes;
+bounded asynchronous shutdown avoids a stuck OS reader blocking exit. SIGCONT
+respects a still-running editor, and all three clients stop input before shell
+restoration. Independent review closed three lifecycle findings.
+
+The selected terminal/reader suite passed 53 tests with zero retries. Strict
+all-feature library/test Clippy passed, and the final test-only lint correction
+passed both reader tests. Existing full P0 evidence remains applicable; this
+scoped follow-up is not a new local full-workspace run.
+
+Two performance campaigns retain 18 samples from the same immutable artifacts.
+Full idle RSS overhead is 3.69% and 3.38%; ordinary/SSE median differences are
+-0.39%/-5.16% and -2.80%/-0.84%. Startup and host-load variation remain recorded
+limitations. The accepted memory optimization follow-up remains open.
+
+The preceding macOS CI job reached its 45-minute total deadline after a 23m52s
+cold build while still passing tests. Only its total budget increases to 75
+minutes; individual deadlines and retries are preserved. The final PR head
+still needs fresh hosted CI. See the
+[complete evidence](evidence/service-refactor/README.md#terminal-input-custody-follow-up-2026-10-20).
