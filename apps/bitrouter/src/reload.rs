@@ -1185,6 +1185,42 @@ pub async fn load_configuration_baseline(
         .map_err(|failure| failure.error)
 }
 
+/// Use the exact local document validated before the foreground host touched
+/// daemon/home state. Policy defaults still resolve at the normal local stage.
+pub(crate) async fn load_selected_configuration_baseline(
+    source: &crate::paths::ConfigSource,
+    selected: Option<Box<crate::config::shared_process::LocalInput>>,
+) -> anyhow::Result<ConfigurationBaseline> {
+    let Some(selected) = selected else {
+        return load_configuration_baseline(source).await;
+    };
+    let crate::paths::ConfigSource::File(path) = source else {
+        anyhow::bail!("selected local document has no file source");
+    };
+    let crate::config::shared_process::LocalInput {
+        mut config,
+        document,
+    } = *selected;
+    anyhow::ensure!(
+        matches!(
+            config.gateway_state,
+            crate::config::gateway_state::GatewayStateConfig::Local {}
+        ),
+        "local startup cannot consume shared authority"
+    );
+    crate::policy_lock::apply_defaults(&mut config, Some(path));
+    crate::assemble::validate_host_configuration(&config)?;
+    let (unclassified_fields, unclassified_values) = unclassified_config(&document);
+    Ok(ConfigurationBaseline {
+        source: source.clone(),
+        loaded_source: source.clone(),
+        config,
+        revision: ConfigurationRevision::Document(document),
+        unclassified_fields: Some(unclassified_fields),
+        unclassified_values: Some(unclassified_values),
+    })
+}
+
 /// Inspect the logical saved source for an already running daemon. A process
 /// that started from Default keeps running zero-config, while a newly created
 /// `<home>/bitrouter.yaml` is returned here as pending saved input.

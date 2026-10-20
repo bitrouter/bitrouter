@@ -47,6 +47,7 @@ pub mod presets;
 pub mod router;
 pub mod routing_table;
 pub mod server_tools;
+pub(crate) mod shared_process;
 pub(crate) mod yaml;
 
 #[cfg(test)]

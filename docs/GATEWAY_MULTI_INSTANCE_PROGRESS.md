@@ -30,12 +30,12 @@ review threads remained unresolved. This does not close any P1 gate.
 
 | Stage | Implementation | Verification | Independent review |
 | --- | --- | --- | --- |
-| 1 Authority foundation | Store/key foundation implemented; startup pending | Real PostgreSQL foundation passed | Store/key foundation approved |
+| 1 Authority foundation | Store/key foundation and shared startup implemented; operator bootstrap pending | Real PostgreSQL foundation and runtime tests passed | Foundation and bounded runtime approved |
 | 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
-| 3 Gateway integration | Credential binding, admission, dispatch, delivery and private HTTP router implemented; official startup pending | Scoped HTTP/protocol/executor and PostgreSQL regressions passed | Authentication/context/dispatch/custody/HTTP substages approved |
+| 3 Gateway integration | Official foreground startup, credential binding, admission, dispatch, delivery and HTTP router implemented; independent-process acceptance pending | Scoped HTTP/protocol/executor and PostgreSQL runtime regressions passed | Authentication/context/dispatch/custody/HTTP/runtime substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
-| 6 Delivery and operations | Shared submission/query SDK, bounded custody/transport/HTTP implemented; runtime/workers/operator pending | Scoped service regressions and independent SDK tests passed | Custody/transport/HTTP/SDK substages approved |
+| 6 Delivery and operations | Shared submission/query SDK, bounded custody/transport/HTTP and retained runtime workers implemented; projection receiver, outbox and operator pending | Scoped runtime/service regressions and independent SDK tests passed | Custody/transport/HTTP/SDK/runtime substages approved |
 | 7 Aggregate acceptance and PR | Pending | Pending | Pending |
 
 ## Acceptance ledger
@@ -1278,3 +1278,57 @@ multi-process acceptance are still required.
 - The process supervisor, official startup, workers and telemetry ordering still
   require integration. These tests do not close P1-A01–A09 or establish complete
   independent-process shutdown acceptance.
+
+## Official foreground runtime (2026-10-21)
+
+- `bro serve --config` now selects and retains its configuration before daemon
+  discovery, home creation or CWD changes. Shared input has a strict process-only
+  schema and a bounded read. Local expansion must remain local and its validated
+  document is reused. The structural probe preserves local flow interpolation,
+  mapping keys, anchors, aliases and merge precedence while rejecting literal
+  duplicate selectors before environment lookup. The 16 MiB selection cap is an
+  implementation choice recorded in the CLI and skill references.
+- A retained lifecycle owns the original joined incarnation, dedicated heartbeat
+  pool, publication, retirement, custody and recovery workers, all generations,
+  optional HTTP transport and the process telemetry owner. Startup/listen failures
+  use the same shutdown path. Local withdrawal precedes durable withdrawal; all
+  waits retain one deadline, second termination requests force, and transport
+  joins precede pipeline force. Reports distinguish quiescence, durable uncertainty
+  and a clean exit. Windows signal handling matches the existing local host;
+  its source was reviewed, but Windows execution is not claimed here.
+- Independent review found and repaired stalled authority polling behind retired
+  sources, stale readiness while heartbeat SQL was blocked, maintenance batches
+  delaying shutdown, and local-parser compatibility/selection defects. Tests
+  observe actual database lock waits, preserve unknown-ACK custody, resume
+  cancelled shutdown and exercise the startup path without a transport.
+- Final Rust 1.97 minimal shared regressions passed **484/484**, 1,898 filtered,
+  zero retries and no leak results in 16.325 seconds
+  (`/tmp/bitrouter-p1-runtime-final-minimal-v2.log`). The all-feature selection
+  passed **508/508**, 3,166 filtered, zero retries and no leak results in 16.796
+  seconds (`/tmp/bitrouter-p1-runtime-final-full.log`). Both explicitly include
+  ignored PostgreSQL tests and cover shared runtime, continuation, pipeline
+  ownership, assembly, configuration, reload and host behavior.
+- Earlier fixture failures and two parallel leak results are preserved in the
+  initial/corrected logs; the repaired serial run passed 11/11 and the final
+  parallel matrices above are clean. A separate attempted matrix stopped after
+  267 passes because its entire build directory disappeared and Nextest could
+  no longer execute the binary. Its cause was not established. It is incomplete
+  infrastructure evidence, not a product failure or a pass. The final runs used
+  a dedicated build directory and unchanged source throughout each run.
+- Final all-feature library/test Clippy exited 0 in 1m37s with no Clippy
+  diagnostics (`/tmp/bitrouter-p1-runtime-final-clippy-full.log`). Its 24 unused
+  library warnings identify remaining P1 integration; strict whole-product lint
+  acceptance remains open. No warning suppression was introduced.
+- Local `--no-default-features` regressions passed **372/372**, 1,889 filtered,
+  zero retries and no leak results in 2.141 seconds
+  (`/tmp/bitrouter-p1-runtime-final-local.log`). The same profile's library/test
+  Clippy passed with `-D warnings` in 45.73 seconds
+  (`/tmp/bitrouter-p1-runtime-final-clippy-local.log`). Formatting and whitespace
+  checks passed. The final source/log manifest is
+  `/tmp/bitrouter-p1-runtime-candidate.json`; bounded independent reviews are
+  `/tmp/bitrouter-p1-runtime-review.json` and
+  `/tmp/bitrouter-p1-startup-publication-review.json`.
+- These are bounded runtime tests, not independent gateway-process acceptance.
+  Operator bootstrap/API, durable metering/trajectory projection and guard
+  catch-up, retained-key correlation, outbox delivery, complete readiness details,
+  local-launcher guards, official shared artifacts and P1-A01–A09 remain open.

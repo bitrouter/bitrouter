@@ -9,11 +9,18 @@ an explicitly initialized namespace, and an environment reference for the
 deployment's base64-encoded 32-byte key. Replicas use the same namespace and key.
 Do not put the key itself in configuration or substitute it into the reference.
 
+Run a build with `multi-instance` using `bro serve --config <file>`. Shared
+mode is a foreground service managed by the operator; it does not use the
+local daemon launcher, PID/socket locator, home directory or compiled extension
+host. It never initializes or publishes a namespace as a startup side effect.
+Routing, policies and provider credentials must already be published there.
+
 ```yaml
 server:
+  listen: 127.0.0.1:4356
   skip_auth: false
 database:
-  url: ${GATEWAY_DATABASE_URL}
+  url: "${GATEWAY_DATABASE_URL}"
 gateway_state:
   mode: shared
   namespace: production-gateway
@@ -33,6 +40,28 @@ gateway_state:
   request_timeout_ms: 30000
   write_stall_timeout_ms: 30000
 ```
+
+The selected document is read once before local startup, with a 16 MiB input
+limit. Select `gateway_state.mode` literally; environment interpolation cannot
+select or change the mode. Shared documents accept `server.listen`,
+`server.log_level`, `server.skip_auth`, `database.url`, `gateway_state` and optional
+`telemetry`. Explicit `inherit_defaults: false` and `registry: {enabled: false}`
+are accepted. Provider/model/policy, control, harness and plugin configuration
+belongs outside this process document and is rejected before environment lookup.
+Quote environment references in shared YAML strings. Bounds must be literal
+numbers. Shared value substitution cannot inject new YAML fields.
+
+Telemetry is disabled unless this process document contains `telemetry`. Its
+fields use the built-in OTLP configuration, and `OTEL_*` overrides are resolved
+once. It requires an OTLP feature and does not load local account attribution or
+create an installation ID. The process owns one exporter across routing changes.
+
+Readiness requires a live original owner lease, fresh access through the main
+database pool and a loaded snapshot matching the active authority. An expired
+owner never silently rejoins. SIGINT/SIGTERM starts one fixed drain deadline;
+another termination signal selects force while retaining task joins. Forced
+shutdown preserves uncertain custody/native records for recovery and exits
+unsuccessfully if work remains unresolved. Local mode keeps its daemon workflow.
 
 The owner lease must exceed three heartbeat intervals plus one transaction
 deadline. The total database connection budget is 2–128: one is reserved for

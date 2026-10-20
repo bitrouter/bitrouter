@@ -158,6 +158,12 @@ impl Registry {
         lock(&self.entries).owned.len()
     }
 
+    #[cfg(test)]
+    pub fn reconciling(&self) -> usize {
+        let entries = lock(&self.entries);
+        entries.owned.len().saturating_sub(entries.queued.len())
+    }
+
     pub fn pending_for(&self, generation: Generation) -> usize {
         lock(&self.entries)
             .generations

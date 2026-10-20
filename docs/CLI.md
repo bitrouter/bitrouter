@@ -11,6 +11,14 @@ and existing session-attributed spend remain available.
 SQLite needs no feature. PostgreSQL/MySQL configuration requires `db-postgres` /
 `db-mysql`; both are included in the default distribution. Reduced builds report
 an unavailable selected backend before connecting.
+The opt-in `multi-instance` feature enables a separate shared foreground path for
+`serve`: a literal `gateway_state.mode: shared` process document selects it before
+local daemon/home discovery. It requires an initialized, published PostgreSQL
+namespace and rejects managed-child/compiled-extension hosting. See the
+[shared process configuration](../skills/bitrouter/references/shared-gateway.md).
+Foreground startup reads a selected file once with a 16 MiB bound. Local
+environment expansion is validated as local before daemon/home effects and the
+same parsed input becomes its configuration baseline.
 Gateway server-side tools require `server-tools` (included by default and enabling
 `mcp`). Selecting MCP tools, advisor, subagent, Fusion, web search or web fetch
 without that feature fails at startup, reload and profile preflight. Saved loop

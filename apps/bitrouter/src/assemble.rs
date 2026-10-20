@@ -956,23 +956,24 @@ async fn assemble_app(
                 None => (None, None),
             },
         };
-    #[cfg(feature = "multi-instance")]
-    let injected_observe = shared.map(|inputs| inputs.telemetry.observe());
-    #[cfg(not(feature = "multi-instance"))]
-    let injected_observe: Option<Arc<dyn ObserveStatusProvider>> = None;
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    let observe_provider: Arc<dyn ObserveStatusProvider> =
-        injected_observe.unwrap_or_else(|| match otel_exporter.clone() {
-            Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
-            None => Arc::new(NoopObserveStatus {
-                compiled_in: OTEL_ENABLED,
-            }),
-        });
+    let default_observe: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
+        Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
+        None => Arc::new(NoopObserveStatus {
+            compiled_in: OTEL_ENABLED,
+        }),
+    };
     #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
-    let (observe_provider, otel_init_error): (Arc<dyn ObserveStatusProvider>, Option<String>) = (
-        injected_observe.unwrap_or_else(|| Arc::new(NoopObserveStatus { compiled_in: false })),
-        None,
-    );
+    let default_observe: Arc<dyn ObserveStatusProvider> =
+        Arc::new(NoopObserveStatus { compiled_in: false });
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    let otel_init_error = None;
+    #[cfg(feature = "multi-instance")]
+    let observe_provider = shared
+        .map(|inputs| inputs.telemetry.observe())
+        .unwrap_or(default_observe);
+    #[cfg(not(feature = "multi-instance"))]
+    let observe_provider = default_observe;
     // Two handles to the same exporter: one moves into the pipeline as an
     // `ObserveHook`, the other lands on `Assembled` so the binary can hand
     // it to the `tracing-opentelemetry` bridge layer.

@@ -175,6 +175,20 @@ impl Generations {
         &self.serving
     }
 
+    /// Only identities leave the manager; enumeration never lends applications.
+    pub fn retiring(&self) -> Vec<Generation> {
+        self.resources()
+            .iter()
+            .filter(|resource| resource.is_retiring())
+            .map(|resource| resource.id)
+            .collect()
+    }
+
+    pub fn can_build(&self) -> bool {
+        let state = self.lock();
+        !state.closed && state.candidate.is_none() && state.retired.len() < self.max_retired
+    }
+
     /// The slot exists before the first database transaction or assembly task.
     pub fn start_candidate(&self, input: Input) -> Result<Generation> {
         let runtime = tokio::runtime::Handle::try_current()?;

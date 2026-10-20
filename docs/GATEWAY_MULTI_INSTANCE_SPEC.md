@@ -66,6 +66,24 @@ terminal; a timeout or uncertain commit acknowledgement proves neither renewal
 nor expiry. A successful heartbeat alone does not make the main backend or a
 loaded snapshot ready.
 
+The official foreground entry selects a literal mode from one bounded (16 MiB)
+configuration read before local daemon discovery, directory creation, CWD changes
+or local policy/credential discovery. Shared inputs contain only process settings.
+Local interpolation retains its existing substitution-first semantics, but its
+expanded document must remain local and is reused as the startup baseline.
+Environment values cannot switch a selected local launch into shared mode.
+
+One process lifecycle owns the joined incarnation, dedicated heartbeat,
+publication, retirement, custody and recovery workers, all generations, optional
+HTTP transport and telemetry. Authority polling stays independent of old-generation
+retirement, and freshness checks continue while heartbeat SQL waits. Shutdown
+withdraws locally before its bounded durable withdrawal attempt, then borrows
+all joins under one retained deadline. Cancelled maintenance requeues custodial
+entries. Force broadcasts before joins, proves external transport quiescence
+before pipeline force, and stops telemetry after producer joins. Startup and
+listen failures use the same lifecycle, including the no-transport case.
+Terminal outbox receiver integration remains a separate delivery requirement.
+
 Shared snapshot preparation currently rejects `google_extensions: true` on Chat
 models. That extension's tool replay proofs require static target credentials;
 the shared credential-version binding does not yet provide that replay contract.
