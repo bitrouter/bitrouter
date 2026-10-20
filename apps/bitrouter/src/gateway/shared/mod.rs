@@ -13,6 +13,7 @@ mod ownership;
 mod publication;
 mod schema;
 mod store;
+pub(crate) mod telemetry;
 mod transport;
 
 #[cfg(test)]

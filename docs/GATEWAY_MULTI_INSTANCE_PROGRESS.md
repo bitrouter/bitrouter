@@ -1068,3 +1068,72 @@ multi-process acceptance are still required.
   resources, official process startup, supervisors, operator interfaces,
   trajectory integration and process-level acceptance remain open. No P1 gate
   is closed and no P1 PR is submitted by these internal fixtures.
+
+## Process-owned telemetry injection (2026-10-21)
+
+- Shared assembly now receives one process telemetry owner, including an
+  explicit disabled case. Generations borrow exporter and status views without
+  rebuilding local telemetry configuration, resolving account attribution or
+  installing another propagator. Generation status shutdown is a no-op; only
+  the process owns exporter shutdown. Assembly also rejects a namespace that
+  differs from its injected continuation authority before initialization.
+- The process retains both the blocking SDK shutdown handle and actual trace/
+  metric processor joins. Cancelled waiters and elapsed deadlines retain that
+  ownership. Forced joining aborts the processors before provider teardown and
+  starts no new flush. Original provider outcomes and worker failures remain
+  cached; a later call cannot turn a failed or forced result into a clean one.
+  Ordinary local exporter construction and its global/environment behavior are
+  preserved.
+- An actual two-generation assembly fixture exposed an incomplete-owner Drop
+  deadlock. Process sampling showed SDK provider Drop synchronously waiting for
+  a processor receiver on the same runtime thread. The fixture process was
+  terminated and the failed run remains recorded in
+  `/tmp/bitrouter-p1-process-telemetry-corrected.log`. Processor futures now keep
+  the exporter alive until their complete futures and receivers are destroyed;
+  the runtime adapter holds a weak owner reference to avoid a cycle. A no-yield
+  Drop regression verifies exporter release with metrics both enabled and
+  disabled. Incomplete Drop still does not constitute a joined shutdown.
+- Independent review found `PT-I02`: invalid trace queue bounds could panic
+  after starting a metric reader, before the complete-exporter keepalive exists.
+  Construction now validates the nonzero Tokio channel range before either
+  worker starts. Metrics on/off tests cover zero, above-limit and maximum-usize
+  capacities, an empty owned task set, the redacted process error, and the local
+  constructor returning an error.
+- Tests exercise the real two-generation assembly path, status views that cannot
+  shut down shared telemetry, expired/repeated drains, forced joins, reentrant
+  panic destruction and a real OTLP flush blocked by a local collector. The
+  latter cancels the waiter while SDK shutdown is pending, resumes the same
+  blocking task, then verifies one request and one joined processor after the
+  collector releases it. A separate controlled blocking fixture checks handle
+  retention and concurrent-waiter rejection.
+- Final all-feature telemetry/assembly selection passed **112/112**, 3,520
+  filtered, zero retries in 0.324 seconds
+  (`/tmp/bitrouter-p1-process-telemetry-full-final.log`). The earlier run's sole
+  failure was the collector fixture's missing `/v1/traces` endpoint path; its
+  shutdown report correctly retained the resulting flush error. The full test
+  image still has Darwin's compact-unwind section-size warning.
+- Final gRPC-only shared telemetry selection passed **64/64**, 2,339 filtered,
+  zero retries in 0.165 seconds
+  (`/tmp/bitrouter-p1-process-telemetry-grpc.log`). Shared assembly without an
+  OTLP feature passed **31/31**, 2,309 filtered in 0.166 seconds
+  (`/tmp/bitrouter-p1-process-telemetry-no-otlp.log`). Local HTTP telemetry/
+  assembly passed **84/84**, 2,225 filtered in 0.204 seconds
+  (`/tmp/bitrouter-p1-process-telemetry-local.log`), both with zero retries.
+- Rust 1.97 all-feature library/test Clippy exited 0 in 1m02s without
+  Clippy-specific diagnostics
+  (`/tmp/bitrouter-p1-process-telemetry-clippy.log`). The 163 library and one
+  library-test unused-code warnings still reflect staged integration, and the
+  dependency future-compatibility warning remains. This is not final strict P1
+  lint acceptance; no suppression was added.
+- Independent source review resolved `PT-I01` (incomplete-owner Drop) and
+  `PT-I02` (partial initialization), with no remaining source finding
+  (`/tmp/bitrouter-p1-process-telemetry-review.json`). The candidate manifest
+  pins the source/documents and final validation logs
+  (`/tmp/bitrouter-p1-process-telemetry-candidate.json`). Formatting and
+  whitespace checks passed.
+- These checks establish the bounded SDK processor/provider ownership contract.
+  They do not join every dependency-internal HTTP/gRPC transport task or prove
+  delivery of all historical telemetry. Standard SDK environment remains read
+  at process exporter construction. Official startup, instrumentation setup,
+  whole-generation retention, process shutdown and all P1 acceptance gates
+  remain open.

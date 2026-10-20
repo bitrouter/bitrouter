@@ -135,6 +135,33 @@ All pending markers count toward unresolved ownership, including `Reserved`;
 drain must not delete such markers just to report success. Forced joining
 starts no database compensation and preserves all unresolved markers.
 
+Shared generations borrow one process-owned telemetry exporter, or an explicit
+disabled view. Generation assembly never falls back to the local exporter
+factory, resolves application telemetry environment/account state again, or
+installs another global propagator. A generation's observation status view does
+not own shutdown. Process startup remains responsible for resolving its telemetry
+configuration and installing global instrumentation once.
+
+The process retains the blocking provider shutdown handle and the actual SDK
+processor roots independently. Cancelling or timing out a shutdown waiter loses
+neither owner. Graceful shutdown uses the original absolute deadline; an expired
+attempt starts no new shutdown. Forced joining aborts and joins the processors
+before requesting provider teardown without a new flush, while retaining any
+already-running blocking shutdown. Completed outcomes are cached, including
+flush/shutdown errors and task failures. Processor quiescence is distinct from a
+clean result, historical delivery success, and transport-internal task closure.
+The latter remains a separate process-level acceptance obligation.
+
+An incomplete owner Drop must not synchronously wait on an SDK receiver whose
+destruction needs the same runtime thread. Processor futures retain the exporter
+until their receivers have been destroyed; the runtime adapter references the
+owner weakly to avoid a cycle. Dropping an incomplete owner still does not prove
+joined shutdown. Constructor validation precedes either processor's startup, so
+invalid trace queue bounds cannot unwind through a partially running provider.
+The underlying OTLP SDK's standard environment is read during process exporter
+construction; this contract does not claim the dependency stack is environment
+independent.
+
 Tenant identity is the authenticated virtual key's owning user, never a caller
 supplied tenant header. Principal identity is the virtual-key ID. The existing
 `api_keys` authority is read from the database; its effective authorization

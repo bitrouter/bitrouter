@@ -187,6 +187,7 @@ pub struct Assembled {
 #[cfg(feature = "multi-instance")]
 pub(crate) struct SharedAssembly {
     pub continuation: crate::gateway::shared::continuation::SharedContinuationDb,
+    pub telemetry: Arc<crate::gateway::shared::telemetry::Telemetry>,
     pub auth_appliers: AuthAppliers,
     pub correlation_key: crate::trajectory::canonical::CorrelationKey,
     pub policies: Vec<crate::policy::Policy>,
@@ -199,6 +200,14 @@ pub(crate) async fn build_shared_app(
     inputs: &SharedAssembly,
 ) -> Result<Assembled> {
     validate_shared_assembly(config, inputs.continuation.database())?;
+    let crate::config::gateway_state::GatewayStateConfig::Shared(shared) = &config.gateway_state
+    else {
+        anyhow::bail!("shared assembly requires explicit shared process configuration");
+    };
+    anyhow::ensure!(
+        shared.namespace == inputs.continuation.namespace(),
+        "shared assembly namespace differs from its injected authority"
+    );
     assemble_app(config, None, Default::default(), Some(inputs)).await
 }
 
@@ -288,23 +297,7 @@ struct OtelExporterStatus {
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 impl ObserveStatusProvider for OtelExporterStatus {
     fn status(&self) -> ObserveStatusPayload {
-        let s = self.exporter.status();
-        ObserveStatusPayload {
-            compiled_in: s.compiled_in,
-            exporter_wired: s.exporter_wired,
-            endpoint: s.endpoint,
-            header_count: s.header_count,
-            service_name: s.service_name,
-            resource_attribute_count: s.resource_attribute_count,
-            sampler: s.sampler,
-            sampler_arg: s.sampler_arg,
-            metrics_enabled: s.metrics_enabled,
-            api_key_count: s.api_key_count,
-            api_key_cap: s.api_key_cap,
-            user_id_count: s.user_id_count,
-            user_id_cap: s.user_id_cap,
-            active_spans: s.active_spans,
-        }
+        otel_status(&self.exporter)
     }
 
     async fn shutdown(&self) {
@@ -319,6 +312,27 @@ impl ObserveStatusProvider for OtelExporterStatus {
         if let Err(e) = tokio::task::spawn_blocking(move || exporter.shutdown()).await {
             tracing::warn!(error = %e, "OTel exporter shutdown task panicked");
         }
+    }
+}
+
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+pub(crate) fn otel_status(exporter: &OtelExporter) -> ObserveStatusPayload {
+    let s = exporter.status();
+    ObserveStatusPayload {
+        compiled_in: s.compiled_in,
+        exporter_wired: s.exporter_wired,
+        endpoint: s.endpoint,
+        header_count: s.header_count,
+        service_name: s.service_name,
+        resource_attribute_count: s.resource_attribute_count,
+        sampler: s.sampler,
+        sampler_arg: s.sampler_arg,
+        metrics_enabled: s.metrics_enabled,
+        api_key_count: s.api_key_count,
+        api_key_cap: s.api_key_cap,
+        user_id_count: s.user_id_count,
+        user_id_cap: s.user_id_cap,
+        active_spans: s.active_spans,
     }
 }
 
@@ -351,6 +365,10 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry
 /// This belongs to the product host, not the SDK parser: trusted custom hosts
 /// may still explicitly install the compatibility guardrails plugin.
 pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    validate_host_configuration_inner(config, true)
+}
+
+fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -> Result<()> {
     config
         .gateway_state
         .validate(&config.database.url, config.server.skip_auth)?;
@@ -382,7 +400,9 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
         cfg!(feature = "harness") || !config.agent_api.enabled,
         "agent_api.enabled requires the harness feature"
     );
-    validate_telemetry_availability(config)?;
+    if resolve_telemetry {
+        validate_telemetry_availability(config)?;
+    }
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
         "plugins.bitrouter-guardrails requires migration: the default bro no longer \
@@ -597,7 +617,7 @@ async fn assemble_app(
     let mut effective_config = config.clone();
     crate::policy_lock::apply_defaults(&mut effective_config, config_path);
     let config = &effective_config;
-    validate_host_configuration(config)?;
+    validate_host_configuration_inner(config, !is_shared)?;
     config.validate_router_config()?;
     let decision_runtime = config
         .decision_model
@@ -628,7 +648,11 @@ async fn assemble_app(
         .filter(|id| !config.checkers.contains_key(*id))
         .collect::<Vec<_>>();
     inactive.sort();
-    let mut ignored_config = ignored_config_warnings(config);
+    let mut ignored_config = if is_shared {
+        ignored_config_file_warnings(config)
+    } else {
+        ignored_config_warnings(config)
+    };
     ignored_config.extend(inactive.into_iter().map(|id| {
         format!("request-check registration '{id}' is inactive: no checkers.{id} declaration")
     }));
@@ -836,61 +860,81 @@ async fn assemble_app(
     // subscriber is not installed yet (it depends on the exporter being
     // built first), so a tracing line here would be dropped. The binary
     // surfaces this once the subscriber is up.
+    #[cfg(all(
+        feature = "multi-instance",
+        any(feature = "otel-http", feature = "otel-grpc")
+    ))]
+    let injected_exporter = shared.map(|inputs| inputs.telemetry.exporter());
+    #[cfg(all(
+        not(feature = "multi-instance"),
+        any(feature = "otel-http", feature = "otel-grpc")
+    ))]
+    let injected_exporter: Option<Option<Arc<OtelExporter>>> = None;
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let (otel_exporter, otel_init_error): (Option<Arc<OtelExporter>>, Option<String>) =
-        match build_otel_config(config, telemetry_install_id)? {
-            Some((otel_config, bearer_plan)) => {
-                // Resolve the LIVE account-bearer source per the plan. Only the
-                // telemetry opt-in with `attribution: auto`/`account` and no
-                // explicit token wants one; `anonymous` (and every other
-                // exporter path) is `StaticOnly` and never reads the credential
-                // store. Best-effort: a `None` source means the export proceeds
-                // anonymously — for `account` we additionally warn.
-                let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
-                    match bearer_plan {
-                        BearerPlan::LiveSource { warn_if_unmet } => {
-                            let source = match cloud_manager.as_ref() {
-                                Some(manager) => {
-                                    crate::cloud::cloud_bearer_source(
-                                        Arc::clone(manager),
-                                        otel_config.endpoint.clone(),
-                                    )
-                                    .await
-                                }
-                                None => None,
-                            };
-                            if source.is_none() && warn_if_unmet {
-                                tracing::warn!(
-                                    "telemetry: attribution=account but no signed-in session \
+        match injected_exporter {
+            Some(exporter) => (exporter, None),
+            None => match build_otel_config(config, telemetry_install_id)? {
+                Some((otel_config, bearer_plan)) => {
+                    // Resolve the LIVE account-bearer source per the plan. Only the
+                    // telemetry opt-in with `attribution: auto`/`account` and no
+                    // explicit token wants one; `anonymous` (and every other
+                    // exporter path) is `StaticOnly` and never reads the credential
+                    // store. Best-effort: a `None` source means the export proceeds
+                    // anonymously — for `account` we additionally warn.
+                    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
+                        match bearer_plan {
+                            BearerPlan::LiveSource { warn_if_unmet } => {
+                                let source = match cloud_manager.as_ref() {
+                                    Some(manager) => {
+                                        crate::cloud::cloud_bearer_source(
+                                            Arc::clone(manager),
+                                            otel_config.endpoint.clone(),
+                                        )
+                                        .await
+                                    }
+                                    None => None,
+                                };
+                                if source.is_none() && warn_if_unmet {
+                                    tracing::warn!(
+                                        "telemetry: attribution=account but no signed-in session \
                                      is available — exporting anonymously (sign in with `{} \
                                      cloud login`)",
-                                    invocation::name()
-                                );
+                                        invocation::name()
+                                    );
+                                }
+                                source
                             }
-                            source
-                        }
-                        BearerPlan::StaticOnly => None,
-                    };
-                match OtelExporter::new(otel_config, bearer) {
-                    Ok(exporter) => (Some(Arc::new(exporter)), None),
-                    Err(e) => (
-                        None,
-                        Some(format!("failed to initialise OpenTelemetry: {e}")),
-                    ),
+                            BearerPlan::StaticOnly => None,
+                        };
+                    match OtelExporter::new(otel_config, bearer) {
+                        Ok(exporter) => (Some(Arc::new(exporter)), None),
+                        Err(e) => (
+                            None,
+                            Some(format!("failed to initialise OpenTelemetry: {e}")),
+                        ),
+                    }
                 }
-            }
-            None => (None, None),
+                None => (None, None),
+            },
         };
+    #[cfg(feature = "multi-instance")]
+    let injected_observe = shared.map(|inputs| inputs.telemetry.observe());
+    #[cfg(not(feature = "multi-instance"))]
+    let injected_observe: Option<Arc<dyn ObserveStatusProvider>> = None;
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
-        Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
-        None => Arc::new(NoopObserveStatus {
-            compiled_in: OTEL_ENABLED,
-        }),
-    };
+    let observe_provider: Arc<dyn ObserveStatusProvider> =
+        injected_observe.unwrap_or_else(|| match otel_exporter.clone() {
+            Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
+            None => Arc::new(NoopObserveStatus {
+                compiled_in: OTEL_ENABLED,
+            }),
+        });
     #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
-    let (observe_provider, otel_init_error): (Arc<dyn ObserveStatusProvider>, Option<String>) =
-        (Arc::new(NoopObserveStatus { compiled_in: false }), None);
+    let (observe_provider, otel_init_error): (Arc<dyn ObserveStatusProvider>, Option<String>) = (
+        injected_observe.unwrap_or_else(|| Arc::new(NoopObserveStatus { compiled_in: false })),
+        None,
+    );
     // Two handles to the same exporter: one moves into the pipeline as an
     // `ObserveHook`, the other lands on `Assembled` so the binary can hand
     // it to the `tracing-opentelemetry` bridge layer.

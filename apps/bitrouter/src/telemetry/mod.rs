@@ -25,6 +25,11 @@ pub mod exporter;
 pub mod http_layer;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 mod metrics;
+#[cfg(all(
+    feature = "multi-instance",
+    any(feature = "otel-http", feature = "otel-grpc")
+))]
+pub(crate) mod owned;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 mod processor_runtime;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
