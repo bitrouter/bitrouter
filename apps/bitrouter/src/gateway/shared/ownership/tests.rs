@@ -8,13 +8,13 @@ use bitrouter_ai::types::ModelOperation;
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, sea_query::Expr};
 use serde_json::Value;
 
-use super::{AdmissionPhase, Registry, Submission, lock};
+use super::{AdmissionPhase, Generation, Registry, Submission, lock};
 use crate::auth::{
     db::{NewApiKey, insert_api_key, upsert_user},
     entities::api_keys,
 };
 use crate::gateway::shared::{
-    authority::Authority,
+    authority::{Authority, Revision},
     crypto::DeploymentKey,
     engine::{Admission, AdmissionResult, Engine, TenantLimits},
     store::{Kind, NewRecord, Store, Stored},
@@ -27,13 +27,13 @@ struct Fixture {
     principal: String,
     key_hash: String,
     fingerprint: String,
-    generation: u64,
+    revision: Revision,
 }
 
 impl Fixture {
     async fn new(store: &Store, limit: usize) -> Result<Self> {
         let authority = Authority::new(store.clone(), DeploymentKey::from_bytes([9; 32])?);
-        let generation = authority.head().await?.config_generation;
+        let revision = authority.head().await?.revision();
         let engine = Engine::join(authority, 30_000).await?;
         let tenant = uuid::Uuid::new_v4().to_string();
         let principal = uuid::Uuid::new_v4().to_string();
@@ -69,7 +69,7 @@ impl Fixture {
             principal,
             key_hash,
             fingerprint: "a".repeat(64),
-            generation,
+            revision,
         })
     }
 
@@ -80,7 +80,7 @@ impl Fixture {
             idempotency_key: None,
             fingerprint: &self.fingerprint,
             operation: ModelOperation::Generation,
-            config_generation: self.generation,
+            revision: self.revision,
         }
     }
 
@@ -178,7 +178,16 @@ async fn duplicate_and_revocation(first: &Store, second: &Store) -> Result<()> {
 
 async fn cancelled_finish_requeues(first: &Store, second: &Store) -> Result<()> {
     let fixture = Fixture::new(first, 1).await?;
-    let admission = fixture.accepted().await?;
+    let generation = Generation::new();
+    let admission = match fixture
+        .registry
+        .reserve_for(generation)?
+        .admit(&fixture.request())
+        .await?
+    {
+        Submission::Accepted(admission) => admission,
+        Submission::Existing(_) => anyhow::bail!("unexpected duplicate"),
+    };
     let id = admission.execution_id.clone();
     drop(admission);
     let tx = second.begin().await?;
@@ -189,6 +198,7 @@ async fn cancelled_finish_requeues(first: &Store, second: &Store) -> Result<()> 
             .is_err()
     );
     ensure!(fixture.registry.pending() == 1 && fixture.registry.reserve().is_err());
+    ensure!(fixture.registry.pending_for(generation) == 1);
     ensure!(lock(&fixture.registry.entries).queued.len() == 1);
     tx.rollback().await?;
     ensure!(fixture.registry.reconcile_one().await?);
@@ -197,6 +207,7 @@ async fn cancelled_finish_requeues(first: &Store, second: &Store) -> Result<()> 
         ExecutionState::Terminal { .. }
     ));
     ensure!(fixture.registry.pending() == 0);
+    ensure!(fixture.registry.pending_for(generation) == 0);
     let next = fixture.registry.reserve()?;
     drop(next);
     ensure!(fixture.registry.reconcile_one().await?);
@@ -205,7 +216,8 @@ async fn cancelled_finish_requeues(first: &Store, second: &Store) -> Result<()> 
 
 async fn uncertain_admission_probe(first: &Store, second: &Store) -> Result<()> {
     let fixture = Fixture::new(first, 1).await?;
-    let reservation = fixture.registry.reserve()?;
+    let generation = Generation::new();
+    let reservation = fixture.registry.reserve_for(generation)?;
     let id = reservation.0.execution_id.clone();
     *lock(&reservation.0.phase) = AdmissionPhase::UnknownAck;
     // Commit without delivering its result to Reservation: the retained stable
@@ -232,8 +244,10 @@ async fn uncertain_admission_probe(first: &Store, second: &Store) -> Result<()> 
     );
     ensure!(lock(&fixture.registry.entries).queued.len() == 1);
     ensure!(fixture.registry.reserve().is_err());
+    ensure!(fixture.registry.pending_for(generation) == 1);
     tx.rollback().await?;
     ensure!(fixture.registry.reconcile_one().await?);
+    ensure!(fixture.registry.pending_for(generation) == 0);
     ensure!(matches!(
         fixture.engine.owned_execution(&id).await?.state,
         ExecutionState::Terminal { .. }

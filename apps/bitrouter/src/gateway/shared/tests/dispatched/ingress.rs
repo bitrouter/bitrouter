@@ -19,6 +19,7 @@ use bitrouter_ai::types::OperationScope;
 
 mod cancellation;
 mod failures;
+mod generations;
 mod profiles;
 
 fn application(fixture: &Fixture) -> Result<Arc<App>> {
@@ -116,7 +117,7 @@ pub(super) async fn exercise(
         .await?;
     let serving = Serving::new(
         fixture.engine.clone(),
-        Snapshot::new(fixture.generation, application(fixture)?)?,
+        Snapshot::new(fixture.revision, application(fixture)?)?,
         &config()?,
     )?;
     let response = serving
@@ -147,33 +148,7 @@ pub(super) async fn exercise(
     .await?;
     Box::pin(status_authorization(fixture, store, tenant, &serving)).await?;
     Box::pin(real_transport(fixture, &serving)).await?;
-    let original = serving.snapshot();
-    let stale = Snapshot::new(fixture.generation, application(fixture)?)?;
-    ensure!(serving.publish(stale).is_err());
-    ensure!(Arc::ptr_eq(&original, &serving.snapshot()));
-    // An assembled future generation is still refused by the durable admission
-    // fence until publication commits; it cannot dispatch using an arbitrary app.
-    let prior = serving.publish(Snapshot::new(
-        fixture.generation + 1,
-        application(fixture)?,
-    )?)?;
-    ensure!(Arc::ptr_eq(&prior, &original) && prior.app.language_model().is_some());
-    let calls = upstream.calls.load(Ordering::SeqCst);
-    let response = serving
-        .router()
-        .oneshot(request(
-            fixture,
-            "/v1/chat/completions",
-            prompt("ok"),
-            None,
-            "unpublished",
-        )?)
-        .await?;
-    ensure!(response.status() == StatusCode::SERVICE_UNAVAILABLE);
-    ensure!(!response.headers().contains_key("x-bitrouter-execution-id"));
-    drop(response);
-    retire(&serving).await?;
-    ensure!(calls == upstream.calls.load(Ordering::SeqCst));
+    Box::pin(generations::exercise(fixture, upstream, store, &serving)).await?;
     Ok(())
 }
 

@@ -16,7 +16,7 @@ use crate::auth::{
 };
 use crate::gateway::providers::auth::{credentials::Credential, store::CredentialKey};
 use crate::gateway::shared::{
-    authority::Authority,
+    authority::{Authority, Revision},
     credentials::{CredentialStamp, Credentials},
     crypto::DeploymentKey,
     engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits, TrajectoryBinding},
@@ -40,7 +40,7 @@ struct Fixture {
     credentials: Credentials,
     slot: CredentialKey,
     stamp: CredentialStamp,
-    generation: u64,
+    revision: Revision,
 }
 
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
@@ -53,13 +53,76 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     revocation_and_dispatch(first, second).await?;
     late_terminal_and_recovery(first, second).await?;
     terminal::exercise(first, second).await?;
+    key_rotation_and_admission(first, second).await?;
+    Ok(())
+}
+
+async fn key_rotation_and_admission(first: &Store, second: &Store) -> Result<()> {
+    let fixture = Fixture::new(first, second, 2).await?;
+    let original = match submit(
+        &fixture.a,
+        &fixture.first,
+        fixture.revision,
+        Some("rotation"),
+    )
+    .await?
+    {
+        AdmissionResult::Accepted(view, _) => view,
+        AdmissionResult::Existing(_) => anyhow::bail!("unexpected original duplicate"),
+    };
+    let authority = Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let head = authority
+        .rotate_correlation(fixture.revision.key_generation)
+        .await?;
+    ensure!(head.config_generation == fixture.revision.config_generation);
+    for revision in [
+        fixture.revision,
+        Revision {
+            key_generation: head.key_generation + 1,
+            ..head.revision()
+        },
+    ] {
+        let error = submit(&fixture.b, &fixture.first, revision, None)
+            .await
+            .err()
+            .context("mismatched key revision admitted fresh work")?;
+        ensure!(matches!(
+            error.downcast_ref::<Rejection>(),
+            Some(Rejection::AuthorityChanged)
+        ));
+    }
+    // A duplicate performs fresh authentication but does not acquire new work
+    // or require its original key epoch to remain the active one.
+    match submit(
+        &fixture.b,
+        &fixture.first,
+        fixture.revision,
+        Some("rotation"),
+    )
+    .await?
+    {
+        AdmissionResult::Existing(view) => ensure!(view.execution_id == original.execution_id),
+        AdmissionResult::Accepted(..) => anyhow::bail!("rotation replayed existing work"),
+    }
+    let _ = accepted(&fixture.b, &fixture.first, head.revision()).await?;
+    let tenant = row(first, Kind::Tenant, &fixture.first.tenant).await?;
+    ensure!(tenant["active"] == 2 && tenant["accepted"] == 2);
+    // Rotation alone does not invalidate already accepted provider work.
+    let prepared = fixture
+        .a
+        .prepare_attempt(&fixture.first.hash, &original.execution_id, &fixture.stamp)
+        .await?;
+    fixture
+        .a
+        .abandon_prepared(&original.execution_id, &prepared.attempt_id)
+        .await?;
     Ok(())
 }
 
 impl Fixture {
     async fn new(first: &Store, second: &Store, capacity: u32) -> Result<Self> {
         let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
-        let generation = authority.head().await?.config_generation;
+        let revision = authority.head().await?.revision();
         let a = Engine::join(authority.clone(), 30_000).await?;
         let b = Engine::join(
             Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?),
@@ -100,7 +163,7 @@ impl Fixture {
             credentials,
             slot,
             stamp,
-            generation,
+            revision,
         })
     }
 }
@@ -130,7 +193,7 @@ async fn principal(store: &Store, tenant: Option<&str>, rpm: Option<i64>) -> Res
 async fn submit(
     engine: &Engine,
     principal: &Principal,
-    generation: u64,
+    revision: Revision,
     key: Option<&str>,
 ) -> Result<AdmissionResult> {
     engine
@@ -140,13 +203,13 @@ async fn submit(
             idempotency_key: key,
             fingerprint: &"d".repeat(64),
             operation: ModelOperation::Generation,
-            config_generation: generation,
+            revision,
         })
         .await
 }
 
-async fn accepted(engine: &Engine, principal: &Principal, generation: u64) -> Result<String> {
-    match submit(engine, principal, generation, None).await? {
+async fn accepted(engine: &Engine, principal: &Principal, revision: Revision) -> Result<String> {
+    match submit(engine, principal, revision, None).await? {
         AdmissionResult::Accepted(execution, _) => Ok(execution.execution_id),
         AdmissionResult::Existing(_) => {
             anyhow::bail!("new fixture request unexpectedly deduplicated")
@@ -184,8 +247,8 @@ async fn independent_tenants(first: &Store, second: &Store) -> Result<()> {
             &Credential::api_key("fixture-account-secret"),
         )
         .await?;
-    let one = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
-    let two = accepted(&fixture.b, &fixture.second, fixture.generation).await?;
+    let one = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
+    let two = accepted(&fixture.b, &fixture.second, fixture.revision).await?;
     let (a, b) = tokio::join!(
         fixture
             .a
@@ -248,7 +311,7 @@ async fn rate_budgets(first: &Store, second: &Store) -> Result<()> {
     if remaining < 2_000 {
         tokio::time::sleep(Duration::from_millis(u64::try_from(remaining)? + 20)).await;
     }
-    let admitted = match submit(&fixture.a, &limited, fixture.generation, Some("once")).await? {
+    let admitted = match submit(&fixture.a, &limited, fixture.revision, Some("once")).await? {
         AdmissionResult::Accepted(execution, _) => execution.execution_id,
         _ => anyhow::bail!("first quota fixture deduplicated"),
     };
@@ -262,11 +325,11 @@ async fn rate_budgets(first: &Store, second: &Store) -> Result<()> {
         )
         .await?;
     ensure!(matches!(
-        submit(&fixture.b, &limited, fixture.generation, Some("once")).await?,
+        submit(&fixture.b, &limited, fixture.revision, Some("once")).await?,
         AdmissionResult::Existing(_)
     ));
     ensure!(matches!(
-        accepted(&fixture.b, &limited, fixture.generation)
+        accepted(&fixture.b, &limited, fixture.revision)
             .await
             .err()
             .and_then(|error| error.downcast::<Rejection>().ok()),
@@ -277,7 +340,7 @@ async fn rate_budgets(first: &Store, second: &Store) -> Result<()> {
         "principal rejection or duplicate charged tenant rate"
     );
     ensure!(row(first, Kind::Principal, &limited.id).await?["accepted"] == 1);
-    let second = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
+    let second = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
     fixture
         .a
         .finish(
@@ -288,7 +351,7 @@ async fn rate_budgets(first: &Store, second: &Store) -> Result<()> {
         )
         .await?;
     ensure!(
-        accepted(&fixture.b, &fixture.first, fixture.generation)
+        accepted(&fixture.b, &fixture.first, fixture.revision)
             .await
             .is_err(),
         "pre-dispatch failure refunded accepted rate charge"
@@ -312,7 +375,7 @@ async fn expiry_during_lock_wait(first: &Store, second: &Store) -> Result<()> {
         .filter(api_keys::Column::Id.eq(&fixture.first.id))
         .exec(first.database())
         .await?;
-    let execution = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
+    let execution = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
     let attempt = fixture
         .a
         .prepare_attempt(&fixture.first.hash, &execution, &fixture.stamp)
@@ -362,8 +425,8 @@ async fn finalization_rollback_and_recovery_isolation(first: &Store, second: &St
     let fixture = Fixture::new(first, second, 2).await?;
     let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
     let owner = Engine::join(authority, 1_000).await?;
-    let bad = accepted(&owner, &fixture.first, fixture.generation).await?;
-    let good = accepted(&owner, &fixture.second, fixture.generation).await?;
+    let bad = accepted(&owner, &fixture.first, fixture.revision).await?;
+    let good = accepted(&owner, &fixture.second, fixture.revision).await?;
     let binding = TrajectoryBinding {
         owner_user_id: fixture.first.tenant.clone(),
         episode_id: uuid::Uuid::new_v4().to_string(),
@@ -481,8 +544,8 @@ async fn publish_generation(store: &Store) -> Result<u64> {
 
 async fn publication_and_dispatch(first: &Store, second: &Store) -> Result<()> {
     let fixture = Fixture::new(first, second, 2).await?;
-    let one = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
-    let two = accepted(&fixture.b, &fixture.second, fixture.generation).await?;
+    let one = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
+    let two = accepted(&fixture.b, &fixture.second, fixture.revision).await?;
     let first_attempt = fixture
         .a
         .prepare_attempt(&fixture.first.hash, &one, &fixture.stamp)
@@ -514,7 +577,7 @@ async fn publication_and_dispatch(first: &Store, second: &Store) -> Result<()> {
     blocker.commit().await?;
     dispatch.await??;
     let generation = publication.await??;
-    ensure!(generation == fixture.generation + 1);
+    ensure!(generation == fixture.revision.config_generation + 1);
     ensure!(
         row(first, Kind::Attempt, &first_attempt.attempt_id).await?["view"]["state"]["status"]
             == "dispatched"
@@ -546,7 +609,7 @@ async fn publication_and_dispatch(first: &Store, second: &Store) -> Result<()> {
 async fn credential_and_dispatch(first: &Store, second: &Store) -> Result<()> {
     for replacement_first in [true, false] {
         let fixture = Fixture::new(first, second, 1).await?;
-        let id = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
+        let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
         let attempt = fixture
             .a
             .prepare_attempt(&fixture.first.hash, &id, &fixture.stamp)
@@ -616,7 +679,7 @@ async fn credential_and_dispatch(first: &Store, second: &Store) -> Result<()> {
 
 async fn revocation_and_dispatch(first: &Store, second: &Store) -> Result<()> {
     let fixture = Fixture::new(first, second, 1).await?;
-    let id = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
+    let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
     let attempt = fixture
         .a
         .prepare_attempt(&fixture.first.hash, &id, &fixture.stamp)
@@ -671,7 +734,7 @@ async fn late_terminal_and_recovery(first: &Store, second: &Store) -> Result<()>
         1_000,
     )
     .await?;
-    let id = accepted(&owner, &fixture.first, fixture.generation).await?;
+    let id = accepted(&owner, &fixture.first, fixture.revision).await?;
     let attempt = owner
         .prepare_attempt(&fixture.first.hash, &id, &fixture.stamp)
         .await?;

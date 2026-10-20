@@ -23,7 +23,7 @@ use futures::StreamExt;
 use super::super::{
     admitted::SharedAdmission,
     authentication,
-    authority::Authority,
+    authority::{Authority, Revision},
     credentials::Credentials,
     crypto::DeploymentKey,
     engine::{Admission, Engine, TenantLimits},
@@ -173,7 +173,7 @@ struct Fixture {
     custody: Arc<Registry>,
     key: GeneratedKey,
     pool: String,
-    generation: u64,
+    revision: Revision,
     executor: Arc<HttpExecutor>,
     base: String,
 }
@@ -196,7 +196,7 @@ impl Fixture {
                 idempotency_key: None,
                 fingerprint: &"a".repeat(64),
                 operation,
-                config_generation: self.generation,
+                revision: self.revision,
             })
             .await?
         {
@@ -253,7 +253,7 @@ impl Fixture {
 
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
-    let generation = authority.head().await?.config_generation;
+    let revision = authority.head().await?.revision();
     let engine = Engine::join(authority.clone(), 30_000).await?;
     let tenant = uuid::Uuid::new_v4().to_string();
     let key = crate::auth::keys::generate();
@@ -338,7 +338,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         engine,
         key,
         pool,
-        generation,
+        revision,
         executor: Arc::new(executor),
         base,
     };

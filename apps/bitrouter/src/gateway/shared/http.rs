@@ -30,21 +30,23 @@ use self::identity::{
     CORRELATION_HEADER, Identity, credential_hash, request_identity, valid_identity,
 };
 use super::admitted::{SharedAdmission, public_error};
+use super::authority::Revision;
 use super::engine::{Admission, Engine, Rejection};
-use super::ownership::{Registry, Submission};
+use super::ownership::{Generation, Registry, Reservation, Submission};
 
 /// A request takes one immutable application/generation pair. Publication
 /// replaces this pair only after the complete application has assembled.
 pub(super) struct Snapshot {
-    pub generation: u64,
+    pub revision: Revision,
+    pub owner: Generation,
     pub app: Arc<App>,
     state: AppState,
 }
 
 impl Snapshot {
-    pub fn new(generation: u64, app: Arc<App>) -> anyhow::Result<Arc<Self>> {
+    pub fn new(revision: Revision, app: Arc<App>) -> anyhow::Result<Arc<Self>> {
         ensure!(
-            generation > 0 && !app.skip_auth(),
+            revision.config_generation > 0 && revision.key_generation > 0 && !app.skip_auth(),
             "invalid shared serving snapshot"
         );
         let pipeline = app
@@ -52,7 +54,8 @@ impl Snapshot {
             .ok_or_else(|| anyhow::anyhow!("shared application has no model pipeline"))?
             .clone();
         Ok(Arc::new(Self {
-            generation,
+            revision,
+            owner: Generation::new(),
             state: AppState {
                 language_model: pipeline,
                 mcp: None,
@@ -103,6 +106,35 @@ impl Serving {
             .clone()
     }
 
+    /// Publication and registration share this short gate. No old-generation
+    /// reservation can appear after a swap; no lock is held across an await.
+    /// Lock order is Serving.current, then Registry.entries.
+    pub fn acquire_request(&self) -> anyhow::Result<(Arc<Snapshot>, Reservation)> {
+        let current = self
+            .current
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        if !self.ready.load(Ordering::Acquire) {
+            return Err(Rejection::Unavailable.into());
+        }
+        let reservation = self.custody.reserve_for(current.owner)?;
+        Ok((current.clone(), reservation))
+    }
+
+    /// This proves only local request/reader quiescence after publication.
+    /// Native compensation and exporter drains are separate retirement barriers.
+    /// The caller must be the sole remaining owner of the retired snapshot;
+    /// snapshots and custody never expose weak handles or lend retired work.
+    pub fn retired_quiescent(&self, snapshot: &Arc<Snapshot>) -> bool {
+        let current = self
+            .current
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        !Arc::ptr_eq(&current, snapshot)
+            && self.custody.pending_for(snapshot.owner) == 0
+            && Arc::strong_count(snapshot) == 1
+    }
+
     /// The lifecycle owner receives the previous app for bounded finalizer drain.
     /// A stale or incomplete publication never mutates the active application.
     pub fn publish(&self, snapshot: Arc<Snapshot>) -> anyhow::Result<Arc<Snapshot>> {
@@ -111,8 +143,8 @@ impl Serving {
             .write()
             .unwrap_or_else(|error| error.into_inner());
         ensure!(
-            snapshot.generation > current.generation,
-            "shared serving generation did not advance"
+            snapshot.revision.advances(current.revision),
+            "shared serving revision did not advance"
         );
         Ok(std::mem::replace(&mut *current, snapshot))
     }
@@ -146,12 +178,9 @@ async fn decisions(State(state): State<Arc<Serving>>, request: Request) -> Respo
 }
 
 async fn infer(state: Arc<Serving>, mut request: Request, inbound: ApiProtocol) -> Response {
-    if !state.ready.load(Ordering::Acquire) {
-        return unavailable();
-    }
     // No body-consuming extractor runs before this nonqueueing acquisition.
-    let reservation = match state.custody.reserve() {
-        Ok(reservation) => reservation,
+    let (snapshot, reservation) = match state.acquire_request() {
+        Ok(acquired) => acquired,
         Err(error) => return failure(error),
     };
     // Shared serving owns ordinary inference only. Keep profile inspection
@@ -159,7 +188,6 @@ async fn infer(state: Arc<Serving>, mut request: Request, inbound: ApiProtocol) 
     if inbound == ApiProtocol::Responses && request.headers().contains_key("bitrouter-beta") {
         return model_http::managed_profile::unavailable();
     }
-    let snapshot = state.snapshot();
     let (key_hash, correlation, idempotency) = match request_identity(request.headers()) {
         Ok(identity) => identity,
         Err(error) => return error.into_response(),
@@ -194,7 +222,7 @@ async fn infer(state: Arc<Serving>, mut request: Request, inbound: ApiProtocol) 
             idempotency_key: idempotency.as_deref(),
             fingerprint: &fingerprint,
             operation: input.operation(),
-            config_generation: snapshot.generation,
+            revision: snapshot.revision,
         })
         .await;
     match admitted {
@@ -265,13 +293,19 @@ async fn models(State(state): State<Arc<Serving>>, headers: HeaderMap) -> Respon
     if !state.ready.load(Ordering::Acquire) {
         return unavailable();
     }
-    model_http::list_models(State(state.snapshot().state.clone()), headers)
+    let snapshot = state.snapshot();
+    let response = model_http::list_models(State(snapshot.state.clone()), headers)
         .await
-        .into_response()
+        .into_response();
+    drop(snapshot);
+    response
 }
 
 async fn metrics(State(state): State<Arc<Serving>>) -> Response {
-    model_http::prometheus_metrics(State(state.snapshot().state.clone())).await
+    let snapshot = state.snapshot();
+    let response = model_http::prometheus_metrics(State(snapshot.state.clone())).await;
+    drop(snapshot);
+    response
 }
 
 async fn health(State(state): State<Arc<Serving>>) -> Response {

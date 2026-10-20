@@ -90,7 +90,7 @@ impl Engine {
                     return Ok(AdmissionResult::Existing(view));
                 }
                 ensure!(
-                    head.value.config_generation == request.config_generation,
+                    head.value.revision() == request.revision,
                     Rejection::AuthorityChanged
                 );
                 let due = self.live_owner(&tx, true).await?;
@@ -160,7 +160,7 @@ impl Engine {
                     correlation_id: request.correlation_id.into(),
                     revision: 0,
                     operation: request.operation,
-                    config_generation: request.config_generation,
+                    config_generation: request.revision.config_generation,
                     accepted_at_ms: now,
                     updated_at_ms: now,
                     state: ExecutionState::Accepted,

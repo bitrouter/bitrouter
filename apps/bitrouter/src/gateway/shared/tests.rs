@@ -105,6 +105,10 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
         )
         .await?;
     }
+    let revision = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?)
+        .head()
+        .await?
+        .revision();
     let a = Engine::join(
         Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?),
         30_000,
@@ -129,7 +133,7 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
         idempotency_key: Some("same-key"),
         fingerprint: &fingerprint,
         operation: ModelOperation::Generation,
-        config_generation: 0,
+        revision,
     };
     let (left, right) = tokio::join!(a.admit(&submission), b.admit(&submission));
     let left = left?;
@@ -397,6 +401,7 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
     };
     use bitrouter_ai::types::{ModelOperation, UsageOrigin};
     let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let revision = authority.head().await?.revision();
     let owner = Engine::join(authority.clone(), 1_000).await?;
     let reconciler = Engine::join(
         Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?),
@@ -452,7 +457,7 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
                 idempotency_key: None,
                 fingerprint: &fingerprint,
                 operation: ModelOperation::Generation,
-                config_generation: 0,
+                revision,
             })
             .await?
         {
@@ -615,7 +620,7 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
             idempotency_key: None,
             fingerprint: &fingerprint,
             operation: ModelOperation::Generation,
-            config_generation: 0,
+            revision,
         })
         .await?
     {

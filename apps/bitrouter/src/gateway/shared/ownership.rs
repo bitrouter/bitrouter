@@ -30,6 +30,7 @@ pub(super) struct Custody {
     pub(super) engine: Engine,
     pub(super) execution_id: String,
     pub(super) dispatch: Arc<Tracker>,
+    generation: Generation,
     phase: Mutex<AdmissionPhase>,
     pipeline_failed: Mutex<bool>,
     _permit: OwnedSemaphorePermit,
@@ -38,6 +39,17 @@ pub(super) struct Custody {
 /// The temporary pre-extractor owner. Its lifetime includes parsing and the
 /// admission transaction, even when that transaction's acknowledgement is lost.
 pub(super) struct Reservation(Arc<Custody>);
+
+/// Process-local resource identity, distinct even for unpublished candidates
+/// assembled from the same authority revision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct Generation(uuid::Uuid);
+
+impl Generation {
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4())
+    }
+}
 
 pub(super) enum Submission {
     Accepted(Arc<SharedAdmission>),
@@ -89,6 +101,7 @@ impl Reservation {
 struct Entries {
     owned: HashMap<String, Arc<Custody>>,
     queued: VecDeque<String>,
+    generations: HashMap<Generation, usize>,
 }
 
 pub(super) struct Registry {
@@ -108,7 +121,7 @@ impl Registry {
     }
 
     /// Nonqueueing acquisition must precede ingress body aggregation.
-    pub fn reserve(&self) -> Result<Reservation> {
+    pub fn reserve_for(&self, generation: Generation) -> Result<Reservation> {
         let permit = self
             .slots
             .clone()
@@ -118,6 +131,7 @@ impl Registry {
             engine: self.engine.clone(),
             execution_id: uuid::Uuid::new_v4().to_string(),
             dispatch: Arc::new(Tracker::default()),
+            generation,
             phase: Mutex::new(AdmissionPhase::NotStarted),
             pipeline_failed: Mutex::new(false),
             _permit: permit,
@@ -131,11 +145,25 @@ impl Registry {
         );
         entries.queued.push_back(custody.execution_id.clone());
         entries.owned.insert(custody.execution_id.clone(), custody);
+        *entries.generations.entry(generation).or_default() += 1;
         Ok(reservation)
+    }
+
+    #[cfg(test)]
+    pub fn reserve(&self) -> Result<Reservation> {
+        self.reserve_for(Generation(uuid::Uuid::nil()))
     }
 
     pub fn pending(&self) -> usize {
         lock(&self.entries).owned.len()
+    }
+
+    pub fn pending_for(&self, generation: Generation) -> usize {
+        lock(&self.entries)
+            .generations
+            .get(&generation)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Visit one fair queue entry. Heartbeat scheduling must be independent of
@@ -161,7 +189,7 @@ impl Registry {
             }
         };
         candidate.custody.reconcile().await?;
-        candidate.retire();
+        candidate.retire()?;
         Ok(true)
     }
 }
@@ -175,11 +203,27 @@ struct Candidate {
 }
 
 impl Candidate {
-    fn retire(mut self) {
-        lock(&self.registry.entries)
-            .owned
-            .remove(&self.custody.execution_id);
+    fn retire(mut self) -> Result<()> {
+        let mut entries = lock(&self.registry.entries);
+        let count = entries
+            .generations
+            .get(&self.custody.generation)
+            .copied()
+            .context("custody lost its generation")?;
+        ensure!(count > 0, "custody generation count underflow");
+        ensure!(
+            entries.owned.remove(&self.custody.execution_id).is_some(),
+            "custody lost its entry"
+        );
+        if count == 1 {
+            entries.generations.remove(&self.custody.generation);
+        } else {
+            entries
+                .generations
+                .insert(self.custody.generation, count - 1);
+        }
         self.retired = true;
+        Ok(())
     }
 }
 
@@ -265,6 +309,7 @@ impl Custody {
             engine,
             execution_id,
             dispatch: Arc::new(Tracker::default()),
+            generation: Generation::new(),
             phase: Mutex::new(AdmissionPhase::Accepted),
             pipeline_failed: Mutex::new(false),
             _permit: permit,

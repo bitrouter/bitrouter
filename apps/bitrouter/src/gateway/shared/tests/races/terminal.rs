@@ -44,7 +44,7 @@ fn observation() -> TerminalObservation {
 }
 
 async fn dispatched(fixture: &Fixture) -> Result<(String, String)> {
-    let id = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
+    let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
     let attempt = fixture
         .a
         .prepare_attempt(&fixture.first.hash, &id, &fixture.stamp)
@@ -196,7 +196,7 @@ async fn bind(store: &Store, fixture: &Fixture, id: &str) -> Result<String> {
 
 async fn resolution_rollback(first: &Store, second: &Store) -> Result<()> {
     let fixture = Fixture::new(first, second, 1).await?;
-    let id = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
+    let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
     let fence = bind(first, &fixture, &id).await?;
     let attempt = fixture
         .a
@@ -256,7 +256,7 @@ async fn resolution_rollback(first: &Store, second: &Store) -> Result<()> {
 async fn projection_saturation(first: &Store, second: &Store) -> Result<()> {
     for already_pending in [true, false] {
         let fixture = Fixture::new(first, second, 1).await?;
-        let id = accepted(&fixture.a, &fixture.first, fixture.generation).await?;
+        let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
         let fence_key = bind(first, &fixture, &id).await?;
         let attempt = fixture
             .a

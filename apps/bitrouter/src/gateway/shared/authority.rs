@@ -14,6 +14,21 @@ use super::store::{Kind, NewRecord, Store, Stored};
 const MAX_CORRELATION_EPOCHS: usize = 16;
 const HEAD: &str = "head";
 
+/// Both components belong to the immutable application selected for admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Revision {
+    pub config_generation: u64,
+    pub key_generation: u64,
+}
+
+impl Revision {
+    pub fn advances(self, previous: Self) -> bool {
+        self != previous
+            && self.config_generation >= previous.config_generation
+            && self.key_generation >= previous.key_generation
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Head {
@@ -21,6 +36,15 @@ pub(super) struct Head {
     deployment_key_id: String,
     pub config_generation: u64,
     pub key_generation: u64,
+}
+
+impl Head {
+    pub fn revision(&self) -> Revision {
+        Revision {
+            config_generation: self.config_generation,
+            key_generation: self.key_generation,
+        }
+    }
 }
 
 /// Only encrypted instances of this type are persisted; it has no Debug impl.

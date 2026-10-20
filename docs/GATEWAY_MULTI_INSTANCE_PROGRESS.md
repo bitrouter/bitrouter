@@ -717,3 +717,54 @@ multi-process acceptance are still required.
   finite retained generations and process-owned observability as required
   integration work (`/tmp/bitrouter-p1-runtime-design-review.json`). No P1 gate
   is closed by this prerequisite.
+
+## Snapshot revision and request custody (2026-10-20)
+
+- Shared snapshots now carry the complete configuration/key revision and a
+  distinct process-local resource identity. Publication permits key-only
+  advancement and rejects a regression of either component. New admission
+  checks both components under the authoritative head fence. Freshly
+  authenticated duplicates still observe their original execution without
+  acquiring new work; key rotation alone does not cancel accepted provider work.
+- Snapshot selection and pre-body custody registration occur under the same
+  short publication gate. Per-generation counts include unstarted, uncertain
+  and accepted reservations until successful reconciliation. Cancelled
+  reconciliation retains both its queue entry and generation count. Counts
+  disappear only when the last owned entry retires.
+- Models and metrics handlers retain their snapshot across awaited work.
+  `retired_quiescent` checks that a snapshot is no longer current, has no
+  request custody, and has no other snapshot readers. This is only a local
+  request/reader barrier; it does not authorize skipping owned task joins,
+  continuation compensation, required finalizers or exporter shutdown.
+- Real PostgreSQL/HTTP regressions rotate keys while an old request body is
+  still pending and while a live response stream retains its old application.
+  The former fails admission without provider dispatch; the latter retains
+  resources until cancellation/reconciliation and remains truthfully Unknown.
+  Snapshot readers independently prevent quiescence. Additional cases reject
+  stale/future key admission without quota consumption, preserve duplicate
+  identity and accepted work, and reject mixed config/key regressions.
+- The first new mixed-regression fixture subtracted a configuration generation
+  of one to zero, reaching constructor validation before the intended
+  publication check. The fixture now first installs a valid later configuration
+  and tests a nonzero regression against it. No production behavior changed
+  for this fixture correction.
+- Minimal shared-feature shared/config validation passed **31/31**, 2,255
+  filtered, zero retries in 14.099 seconds; the PostgreSQL campaign took
+  14.027 seconds (`/tmp/bitrouter-p1-generation-tests.log`).
+- All-feature shared/config validation passed **31/31**, 3,535 filtered, zero
+  retries in 13.698 seconds; the PostgreSQL campaign took 13.616 seconds
+  (`/tmp/bitrouter-p1-generation-full-tests.log`). Rust 1.97 all-feature
+  library/test Clippy completed with exit 0 in 1m01s and no Clippy-specific
+  diagnostics (`/tmp/bitrouter-p1-generation-clippy.log`). It reports 130
+  library and one library-test staged unused-code warnings; no suppression was
+  introduced. Formatting and whitespace checks passed. Final strict P1 lint
+  acceptance still requires official runtime integration.
+- Independent review found no actionable production correctness defects
+  (`/tmp/bitrouter-p1-generation-review.json`). Its documentation finding is
+  addressed: configuration-generation changes invalidate pending dispatch;
+  key-only rotation preserves accepted work. The local quiescence predicate is
+  not a sealed producer gate. Explicit producer tickets remain necessary for
+  ordered owned-drain phases. Official startup, head/load supervision and
+  readiness, finite retained generations,
+  owned task/finalizer drains and trajectory epoch binding remain open. No P1
+  acceptance gate is closed by these internal lifecycle boundaries.

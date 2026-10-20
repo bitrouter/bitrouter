@@ -29,7 +29,7 @@ use crate::gateway::shared::{
 
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
-    let generation = authority.head().await?.config_generation;
+    let revision = authority.head().await?.revision();
     let engine = Engine::join(authority, 30_000).await?;
     let tenant = uuid::Uuid::new_v4().to_string();
     let principal_id = uuid::Uuid::new_v4().to_string();
@@ -65,7 +65,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
             idempotency_key: None,
             fingerprint: &"a".repeat(64),
             operation: ModelOperation::Generation,
-            config_generation: generation,
+            revision,
         })
         .await?
     {

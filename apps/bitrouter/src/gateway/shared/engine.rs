@@ -17,7 +17,7 @@ use bitrouter_ai::types::ModelOperation;
 use sea_orm::DatabaseTransaction;
 use serde::{Deserialize, Serialize};
 
-use super::authority::Authority;
+use super::authority::{Authority, Revision};
 use super::store::{Kind, NewRecord, Store, Stored};
 
 /// Stable classifications exposed by HTTP without backend diagnostics.
@@ -167,7 +167,7 @@ pub(super) struct Admission<'a> {
     pub idempotency_key: Option<&'a str>,
     pub fingerprint: &'a str,
     pub operation: ModelOperation,
-    pub config_generation: u64,
+    pub revision: Revision,
 }
 
 pub(super) enum AdmissionResult {

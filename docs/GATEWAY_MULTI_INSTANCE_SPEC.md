@@ -73,15 +73,30 @@ Ordinary Chat Completions and local Google extension behavior are unchanged.
 This is an explicit shared-mode compatibility limit, never a silent downgrade.
 
 Configuration publication uses compare-and-set against the current generation.
-A replica prepares a complete immutable routing/policy snapshot and exposes it
-atomically. Every new admission checks the authoritative generation; a stale or
+A replica prepares a complete immutable routing/policy/key snapshot and exposes
+its `(config_generation, key_generation)` revision atomically. Neither component
+may regress and at least one must advance, including key-only publications.
+Every new admission checks both authoritative components; a stale or
 unavailable snapshot produces a bounded 503, never a request authorized against
 an independent stale policy. Already admitted work retains its recorded routing
-snapshot. A generation change before an attempt's dispatch authorization rejects
-that attempt with `authority_changed`; it does not silently reroute the accepted
-execution. Already dispatched attempts may finish. Credential/principal
-authority is checked again at provider dispatch.
+snapshot. A configuration-generation change before an attempt's dispatch
+authorization rejects that attempt with `authority_changed`; it does not
+silently reroute the accepted execution. Correlation-key-only rotation does not
+invalidate already accepted provider work. Already dispatched attempts may
+finish. Credential/principal authority is checked again at provider dispatch.
 Readiness reports the active/loaded generations and backend accessibility.
+
+Snapshot acquisition and registration of request custody share one short
+publication gate before body aggregation or admission. Each assembled snapshot
+has a distinct process-local resource identity, even when two candidates have
+the same authority revision. Swapping the current snapshot prevents later served
+requests from registering against the old one. Unstarted, uncertain-ACK and
+accepted reservations all retain their generation count until reconciliation
+retires them; cancellation never clears that count early. Models/metrics readers
+retain their snapshot across awaited work. A retired snapshot with no remaining
+custody/readers has reached only the local request barrier: required finalizer,
+continuation compensation, owned task and exporter drains remain separate
+requirements before releasing its application resources.
 
 Tenant identity is the authenticated virtual key's owning user, never a caller
 supplied tenant header. Principal identity is the virtual-key ID. The existing
