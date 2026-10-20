@@ -31,11 +31,11 @@ review threads remained unresolved. This does not close any P1 gate.
 | Stage | Implementation | Verification | Independent review |
 | --- | --- | --- | --- |
 | 1 Authority foundation | Store/key foundation, shared startup and explicit stock bootstrap implemented | PostgreSQL foundation/runtime and blank-database stock bootstrap passed in minimal/full selections; local regressions and bounded lint passed | Foundation/runtime and bounded bootstrap backend/CLI/process reviews approved |
-| 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
+| 2 Admission and execution | Private engine and served admission/execution implemented; complete process acceptance pending | Real PostgreSQL transaction/race and scoped served execution tests passed | Private engine and serving substages approved |
 | 3 Gateway integration | Official foreground startup, credential binding, admission, dispatch, delivery and HTTP router implemented; complete process acceptance pending | Scoped HTTP/protocol/executor and PostgreSQL runtime regressions plus official-process startup/idle-drain tests passed | Authentication/context/dispatch/custody/HTTP/runtime substages approved |
-| 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
+| 4 Published authority | Immutable publication, runtime and operator HTTP/SDK wiring implemented; remote CLI pending | PostgreSQL publication/handler, two-process operator and scoped feature regressions passed | Publication and bounded operator HTTP/SDK stages approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
-| 6 Delivery and operations | Shared submission/query SDK, bounded custody/transport/HTTP and retained runtime workers implemented; projection receiver, outbox and operator pending | Scoped runtime/service regressions and independent SDK tests passed | Custody/transport/HTTP/SDK/runtime substages approved |
+| 6 Delivery and operations | Shared submission/query SDK, bounded custody/transport/HTTP, operator HTTP/SDK and retained runtime workers implemented; projection receiver, outbox and remote operator CLI pending | Scoped runtime/service regressions and independent SDK tests passed | Custody/transport/HTTP/SDK/runtime and bounded operator HTTP/SDK substages approved |
 | 7 Aggregate acceptance and PR | Pending | Pending | Pending |
 
 ## Acceptance ledger
@@ -1482,3 +1482,61 @@ multi-process acceptance are still required.
   candidate with zero open blocking findings. The documentation precision note
   was applied: accepted input is 2 MiB, with one extra byte read for overflow
   detection. Candidate manifest: `/tmp/bitrouter-p1-bootstrap-candidate.json`.
+
+## Authenticated operator transport and SDK (2026-10-21)
+
+- Shared processes can explicitly enable a separate loopback operator listener.
+  Literal actor/grant/environment-reference validation precedes environment
+  lookup; token snapshots precede database pools. Authentication precedes body
+  reads. Requests use bounded JSON and a whole-handler deadline; writes that time
+  out remain Unknown. The listener is independent of inference readiness during
+  operation and participates in the retained process shutdown alongside inference.
+- `OperatorClient` supplies explicit mutation, actor-scoped receipt, revision and
+  secret-free metadata calls. It performs no discovery, automatic replay or
+  redirects. Response identities/media/size are checked, and automatic decoding
+  is disabled even under dependency feature unification. SDK errors distinguish
+  definite rejections from unknown write outcomes and retain only the original ID.
+- Source review repairs covered whole-request deadlines, complete media parsing,
+  Bearer grammar, SDK fixture task ownership and compressed-response validation.
+  A streamed-body size test was strengthened to use a valid oversized receipt
+  and require the specific Limit error, removing its invalid-JSON false positive.
+- The first process campaign passed 32/33: its readiness-fault setup was rejected
+  by configuration validation before producing a fault. The repaired fixture
+  atomically modifies an immutable publication together with its new head; it is
+  explicit storage corruption, not an input accepted by the public API. The
+  timeout test now observes the POST's actual PostgreSQL blocker and asserts a
+  600 ms watchdog around its 200 ms handler budget. GET and pending-body timeout
+  branches have the same watchdog; only POST has the observed SQL-wait barrier.
+- Minimal shared integration recheck: **33/33**, 2,370 outside selection, 1.299s
+  (`/tmp/bitrouter-p1-operator-service-integration-recheck.log`). Final full-feature
+  lib/bin selection: **35/35**, 3,731 outside selection, 2.376s
+  (`/tmp/bitrouter-p1-operator-transport-final-full-tests.log`). Both are clean
+  first-attempt runs without LEAK results. Actual stock processes exercise
+  cross-replica receipt replay/query, Unicode query identities, separate inference
+  routes, readiness loss/recovery, invalid-token startup and both bind failures.
+  The lifecycle case cancels/resumes the original deadline and joins two held
+  connections. Exact operator-join-before-pipeline-force ordering is established
+  by the reviewed call sequence, not an independent test ordering sentinel.
+- Final SDK all-feature tests with `reqwest/gzip` and the positive decoder control:
+  **93 tests + 6 doctests passed**; strict all-target SDK Clippy passed. Logs share
+  `/tmp/bitrouter-p1-operator-transport-final-` with suffixes `sdk-tests.log` and
+  `sdk-clippy.log`. Local no-default lib/bin selection: **10/10**, 2,313 outside
+  selection, 0.040s (`local-tests.log`); strict local lib/bin Clippy passed
+  (`local-clippy.log`). All-feature app lib/bin/tests Clippy passed with no Clippy
+  diagnostics and 18 staged unused library warnings (`app-clippy.log`). These
+  warnings still prevent whole-product warning-free acceptance. Existing
+  proc-macro-error2 and macOS unwind-table notices remain recorded.
+- The final stock executable uses Rust 1.97.0, no default features plus
+  `multi-instance`, disabled dev/test debug info and incremental compilation,
+  and two build jobs. SHA-256:
+  `352cbd9b4a30599545d0b357c165a5b50aad5f65b935c21fe6b903d309adc0b4`.
+  Its build completed in 35.03s (`final-binary-build.log` with the same prefix).
+  Source, binary, commands and log hashes are recorded in
+  `/tmp/bitrouter-p1-operator-transport-candidate.json`.
+- Independent SDK and service reviews approved the final bounded candidate with
+  zero open findings. Reports are `/tmp/bitrouter-p1-operator-sdk-review.md` and
+  `/tmp/bitrouter-p1-operator-service-review.md`. Remote operator CLI, durable projection/outbox integration, shared
+  distribution, full aggregate checks/performance and P1-A01–A09 remain open.
+  This stage does not prove a committed mutation followed by lost HTTP/SQL ACK,
+  exact operator-driver failure injection, arbitrary process-crash cleanup or
+  accepted inference draining. P0 is unchanged.

@@ -64,6 +64,7 @@ impl Fixture {
                 "transaction_timeout_ms": 500, "heartbeat_ms": 100, "worker_interval_ms": 100,
                 "owner_lease_ms": 10000, "drain_timeout_ms": 2000 }))?,
             telemetry: None,
+            operator: None,
         };
         let started = Instant::now();
         let engine = Engine::join(authority.clone(), process.shared.owner_lease_ms).await?;
@@ -507,6 +508,113 @@ async fn startup_without_transport_still_joins_heartbeat_and_telemetry() -> Resu
             "{report:?}"
         );
         ensure!(fixture.lifecycle.workers.reports().len() == 1);
+        Ok(())
+    }
+    .await;
+    fixture.close(result).await
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+async fn cancelled_dual_listener_drain_resumes_and_joins_both_before_pipeline_force() -> Result<()>
+{
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let mut fixture = Fixture::new().await?;
+    let result = async {
+        fixture.start().await?;
+        let mut sockets = Vec::new();
+        for inference in [true, false] {
+            let entered = Arc::new(Notify::new());
+            let handler_entered = entered.clone();
+            let serving = fixture.lifecycle.generations.serving().clone();
+            let router = Router::new().route(
+                "/held",
+                get(move || {
+                    let serving = serving.clone();
+                    let entered = handler_entered.clone();
+                    async move {
+                        let owners = inference.then(|| serving.acquire_request()).transpose();
+                        if owners.is_ok() {
+                            entered.notify_one();
+                            std::future::pending::<()>().await;
+                        }
+                        drop(owners);
+                        StatusCode::SERVICE_UNAVAILABLE
+                    }
+                }),
+            );
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let address = listener.local_addr()?;
+            let transport = Transport::start(listener, router, (&fixture.process.shared).into())?;
+            if inference {
+                fixture.lifecycle.transport = Some(transport);
+            } else {
+                fixture.lifecycle.operator_transport = Some(transport);
+            }
+            let mut socket = tokio::net::TcpStream::connect(address).await?;
+            socket
+                .write_all(b"GET /held HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .await?;
+            tokio::time::timeout(Duration::from_secs(2), entered.notified()).await?;
+            sockets.push(socket);
+        }
+        let deadline = Instant::now() + Duration::from_millis(200);
+        let force = CancellationToken::new();
+        ensure!(
+            tokio::time::timeout(
+                Duration::from_millis(25),
+                fixture.lifecycle.shutdown_until(deadline, &force)
+            )
+            .await
+            .is_err()
+        );
+        for transport in fixture
+            .lifecycle
+            .transport
+            .iter()
+            .chain(fixture.lifecycle.operator_transport.iter())
+        {
+            ensure!(transport.report().connections.pending == 1);
+        }
+        ensure!(
+            fixture
+                .lifecycle
+                .shutdown_until(deadline + Duration::from_secs(1), &force)
+                .await
+                .is_err()
+        );
+        let report = tokio::time::timeout(
+            Duration::from_secs(2),
+            fixture.lifecycle.shutdown_until(deadline, &force),
+        )
+        .await??;
+        ensure!(report.forced && report.quiescent && !report.clean);
+        for transport in fixture
+            .lifecycle
+            .transport
+            .iter()
+            .chain(fixture.lifecycle.operator_transport.iter())
+        {
+            let report = transport.report();
+            ensure!(
+                report.is_quiescent()
+                    && report.connections.cancelled == 1
+                    && report.connections.joined == 1
+            );
+        }
+        ensure!(
+            fixture
+                .lifecycle
+                .generations
+                .forced_reports()
+                .iter()
+                .all(|report| report.is_quiescent() && !report.pipeline_failed)
+        );
+        for mut socket in sockets {
+            let mut bytes = Vec::new();
+            tokio::time::timeout(Duration::from_secs(1), socket.read_to_end(&mut bytes)).await??;
+        }
         Ok(())
     }
     .await;

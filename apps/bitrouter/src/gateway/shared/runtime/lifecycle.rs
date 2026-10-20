@@ -50,6 +50,7 @@ pub(super) struct Lifecycle {
     pub engine: Engine,
     pub generations: Arc<Generations>,
     pub transport: Option<Transport>,
+    pub operator_transport: Option<Transport>,
     pub workers: Workers,
     pub health: Arc<Health>,
     shutdown: Option<Shutdown>,
@@ -69,6 +70,7 @@ impl Lifecycle {
             engine,
             generations,
             transport: None,
+            operator_transport: None,
             workers,
             health,
             shutdown: None,
@@ -105,7 +107,7 @@ impl Lifecycle {
             state.forced = true;
         }
         // Broadcast to every root before awaiting even the first join.
-        if let Some(transport) = &self.transport {
+        for transport in self.transport.iter().chain(self.operator_transport.iter()) {
             transport.request_force();
         }
         self.generations.request_force();
@@ -170,7 +172,7 @@ impl Lifecycle {
                 Withdrawal::Failed
             };
         }
-        if let Some(transport) = &self.transport {
+        for transport in self.transport.iter().chain(self.operator_transport.iter()) {
             transport.stop(deadline)?;
         }
         let generations = &self.generations;
@@ -203,10 +205,14 @@ impl Lifecycle {
             Ok::<bool, anyhow::Error>(state.retired.iter().all(|report| report.reclaimed))
         };
         let drain_transport = async {
-            match &self.transport {
-                Some(transport) => Ok(transport.drain_until(deadline).await?.is_quiescent()),
-                None => Ok::<bool, anyhow::Error>(true),
-            }
+            let reports = futures::future::try_join_all(
+                self.transport
+                    .iter()
+                    .chain(self.operator_transport.iter())
+                    .map(|transport| transport.drain_until(deadline)),
+            )
+            .await?;
+            Ok::<bool, anyhow::Error>(reports.into_iter().all(|report| report.is_quiescent()))
         };
         let (transport, generations) = tokio::try_join!(drain_transport, drain_generations)?;
         if !transport || !generations {
@@ -224,8 +230,9 @@ impl Lifecycle {
     async fn join_forced(&mut self) -> Result<()> {
         let generations = &self.generations;
         let transport = &self.transport;
+        let operator_transport = &self.operator_transport;
         let external = async {
-            if let Some(transport) = transport {
+            for transport in transport.iter().chain(operator_transport.iter()) {
                 ensure!(
                     transport.join_forced().await?.is_quiescent(),
                     "shared transport is not joined"
@@ -290,8 +297,9 @@ impl Lifecycle {
             && workers.iter().all(|(_, report)| report.joined)
             && self
                 .transport
-                .as_ref()
-                .is_none_or(|transport| transport.report().is_quiescent());
+                .iter()
+                .chain(self.operator_transport.iter())
+                .all(|transport| transport.report().is_quiescent());
         let clean = quiescent
             && durable_resolved
             && !state.forced
@@ -302,8 +310,9 @@ impl Lifecycle {
             && state.retired.iter().all(|report| report.is_clean())
             && self
                 .transport
-                .as_ref()
-                .is_none_or(|transport| transport.report().is_clean());
+                .iter()
+                .chain(self.operator_transport.iter())
+                .all(|transport| transport.report().is_clean());
         Report {
             forced: state.forced,
             withdrawal: state.withdrawal,

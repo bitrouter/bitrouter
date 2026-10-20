@@ -20,6 +20,7 @@ use super::authority::Authority;
 use super::crypto::DeploymentKey;
 use super::engine::Engine;
 use super::generations::Generations;
+use super::operator_service::{self, auth::Auth};
 use super::store::{self, Store};
 use super::telemetry::Telemetry;
 use super::transport::owned::Transport;
@@ -32,6 +33,12 @@ use workers::Workers;
 pub(crate) async fn serve(process: Process) -> Result<()> {
     let mut signals = Signals::new()?;
     let key = DeploymentKey::from_environment(&process.shared.deployment_key_env)?;
+    let operator_auth = process
+        .operator
+        .as_ref()
+        .map(Auth::new)
+        .transpose()?
+        .map(Arc::new);
     let timeout = Duration::from_millis(process.shared.transaction_timeout_ms);
     let main = store::connect(
         &process.database_url,
@@ -41,8 +48,15 @@ pub(crate) async fn serve(process: Process) -> Result<()> {
     .await?;
     let result = async {
         let heartbeat = store::connect(&process.database_url, 1, timeout).await?;
-        let result =
-            serve_with_pools(&process, main.clone(), heartbeat.clone(), key, &mut signals).await;
+        let result = serve_with_pools(
+            &process,
+            main.clone(),
+            heartbeat.clone(),
+            key,
+            operator_auth,
+            &mut signals,
+        )
+        .await;
         let closed = heartbeat.close().await;
         result?;
         closed.context("closing shared heartbeat pool")?;
@@ -60,6 +74,7 @@ async fn serve_with_pools(
     main: sea_orm::DatabaseConnection,
     heartbeat: sea_orm::DatabaseConnection,
     key: DeploymentKey,
+    operator_auth: Option<Arc<Auth>>,
     signals: &mut Signals,
 ) -> Result<()> {
     let authority = Authority::new(
@@ -131,17 +146,31 @@ async fn serve_with_pools(
         crate::host::init_serve_tracing_subscriber(
             #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
             telemetry.exporter().as_deref(), &process.server.log_level)?;
+        if let Some(config) = &process.operator {
+            let auth = operator_auth.clone().context("operator authentication snapshot missing")?;
+            let listener = tokio::select! {
+                biased;
+                signal = signals.recv() => { signal?; return Ok(()); },
+                worker = lifecycle.workers.wait_any() => anyhow::bail!("shared {worker} worker exited during operator binding"),
+                listener = TcpListener::bind(config.listen) => listener.context("binding shared operator listener")?,
+            };
+            lifecycle.operator_transport = Some(Transport::start(listener,
+                operator_service::router(authority.clone(), auth, Duration::from_millis(process.shared.request_timeout_ms)),
+                super::transport::Limits::for_operator(&process.shared, config.max_connections))?);
+        }
         let initial = publication::initial(&authority, process, &lifecycle.generations, &lifecycle.health);
         tokio::select! {
             biased;
             signal = signals.recv() => { signal?; return Ok(()); },
             worker = lifecycle.workers.wait_any() => anyhow::bail!("shared {worker} worker exited during startup"),
+            result = wait_operator(&lifecycle.operator_transport) => { result?; anyhow::bail!("shared operator accept task exited during startup"); },
             result = initial => result?,
         }
         let listener = tokio::select! {
             biased;
             signal = signals.recv() => { signal?; return Ok(()); },
             worker = lifecycle.workers.wait_any() => anyhow::bail!("shared {worker} worker exited during binding"),
+            result = wait_operator(&lifecycle.operator_transport) => { result?; anyhow::bail!("shared operator accept task exited during binding"); },
             listener = TcpListener::bind(&process.server.listen) => listener.context("binding shared gateway listener")?,
         };
         lifecycle.transport = Some(Transport::start(listener, lifecycle.generations.serving().router(), (&process.shared).into())?);
@@ -153,6 +182,7 @@ async fn serve_with_pools(
             biased;
             signal = signals.recv() => signal,
             worker = lifecycle.workers.wait_any() => anyhow::bail!("shared {worker} worker exited"),
+            result = wait_operator(&lifecycle.operator_transport) => { result?; anyhow::bail!("shared operator accept task exited"); },
             result = transport.wait_driver() => { result?; anyhow::bail!("shared accept task exited"); },
         }
     }.await;
@@ -181,6 +211,13 @@ async fn serve_with_pools(
         "shared gateway stopped with interrupted or unresolved work"
     );
     Ok(())
+}
+
+async fn wait_operator(transport: &Option<Transport>) -> Result<()> {
+    match transport {
+        Some(transport) => transport.wait_driver().await.map(|_| ()),
+        None => std::future::pending().await,
+    }
 }
 
 struct Signals {

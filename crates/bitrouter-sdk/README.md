@@ -306,3 +306,25 @@ migration. Server assembly and advanced trusted host adapters have moved to the
 `bitrouter` application. The managed channel preserves the existing WebSocket
 surface; it does not establish complete core HTTP coverage or remote access to
 local-only harness operations.
+
+## Shared gateway operator client
+
+`operator::OperatorClient` addresses a separately authenticated operator listener
+using an explicit endpoint and token. It never discovers a local daemon, named
+context or inference credential. Use HTTPS for remote endpoints or HTTP on
+loopback through a tunnel. An endpoint may include a proxy prefix ending in
+`/operator/v1`; an origin-only endpoint receives that path automatically.
+
+`apply(&Mutation)` submits exactly once with the caller's operation ID. Redirects,
+automatic retries and default proxy discovery are disabled. Request inputs and
+response bodies are bounded; errors and client diagnostics retain no mutation
+body or provider credential. `OperatorOptions` controls finite transport deadlines
+and allows explicit proxy discovery. A cancelled request has an unknown outcome.
+
+On `Error::OperatorUnknown`, retain the original private input and call
+`operation(operation_id)` with the same client identity. A committed receipt is
+durable evidence; `Unresolved` does not prove rejection or rollback. Do not create
+a new ID to retry an uncertain write. Typed `Error::OperatorRejected` represents
+validated service error categories. Revision, tenant/resource policy, principal,
+credential metadata and execution reads use their `bitrouter_ai::gateway`
+contracts. No client method creates a serving instance or executes inference.

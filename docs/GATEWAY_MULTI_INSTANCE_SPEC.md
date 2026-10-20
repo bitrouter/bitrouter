@@ -105,8 +105,42 @@ the exclusive head before any receipt/subordinate lock; other mutations acquire
 the shared head. Publication authenticates and decodes every referenced stored
 credential under that fence. Configuration validation/encoding and input bounds
 are checked before the short transaction. No operator command joins a serving
-incarnation or executes provider work. Remote operator authentication and the
-HTTP/CLI/SDK administration paths remain separate integration requirements.
+incarnation or executes provider work.
+
+An optional process-local `operator` block enables a separate numeric-loopback
+listener with explicit actor IDs, token environment references and grants. The
+complete literal block is validated before environment expansion. Tokens are
+loaded before database pools open, must contain 32–4096 Bearer-compatible bytes,
+and are represented by process-private MACs after setup. No inference key,
+legacy control credential or deployment key grants HTTP operator access. Remote
+access uses an external TLS proxy or tunnel. Actor identity must remain stable
+across replicas and token rotations to recover its own receipts.
+
+The operator listener exposes `/operator/v1/mutations`, `/operations`,
+`/revision`, and secret-free tenant/resource/principal/credential/execution
+metadata reads. Identity parameters are encoded query values, not URL path
+segments. Authorization precedes query/body parsing. Router replies are non-cacheable;
+mutation requests require a single complete JSON media type and no content encoding.
+Connections are capped at 1–256 (default 16), JSON input at 2 MiB, and the whole
+handler at the configured request timeout, including body reads and SQL waits.
+The backend's encoded actor-plus-input limit remains an additional acceptance
+check. A timed-out write is Unknown, with its validated operation ID when known;
+a timed-out read is Unavailable. Synchronous bounded parsing is not preemptible.
+
+`bitrouter_sdk::operator::OperatorClient` takes an explicit HTTPS or loopback
+HTTP endpoint and a separate token. It performs one mutation request, without
+discovery, retry, redirects or automatic response decompression. Validated definite
+4xx rejections are distinct from uncertain delivery, malformed or mismatched
+receipts, and other statuses. Uncertain errors retain only the original operation
+ID; callers keep the original input privately and use actor-scoped receipt lookup.
+Cancellation also leaves an unknown outcome. Lookup absence never proves rollback.
+Default response input is bounded to 2 MiB and transport deadlines are finite.
+Remote CLI administration remains a separate integration requirement.
+
+Operator serving remains independent of inference readiness during operation.
+Initial assembly still fails fast through the common cleanup path. Both listeners
+are supervised during startup and running, share the original shutdown deadline,
+and join before forced pipeline reclamation and telemetry shutdown.
 
 Local process configuration owns listener addresses, database connection details,
 deployment-key references and worker bounds. A versioned, validated shared

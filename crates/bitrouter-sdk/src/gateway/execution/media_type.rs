@@ -3,7 +3,7 @@
 // Parameters and quoted strings follow:
 // https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6.6
 // https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6.4
-pub(super) fn matches(value: &str, expected: &str) -> bool {
+pub(crate) fn matches(value: &str, expected: &str) -> bool {
     if !value.is_ascii() {
         return false;
     }

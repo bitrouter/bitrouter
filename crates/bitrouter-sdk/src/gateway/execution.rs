@@ -7,7 +7,7 @@
 //! model output or resuming a stream. Preserve request semantics and all effective
 //! semantic headers when explicitly resubmitting an idempotency key.
 
-mod media_type;
+pub(crate) mod media_type;
 mod options;
 mod response;
 

@@ -783,6 +783,7 @@ dependencies = [
  "axum",
  "bitrouter-ai",
  "bytes",
+ "flate2",
  "futures-core",
  "futures-util",
  "http-body-util",

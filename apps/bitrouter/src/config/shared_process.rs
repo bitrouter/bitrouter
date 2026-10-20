@@ -5,6 +5,8 @@ use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use tokio::io::AsyncReadExt as _;
 
+#[cfg(feature = "multi-instance")]
+pub(crate) mod operator;
 mod probe;
 
 #[cfg(feature = "multi-instance")]
@@ -59,6 +61,7 @@ struct Document {
     database: Database,
     gateway_state: GatewayStateConfig,
     telemetry: Option<OtelConfig>,
+    operator: Option<operator::Config>,
     inherit_defaults: Option<bool>,
     registry: Option<Registry>,
 }
@@ -71,6 +74,7 @@ pub(crate) struct Process {
     pub database_url: String,
     pub shared: SharedGatewayConfig,
     pub telemetry: Option<OtelConfig>,
+    pub operator: Option<operator::Config>,
 }
 
 pub(crate) struct LocalInput {
@@ -235,6 +239,9 @@ fn parse_shared(text: &str, lookup: impl Fn(&str) -> Option<String>) -> Result<P
     // single environment reference. Numeric bounds must be literal values.
     let raw: Document = serde_json::from_value(value.clone())
         .map_err(|_| anyhow::anyhow!("shared configuration accepts only process inputs"))?;
+    if let Some(operator) = &raw.operator {
+        operator.validate()?;
+    }
     ensure!(
         raw.inherit_defaults != Some(true) && raw.registry.is_none_or(|registry| !registry.enabled),
         "shared configuration cannot inherit defaults or enable registry discovery"
@@ -256,6 +263,7 @@ fn parse_shared(text: &str, lookup: impl Fn(&str) -> Option<String>) -> Result<P
         server: document.server,
         database_url: document.database.url,
         shared,
+        operator: document.operator,
         telemetry: document
             .telemetry
             .map(|config| config.with_env_from(lookup)),
@@ -325,6 +333,73 @@ mod tests {
     use super::*;
     #[cfg(feature = "multi-instance")]
     const BASE: &str = "database:\n  url: '${DATABASE_URL}'\ngateway_state:\n  mode: shared\n  namespace: process-fixture\n  deployment_key_env: DEPLOYMENT_KEY\n";
+
+    #[cfg(feature = "multi-instance")]
+    #[test]
+    fn operator_configuration_is_literal_and_validated_before_environment() -> Result<()> {
+        let valid = serde_json::json!({
+            "listen": "127.0.0.1:4358",
+            "credentials": [{"id": "operator", "token_env": "OPERATOR_TOKEN", "grants": ["policy_write"]}]
+        });
+        let mut invalid = Vec::new();
+        for (pointer, value) in [
+            ("/listen", serde_json::json!("0.0.0.0:4358")),
+            ("/listen", serde_json::json!("127.0.0.1:0")),
+            ("/listen", serde_json::json!("${OPERATOR_LISTEN}")),
+            ("/credentials/0/id", serde_json::json!("${OPERATOR_ID}")),
+            (
+                "/credentials/0/token_env",
+                serde_json::json!("${TOKEN_NAME}"),
+            ),
+            ("/credentials/0/token_env", serde_json::json!("1INVALID")),
+            ("/credentials/0/grants", serde_json::json!([])),
+            ("/credentials/0/grants", serde_json::json!(["read", "read"])),
+            ("/credentials", serde_json::json!([])),
+        ] {
+            let mut changed = valid.clone();
+            *changed
+                .pointer_mut(pointer)
+                .context("fixture pointer missing")? = value;
+            invalid.push(changed);
+        }
+        for maximum in [0, 257] {
+            let mut changed = valid.clone();
+            changed["max_connections"] = serde_json::json!(maximum);
+            invalid.push(changed);
+        }
+        let mut duplicate = valid.clone();
+        duplicate["credentials"] =
+            serde_json::json!([valid["credentials"][0], valid["credentials"][0]]);
+        invalid.push(duplicate);
+        for operator in invalid {
+            let reads = std::cell::Cell::new(0);
+            ensure!(
+                parse_with(&format!("{BASE}operator: {operator}\n"), |_| {
+                    reads.set(reads.get() + 1);
+                    Some("private-value".into())
+                })
+                .is_err()
+            );
+            ensure!(
+                reads.get() == 0,
+                "invalid operator configuration expanded environment"
+            );
+        }
+        let reads = std::cell::RefCell::new(Vec::new());
+        let Selection::Shared(process) =
+            parse_with(&format!("{BASE}operator: {valid}\n"), |name| {
+                reads.borrow_mut().push(name.to_owned());
+                Some("postgres://localhost/fixture".into())
+            })?
+        else {
+            anyhow::bail!("shared process missing");
+        };
+        ensure!(*reads.borrow() == ["DATABASE_URL"]);
+        let operator = process.operator.context("operator configuration missing")?;
+        ensure!(operator.credentials[0].token_env == "OPERATOR_TOKEN");
+        ensure!(operator.max_connections == 16);
+        Ok(())
+    }
 
     #[cfg(feature = "multi-instance")]
     #[test]

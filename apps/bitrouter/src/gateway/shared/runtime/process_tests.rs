@@ -1,6 +1,7 @@
 //! Exercise the official executable, never an in-process replacement host.
 
 mod bootstrap;
+mod operator;
 
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
@@ -157,9 +158,19 @@ impl Fixture {
         address: std::net::SocketAddr,
         extra: &[&str],
     ) -> Result<usize> {
+        self.spawn_with_operator(action, address, extra, None).await
+    }
+
+    async fn spawn_with_operator(
+        &mut self,
+        action: &str,
+        address: std::net::SocketAddr,
+        extra: &[&str],
+        operator: Option<(std::net::SocketAddr, &str)>,
+    ) -> Result<usize> {
         let index = self.children.len();
         let config = self.root.path().join(format!("gateway-{index}.json"));
-        let document = json!({
+        let mut document = json!({
             "server": {"listen": address.to_string(), "log_level": "info"},
             "database": {"url": "${FIXTURE_SHARED_DATABASE}"},
             "gateway_state": {
@@ -169,6 +180,11 @@ impl Fixture {
                 "heartbeat_ms": 250, "worker_interval_ms": 100, "drain_timeout_ms": 2000
             }
         });
+        if let Some((listen, _)) = operator {
+            document["operator"] = json!({"listen": listen.to_string(), "credentials": [{
+                "id": "fixture-operator", "token_env": "FIXTURE_OPERATOR_TOKEN", "grants": ["read", "policy_write"]
+            }]});
+        }
         tokio::fs::write(&config, serde_json::to_vec(&document)?).await?;
         let log = self.root.path().join(format!("gateway-{index}.log"));
         let output = std::fs::File::create(&log)?;
@@ -180,6 +196,10 @@ impl Fixture {
             .current_dir(self.root.path().join("launch"))
             .env("FIXTURE_SHARED_DATABASE", &self.url)
             .env("FIXTURE_SHARED_KEY", STANDARD.encode(self.key))
+            .env(
+                "FIXTURE_OPERATOR_TOKEN",
+                operator.map_or("", |(_, token)| token),
+            )
             .env("BITROUTER_HOME", self.root.path().join("unexpected-home"))
             .env("HOME", self.root.path().join("unexpected-user-home"))
             .env_remove("RUST_LOG")

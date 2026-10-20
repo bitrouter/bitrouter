@@ -12,6 +12,7 @@ mod engine;
 mod generations;
 mod http;
 mod operator;
+mod operator_service;
 mod ownership;
 mod publication;
 pub(crate) mod runtime;

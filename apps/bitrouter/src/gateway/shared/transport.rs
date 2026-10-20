@@ -69,6 +69,16 @@ impl From<&SharedGatewayConfig> for Limits {
     }
 }
 
+impl Limits {
+    pub fn for_operator(config: &SharedGatewayConfig, connections: usize) -> Self {
+        Self {
+            connections,
+            request_bytes: 2 * 1024 * 1024,
+            ..Self::from(config)
+        }
+    }
+}
+
 /// Fixture compatibility wrapper. Production supplies one process deadline to
 /// the retained transport owner instead of creating a relative drain timeout.
 #[cfg(test)]

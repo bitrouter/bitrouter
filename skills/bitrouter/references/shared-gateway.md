@@ -48,7 +48,7 @@ The selected document is read once before local startup, with a 16 MiB input
 limit. Select `gateway_state.mode` literally; environment interpolation cannot
 select or change the mode. Shared documents accept `server.listen`,
 `server.log_level`, `server.skip_auth`, `database.url`, `gateway_state` and optional
-`telemetry`. Explicit `inherit_defaults: false` and `registry: {enabled: false}`
+`telemetry` and `operator`. Explicit `inherit_defaults: false` and `registry: {enabled: false}`
 are accepted. Provider/model/policy, control, harness and plugin configuration
 belongs outside this process document and is rejected before environment lookup.
 Quote environment references in shared YAML strings. Bounds must be literal
@@ -104,6 +104,53 @@ Routing and policy authority is published separately from these process-local
 settings. Replicas must never substitute their own provider credentials or policy
 files for unavailable shared authority. Do not enable shared mode on a database
 holding unrelated local continuation/trajectory authorities.
+
+## Operator listener
+
+Shared process configuration can explicitly enable an independent operator
+listener. Omitting this block creates no operator listener or fallback credential:
+
+```yaml
+operator:
+  listen: 127.0.0.1:4358
+  max_connections: 16
+  credentials:
+    - id: service-operator
+      token_env: SHARED_OPERATOR_TOKEN
+      grants: [read, policy_write, credential_write, publish]
+```
+
+The address must be numeric loopback with a nonzero port. Use a TLS proxy or
+tunnel for remote access. Supply a separately generated high-entropy token in
+the named environment variable (32–4096 Bearer-compatible bytes). Actor IDs,
+token variable names and grants are literal process inputs; keep actor IDs
+consistent across replicas so receipt recovery retains its identity. Tokens are
+loaded before database pools open and never come from inference or legacy
+control authentication. Token rotation requires restarting the process with the
+same actor identity. The process validates the complete block before resolving
+environment references; an explicit empty or malformed block is an error.
+
+The listener serves `/operator/v1` separately from inference. Explicit grants
+are `read`, `policy_write`, `credential_write`, `publish`, `rotate_correlation`,
+`resolve_execution` and `global_principal_write`. The last capability covers
+database-wide principals; ordinary namespace read/write grants do not imply it.
+Write-only operators can recover their own command receipts using the command's
+grant. No namespace or actor override is accepted in a request.
+
+Use the SDK's explicit `operator::OperatorClient` for mutations, receipt lookup,
+revision and metadata reads. Operation IDs are query values on
+`GET /operator/v1/operations?operation_id=...`; mutations use
+`POST /operator/v1/mutations`. Preserve the original ID after unknown outcomes.
+Operator connections are bounded to 1–256 (default 16), JSON requests to 2 MiB,
+and the entire handler to `gateway_state.request_timeout_ms`. The backend also
+checks its encoded actor-plus-mutation size, so passing the wire byte limit alone
+does not guarantee acceptance. Content encodings are unsupported. Header and
+write-stall limits remain the shared transport limits.
+
+Operator requests do not depend on the loaded inference generation's readiness
+during operation. Normal startup still requires valid initialized authority and
+successful initial assembly; this is not an admin-only rescue process. Both
+listeners drain or force-stop under the same process deadline.
 
 ## Explicit initialization
 
