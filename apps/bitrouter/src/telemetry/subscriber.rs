@@ -1,7 +1,7 @@
 //! The `tracing` ↔ OpenTelemetry bridge layer.
 //!
 //! [`tracing_opentelemetry`] maps `otel.*` sentinel fields on a
-//! `tracing::Span` into a real OTel span. The bridge layer itself is not
+//! `tracing::Span` into a real OTel span. The bridge layer is
 //! composed by the application host onto its global subscriber via
 //! [`tracing_subscriber_layer`], alongside its `fmt` / file layers.
 //!

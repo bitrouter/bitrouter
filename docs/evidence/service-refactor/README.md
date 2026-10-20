@@ -1,5 +1,8 @@
 # Service refactor measurement evidence
 
+Latest runtime comparison: [finalizer handoff follow-up](#finalizer-handoff-follow-up-2026-10-20),
+source `6c66b9b`. Earlier campaigns retain their own dated source identities.
+
 [Raw gateway samples](gateway-local-2026-10-16.json) were captured on
 2026-10-16 using the standalone
 [measurement fixture](../../../apps/bitrouter/tests/fixtures/gateway_measurements/README.md).
@@ -302,3 +305,61 @@ SSE result prompted the repeat; neither campaign is excluded. The changing sign
 and absolute throughput do not establish a stable regression or improvement.
 Host-load observations are retained without assigning a cause. These local
 development samples do not constitute a production-performance claim.
+
+## Finalizer handoff follow-up (2026-10-20)
+
+Runtime source: `6c66b9b99a5758421315d02a014443bbd08ab0a3`; baseline:
+`e972d5ebb8215a51dbe88d404616087b940250ca`. The
+[validation record](validation-handoff-fix-2026-10-20.json) contains source and
+log hashes, compiled identities, independent source review, original macOS
+failure, new regression's expected pre-fix failure, and positive/negative fixture
+checks. The complete local all-feature suite passed 4,698 tests with 47 explicit
+skips and zero retries. The minimum-gateway finalizer selection passed 109;
+strict library/test Clippy and formatting passed. Fresh hosted validation is a
+separate requirement.
+
+The first [nine samples](gateway-handoff-fix-2026-10-20.json) showed lower
+ordinary/SSE throughput medians and substantial variation. One
+[same-artifact repeat](gateway-handoff-repeat-2026-10-20.json) retains another
+nine samples; none are discarded. Both use the established development profile,
+three rotating orders, fresh SQLite, 16 warmups, 4,096 ordinary and 4,096 SSE
+requests at concurrency eight, with exactly 8,208 counted upstream calls per
+sample. The executables were copied from clean committed source before testing.
+No Cargo build, test or lint overlaps either measurement campaign.
+
+| Metric (median) | Baseline | Full candidate | Minimum gateway |
+| --- | ---: | ---: | ---: |
+| First: idle RSS MiB | 61.250 | 64.031 | 41.875 |
+| First: startup ms | 67.727 | 63.781 | 62.789 |
+| First: after-load RSS MiB | 210.750 | 201.531 | 175.500 |
+| First: ordinary requests/s | 3,697.117 | 3,495.483 | 3,454.613 |
+| First: streaming requests/s | 4,594.297 | 4,296.722 | 4,381.914 |
+| Repeat: idle RSS MiB | 61.328 | 64.234 | 42.016 |
+| Repeat: startup ms | 57.327 | 58.368 | 55.259 |
+| Repeat: after-load RSS MiB | 195.656 | 210.266 | 179.719 |
+| Repeat: ordinary requests/s | 3,767.125 | 4,028.516 | 4,056.278 |
+| Repeat: streaming requests/s | 4,932.728 | 4,993.429 | 5,070.035 |
+
+Full idle increases are **2.78125 MiB / 4.54%** and **2.90625 MiB / 4.74%**,
+below the previously accepted measured increase. The memory optimization
+follow-up remains open. First-campaign ordinary/SSE median differences are
+**-5.45% / -6.48%**; the repeat differences are **+6.94% / +1.23%**. First full
+streaming samples range from 3,214 to 4,419 requests/s and baseline from 4,483
+to 4,847; the repeat ranges overlap (full 4,671–5,075, baseline 4,767–5,158).
+First minimum ordinary samples span 1,885–3,608 requests/s. These variable local
+samples do not establish a stable throughput change, long-running memory use or
+production latency. After-load RSS also changes direction between campaigns;
+it is not evidence of a sustained memory improvement.
+
+The preceding CodeQL check passed, but the preceding macOS CI job timed out in
+two process tests. Prebuilding removes an identified nested-Cargo wait; the
+existing timeout logs do not prove which await timed out. All original failures
+remain recorded, and neither local success nor this performance comparison
+substitutes for new hosted platform and CodeQL results on the PR head.
+
+The [independent acceptance record](acceptance-handoff-fix-2026-10-20.json)
+approves local readiness to push after verifying source/log/binary identities,
+all sample arithmetic and prior acceptance applicability. One subsequent change
+to a telemetry module comment removes a mistaken negation; it changes no runtime
+behavior and the artifacts retain their recorded source identity. Hosted checks
+on the pushed head remain pending at this review.

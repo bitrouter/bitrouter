@@ -4,12 +4,13 @@ Implementation follows the [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 P1 remains out of scope. This ledger records evidence for the full P0 delivery;
 completing one extraction does not complete the milestone.
 
-Current status: P0 previously passed local and hosted acceptance. Main has now
-reverted the Goal implementation in #987, and the PR is being refreshed against
-that main revision (`e972d5e`). New committed artifact/performance checks passed
-at `a51effd`; exact-head hosted checks are pending. Earlier acceptance retains its
-dated source identity;
-it is not a claim about a newer PR head. P1 remains outside this PR.
+Current status: the PR incorporates post-revert main `e972d5e`. Latest runtime
+candidate `6c66b9b` passed the complete local all-feature workspace suite,
+minimum-gateway finalizer regressions, strict linting and scoped independent
+review. Its immutable full/minimum artifacts have two recorded performance
+campaigns. Fresh hosted CI and CodeQL on the follow-up PR head remain required:
+the preceding head passed CodeQL but failed two macOS process tests. Earlier
+acceptance retains its dated source identity. P1 remains outside this PR.
 
 ## Post-revert main integration (2026-10-20)
 
@@ -3844,3 +3845,56 @@ passed. Independent scoped review approved the corrected implementation.
 The [follow-up evidence](evidence/service-refactor/README.md#cryptographic-source-follow-up-2026-10-20)
 records final artifacts and measurements. Hosted CI and CodeQL on the new PR
 head remain separate required gates.
+
+## Finalizer handoff and process fixtures (2026-10-20)
+
+At `e7ff1e5`, [CodeQL passed](https://github.com/bitrouter/bitrouter/runs/118585360244)
+with no new alerts. The [main CI run](https://github.com/bitrouter/bitrouter/actions/runs/39410028824)
+passed 56 jobs and failed the macOS job: 4,695 tests passed and two stdio MCP
+cases timed out at 300 seconds. Those logs do not identify the exact await.
+The tests synchronously invoked Cargo to build process fixtures inside each
+isolated nextest process. The follow-up prebuilds the required examples before
+macOS and selected Linux test deadlines, with an explicit path that fails
+immediately if an artifact is missing. Existing standalone and minimal-MCP
+fallback behavior remains available. Per-test deadlines and retries are unchanged.
+
+Runtime candidate `6c66b9b99a5758421315d02a014443bbd08ab0a3` also fixes an
+independently identified receipt-ownership race. A successful oneshot enqueue
+did not establish that the caller had taken responsibility for compensation.
+The tracked finalizer now retains the original receipt until consumption is
+acknowledged. Dropping an unconsumed queued result triggers rollback, and the
+caller installs a consumed receipt into its guard in the same poll.
+
+The new native SQLite regression fails before the fix and passes afterward.
+It covers direct and streamed results, exactly one rollback with the original
+receipt, no premature publication, and removal of the provisional row after
+drain. The failing baseline reaches the direct case first; it does not separately
+establish a pre-fix streamed failure. Existing success and later-cancellation
+tests remain controls. Stale gateway/telemetry ownership comments were corrected.
+
+- Complete workspace/all-feature suite: **4,698 passed, 47 explicit skips,
+  zero retries**, 636.138 seconds.
+- Focused finalizer suite: **115 passed**; prebuilt MCP/terminal suite:
+  **66 passed**; minimum-gateway finalizer suite: **109 passed**. All use zero retries.
+- Explicit missing-fixture negative check fails as intended in 0.007 seconds,
+  without a nested Cargo build. Workflow YAML parses; actionlint is unavailable.
+- Strict all-feature library/test Clippy on Rust 1.97, formatting and diff checks
+  passed. Scoped independent review approved all eight changed source/CI files.
+- Two isolated campaigns retain **18 samples** from the same immutable artifacts.
+  Full idle RSS overhead is **4.54% / 4.74%**; minimum gateway idle medians are
+  **41.88 / 42.02 MiB**. Ordinary/SSE throughput differences reverse from
+  **-5.45% / -6.48%** to **+6.94% / +1.23%** in the repeat. These samples do not
+  establish a stable throughput change. The accepted memory overhead and
+  optimization follow-up remain recorded.
+
+The [complete follow-up evidence](evidence/service-refactor/README.md#finalizer-handoff-follow-up-2026-10-20)
+records identities, exact local validation, failed checks and measurement ranges.
+Fresh hosted confirmation remains necessary before declaring the PR merge ready.
+
+Final independent acceptance review approved this local follow-up for pushing:
+A01–A16 evidence remains applicable, source/log/artifact identities reconcile,
+and all 18 performance samples and arithmetic match. No blocking finding
+remains. A retained negation in one telemetry module comment was corrected after
+measurement; the runtime artifacts keep their `6c66b9b` identity. See the
+[acceptance record](evidence/service-refactor/acceptance-handoff-fix-2026-10-20.json).
+This approval does not replace the fresh hosted gate above.

@@ -1,0 +1,39 @@
+{
+  "schema": "bitrouter.p0-handoff-acceptance.v1",
+  "date": "2026-10-20",
+  "runtime_source_revision": "6c66b9b99a5758421315d02a014443bbd08ab0a3",
+  "decision": "APPROVED",
+  "local_acceptance_closed": true,
+  "merge_ready_at_review": false,
+  "summary": "APPROVED for local follow-up readiness to push. Existing A01-A16 evidence is consistent with the P0 scope and the current narrowly changed paths; current full4698/minimum109/focused115/process66 results, fail-closed negative check, strict lint, immutable artifacts and both performance campaigns reconcile. All18 samples are retained and arithmetic matches. No blocking or major finding remains; N2 is corrected by a verified comment-only overlay. No claim of fresh hosted success, merge readiness, release publication or P1 acceptance.",
+  "independent_report_sha256": "80ae73d0a05f6af247710fb31f187594734794f9f380eaf522e777bff4f02107",
+  "evidence_sha256": {
+    "gateway-handoff-fix-2026-10-20.json": "29a4407dbc947049f6d40b4d4b2bb4c6a3d6a52356bef09dd79f1d8bd6b93b3c",
+    "gateway-handoff-repeat-2026-10-20.json": "08820b00964932760740ecbf4daeb0ff8b904129f1284a73965038fd73662748",
+    "validation-handoff-fix-2026-10-20.json": "a9c3cf970c2294c169281c93623bb5f0df7f5ea1c6ec955ad877d3ed526dc806"
+  },
+  "blocking_findings": [
+
+  ],
+  "required_code_fixes": [
+
+  ],
+  "corrected_documentation_finding": "N2: remove a retained negation in the tracing bridge module comment; the application host composes the bridge. Verified comment-only follow-up after immutable runtime measurement.",
+  "nonblocking_style_disposition": "Parent retains established descriptive repository test naming rather than an optional skill-specific template; not a user preference claim.",
+  "performance": {
+    "samples": 18,
+    "all_samples_retained": true,
+    "artifact_bytes_hashes_identities_verified": true,
+    "statistics_independently_recalculated": true,
+    "raw_copies_match_logs": true,
+    "assessment": "Initial ordinary/SSE differences -5.4538227%/-6.4770514%; repeat +6.9387317%/+1.2305787%. First full SSE range3213.929-4418.948 is below baseline4482.529-4847.442; retained, not discarded. Repeat ranges overlap. Full after-load RSS changes from -4.3743% to +7.4669%. This does not establish statistical equivalence, a stable regression, a performance improvement or long-running memory behavior. Local A16 comparison is complete with limitations retained; no arbitrary throughput budget is invented.",
+    "memory_assessment": "Idle overhead2.78125MiB/4.540816% and2.90625MiB/4.738854% remains below the prior explicitly accepted measured3.09375MiB/~5.05% comparison; the optimization follow-up stays open. This is not a general regression allowance.",
+    "limitations": [
+      "Three rotating samples per artifact per campaign; unoptimized local macOS ARM64 builds.",
+      "Fixed small loopback responses; no production provider/network latency, token generation speed or time-to-first-token measurement.",
+      "Not all optional runtime subsystems/exporters are active.",
+      "No causal attribution of variation to host load or the source fix; no production performance claim."
+    ]
+  },
+  "remaining_gate": "Fresh hosted platform CI, packaging and CodeQL on the pushed PR head; no merge or release authorized by this review."
+}
