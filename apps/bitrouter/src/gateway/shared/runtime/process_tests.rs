@@ -1,5 +1,7 @@
 //! Exercise the official executable, never an in-process replacement host.
 
+mod bootstrap;
+
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;

@@ -7,6 +7,25 @@ use crate::tracing_filter::resolve_env_filter;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
+/// Explicit stock CLI bootstrap, without daemon or local-home discovery.
+#[cfg(feature = "multi-instance")]
+pub async fn initialize_shared(
+    config: &std::path::Path,
+    plan: &std::path::Path,
+    operator_id: &str,
+    operation_id: &str,
+    global_principals: bool,
+) -> Result<bitrouter_ai::gateway::operator::BootstrapReceipt> {
+    crate::gateway::shared::bootstrap::run(
+        config,
+        plan,
+        operator_id,
+        operation_id,
+        global_principals,
+    )
+    .await
+}
+
 async fn supervise_http_shutdown<Http, Control, Hup, Term>(
     http: Http,
     control: Control,

@@ -18,6 +18,17 @@ namespace and rejects managed-child/compiled-extension hosting. See the
 [shared process configuration](../skills/bitrouter/references/shared-gateway.md).
 `start` and `restart` reject shared configurations before creating local daemon
 state or contacting an existing daemon. Shared services use foreground `serve`.
+`bro shared init --config PROCESS.yaml --plan SEED.json --operator-id OPERATOR
+--operation-id ID [--global-principals]` explicitly initializes both database
+schemas and atomically seeds a new namespace. The named PostgreSQL database and
+deployment key must already exist. `--plan -` reads JSON from stdin. A seed is
+limited to 2 MiB and 64 operations including its final publication; it uses the
+configured transaction deadline. Principal creation requires the explicit global
+flag because virtual principals are database-wide. This command does not use
+named contexts, local daemon discovery or a serving incarnation. After an
+uncertain response, retain the same actor, operation ID and identical plan;
+replay returns the original receipt without overwriting later configuration.
+See the [seed contract](../skills/bitrouter/references/shared-gateway.md#explicit-initialization).
 Foreground startup reads a selected file once with a 16 MiB bound. Local
 environment expansion is validated as local before daemon/home effects and the
 same parsed input becomes its configuration baseline.

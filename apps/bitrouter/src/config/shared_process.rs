@@ -97,6 +97,25 @@ pub(crate) async fn select(source: &ConfigSource) -> Result<Selection> {
     parse_lookups(&text, |key| std::env::var(key).ok(), super::env_lookup)
 }
 
+/// Privileged shared commands never expand or validate local configuration.
+#[cfg(feature = "multi-instance")]
+pub(crate) async fn select_shared(path: &std::path::Path) -> Result<Process> {
+    let file = tokio::fs::File::open(path)
+        .await
+        .context("opening selected gateway configuration")?;
+    let text = read_selected(file).await?;
+    parse_shared_only(&text, |key| std::env::var(key).ok())
+}
+
+#[cfg(feature = "multi-instance")]
+fn parse_shared_only(text: &str, lookup: impl Fn(&str) -> Option<String>) -> Result<Process> {
+    ensure!(
+        selects_shared(text)?,
+        "shared initialization requires an explicit shared process configuration"
+    );
+    parse_shared(text, lookup)
+}
+
 async fn read_selected(reader: impl tokio::io::AsyncRead + Unpin) -> Result<String> {
     let mut bytes = Vec::new();
     reader
@@ -121,6 +140,21 @@ fn parse_lookups(
     shared_lookup: impl Fn(&str) -> Option<String>,
     local_lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<Selection> {
+    if !selects_shared(text)? {
+        return local_input(text, local_lookup)
+            .map(|input| Selection::Local(Some(Box::new(input))));
+    }
+    #[cfg(not(feature = "multi-instance"))]
+    {
+        let _ = shared_lookup;
+        anyhow::bail!("shared gateway requires the multi-instance feature");
+    }
+    #[cfg(feature = "multi-instance")]
+    parse_shared(text, shared_lookup).map(|process| Selection::Shared(Box::new(process)))
+}
+
+/// Inspect only syntax and literal mode, without consulting the environment.
+fn selects_shared(text: &str) -> Result<bool> {
     // Existing local YAML substitutes before parsing, including unquoted flow
     // values such as {listen: ${LISTEN}}. A structural probe can mask those
     // tokens without consulting their environment or changing the local input.
@@ -161,20 +195,10 @@ fn parse_lookups(
         .pointer("/gateway_state/mode")
         .and_then(|mode| mode.as_str())
     {
-        None | Some("local") => {
-            return local_input(text, local_lookup)
-                .map(|input| Selection::Local(Some(Box::new(input))));
-        }
-        Some("shared") => {}
+        None | Some("local") => Ok(false),
+        Some("shared") => Ok(true),
         Some(_) => anyhow::bail!("gateway_state.mode must be the literal local or shared"),
     }
-    #[cfg(not(feature = "multi-instance"))]
-    {
-        let _ = shared_lookup;
-        anyhow::bail!("shared gateway requires the multi-instance feature");
-    }
-    #[cfg(feature = "multi-instance")]
-    parse_shared(text, shared_lookup).map(|process| Selection::Shared(Box::new(process)))
 }
 
 fn local_input(text: &str, lookup: impl Fn(&str) -> Option<String>) -> Result<LocalInput> {
@@ -301,6 +325,53 @@ mod tests {
     use super::*;
     #[cfg(feature = "multi-instance")]
     const BASE: &str = "database:\n  url: '${DATABASE_URL}'\ngateway_state:\n  mode: shared\n  namespace: process-fixture\n  deployment_key_env: DEPLOYMENT_KEY\n";
+
+    #[cfg(feature = "multi-instance")]
+    #[test]
+    fn shared_only_rejects_local_inputs_without_expanding_or_reporting_secrets() -> Result<()> {
+        use crate::output::{Format, Output, error::envelope_from_anyhow};
+
+        for state in ["", "gateway_state: {mode: local}\n"] {
+            for body in [
+                "{}",
+                "providers: {fixture: {api_base: '${BOOTSTRAP_SECRET}'}}",
+            ] {
+                let text = if body == "{}" && !state.is_empty() {
+                    state.to_owned()
+                } else {
+                    format!("{state}{body}")
+                };
+                let reads = std::cell::Cell::new(0);
+                let error = parse_shared_only(&text, |_| {
+                    reads.set(reads.get() + 1);
+                    Some("fixture-secret-not-a-url".into())
+                })
+                .err()
+                .context("accepted local bootstrap input")?;
+                ensure!(reads.get() == 0);
+                ensure!(
+                    error.to_string()
+                        == "shared initialization requires an explicit shared process configuration"
+                );
+                let envelope = envelope_from_anyhow(&error);
+                for format in [Format::Json, Format::Human] {
+                    let rendered = String::from_utf8(Output::new(format).render_to_vec(&envelope))?;
+                    ensure!(
+                        !rendered.contains("fixture-secret")
+                            && !rendered.contains("BOOTSTRAP_SECRET")
+                    );
+                }
+            }
+        }
+        let reads = std::cell::RefCell::new(Vec::new());
+        let process = parse_shared_only(BASE, |name| {
+            reads.borrow_mut().push(name.to_owned());
+            Some("postgres://localhost/bootstrap".into())
+        })?;
+        ensure!(process.database_url == "postgres://localhost/bootstrap");
+        ensure!(*reads.borrow() == ["DATABASE_URL"]);
+        Ok(())
+    }
 
     #[cfg(feature = "multi-instance")]
     #[test]

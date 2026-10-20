@@ -129,41 +129,54 @@ impl Authority {
 
     /// Explicit operator initialization. Joining never creates an authority.
     pub async fn initialize(&self) -> Result<Head> {
-        let ring = KeyRing {
-            continuation: random_key()?,
-            correlations: vec![random_key()?],
-        };
-        let head = Head {
+        self.store
+            .retry(|| async {
+                let tx = self.store.begin().await?;
+                let (created, head) = self.initialize_or_lock(&tx).await?;
+                ensure!(created, "shared namespace is already initialized");
+                tx.commit().await?;
+                Ok(head.value)
+            })
+            .await
+    }
+
+    /// Explicit bootstrap only. Existing authority is exclusively fenced and
+    /// validated, never replaced; the caller must verify its bootstrap receipt.
+    pub async fn initialize_or_lock(
+        &self,
+        tx: &DatabaseTransaction,
+    ) -> Result<(bool, Stored<Head>)> {
+        let initial = Head {
             format: 1,
             deployment_key_id: self.key.id().into(),
             config_generation: 0,
             key_generation: 1,
         };
-        self.store
-            .retry(|| async {
-                let tx = self.store.begin().await?;
-                let now = Store::now(&tx).await?;
-                let created = self
-                    .store
-                    .create(
-                        &tx,
-                        NewRecord {
-                            kind: Kind::Authority,
-                            key: HEAD,
-                            status: "active",
-                            due_at_ms: None,
-                            now_ms: now,
-                            value: &head,
-                        },
-                    )
-                    .await?;
-                ensure!(created, "shared namespace is already initialized");
-                self.write_keys(&tx, &ring, head.key_generation, now)
-                    .await?;
-                tx.commit().await?;
-                Ok(head.clone())
-            })
-            .await
+        let now = Store::now(tx).await?;
+        let created = self
+            .store
+            .create(
+                tx,
+                NewRecord {
+                    kind: Kind::Authority,
+                    key: HEAD,
+                    status: "active",
+                    due_at_ms: None,
+                    now_ms: now,
+                    value: &initial,
+                },
+            )
+            .await?;
+        let head = self.fence_exclusive(tx).await?;
+        if created {
+            let ring = KeyRing {
+                continuation: random_key()?,
+                correlations: vec![random_key()?],
+            };
+            self.write_keys(tx, &ring, initial.key_generation, now)
+                .await?;
+        }
+        Ok((created, head))
     }
 
     /// Hold this shared fence through the complete admission/dispatch transaction.

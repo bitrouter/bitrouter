@@ -7,6 +7,16 @@ pub(super) struct SharedMigrator;
 
 /// Serialize schema changes only; this lock never participates in inference.
 pub(super) async fn initialize(store: &super::store::Store) -> anyhow::Result<()> {
+    initialize_selected(store, false).await
+}
+
+/// Explicit stock bootstrap also needs the ordinary auth/observation tables.
+/// Both ledgers share the schema lock; replica startup calls neither initializer.
+pub(super) async fn initialize_all(store: &super::store::Store) -> anyhow::Result<()> {
+    initialize_selected(store, true).await
+}
+
+async fn initialize_selected(store: &super::store::Store, ordinary: bool) -> anyhow::Result<()> {
     store
         .bounded(async {
             // A waiter must see the preceding initializer's committed ledger
@@ -23,6 +33,9 @@ pub(super) async fn initialize(store: &super::store::Store) -> anyhow::Result<()
                 [0x4252_4757_5343_4831_i64.into()],
             ))
             .await?;
+            if ordinary {
+                crate::db::migration::Migrator::up(&tx, None).await?;
+            }
             SharedMigrator::up(&tx, None).await?;
             tx.commit().await?;
             Ok(())

@@ -104,3 +104,64 @@ Routing and policy authority is published separately from these process-local
 settings. Replicas must never substitute their own provider credentials or policy
 files for unavailable shared authority. Do not enable shared mode on a database
 holding unrelated local continuation/trajectory authorities.
+
+## Explicit initialization
+
+Use a build with `multi-instance`:
+
+```sh
+bro shared init --config PROCESS.yaml --plan SEED.json \
+  --operator-id bootstrap-admin --operation-id initial-seed
+```
+
+The PostgreSQL database and deployment key are explicit prerequisites. The
+command initializes both schema ledgers, then commits a complete seed and its
+receipt in one transaction. It starts no listener, serving incarnation or local
+daemon. Neither a named context nor implicit home/config discovery is used.
+`--plan -` reads stdin. Success emits a secret-free JSON receipt; `--human` emits
+its namespace, audit identity and original committed generations.
+
+The JSON seed has `resources`, `tenants`, `principals`, `credentials` arrays and
+a required `configuration` object. Resource/tenant entries use their operator
+put shapes with `expected_revision: null`; principal entries use
+`expected_authorization_revision: null`; credential imports use
+`expected_version: null`. All are unique creates. Referenced tenants, resource
+pools and credential slots must be included in this seed. Configuration uses
+`format: 1`, explicit `routing`, embedded `policies`, optional `policy_lock`,
+credential bindings and `require_known_pricing`; it contains no process settings.
+Inputs are literal JSON, with no environment or file expansion inside the seed.
+
+A minimal seed for verifying installation and replica readiness is:
+
+```json
+{
+  "configuration": {
+    "format": 1,
+    "routing": {},
+    "policies": [],
+    "policy_lock": null,
+    "credentials": [],
+    "require_known_pricing": false
+  }
+}
+```
+
+This seed publishes no model routes or inference principals. For inference,
+include the resource pools, tenants, principals, credentials and routing bindings
+in the initial seed.
+
+Include `--global-principals` only when explicitly creating database-wide virtual
+principals. Each input contains a lowercase SHA-256 verifier of a client-generated
+high-entropy inference secret, not its plaintext. Provider credential imports are
+write-only secret inputs. Keep the original plan available privately for recovery;
+the receipt never exports these secrets or verifiers.
+
+The whole plan is bounded to 2 MiB and 64 operations including publication. The
+configured database transaction deadline also bounds the seed transaction.
+Failed pre-commit domain writes roll back together; completed schema migrations
+remain. A same-identity, identical-plan retry returns the original successful
+receipt. It does not replay changes over later administration. Different input
+under an already committed initialization, or a namespace initialized by another
+operation, conflicts. An uncertain response is not proof of rollback: reuse the
+same operator ID, operation ID and plan to recover its receipt. Ordinary `serve`
+continues to require a published namespace and never performs this initialization.

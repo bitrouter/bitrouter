@@ -30,7 +30,7 @@ review threads remained unresolved. This does not close any P1 gate.
 
 | Stage | Implementation | Verification | Independent review |
 | --- | --- | --- | --- |
-| 1 Authority foundation | Store/key foundation and shared startup implemented; operator bootstrap pending | Real PostgreSQL foundation and runtime tests passed | Foundation and bounded runtime approved |
+| 1 Authority foundation | Store/key foundation, shared startup and explicit stock bootstrap implemented | PostgreSQL foundation/runtime and blank-database stock bootstrap passed in minimal/full selections; local regressions and bounded lint passed | Foundation/runtime and bounded bootstrap backend/CLI/process reviews approved |
 | 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
 | 3 Gateway integration | Official foreground startup, credential binding, admission, dispatch, delivery and HTTP router implemented; complete process acceptance pending | Scoped HTTP/protocol/executor and PostgreSQL runtime regressions plus official-process startup/idle-drain tests passed | Authentication/context/dispatch/custody/HTTP/runtime substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
@@ -1424,3 +1424,61 @@ multi-process acceptance are still required.
   stock bootstrap, transport authentication, whole-product strict lint, durable
   projection delivery or independent-process acceptance. All P1-A01–A09 remain
   pending; P0 is unchanged.
+
+## Stock atomic bootstrap (2026-10-21)
+
+- `bro shared init` now uses explicit process/seed inputs and caller identities,
+  validates before database work, and seeds a namespace in one transaction after
+  serialized schema installation. The initial publication, keys, global
+  principal inserts and all receipts commit or roll back together. Identical
+  replay returns the original receipt without resetting later administration.
+  Local configuration is rejected before local environment expansion; named
+  contexts and unavailable features reject before input or logging setup.
+- Independent source reviews closed BCLI-I01 (local configuration could disclose
+  expanded secrets), BCLI-I02 (context validation after global tracing setup),
+  and BPF-I01 (a test URL `dbname` query could override its owned database).
+  The new fixture strips those overrides and checks `current_database()` before
+  any schema work. Only a UUID database created by the fixture is dropped.
+- Rebuilt stock executable: Rust 1.97.0, no default features plus
+  `multi-instance`, dev/test debug info disabled, incremental disabled, two build
+  jobs. SHA-256 `f0e4b17c3302a0d1d5ef9f38ff555329d3d2f51318d8525c1c8785a5a7033f7a`.
+  The binary includes the final production source; subsequent changes were test
+  isolation checks and documentation. Its build log is
+  `/tmp/bitrouter-p1-bootstrap-final-binary-build.log` (34.75s).
+- Frozen-source checks in the dedicated target directory:
+  `/tmp/bitrouter-p1-bootstrap-final-minimal-tests.log`: **90/90**, 2,365 outside
+  selection, 14.221s; `final-full-tests.log` with the same filename prefix:
+  **92/92**, 3,665 outside selection, 15.982s. Both include four actual stock
+  process cases and have no retry or LEAK results. The new case bootstraps a
+  genuinely empty database, starts two initializers, checks equal replay
+  receipts/no serving owner, joins two independent replicas and checks idle
+  graceful exits/no local daemon state. It is not deterministic lock-contention
+  proof or authorized inference/accepted-work drain evidence. A post-run catalog
+  check found no remaining fixture-created database.
+- Local `--no-default-features` regression selection: **11/11**, 2,312 outside
+  selection, 0.048s (`final-local-tests.log`). The first local command mistakenly
+  named nonexistent `db-sqlite` and stopped before compilation; its separate log
+  is retained. SQLite is a base dependency, not a feature flag.
+- Public contracts: **47/47**, zero doctests (`final-contract-tests.log`). Strict
+  contract Clippy and strict local application lib/bin Clippy passed
+  (`final-contract-clippy.log`, `final-local-clippy.log`). All-feature application
+  lib/bin/tests Clippy passed with no Clippy diagnostics and 25 staged unused
+  library warnings (`final-clippy.log`); this is not whole-product warning-free
+  acceptance. Formatter/diff checks passed. The existing proc-macro-error2
+  future-incompatibility notice and macOS large-unwind-table linker warning are
+  retained in build logs.
+- Earlier intermediate backend testing reported one LEAK in the existing
+  operator test. Two immediate unchanged-source reruns and the final minimal/full
+  selections were clean; the first cause remains unestablished. The first CLI
+  boundary run failed on the global-subscriber issue above; its production
+  preflight fix is covered by both final profiles. These initial failures are
+  retained as history, not substituted for final evidence.
+- Remote operator API/authentication/SDK/CLI, durable projection integration,
+  official shared distribution, aggregate checks/performance and all P1-A01–A09
+  gates remain open. The empty seed process fixture does not establish principal
+  or credential seeding via CLI, crash recovery, lost database COMMIT ACKs or
+  complete process teardown under arbitrary harness termination. P0 is unchanged.
+- Final independent bootstrap backend/process and CLI reviews approved the frozen
+  candidate with zero open blocking findings. The documentation precision note
+  was applied: accepted input is 2 MiB, with one extra byte read for overflow
+  detection. Candidate manifest: `/tmp/bitrouter-p1-bootstrap-candidate.json`.

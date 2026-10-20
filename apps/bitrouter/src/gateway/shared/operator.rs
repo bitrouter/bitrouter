@@ -14,6 +14,7 @@ use super::authority::Authority;
 use super::engine::{Rejection, management};
 use super::store::{Kind, NewRecord, Store, Stored};
 
+pub(super) mod bootstrap;
 mod commands;
 mod principals;
 
@@ -335,7 +336,7 @@ fn checked_receipt(
     Ok(receipt.clone())
 }
 
-fn validate_handle(value: &str) -> Result<()> {
+pub(super) fn validate_handle(value: &str) -> Result<()> {
     ensure!(
         !value.is_empty()
             && value.len() <= 128

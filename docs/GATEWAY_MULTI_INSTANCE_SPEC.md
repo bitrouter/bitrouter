@@ -49,6 +49,34 @@ continuation/correlation authorities. The shared schema has a separate migration
 ledger and is initialized only for shared operation; existing local migrations
 and local database contents are preserved.
 
+`bro shared init` is the explicit local bootstrap entry. It requires a shared
+process configuration, bounded JSON seed plan, operator identity and caller-owned
+operation ID. It rejects named contexts and unavailable builds before discovery
+or input reads, and rejects local configuration before expanding any local
+environment references. Plans are literal JSON, not environment templates. The
+operator and operation handles are validated before opening files or stdin.
+The command uses one database connection and never joins a serving incarnation.
+
+The seed is limited to 64 operations including publication and 2 MiB of encoded
+input. Accepted file/stdin input is limited to 2 MiB; reads are capped at
+2 MiB + 1 byte to detect overflow. Resources, tenants,
+principals and credential slots must be unique creates, with references confined
+to the seed. Principal creation additionally requires `--global-principals`
+because virtual keys are database-wide. The complete plan, grants and publication
+are prepared before any schema work. Both ordinary and shared migration ledgers
+are installed under the shared initializer's transaction advisory lock. This
+does not change the existing local migration entry point.
+
+After schema installation, a single bounded transaction creates namespace
+authority/keyring, applies the seed, publishes generation one and commits every
+child receipt plus a root bootstrap receipt. A failure rolls back the seed,
+including newly inserted global principals; installed schemas may remain.
+Matching operator, root ID and deployment-keyed whole-plan fingerprint replay
+the original receipt without resetting later publications or key generations.
+An existing namespace without that matching root receipt conflicts. Operators
+must retain the same identity and private plan after an uncertain reply. Database
+provisioning and deployment-key distribution remain external prerequisites.
+
 The operator capability is separate from inference authentication. Namespace
 policy, credential, publication, correlation-rotation and execution-resolution
 grants are explicit. The existing `api_keys` table is database-wide; principal
@@ -77,8 +105,8 @@ the exclusive head before any receipt/subordinate lock; other mutations acquire
 the shared head. Publication authenticates and decodes every referenced stored
 credential under that fence. Configuration validation/encoding and input bounds
 are checked before the short transaction. No operator command joins a serving
-incarnation or executes provider work. Bootstrap, operator authentication and
-the HTTP/CLI/SDK paths remain separate integration requirements.
+incarnation or executes provider work. Remote operator authentication and the
+HTTP/CLI/SDK administration paths remain separate integration requirements.
 
 Local process configuration owns listener addresses, database connection details,
 deployment-key references and worker bounds. A versioned, validated shared

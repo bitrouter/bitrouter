@@ -177,6 +177,37 @@ pub struct PublicationPut {
     pub configuration: Publication,
 }
 
+/// A bounded, create-only seed for explicit local bootstrap. The service commits
+/// the complete plan atomically; ordinary replicas never consume this input.
+#[derive(Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapPlan {
+    #[serde(default)]
+    pub resources: Vec<ResourcePut>,
+    #[serde(default)]
+    pub tenants: Vec<TenantPut>,
+    #[serde(default)]
+    pub principals: Vec<PrincipalPut>,
+    #[serde(default)]
+    pub credentials: Vec<CredentialImport>,
+    pub configuration: Publication,
+}
+
+/// The original successful bootstrap, including the first publication receipt.
+/// Replaying it does not overwrite configuration that was subsequently changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct BootstrapReceipt {
+    pub namespace: String,
+    pub operator_id: String,
+    pub operation_id: String,
+    pub committed_at_ms: i64,
+    pub revision: Revision,
+    pub operations: Vec<Receipt>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -290,7 +321,8 @@ redacted_contract_debug!(
     CredentialInput,
     CredentialImport,
     Publication,
-    PublicationPut
+    PublicationPut,
+    BootstrapPlan
 );
 
 #[cfg(test)]
