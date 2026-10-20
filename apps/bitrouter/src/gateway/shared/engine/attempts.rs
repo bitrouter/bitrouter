@@ -6,9 +6,7 @@ use bitrouter_ai::gateway::execution::{
 };
 use sea_orm::DatabaseTransaction;
 
-use super::{
-    Attempt, Engine, Execution, Rejection, Resource, Tenant, admission::authenticate, validate_id,
-};
+use super::{Attempt, Engine, Execution, Rejection, Resource, Tenant, admission::authenticate};
 use crate::gateway::shared::credentials::{CredentialStamp, Credentials};
 use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 
@@ -68,57 +66,19 @@ impl Engine {
         expected_revision: Option<u64>,
         concurrent_attempts: u32,
     ) -> Result<u64> {
-        validate_id(pool_id)?;
-        ensure!(
-            concurrent_attempts <= 1_000_000,
-            "shared resource limit exceeds supported bound"
-        );
+        let input = bitrouter_ai::gateway::operator::ResourcePut {
+            resource_pool_id: pool_id.into(),
+            expected_revision,
+            concurrent_attempts,
+        };
+        super::management::validate_resource(&input)?;
         self.store()
             .retry(|| async {
                 let tx = self.store().begin().await?;
                 self.authority.fence(&tx).await?;
-                let now = Store::now(&tx).await?;
-                if expected_revision.is_none() {
-                    ensure!(
-                        self.store()
-                            .create(
-                                &tx,
-                                NewRecord {
-                                    kind: Kind::Resource,
-                                    key: pool_id,
-                                    status: "active",
-                                    due_at_ms: None,
-                                    now_ms: now,
-                                    value: &Resource {
-                                        concurrent_attempts,
-                                        policy_revision: 1,
-                                        active: 0
-                                    },
-                                }
-                            )
-                            .await?,
-                        Rejection::AuthorityChanged
-                    );
-                    tx.commit().await?;
-                    return Ok(1);
-                }
-                let mut resource: Stored<Resource> =
-                    self.store().lock(&tx, Kind::Resource, pool_id).await?;
-                ensure!(
-                    Some(resource.value.policy_revision) == expected_revision,
-                    Rejection::AuthorityChanged
-                );
-                resource.value.policy_revision = resource
-                    .value
-                    .policy_revision
-                    .checked_add(1)
-                    .context("resource policy revision exhausted")?;
-                resource.value.concurrent_attempts = concurrent_attempts;
-                self.store()
-                    .save(&tx, &mut resource, "active", None, now)
-                    .await?;
+                let policy = super::management::put_resource(&self.authority, &tx, &input).await?;
                 tx.commit().await?;
-                Ok(resource.value.policy_revision)
+                Ok(policy.revision)
             })
             .await
     }
@@ -464,12 +424,7 @@ impl Engine {
         due: Option<i64>,
         now: i64,
     ) -> Result<()> {
-        execution.value.view.updated_at_ms = now;
-        execution.value.view.revision = execution
-            .revision()?
-            .checked_add(1)
-            .context("execution revision exhausted")?;
-        self.store().save(tx, execution, status, due, now).await
+        save_execution(self.store(), tx, execution, status, due, now).await
     }
 }
 
@@ -482,4 +437,20 @@ pub(super) fn replace_attempt(execution: &mut Execution, attempt: &GatewayAttemp
         .context("execution attempt binding is missing")?;
     *existing = attempt.clone();
     Ok(())
+}
+
+pub(super) async fn save_execution(
+    store: &Store,
+    tx: &DatabaseTransaction,
+    execution: &mut Stored<Execution>,
+    status: &str,
+    due: Option<i64>,
+    now: i64,
+) -> Result<()> {
+    execution.value.view.updated_at_ms = now;
+    execution.value.view.revision = execution
+        .revision()?
+        .checked_add(1)
+        .context("execution revision exhausted")?;
+    store.save(tx, execution, status, due, now).await
 }

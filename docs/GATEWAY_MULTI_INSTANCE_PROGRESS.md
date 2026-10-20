@@ -1368,3 +1368,59 @@ multi-process acceptance are still required.
 - These fixtures use internal schema/authority setup. They do not establish
   bootstrap through stock operator commands, authenticated accepted-work drain,
   crash recovery or any complete P1 gate. All P1-A01–A09 remain pending.
+
+## Atomic operator commands and receipts (2026-10-21)
+
+- Added pure `bitrouter-ai::gateway::operator` inputs, grants, metadata and
+  receipts. Secret-bearing write diagnostics are redacted; stored credentials,
+  deployment keys and virtual-key verifiers have no read/receipt projection.
+  Protocol interpretation and transaction execution remain in the application.
+- An application-owned operator facade implements all seven command variants:
+  tenant/resource policy, global principal administration, credential import,
+  configuration publication, correlation rotation and Unknown resolution. It
+  does not join a serving incarnation. Existing engine entry points delegate to
+  the same transaction helpers. Publication validates authenticated credential
+  contents under its exclusive head fence; metadata alone cannot authorize it.
+- Each mutation and its actor-bound receipt commit together. A private keyed
+  fingerprint binds the complete input without retaining a plaintext secret
+  digest. Identical replay returns the original receipt after a current grant
+  check; conflicting input fails. Missing receipts remain unresolved. Policy CAS
+  preserves occupancy, credential CAS preserves resource identity, and config
+  and key generations advance independently. Global principal access has a
+  separate explicit capability and locks the existing database-wide key row.
+- A two-pool PostgreSQL campaign exercises all commands, concurrent replay/CAS,
+  original receipt recovery, grant revocation, actor/namespace isolation,
+  invalid-input rejection before blocked SQL, transaction visibility/rollback,
+  occupancy preservation and secret-free receipt rows. Corrupt ciphertext,
+  authenticated invalid credential encoding and started refresh all reject
+  publication without a new head, configuration row or successful receipt.
+  Unknown resolution preserves its atomic permit release/projection/outbox work.
+- Frozen-source validation used Rust 1.97 and the dedicated runtime target.
+  The all-feature shared selection passed **69/69**, 3,610 filtered, in 14.061s
+  (`/tmp/bitrouter-p1-operator-final-full-tests.log`); the minimal shared profile
+  passed **67/67**, 2,320 filtered, in 14.112s
+  (`/tmp/bitrouter-p1-operator-final-minimal-tests.log`). Both include ignored
+  PostgreSQL cases, with zero retries and no leak results. Actual process tests
+  were excluded because the previously built executable predates this stage.
+- AI contract tests passed **47/47**; doctest execution found zero tests
+  (`/tmp/bitrouter-p1-operator-final-contract-tests.log`). Standalone all-feature,
+  all-target AI Clippy passed with `-D warnings` in 6.50s. All-feature application
+  library/test Clippy exited 0 in 1m08s with no Clippy diagnostics; 61 staged
+  unused-code warnings remain while operator and other P1 integration is open.
+  No suppression was added. The full test binary emitted the macOS large unwind
+  table linker warning; logs also retain the existing proc-macro-error2 future
+  incompatibility warning. Neither is a performance result. Formatting and
+  whitespace checks passed.
+- The source and five final logs are pinned in
+  `/tmp/bitrouter-p1-operator-candidate.json`. Bounded reviews are recorded in
+  `/tmp/bitrouter-p1-operator-foundation-review.md` and
+  `/tmp/bitrouter-p1-operator-backend-review.md`. The two source findings were
+  repaired: pre-SQL identity validation and full credential validation during
+  publication. Receipt recovery after a discarded successful reply is synthetic
+  evidence, not an injected PostgreSQL lost-COMMIT-ACK test. Cancellation coverage
+  here is before domain writes; later-write cancellation remains a process
+  campaign obligation, distinct from the explicit transaction rollback test.
+- This stage exposes no operator HTTP/CLI/SDK entry point and does not establish
+  stock bootstrap, transport authentication, whole-product strict lint, durable
+  projection delivery or independent-process acceptance. All P1-A01–A09 remain
+  pending; P0 is unchanged.

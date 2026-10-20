@@ -4,9 +4,10 @@ mod admission;
 mod attempts;
 mod finalization;
 mod lease;
+pub(super) mod management;
 mod outbox;
 mod recovery;
-mod resolution;
+pub(super) mod resolution;
 
 use std::collections::BTreeSet;
 
@@ -291,62 +292,29 @@ impl Engine {
         expected_revision: Option<u64>,
         limits: &TenantLimits,
     ) -> Result<u64> {
-        validate_id(tenant_id)?;
-        limits.validate()?;
+        let input = bitrouter_ai::gateway::operator::TenantPut {
+            tenant_id: tenant_id.into(),
+            expected_revision,
+            limits: bitrouter_ai::gateway::operator::TenantLimits {
+                concurrent_executions: limits.concurrent_executions,
+                requests_per_minute: limits.requests_per_minute,
+                resource_pools: limits.resource_pools.clone(),
+            },
+        };
+        management::validate_tenant(&input)?;
         self.store()
             .retry(|| async {
                 let tx = self.store().begin().await?;
                 self.authority.fence(&tx).await?;
-                let now = Store::now(&tx).await?;
-                if expected_revision.is_none() {
-                    ensure!(
-                        self.store()
-                            .create(
-                                &tx,
-                                NewRecord {
-                                    kind: Kind::Tenant,
-                                    key: tenant_id,
-                                    status: "active",
-                                    due_at_ms: None,
-                                    now_ms: now,
-                                    value: &Tenant {
-                                        limits: limits.clone(),
-                                        policy_revision: 1,
-                                        active: 0,
-                                        minute: now.div_euclid(60_000),
-                                        accepted: 0
-                                    },
-                                }
-                            )
-                            .await?,
-                        Rejection::AuthorityChanged
-                    );
-                    tx.commit().await?;
-                    return Ok(1);
-                }
-                let mut tenant: Stored<Tenant> =
-                    self.store().lock(&tx, Kind::Tenant, tenant_id).await?;
-                ensure!(
-                    Some(tenant.value.policy_revision) == expected_revision,
-                    Rejection::AuthorityChanged
-                );
-                tenant.value.policy_revision = tenant
-                    .value
-                    .policy_revision
-                    .checked_add(1)
-                    .context("tenant policy revision exhausted")?;
-                tenant.value.limits = limits.clone();
-                self.store()
-                    .save(&tx, &mut tenant, "active", None, now)
-                    .await?;
+                let policy = management::put_tenant(&self.authority, &tx, &input).await?;
                 tx.commit().await?;
-                Ok(tenant.value.policy_revision)
+                Ok(policy.revision)
             })
             .await
     }
 }
 
-fn validate_id(value: &str) -> Result<()> {
+pub(super) fn validate_id(value: &str) -> Result<()> {
     ensure!(
         !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control),
         "shared identity must contain 1..256 bytes without control characters"

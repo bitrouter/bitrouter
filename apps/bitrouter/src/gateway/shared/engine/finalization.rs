@@ -279,24 +279,7 @@ impl Engine {
         execution: &Execution,
         now: i64,
     ) -> Result<()> {
-        if let Some(binding) = &execution.trajectory {
-            let mut fence = self.episode_fence(tx, binding, now).await?;
-            if fence.value.pending.contains(&execution.view.execution_id) {
-                return Ok(());
-            }
-            ensure!(
-                fence.value.pending.len() < 256,
-                "trajectory projection backlog is full"
-            );
-            fence
-                .value
-                .pending
-                .insert(execution.view.execution_id.clone());
-            self.store()
-                .save(tx, &mut fence, "pending", None, now)
-                .await?;
-        }
-        Ok(())
+        install_projection_fence(self.store(), tx, execution, now).await
     }
 
     pub(super) async fn publish_terminal_event(
@@ -305,33 +288,7 @@ impl Engine {
         execution: &Execution,
         now: i64,
     ) -> Result<()> {
-        let event = GatewayTerminalEvent {
-            event_id: format!("gateway-terminal-{}", execution.view.execution_id),
-            tenant_id: execution.tenant_id.clone(),
-            execution: execution.view.clone(),
-        };
-        ensure!(
-            self.store()
-                .create(
-                    tx,
-                    NewRecord {
-                        kind: Kind::Outbox,
-                        key: &event.event_id,
-                        status: "pending",
-                        due_at_ms: Some(now),
-                        now_ms: now,
-                        value: &Outbox {
-                            event: event.clone(),
-                            lease: None,
-                            deliveries: 0,
-                            acknowledged_at_ms: None,
-                        },
-                    }
-                )
-                .await?,
-            "terminal event identity already exists without finalization"
-        );
-        Ok(())
+        publish_terminal_event(self.store(), tx, execution, now).await
     }
 
     pub(super) async fn episode_fence(
@@ -340,35 +297,7 @@ impl Engine {
         binding: &TrajectoryBinding,
         now: i64,
     ) -> Result<Stored<EpisodeFence>> {
-        let key = hex::encode(Sha256::digest(serde_json::to_vec(&(
-            "gateway-episode-fence-v1",
-            &binding.owner_user_id,
-            &binding.episode_id,
-        ))?));
-        self.store()
-            .create(
-                tx,
-                NewRecord {
-                    kind: Kind::EpisodeFence,
-                    key: &key,
-                    status: "ready",
-                    due_at_ms: None,
-                    now_ms: now,
-                    value: &EpisodeFence {
-                        owner_user_id: binding.owner_user_id.clone(),
-                        episode_id: binding.episode_id.clone(),
-                        pending: Default::default(),
-                    },
-                },
-            )
-            .await?;
-        let fence: Stored<EpisodeFence> = self.store().lock(tx, Kind::EpisodeFence, &key).await?;
-        ensure!(
-            fence.value.owner_user_id == binding.owner_user_id
-                && fence.value.episode_id == binding.episode_id,
-            "episode projection fence identity mismatch"
-        );
-        Ok(fence)
+        episode_fence(self.store(), tx, binding, now).await
     }
 }
 
@@ -426,4 +355,100 @@ pub(super) fn validate_outcome(outcome: &TerminalOutcome) -> Result<()> {
         );
     }
     Ok(())
+}
+
+pub(super) async fn install_projection_fence(
+    store: &Store,
+    tx: &DatabaseTransaction,
+    execution: &Execution,
+    now: i64,
+) -> Result<()> {
+    if let Some(binding) = &execution.trajectory {
+        let mut fence = episode_fence(store, tx, binding, now).await?;
+        if fence.value.pending.contains(&execution.view.execution_id) {
+            return Ok(());
+        }
+        ensure!(
+            fence.value.pending.len() < 256,
+            "trajectory projection backlog is full"
+        );
+        fence
+            .value
+            .pending
+            .insert(execution.view.execution_id.clone());
+        store.save(tx, &mut fence, "pending", None, now).await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn publish_terminal_event(
+    store: &Store,
+    tx: &DatabaseTransaction,
+    execution: &Execution,
+    now: i64,
+) -> Result<()> {
+    let event = GatewayTerminalEvent {
+        event_id: format!("gateway-terminal-{}", execution.view.execution_id),
+        tenant_id: execution.tenant_id.clone(),
+        execution: execution.view.clone(),
+    };
+    ensure!(
+        store
+            .create(
+                tx,
+                NewRecord {
+                    kind: Kind::Outbox,
+                    key: &event.event_id,
+                    status: "pending",
+                    due_at_ms: Some(now),
+                    now_ms: now,
+                    value: &Outbox {
+                        event: event.clone(),
+                        lease: None,
+                        deliveries: 0,
+                        acknowledged_at_ms: None,
+                    },
+                }
+            )
+            .await?,
+        "terminal event identity already exists without finalization"
+    );
+    Ok(())
+}
+
+pub(super) async fn episode_fence(
+    store: &Store,
+    tx: &DatabaseTransaction,
+    binding: &TrajectoryBinding,
+    now: i64,
+) -> Result<Stored<EpisodeFence>> {
+    let key = hex::encode(Sha256::digest(serde_json::to_vec(&(
+        "gateway-episode-fence-v1",
+        &binding.owner_user_id,
+        &binding.episode_id,
+    ))?));
+    store
+        .create(
+            tx,
+            NewRecord {
+                kind: Kind::EpisodeFence,
+                key: &key,
+                status: "ready",
+                due_at_ms: None,
+                now_ms: now,
+                value: &EpisodeFence {
+                    owner_user_id: binding.owner_user_id.clone(),
+                    episode_id: binding.episode_id.clone(),
+                    pending: Default::default(),
+                },
+            },
+        )
+        .await?;
+    let fence: Stored<EpisodeFence> = store.lock(tx, Kind::EpisodeFence, &key).await?;
+    ensure!(
+        fence.value.owner_user_id == binding.owner_user_id
+            && fence.value.episode_id == binding.episode_id,
+        "episode projection fence identity mismatch"
+    );
+    Ok(fence)
 }

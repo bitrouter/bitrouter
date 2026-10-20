@@ -97,6 +97,10 @@ impl Authority {
         &self.store
     }
 
+    pub fn operator_fingerprint(&self, purpose: &str, input: &[u8]) -> Result<String> {
+        self.key.fingerprint(self.store.namespace(), purpose, input)
+    }
+
     pub fn with_database(&self, db: sea_orm::DatabaseConnection) -> Result<Self> {
         Ok(Self::new(self.store.with_database(db)?, self.key.clone()))
     }
@@ -171,6 +175,14 @@ impl Authority {
         Ok(head)
     }
 
+    /// Select this mode before acquiring any receipt or subordinate row; never
+    /// upgrade a shared head lock after taking another lock.
+    pub async fn fence_exclusive(&self, tx: &DatabaseTransaction) -> Result<Stored<Head>> {
+        let head: Stored<Head> = self.store.lock(tx, Kind::Authority, HEAD).await?;
+        self.validate_head(&head.value)?;
+        Ok(head)
+    }
+
     /// Validate native continuation authority under the same publication fence.
     /// Correlation-only rotation does not revoke an unchanged continuation key.
     pub async fn fence_continuation_key(
@@ -216,33 +228,43 @@ impl Authority {
     /// Rotation retains every prior epoch. At the bound operators must retain
     /// history rather than silently dropping a key that may still be referenced.
     pub async fn rotate_correlation(&self, expected_generation: u64) -> Result<Head> {
-        let new_key = random_key()?;
         self.store
             .retry(|| async {
                 let tx = self.store.begin().await?;
-                let mut head: Stored<Head> = self.store.lock(&tx, Kind::Authority, HEAD).await?;
-                self.validate_head(&head.value)?;
-                ensure!(
-                    head.value.key_generation == expected_generation,
-                    "shared key generation changed"
-                );
-                let mut ring = self.read_keys(&tx, expected_generation).await?;
-                ensure!(
-                    ring.correlations.len() < MAX_CORRELATION_EPOCHS,
-                    "shared key epoch retention bound reached"
-                );
-                ring.correlations.push(new_key);
-                head.value.key_generation = expected_generation
-                    .checked_add(1)
-                    .context("key generation exhausted")?;
-                let now = Store::now(&tx).await?;
-                self.write_keys(&tx, &ring, head.value.key_generation, now)
+                let mut head = self.fence_exclusive(&tx).await?;
+                self.rotate_correlation_in(&tx, &mut head, expected_generation)
                     .await?;
-                self.store.save(&tx, &mut head, "active", None, now).await?;
                 tx.commit().await?;
                 Ok(head.value)
             })
             .await
+    }
+
+    /// The caller holds the exclusive head fence and owns the receipt commit.
+    pub async fn rotate_correlation_in(
+        &self,
+        tx: &DatabaseTransaction,
+        head: &mut Stored<Head>,
+        expected_generation: u64,
+    ) -> Result<()> {
+        ensure!(
+            head.value.key_generation == expected_generation,
+            super::engine::Rejection::AuthorityChanged
+        );
+        let mut ring = self.read_keys(tx, expected_generation).await?;
+        ensure!(
+            ring.correlations.len() < MAX_CORRELATION_EPOCHS,
+            super::engine::Rejection::AuthorityChanged
+        );
+        ring.correlations.push(random_key()?);
+        head.value.key_generation = expected_generation
+            .checked_add(1)
+            .context("key generation exhausted")?;
+        let now = Store::now(tx).await?;
+        self.write_keys(tx, &ring, head.value.key_generation, now)
+            .await?;
+        self.store.save(tx, head, "active", None, now).await?;
+        Ok(())
     }
 
     async fn read_keys(

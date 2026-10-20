@@ -58,6 +58,21 @@ impl DeploymentKey {
         &self.id
     }
 
+    /// Bind secret-bearing operator input without storing a guessable plaintext
+    /// digest. Length framing separates the namespace, purpose and input.
+    pub fn fingerprint(&self, namespace: &str, purpose: &str, input: &[u8]) -> Result<String> {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&self.secret)
+            .map_err(|_| anyhow::anyhow!("invalid shared deployment key"))?;
+        // HMAC-SHA256; the domain is separate from encryption and key identity.
+        // https://www.rfc-editor.org/rfc/rfc2104
+        mac.update(b"bitrouter.gateway.operator-binding.v1");
+        for part in [namespace.as_bytes(), purpose.as_bytes(), input] {
+            mac.update(&u64::try_from(part.len())?.to_be_bytes());
+            mac.update(part);
+        }
+        Ok(hex::encode(mac.finalize().into_bytes()))
+    }
+
     pub fn seal(&self, identity: SecretIdentity<'_>, plaintext: &[u8]) -> Result<SealedSecret> {
         ensure!(
             plaintext.len() <= MAX_SECRET_BYTES,
@@ -174,6 +189,41 @@ impl SecretIdentity<'_> {
 #[cfg(test)]
 mod tests {
     use super::{DeploymentKey, SecretIdentity};
+
+    #[test]
+    fn operator_fingerprint_binds_key_namespace_purpose_and_content() -> anyhow::Result<()> {
+        let key = DeploymentKey::from_bytes([7; 32])?;
+        let fingerprint = key.fingerprint("east", "mutation", b"private-token")?;
+        assert_eq!(
+            fingerprint,
+            key.fingerprint("east", "mutation", b"private-token")?
+        );
+        assert_ne!(
+            fingerprint,
+            key.fingerprint("west", "mutation", b"private-token")?
+        );
+        assert_ne!(
+            fingerprint,
+            key.fingerprint("east", "principal", b"private-token")?
+        );
+        assert_ne!(
+            fingerprint,
+            key.fingerprint("east", "mutation", b"other-token")?
+        );
+        assert_ne!(
+            fingerprint,
+            DeploymentKey::from_bytes([8; 32])?.fingerprint(
+                "east",
+                "mutation",
+                b"private-token"
+            )?
+        );
+        assert_ne!(
+            key.fingerprint("ab", "c", b"d")?,
+            key.fingerprint("a", "bc", b"d")?
+        );
+        Ok(())
+    }
 
     #[test]
     fn ciphertext_cannot_move_between_clusters_records_revisions_or_keys() -> anyhow::Result<()> {

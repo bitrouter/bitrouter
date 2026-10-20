@@ -10,6 +10,7 @@ pub(crate) mod dispatched;
 mod engine;
 mod generations;
 mod http;
+mod operator;
 mod ownership;
 mod publication;
 pub(crate) mod runtime;

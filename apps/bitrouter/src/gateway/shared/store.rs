@@ -60,6 +60,7 @@ pub(super) enum Kind {
     Credential,
     EpisodeFence,
     ContinuationProducer,
+    OperatorReceipt,
 }
 
 impl Kind {
@@ -77,6 +78,7 @@ impl Kind {
             Self::Credential => "credential",
             Self::EpisodeFence => "episode_fence",
             Self::ContinuationProducer => "continuation_producer",
+            Self::OperatorReceipt => "operator_receipt",
         }
     }
 }
@@ -256,14 +258,24 @@ impl Store {
         kind: Kind,
         key: &str,
     ) -> Result<Stored<T>> {
+        self.lock_optional(tx, kind, key)
+            .await?
+            .context("shared gateway authority record is missing")
+    }
+
+    pub async fn lock_optional<T: DeserializeOwned>(
+        &self,
+        tx: &DatabaseTransaction,
+        kind: Kind,
+        key: &str,
+    ) -> Result<Option<Stored<T>>> {
         // Independent processes serialize only on the affected authority row.
         // https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS
         let row = entity::Entity::find_by_id(self.id(kind, key)?)
             .lock_exclusive()
             .one(tx)
-            .await?
-            .context("shared gateway authority record is missing")?;
-        self.decode(kind, key, row)
+            .await?;
+        row.map(|row| self.decode(kind, key, row)).transpose()
     }
 
     /// Concurrent readers fence publication without serializing one another.

@@ -298,58 +298,85 @@ impl Authority {
         expected_generation: u64,
         configuration: &Configuration,
     ) -> Result<Head> {
+        let prepared = self.prepare_publication(expected_generation, configuration)?;
+        self.store()
+            .retry(|| async {
+                let tx = self.store().begin().await?;
+                let mut head = self.fence_exclusive(&tx).await?;
+                self.publish_in(&tx, &mut head, &prepared).await?;
+                tx.commit().await?;
+                Ok(head.value)
+            })
+            .await
+    }
+
+    pub fn prepare_publication(
+        &self,
+        expected_generation: u64,
+        configuration: &Configuration,
+    ) -> Result<PreparedPublication> {
         configuration.prepare()?;
-        let credentials = Credentials::new(self.clone());
-        let mut stamps = Vec::new();
-        for binding in &configuration.credentials {
-            let (stamp, _) = credentials.load(&binding.slot()).await?;
-            stamps.push(stamp);
-        }
-        stamps.sort_by(|left, right| left.id.cmp(&right.id));
-        stamps.dedup();
         let generation = expected_generation
             .checked_add(1)
             .context("configuration generation exhausted")?;
         let record = format!("configuration/{generation}");
         let sealed = self.seal(&record, generation, &serde_json::to_vec(configuration)?)?;
-        self.store()
-            .retry(|| async {
-                let tx = self.store().begin().await?;
-                let mut head: Stored<Head> =
-                    self.store().lock(&tx, Kind::Authority, "head").await?;
-                self.validate_head(&head.value)?;
-                ensure!(
-                    head.value.config_generation == expected_generation,
-                    Rejection::AuthorityChanged
-                );
-                for stamp in &stamps {
-                    credentials.fence(&tx, stamp).await?;
-                }
-                let now = Store::now(&tx).await?;
-                ensure!(
-                    self.store()
-                        .create(
-                            &tx,
-                            NewRecord {
-                                kind: Kind::Authority,
-                                key: &record,
-                                status: "retained",
-                                due_at_ms: None,
-                                now_ms: now,
-                                value: &sealed,
-                            }
-                        )
-                        .await?,
-                    "configuration generation already exists"
-                );
-                head.value.config_generation = generation;
-                self.store()
-                    .save(&tx, &mut head, "active", None, now)
-                    .await?;
-                tx.commit().await?;
-                Ok(head.value)
-            })
-            .await
+        let slots = configuration
+            .credentials
+            .iter()
+            .map(CredentialBinding::slot)
+            .collect();
+        Ok(PreparedPublication {
+            expected_generation,
+            generation,
+            record,
+            sealed,
+            slots,
+        })
+    }
+
+    /// The caller acquired the exclusive head before its operation receipt.
+    pub async fn publish_in(
+        &self,
+        tx: &sea_orm::DatabaseTransaction,
+        head: &mut Stored<Head>,
+        input: &PreparedPublication,
+    ) -> Result<()> {
+        ensure!(
+            head.value.config_generation == input.expected_generation,
+            Rejection::AuthorityChanged
+        );
+        let credentials = Credentials::new(self.clone());
+        let mut stamps = Vec::new();
+        for slot in &input.slots {
+            let (stamp, _) = credentials.load_in(tx, slot).await?;
+            stamps.push(stamp);
+        }
+        stamps.sort_by(|left, right| left.id.cmp(&right.id));
+        stamps.dedup();
+        for stamp in &stamps {
+            credentials.fence(tx, stamp).await?;
+        }
+        let now = Store::now(tx).await?;
+        ensure!(
+            self.store()
+                .create(
+                    tx,
+                    NewRecord {
+                        kind: Kind::Authority,
+                        key: &input.record,
+                        status: "retained",
+                        due_at_ms: None,
+                        now_ms: now,
+                        value: &input.sealed,
+                    }
+                )
+                .await?,
+            "configuration generation already exists"
+        );
+        head.value.config_generation = input.generation;
+        self.store().save(tx, head, "active", None, now).await?;
+        Ok(())
     }
 
     /// Load the exact immutable version identified by a previously read head.
@@ -380,4 +407,13 @@ impl Authority {
         configuration.prepare()?;
         Ok(configuration)
     }
+}
+
+/// Validated and encrypted before opening the short publication transaction.
+pub(super) struct PreparedPublication {
+    expected_generation: u64,
+    generation: u64,
+    record: String,
+    sealed: SealedSecret,
+    slots: Vec<CredentialKey>,
 }

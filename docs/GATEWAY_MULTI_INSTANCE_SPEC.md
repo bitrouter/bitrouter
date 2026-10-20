@@ -17,12 +17,14 @@ admission do not require affinity. Live response streams belong to their origina
 process. This does not distribute the core scheduler or move harness session/tool
 ownership into the gateway.
 
-- `bitrouter-ai::gateway` owns credential-free HTTP contracts, including durable
-  execution status and operator acknowledgement shapes. It gains no transport,
+- `bitrouter-ai::gateway` owns HTTP contracts, including credential-free durable
+  execution/read projections and explicit write-only administrative inputs. It gains no transport,
   database, conversion or asynchronous runtime dependency.
 - `bitrouter-sdk` supplies explicit gateway and operator clients. It does not
   retry inference automatically, execute tools, implicitly acknowledge unknown
-  provider work, or accept/provider-export secret credentials in its DTOs.
+  provider work, or export stored provider credentials or deployment secrets.
+  Explicit credential-import inputs are separate from secret-free read and
+  receipt DTOs; ordinary gateway requests never acquire operator authority.
 - `bitrouter::gateway::shared` owns PostgreSQL authority, admission, execution
   records, recovery, delivery and shared secret storage. Existing gateway
   execution, metering, continuation and trajectory modules retain their domain
@@ -46,6 +48,37 @@ silently publish their own local route configuration or generate independent
 continuation/correlation authorities. The shared schema has a separate migration
 ledger and is initialized only for shared operation; existing local migrations
 and local database contents are preserved.
+
+The operator capability is separate from inference authentication. Namespace
+policy, credential, publication, correlation-rotation and execution-resolution
+grants are explicit. The existing `api_keys` table is database-wide; principal
+reads and mutations require an explicit `global_principal_write` capability,
+not merely namespace policy administration. Principal updates lock the same
+global row used by admission and preserve its tenant identity. Their opaque CAS
+revision covers the authorization fields with a deployment-private keyed MAC;
+responses expose neither the verifier nor the plaintext inference key.
+
+Every operator mutation has a caller-owned operation ID. Namespace, operator,
+command and serialized input are bound by a private keyed fingerprint. A durable
+receipt, audit identity and the mutation commit in the same transaction. A
+same-ID, same-input replay requires the current command grant and returns the
+original receipt; different input conflicts. Receipt lookup is actor-scoped,
+checks the recorded grant, and distinguishes committed from unresolved. Absence
+does not establish failure while an earlier request may still be in flight.
+Timeout or an unclassified backend error yields an unknown write outcome, never
+permission to invent a fresh operation ID and repeat the mutation blindly.
+
+Tenant/resource writes compare policy revisions and preserve occupancy/rate
+counters. Credential import compares the slot version and preserves its resource
+identity. Publication compares only the configuration generation; correlation
+rotation compares only the key generation. The paired revision in a receipt is
+the committed observation, not a whole-pair CAS. Publication and rotation acquire
+the exclusive head before any receipt/subordinate lock; other mutations acquire
+the shared head. Publication authenticates and decodes every referenced stored
+credential under that fence. Configuration validation/encoding and input bounds
+are checked before the short transaction. No operator command joins a serving
+incarnation or executes provider work. Bootstrap, operator authentication and
+the HTTP/CLI/SDK paths remain separate integration requirements.
 
 Local process configuration owns listener addresses, database connection details,
 deployment-key references and worker bounds. A versioned, validated shared
