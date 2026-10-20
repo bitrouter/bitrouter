@@ -4267,13 +4267,17 @@ presets:
             context_with_previous_response_id(headers, "request-stable", None)
         }
 
-        fn trajectory(db: sea_orm::DatabaseConnection) -> anyhow::Result<Arc<TrajectoryRuntime>> {
+        fn trajectory(
+            db: sea_orm::DatabaseConnection,
+            key: CorrelationKey,
+        ) -> anyhow::Result<Arc<TrajectoryRuntime>> {
             Ok(Arc::new(TrajectoryRuntime::new(
                 TrajectoryStore::new(db),
-                Canonicalizer::new(CorrelationKey::from_bytes([31; 32])?),
+                Canonicalizer::new(key),
             )))
         }
 
+        let correlation_key = CorrelationKey::from_bytes(rand::random())?;
         let old_dir = tempfile::tempdir()?;
         let old_config_path = old_dir.path().join("bitrouter.yaml");
         tokio::fs::write(
@@ -4296,7 +4300,7 @@ presets:
             Some(&old_config_path),
             None,
             PendingEvalDecisionStore::default(),
-            Some(trajectory(old_db.clone())?),
+            Some(trajectory(old_db.clone(), correlation_key.clone())?),
         )
         .await?;
         let mut old_context =
@@ -4374,7 +4378,7 @@ presets:
                 decision_path.clone(),
             )?)),
             PendingEvalDecisionStore::default(),
-            Some(trajectory(baseline_db.clone())?),
+            Some(trajectory(baseline_db.clone(), correlation_key.clone())?),
         )
         .await?;
         let mut preauth_context = context(http::HeaderMap::new());
@@ -4454,7 +4458,7 @@ presets:
             Some(&config_path),
             None,
             PendingEvalDecisionStore::default(),
-            Some(trajectory(metadata_db.clone())?),
+            Some(trajectory(metadata_db.clone(), correlation_key)?),
         )
         .await?;
         let mut headers = http::HeaderMap::new();
@@ -4627,7 +4631,7 @@ presets:
 
         let trajectory = Arc::new(TrajectoryRuntime::new(
             TrajectoryStore::new(db.clone()),
-            Canonicalizer::new(CorrelationKey::from_bytes([41; 32])?),
+            Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?),
         ));
         let enabled = PolicyRuntime::new(
             &enabled_config,

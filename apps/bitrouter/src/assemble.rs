@@ -3118,7 +3118,7 @@ presets:
         crate::db::run_migrations(&db).await?;
         let runtime = TrajectoryRuntime::new(
             TrajectoryStore::new(db.clone()),
-            Canonicalizer::new(CorrelationKey::from_bytes([51; 32])?),
+            Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?),
         );
         let root = runtime
             .begin_request(

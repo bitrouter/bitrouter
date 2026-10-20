@@ -32,7 +32,6 @@ use std::path::{Path, PathBuf};
 use crate::commands::invocation;
 use anyhow::{Context, Result};
 use base64::Engine;
-use rand::Rng;
 
 use crate::trajectory::canonical::CorrelationKey;
 
@@ -296,8 +295,7 @@ pub fn get_or_create_correlation_key(home: &Path) -> Result<CorrelationKey> {
             return CorrelationKey::from_bytes(secret);
         }
 
-        let mut secret = [0_u8; 32];
-        rand::rng().fill_bytes(&mut secret);
+        let secret: [u8; 32] = rand::random();
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
         create_private_file(&path, encoded.as_bytes())
             .with_context(|| format!("writing {}", path.display()))?;
@@ -321,8 +319,7 @@ pub fn get_or_create_continuation_key(home: &Path) -> Result<[u8; 32]> {
             });
         }
 
-        let mut secret = [0_u8; 32];
-        rand::rng().fill_bytes(&mut secret);
+        let secret: [u8; 32] = rand::random();
         let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret);
         create_private_file(&path, encoded.as_bytes())
             .with_context(|| format!("writing {}", path.display()))?;

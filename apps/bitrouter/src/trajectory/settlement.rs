@@ -316,7 +316,7 @@ mod tests {
     async fn recorder_reports_closed_dispositions_and_persists_prediction_observation()
     -> anyhow::Result<()> {
         let (_db, store) = store().await?;
-        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let recorder = TrajectorySettlementRecorder::new(store.clone(), None, identity_key.clone());
         assert_eq!(
             recorder
@@ -399,7 +399,7 @@ mod tests {
     -> anyhow::Result<()> {
         let (db, store) = store().await?;
         let eval_store = EvalStore::new(db.clone());
-        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let stored_request = identity_key.request_identity("owner-a", "external-request")?;
         begin_guarded(&store, &stored_request, "episode-observed").await?;
         let publisher = TrajectoryOutboxPublisher::new(
@@ -638,7 +638,7 @@ mod tests {
             "sqlite://{}?mode=rwc",
             directory.path().join("trajectory-retry.db").display()
         );
-        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let request_id = identity_key.request_identity("owner-a", "external-request-1")?;
 
         let db = crate::db::connect(&database_url).await?;
@@ -728,7 +728,12 @@ mod tests {
 
     #[tokio::test]
     async fn recorder_retry_rejects_corrupt_terminal_event_index() -> anyhow::Result<()> {
-        let (db, recorder, request_id, first) = terminal_recorder_fixture().await?;
+        let TerminalRecorderFixture {
+            db,
+            recorder,
+            request_id,
+            first,
+        } = terminal_recorder_fixture().await?;
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "UPDATE trajectory_requests SET settlement_event_id = ? WHERE request_id = ?",
@@ -746,7 +751,12 @@ mod tests {
 
     #[tokio::test]
     async fn recorder_retry_rejects_corrupt_terminal_status() -> anyhow::Result<()> {
-        let (db, recorder, request_id, first) = terminal_recorder_fixture().await?;
+        let TerminalRecorderFixture {
+            db,
+            recorder,
+            request_id,
+            first,
+        } = terminal_recorder_fixture().await?;
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "UPDATE trajectory_requests SET status = 'settled' WHERE request_id = ?",
@@ -764,7 +774,12 @@ mod tests {
 
     #[tokio::test]
     async fn recorder_retry_rejects_corrupt_terminal_outbox_index() -> anyhow::Result<()> {
-        let (db, recorder, request_id, first) = terminal_recorder_fixture().await?;
+        let TerminalRecorderFixture {
+            db,
+            recorder,
+            request_id,
+            first,
+        } = terminal_recorder_fixture().await?;
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "UPDATE trajectory_requests SET settlement_outbox_id = ? WHERE request_id = ?",
@@ -783,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn recorder_retry_rejects_foreign_but_valid_evaluation_envelope() -> anyhow::Result<()> {
         let (db, store) = store().await?;
-        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let request_id = identity_key.request_identity("owner-a", "external-request-current")?;
         begin_guarded(&store, &request_id, "episode-current").await?;
         let current_metering = routing_failure_metering("external-request-current", 100);
@@ -931,7 +946,7 @@ mod tests {
     #[tokio::test]
     async fn tracked_request_without_metering_proof_remains_unsettled() -> anyhow::Result<()> {
         let (_db, store) = store().await?;
-        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let request_id = identity_key.request_identity("owner-a", "request-1")?;
         begin_guarded(&store, &request_id, "episode-1").await?;
         let recorder = TrajectorySettlementRecorder::new(store.clone(), None, identity_key);
@@ -1090,7 +1105,7 @@ mod tests {
             "private-request-header-SECRET-task-label-SENTINEL",
         ];
         let (db, store) = store().await?;
-        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let runtime =
             TrajectoryRuntime::new(store.clone(), Canonicalizer::new(identity_key.clone()));
         let first_input = correlate_input("privacy-first", "unused-episode");
@@ -1428,14 +1443,16 @@ mod tests {
         Ok((db.clone(), TrajectoryStore::new(db)))
     }
 
-    async fn terminal_recorder_fixture() -> anyhow::Result<(
-        sea_orm::DatabaseConnection,
-        TrajectorySettlementRecorder,
-        String,
-        SettlementContext,
-    )> {
+    struct TerminalRecorderFixture {
+        db: sea_orm::DatabaseConnection,
+        recorder: TrajectorySettlementRecorder,
+        request_id: String,
+        first: SettlementContext,
+    }
+
+    async fn terminal_recorder_fixture() -> anyhow::Result<TerminalRecorderFixture> {
         let (db, store) = store().await?;
-        let identity_key = CorrelationKey::from_bytes([41; 32])?;
+        let identity_key = CorrelationKey::from_bytes(rand::random())?;
         let request_id = identity_key.request_identity("owner-a", "external-request-1")?;
         begin_guarded(&store, &request_id, "episode-1").await?;
         let recorder = TrajectorySettlementRecorder::new(store, None, identity_key);
@@ -1445,7 +1462,12 @@ mod tests {
             recorder.record_if_tracked(&first, None).await?,
             TrajectorySettlementDisposition::Persisted
         );
-        Ok((db, recorder, request_id, first))
+        Ok(TerminalRecorderFixture {
+            db,
+            recorder,
+            request_id,
+            first,
+        })
     }
 
     async fn raw_json_column(

@@ -732,7 +732,7 @@ mod tests {
 
     #[test]
     fn equivalent_protocol_histories_have_identical_ordered_prefix_digests() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([7; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let [chat, messages, responses] = equivalent_prompts()?;
 
         let chat = canonicalizer.canonicalize(&chat)?;
@@ -756,7 +756,7 @@ mod tests {
     #[test]
     fn provider_and_workflow_metadata_do_not_change_digests_but_ancestry_does() -> anyhow::Result<()>
     {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([9; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let [baseline, _, _] = equivalent_prompts()?;
         let mut metadata_changed = baseline.clone();
         metadata_changed.model = "another-provider:model".into();
@@ -799,9 +799,10 @@ mod tests {
     #[test]
     fn keyed_digests_are_secret_scoped_and_stable_for_one_key() -> anyhow::Result<()> {
         let [prompt, _, _] = equivalent_prompts()?;
-        let first = Canonicalizer::new(CorrelationKey::from_bytes([11; 32])?);
-        let restarted = Canonicalizer::new(CorrelationKey::from_bytes([11; 32])?);
-        let other = Canonicalizer::new(CorrelationKey::from_bytes([12; 32])?);
+        let key = CorrelationKey::from_bytes(rand::random())?;
+        let first = Canonicalizer::new(key.clone());
+        let restarted = Canonicalizer::new(key);
+        let other = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
 
         assert_eq!(
             first.canonicalize(&prompt)?,
@@ -816,7 +817,7 @@ mod tests {
 
     #[test]
     fn native_parent_digest_is_truthfully_keyed_and_key_bound() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([19; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let digest = canonicalizer.native_parent_digest("response-parent")?;
 
         assert_eq!(digest.key_id(), canonicalizer.key_id());
@@ -828,13 +829,13 @@ mod tests {
     #[test]
     fn request_identity_is_stable_install_keyed_owner_bound_and_opaque() -> anyhow::Result<()> {
         let raw = "SECRET-task-label-request-header";
-        let key = CorrelationKey::from_bytes([27; 32])?;
+        let key = CorrelationKey::from_bytes(rand::random())?;
         let stable = key.request_identity("owner-a", raw)?;
         assert_eq!(stable, key.request_identity("owner-a", raw)?);
         assert_ne!(stable, key.request_identity("owner-b", raw)?);
         assert_ne!(
             stable,
-            CorrelationKey::from_bytes([28; 32])?.request_identity("owner-a", raw)?
+            CorrelationKey::from_bytes(rand::random())?.request_identity("owner-a", raw)?
         );
         assert!(stable.starts_with("trajectory-request-"));
         assert!(!stable.contains(raw));
@@ -845,7 +846,7 @@ mod tests {
 
     #[test]
     fn equivalent_cross_protocol_tool_histories_share_digests() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([13; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let [chat, messages, responses] = equivalent_tool_histories()?;
 
         let chat = canonicalizer.canonicalize(&chat)?;
@@ -856,7 +857,7 @@ mod tests {
 
     #[test]
     fn semantic_message_boundaries_affect_digests_and_prefixes() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([14; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let one_multi_block = parse(
             ApiProtocol::Messages,
             serde_json::json!({
@@ -902,7 +903,7 @@ mod tests {
 
     #[test]
     fn adjacent_same_role_semantic_messages_remain_distinct() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([16; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         for role in ["user", "assistant"] {
             let prompt = parse(
                 ApiProtocol::ChatCompletions,
@@ -929,7 +930,7 @@ mod tests {
     #[test]
     fn equivalent_multi_tool_histories_merge_only_protocol_artifact_fragments() -> anyhow::Result<()>
     {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([18; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let [chat, messages, responses] = equivalent_multi_tool_histories()?;
         let chat = canonicalizer.canonicalize(&chat)?;
         assert_eq!(chat, canonicalizer.canonicalize(&messages)?);
@@ -939,7 +940,7 @@ mod tests {
 
     #[test]
     fn parseable_tool_json_ignores_key_order_and_whitespace() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([15; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let [mut baseline, _, _] = equivalent_tool_histories()?;
         let mut reordered = baseline.clone();
         for content in &mut reordered.messages[1].content {
@@ -968,7 +969,7 @@ mod tests {
 
     #[test]
     fn user_and_tool_json_provider_metadata_keys_are_semantic() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([17; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let [mut baseline, _, _] = equivalent_tool_histories()?;
         if let Content::ToolResult { output, .. } = &mut baseline.messages[2].content[0] {
             *output = ToolResultOutput::Json {
@@ -1003,7 +1004,7 @@ mod tests {
 
     #[test]
     fn canonicalizer_reports_exact_full_input_byte_count_without_content() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([29; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let prompt = parse(
             ApiProtocol::ChatCompletions,
             serde_json::json!({
@@ -1021,7 +1022,7 @@ mod tests {
 
     #[test]
     fn incremental_prefix_digests_remain_byte_compatible_with_v1_json() -> anyhow::Result<()> {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([31; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         let prompt = parse(
             ApiProtocol::ChatCompletions,
             serde_json::json!({
@@ -1066,7 +1067,7 @@ mod tests {
     #[test]
     fn canonical_prefix_work_is_linear_and_emits_at_most_256_newest_digests() -> anyhow::Result<()>
     {
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([32; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         for turn_count in [32_usize, 64, 128, 1024] {
             let messages = (0..turn_count)
                 .map(|index| {

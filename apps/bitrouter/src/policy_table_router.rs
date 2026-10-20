@@ -1546,8 +1546,8 @@ mod tests {
     fn guarded_decision_log_uses_only_opaque_trajectory_request_identity() -> anyhow::Result<()> {
         let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
         let raw_request_id = "SECRET-task-labeled-request-header-SENTINEL";
-        let opaque_request_id =
-            CorrelationKey::from_bytes([35; 32])?.request_identity("owner-a", raw_request_id)?;
+        let opaque_request_id = CorrelationKey::from_bytes(rand::random())?
+            .request_identity("owner-a", raw_request_id)?;
         let router = router();
         let mut request_prompt = prompt("inbound");
         request_prompt.messages = vec![user("generic request")];
