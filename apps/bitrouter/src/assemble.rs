@@ -1197,6 +1197,10 @@ async fn assemble_app(
         .skip_auth(config.server.skip_auth)
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
+            #[cfg(feature = "multi-instance")]
+            if is_shared {
+                lm.owned_drain();
+            }
             lm.routing_table(routing_table).executor(executor);
             lm.native_cost_estimator(pricing_for_native);
             lm.native_cost_source(Arc::new(metering_for_native_costs));

@@ -1,4 +1,5 @@
 use super::*;
+use crate::gateway::pipeline::owned_tasks::Drain;
 use crate::gateway::shared::authority::Revision;
 use std::future::Future;
 
@@ -39,6 +40,10 @@ pub(super) async fn exercise(
     serving: &Arc<Serving>,
 ) -> Result<()> {
     let original = serving.snapshot();
+    let app = application(fixture)?;
+    let candidate = Snapshot::new(original.revision, app.clone())?;
+    ensure!(Snapshot::new(original.revision, app).is_err());
+    drop(candidate);
     let same = Snapshot::new(original.revision, application(fixture)?)?;
     ensure!(same.owner != original.owner);
     ensure!(serving.publish(same).is_err());
@@ -56,6 +61,7 @@ pub(super) async fn exercise(
     }
     ensure!(Arc::ptr_eq(&original, &serving.snapshot()));
     drop(original);
+    Box::pin(eof_retains_source_until_body_drop(fixture, store, serving)).await?;
     Box::pin(body_wait_and_key_publication(
         fixture, upstream, store, serving,
     ))
@@ -84,7 +90,7 @@ pub(super) async fn exercise(
         },
         application(fixture)?,
     )?)?;
-    ensure!(Arc::ptr_eq(&prior, &original) && prior.app.language_model().is_some());
+    ensure!(Arc::ptr_eq(&prior, &original) && prior.tasks().acquire().is_err());
     // Both components are valid and nonzero, but config regresses relative to
     // the newly installed candidate even though its key component advances.
     ensure!(
@@ -154,6 +160,13 @@ async fn body_wait_and_key_publication(
     let old = rotate(fixture, store, serving).await?;
     ensure!(old.owner == old_owner && old.owner != serving.snapshot().owner);
     ensure!(!serving.retired_quiescent(&old));
+    ensure!(old.tasks().pending().sources == 1);
+    ensure!(old.tasks().acquire().is_err());
+    ensure!(old.tasks().force().is_err());
+    ensure!(matches!(
+        old.tasks().drain_until(tokio::time::Instant::now()).await?,
+        Drain::Retained(pending) if pending.sources == 1
+    ));
     ensure!(serving.custody.pending_for(serving.snapshot().owner) == 0);
     let calls = upstream.calls.load(Ordering::SeqCst);
     send.send(serde_json::to_vec(&prompt("ok"))?)
@@ -175,6 +188,10 @@ async fn body_wait_and_key_publication(
     );
     drop(reader);
     ensure!(serving.retired_quiescent(&old));
+    ensure!(matches!(
+        old.tasks().drain_until(tokio::time::Instant::now()).await?,
+        Drain::Joined(summary) if summary.is_clean()
+    ));
     ensure!(!serving.retired_quiescent(&serving.snapshot()));
     Ok(())
 }
@@ -209,12 +226,64 @@ async fn stream_and_key_publication(
     let old = rotate(fixture, store, serving).await?;
     ensure!(serving.custody.pending_for(old.owner) == 1);
     ensure!(!serving.retired_quiescent(&old));
+    ensure!(old.tasks().pending().sources == 1);
+    ensure!(old.tasks().force().is_err());
     drop(body);
+    ensure!(old.tasks().pending().sources == 0);
+    ensure!(matches!(
+        old.tasks()
+            .drain_until(tokio::time::Instant::now() + Duration::from_secs(3))
+            .await?,
+        Drain::Joined(summary) if summary.joined > 0 && summary.is_clean()
+    ));
     retire(serving).await?;
     ensure!(serving.retired_quiescent(&old));
     ensure!(matches!(
         fixture.engine.query(&fixture.key.hash, &id).await?.state,
         ExecutionState::Unknown { .. }
     ));
+    Ok(())
+}
+
+async fn eof_retains_source_until_body_drop(
+    fixture: &Fixture,
+    store: &Store,
+    serving: &Arc<Serving>,
+) -> Result<()> {
+    for (model, stream) in [("ok", false), ("stream", true)] {
+        let mut input = prompt(model);
+        input["stream"] = json!(stream);
+        let response = serving
+            .router()
+            .oneshot(request(
+                fixture,
+                "/v1/chat/completions",
+                input,
+                None,
+                "retained-eof",
+            )?)
+            .await?;
+        ensure!(response.status() == StatusCode::OK);
+        let mut body = response.into_body();
+        while let Some(frame) =
+            futures::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await
+        {
+            frame?;
+        }
+        let old = rotate(fixture, store, serving).await?;
+        ensure!(old.tasks().pending().sources == 1);
+        ensure!(matches!(
+            old.tasks().drain_until(tokio::time::Instant::now()).await?,
+            Drain::Retained(pending) if pending.sources == 1
+        ));
+        drop(body);
+        ensure!(matches!(
+            old.tasks()
+                .drain_until(tokio::time::Instant::now() + Duration::from_secs(3))
+                .await?,
+            Drain::Joined(summary) if summary.is_clean()
+        ));
+        retire(serving).await?;
+    }
     Ok(())
 }

@@ -98,6 +98,31 @@ custody/readers has reached only the local request barrier: required finalizer,
 continuation compensation, owned task and exporter drains remain separate
 requirements before releasing its application resources.
 
+Shared pipelines retain separate execution and settlement task sets. Every HTTP
+producer acquires a non-clonable source ticket under the snapshot publication
+gate. Publication closes the previous source gate; existing tickets survive
+through destruction of the request or response body, including a body retained
+after EOF. Models/metrics readers also hold tickets. A pipeline cannot be bound
+to two serving snapshots.
+
+Drain waiters borrow these task sets; cancellation and elapsed deadlines retain
+all handles. Closed sources, zero tickets and both joined task sets establish
+the task-producer fixed point. Joining records cancellation, panic and required
+finalizer failures separately; a successful task return does not erase a failed
+compensation. Returned panic payloads are destroyed outside the ownership lock
+and before checking the fixed point, since their destructors can register work.
+At that fixed point the task registration gate seals. Late registrations are
+owned, discarded without polling their work, and recorded as lifecycle errors.
+
+Forced shutdown first destroys and joins external transport producers. Only
+then may it permanently force the pipeline groups. Tasks subsequently registered
+by cancellation destructors remain owned and joined, but their work is never
+polled. One deadline governs graceful work; forced joining does not create a
+new grace period. Noncooperative tasks cannot be reported as a clean shutdown
+merely because a waiter timed out. Native continuation reconciliation, custody
+retirement and complete application/exporter ownership remain independent
+barriers after pipeline tasks have joined.
+
 Tenant identity is the authenticated virtual key's owning user, never a caller
 supplied tenant header. Principal identity is the virtual-key ID. The existing
 `api_keys` authority is read from the database; its effective authorization

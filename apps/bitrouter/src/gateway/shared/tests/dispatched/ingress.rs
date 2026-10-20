@@ -35,6 +35,7 @@ fn application(fixture: &Fixture) -> Result<Arc<App>> {
             .skip_auth(false)
             .language_model(|pipeline| {
                 pipeline
+                    .owned_drain()
                     .served_operations(OperationScope::Both)
                     .routing_table(Arc::new(routes))
                     .executor(fixture.executor.clone())

@@ -1,11 +1,11 @@
 //! The `language_model` flight pipeline plus its interleaved StreamHook stage.
 
 use crate::gateway::model::conversion::ReportAdmission;
+use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use std::{future::Future, mem};
 
 #[cfg(feature = "server-tools")]
 use async_trait::async_trait;
@@ -412,9 +412,10 @@ pub struct Pipeline {
     /// Detached stream-finalization tasks. Every terminal stream moves its
     /// settlement here before awaiting it, so a client disconnect cannot cancel
     /// recorders after the terminal SSE frame has already been delivered.
-    /// [`Pipeline::drain_required_pending_settlements`] awaits them on
-    /// production graceful shutdown.
-    pub(crate) pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+    /// Local shutdown awaits them through
+    /// [`Pipeline::drain_required_pending_settlements`]; shared generations
+    /// retain them in their owned lifecycle.
+    pub(super) pending_settlements: super::tasks::Settlements,
     /// Detached **non-streaming** executions ([`Pipeline::execute_detached`]).
     /// A `TaskTracker` (not the `JoinSet` above) because *every* non-streaming
     /// request runs here, so completed tasks must be reaped automatically
@@ -513,6 +514,11 @@ fn sync_execution_target(ctx: &mut PipelineContext, slot: &SharedStreamAttempt) 
 }
 
 impl Pipeline {
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn owned_tasks(&self) -> Option<&Arc<super::owned_tasks::OwnedTasks>> {
+        self.pending_settlements.owned.as_ref()
+    }
+
     /// The routing table backing this pipeline.
     pub fn routing_table(&self) -> &Arc<dyn RoutingTable> {
         &self.routing_table
@@ -535,7 +541,15 @@ impl Pipeline {
     /// in-flight handler/stream-consumer to drop before returning, so all
     /// Drops fire *before* `drain_pending_settlements` is called — the swap
     /// is correct under that contract.
+    ///
+    /// Shared generations require the owned lifecycle instead; this legacy
+    /// best-effort method logs misuse and returns zero without touching work.
     pub async fn drain_pending_settlements(&self) -> usize {
+        #[cfg(feature = "multi-instance")]
+        if self.owned_tasks().is_some() {
+            tracing::error!("Shared generation requires its owned lifecycle drain");
+            return 0;
+        }
         let drained = self.drain_detached_work().await;
         if self.drain_required_finalizers().await.is_err() {
             tracing::error!(
@@ -553,7 +567,16 @@ impl Pipeline {
     /// unresolved durable ownership cannot be mistaken for a clean exit. It is
     /// safe to retry after an error: detached work remains drained while each
     /// finalizer re-enters its retained reconciliation evidence.
+    ///
+    /// Shared generations reject this local-only contract: their lifecycle
+    /// must retain task handles and apply one deadline to all resource owners.
     pub async fn drain_required_pending_settlements(&self) -> Result<usize> {
+        #[cfg(feature = "multi-instance")]
+        if self.owned_tasks().is_some() {
+            return Err(BitrouterError::internal(
+                "shared generation requires its owned lifecycle drain",
+            ));
+        }
         let drained = self.drain_detached_work().await;
         self.drain_required_finalizers().await?;
         Ok(drained)
@@ -563,23 +586,11 @@ impl Pipeline {
         // Detached non-stream execution may itself enqueue finalizer rollback
         // and delivery-observation tasks. Drain it first so those tasks are in
         // the JoinSet before we take that set below.
-        let mut drained = self.detached_executions.len();
+        let drained = self.detached_executions.len();
         self.detached_executions.close();
         self.detached_executions.wait().await;
 
-        // Take the JoinSet out of the mutex so we can `await` join_next
-        // without holding a sync lock across an await.
-        let mut taken = {
-            let mut guard = match self.pending_settlements.lock() {
-                Ok(g) => g,
-                Err(p) => p.into_inner(),
-            };
-            mem::take(&mut *guard)
-        };
-        while taken.join_next().await.is_some() {
-            drained += 1;
-        }
-        drained
+        drained + self.pending_settlements.drain_local().await
     }
 
     async fn drain_required_finalizers(&self) -> Result<()> {
@@ -593,18 +604,8 @@ impl Pipeline {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        let future = future.instrument(tracing::Span::current());
-        match self.pending_settlements.lock() {
-            Ok(mut set) => {
-                while set.try_join_next().is_some() {}
-                set.spawn(future);
-            }
-            Err(poisoned) => {
-                let mut set = poisoned.into_inner();
-                while set.try_join_next().is_some() {}
-                set.spawn(future);
-            }
-        }
+        self.pending_settlements
+            .spawn(future.instrument(tracing::Span::current()));
     }
 
     /// Execute a non-streaming request that **always runs to completion**, even
@@ -657,23 +658,29 @@ impl Pipeline {
         // the handler's request span / trace context.
         let span = tracing::Span::current();
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
-        self.detached_executions.spawn(
-            async move {
-                let result = pipeline
-                    .execute_prepared(
-                        req,
-                        #[cfg(feature = "server-tools")]
-                        run_server_tools,
-                        control,
-                    )
-                    .await;
-                // A dropped handler drops the prepared delivery permit here;
-                // upstream execution and settlement have nevertheless run on
-                // this shutdown-tracked task.
-                let _ = prepared_tx.send(result);
-            }
-            .instrument(span),
-        );
+        let work = async move {
+            let result = pipeline
+                .execute_prepared(
+                    req,
+                    #[cfg(feature = "server-tools")]
+                    run_server_tools,
+                    control,
+                )
+                .await;
+            // A dropped handler drops the prepared delivery permit here;
+            // upstream execution and settlement have nevertheless run on
+            // this shutdown-tracked task.
+            let _ = prepared_tx.send(result);
+        }
+        .instrument(span);
+        #[cfg(feature = "multi-instance")]
+        if let Some(owner) = self.owned_tasks() {
+            owner.spawn_execution(work);
+        } else {
+            self.detached_executions.spawn(work);
+        }
+        #[cfg(not(feature = "multi-instance"))]
+        self.detached_executions.spawn(work);
         prepared_rx.await.map_err(|error| {
             BitrouterError::internal(format!(
                 "non-streaming execution task failed to complete: {error}"
@@ -1898,6 +1905,7 @@ impl Pipeline {
         let task_finalization = finalization.clone();
         let receipt = RequiredFinalizationReceipt::new();
         let task_receipt = receipt.clone();
+        let tasks = self.pending_settlements.clone();
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
         let (consumed_tx, consumed_rx) = tokio::sync::oneshot::channel();
         self.spawn_stream_finalization(async move {
@@ -1918,16 +1926,17 @@ impl Pipeline {
                             .rollback_with_receipt(&task_finalization, &task_receipt)
                             .await
                     {
-                        tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+                        tasks.finalizer_failed(&error);
                     }
                 }
                 Err(error) => {
+                    tasks.finalizer_failed(&error);
                     preparation_custody.record_pipeline_outcome(false);
                     if let Err(rollback_error) = finalizer
                         .rollback_with_receipt(&task_finalization, &task_receipt)
                         .await
                     {
-                        tracing::error!(error = %rollback_error, "RequiredFinalizer rollback failed");
+                        tasks.finalizer_failed(&rollback_error);
                     }
                     let _ = prepared_tx.send(Err(error));
                 }
@@ -3411,7 +3420,7 @@ mod fallback_error_tests {
 struct RequiredFinalizationGuard {
     finalizers: Vec<Arc<dyn RequiredFinalizer>>,
     finalization: RequiredFinalizationContext,
-    pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+    pending_settlements: super::tasks::Settlements,
     receipt: Option<RequiredFinalizationReceipt>,
     armed: bool,
     custody: ExecutionCustody,
@@ -3421,7 +3430,7 @@ impl RequiredFinalizationGuard {
     fn new(
         finalizers: Vec<Arc<dyn RequiredFinalizer>>,
         finalization: RequiredFinalizationContext,
-        pending_settlements: Arc<std::sync::Mutex<tokio::task::JoinSet<()>>>,
+        pending_settlements: super::tasks::Settlements,
         custody: ExecutionCustody,
     ) -> Self {
         custody.record_pipeline_outcome(finalization.successful_terminal);
@@ -3453,6 +3462,7 @@ impl RequiredFinalizationGuard {
         let finalization = self.finalization.clone();
         let receipt = self.receipt.clone();
         let custody = self.custody.clone();
+        let tasks = self.pending_settlements.clone();
         self.disarm();
         let authorization = async move {
             let authorization_result = match receipt.as_ref() {
@@ -3466,6 +3476,9 @@ impl RequiredFinalizationGuard {
             let delivered = match authorization_result {
                 Ok(delivered) => delivered,
                 Err(error) => {
+                    if receipt.is_some() {
+                        tasks.finalizer_failed(&error);
+                    }
                     custody.record_pipeline_outcome(false);
                     delivery.reject(error.clone());
                     if let Some(receipt) = receipt.as_ref()
@@ -3473,7 +3486,7 @@ impl RequiredFinalizationGuard {
                             .rollback_with_receipt(&finalization, receipt)
                             .await
                     {
-                        tracing::error!(error = %rollback_error, "RequiredFinalizer rollback failed");
+                        tasks.finalizer_failed(&rollback_error);
                     }
                     let _ = outcome_tx.send(DeliveryAuthorizationOutcome::Failed(error));
                     return;
@@ -3485,7 +3498,7 @@ impl RequiredFinalizationGuard {
                     .rollback_with_receipt(&finalization, receipt)
                     .await
             {
-                tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+                tasks.finalizer_failed(&error);
             }
             let _ = outcome_tx.send(if delivered {
                 DeliveryAuthorizationOutcome::Delivered
@@ -3494,17 +3507,7 @@ impl RequiredFinalizationGuard {
             });
         }
         .instrument(tracing::Span::current());
-        match self.pending_settlements.lock() {
-            Ok(mut set) => {
-                while set.try_join_next().is_some() {}
-                set.spawn(authorization);
-            }
-            Err(poisoned) => {
-                let mut set = poisoned.into_inner();
-                while set.try_join_next().is_some() {}
-                set.spawn(authorization);
-            }
-        }
+        self.pending_settlements.spawn(authorization);
         (permit, outcome_rx)
     }
 }
@@ -3518,6 +3521,7 @@ impl Drop for RequiredFinalizationGuard {
         let finalization = self.finalization.clone();
         let receipt = self.receipt.clone();
         let custody = self.custody.clone();
+        let tasks = self.pending_settlements.clone();
         self.disarm();
         let rollback = async move {
             let _custody = custody;
@@ -3526,21 +3530,11 @@ impl Drop for RequiredFinalizationGuard {
                     .rollback_with_receipt(&finalization, receipt)
                     .await
             {
-                tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+                tasks.finalizer_failed(&error);
             }
         }
         .instrument(tracing::Span::current());
-        match self.pending_settlements.lock() {
-            Ok(mut set) => {
-                while set.try_join_next().is_some() {}
-                set.spawn(rollback);
-            }
-            Err(poisoned) => {
-                let mut set = poisoned.into_inner();
-                while set.try_join_next().is_some() {}
-                set.spawn(rollback);
-            }
-        }
+        self.pending_settlements.spawn(rollback);
     }
 }
 
@@ -3827,6 +3821,9 @@ impl StreamSettlementGuard {
             let delivered = match authorization_result {
                 Ok(delivered) => delivered,
                 Err(error) => {
+                    if receipt.is_some() {
+                        pipeline.pending_settlements.finalizer_failed(&error);
+                    }
                     ExecutionCustody::from_context(&ctx).record_pipeline_outcome(false);
                     delivery.reject(error.clone());
                     rollback_required_finalizer(&pipeline, &ctx, true, receipt).await;
@@ -3883,7 +3880,7 @@ async fn rollback_required_finalizer(
         .rollback_with_receipt(&finalization, receipt)
         .await
     {
-        tracing::error!(error = %error, "RequiredFinalizer rollback failed");
+        pipeline.pending_settlements.finalizer_failed(&error);
     }
 }
 

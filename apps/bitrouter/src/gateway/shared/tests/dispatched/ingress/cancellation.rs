@@ -57,13 +57,6 @@ async fn scenario(
     .await??;
     ensure!(!serving.custody.reconcile_one().await?);
     drop(body);
-    serving
-        .snapshot()
-        .app
-        .language_model()
-        .context("missing cancellation pipeline")?
-        .drain_required_pending_settlements()
-        .await?;
     retire(serving).await?;
     let view = fixture.engine.query(&fixture.key.hash, &execution).await?;
     if known {

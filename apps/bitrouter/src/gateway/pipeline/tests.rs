@@ -18,6 +18,10 @@ mod native_output;
 #[path = "tests_native_stream.rs"]
 mod native_stream;
 
+#[cfg(feature = "multi-instance")]
+#[path = "tests_owned_drain.rs"]
+mod owned_drain;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;

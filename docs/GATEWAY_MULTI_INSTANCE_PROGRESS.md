@@ -768,3 +768,53 @@ multi-process acceptance are still required.
   readiness, finite retained generations,
   owned task/finalizer drains and trajectory epoch binding remain open. No P1
   acceptance gate is closed by these internal lifecycle boundaries.
+
+## Owned pipeline tasks and producer tickets (2026-10-21)
+
+- Shared assembly now selects persistent execution/settlement task ownership.
+  Local builds retain the existing task tracker and settlement drain behavior.
+  Shared pipelines explicitly reject the local error-returning shutdown entry
+  rather than silently draining empty local collections.
+- HTTP snapshot selection acquires a non-clonable producer ticket under the
+  publication gate. Publication closes the old gate, while already acquired
+  tickets remain valid through body destruction. JSON/SSE EOF alone does not
+  release a ticket. Models/metrics readers also retain tickets. Binding one
+  pipeline to more than one serving snapshot is rejected.
+- A cancelled/expired drain retains its task handles and evidence. Reaping is
+  bounded per poll and a single waiter owns the join wakeup. Task and panic
+  payload destruction can register descendants without holding the owner lock;
+  the empty fixed point is checked after those destructors run. Closing sources
+  does not reject descendants of previously accepted work. Completing the
+  fixed point seals registration; late work is discarded without polling and
+  recorded as a lifecycle failure.
+- Force requires all external producer tickets to be released. Existing tasks
+  are aborted and retained for joining; children registered after force are
+  destroyed by owned wrappers without polling their asynchronous work. Forced,
+  cancelled, panicked, discarded, late-registration and required-finalizer
+  failure outcomes remain distinct. Rollback failure is retained even if its
+  containing task returns successfully.
+- Initial minimal shared/config and new lifecycle validation passed **41/41**,
+  2,255 filtered, zero retries in 13.555 seconds; the PostgreSQL campaign took
+  13.442 seconds (`/tmp/bitrouter-p1-owned-tasks-tests.log`). Subsequent additions
+  cover sealing, rollback-failure accounting and retained JSON/SSE EOF bodies;
+  final candidate minimal shared validation passed **43/43**, 2,255 filtered,
+  zero retries in 15.677 seconds, including the PostgreSQL campaign in 15.561
+  seconds (`/tmp/bitrouter-p1-owned-tasks-final-minimal.log`).
+- Final all-feature pipeline/shared/config regressions passed **412/412**,
+  3,166 filtered, zero retries in 15.702 seconds; PostgreSQL took 13.641 seconds
+  (`/tmp/bitrouter-p1-owned-tasks-full-tests.log`). Pure local
+  `--no-default-features` pipeline/config regressions passed **255/255**, 1,998
+  filtered, zero retries in 1.156 seconds
+  (`/tmp/bitrouter-p1-owned-tasks-local-tests.log`).
+- Rust 1.97 all-feature library/test Clippy exited 0 in 1m01s with no
+  Clippy-specific diagnostics (`/tmp/bitrouter-p1-owned-tasks-clippy.log`).
+  Its 138 library and one library-test unused-code warnings remain staged
+  runtime integration work; no suppression was introduced. This is not final
+  strict P1 lint acceptance. Formatting and whitespace checks passed.
+  Independent implementation review approved this substage with no actionable
+  findings (`/tmp/bitrouter-p1-owned-tasks-review.json`); all 15 candidate files
+  and four validation logs matched the reviewed fingerprints.
+- This substage does not implement the complete generation resource owner,
+  bounded retained generations, continuation worker/marker drain, startup
+  supervisor or process shutdown. A joined pipeline is not sufficient to
+  release its application resources. All P1 acceptance gates remain open.

@@ -25,6 +25,7 @@ use crate::config::gateway_state::SharedGatewayConfig;
 use crate::gateway::assembly::App;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::http::{self as model_http, AppState};
+use crate::gateway::pipeline::owned_tasks::{OwnedTasks, Source};
 
 use self::identity::{
     CORRELATION_HEADER, Identity, credential_hash, request_identity, valid_identity,
@@ -39,7 +40,7 @@ use super::ownership::{Generation, Registry, Reservation, Submission};
 pub(super) struct Snapshot {
     pub revision: Revision,
     pub owner: Generation,
-    pub app: Arc<App>,
+    tasks: Arc<OwnedTasks>,
     state: AppState,
 }
 
@@ -53,6 +54,11 @@ impl Snapshot {
             .language_model()
             .ok_or_else(|| anyhow::anyhow!("shared application has no model pipeline"))?
             .clone();
+        let tasks = pipeline
+            .owned_tasks()
+            .ok_or_else(|| anyhow::anyhow!("shared application has no owned task lifecycle"))?
+            .clone();
+        tasks.bind_snapshot()?;
         Ok(Arc::new(Self {
             revision,
             owner: Generation::new(),
@@ -63,8 +69,12 @@ impl Snapshot {
                 metrics_renderer: app.metrics_renderer().cloned(),
                 prompt_transforms: app.prompt_transforms().to_vec(),
             },
-            app,
+            tasks,
         }))
+    }
+
+    pub fn tasks(&self) -> &Arc<OwnedTasks> {
+        &self.tasks
     }
 }
 
@@ -99,6 +109,7 @@ impl Serving {
         self.ready.store(ready, Ordering::Release);
     }
 
+    #[cfg(test)]
     pub fn snapshot(&self) -> Arc<Snapshot> {
         self.current
             .read()
@@ -109,7 +120,7 @@ impl Serving {
     /// Publication and registration share this short gate. No old-generation
     /// reservation can appear after a swap; no lock is held across an await.
     /// Lock order is Serving.current, then Registry.entries.
-    pub fn acquire_request(&self) -> anyhow::Result<(Arc<Snapshot>, Reservation)> {
+    pub fn acquire_request(&self) -> anyhow::Result<(Arc<Snapshot>, Reservation, Source)> {
         let current = self
             .current
             .read()
@@ -117,8 +128,17 @@ impl Serving {
         if !self.ready.load(Ordering::Acquire) {
             return Err(Rejection::Unavailable.into());
         }
+        let source = current.tasks.acquire()?;
         let reservation = self.custody.reserve_for(current.owner)?;
-        Ok((current.clone(), reservation))
+        Ok((current.clone(), reservation, source))
+    }
+
+    fn acquire_reader(&self) -> anyhow::Result<(Arc<Snapshot>, Source)> {
+        let current = self
+            .current
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        Ok((current.clone(), current.tasks.acquire()?))
     }
 
     /// This proves only local request/reader quiescence after publication.
@@ -132,6 +152,7 @@ impl Serving {
             .unwrap_or_else(|error| error.into_inner());
         !Arc::ptr_eq(&current, snapshot)
             && self.custody.pending_for(snapshot.owner) == 0
+            && snapshot.tasks.pending().sources == 0
             && Arc::strong_count(snapshot) == 1
     }
 
@@ -146,6 +167,7 @@ impl Serving {
             snapshot.revision.advances(current.revision),
             "shared serving revision did not advance"
         );
+        current.tasks.close_sources();
         Ok(std::mem::replace(&mut *current, snapshot))
     }
 
@@ -179,7 +201,7 @@ async fn decisions(State(state): State<Arc<Serving>>, request: Request) -> Respo
 
 async fn infer(state: Arc<Serving>, mut request: Request, inbound: ApiProtocol) -> Response {
     // No body-consuming extractor runs before this nonqueueing acquisition.
-    let (snapshot, reservation) = match state.acquire_request() {
+    let (snapshot, reservation, source) = match state.acquire_request() {
         Ok(acquired) => acquired,
         Err(error) => return failure(error),
     };
@@ -250,6 +272,7 @@ async fn infer(state: Arc<Serving>, mut request: Request, inbound: ApiProtocol) 
                     inner,
                     _admission: admission,
                     _snapshot: snapshot,
+                    _source: source,
                 })
             })
         }
@@ -293,18 +316,26 @@ async fn models(State(state): State<Arc<Serving>>, headers: HeaderMap) -> Respon
     if !state.ready.load(Ordering::Acquire) {
         return unavailable();
     }
-    let snapshot = state.snapshot();
+    let (snapshot, source) = match state.acquire_reader() {
+        Ok(acquired) => acquired,
+        Err(error) => return failure(error),
+    };
     let response = model_http::list_models(State(snapshot.state.clone()), headers)
         .await
         .into_response();
     drop(snapshot);
+    drop(source);
     response
 }
 
 async fn metrics(State(state): State<Arc<Serving>>) -> Response {
-    let snapshot = state.snapshot();
+    let (snapshot, source) = match state.acquire_reader() {
+        Ok(acquired) => acquired,
+        Err(error) => return failure(error),
+    };
     let response = model_http::prometheus_metrics(State(snapshot.state.clone())).await;
     drop(snapshot);
+    drop(source);
     response
 }
 
@@ -349,6 +380,9 @@ struct CustodyBody {
     inner: Body,
     _admission: Arc<SharedAdmission>,
     _snapshot: Arc<Snapshot>,
+    // Fields drop in declaration order. Stream Drop may register compensation;
+    // release the external producer only after those destructors have run.
+    _source: Source,
 }
 
 impl HttpBody for CustodyBody {
