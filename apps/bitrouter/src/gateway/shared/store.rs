@@ -59,6 +59,7 @@ pub(super) enum Kind {
     Outbox,
     Credential,
     EpisodeFence,
+    ContinuationProducer,
 }
 
 impl Kind {
@@ -75,6 +76,7 @@ impl Kind {
             Self::Outbox => "outbox",
             Self::Credential => "credential",
             Self::EpisodeFence => "episode_fence",
+            Self::ContinuationProducer => "continuation_producer",
         }
     }
 }

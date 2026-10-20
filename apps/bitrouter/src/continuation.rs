@@ -6,6 +6,8 @@ pub(crate) mod owned;
 #[cfg(all(test, feature = "multi-instance"))]
 #[path = "continuation/tests_owned.rs"]
 mod owned_tests;
+#[cfg(feature = "multi-instance")]
+mod shared;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -2595,6 +2597,30 @@ fn publication_lease_until_for(now: DateTime<Utc>, seconds: i64) -> Result<Strin
 }
 
 fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Result<Vec<u8>> {
+    decrypt_authenticated(key, row, &row_aad(row))
+}
+
+fn row_aad(row: &continuation_entity::Model) -> Vec<u8> {
+    aead_aad([
+        &row.key_id,
+        &row.owner_identity,
+        &row.continuation_identity,
+        &row.target_fingerprint,
+        &row.created_at,
+        &row.expires_at,
+        &row.purge_after,
+        &row.publication_state,
+        &row.publication_generation,
+        &row.publication_instance_id,
+        &row.publication_lease_until,
+    ])
+}
+
+fn decrypt_authenticated(
+    key: &ContinuationKey,
+    row: &continuation_entity::Model,
+    aad: &[u8],
+) -> Result<Vec<u8>> {
     let ciphertext = row
         .ciphertext
         .as_deref()
@@ -2612,26 +2638,13 @@ fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Resul
     let nonce: [u8; NONCE_BYTES] = nonce
         .try_into()
         .map_err(|_| anyhow::anyhow!("continuation nonce has invalid length"))?;
-    let aad = aead_aad([
-        &row.key_id,
-        &row.owner_identity,
-        &row.continuation_identity,
-        &row.target_fingerprint,
-        &row.created_at,
-        &row.expires_at,
-        &row.purge_after,
-        &row.publication_state,
-        &row.publication_generation,
-        &row.publication_instance_id,
-        &row.publication_lease_until,
-    ]);
     let unbound = UnboundKey::new(&AES_256_GCM, &key.secret)
         .map_err(|_| anyhow::anyhow!("invalid continuation encryption key"))?;
     let key = LessSafeKey::new(unbound);
     let plaintext = key
         .open_in_place(
             Nonce::assume_unique_for_key(nonce),
-            Aad::from(aad.as_slice()),
+            Aad::from(aad),
             &mut ciphertext,
         )
         .map_err(|_| anyhow::anyhow!("continuation authentication failed"))?;
@@ -2642,7 +2655,10 @@ fn decrypt_payload(
     key: &ContinuationKey,
     row: &continuation_entity::Model,
 ) -> Result<ContinuationPayload> {
-    let plaintext = decrypt_row(key, row)?;
+    decode_payload(decrypt_row(key, row)?)
+}
+
+fn decode_payload(plaintext: Vec<u8>) -> Result<ContinuationPayload> {
     let payload = if let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V4_MAGIC) {
         let payload: ContinuationPayload =
             serde_json::from_slice(serialized).context("continuation v4 payload is invalid")?;
@@ -2704,7 +2720,10 @@ fn validate_effective_model(effective_model: &str) -> Result<()> {
 mod continuation_entity {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[derive(
+        Clone, Debug, PartialEq, Eq, DeriveEntityModel, serde::Serialize, serde::Deserialize,
+    )]
+    #[serde(deny_unknown_fields)]
     #[sea_orm(table_name = "provider_continuations")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -2820,7 +2839,7 @@ mod tests {
         assert_eq!(legacy.pinned_effort_override(), None);
     }
 
-    fn target(api_key: &str) -> RoutingTarget {
+    pub(super) fn target(api_key: &str) -> RoutingTarget {
         RoutingTarget {
             provider_name: "openai".into(),
             service_id: "gpt-5".into(),
@@ -2841,7 +2860,7 @@ mod tests {
         }
     }
 
-    fn static_authority(api_key: &str) -> ContinuationAuthority {
+    pub(super) fn static_authority(api_key: &str) -> ContinuationAuthority {
         ContinuationAuthority::new(
             CredentialAuthority::derive("static-transport-credential", api_key),
             crate::gateway::model::target::AuthScheme::Bearer,

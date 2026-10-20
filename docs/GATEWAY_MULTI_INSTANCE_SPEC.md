@@ -391,6 +391,48 @@ remain applicable. A new replica must resolve an established continuation using
 shared state alone. A changed account, unknown key or unavailable shared store
 fails closed rather than silently starting a new provider conversation.
 
+Shared native continuation storage has its own namespace-scoped relation under
+the shared migration ledger. It never initializes or queries the local native
+singleton key epoch. The initialized namespace key ring is authoritative;
+correlation-only rotation preserves an unchanged continuation key. Both identity
+framing and authenticated encryption bind the namespace. Shared ciphertext cannot
+be decoded through the local native domain, even with identical key material.
+Shared target fingerprints also use versioned tuple framing for provider,
+account, protocol, effective endpoint, authentication scheme and credential
+proof. Embedded delimiters cannot make distinct field tuples equivalent. Shared
+resolution must reuse this framing; the persisted local fingerprint is unchanged.
+Native ID bytes are bounded before copying; the complete serialized plaintext,
+including its format prefix, is bounded to 1 MiB before database access. Random
+publication generation strings are limited to 128 bytes. The 2 MiB persisted
+record bound remains a final check after authenticated encryption and encoding.
+
+Each native publication transaction fences key authority, locks its producer
+record, takes a transaction-scoped identity lock, and locks an existing native
+row before reading the database's current time. The identity lock covers absent
+rows as well as updates. Creation, lease and retention times use canonical UTC
+microseconds. A final write predicate rechecks lease/retention validity after
+sealing, so waiting for a lock or pausing after a clock sample cannot renew an
+expired token. Every forward boundary must validate exact ownership afresh;
+neither a cached future lease nor a cleanup token authorizes forward publication.
+Renewal never extends retention.
+
+The producer record is a durable bind gate. Bind transactions hold its shared
+lock through commit; closing takes an exclusive lock and commits irreversibly.
+After the actual pipeline producers/tasks join, the generation owner closes this
+gate before resolving uncertain `Reserved` markers from row absence. An
+unconfirmed close is not a barrier: a fresh primary read must confirm the exact
+producer's closed record. Evidence lookup after closure uses a fresh statement
+snapshot after acquiring identity locks, including commits by other producers.
+Closure proves only that this producer cannot insert later; worker joining,
+marker compensation and complete generation resource ownership remain separate
+requirements. A closed producer identity is never reused or recreated.
+
+Implementation is staged: the private native bind/renew backend and transaction
+gate do not yet replace the registry's local paths. Shared activation, resolution,
+maintenance, cleanup and `Reserved` recovery must be integrated before enabling
+this backend through official startup. The internal tests do not close a P1
+independent-process acceptance gate.
+
 ## Trajectory identity, key epochs and guards
 
 Store the correlation key ring and its revision as shared encrypted authority.

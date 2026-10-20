@@ -171,6 +171,22 @@ impl Authority {
         Ok(head)
     }
 
+    /// Validate native continuation authority under the same publication fence.
+    /// Correlation-only rotation does not revoke an unchanged continuation key.
+    pub async fn fence_continuation_key(
+        &self,
+        tx: &DatabaseTransaction,
+        expected: &ContinuationKey,
+    ) -> Result<()> {
+        let head = self.fence(tx).await?;
+        let keys = self.read_keys(tx, head.value.key_generation).await?;
+        ensure!(
+            keys.continuation()? == *expected,
+            "shared continuation key authority changed"
+        );
+        Ok(())
+    }
+
     pub async fn head(&self) -> Result<Head> {
         self.store
             .bounded(async {

@@ -33,7 +33,7 @@ pub(super) async fn initialize(store: &super::store::Store) -> anyhow::Result<()
 #[async_trait::async_trait]
 impl MigratorTrait for SharedMigrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(Initial)]
+        vec![Box::new(Initial), Box::new(NativeContinuations)]
     }
 
     fn migration_table_name() -> DynIden {
@@ -117,4 +117,56 @@ enum Records {
     DueAtMs,
     UpdatedAtMs,
     Body,
+}
+
+struct NativeContinuations;
+
+impl MigrationName for NativeContinuations {
+    fn name(&self) -> &str {
+        "m20261021_000002_shared_native_continuations"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for NativeContinuations {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // Keep local native rows and their singleton key epoch untouched.
+        // Times duplicate authenticated body fields only for bounded scans;
+        // readers validate those copies before using a row.
+        // https://www.postgresql.org/docs/current/sql-createtable.html
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "CREATE TABLE gateway_shared_native_continuations (
+                    namespace varchar(64) NOT NULL,
+                    identity varchar(256) NOT NULL,
+                    revision bigint NOT NULL CHECK (revision >= 0),
+                    body text NOT NULL,
+                    publication_state varchar(32) NOT NULL,
+                    lease_until varchar(32) NOT NULL,
+                    expires_at varchar(32) NOT NULL,
+                    purge_after varchar(32) NOT NULL,
+                    PRIMARY KEY (namespace, identity)
+                );
+                CREATE INDEX gateway_shared_native_lease
+                    ON gateway_shared_native_continuations
+                    (namespace, publication_state, lease_until, identity);
+                CREATE INDEX gateway_shared_native_expiry
+                    ON gateway_shared_native_continuations
+                    (namespace, expires_at, identity);
+                CREATE INDEX gateway_shared_native_purge
+                    ON gateway_shared_native_continuations
+                    (namespace, purge_after, identity);",
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("DROP TABLE gateway_shared_native_continuations")
+            .await?;
+        Ok(())
+    }
 }

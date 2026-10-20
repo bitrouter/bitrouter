@@ -3,6 +3,7 @@
 pub(crate) mod admitted;
 mod authentication;
 mod authority;
+pub(crate) mod continuation;
 pub(crate) mod credentials;
 mod crypto;
 pub(crate) mod dispatched;

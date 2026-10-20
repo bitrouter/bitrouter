@@ -869,3 +869,73 @@ multi-process acceptance are still required.
   generation resource ownership and the process supervisor. The fixture
   results are not PostgreSQL concurrency/process acceptance. All P1 gates
   remain open.
+
+## Shared native transaction authority and bind/renew (2026-10-21)
+
+- An initial PostgreSQL regression reproduced the legacy continuation renewal
+  gap: a valid authenticated row with an expired lease was renewed by its old
+  owner (`/tmp/bitrouter-p1-continuation-clock-red.log`, one failing test).
+  The new shared backend is explicit; backend type, Cargo feature selection and
+  owned worker lifecycle do not change local caller-clock semantics.
+- Shared producer records now fence binds with `FOR SHARE`; a committed
+  `FOR UPDATE` close waits for already admitted writes and rejects delayed
+  writers. Closure evidence is bound to one namespace and random producer.
+  Cancelled/unconfirmed results are retained until a fresh primary read proves
+  closure. Post-close inspection uses a fresh statement snapshot after its
+  identity-lock wait. No production call joins Rust tasks inside a transaction.
+- The shared migration ledger now owns a namespace-scoped native relation.
+  Private bind/renew operations use the initialized namespace key authority,
+  framed owner/request identities and namespace-bound authenticated encryption.
+  They never bootstrap the local singleton epoch. Local crypto helpers were
+  factored without changing their authenticated data or payload interpretation.
+- The native row is locked before the database clock is sampled. Renewing an
+  expired or superseded token fails; a cleanup token cannot renew forward
+  authority. The final SQL mutation checks old lease, retention and replacement
+  lease again after sealing. Renewal preserves retention and reauthenticates
+  metadata. A cached future lease cannot bypass the row lookup.
+- Initial gate validation passed **3/3**, then initial gate/native tests passed
+  **7/7** (`/tmp/bitrouter-p1-continuation-gate-tests.log`,
+  `/tmp/bitrouter-p1-continuation-clock-tests.log`). Subsequent additions cover
+  namespace-bound AEAD, metadata tampering, cached stale tokens, caller loss of
+  a committed close result and post-lock snapshot freshness. The caller-loss
+  fixture does not simulate a PostgreSQL wire disconnect.
+- Final repaired minimal `multi-instance` continuation/shared regression passed
+  **141/141**, 2,175 filtered, zero retries in 24.956 seconds
+  (`/tmp/bitrouter-p1-continuation-clock-bounded-minimal.log`). Full-feature
+  continuation/pipeline/shared/config regression passed **528/528**, 3,068
+  filtered, zero retries in 29.297 seconds; PostgreSQL foundation took 13.732
+  seconds (`/tmp/bitrouter-p1-continuation-clock-bounded-full.log`). Pure local
+  `--no-default-features` continuation regression passed **93/93**, 2,160
+  filtered, zero retries in 7.217 seconds
+  (`/tmp/bitrouter-p1-continuation-clock-local.log`).
+- Rust 1.97 all-feature library/test Clippy exited 0 in 1m02s with no
+  Clippy-specific diagnostics
+  (`/tmp/bitrouter-p1-continuation-clock-bounded-clippy.log`).
+  The 163 library and one library-test unused-code warnings remain staged
+  runtime integration work; no suppression was introduced. This is not final
+  strict P1 lint acceptance. Formatting and whitespace checks passed.
+- Independent native review found a legacy NUL-delimited target fingerprint
+  collision at the new shared boundary. The shared implementation now frames
+  the namespace/provider/account/protocol/endpoint/auth-scheme/credential-proof
+  tuple under a new domain. A regression rejects the colliding provider/account
+  tuple, preserves the first row, and still accepts an exact duplicate. Local
+  persisted fingerprints remain unchanged. The final repaired test profiles
+  above include this regression; local source was unchanged by the repair.
+- Final boundary inspection identified a second issue: native payload size was
+  checked after encryption under the database locks. Raw native IDs and the
+  complete serialized plaintext are now capped before database access, leaving
+  room for the authentication tag, base64 expansion and bounded row metadata.
+  A closed-producer fixture distinguishes oversized raw IDs, serialization
+  expansion and a valid-size control by their specific errors. The final
+  profiles above include this repair.
+- Independent reviews approved the transaction gate and the narrow native
+  bind/renew implementation with no open findings
+  (`/tmp/bitrouter-p1-continuation-gate-review.json`,
+  `/tmp/bitrouter-p1-native-bind-renew-review.json`). Both target framing and
+  pre-transaction size-bound findings are closed. All 11 candidate file and
+  four final validation-log fingerprints were verified; runtime integration
+  and P1 acceptance remain excluded from these approvals.
+- Registry/assembly integration, forward state transitions, active resolution,
+  pruning, expired cleanup claims and uncertain `Reserved` recovery are still
+  open. The new backend currently implements private bind/renew only. These
+  fixtures are not official-process acceptance; all P1 gates remain open.
