@@ -16,6 +16,8 @@ The opt-in `multi-instance` feature enables a separate shared foreground path fo
 local daemon/home discovery. It requires an initialized, published PostgreSQL
 namespace and rejects managed-child/compiled-extension hosting. See the
 [shared process configuration](../skills/bitrouter/references/shared-gateway.md).
+`start` and `restart` reject shared configurations before creating local daemon
+state or contacting an existing daemon. Shared services use foreground `serve`.
 Foreground startup reads a selected file once with a 16 MiB bound. Local
 environment expansion is validated as local before daemon/home effects and the
 same parsed input becomes its configuration baseline.

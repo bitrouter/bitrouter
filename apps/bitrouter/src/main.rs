@@ -2210,6 +2210,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             log,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            bitrouter::host::validate_local_daemon_source(&source).await?;
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             let log_path = resolve_log_path(source.home(), log.as_deref());
             output.emit(&restart(&source, &socket, &log_path).await?)?;
@@ -4022,6 +4023,7 @@ async fn start(
     log_path: &Path,
     action: &'static str,
 ) -> Result<DaemonActionReport> {
+    bitrouter::host::validate_local_daemon_source(source).await?;
     bitrouter::host::validate_startup_features()?;
     // Make sure the bitrouter home exists *before* we open the log
     // file inside it. (Zero-config first-run lands here with the home

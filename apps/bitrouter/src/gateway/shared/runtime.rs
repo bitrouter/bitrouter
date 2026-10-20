@@ -5,6 +5,9 @@ mod lifecycle;
 mod publication;
 mod workers;
 
+#[cfg(all(test, unix))]
+mod process_tests;
+
 use std::sync::Arc;
 use std::time::Duration;
 

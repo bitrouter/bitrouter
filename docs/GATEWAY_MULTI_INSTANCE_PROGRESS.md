@@ -32,7 +32,7 @@ review threads remained unresolved. This does not close any P1 gate.
 | --- | --- | --- | --- |
 | 1 Authority foundation | Store/key foundation and shared startup implemented; operator bootstrap pending | Real PostgreSQL foundation and runtime tests passed | Foundation and bounded runtime approved |
 | 2 Admission and execution | Private engine implemented; serving integration pending | Real PostgreSQL transaction/race tests passed | Private engine approved |
-| 3 Gateway integration | Official foreground startup, credential binding, admission, dispatch, delivery and HTTP router implemented; independent-process acceptance pending | Scoped HTTP/protocol/executor and PostgreSQL runtime regressions passed | Authentication/context/dispatch/custody/HTTP/runtime substages approved |
+| 3 Gateway integration | Official foreground startup, credential binding, admission, dispatch, delivery and HTTP router implemented; complete process acceptance pending | Scoped HTTP/protocol/executor and PostgreSQL runtime regressions plus official-process startup/idle-drain tests passed | Authentication/context/dispatch/custody/HTTP/runtime substages approved |
 | 4 Published authority | Immutable publication implemented; operator and runtime wiring pending | Real PostgreSQL publication and local parser regressions passed | Publication substage approved |
 | 5 Trajectory authority | Pending | Pending | Pending |
 | 6 Delivery and operations | Shared submission/query SDK, bounded custody/transport/HTTP and retained runtime workers implemented; projection receiver, outbox and operator pending | Scoped runtime/service regressions and independent SDK tests passed | Custody/transport/HTTP/SDK/runtime substages approved |
@@ -1332,3 +1332,39 @@ multi-process acceptance are still required.
   Operator bootstrap/API, durable metering/trajectory projection and guard
   catch-up, retained-key correlation, outbox delivery, complete readiness details,
   local-launcher guards, official shared artifacts and P1-A01–A09 remain open.
+
+## Official process startup and local launcher boundary (2026-10-21)
+
+- Local `start`/`restart` now reject shared mode before daemon discovery,
+  replacement, home/runtime-file creation or child spawning. The common
+  `daemon::start_and_wait` entry applies the same guard for automatic launchers.
+  The CLI and shipped skill document foreground service ownership.
+- Three opt-in PostgreSQL fixtures run the actual Cargo-built `bro`, with
+  separately retained child processes, explicit configuration/key inputs and
+  isolated working/home paths. They verify two independently joined replicas,
+  unauthenticated inference rejection, clean idle SIGTERM exits with the other
+  replica still ready, listener-bind failure, unpublished-namespace rejection,
+  and rejected `start`/`restart`/managed-child paths. Durable owner rows and
+  filesystem contents are checked. Cleanup signals only children created by the
+  fixture and waits for every retained child before closing its database pool.
+- The candidate executable was built using Rust 1.97 with
+  `--no-default-features --features multi-instance`; its build-info profile is
+  still `custom`, so this does not close the official distribution-profile task.
+  Artifact metadata is in `/tmp/bitrouter-p1-official-process-artifact.json`.
+  `/tmp/bitrouter-p1-official-process-initial.log` records **71/71** selected
+  library/binary tests passing, 2,373 filtered, zero retries and no leak results
+  in 1.990 seconds. This includes all three real process fixtures and local
+  host/daemon/restart regression cases.
+- The unshared profile's same local selection passed **65/65**, 2,255 filtered,
+  zero retries and no leak results in 1.142 seconds
+  (`/tmp/bitrouter-p1-launcher-local-tests.log`). Library/binary/test Clippy
+  passed with `-D warnings` locally in 27.62 seconds and with all features in
+  1m04s; the latter retains 24 staged unused-code warnings and no Clippy
+  diagnostics. Formatting and whitespace checks passed. The source, five logs,
+  artifact metadata and executable digest are pinned in
+  `/tmp/bitrouter-p1-official-process-candidate.json`. Independent reviews are
+  `/tmp/bitrouter-p1-official-process-review.json` and
+  `/tmp/bitrouter-p1-local-daemon-guard-review.json`.
+- These fixtures use internal schema/authority setup. They do not establish
+  bootstrap through stock operator commands, authenticated accepted-work drain,
+  crash recovery or any complete P1 gate. All P1-A01–A09 remain pending.

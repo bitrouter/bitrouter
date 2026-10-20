@@ -14,6 +14,9 @@ mode is a foreground service managed by the operator; it does not use the
 local daemon launcher, PID/socket locator, home directory or compiled extension
 host. It never initializes or publishes a namespace as a startup side effect.
 Routing, policies and provider credentials must already be published there.
+`bro start` and `bro restart` reject shared configuration before local daemon
+discovery or runtime-file creation. Use your service manager to run and stop the
+foreground process; do not use the local daemon launcher for a shared deployment.
 
 ```yaml
 server:

@@ -187,6 +187,20 @@ pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool)
     serve_with_options(source, managed_child, |_| Ok(()), selected).await
 }
 
+/// Reject a shared deployment before a local launcher creates files, discovers
+/// a control socket or replaces a daemon. Shared services use foreground serve.
+pub async fn validate_local_daemon_source(source: &crate::paths::ConfigSource) -> Result<()> {
+    let selected = crate::config::shared_process::select(source).await?;
+    #[cfg(feature = "multi-instance")]
+    anyhow::ensure!(
+        matches!(selected, crate::config::shared_process::Selection::Local(_)),
+        "shared gateway must run through foreground serve, not local daemon commands"
+    );
+    #[cfg(not(feature = "multi-instance"))]
+    drop(selected);
+    Ok(())
+}
+
 /// Reject unavailable environment-driven startup work before a launcher changes
 /// local files or stops a resident daemon. Foreground hosts use the same check.
 pub fn validate_startup_features() -> Result<()> {
