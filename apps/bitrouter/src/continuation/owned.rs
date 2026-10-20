@@ -46,6 +46,20 @@ pub(crate) struct Drain {
     pub retained: Option<Retained>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Status {
+    pub worker: Worker,
+    pub markers: Markers,
+    pub producer_closed: bool,
+    pub joining: bool,
+}
+
+impl Status {
+    pub fn is_quiescent(self) -> bool {
+        self.worker.joined && !self.joining
+    }
+}
+
 impl Drain {
     pub fn is_clean(self) -> bool {
         self.retained.is_none() && self.markers.total == 0 && self.worker.is_clean()
@@ -71,6 +85,7 @@ struct State {
 #[derive(Default)]
 pub(super) struct Control {
     state: Mutex<State>,
+    forced: tokio::sync::Notify,
 }
 
 struct Waiter<'a>(&'a Control);
@@ -121,6 +136,9 @@ impl Control {
             }
         }
         notify.notify_one();
+        if force {
+            self.forced.notify_waiters();
+        }
     }
 
     fn poll_joined(&self, cx: &mut Context<'_>) -> Poll<Worker> {
@@ -247,12 +265,48 @@ impl ContinuationRegistry {
             .is_some_and(Control::healthy)
     }
 
+    /// Refresh this after pipeline producers join: their destructors may leave
+    /// additional markers even when the native worker has already stopped.
+    pub(crate) fn owned_status(&self) -> Result<Status> {
+        let (worker, joining) = {
+            let state = self.owned()?.lock();
+            (state.worker, state.waiting)
+        };
+        Ok(Status {
+            worker,
+            markers: self.owned_markers(),
+            producer_closed: self
+                .inner
+                .shared
+                .as_ref()
+                .is_none_or(|shared| shared.producer_closed()),
+            joining,
+        })
+    }
+
     /// Borrow the worker handle and use the caller's single absolute deadline.
     /// Cancellation retains the worker, closed restart gate and marker map.
     /// Call only after pipeline producers and tasks have joined.
     pub(crate) async fn drain_owned_until(&self, deadline: Instant) -> Result<Drain> {
         let control = self.owned()?;
         let _waiter = control.waiter()?;
+        let forced = control.forced.notified();
+        tokio::pin!(forced);
+        forced.as_mut().enable();
+        if control.worker().forced {
+            return self.owned_report(Some(Retained::Forced));
+        }
+        // Register before observing the latch so force cannot be lost between
+        // the check and a blocked worker/database await.
+        // https://docs.rs/tokio/latest/tokio/sync/struct.Notify.html#method.notified
+        tokio::select! {
+            biased;
+            () = &mut forced => self.owned_report(Some(Retained::Forced)),
+            result = self.drain_owned_grace(control, deadline) => result,
+        }
+    }
+
+    async fn drain_owned_grace(&self, control: &Control, deadline: Instant) -> Result<Drain> {
         if let Some(shared) = &self.inner.shared {
             shared.stop_accepting();
         }
@@ -283,6 +337,9 @@ impl ContinuationRegistry {
         }
         self.mark_pending_for_shutdown_reconciliation();
         loop {
+            if control.worker().forced {
+                return self.owned_report(Some(Retained::Forced));
+            }
             let before = self.owned_markers();
             if before.total == 0 {
                 return self.owned_report(None);
@@ -314,16 +371,31 @@ impl ContinuationRegistry {
         }
     }
 
-    /// After graceful work ends, abort and JOIN the retained worker. No database
-    /// compensation is started here. A cancelled waiter leaves the join owned.
-    pub(crate) async fn force_owned(&self) -> Result<Drain> {
+    /// Broadcast without waiting, including while graceful cleanup is pending.
+    /// The force latch also cancels that borrowed cleanup before its next batch.
+    pub(crate) fn request_force_owned(&self) -> Result<()> {
         let control = self.owned()?;
-        let _waiter = control.waiter()?;
         if let Some(shared) = &self.inner.shared {
             shared.stop_accepting();
         }
         control.begin_drain(&self.inner.reconciler.notify, true);
+        Ok(())
+    }
+
+    /// No database compensation starts here. Cancellation retains the handle.
+    pub(crate) async fn join_forced_owned(&self) -> Result<Drain> {
+        let control = self.owned()?;
+        ensure!(
+            control.worker().forced,
+            "continuation worker has not been forced"
+        );
+        let _waiter = control.waiter()?;
         std::future::poll_fn(|cx| control.poll_joined(cx)).await;
         self.owned_report(Some(Retained::Forced))
+    }
+
+    pub(crate) async fn force_owned(&self) -> Result<Drain> {
+        self.request_force_owned()?;
+        self.join_forced_owned().await
     }
 }

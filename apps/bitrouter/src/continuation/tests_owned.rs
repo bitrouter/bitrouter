@@ -81,6 +81,27 @@ async fn timeout_and_cancelled_force_keep_worker_ownership() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn force_broadcast_interrupts_a_graceful_wait_before_joining() -> Result<()> {
+    let registry = registry(94).await?.with_owned_lifecycle()?;
+    let release = gated_worker(&registry)?;
+    let original = control(&registry)?.task_id();
+    ensure!(registry.join_forced_owned().await.is_err());
+    let mut waiting = Box::pin(registry.drain_owned_until(deadline()));
+    ensure!(futures::poll!(waiting.as_mut()).is_pending());
+    registry.request_force_owned()?;
+    ensure!(registry.owned_status()?.worker.forced);
+    ensure!(registry.owned_status()?.joining && !registry.owned_status()?.is_quiescent());
+    ensure!(control(&registry)?.task_id() == original);
+    let retained = waiting.await?;
+    ensure!(retained.retained == Some(Retained::Forced));
+    let joined = registry.join_forced_owned().await?;
+    ensure!(joined.worker.joined && joined.worker.forced);
+    ensure!(registry.owned_status()?.is_quiescent());
+    ensure!(release.send(()).is_err());
+    Ok(())
+}
+
 struct RestartOnDrop(ContinuationRegistry, Arc<std::sync::atomic::AtomicUsize>);
 
 impl Drop for RestartOnDrop {

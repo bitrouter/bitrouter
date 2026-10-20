@@ -145,6 +145,10 @@ impl Registry {
         Ok(())
     }
 
+    pub(in crate::continuation) fn producer_closed(&self) -> bool {
+        self.lock().closure.is_some()
+    }
+
     fn visible(&self, row: &continuation_entity::Model) -> bool {
         !self.lock().pending.values().any(|p| {
             !matches!(p.disposition, Disposition::Existing(_))

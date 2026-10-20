@@ -1,5 +1,7 @@
 //! A retained build handle and all resource barriers for one generation.
 
+mod forced;
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,6 +41,8 @@ struct Retirement {
     native: Option<crate::continuation::owned::Drain>,
     producer_closed: bool,
     custody_failed: bool,
+    pipeline_failed: bool,
+    native_failed: bool,
 }
 
 pub(super) struct Resource {
@@ -49,6 +53,9 @@ pub(super) struct Resource {
     retirement: Mutex<Retirement>,
     retiring: AtomicBool,
     waiting: AtomicBool,
+    forcing: AtomicBool,
+    external_joined: AtomicBool,
+    force_signal: tokio::sync::Notify,
 }
 
 pub(super) struct Waiter<'a>(&'a Resource);
@@ -69,6 +76,9 @@ impl Resource {
             retirement: Mutex::new(Retirement::default()),
             retiring: AtomicBool::new(false),
             waiting: AtomicBool::new(false),
+            forcing: AtomicBool::new(false),
+            external_joined: AtomicBool::new(false),
+            force_signal: tokio::sync::Notify::new(),
         }
     }
 
@@ -169,6 +179,9 @@ impl Resource {
         // Panic payloads and construction errors can own arbitrary destructors.
         // Never run them under an ownership mutex.
         drop(observed);
+        if self.forcing.load(Ordering::Acquire) {
+            self.force_components();
+        }
         Poll::Ready(outcome)
     }
 
@@ -184,6 +197,15 @@ impl Resource {
         match &*self.build.lock().unwrap_or_else(|error| error.into_inner()) {
             Build::Running(task) => Some(task.id()),
             _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn build_finished(&self) -> bool {
+        match &*self.build.lock().unwrap_or_else(|error| error.into_inner()) {
+            Build::Running(task) => task.is_finished(),
+            Build::Joined(_) => true,
+            Build::Reserved => false,
         }
     }
 
@@ -217,6 +239,10 @@ impl Resource {
     }
 
     pub fn begin_attempt(&self, deadline: Instant) -> Result<Attempt> {
+        ensure!(
+            !self.forcing.load(Ordering::Acquire),
+            "forced generation cannot start a graceful attempt"
+        );
         ensure!(self.is_retiring(), "generation has not been withdrawn");
         let mut state = self
             .retirement
@@ -260,6 +286,20 @@ impl Resource {
 
     /// The manager keeps both this owner and the waiter guard through removal.
     pub async fn retire(&self, attempt: Attempt, serving: &Serving) -> Result<Report> {
+        let forced = self.force_signal.notified();
+        tokio::pin!(forced);
+        forced.as_mut().enable();
+        if self.forcing.load(Ordering::Acquire) {
+            return Ok(self.report(attempt, serving));
+        }
+        tokio::select! {
+            biased;
+            () = &mut forced => Ok(self.report(attempt, serving)),
+            result = self.retire_grace(attempt, serving) => result,
+        }
+    }
+
+    async fn retire_grace(&self, attempt: Attempt, serving: &Serving) -> Result<Report> {
         ensure!(self.is_retiring(), "generation has not been withdrawn");
         ensure!(
             self.retirement

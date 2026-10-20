@@ -111,6 +111,16 @@ also closes models/metrics acquisition and cannot be undone by readiness updates
 Build handles and outputs stay in these slots through cancelled waits and failed
 publication; diagnostic reports contain no application handles.
 
+Forced shutdown broadcasts build/native cancellation to every retained slot
+before waiting. Native force interrupts a graceful database wait without starting
+compensation or producer-close SQL. Completed but unobserved builds retain their
+complete applications and inherit the permanent force state when joined. Pipeline
+force requires actual transport quiescence (or proof that transport never
+started), followed by its independent zero-source check. Cancelled join waiters
+leave all handles in their owners. Reports distinguish local task quiescence
+from unresolved custody, native markers and unconfirmed durable producer closure;
+force never manufactures successful reclamation or renews a graceful deadline.
+
 Each candidate retains a fresh producer identity in memory before asynchronous
 registration; a confirmed commit makes its record durable. Registration and
 absence-close serialize on that identity, using

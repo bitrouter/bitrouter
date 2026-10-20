@@ -81,12 +81,50 @@ pub(super) struct Candidate {
     pub failure: Option<BuildFailure>,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ForcedReport {
+    pub generation: Generation,
+    pub build_joined: bool,
+    pub build_failure: Option<BuildFailure>,
+    pub has_components: bool,
+    pub pipeline: Option<crate::gateway::pipeline::owned_tasks::Summary>,
+    pub pending: Option<crate::gateway::pipeline::owned_tasks::Pending>,
+    pub native: Option<crate::continuation::owned::Status>,
+    pub producer_closed: bool,
+    pub custody: usize,
+    pub snapshot_readers: usize,
+    pub pipeline_failed: bool,
+    pub native_failed: bool,
+    pub joining: bool,
+}
+
+impl ForcedReport {
+    pub fn is_quiescent(self) -> bool {
+        self.build_joined
+            && !self.joining
+            && self.snapshot_readers == 0
+            && (!self.has_components
+                || (self.pipeline.is_some()
+                    && self.pending.is_some_and(|pending| {
+                        pending.sources == 0 && pending.executions == 0 && pending.settlements == 0
+                    })
+                    && self.native.is_some_and(|native| native.is_quiescent())))
+    }
+
+    pub fn durable_resolved(self) -> bool {
+        self.producer_closed
+            && self.custody == 0
+            && self.native.is_none_or(|native| native.markers.total == 0)
+    }
+}
+
 struct State {
     current: Option<Arc<Resource>>,
     retired: Vec<Arc<Resource>>,
     candidate: Option<Arc<Resource>>,
     history: VecDeque<Report>,
     closed: bool,
+    forcing: bool,
 }
 
 pub(super) struct Generations {
@@ -95,6 +133,7 @@ pub(super) struct Generations {
     namespace: String,
     max_retired: usize,
     state: Mutex<State>,
+    external_joined: tokio::sync::watch::Sender<bool>,
 }
 
 impl Generations {
@@ -122,7 +161,9 @@ impl Generations {
                 candidate: None,
                 history: VecDeque::with_capacity(config.max_retired + 2),
                 closed: false,
+                forcing: false,
             }),
+            external_joined: tokio::sync::watch::channel(false).0,
         })
     }
 
@@ -269,6 +310,10 @@ impl Generations {
 
     /// Explicitly choose a new attempt. Retrying an existing token never renews D.
     pub fn begin_retirement(&self, id: Generation, deadline: Instant) -> Result<Attempt> {
+        ensure!(
+            !self.lock().forcing,
+            "forced generations cannot start graceful retirement"
+        );
         self.retained(id)?.begin_attempt(deadline)
     }
 
@@ -290,6 +335,10 @@ impl Generations {
         }
         let removed = {
             let mut state = self.lock();
+            if state.forcing {
+                report.reclaimed = false;
+                return Ok(report);
+            }
             let removed = if state
                 .current
                 .as_ref()
@@ -323,6 +372,71 @@ impl Generations {
         Ok(report)
     }
 
+    fn resources(&self) -> Vec<Arc<Resource>> {
+        let state = self.lock();
+        state
+            .current
+            .iter()
+            .chain(state.retired.iter())
+            .chain(state.candidate.iter())
+            .cloned()
+            .collect()
+    }
+
+    /// Broadcast before awaiting any build/native worker. Ordinary retirement
+    /// cannot remove owners or start new cleanup once force has been selected.
+    pub fn request_force(&self) {
+        self.withdraw();
+        self.lock().forcing = true;
+        for resource in self.resources() {
+            resource.request_force();
+        }
+    }
+
+    /// Pass the actual process transport, or None only when it never started.
+    /// Source-zero alone is not proof that external transport producers joined.
+    pub fn force_pipelines(
+        &self,
+        transport: Option<&super::transport::owned::Transport>,
+    ) -> Result<()> {
+        ensure!(
+            self.lock().forcing,
+            "generation force has not been selected"
+        );
+        ensure!(
+            transport.is_none_or(|owner| owner.report().is_quiescent()),
+            "transport producers have not joined"
+        );
+        for resource in self.resources() {
+            resource.request_pipeline_force();
+        }
+        // Wake waiters only after every currently known pipeline was signalled.
+        self.external_joined.send_replace(true);
+        Ok(())
+    }
+
+    pub fn forced_reports(&self) -> Vec<ForcedReport> {
+        self.resources()
+            .iter()
+            .map(|resource| resource.forced_report(&self.serving))
+            .collect()
+    }
+
+    pub async fn join_forced(&self) -> Result<Vec<ForcedReport>> {
+        ensure!(
+            self.lock().forcing,
+            "generation force has not been selected"
+        );
+        let resources = self.resources();
+        // Only borrowed waits live in these temporary futures. Handles and
+        // complete applications remain in the manager's bounded slots.
+        let waits = resources
+            .iter()
+            .map(|resource| resource.join_forced(self.external_joined.subscribe()));
+        futures::future::join_all(waits).await;
+        Ok(self.forced_reports())
+    }
+
     #[cfg(test)]
     fn retained_count(&self) -> usize {
         let state = self.lock();
@@ -334,6 +448,22 @@ impl Generations {
 
 impl Drop for Generations {
     fn drop(&mut self) {
+        let forcing = self
+            .state
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .forcing;
+        if forcing {
+            let reports = self.forced_reports();
+            if reports.iter().all(|report| report.is_quiescent()) {
+                if reports.iter().any(|report| !report.durable_resolved()) {
+                    tracing::warn!(
+                        "Joined gateway generations retain unresolved durable state for recovery"
+                    );
+                }
+                return;
+            }
+        }
         let state = self
             .state
             .get_mut()

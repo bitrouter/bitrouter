@@ -1242,3 +1242,39 @@ multi-process acceptance are still required.
   startup and all P1 acceptance gates remain open. These owner fixtures are not
   independent-process shutdown acceptance or a claim of transport-internal
   dependency-task closure.
+
+## Generation and native force integration (2026-10-21)
+
+- Native continuation force now separates a synchronous signal from a borrowed
+  join. The signal interrupts active graceful SQL waits, permanently closes the
+  restart/admission gates and preserves the worker handle and durable markers.
+  A fresh status reports actual joins separately from producer closure.
+- The generation manager broadcasts force across current, retired and candidate
+  slots. It retains failed and completed-but-unobserved builds, applies sticky
+  force to newly harvested applications, and joins native/pipeline groups
+  concurrently. Pipeline force requires an actually joined transport and its
+  own zero-source check. It never starts forced compensation/closure SQL or
+  clears unresolved custody to claim success.
+- Independent source review found no production defect. Its nonblocking coverage
+  observation was addressed: two PostgreSQL cases now observe the actual blocker
+  PID with `pg_blocking_pids` before forcing cancellation, rather than relying on
+  elapsed time. Tests also cover cancelled joins, retained source/snapshot
+  barriers, late build results and failure-history preservation.
+- Final minimal shared-feature regressions passed **225/225**, 2,139 filtered,
+  zero retries in 15.913 seconds
+  (`/tmp/bitrouter-p1-generation-force-minimal.log`). Final all-feature shared,
+  continuation, pipeline-owner, assembly and configuration regressions passed
+  **244/244**, 3,412 filtered, zero retries in 16.169 seconds
+  (`/tmp/bitrouter-p1-generation-force-full.log`). Both explicitly include ignored
+  PostgreSQL tests. The earlier lock-observed command omitted `--run-ignored all`
+  and is not evidence for the database cases.
+- Rust 1.97 all-feature library/test Clippy exited 0 in 1m03s with no Clippy
+  diagnostics (`/tmp/bitrouter-p1-generation-force-clippy.log`). The 197 library
+  and one library-test unused-code warnings still reflect runtime integration
+  work; this is not final strict lint acceptance. Formatting and whitespace
+  checks passed. Source/evidence identities are recorded in
+  `/tmp/bitrouter-p1-generation-force-candidate.json`; the bounded independent
+  review is `/tmp/bitrouter-p1-generation-force-review.json`.
+- The process supervisor, official startup, workers and telemetry ordering still
+  require integration. These tests do not close P1-A01–A09 or establish complete
+  independent-process shutdown acceptance.
