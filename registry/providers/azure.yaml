@@ -204,6 +204,14 @@ models:
         cache_read: 0.5
       output_tokens:
         text: 6.0
+  - id: deepseek/deepseek-v4.1-flash
+    provider_model_id: deepseek-v4.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.006
+      output_tokens:
+        text: 1.2
 auto_sync:
   feed: models_dev
   key: azure
