@@ -73,6 +73,10 @@ impl Authority {
         &self.store
     }
 
+    pub fn with_database(&self, db: sea_orm::DatabaseConnection) -> Result<Self> {
+        Ok(Self::new(self.store.with_database(db)?, self.key.clone()))
+    }
+
     pub fn seal(&self, record: &str, revision: u64, plaintext: &[u8]) -> Result<SealedSecret> {
         self.key.seal(
             SecretIdentity {

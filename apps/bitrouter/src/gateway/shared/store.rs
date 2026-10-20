@@ -139,6 +139,11 @@ impl Store {
         &self.db
     }
 
+    /// Preserve authority identity and deadlines while reserving a separate pool.
+    pub fn with_database(&self, db: DatabaseConnection) -> Result<Self> {
+        Self::new(db, &self.namespace, self.transaction_timeout)
+    }
+
     pub fn namespace(&self) -> &str {
         &self.namespace
     }

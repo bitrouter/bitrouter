@@ -55,6 +55,17 @@ included in that snapshot rather than read independently by each replica.
 Environment-derived provider secrets are imported into encrypted shared storage;
 they are not re-resolved from each worker's environment during inference.
 
+The process database connection budget is 2–128, split into one dedicated
+heartbeat connection and the remaining main-pool connections. Generations reuse
+these pools. The heartbeat capability derives from the original joined owner,
+preserving namespace, deployment key, lease and transaction deadline; it never
+joins another incarnation. Renewal validates authority and the owner row, keeps
+draining owners non-accepting, and returns database-clock lease evidence only
+after commit. Pool isolation cannot bypass authoritative row locks. Expiry is
+terminal; a timeout or uncertain commit acknowledgement proves neither renewal
+nor expiry. A successful heartbeat alone does not make the main backend or a
+loaded snapshot ready.
+
 Shared snapshot preparation currently rejects `google_extensions: true` on Chat
 models. That extension's tool replay proofs require static target credentials;
 the shared credential-version binding does not yet provide that replay contract.

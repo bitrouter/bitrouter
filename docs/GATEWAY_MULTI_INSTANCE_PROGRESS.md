@@ -673,3 +673,47 @@ multi-process acceptance are still required.
   inference/status client delivery, not the operator API or official process
   runtime. Publication/drain workers, trajectory integration, independent
   process acceptance, performance and final aggregate review remain open.
+
+## Dedicated heartbeat prerequisite (2026-10-20)
+
+- A renewal-only capability now derives from the original joined engine and
+  substitutes a dedicated PostgreSQL pool while preserving owner, namespace,
+  deployment key, lease and transaction deadline. It neither initializes
+  authority nor joins another incarnation. Renewal holds the shared authority
+  fence and original owner lock, preserves drain state, and returns database
+  time/expiry/acceptance evidence only after commit. Definite expiry remains a
+  typed rejection; other failures can include an uncertain acknowledgement.
+- Process configuration now requires a total connection budget of **2–128**;
+  the intended split is one heartbeat connection and `N-1` main connections.
+  The low-level connector still permits a one-connection pool. Configuration
+  and the shipped skill reference agree on these bounds. Official pool creation
+  and the supervisor are still pending; this primitive does not enforce the
+  caller's pool selection or prove a running process respects the total budget.
+- The real PostgreSQL regression uses two one-connection pools. It occupies the
+  main pool during renewal, checks the persisted expiry/revision, demonstrates
+  that an owner-row lock still times out renewal, recovers after releasing that
+  lock, renews while draining, forces database-clock expiry, and verifies that
+  repeated renewals reject without creating a replacement owner.
+- Minimal shared-feature focused validation passed **2/2**, 2,284 filtered,
+  zero retries in 0.588 seconds; the PostgreSQL case took 0.577 seconds
+  (`/tmp/bitrouter-p1-lease-tests.log`). All-feature shared/config regressions
+  passed **31/31**, 3,535 filtered, zero retries in 13.648 seconds, including
+  the complete existing PostgreSQL campaign in 13.564 seconds
+  (`/tmp/bitrouter-p1-lease-regressions.log`).
+- Pure local `--no-default-features` configuration regression passed **1/1**,
+  2,252 filtered, zero retries in 0.025 seconds without a PostgreSQL test URL
+  (`/tmp/bitrouter-p1-lease-local.log`). Rust 1.97 all-feature library/test Clippy
+  exited successfully in 1m01s with no Clippy-specific diagnostics
+  (`/tmp/bitrouter-p1-lease-clippy.log`). It retains 126 library and one
+  library-test unused-code warnings from runtime integration that is still
+  staged; no warning was suppressed and this is not final strict P1 lint
+  acceptance. Formatting and whitespace checks passed.
+- Independent review found no actionable defects in the six implementation/
+  skill files (`/tmp/bitrouter-p1-lease-review.json`). Lost commit-ACK fault
+  injection, official pool allocation and supervised readiness remain later
+  runtime/process validation, not evidence supplied by this focused test.
+- The runtime design audit additionally identified complete config/key revision
+  fencing, atomic generation custody, cancellation-safe task/finalizer drains,
+  finite retained generations and process-owned observability as required
+  integration work (`/tmp/bitrouter-p1-runtime-design-review.json`). No P1 gate
+  is closed by this prerequisite.

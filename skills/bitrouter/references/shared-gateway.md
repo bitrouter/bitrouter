@@ -34,7 +34,9 @@ gateway_state:
 ```
 
 The owner lease must exceed three heartbeat intervals plus one transaction
-deadline. Database connections are bounded to 1–128, each background pass to
+deadline. The total database connection budget is 2–128: one is reserved for
+heartbeats and the remaining connections serve requests and other workers.
+Each background pass is bounded to
 1–256 records, and local in-flight requests to 1–65536. Excess admission is
 rejected without an unbounded waiting queue. Request bodies are bounded to
 1024–16777216 bytes. An expired owner lease does not prove provider work stopped.

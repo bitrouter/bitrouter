@@ -28,7 +28,7 @@ pub struct SharedGatewayConfig {
     pub namespace: String,
     /// Environment variable containing a base64-encoded 32-byte deployment key.
     pub deployment_key_env: String,
-    /// Maximum database connections owned by this process (1..128).
+    /// Total database connections (2..128), including one reserved for heartbeat.
     #[serde(default = "default_pool_connections")]
     pub pool_connections: u32,
     /// Database acquisition/transaction deadline, in milliseconds (100..30000).
@@ -112,7 +112,7 @@ impl GatewayStateConfig {
                 "gateway_state.deployment_key_env must name an environment variable",
             ));
         }
-        if !(1..=128).contains(&shared.pool_connections)
+        if !(2..=128).contains(&shared.pool_connections)
             || !(100..=30_000).contains(&shared.transaction_timeout_ms)
             || !(1_000..=300_000).contains(&shared.owner_lease_ms)
             || !(100..=30_000).contains(&shared.heartbeat_ms)
@@ -190,6 +190,8 @@ mod tests {
             ("namespace", serde_json::json!("a/b")),
             ("deployment_key_env", serde_json::json!("inline=secret")),
             ("pool_connections", serde_json::json!(0)),
+            ("pool_connections", serde_json::json!(1)),
+            ("pool_connections", serde_json::json!(129)),
             ("transaction_timeout_ms", serde_json::json!(30001)),
             ("owner_lease_ms", serde_json::json!(15000)),
             ("local_max_in_flight", serde_json::json!(0)),
@@ -208,6 +210,12 @@ mod tests {
                     .is_err(),
                 "accepted {field}"
             );
+        }
+        for limit in [2, 128] {
+            let mut value = base.clone();
+            value["pool_connections"] = serde_json::json!(limit);
+            let config: GatewayStateConfig = serde_json::from_value(value)?;
+            config.validate("postgres://localhost/fixture", false)?;
         }
         assert!(
             serde_json::from_value::<GatewayStateConfig>(serde_json::json!({

@@ -3,6 +3,7 @@
 mod admission;
 mod attempts;
 mod finalization;
+mod lease;
 mod outbox;
 mod recovery;
 mod resolution;
@@ -182,6 +183,19 @@ pub(super) struct Engine {
     lease_ms: i64,
 }
 
+/// Renewal-only capability for the original incarnation on a dedicated pool.
+pub(super) struct Heartbeat {
+    engine: Engine,
+}
+
+/// Database-clock evidence from a committed renewal, not a readiness assertion.
+#[derive(Debug)]
+pub(super) struct LeaseObservation {
+    pub database_now_ms: i64,
+    pub expires_at_ms: i64,
+    pub accepting: bool,
+}
+
 impl Engine {
     pub async fn join(authority: Authority, lease_ms: u64) -> Result<Self> {
         ensure!(
@@ -233,31 +247,6 @@ impl Engine {
     fn deadline(&self, now: i64) -> Result<i64> {
         now.checked_add(self.lease_ms)
             .context("shared lease clock overflow")
-    }
-
-    /// A heartbeat cannot resurrect an incarnation after its lease expired.
-    pub async fn heartbeat(&self) -> Result<()> {
-        self.store()
-            .retry(|| async {
-                let tx = self.store().begin().await?;
-                let mut instance: Stored<Instance> =
-                    self.store().lock(&tx, Kind::Instance, &self.owner).await?;
-                let now = Store::now(&tx).await?;
-                ensure!(instance.value.expires_at_ms > now, Rejection::Unavailable);
-                instance.value.expires_at_ms = self.deadline(now)?;
-                let status = if instance.value.accepting {
-                    "live"
-                } else {
-                    "draining"
-                };
-                let due = instance.value.expires_at_ms;
-                self.store()
-                    .save(&tx, &mut instance, status, Some(due), now)
-                    .await?;
-                tx.commit().await?;
-                Ok(())
-            })
-            .await
     }
 
     pub async fn drain(&self) -> Result<()> {
