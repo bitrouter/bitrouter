@@ -281,6 +281,7 @@ async fn renewal_reseals_metadata_and_preserves_retention() -> Result<()> {
             key: native.key.clone(),
             authority: other.authority,
             maintenance_cursor: Mutex::new(None),
+            recovery_cursor: Mutex::new(None),
         };
         ensure!(same_key_other_namespace.decrypt(&renewed).is_err());
         ensure!(

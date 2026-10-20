@@ -115,6 +115,11 @@ impl SharedContinuationDb {
         Self::create(authority, key).await
     }
 
+    #[cfg(test)]
+    pub(crate) async fn fixture_peer(&self) -> Result<Self> {
+        Self::create(self.authority.clone(), self.key.clone()).await
+    }
+
     /// Bound the entire transaction, including pool checkout and acknowledgement.
     pub(crate) async fn bounded<T>(&self, operation: impl Future<Output = Result<T>>) -> Result<T> {
         self.authority.store().bounded(operation).await

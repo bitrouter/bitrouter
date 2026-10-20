@@ -22,6 +22,10 @@ use bitrouter_ai::types::{
     ApiProtocol, FinishReason, ModelOperation, ReasoningEffort, UsageOrigin,
 };
 
+#[cfg(feature = "multi-instance")]
+#[path = "terminal_observation.rs"]
+pub(crate) mod terminal;
+
 /// Success-only lifecycle data supplied to required finalizers before a
 /// response is allowed to advertise successful completion.
 #[derive(Clone)]
@@ -96,6 +100,8 @@ struct RequiredDeliveryHandshakeInner {
         tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>>>,
     activation_completed: Mutex<Option<tokio::sync::oneshot::Sender<Result<()>>>>,
     terminal_committed: tokio::sync::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    #[cfg(feature = "multi-instance")]
+    terminal_witness: Option<terminal::Witness>,
 }
 
 /// Downstream's proof that an activated payload was delivered or replaced by
@@ -116,7 +122,14 @@ impl RequiredDeliveryHandshake {
         ready: tokio::sync::oneshot::Sender<Result<()>>,
         acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
     ) -> Self {
-        Self::with_completion(ready, acknowledged, None, None)
+        Self::with_completion(
+            ready,
+            acknowledged,
+            None,
+            None,
+            #[cfg(feature = "multi-instance")]
+            None,
+        )
     }
 
     /// Construct a drop-aware rendezvous whose delivery side waits for durable
@@ -132,7 +145,31 @@ impl RequiredDeliveryHandshake {
             acknowledged,
             Some(activation_completed),
             Some(terminal_committed),
+            #[cfg(feature = "multi-instance")]
+            None,
         )
+    }
+
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn new_with_terminal_witness(
+        ready: tokio::sync::oneshot::Sender<Result<()>>,
+        acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
+        activation_completed: tokio::sync::oneshot::Sender<Result<()>>,
+        terminal_committed: tokio::sync::oneshot::Receiver<()>,
+        witness: terminal::Witness,
+    ) -> Self {
+        Self::with_completion(
+            ready,
+            acknowledged,
+            Some(activation_completed),
+            Some(terminal_committed),
+            Some(witness),
+        )
+    }
+
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn terminal_witness(&self) -> Option<terminal::Witness> {
+        self.inner.terminal_witness.clone()
     }
 
     fn with_completion(
@@ -140,6 +177,7 @@ impl RequiredDeliveryHandshake {
         acknowledged: tokio::sync::oneshot::Receiver<DeliveryAcknowledgement>,
         activation_completed: Option<tokio::sync::oneshot::Sender<Result<()>>>,
         terminal_committed: Option<tokio::sync::oneshot::Receiver<()>>,
+        #[cfg(feature = "multi-instance")] terminal_witness: Option<terminal::Witness>,
     ) -> Self {
         Self {
             inner: Arc::new(RequiredDeliveryHandshakeInner {
@@ -147,6 +185,8 @@ impl RequiredDeliveryHandshake {
                 acknowledged: tokio::sync::Mutex::new(Some(acknowledged)),
                 activation_completed: Mutex::new(activation_completed),
                 terminal_committed: tokio::sync::Mutex::new(terminal_committed),
+                #[cfg(feature = "multi-instance")]
+                terminal_witness,
             }),
         }
     }

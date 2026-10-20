@@ -59,10 +59,20 @@ impl SharedNative {
 
     /// Retention is authorized at this locked snapshot. Publication lease age
     /// does not revoke an already active mapping. No lock follows the result.
+    #[cfg(test)]
     pub(in crate::continuation) async fn resolve(
         &self,
         owner: &str,
         request: &str,
+    ) -> Result<ContinuationResolution> {
+        self.resolve_visible(owner, request, |_| true).await
+    }
+
+    pub(in crate::continuation) async fn resolve_visible(
+        &self,
+        owner: &str,
+        request: &str,
+        visible: impl Fn(&continuation_entity::Model) -> bool,
     ) -> Result<ContinuationResolution> {
         let identity = self.identity(owner, request)?;
         let owner_identity = self.owner_identity(owner)?;
@@ -88,7 +98,7 @@ impl SharedNative {
                     tx.commit().await?;
                     return Ok(ContinuationResolution::Expired);
                 }
-                if snapshot.row.publication_state != PUBLICATION_ACTIVE {
+                if snapshot.row.publication_state != PUBLICATION_ACTIVE || !visible(&snapshot.row) {
                     tx.commit().await?;
                     return Ok(ContinuationResolution::Missing);
                 }
@@ -232,7 +242,11 @@ impl SharedNative {
             .await
     }
 
-    async fn scrub(&self, tx: &DatabaseTransaction, previous: &Snapshot) -> Result<bool> {
+    pub(super) async fn scrub(
+        &self,
+        tx: &DatabaseTransaction,
+        previous: &Snapshot,
+    ) -> Result<bool> {
         let mut row = previous.row.clone();
         row.publication_state = PUBLICATION_EXPIRED.into();
         // An authenticated empty payload removes the native id while retaining

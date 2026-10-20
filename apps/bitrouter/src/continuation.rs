@@ -330,6 +330,8 @@ pub struct ContinuationRegistry {
 }
 
 struct ContinuationRegistryInner {
+    #[cfg(feature = "multi-instance")]
+    shared: Option<shared::registry::Registry>,
     db: DatabaseConnection,
     keys: ContinuationKeySource,
     retention: TimeDelta,
@@ -516,6 +518,8 @@ impl ContinuationRegistry {
             u64::try_from(prune_batch_size).context("continuation prune_batch_size exceeds u64")?;
         Ok(Self {
             inner: Arc::new(ContinuationRegistryInner {
+                #[cfg(feature = "multi-instance")]
+                shared: None,
                 db,
                 keys,
                 retention,
@@ -739,6 +743,10 @@ impl ContinuationRegistry {
     }
 
     async fn reconcile_pass(&self, now: DateTime<Utc>) -> bool {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_reconcile().await;
+        }
         let mut had_error = self.reconcile_local_publications(now).await;
         if self.reconcile_stale_publications(now).await {
             had_error = true;
@@ -747,6 +755,10 @@ impl ContinuationRegistry {
     }
 
     async fn reconcile_local_publications(&self, now: DateTime<Utc>) -> bool {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_reconcile_pending().await;
+        }
         let pending = {
             let publications = match self.inner.pending_publications.lock() {
                 Ok(publications) => publications,
@@ -841,6 +853,11 @@ impl ContinuationRegistry {
     }
 
     fn mark_pending_for_shutdown_reconciliation(&self) {
+        #[cfg(feature = "multi-instance")]
+        if let Some(shared) = &self.inner.shared {
+            shared.stop_accepting();
+            return;
+        }
         let mut publications = match self.inner.pending_publications.lock() {
             Ok(publications) => publications,
             Err(poisoned) => poisoned.into_inner(),
@@ -1017,6 +1034,10 @@ impl ContinuationRegistry {
         delivery_attempt_id: u64,
         receipt: Option<&RequiredFinalizationReceipt>,
     ) -> Result<()> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_rollback(delivery_attempt_id, receipt).await;
+        }
         let publication = self.pending_publication(delivery_attempt_id, receipt);
         let Some(publication) = publication else {
             return Ok(());
@@ -1146,6 +1167,10 @@ impl ContinuationRegistry {
     }
 
     fn has_pending_publications(&self) -> bool {
+        #[cfg(feature = "multi-instance")]
+        if let Some(shared) = &self.inner.shared {
+            return shared.markers().total > 0;
+        }
         let publications = match self.inner.pending_publications.lock() {
             Ok(publications) => publications,
             Err(poisoned) => poisoned.into_inner(),
@@ -1337,6 +1362,12 @@ impl ContinuationRegistry {
         receipt: Option<&RequiredFinalizationReceipt>,
         delivery: &RequiredDeliveryHandshake,
     ) -> Result<bool> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self
+                .shared_activate(delivery_attempt_id, receipt, delivery)
+                .await;
+        }
         let publication = self.pending_publication(delivery_attempt_id, receipt);
         let Some(publication) = publication else {
             // Idempotent preparation against an already-active row owns no
@@ -1534,6 +1565,23 @@ impl ContinuationRegistry {
         now: DateTime<Utc>,
     ) -> Result<()> {
         let effective_model = format!("{}:{}", target.provider_name, target.service_id);
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self
+                .shared_bind(
+                    owner_user_id,
+                    gateway_request_id,
+                    ContinuationBinding {
+                        provider_response_id,
+                        effective_model: &effective_model,
+                        effective_effort: None,
+                        causal_prefix_commitment: None,
+                        target,
+                        credential_authority,
+                    },
+                )
+                .await;
+        }
         let key = self.inner.keys.load()?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
         let identity_lock = self.pending_identity_lock(&continuation_identity);
@@ -1573,6 +1621,12 @@ impl ContinuationRegistry {
         binding: ContinuationBinding<'_>,
         attempt: PendingBindAttempt,
     ) -> Result<bool> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self
+                .shared_bind_pending(owner_user_id, gateway_request_id, binding, attempt)
+                .await;
+        }
         let PendingBindAttempt {
             now,
             delivery_attempt_id,
@@ -1848,6 +1902,10 @@ impl ContinuationRegistry {
         gateway_request_id: &str,
         now: DateTime<Utc>,
     ) -> Result<ContinuationResolution> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_resolve(owner_user_id, gateway_request_id).await;
+        }
         let key = self.inner.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
@@ -1907,6 +1965,10 @@ impl ContinuationRegistry {
     }
 
     pub async fn prune(&self, now: DateTime<Utc>) -> Result<u64> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_prune().await;
+        }
         let now = timestamp(now);
         let expired = continuation_entity::Entity::find()
             .filter(continuation_entity::Column::ExpiresAt.lte(now.clone()))
@@ -2476,6 +2538,17 @@ impl ContinuationRuntime {
         delivery: &RequiredDeliveryHandshake,
     ) -> PipelineResult<bool> {
         if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
+            return delivery.wait_for_delivery().await;
+        }
+        #[cfg(feature = "multi-instance")]
+        if self.registry.inner.shared.is_some()
+            && (!ctx.successful_terminal
+                || !ctx.native_response_completed
+                || ctx
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.api_protocol != ApiProtocol::Responses))
+        {
             return delivery.wait_for_delivery().await;
         }
         match self

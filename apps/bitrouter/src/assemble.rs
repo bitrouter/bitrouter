@@ -186,9 +186,8 @@ pub struct Assembled {
 /// The coordinator owns migrations, publication and process lifecycle.
 #[cfg(feature = "multi-instance")]
 pub(crate) struct SharedAssembly {
-    pub database: DatabaseConnection,
+    pub continuation: crate::gateway::shared::continuation::SharedContinuationDb,
     pub auth_appliers: AuthAppliers,
-    pub continuation_key: crate::continuation::ContinuationKey,
     pub correlation_key: crate::trajectory::canonical::CorrelationKey,
     pub policies: Vec<crate::policy::Policy>,
     pub policy_lock: Option<crate::policy_lock::PolicyLock>,
@@ -199,6 +198,12 @@ pub(crate) async fn build_shared_app(
     config: &Config,
     inputs: &SharedAssembly,
 ) -> Result<Assembled> {
+    validate_shared_assembly(config, inputs.continuation.database())?;
+    assemble_app(config, None, Default::default(), Some(inputs)).await
+}
+
+#[cfg(feature = "multi-instance")]
+fn validate_shared_assembly(config: &Config, database: &DatabaseConnection) -> Result<()> {
     use sea_orm::{ConnectionTrait, DatabaseBackend};
 
     anyhow::ensure!(
@@ -213,10 +218,10 @@ pub(crate) async fn build_shared_app(
         "shared assembly requires a complete published routing snapshot"
     );
     anyhow::ensure!(
-        inputs.database.get_database_backend() == DatabaseBackend::Postgres,
+        database.get_database_backend() == DatabaseBackend::Postgres,
         "shared assembly requires an injected PostgreSQL connection"
     );
-    assemble_app(config, None, Default::default(), Some(inputs)).await
+    Ok(())
 }
 
 #[cfg(all(test, feature = "multi-instance"))]
@@ -239,18 +244,8 @@ gateway_state:
 "#,
             |_| None,
         )?;
-        let inputs = SharedAssembly {
-            database: crate::db::connect("sqlite::memory:").await?,
-            auth_appliers: AuthAppliers::new(),
-            continuation_key: crate::continuation::ContinuationKey::from_bytes(rand::random())?,
-            correlation_key: crate::trajectory::canonical::CorrelationKey::from_bytes(
-                rand::random(),
-            )?,
-            policies: Vec::new(),
-            policy_lock: None,
-        };
-        let error = build_shared_app(&config, &inputs)
-            .await
+        let database = crate::db::connect("sqlite::memory:").await?;
+        let error = validate_shared_assembly(&config, &database)
             .err()
             .context("shared construction accepted a local database")?;
         assert_eq!(
@@ -653,7 +648,7 @@ async fn assemble_app(
     // The schema is applied from `crate::db::migration` — Rust code, not
     // SQL — so it lands identically on whichever backend is configured.
     #[cfg(feature = "multi-instance")]
-    let shared_db = shared.map(|inputs| inputs.database.clone());
+    let shared_db = shared.map(|inputs| inputs.continuation.database().clone());
     #[cfg(not(feature = "multi-instance"))]
     let shared_db: Option<DatabaseConnection> = None;
     let db = match shared_db {
@@ -694,7 +689,7 @@ async fn assemble_app(
     };
     #[cfg(feature = "multi-instance")]
     let shared_continuation =
-        shared.map(|inputs| ContinuationKeySource::fixed(inputs.continuation_key.clone()));
+        shared.map(|inputs| ContinuationKeySource::fixed(inputs.continuation.key()));
     #[cfg(not(feature = "multi-instance"))]
     let shared_continuation: Option<ContinuationKeySource> = None;
     let continuation_keys = match shared_continuation {
@@ -716,8 +711,12 @@ async fn assemble_app(
         config.continuation.prune_batch_size,
     )?;
     #[cfg(feature = "multi-instance")]
-    let continuation_registry = if is_shared {
-        continuation_registry.with_owned_lifecycle()?
+    let continuation_registry = if let Some(inputs) = shared {
+        ContinuationRegistry::new_shared(
+            inputs.continuation.clone(),
+            config.continuation.retention_days,
+            config.continuation.prune_batch_size,
+        )?
     } else {
         continuation_registry
     };

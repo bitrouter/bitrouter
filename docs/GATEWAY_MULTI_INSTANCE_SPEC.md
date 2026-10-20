@@ -456,11 +456,51 @@ Closure proves only that this producer cannot insert later; worker joining,
 marker compensation and complete generation resource ownership remain separate
 requirements. A closed producer identity is never reused or recreated.
 
-Implementation is staged: private bind/renew, forward transitions, resolution,
-retention maintenance and the transaction gate do not yet replace the registry's
-local paths. Cleanup, `Reserved` recovery and Registry/assembly integration must
-be completed before enabling this backend through official startup. The
-internal tests do not close a P1 independent-process acceptance gate.
+Shared registry construction explicitly requires the initialized continuation
+authority. It routes binding, forward publication, lookup, retention and
+reconciliation to the namespace backend; compiling the feature does not change
+a local registry's storage mode. Assembly derives its continuation key and
+database from the same capability rather than accepting independently supplied
+values. The local constructor and local persistence remain unchanged.
+
+Shared pending records distinguish an uncertain reservation, a confirmed owned
+binding and a non-owning preparation against an established active binding.
+Every record retains the original random generation and invocation receipt.
+An observed lease is invalidated before an awaited renewal; only a fresh locked
+observation of a confirmed live owned generation can reconstruct it. A receipt
+alone never reconstructs forward authority from an uncertain reservation.
+Retiring or uncertain state cannot revert to forward publication.
+
+Explicit invocation-matched rollback records its obligation before waiting for
+an identity lock. If reconciliation still retains that invocation, rollback
+returns an unresolved error instead of acknowledging cleanup. Positive
+cancellation may atomically demote its own active
+generation to authenticated `cleanup` state. Uncertain ownership without
+positive failure can claim only expired prepublication or existing cleanup.
+Producer closure can claim prepublication but cannot demote retained active
+state. Cleanup preserves the generation and retention metadata and never grants
+a publication lease. A peer can finish a durable claim, comparing its full body
+and revision; cancellation after claim commit does not strand an active row.
+
+The delivery sender retains a monotonic process-local outcome independently of
+the terminal receiver. Success requires successful accounting and terminal send
+in the same final poll; failed delivery may also send the terminal `()` signal
+and must not become success evidence. Cancelled finalizer waits cannot consume
+the retained outcome. A successful terminal permits local intent retirement
+without deleting its active mapping. An active row with unknown delivery remains
+retained, even after the worker and producer close. Non-owning preparations never
+delete the established binding. An eligible commit with no preparation is an
+error, not an implicit duplicate success.
+
+The owned drain closes its in-memory bind gate, joins the worker, and then closes
+the database producer, even when the marker map is empty. It checks the original
+deadline before starting producer-close SQL. Reserved missing/foreign evidence
+is accepted only after confirmed closure. Forced drain only joins workers and
+retains unresolved records; it starts no compensation.
+
+Official startup, whole-generation resource ownership and independent process
+acceptance remain staged. These registry and database fixtures do not close a
+P1 independent-process acceptance gate.
 
 ## Trajectory identity, key epochs and guards
 

@@ -16,14 +16,36 @@ const SHARED_IDENTITY_DOMAIN: &[u8] = b"bitrouter.shared-continuation.identity.v
 const SHARED_OWNER_DOMAIN: &[u8] = b"bitrouter.shared-continuation.owner.v1";
 const SHARED_TARGET_DOMAIN: &[u8] = b"bitrouter.shared-continuation.target.v1";
 const PUBLICATION_EXPIRED: &str = "expired";
+const PUBLICATION_CLEANUP: &str = "cleanup";
 
+#[path = "shared_cleanup.rs"]
+pub(super) mod cleanup;
 #[path = "shared_lifecycle.rs"]
 mod lifecycle;
+#[path = "shared_registry.rs"]
+pub(super) mod registry;
 
 pub(super) struct SharedNative {
     authority: SharedContinuationDb,
     key: ContinuationKey,
     maintenance_cursor: Mutex<Option<String>>,
+    recovery_cursor: Mutex<Option<String>>,
+}
+
+/// Stable invocation identity; an observed lease is deliberately not identity.
+#[derive(Clone)]
+pub(super) struct NativeIntent {
+    pub identity: String,
+    pub generation: String,
+    pub producer: String,
+}
+
+impl NativeIntent {
+    fn owns(&self, row: &continuation_entity::Model) -> bool {
+        self.identity == row.continuation_identity
+            && self.generation == row.publication_generation
+            && self.producer == row.publication_instance_id
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -68,7 +90,82 @@ impl SharedNative {
             authority,
             key,
             maintenance_cursor: Mutex::new(None),
+            recovery_cursor: Mutex::new(None),
         }
+    }
+
+    pub(super) fn intent(&self, owner: &str, request: &str) -> Result<NativeIntent> {
+        Ok(NativeIntent {
+            identity: self.identity(owner, request)?,
+            generation: publication_generation()?,
+            producer: self.authority.producer_id().into(),
+        })
+    }
+
+    /// Resolve an uncertain renewal from a locked primary observation. The
+    /// caller must have a confirmed bind; this never reconstructs Reserved
+    /// absence or permits a cleanup/expired row to regain forward authority.
+    pub(super) async fn refresh_forward(
+        &self,
+        intent: &NativeIntent,
+    ) -> Result<continuation_entity::Model> {
+        ensure!(
+            intent.producer == self.authority.producer_id(),
+            Rejection::Changed
+        );
+        self.authority
+            .retry(|| async {
+                let tx = self.authority.begin_bind(&intent.identity).await?;
+                let snapshot = self
+                    .lock_row(&tx, &intent.identity)
+                    .await?
+                    .ok_or(Rejection::Changed)?;
+                self.decrypt(&snapshot.row)?;
+                ensure!(intent.owns(&snapshot.row), Rejection::Changed);
+                ensure!(
+                    matches!(
+                        snapshot.row.publication_state.as_str(),
+                        PUBLICATION_PROVISIONAL | PUBLICATION_DELIVERING | PUBLICATION_ACTIVE
+                    ),
+                    Rejection::Changed
+                );
+                let now = SharedContinuationDb::now(&tx).await?;
+                ensure!(
+                    parse_timestamp(&snapshot.row.publication_lease_until)? > now
+                        && parse_timestamp(&snapshot.row.expires_at)? > now,
+                    Rejection::Expired
+                );
+                tx.commit().await?;
+                Ok(snapshot.row)
+            })
+            .await
+    }
+
+    /// Revalidate the exact established generation used by a non-owning
+    /// duplicate preparation. Publication lease age is irrelevant to reads.
+    pub(super) async fn verify_existing(&self, intent: &NativeIntent) -> Result<()> {
+        self.authority
+            .retry(|| async {
+                let tx = self.authority.begin_cleanup(&intent.identity).await?;
+                let snapshot = self
+                    .lock_row(&tx, &intent.identity)
+                    .await?
+                    .ok_or(Rejection::Changed)?;
+                self.decrypt(&snapshot.row)?;
+                ensure!(
+                    intent.owns(&snapshot.row)
+                        && snapshot.row.publication_state == PUBLICATION_ACTIVE,
+                    Rejection::Changed
+                );
+                let now = SharedContinuationDb::now(&tx).await?;
+                ensure!(
+                    parse_timestamp(&snapshot.row.expires_at)? > now,
+                    Rejection::Expired
+                );
+                tx.commit().await?;
+                Ok(())
+            })
+            .await
     }
 
     fn identity(&self, owner: &str, request: &str) -> Result<String> {
@@ -158,6 +255,10 @@ impl SharedNative {
                             && parse_timestamp(&row.expires_at)? > now,
                         Rejection::Expired
                     );
+                    ensure!(
+                        row.publication_state != PUBLICATION_CLEANUP,
+                        Rejection::Changed
+                    );
                     let actual = decode_payload(plaintext)?;
                     ensure!(
                         row.owner_identity == owner_identity
@@ -242,6 +343,10 @@ impl SharedNative {
                 ensure!(
                     snapshot.row.publication_state != PUBLICATION_EXPIRED,
                     Rejection::Expired
+                );
+                ensure!(
+                    snapshot.row.publication_state != PUBLICATION_CLEANUP,
+                    Rejection::Changed
                 );
                 ensure!(
                     publication_owns_row(publication, &snapshot.row),
@@ -343,6 +448,7 @@ impl SharedNative {
                     | PUBLICATION_DELIVERING
                     | PUBLICATION_ACTIVE
                     | PUBLICATION_EXPIRED
+                    | PUBLICATION_CLEANUP
             ),
             "unsupported shared native publication state"
         );

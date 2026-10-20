@@ -159,6 +159,8 @@ pub(crate) struct DeliveryPermit {
     terminal_committed: Option<tokio::sync::oneshot::Sender<()>>,
     custody: ExecutionCustody,
     successful_terminal: bool,
+    #[cfg(feature = "multi-instance")]
+    terminal_observation: super::settlement::terminal::Writer,
 }
 
 impl DeliveryPermit {
@@ -195,6 +197,8 @@ impl DeliveryPermit {
                         .map_err(|_| {
                             BitrouterError::internal("delivery terminal commit receiver closed")
                         })?;
+                    #[cfg(feature = "multi-instance")]
+                    self.terminal_observation.complete(self.successful_terminal);
                     Ok(())
                 } else {
                     Err(BitrouterError::internal(
@@ -219,6 +223,8 @@ impl DeliveryPermit {
         // The caller already knows rendering/encoding failed. Freeze that
         // decision before returning a future that can be dropped unpolled.
         self.custody.record_pipeline_outcome(false);
+        #[cfg(feature = "multi-instance")]
+        self.terminal_observation.complete(false);
         self.fail_recorded(failure)
     }
 
@@ -298,6 +304,23 @@ fn delivery_handshake(
     let (acknowledged_tx, acknowledged_rx) = tokio::sync::oneshot::channel();
     let (activation_completed_tx, activation_completed_rx) = tokio::sync::oneshot::channel();
     let (terminal_committed_tx, terminal_committed_rx) = tokio::sync::oneshot::channel();
+    #[cfg(feature = "multi-instance")]
+    let (terminal_witness, terminal_observation) = super::settlement::terminal::pair();
+    #[cfg(feature = "multi-instance")]
+    let delivery = RequiredDeliveryHandshake::new_with_terminal_witness(
+        ready_tx,
+        acknowledged_rx,
+        activation_completed_tx,
+        terminal_committed_rx,
+        terminal_witness,
+    );
+    #[cfg(not(feature = "multi-instance"))]
+    let delivery = RequiredDeliveryHandshake::new_with_completion(
+        ready_tx,
+        acknowledged_rx,
+        activation_completed_tx,
+        terminal_committed_rx,
+    );
     (
         DeliveryPermit {
             ready: ready_rx,
@@ -306,13 +329,10 @@ fn delivery_handshake(
             terminal_committed: Some(terminal_committed_tx),
             custody,
             successful_terminal,
+            #[cfg(feature = "multi-instance")]
+            terminal_observation,
         },
-        RequiredDeliveryHandshake::new_with_completion(
-            ready_tx,
-            acknowledged_rx,
-            activation_completed_tx,
-            terminal_committed_rx,
-        ),
+        delivery,
     )
 }
 
@@ -4062,6 +4082,8 @@ fn log_request_finished(settle: &SettlementContext) {
 
 #[cfg(test)]
 mod stream_outcome_tests {
+    #[cfg(feature = "multi-instance")]
+    use anyhow::Context as _;
     use std::sync::Arc;
 
     use super::{
@@ -4211,5 +4233,88 @@ mod stream_outcome_tests {
         drop(deliver);
 
         assert!(!authorization.await.expect("authorization remains valid"));
+    }
+
+    #[cfg(feature = "multi-instance")]
+    #[tokio::test]
+    async fn sender_witness_survives_terminal_send_before_receiver_resumes() -> anyhow::Result<()> {
+        let (permit, delivery) = delivery_handshake(ExecutionCustody::default(), true);
+        let witness = delivery
+            .terminal_witness()
+            .context("terminal witness missing")?;
+        let mut authorization = Box::pin(async move {
+            anyhow::ensure!(delivery.wait_for_delivery_acknowledgement().await?);
+            anyhow::ensure!(delivery.complete_activation(Ok(())));
+            Ok::<bool, anyhow::Error>(delivery.wait_for_terminal_commit().await)
+        });
+        anyhow::ensure!(futures::poll!(authorization.as_mut()).is_pending());
+        let mut deliver = Box::pin(permit.deliver());
+        anyhow::ensure!(futures::poll!(deliver.as_mut()).is_pending());
+        anyhow::ensure!(futures::poll!(authorization.as_mut()).is_pending());
+        anyhow::ensure!(witness.outcome().is_none());
+        anyhow::ensure!(matches!(
+            futures::poll!(deliver.as_mut()),
+            std::task::Poll::Ready(Ok(()))
+        ));
+        // The terminal receiver has not resumed, but the sender's successful
+        // accounting/send/Ready decision is already retained by the witness.
+        drop(authorization);
+        anyhow::ensure!(witness.outcome() == Some(true));
+        anyhow::ensure!(witness.wait().await);
+        Ok(())
+    }
+
+    #[cfg(feature = "multi-instance")]
+    #[tokio::test]
+    async fn failure_terminal_signal_does_not_become_a_success_witness() -> anyhow::Result<()> {
+        let (permit, delivery) = delivery_handshake(ExecutionCustody::default(), true);
+        let witness = delivery
+            .terminal_witness()
+            .context("terminal witness missing")?;
+        let (authorization, delivery) = tokio::join!(
+            delivery.wait_for_delivery(),
+            permit.fail(BitrouterError::internal("fixture encoding failure")),
+        );
+        anyhow::ensure!(authorization.is_err());
+        delivery?;
+        anyhow::ensure!(witness.outcome() == Some(false));
+
+        let (permit, delivery) = delivery_handshake(ExecutionCustody::default(), false);
+        let witness = delivery
+            .terminal_witness()
+            .context("terminal witness missing")?;
+        let (authorization, delivery) =
+            tokio::join!(delivery.wait_for_delivery(), permit.deliver());
+        anyhow::ensure!(authorization?);
+        delivery?;
+        anyhow::ensure!(!witness.wait().await);
+        Ok(())
+    }
+
+    #[cfg(feature = "multi-instance")]
+    #[tokio::test]
+    async fn cancelled_and_unpolled_failed_permits_retain_negative_evidence() -> anyhow::Result<()>
+    {
+        let (permit, delivery) = delivery_handshake(ExecutionCustody::default(), true);
+        let witness = delivery
+            .terminal_witness()
+            .context("terminal witness missing")?;
+        let mut wait = Box::pin(witness.wait());
+        anyhow::ensure!(futures::poll!(wait.as_mut()).is_pending());
+        drop(wait);
+        let failure = permit.fail(BitrouterError::internal("unpolled failure"));
+        anyhow::ensure!(witness.outcome() == Some(false));
+        drop(failure);
+        anyhow::ensure!(!witness.wait().await);
+
+        let (permit, delivery) = delivery_handshake(ExecutionCustody::default(), true);
+        let witness = delivery
+            .terminal_witness()
+            .context("terminal witness missing")?;
+        let mut deliver = Box::pin(permit.deliver());
+        anyhow::ensure!(futures::poll!(deliver.as_mut()).is_pending());
+        drop(deliver);
+        anyhow::ensure!(!witness.wait().await);
+        Ok(())
     }
 }

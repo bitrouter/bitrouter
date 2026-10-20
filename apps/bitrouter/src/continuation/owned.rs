@@ -214,6 +214,9 @@ impl ContinuationRegistry {
     }
 
     fn owned_markers(&self) -> Markers {
+        if let Some(shared) = &self.inner.shared {
+            return shared.markers();
+        }
         let pending = self
             .inner
             .pending_publications
@@ -250,6 +253,9 @@ impl ContinuationRegistry {
     pub(crate) async fn drain_owned_until(&self, deadline: Instant) -> Result<Drain> {
         let control = self.owned()?;
         let _waiter = control.waiter()?;
+        if let Some(shared) = &self.inner.shared {
+            shared.stop_accepting();
+        }
         control.begin_drain(&self.inner.reconciler.notify, false);
         if tokio::time::timeout_at(deadline, std::future::poll_fn(|cx| control.poll_joined(cx)))
             .await
@@ -259,6 +265,21 @@ impl ContinuationRegistry {
         }
         if control.worker().forced {
             return self.owned_report(Some(Retained::Forced));
+        }
+        if Instant::now() >= deadline {
+            return self.owned_report(Some(Retained::Deadline));
+        }
+        // Even an empty local map needs the durable producer-close barrier:
+        // cancelled SQL may still hold a bind transaction on the primary.
+        if let Some(shared) = &self.inner.shared {
+            match tokio::time::timeout_at(deadline, shared.close_producer()).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "Shared continuation producer close retained ownership");
+                    return self.owned_report(Some(Retained::Backend));
+                }
+                Err(_) => return self.owned_report(Some(Retained::Deadline)),
+            }
         }
         self.mark_pending_for_shutdown_reconciliation();
         loop {
@@ -298,6 +319,9 @@ impl ContinuationRegistry {
     pub(crate) async fn force_owned(&self) -> Result<Drain> {
         let control = self.owned()?;
         let _waiter = control.waiter()?;
+        if let Some(shared) = &self.inner.shared {
+            shared.stop_accepting();
+        }
         control.begin_drain(&self.inner.reconciler.notify, true);
         std::future::poll_fn(|cx| control.poll_joined(cx)).await;
         self.owned_report(Some(Retained::Forced))

@@ -4,10 +4,10 @@ Implementation follows the [P1 contract](GATEWAY_MULTI_INSTANCE_SPEC.md) and the
 [original P1 gates](BITROUTER_SERVICE_REFACTOR_PLAN.md#p1-acceptance).
 Status: **in progress; no P1 delivery gate is accepted yet**.
 
-Current P0 base (2026-10-20): `9cbe512d101e777470d113b0086ab9e331b3a638`.
+Current P0 base (rechecked 2026-10-21): `9cbe512d101e777470d113b0086ab9e331b3a638`.
 [#984](https://github.com/bitrouter/bitrouter/pull/984) is merge ready and remains
 unmerged: [CI](https://github.com/bitrouter/bitrouter/actions/runs/39421381228)
-passed 57/57 jobs, all checks were 63 successful/8 configured skips, and no
+passed 57/57 jobs, all checks were 64 successful/8 configured skips, and no
 review threads remained unresolved. This does not close any P1 gate.
 
 ## Baseline and scope (2026-10-19)
@@ -1002,3 +1002,69 @@ multi-process acceptance are still required.
   whitespace checks passed. Registry/assembly integration, cleanup-only
   recovery, uncertain `Reserved` resolution and official-process acceptance
   remain open. No P1 acceptance gate is closed by this substage.
+
+## Shared native cleanup and Registry integration (2026-10-21)
+
+- Shared cleanup is durable and namespace-scoped. Receipt-matched cancellation
+  can atomically demote an owned active generation to authenticated cleanup;
+  retirement alone cannot. Cleanup ownership ignores obsolete observed leases
+  while retaining the exact identity, generation and producer. Finishing compares
+  body plus revision, including against a replacement at the same revision.
+  Recovery scans at most 32 records, advances immediately before each attempt
+  and uses a total database deadline. A peer can finish an acknowledged cleanup
+  whose result was discarded by its caller; that fixture is not a wire-fault test.
+- Delivery permits retain a sender-side terminal outcome. Successful accounting
+  and terminal send precede the positive outcome in the same poll. A failure
+  signal, dropped permit or unpolled failure future records negative evidence.
+  Cancelling the receiver does not consume this evidence. Existing local
+  handshake behavior remains intact.
+- `ContinuationRegistry::new_shared` selects the initialized namespace backend.
+  Bind, prepare, commit, rollback, lookup, prune and reconciliation now dispatch
+  explicitly; the shared path does not use the local singleton key epoch or
+  caller-provided clock. Shared assembly injects this capability, deriving both
+  database and continuation key from it.
+- The shared registry stores separate reserved, owned and non-owning existing
+  preparations. It retains immutable intent and receipt identity through
+  cancellation, invalidates an observed lease before renewal, and never promotes
+  cleanup or retiring state back into forward publication. Eligible commits
+  without preparation fail. Existing active duplicates cannot acquire cleanup
+  ownership of the earlier binding.
+- Owned drain closes admission to new native binds, joins the worker, then
+  confirms the durable producer-close barrier before resolving reserved absence
+  or foreign rows. The same absolute deadline covers that barrier and all marker
+  work, including empty-map shutdown. Repeating an expired drain cannot issue
+  producer-close SQL. Force only aborts/joins the worker.
+- Initial minimal native/terminal selection passed **37/37**, zero retries in
+  4.028 seconds (`/tmp/bitrouter-p1-native-registry-initial.log`). After adding
+  expired-drain and uncertain-live-prepublication coverage, the minimal
+  shared/continuation/terminal/assembly selection passed **174/174**, 2,165
+  filtered, zero retries in 15.495 seconds
+  (`/tmp/bitrouter-p1-native-registry-minimal.log`).
+- Full-feature continuation/pipeline/shared/config/assembly selection
+  passed **553/553**, 3,066 filtered, zero retries in 16.011 seconds
+  (`/tmp/bitrouter-p1-native-registry-full.log`). Local continuation/terminal
+  selection passed **102/102**, 2,151 filtered, zero retries in 1.581 seconds
+  (`/tmp/bitrouter-p1-native-registry-local.log`).
+- Parent review then corrected rollback reporting: an uncertain reservation or
+  otherwise retained cleanup marker must return an explicit unresolved error,
+  rather than `Ok(())`. The registry regression verifies that the original
+  reservation survives that error and drains after confirmed closure. The
+  affected minimal Registry selection passed **9/9**, 2,330 filtered, zero
+  retries in 0.314 seconds (`/tmp/bitrouter-p1-native-registry-rollback.log`).
+  The broader profiles above precede this final reporting-only change.
+- Rust 1.97 all-feature library/test Clippy exited 0 in 1m02s with no
+  Clippy-specific diagnostics (`/tmp/bitrouter-p1-native-registry-clippy.log`).
+  After the rollback reporting fix, the same check exited 0 in 1m03s
+  (`/tmp/bitrouter-p1-native-registry-rollback-clippy.log`), again with no
+  Clippy-specific diagnostics.
+  There are still 149 library and two library-test unused-code warnings from
+  staged integration; this is not final strict P1 lint acceptance. No suppression
+  was added. The existing dependency future-compatibility warning remains.
+- Independent source review found no open findings in the bounded registry
+  integration (`/tmp/bitrouter-p1-native-registry-review.json`), including the
+  rollback reporting correction. The candidate manifest records source and
+  evidence fingerprints (`/tmp/bitrouter-p1-native-registry-candidate.json`).
+  Formatting and whitespace checks passed. Whole-generation
+  resources, official process startup, supervisors, operator interfaces,
+  trajectory integration and process-level acceptance remain open. No P1 gate
+  is closed and no P1 PR is submitted by these internal fixtures.
