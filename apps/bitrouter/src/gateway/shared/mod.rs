@@ -8,6 +8,7 @@ pub(crate) mod credentials;
 mod crypto;
 pub(crate) mod dispatched;
 mod engine;
+mod generations;
 mod http;
 mod ownership;
 mod publication;

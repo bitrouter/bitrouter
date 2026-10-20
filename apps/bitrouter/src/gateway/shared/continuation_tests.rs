@@ -18,6 +18,48 @@ struct Fixture {
     peer: Authority,
 }
 
+#[tokio::test]
+#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+async fn registration_intent_closes_absence_and_cannot_be_reopened() -> Result<()> {
+    let fixture = Fixture::new().await?;
+    let result = async {
+        let context = fixture.context().await?;
+        let pending = registration::Registration::new(fixture.authority.clone(), context.key());
+        pending.close().await?;
+        ensure!(pending.open().await.is_err());
+        let repeated = registration::Registration::new(fixture.authority.clone(), context.key());
+        let opened = repeated.open().await?;
+        let confirmed = repeated.open().await?;
+        ensure!(opened.producer_id() == confirmed.producer_id());
+        // Discarding a confirmed result exercises durable reconciliation, not a
+        // claim that the wire lost a COMMIT acknowledgement.
+        drop(confirmed);
+        let bind = opened.begin_bind("retained-initializer").await?;
+        let mut close = Box::pin(repeated.close());
+        ensure!(futures::poll!(close.as_mut()).is_pending());
+        drop(close);
+        bind.rollback().await?;
+        repeated.close().await?;
+        ensure!(opened.begin_bind("after-registration-close").await.is_err());
+        ensure!(repeated.open().await.is_err());
+        let competing = registration::Registration::new(fixture.authority.clone(), context.key());
+        let (opening, closing) = tokio::join!(competing.open(), competing.close());
+        closing?;
+        if let Ok(capability) = opening {
+            ensure!(
+                capability
+                    .begin_bind("after-competing-close")
+                    .await
+                    .is_err()
+            );
+        }
+        ensure!(competing.open().await.is_err());
+        Ok(())
+    }
+    .await;
+    fixture.close(result).await
+}
+
 impl Fixture {
     async fn new() -> Result<Self> {
         let url = std::env::var("BITROUTER_TEST_DATABASE_URL")

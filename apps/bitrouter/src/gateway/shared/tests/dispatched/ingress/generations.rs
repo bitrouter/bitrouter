@@ -39,7 +39,7 @@ pub(super) async fn exercise(
     store: &Store,
     serving: &Arc<Serving>,
 ) -> Result<()> {
-    let original = serving.snapshot();
+    let original = serving.snapshot()?;
     let app = application(fixture)?;
     let candidate = Snapshot::new(original.revision, app.clone())?;
     ensure!(Snapshot::new(original.revision, app).is_err());
@@ -59,7 +59,7 @@ pub(super) async fn exercise(
     ] {
         ensure!(Snapshot::new(revision, application(fixture)?).is_err());
     }
-    ensure!(Arc::ptr_eq(&original, &serving.snapshot()));
+    ensure!(Arc::ptr_eq(&original, &serving.snapshot()?));
     drop(original);
     Box::pin(eof_retains_source_until_body_drop(fixture, store, serving)).await?;
     Box::pin(body_wait_and_key_publication(
@@ -68,7 +68,7 @@ pub(super) async fn exercise(
     .await?;
     Box::pin(stream_and_key_publication(fixture, store, serving)).await?;
 
-    let original = serving.snapshot();
+    let original = serving.snapshot()?;
     for revision in [
         original.revision,
         Revision {
@@ -124,7 +124,7 @@ pub(super) async fn exercise(
 }
 
 async fn rotate(fixture: &Fixture, store: &Store, serving: &Serving) -> Result<Arc<Snapshot>> {
-    let revision = serving.snapshot().revision;
+    let revision = serving.snapshot()?.revision;
     let authority = Authority::new(store.clone(), DeploymentKey::from_bytes([9; 32])?);
     let head = authority
         .rotate_correlation(revision.key_generation)
@@ -139,7 +139,7 @@ async fn body_wait_and_key_publication(
     store: &Store,
     serving: &Arc<Serving>,
 ) -> Result<()> {
-    let old_owner = serving.snapshot().owner;
+    let old_owner = serving.snapshot()?.owner;
     let (send, input) = tokio::sync::oneshot::channel();
     let polled = Arc::new(AtomicUsize::new(0));
     let mut pending = request(
@@ -158,7 +158,7 @@ async fn body_wait_and_key_publication(
     ensure!(polled.load(Ordering::SeqCst) > 0);
     ensure!(serving.custody.pending_for(old_owner) == 1);
     let old = rotate(fixture, store, serving).await?;
-    ensure!(old.owner == old_owner && old.owner != serving.snapshot().owner);
+    ensure!(old.owner == old_owner && old.owner != serving.snapshot()?.owner);
     ensure!(!serving.retired_quiescent(&old));
     ensure!(old.tasks().pending().sources == 1);
     ensure!(old.tasks().acquire().is_err());
@@ -167,7 +167,7 @@ async fn body_wait_and_key_publication(
         old.tasks().drain_until(tokio::time::Instant::now()).await?,
         Drain::Retained(pending) if pending.sources == 1
     ));
-    ensure!(serving.custody.pending_for(serving.snapshot().owner) == 0);
+    ensure!(serving.custody.pending_for(serving.snapshot()?.owner) == 0);
     let calls = upstream.calls.load(Ordering::SeqCst);
     send.send(serde_json::to_vec(&prompt("ok"))?)
         .map_err(|_| anyhow::anyhow!("body receiver dropped"))?;
@@ -192,7 +192,7 @@ async fn body_wait_and_key_publication(
         old.tasks().drain_until(tokio::time::Instant::now()).await?,
         Drain::Joined(summary) if summary.is_clean()
     ));
-    ensure!(!serving.retired_quiescent(&serving.snapshot()));
+    ensure!(!serving.retired_quiescent(&serving.snapshot()?));
     Ok(())
 }
 

@@ -23,6 +23,7 @@ gateway_state:
   owner_lease_ms: 30000
   heartbeat_ms: 5000
   local_max_in_flight: 256
+  max_retired: 4
   worker_interval_ms: 1000
   worker_batch_size: 64
   drain_timeout_ms: 30000
@@ -40,6 +41,17 @@ Each background pass is bounded to
 1–256 records, and local in-flight requests to 1–65536. Excess admission is
 rejected without an unbounded waiting queue. Request bodies are bounded to
 1024–16777216 bytes. An expired owner lease does not prove provider work stopped.
+
+`max_retired` accepts 1–64 (default 4), in addition to the current generation
+and one candidate/build slot. At the limit, configuration replacement waits for
+resource reclamation; it never evicts a generation with outstanding work. A
+cancelled or failed candidate retains its slot until its build and cleanup are
+confirmed complete. Readiness still requires the loaded authority revision to
+be current.
+
+Shared assembly rejects MCP servers, active server tools, decision-model
+execution, request checkers and the agent API. These execution capabilities
+remain local until they have explicit shared worker ownership.
 
 Shared HTTP serving uses one request per HTTP/1 connection, with no upgrades or
 HTTP/2. Clients must reconnect for subsequent requests. This bounds response-head

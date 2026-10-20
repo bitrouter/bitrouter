@@ -244,6 +244,10 @@ impl Engine {
         self.authority.store()
     }
 
+    pub fn namespace(&self) -> &str {
+        self.store().namespace()
+    }
+
     fn deadline(&self, now: i64) -> Result<i64> {
         now.checked_add(self.lease_ms)
             .context("shared lease clock overflow")

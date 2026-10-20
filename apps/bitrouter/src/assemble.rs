@@ -227,6 +227,24 @@ fn validate_shared_assembly(config: &Config, database: &DatabaseConnection) -> R
         "shared assembly requires a complete published routing snapshot"
     );
     anyhow::ensure!(
+        config.mcp_servers.is_empty(),
+        "shared assembly does not support MCP server workers"
+    );
+    let tools = &config.server_tools;
+    anyhow::ensure!(
+        tools.mcp_servers.is_empty()
+            && !tools.advisor
+            && !tools.subagent
+            && tools.fusion.is_none()
+            && tools.web_search.is_none()
+            && tools.web_fetch.is_none(),
+        "shared assembly does not support server tool execution"
+    );
+    anyhow::ensure!(
+        config.decision_model.is_none() && config.checkers.is_empty() && !config.agent_api.enabled,
+        "shared assembly requires published routing without local decision, extension or harness execution"
+    );
+    anyhow::ensure!(
         database.get_database_backend() == DatabaseBackend::Postgres,
         "shared assembly requires an injected PostgreSQL connection"
     );
@@ -260,6 +278,26 @@ gateway_state:
         assert_eq!(
             error.to_string(),
             "shared assembly requires an injected PostgreSQL connection"
+        );
+        let mut forbidden = config.clone();
+        forbidden.mcp_servers = serde_json::from_value(serde_json::json!({
+            "unstarted": { "name":"unstarted", "transport": { "type":"http", "url":"http://127.0.0.1:1/mcp" } }
+        }))?;
+        let error = validate_shared_assembly(&forbidden, &database)
+            .err()
+            .context("shared MCP worker accepted")?;
+        assert_eq!(
+            error.to_string(),
+            "shared assembly does not support MCP server workers"
+        );
+        forbidden = config;
+        forbidden.server_tools.advisor = true;
+        let error = validate_shared_assembly(&forbidden, &database)
+            .err()
+            .context("shared tool execution accepted")?;
+        assert_eq!(
+            error.to_string(),
+            "shared assembly does not support server tool execution"
         );
         Ok(())
     }

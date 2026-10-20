@@ -45,7 +45,16 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    #[cfg(test)]
     pub fn new(revision: Revision, app: Arc<App>) -> anyhow::Result<Arc<Self>> {
+        Self::assemble(revision, &app, Generation::new())
+    }
+
+    pub(super) fn assemble(
+        revision: Revision,
+        app: &App,
+        owner: Generation,
+    ) -> anyhow::Result<Arc<Self>> {
         ensure!(
             revision.config_generation > 0 && revision.key_generation > 0 && !app.skip_auth(),
             "invalid shared serving snapshot"
@@ -61,7 +70,7 @@ impl Snapshot {
         tasks.bind_snapshot()?;
         Ok(Arc::new(Self {
             revision,
-            owner: Generation::new(),
+            owner,
             state: AppState {
                 language_model: pipeline,
                 mcp: None,
@@ -81,17 +90,30 @@ impl Snapshot {
 pub(super) struct Serving {
     pub engine: Engine,
     pub custody: Arc<Registry>,
-    current: RwLock<Arc<Snapshot>>,
+    current: RwLock<Publication>,
     ready: AtomicBool,
     request_bytes: usize,
 }
 
+#[derive(Default)]
+struct Publication {
+    snapshot: Option<Arc<Snapshot>>,
+    withdrawn: bool,
+}
+
 impl Serving {
+    #[cfg(test)]
     pub fn new(
         engine: Engine,
         snapshot: Arc<Snapshot>,
         config: &SharedGatewayConfig,
     ) -> anyhow::Result<Arc<Self>> {
+        let serving = Self::empty(engine, config)?;
+        serving.install(snapshot)?;
+        Ok(serving)
+    }
+
+    pub(super) fn empty(engine: Engine, config: &SharedGatewayConfig) -> anyhow::Result<Arc<Self>> {
         ensure!(
             (1024..=16_777_216).contains(&config.max_request_bytes),
             "invalid shared ingress bound"
@@ -99,22 +121,32 @@ impl Serving {
         Ok(Arc::new(Self {
             custody: Registry::new(engine.clone(), config.local_max_in_flight)?,
             engine,
-            current: RwLock::new(snapshot),
+            current: RwLock::new(Publication::default()),
             ready: AtomicBool::new(false),
             request_bytes: config.max_request_bytes,
         }))
     }
 
     pub fn set_ready(&self, ready: bool) {
-        self.ready.store(ready, Ordering::Release);
+        let current = self
+            .current
+            .read()
+            .unwrap_or_else(|error| error.into_inner());
+        self.ready.store(
+            ready && !current.withdrawn && current.snapshot.is_some(),
+            Ordering::Release,
+        );
     }
 
     #[cfg(test)]
-    pub fn snapshot(&self) -> Arc<Snapshot> {
+    pub fn snapshot(&self) -> anyhow::Result<Arc<Snapshot>> {
         self.current
             .read()
             .unwrap_or_else(|error| error.into_inner())
-            .clone()
+            .snapshot
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("fixture has no serving snapshot"))
     }
 
     /// Publication and registration share this short gate. No old-generation
@@ -128,6 +160,7 @@ impl Serving {
         if !self.ready.load(Ordering::Acquire) {
             return Err(Rejection::Unavailable.into());
         }
+        let current = current.snapshot.as_ref().ok_or(Rejection::Unavailable)?;
         let source = current.tasks.acquire()?;
         let reservation = self.custody.reserve_for(current.owner)?;
         Ok((current.clone(), reservation, source))
@@ -138,6 +171,7 @@ impl Serving {
             .current
             .read()
             .unwrap_or_else(|error| error.into_inner());
+        let current = current.snapshot.as_ref().ok_or(Rejection::Unavailable)?;
         Ok((current.clone(), current.tasks.acquire()?))
     }
 
@@ -150,7 +184,10 @@ impl Serving {
             .current
             .read()
             .unwrap_or_else(|error| error.into_inner());
-        !Arc::ptr_eq(&current, snapshot)
+        !current
+            .snapshot
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, snapshot))
             && self.custody.pending_for(snapshot.owner) == 0
             && snapshot.tasks.pending().sources == 0
             && Arc::strong_count(snapshot) == 1
@@ -158,17 +195,59 @@ impl Serving {
 
     /// The lifecycle owner receives the previous app for bounded finalizer drain.
     /// A stale or incomplete publication never mutates the active application.
+    #[cfg(test)]
     pub fn publish(&self, snapshot: Arc<Snapshot>) -> anyhow::Result<Arc<Snapshot>> {
+        self.install(snapshot)?
+            .ok_or_else(|| anyhow::anyhow!("fixture publication has no predecessor"))
+    }
+
+    /// Only the whole-generation manager publishes production snapshots. Its
+    /// resource transfer is synchronous with this gate and never awaits here.
+    pub(super) fn install(&self, snapshot: Arc<Snapshot>) -> anyhow::Result<Option<Arc<Snapshot>>> {
         let mut current = self
             .current
             .write()
             .unwrap_or_else(|error| error.into_inner());
         ensure!(
-            snapshot.revision.advances(current.revision),
+            !current.withdrawn,
+            "shared serving is permanently withdrawn"
+        );
+        ensure!(
+            current
+                .snapshot
+                .as_ref()
+                .is_none_or(|current| snapshot.revision.advances(current.revision)),
             "shared serving revision did not advance"
         );
-        current.tasks.close_sources();
-        Ok(std::mem::replace(&mut *current, snapshot))
+        if let Some(current) = &current.snapshot {
+            current.tasks.close_sources();
+        }
+        Ok(current.snapshot.replace(snapshot))
+    }
+
+    pub(super) fn withdraw(&self) {
+        let previous = {
+            let mut current = self
+                .current
+                .write()
+                .unwrap_or_else(|error| error.into_inner());
+            current.withdrawn = true;
+            self.ready.store(false, Ordering::Release);
+            if let Some(snapshot) = &current.snapshot {
+                snapshot.tasks.close_sources();
+            }
+            current.snapshot.take()
+        };
+        drop(previous);
+    }
+
+    pub(super) fn loaded_revision(&self) -> Option<Revision> {
+        self.current
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.revision)
     }
 
     pub fn router(self: &Arc<Self>) -> Router {

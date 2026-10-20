@@ -1137,3 +1137,58 @@ multi-process acceptance are still required.
   at process exporter construction. Official startup, instrumentation setup,
   whole-generation retention, process shutdown and all P1 acceptance gates
   remain open.
+
+## Bounded whole-generation ownership (2026-10-21)
+
+- The manager retains complete assembled applications alongside their snapshots:
+  one current, a bounded retired collection and one candidate/build/failed-cleanup
+  slot. `max_retired` defaults to 4 and accepts 1–64. Publication cannot evict a
+  live owner; terminal withdrawal closes all HTTP acquisition gates permanently.
+- Registration allocates its producer intent before starting SQL. Creation and
+  absence-close share an identity lock and a closed tombstone fences a delayed
+  initializer. Failed candidates with invalid continuation keys can still close
+  their own identity under deployment authority. Another live producer remains
+  open. Shared assembly rejects unsupported MCP/tool/agent execution before
+  starting resources; local assembly behavior remains unchanged.
+- Build and drain waiters borrow retained handles. Normal retirement joins the
+  build and pipeline, confirms native producer closure/reconciliation, then
+  checks custody and readers. Cancelled waits retain the complete application
+  and original absolute deadline. Historical failures remain visible separately
+  from the proof that resources can be reclaimed.
+- Independent review found `G-I01`: a single 32-entry custody chunk could miss
+  reclaimable old entries behind live current requests. Reconciliation now yields
+  between bounded chunks, completes a fair sweep and repeats only after progress.
+  Tests cover forty busy entries before sixty-six reclaimable entries and an
+  all-live sweep that returns without spinning.
+- Corrected minimal shared-feature selection passed **15/15**, 2,334 filtered,
+  zero retries in 0.373 seconds
+  (`/tmp/bitrouter-p1-generations-corrected.log`). It also covers capacity refusal,
+  complete-application lifetime, same-revision rejection, cancelled build/native
+  waits, expired retries, invalid-key cleanup and failure-history preservation.
+- The broader minimal shared-feature selection passed **210/210**, 2,139
+  filtered, zero retries in 15.900 seconds
+  (`/tmp/bitrouter-p1-generations-minimal.log`). The same selection under all
+  features passed **229/229**, 3,412 filtered, zero retries in 15.960 seconds
+  (`/tmp/bitrouter-p1-generations-full.log`), including real PostgreSQL and
+  complete two-generation telemetry assembly. The existing Darwin compact-unwind
+  linker warning remains unrelated to these ownership assertions.
+- Pure local gateway continuation/assembly/configuration regressions, with no
+  PostgreSQL test URL, passed **123/123**, 2,130 filtered, zero retries in 1.666
+  seconds (`/tmp/bitrouter-p1-generations-local.log`).
+- Independent source reviews closed `G-I01` and all three candidate construction
+  findings (`CB-01`–`CB-03`). Initial Clippy found a `manual_map` simplification
+  in retirement collection removal; the expression was corrected without
+  changing its behavior. The final source repeated the complete all-feature
+  selection: **229/229 passed**, 3,412 filtered, zero retries in 16.025 seconds
+  (`/tmp/bitrouter-p1-generations-full-final.log`).
+- Final Rust 1.97 all-feature library/test Clippy exited 0 in 1m03s with no
+  Clippy-specific diagnostics (`/tmp/bitrouter-p1-generations-clippy.log`). The
+  182 library and one library-test unused-code warnings are staged runtime
+  integration gaps, not final strict lint acceptance. No suppression was added.
+  Formatting and whitespace checks passed. The candidate manifest pins the
+  source, documents and validation logs
+  (`/tmp/bitrouter-p1-generations-candidate.json`); independent bounded reviews
+  are recorded in `/tmp/bitrouter-p1-generations-review.json` and
+  `/tmp/bitrouter-p1-candidate-build-map.json`.
+- This stage does not implement forced process shutdown, startup/publication
+  supervision or official independent-process acceptance. P1-A01–A09 remain open.

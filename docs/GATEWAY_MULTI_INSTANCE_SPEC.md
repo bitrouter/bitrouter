@@ -1,7 +1,7 @@
 # Native gateway multi-instance implementation
 
 Status: implementation contract; delivery is not yet accepted.
-Updated: 2026-10-20. P0 base: `9cbe512d101e777470d113b0086ab9e331b3a638`
+Updated: 2026-10-21. P0 base: `9cbe512d101e777470d113b0086ab9e331b3a638`
 ([#984](https://github.com/bitrouter/bitrouter/pull/984)).
 
 This implements the complete P1 milestone in the
@@ -72,6 +72,11 @@ the shared credential-version binding does not yet provide that replay contract.
 Ordinary Chat Completions and local Google extension behavior are unchanged.
 This is an explicit shared-mode compatibility limit, never a silent downgrade.
 
+Shared assembly also rejects MCP servers, active server tools, decision-model
+execution, request checkers and the agent API before constructing application
+resources. These capabilities have no shared execution/worker ownership
+contract yet. Local assembly retains its existing behavior.
+
 Configuration publication uses compare-and-set against the current generation.
 A replica prepares a complete immutable routing/policy/key snapshot and exposes
 its `(config_generation, key_generation)` revision atomically. Neither component
@@ -97,6 +102,30 @@ retain their snapshot across awaited work. A retired snapshot with no remaining
 custody/readers has reached only the local request barrier: required finalizer,
 continuation compensation, owned task and exporter drains remain separate
 requirements before releasing its application resources.
+
+The generation manager retains the complete assembled application, not just its
+HTTP snapshot: one current generation, at most `max_retired` old generations
+(default 4, range 1–64), and one candidate/build/failed-cleanup slot. A full retired
+budget prevents publication without evicting any owner. Terminal withdrawal
+also closes models/metrics acquisition and cannot be undone by readiness updates.
+Build handles and outputs stay in these slots through cancelled waits and failed
+publication; diagnostic reports contain no application handles.
+
+Each candidate retains a fresh producer identity in memory before asynchronous
+registration; a confirmed commit makes its record durable. Registration and
+absence-close serialize on that identity, using
+a closed tombstone to fence delayed creation. Closing an unpublished failed
+candidate requires deployment authority even if its continuation key is invalid;
+native-row authentication is never bypassed. A closed producer cannot reopen,
+and discarding one candidate cannot close another generation's producer.
+
+Normal retirement joins the build and pipeline, confirms native producer closure
+and compensation, then checks custody and snapshot readers. It never forces a
+worker. Custody reconciliation visits complete fair sweeps in cooperative batches
+under the same absolute deadline; a busy first batch cannot starve eligible old
+entries. Reclamation is separate from historical panic/finalizer failures.
+Retries retain their original attempt deadline; only an explicit new attempt
+can choose another deadline. A bounded report history preserves completed results.
 
 Shared pipelines retain separate execution and settlement task sets. Every HTTP
 producer acquires a non-clonable source ticket under the snapshot publication

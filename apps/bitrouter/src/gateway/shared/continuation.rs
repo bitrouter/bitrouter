@@ -20,6 +20,8 @@ use crate::continuation::ContinuationKey;
 use super::authority::Authority;
 use super::store::{Kind, NewRecord, Stored};
 
+pub(super) mod registration;
+
 /// A single immutable generation's authority, never inferred from its backend.
 #[derive(Clone)]
 pub(crate) struct SharedContinuationDb {
@@ -44,41 +46,9 @@ pub(crate) struct ProducerClosure {
 impl SharedContinuationDb {
     /// Allocate a new producer only against an explicitly initialized authority.
     /// Failure never returns a capability with an unconfirmed producer record.
+    #[cfg(test)]
     pub(super) async fn create(authority: Authority, key: ContinuationKey) -> Result<Self> {
-        let context = Self {
-            authority,
-            key,
-            producer_id: uuid::Uuid::new_v4().to_string(),
-        };
-        context
-            .retry(|| async {
-                let tx = context.authority.store().begin().await?;
-                context.fence_key(&tx).await?;
-                let now = Self::now(&tx).await?;
-                let created = context
-                    .authority
-                    .store()
-                    .create(
-                        &tx,
-                        NewRecord {
-                            kind: Kind::ContinuationProducer,
-                            key: &context.producer_id,
-                            status: "open",
-                            due_at_ms: None,
-                            now_ms: now.timestamp_millis(),
-                            value: &Producer {
-                                instance_id: context.producer_id.clone(),
-                                closed_at_us: None,
-                            },
-                        },
-                    )
-                    .await?;
-                ensure!(created, "continuation producer identity already exists");
-                tx.commit().await?;
-                Ok(())
-            })
-            .await?;
-        Ok(context)
+        registration::Registration::new(authority, key).open().await
     }
 
     pub(crate) fn database(&self) -> &DatabaseConnection {

@@ -43,6 +43,10 @@ pub struct SharedGatewayConfig {
     /// Nonqueueing admission bound, including slow response consumers (1..65536).
     #[serde(default = "default_local_max_in_flight")]
     pub local_max_in_flight: usize,
+    /// Maximum retired routing generations still retaining resources (1..64).
+    /// The current generation and one candidate are additional slots.
+    #[serde(default = "default_max_retired")]
+    pub max_retired: usize,
     /// Recovery/publication polling interval, in milliseconds (100..30000).
     #[serde(default = "default_worker_interval_ms")]
     pub worker_interval_ms: u64,
@@ -122,6 +126,7 @@ impl GatewayStateConfig {
                 .saturating_add(shared.transaction_timeout_ms)
                 >= shared.owner_lease_ms
             || !(1..=65_536).contains(&shared.local_max_in_flight)
+            || !(1..=64).contains(&shared.max_retired)
             || !(100..=30_000).contains(&shared.worker_interval_ms)
             || !(1..=256).contains(&shared.worker_batch_size)
             || !(100..=300_000).contains(&shared.drain_timeout_ms)
@@ -153,6 +158,9 @@ fn default_heartbeat_ms() -> u64 {
 }
 fn default_local_max_in_flight() -> usize {
     256
+}
+fn default_max_retired() -> usize {
+    4
 }
 fn default_worker_interval_ms() -> u64 {
     1_000
@@ -195,6 +203,8 @@ mod tests {
             ("transaction_timeout_ms", serde_json::json!(30001)),
             ("owner_lease_ms", serde_json::json!(15000)),
             ("local_max_in_flight", serde_json::json!(0)),
+            ("max_retired", serde_json::json!(0)),
+            ("max_retired", serde_json::json!(65)),
             ("worker_batch_size", serde_json::json!(257)),
             ("max_connections", serde_json::json!(0)),
             ("header_timeout_ms", serde_json::json!(99)),
@@ -214,6 +224,15 @@ mod tests {
         for limit in [2, 128] {
             let mut value = base.clone();
             value["pool_connections"] = serde_json::json!(limit);
+            let config: GatewayStateConfig = serde_json::from_value(value)?;
+            config.validate("postgres://localhost/fixture", false)?;
+        }
+        if let GatewayStateConfig::Shared(shared) = config {
+            assert_eq!(shared.max_retired, 4);
+        }
+        for limit in [1, 64] {
+            let mut value = base.clone();
+            value["max_retired"] = serde_json::json!(limit);
             let config: GatewayStateConfig = serde_json::from_value(value)?;
             config.validate("postgres://localhost/fixture", false)?;
         }
