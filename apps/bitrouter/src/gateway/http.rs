@@ -1,4 +1,4 @@
-//! axum HTTP server — gated behind the `server` feature.
+//! Application-owned axum HTTP server, available in every gateway build.
 //!
 //! Wires generation and Decisions inbound protocols to the `language_model` pipeline:
 //! - `POST /v1/messages` — Messages
@@ -51,7 +51,7 @@ pub struct AppState {
     pub language_model: Arc<Pipeline>,
     /// Optional `mcp` pipeline — `POST /mcp/{name}` is mounted only when set.
     pub mcp: Option<Arc<mcp::Pipeline>>,
-    /// SDK-level `skip_auth`: when `true`, a credential-less request is given a
+    /// Application-level `skip_auth`: when `true`, a credential-less request is given a
     /// synthesised local caller; otherwise a pre-auth anonymous placeholder
     /// (an `AuthHook` is then expected to validate / reject).
     pub skip_auth: bool,
@@ -70,10 +70,9 @@ impl App {
     }
 
     /// Like [`App::serve`], but with a host-supplied router wrapper applied
-    /// after the SDK has mounted every route — used by
-    /// `bitrouter_telemetry::otel::http_layer` to open an OpenTelemetry SERVER
-    /// span at HTTP ingress. It is a genuine extension point rather than an
-    /// internal call: the renderer that uses it ships in another crate.
+    /// after the application has mounted every route. Application telemetry
+    /// uses this boundary to open an OpenTelemetry SERVER span at HTTP ingress;
+    /// custom hosts can install additional middleware through the same boundary.
     pub async fn serve_with_router_wrapper<F>(&self, listen: &str, wrapper: F) -> Result<()>
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,
@@ -111,7 +110,7 @@ impl App {
     /// Serve an already-bound listener with the normal router and shutdown drain.
     ///
     /// Hosts with multiple listeners can bind every required endpoint before
-    /// publishing readiness, without rebuilding the SDK's HTTP lifecycle.
+    /// publishing readiness, while retaining the gateway's HTTP lifecycle.
     pub async fn serve_listener_with_router_wrapper_and_shutdown<F, S>(
         &self,
         listener: tokio::net::TcpListener,
@@ -253,7 +252,7 @@ async fn shutdown_signal() {
 /// never be an unbounded allocation.
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 
-/// A router-wrapper closure. The wrapper runs after the SDK has mounted
+/// A router-wrapper closure. The wrapper runs after the application has mounted
 /// every route and applied every built-in layer, so a host can wrap the
 /// whole router in additional middleware (e.g. the layer that creates the
 /// SERVER span at HTTP ingress).
@@ -262,8 +261,8 @@ const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 /// `Fn` (not `FnOnce`) lets the same options be applied more than once.
 pub type RouterWrapper = Arc<dyn Fn(Router) -> Router + Send + Sync>;
 
-/// Options controlling which routes the SDK mounts. Hosts that ship their
-/// own richer variant of a built-in route opt out of the SDK's plainer
+/// Options controlling which routes the gateway mounts. Hosts that ship their
+/// own richer variant of a built-in route opt out of the gateway's default
 /// version here so [`axum::Router::merge`] does not panic on the duplicate
 /// path.
 #[derive(Default, Clone)]
@@ -280,10 +279,9 @@ pub struct RouterOptions {
 }
 
 impl RouterOptions {
-    /// Install a router-wrapper closure that runs after the SDK has mounted
-    /// every route. Used to add inbound HTTP middleware (e.g. the observe
-    /// plugin's ingress-span layer) without coupling the SDK to OpenTelemetry
-    /// or any other tracing backend.
+    /// Install a router-wrapper closure that runs after the gateway has mounted
+    /// every route. Application telemetry and custom hosts use this to add
+    /// inbound HTTP middleware without making routing depend on an exporter.
     pub fn with_router_wrapper<F>(mut self, wrapper: F) -> Self
     where
         F: Fn(Router) -> Router + Send + Sync + 'static,

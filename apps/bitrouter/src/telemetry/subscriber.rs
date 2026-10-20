@@ -2,14 +2,12 @@
 //!
 //! [`tracing_opentelemetry`] maps `otel.*` sentinel fields on a
 //! `tracing::Span` into a real OTel span. The bridge layer itself is not
-//! installed by this crate — the host (binary) composes it onto its global
-//! subscriber via [`tracing_subscriber_layer`], alongside any `fmt` / file
-//! layers it already runs.
+//! composed by the application host onto its global subscriber via
+//! [`tracing_subscriber_layer`], alongside its `fmt` / file layers.
 //!
-//! This module is deliberately free of any HTTP-server dependency so a
-//! consumer that only wants the tracing bridge does not have to compile the
-//! axum front-end. The inbound SERVER span lives next door in
-//! [`crate::telemetry::http_layer`], behind the `server` feature.
+//! This module handles tracing spans. The inbound SERVER span lives in
+//! [`crate::telemetry::http_layer`]. Both modules are enabled by `otel-http`
+//! or `otel-grpc`; gateway serving itself is always available.
 
 use crate::telemetry::exporter::OtelExporter;
 

@@ -3,7 +3,16 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+#[path = "prebuilt_example.rs"]
+mod prebuilt_example;
+
 pub fn build(package: &str, example: &str) -> Result<PathBuf, String> {
+    if let Some(path) = prebuilt_example::from_env(example)? {
+        return Ok(path);
+    }
+    eprintln!(
+        "building Cargo fixture {example}; CI can set BITROUTER_TEST_EXAMPLES_DIR to prebuilt examples"
+    );
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let profile = executable
         .parent()

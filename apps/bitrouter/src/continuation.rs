@@ -9543,6 +9543,192 @@ mod tests {
         Ok(())
     }
 
+    #[derive(Default)]
+    struct PreparationHandoffSignals {
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        completed: tokio::sync::Notify,
+        rollback_started: tokio::sync::Notify,
+        release_rollback: tokio::sync::Notify,
+        rollbacks: AtomicUsize,
+        receipt: std::sync::Mutex<Option<RequiredFinalizationReceipt>>,
+    }
+
+    struct PreparationHandoffFinalizer {
+        runtime: ContinuationRuntime,
+        signals: Arc<PreparationHandoffSignals>,
+    }
+
+    #[async_trait]
+    impl RequiredFinalizer for PreparationHandoffFinalizer {
+        async fn finalize(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+            self.runtime.finalize(ctx).await
+        }
+
+        async fn finalize_with_receipt(
+            &self,
+            ctx: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+        ) -> PipelineResult<()> {
+            *self
+                .signals
+                .receipt
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(receipt.clone());
+            self.signals.started.notify_one();
+            self.signals.release.notified().await;
+            self.runtime.finalize_with_receipt(ctx, receipt).await?;
+            self.signals.completed.notify_one();
+            Ok(())
+        }
+
+        async fn rollback_with_receipt(
+            &self,
+            ctx: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+        ) -> PipelineResult<()> {
+            let same = self
+                .signals
+                .receipt
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .is_some_and(|original| original.same_invocation(receipt));
+            if !same {
+                return Err(BitrouterError::internal(
+                    "preparation receipt changed before rollback",
+                ));
+            }
+            self.signals.rollbacks.fetch_add(1, Ordering::SeqCst);
+            self.signals.rollback_started.notify_one();
+            self.signals.release_rollback.notified().await;
+            self.runtime.rollback_with_receipt(ctx, receipt).await
+        }
+
+        async fn commit_with_receipt(
+            &self,
+            ctx: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+            delivery: &RequiredDeliveryHandshake,
+        ) -> PipelineResult<bool> {
+            self.runtime
+                .commit_with_receipt(ctx, receipt, delivery)
+                .await
+        }
+
+        async fn drain_pending_work(&self) -> PipelineResult<()> {
+            self.runtime.drain_pending_work().await
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_preparation_receipt_retains_compensation_until_consumed() -> anyhow::Result<()>
+    {
+        for streamed in [false, true] {
+            let registry = registry(55).await?;
+            let runtime = ContinuationRuntime::new(registry.clone());
+            let signals = Arc::new(PreparationHandoffSignals::default());
+            let routes = Arc::new(StaticRoutingTable::new());
+            routes.insert("gpt-5", vec![target("credential")]);
+            let response = if streamed {
+                MockResponse::Stream(vec![
+                    StreamPart::ResponseStarted {
+                        id: "handoff-provider".into(),
+                        source_protocol: ApiProtocol::Responses,
+                    },
+                    StreamPart::ResponseCompleted {
+                        id: "handoff-provider".into(),
+                        source_protocol: ApiProtocol::Responses,
+                        status: "completed".into(),
+                        usage: None,
+                        response_output_commitment: None,
+                    },
+                ])
+            } else {
+                MockResponse::Generate(GenerateResult {
+                    content: vec![Content::Text {
+                        text: "handoff".into(),
+                        provider_metadata: Default::default(),
+                    }],
+                    usage: None,
+                    finish_reason: Some(FinishReason::Stop),
+                    response_id: Some("handoff-provider".into()),
+                    stop_details: None,
+                    provider_metadata: Default::default(),
+                })
+            };
+            let mut builder = PipelineBuilder::new();
+            builder
+                .routing_table(routes)
+                .executor(Arc::new(MockExecutor::new(vec![response])))
+                .route_hook(runtime.clone())
+                .required_finalizer(PreparationHandoffFinalizer {
+                    runtime,
+                    signals: signals.clone(),
+                });
+            let pipeline = Arc::new(builder.build()?);
+            let active = pipeline.clone();
+            let mut execution = Box::pin(async move {
+                if streamed {
+                    let mut stream = active
+                        .execute_stream(tool_request("queued-handoff", None))
+                        .await?;
+                    while let Some(part) = stream.next().await {
+                        part?;
+                    }
+                } else {
+                    active
+                        .execute(nonstream_tool_request("queued-handoff", None))
+                        .await?;
+                }
+                Ok::<(), BitrouterError>(())
+            });
+            tokio::select! {
+                _ = signals.started.notified() => {},
+                result = &mut execution => anyhow::bail!("execution ended before preparation: {result:?}"),
+            }
+            signals.release.notify_one();
+            // This current-thread test never polls the receipt consumer again.
+            // The producer notifies and enqueues in one poll, then relinquishes
+            // execution. Dropping now covers successful send, not send failure.
+            signals.completed.notified().await;
+            drop(execution);
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                signals.rollback_started.notified(),
+            )
+            .await?;
+            assert_eq!(signals.rollbacks.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                registry
+                    .resolve(
+                        "tool-owner",
+                        &encode_gateway_continuation_id("queued-handoff")?,
+                        Utc::now()
+                    )
+                    .await?,
+                ContinuationResolution::Missing
+            );
+            signals.release_rollback.notify_one();
+            pipeline.drain_required_pending_settlements().await?;
+            assert_eq!(signals.rollbacks.load(Ordering::SeqCst), 1);
+            let row = registry
+                .database()
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+                ))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+            assert_eq!(
+                row.try_get::<i64>("", "count")?,
+                0,
+                "queued receipt orphaned provisional continuation"
+            );
+        }
+        Ok(())
+    }
+
     fn terminal_barrier_pipeline(
         registry: ContinuationRegistry,
         blocker: Option<BlockingRequiredFinalizer>,

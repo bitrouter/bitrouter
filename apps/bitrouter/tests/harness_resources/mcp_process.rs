@@ -11,6 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
+#[path = "../support/prebuilt_example.rs"]
+mod prebuilt_example;
+
 fn fixture_binary() -> Result<&'static Path, String> {
     static BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     BINARY
@@ -20,6 +23,12 @@ fn fixture_binary() -> Result<&'static Path, String> {
 }
 
 fn build_fixture() -> Result<PathBuf, String> {
+    if let Some(path) = prebuilt_example::from_env("harness_mcp_fixture")? {
+        return Ok(path);
+    }
+    eprintln!(
+        "building Cargo MCP fixture; CI can set BITROUTER_TEST_EXAMPLES_DIR to prebuilt examples"
+    );
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let profile = executable
         .parent()

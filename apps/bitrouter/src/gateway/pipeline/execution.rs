@@ -1817,13 +1817,20 @@ impl Pipeline {
         let receipt = RequiredFinalizationReceipt::new();
         let task_receipt = receipt.clone();
         let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
+        let (consumed_tx, consumed_rx) = tokio::sync::oneshot::channel();
         self.spawn_stream_finalization(async move {
             match finalizer
                 .finalize_with_receipt(&task_finalization, &task_receipt)
                 .await
             {
                 Ok(()) => {
-                    if prepared_tx.send(Ok(receipt)).is_err()
+                    // A successful send does not prove that the caller took
+                    // rollback ownership. Keep this tracked owner until the
+                    // receiver acknowledges consumption; dropping a queued
+                    // payload must compensate just like a failed send.
+                    // https://docs.rs/tokio/latest/tokio/sync/oneshot/struct.Sender.html#method.send
+                    if (prepared_tx.send(Ok((receipt, consumed_tx))).is_err()
+                        || consumed_rx.await.is_err())
                         && let Err(error) = finalizer
                             .rollback_with_receipt(&task_finalization, &task_receipt)
                             .await
@@ -1842,11 +1849,17 @@ impl Pipeline {
                 }
             }
         });
-        let receipt = prepared_rx.await.map_err(|error| {
+        let (receipt, consumed) = prepared_rx.await.map_err(|error| {
             BitrouterError::internal(format!(
                 "required finalizer preparation ended unexpectedly: {error}"
             ))
         })??;
+        // No await may separate this acknowledgement, the Ready return, and
+        // installation in the nonstream/stream guard by our callers. If the
+        // tracked producer was aborted, the caller still owns this receipt.
+        if consumed.send(()).is_err() {
+            tracing::warn!("required finalizer producer ended during receipt handoff");
+        }
         Ok(Some(receipt))
     }
 
