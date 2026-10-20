@@ -39,6 +39,18 @@ fn publication_has_no_ambient_authority() -> Result<()> {
     let prepared = document.prepare()?;
     ensure!(!prepared.config.inherit_defaults && !prepared.config.registry.enabled);
     ensure!(!prepared.config.server.skip_auth && prepared.policies.len() == 1);
+    let mut unsupported = document.clone();
+    unsupported.routing["providers"]["fixture"]["models"][0]["compatibility"] =
+        json!({"chat_completions": {"google_extensions": true}});
+    let rejection = unsupported
+        .prepare()
+        .err()
+        .context("accepted unsupported shared Google replay")?;
+    ensure!(
+        rejection
+            .to_string()
+            .contains("shared Google Chat replay authority is not supported")
+    );
     ensure!(
         matches!(prepared.config.providers["fixture"].headers.get("x-fixture"),
         Some(crate::config::ProviderHeaderConfig::Static(value))

@@ -1148,6 +1148,8 @@ impl HttpExecutor {
         apply_provider_headers(&mut applied, input.target, input.ctx, false);
         merge_outbound_trace_headers(&mut applied, input.trace_headers);
         inject_outbound_request_id(&mut applied, input.ctx)?;
+        #[cfg(feature = "multi-instance")]
+        let shared_credential = applied.shared_credential()?;
         let (request, credential_authority) = applied.into_parts();
         if input.target.headers.iter().any(|rule| {
             is_continuation_scope_header(rule.name().as_str())
@@ -1263,14 +1265,20 @@ impl HttpExecutor {
         input
             .ctx
             .record_credential_authority(credential_authority.clone());
-        Ok(match credential_authority {
+        let applied = match credential_authority {
             Some(authority) => crate::gateway::providers::auth::AppliedAuth::proven_with_scheme(
                 request,
                 authority.credential().clone(),
                 authority.effective_scheme(),
             ),
             None => crate::gateway::providers::auth::AppliedAuth::unproven(request),
-        })
+        };
+        #[cfg(feature = "multi-instance")]
+        let applied = match shared_credential {
+            Some(stamp) => applied.bind_shared_credential(stamp),
+            None => applied,
+        };
+        Ok(applied)
     }
 
     async fn refresh_auth_after_unauthorized(
@@ -1682,7 +1690,12 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
-        if crate::gateway::providers::codex::requires_streaming(&target.model_target()) {
+        if crate::gateway::providers::codex::requires_streaming(&target.model_target())
+            || self
+                .auth_appliers
+                .lookup(&target.provider_name)
+                .is_some_and(|applier| applier.requires_streaming(&target.model_target()))
+        {
             return self.execute_streaming_generation(target, prompt, ctx).await;
         }
         let (adapter, transport) = self
@@ -2841,6 +2854,98 @@ mod beta_forward_tests {
                     trace_headers: None,
                 })
                 .await?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "multi-instance")]
+    struct SharedCredentialFixture(bool);
+
+    #[cfg(feature = "multi-instance")]
+    #[async_trait]
+    impl crate::gateway::providers::auth::AuthApplier for SharedCredentialFixture {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
+            request.headers_mut().insert(
+                "x-api-key",
+                http::HeaderValue::from_static("shared-fixture-key"),
+            );
+            Ok(request)
+        }
+
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
+            let mut applied = AppliedAuth::unproven(self.apply(request, target).await?)
+                .bind_shared_credential(crate::gateway::shared::credentials::CredentialStamp {
+                    id: "shared-fixture-account".into(),
+                    pool_id: "shared-fixture-pool".into(),
+                    version: 17,
+                });
+            if self.0 {
+                applied.headers_mut().insert(
+                    "x-api-key",
+                    http::HeaderValue::from_static("changed-after-binding"),
+                );
+            }
+            Ok(applied)
+        }
+    }
+
+    #[cfg(feature = "multi-instance")]
+    #[tokio::test]
+    async fn executor_preserves_shared_stamp_and_rejects_mutated_auth() -> Result<()> {
+        for mutate in [false, true] {
+            let target = target(ApiProtocol::Messages);
+            let executor = HttpExecutor::with_dispatch_and_auth(
+                Default::default(),
+                OutboundDispatch::builtin(),
+                AuthAppliers::new().with(
+                    &target.provider_name,
+                    Arc::new(SharedCredentialFixture(mutate)),
+                ),
+            )?;
+            let ctx = ctx_with_beta(None);
+            let (adapter, transport) = executor
+                .dispatch
+                .lookup(&target.api_protocol)
+                .ok_or_else(|| BitrouterError::internal("fixture dispatch missing"))?;
+            let body = adapter.render_request_for_target(
+                ctx.require_generation_prompt()?,
+                &target.model_target(),
+            )?;
+            let (client, _) = executor.client_for(&target, false);
+            let result = executor
+                .build_authenticated_request(&RequestBuildInput {
+                    client: &client,
+                    url: "https://example.invalid/messages",
+                    body: &body,
+                    managed_expected: None,
+                    target: &target,
+                    transport,
+                    ctx: &ctx,
+                    trace_headers: None,
+                })
+                .await;
+            if mutate {
+                assert!(result.is_err());
+            } else {
+                let applied = result?;
+                let stamp = applied
+                    .shared_credential()?
+                    .ok_or_else(|| BitrouterError::internal("shared stamp lost"))?;
+                assert_eq!(stamp.version, 17);
+                assert_eq!(stamp.pool_id, "shared-fixture-pool");
+                assert!(
+                    applied.into_parts().1.is_none(),
+                    "fixture deliberately has no continuation authority"
+                );
+            }
         }
         Ok(())
     }

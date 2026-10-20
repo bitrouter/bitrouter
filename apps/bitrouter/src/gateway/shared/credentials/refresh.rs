@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 
+use super::observation::Observation;
 use super::{Account, CredentialStamp, Credentials, RefreshLease, account_id};
 use crate::gateway::providers::auth::{
     credentials::Credential,
@@ -19,6 +20,7 @@ struct Transaction {
     credential: Credential,
     pending: Option<Credential>,
     completed: bool,
+    observation: Option<Observation>,
 }
 
 #[async_trait]
@@ -71,6 +73,7 @@ impl CredentialStore for Credentials {
             credential,
             pending: None,
             completed: false,
+            observation: Observation::current(),
         }))
     }
 }
@@ -159,7 +162,7 @@ impl CredentialTransaction for Transaction {
 
     async fn release(&mut self) -> std::result::Result<(), StoreError> {
         if self.completed {
-            return Ok(());
+            return self.record_observation();
         }
         let store = self.backend.authority.store();
         store
@@ -181,11 +184,18 @@ impl CredentialTransaction for Transaction {
             .await
             .map_err(redact)?;
         self.completed = true;
-        Ok(())
+        self.record_observation()
     }
 }
 
 impl Transaction {
+    fn record_observation(&self) -> std::result::Result<(), StoreError> {
+        match &self.observation {
+            Some(observation) => observation.record(&self.stamp),
+            None => Ok(()),
+        }
+    }
+
     fn check_lease<'a>(&self, account: &'a Account, now: i64) -> Result<&'a RefreshLease> {
         let lease = account.lease.as_ref().ok_or(StoreError::Conflict)?;
         ensure!(

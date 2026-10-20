@@ -13,12 +13,13 @@ use super::crypto::SealedSecret;
 use super::engine::Rejection;
 use super::store::{Kind, NewRecord, Store, Stored};
 
+pub(crate) mod observation;
 mod refresh;
 
 /// An application-owned binding; neither tokens nor backend errors are public.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct CredentialStamp {
+pub(crate) struct CredentialStamp {
     pub id: String,
     pub pool_id: String,
     pub version: u64,

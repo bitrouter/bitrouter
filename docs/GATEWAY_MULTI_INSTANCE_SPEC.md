@@ -55,6 +55,12 @@ included in that snapshot rather than read independently by each replica.
 Environment-derived provider secrets are imported into encrypted shared storage;
 they are not re-resolved from each worker's environment during inference.
 
+Shared snapshot preparation currently rejects `google_extensions: true` on Chat
+models. That extension's tool replay proofs require static target credentials;
+the shared credential-version binding does not yet provide that replay contract.
+Ordinary Chat Completions and local Google extension behavior are unchanged.
+This is an explicit shared-mode compatibility limit, never a silent downgrade.
+
 Configuration publication uses compare-and-set against the current generation.
 A replica prepares a complete immutable routing/policy snapshot and exposes it
 atomically. Every new admission checks the authoritative generation; a stale or

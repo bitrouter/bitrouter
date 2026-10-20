@@ -1,6 +1,6 @@
 //! Immutable, encrypted routing publications, separate from process configuration.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -60,6 +60,9 @@ pub(super) struct Configuration {
 pub(super) struct PreparedConfiguration {
     pub config: Config,
     pub policies: Vec<Policy>,
+    /// Resolved from the validated source graph, before local config parsing
+    /// erases `derives`. Credential slot names do not select auth mechanisms.
+    pub authentication: HashMap<String, String>,
 }
 
 impl Configuration {
@@ -121,6 +124,13 @@ impl Configuration {
         );
         let mut accounts = BTreeSet::new();
         for (id, provider) in &config.providers {
+            ensure!(
+                provider
+                    .models
+                    .iter()
+                    .all(|model| !model.compatibility.chat_completions.google_extensions),
+                "shared Google Chat replay authority is not supported; disable google_extensions or use local mode"
+            );
             ensure!(
                 !provider.auto_discover && !provider.api_base.is_empty(),
                 "shared provider '{id}' requires an explicit endpoint and disabled discovery"
@@ -221,7 +231,19 @@ impl Configuration {
                 "shared policy bindings require an embedded policy lock"
             );
         }
-        Ok(PreparedConfiguration { config, policies })
+        let authentication = config
+            .providers
+            .keys()
+            .map(|provider| {
+                super::authentication::mechanism(&self.routing, provider)
+                    .map(|mechanism| (provider.clone(), mechanism))
+            })
+            .collect::<Result<_>>()?;
+        Ok(PreparedConfiguration {
+            config,
+            policies,
+            authentication,
+        })
     }
 }
 

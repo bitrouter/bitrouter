@@ -197,6 +197,40 @@ All P1-A01–A09 delivery gates remain pending. Actual shared authentication,
 dispatch, durable settlement, trajectory catch-up, operator APIs, workers and
 multi-process acceptance are still required.
 
+## Shared authentication binding (2026-10-20)
+
+- The branch is based on P0 `b25909a`; the prior direct-reader checkpoint is
+  `ed4c89b`. P0's new hosted CI remains in progress and is tracked separately.
+- Added an application-owned auth registry that maps published route accounts
+  to imported shared slots. Every provider receives an explicit mechanism;
+  inline credential overrides and unbound accounts fail closed. Existing static
+  transports and subscription mechanisms retain their protocol behavior.
+- Each credential transaction captures a request-local observation before OAuth
+  spawns its owned refresh task. Awaited release records the exact read or
+  committed replacement version. The authenticated request carries that version
+  and resource pool, with a wire commitment covering destination, credentials
+  and account headers. Executor reconstruction checks and preserves the binding,
+  including providers without a stable continuation proof.
+- Review found that config resolution erases inheritance and that Google Chat
+  replay still requires inline static authority. Preparation now retains the
+  authentication mechanism from the validated publication source, including
+  multi-level subscription aliases. Shared publications explicitly reject
+  `google_extensions: true`; local Google behavior remains unchanged. This
+  compatibility limit is also recorded in the implementation contract.
+- Independent re-review approved both fixes and found no remaining scoped
+  correctness/security/compatibility blocker.
+- `/tmp/bitrouter-p1-auth-binding-reviewed-tests.log`: **9 passed**, 8.098 s,
+  zero retries; real PostgreSQL authority/refresh/publication/authentication
+  campaign, wire proof tests, executor preservation and publication validation.
+  `/tmp/bitrouter-p1-auth-binding-regression.log`: **172 passed**, 5.350 s,
+  existing authentication, provider and executor regressions. Unselected tests
+  are not claimed as an aggregate pass. The initial string-type compile error
+  is retained in `/tmp/bitrouter-p1-auth-binding-tests.log`.
+- The served HTTP admission/dispatch/settlement integration is still pending;
+  this substage does not close any P1-A01–A09 gate or establish multi-process
+  serving acceptance. The registry is consumed by its real-backend campaign
+  while the serving snapshot coordinator is being connected.
+
 ## Direct credential reader release (2026-10-20)
 
 - P1 is now based on P0 runtime source `6218709`; the shared assembly checkpoint

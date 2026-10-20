@@ -115,6 +115,10 @@ fn bearer_access_token(value: Option<&HeaderValue>) -> Option<&str> {
 
 #[async_trait]
 impl AuthApplier for OpenAiCodexAuthApplier {
+    fn requires_streaming(&self, target: &ModelTarget) -> bool {
+        requires_streaming(target)
+    }
+
     async fn apply(
         &self,
         request: reqwest::Request,

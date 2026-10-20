@@ -52,6 +52,7 @@ async fn foundation() -> Result<()> {
         races::exercise(&first, &second).await?;
         refresh::exercise(&first, &second).await?;
         publication::exercise(&first, &second).await?;
+        super::authentication::tests::exercise(&first, &second).await?;
         Ok::<(), anyhow::Error>(())
     }
     .await;
