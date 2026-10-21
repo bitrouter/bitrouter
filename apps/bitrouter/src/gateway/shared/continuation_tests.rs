@@ -1,4 +1,7 @@
 //! Independent PostgreSQL pools exercise the durable producer barrier.
+//! Each campaign owns its database: namespace predicates do not isolate
+//! unrelated tests from page/relation-level Serializable predicate locks.
+//! <https://www.postgresql.org/docs/17/transaction-iso.html#XACT-SERIALIZABLE>
 //! These fixtures do not replace native-row or official-process acceptance.
 
 use std::time::Duration;
@@ -8,20 +11,21 @@ use sea_orm::DatabaseConnection;
 use super::*;
 use crate::gateway::shared::crypto::DeploymentKey;
 use crate::gateway::shared::schema;
-use crate::gateway::shared::store::{self, Store};
+use crate::gateway::shared::store::Store;
+use crate::gateway::shared::test_database::EmptyDatabase;
 
 struct Fixture {
-    first: DatabaseConnection,
     second: DatabaseConnection,
     authority: Authority,
     peer: Authority,
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+#[ignore = "requires PostgreSQL CREATEDB via BITROUTER_TEST_DATABASE_URL"]
 async fn registration_intent_closes_absence_and_cannot_be_reopened() -> Result<()> {
-    let fixture = Fixture::new().await?;
+    let mut database = EmptyDatabase::create().await?;
     let result = async {
+        let fixture = Fixture::new(&mut database).await?;
         let context = fixture.context().await?;
         let pending = registration::Registration::new(fixture.authority.clone(), context.key());
         pending.close().await?;
@@ -56,22 +60,19 @@ async fn registration_intent_closes_absence_and_cannot_be_reopened() -> Result<(
         Ok(())
     }
     .await;
-    fixture.close(result).await
+    database.finish(result).await
 }
 
 impl Fixture {
-    async fn new() -> Result<Self> {
-        let url = std::env::var("BITROUTER_TEST_DATABASE_URL")
-            .context("BITROUTER_TEST_DATABASE_URL is required")?;
-        let first = store::connect(&url, 2, Duration::from_secs(3)).await?;
-        let second = store::connect(&url, 2, Duration::from_secs(3)).await?;
+    async fn new(database: &mut EmptyDatabase) -> Result<Self> {
+        let first = database.connect(2, Duration::from_secs(3)).await?;
+        let second = database.connect(2, Duration::from_secs(3)).await?;
         let namespace = format!("native-gate-{}", uuid::Uuid::new_v4());
-        let a = Store::new(first.clone(), &namespace, Duration::from_secs(3))?;
+        let a = Store::new(first, &namespace, Duration::from_secs(3))?;
         let b = Store::new(second.clone(), &namespace, Duration::from_secs(3))?;
         schema::initialize(&a).await?;
         let key = DeploymentKey::from_bytes(rand::random())?;
         Ok(Self {
-            first,
             second,
             authority: Authority::new(a, key.clone()),
             peer: Authority::new(b, key),
@@ -91,22 +92,14 @@ impl Fixture {
             producer_id: context.producer_id.clone(),
         }
     }
-
-    async fn close(self, result: Result<()>) -> Result<()> {
-        let first = self.first.close().await;
-        let second = self.second.close().await;
-        result?;
-        first?;
-        second?;
-        Ok(())
-    }
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+#[ignore = "requires PostgreSQL CREATEDB via BITROUTER_TEST_DATABASE_URL"]
 async fn close_waits_for_accepted_bind_and_prevents_late_bind() -> Result<()> {
-    let fixture = Fixture::new().await?;
+    let mut database = EmptyDatabase::create().await?;
     let result = async {
+        let fixture = Fixture::new(&mut database).await?;
         let context = fixture.context().await?;
         let peer = fixture.peer(&context);
         ensure!(context.confirm_closed().await?.is_none());
@@ -160,14 +153,15 @@ async fn close_waits_for_accepted_bind_and_prevents_late_bind() -> Result<()> {
         Ok(())
     }
     .await;
-    fixture.close(result).await
+    database.finish(result).await
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+#[ignore = "requires PostgreSQL CREATEDB via BITROUTER_TEST_DATABASE_URL"]
 async fn cancelled_close_and_old_snapshot_cannot_reopen_producer() -> Result<()> {
-    let fixture = Fixture::new().await?;
+    let mut database = EmptyDatabase::create().await?;
     let result = async {
+        let fixture = Fixture::new(&mut database).await?;
         let context = fixture.context().await?;
         let peer = fixture.peer(&context);
         let bind = context.begin_bind("before-cancel").await?;
@@ -203,14 +197,15 @@ async fn cancelled_close_and_old_snapshot_cannot_reopen_producer() -> Result<()>
         Ok(())
     }
     .await;
-    fixture.close(result).await
+    database.finish(result).await
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+#[ignore = "requires PostgreSQL CREATEDB via BITROUTER_TEST_DATABASE_URL"]
 async fn key_namespace_and_microsecond_clock_authority() -> Result<()> {
-    let fixture = Fixture::new().await?;
+    let mut database = EmptyDatabase::create().await?;
     let result = async {
+        let fixture = Fixture::new(&mut database).await?;
         let arbitrary = ContinuationKey::from_bytes(rand::random())?;
         ensure!(
             SharedContinuationDb::create(fixture.authority.clone(), arbitrary.clone())
@@ -280,14 +275,15 @@ async fn key_namespace_and_microsecond_clock_authority() -> Result<()> {
         Ok(())
     }
     .await;
-    fixture.close(result).await
+    database.finish(result).await
 }
 
 #[tokio::test]
-#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+#[ignore = "requires PostgreSQL CREATEDB via BITROUTER_TEST_DATABASE_URL"]
 async fn unobserved_close_result_and_post_lock_evidence_are_recoverable() -> Result<()> {
-    let fixture = Fixture::new().await?;
+    let mut database = EmptyDatabase::create().await?;
     let result = async {
+        let fixture = Fixture::new(&mut database).await?;
         let context = fixture.context().await?;
         let peer = fixture.peer(&context);
         let (committed, observed) = tokio::sync::oneshot::channel();
@@ -376,5 +372,5 @@ async fn unobserved_close_result_and_post_lock_evidence_are_recoverable() -> Res
         Ok(())
     }
     .await;
-    fixture.close(result).await
+    database.finish(result).await
 }
