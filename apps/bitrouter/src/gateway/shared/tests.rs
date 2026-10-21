@@ -30,7 +30,7 @@ struct Counter {
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL for a dedicated PostgreSQL test database"]
 async fn postgres_foundation() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(60), foundation())
+    tokio::time::timeout(Duration::from_secs(60), Box::pin(foundation()))
         .await
         .context("shared foundation regression deadline exceeded")?
 }
@@ -43,22 +43,24 @@ async fn foundation() -> Result<()> {
     let namespace = format!("test-{}", uuid::Uuid::new_v4());
     let first = Store::new(first_db.clone(), &namespace, Duration::from_secs(3))?;
     let second = Store::new(second_db.clone(), &namespace, Duration::from_secs(3))?;
+    // Keep the independent campaigns' large debug futures off this aggregate
+    // frame. They retain the same owner, assertions, concurrency and deadline.
     let result = async {
         let (a, b) = tokio::join!(schema::initialize(&first), schema::initialize(&second));
         a?;
         b?;
-        namespace_and_rollback(&first, &second).await?;
-        key_authority_and_publication_fence(&first, &second).await?;
-        transaction_timeout(&url, &first).await?;
-        pooled_read_timeout(&url, &first).await?;
-        connector_trace_is_redacted(&url).await?;
-        shared_admission(&first, &second).await?;
-        shared_recovery(&first, &second).await?;
-        races::exercise(&first, &second).await?;
-        refresh::exercise(&first, &second).await?;
-        publication::exercise(&first, &second).await?;
-        super::authentication::tests::exercise(&first, &second).await?;
-        admitted::exercise(&first, &second).await?;
+        Box::pin(namespace_and_rollback(&first, &second)).await?;
+        Box::pin(key_authority_and_publication_fence(&first, &second)).await?;
+        Box::pin(transaction_timeout(&url, &first)).await?;
+        Box::pin(pooled_read_timeout(&url, &first)).await?;
+        Box::pin(connector_trace_is_redacted(&url)).await?;
+        Box::pin(shared_admission(&first, &second)).await?;
+        Box::pin(shared_recovery(&first, &second)).await?;
+        Box::pin(races::exercise(&first, &second)).await?;
+        Box::pin(refresh::exercise(&first, &second)).await?;
+        Box::pin(publication::exercise(&first, &second)).await?;
+        Box::pin(super::authentication::tests::exercise(&first, &second)).await?;
+        Box::pin(admitted::exercise(&first, &second)).await?;
         // Give the executor campaign its own polling root, as production HTTP
         // connections do, rather than nesting it inside every foundation frame.
         let mut executors = tokio::task::JoinSet::new();
