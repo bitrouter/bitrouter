@@ -115,12 +115,16 @@ jobs:
             "$PACKAGE_OUTPUT/build-info.json"
           jq -e --slurpfile actual "$PACKAGE_OUTPUT/build-info.json" \
             --arg binary "bro$suffix" '.identity == $actual[0] and .binary.path == $binary' "$root/manifest.json"
+          # Hash binary stdin to avoid escaped Windows filenames. Compare in jq
+          # so native Windows CRLF output cannot decorate the expected digest.
+          # https://www.gnu.org/software/coreutils/manual/html_node/cksum-output-modes.html
+          # https://jqlang.org/manual/#invoking-jq
           if command -v sha256sum >/dev/null; then
-            digest="$(sha256sum "$candidate" | awk '{print $1}')"
+            digest="$(sha256sum -b < "$candidate" | awk '{print $1}')"
           else
-            digest="$(shasum -a 256 "$candidate" | awk '{print $1}')"
+            digest="$(shasum -a 256 -b < "$candidate" | awk '{print $1}')"
           fi
-          test "$digest" = "$(jq -r '.binary.sha256' "$root/manifest.json")"
+          jq -e --arg digest "$digest" '.binary.sha256 == $digest' "$root/manifest.json"
       - name: Build independent SDK consumer and run packaged acceptance
         if: matrix.profile == 'gateway'
         shell: bash
