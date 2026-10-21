@@ -137,6 +137,7 @@ impl CoreSession {
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
                 changed: Notify::new(),
+                skill_consents_changed: Notify::new(),
                 steering_changed: Notify::new(),
                 budget_changed: Arc::new(Notify::new()),
             }),
