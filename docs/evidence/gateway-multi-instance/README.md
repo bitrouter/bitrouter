@@ -1,9 +1,11 @@
 # P1 candidate evidence — 2026-10-21
 
 This evidence accompanies the [acceptance record](../../GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md).
-P0 source is `9cbe512d101e777470d113b0086ab9e331b3a638`; P1 runtime source is
+P0 source is `9cbe512d101e777470d113b0086ab9e331b3a638`; measured P1 runtime source is
 `2495bf8db118de399a11fc11f82ba18bd6a6455d`. Later documentation-only commits do
-not change the measured runtime. [Artifact identities](artifacts-2026-10-21.json)
+not change the measured runtime. The later
+[pooled-read follow-up](read-retry-2026-10-21.md) records current shared validation
+and why the original local measurements retain their original provenance. [Artifact identities](artifacts-2026-10-21.json)
 record source, hashes, features, compiler, build settings and dependency counts.
 
 ## Local comparison method
@@ -116,8 +118,8 @@ small footprint changes to particular source edits.
 
 ## Validation and retained failures
 
-[Validation results](validation-2026-10-21.json) record commands, source revisions,
-counts and log hashes: the final workspace passed 4,939/4,939 in 677.839s, with
+[Initial-candidate validation](validation-2026-10-21.json) records commands, source revisions,
+counts and log hashes: that workspace passed 4,939/4,939 in 677.839s, with
 147 configured skips; doctests passed 11 with one ignored. Strict workspace
 Clippy, warning-denied rustdoc, registry validation, distribution consistency and
 format checks passed. The separate shared selection passed 203/203, the fixed

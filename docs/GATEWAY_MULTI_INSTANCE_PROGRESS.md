@@ -5,16 +5,16 @@ Implementation follows the [P1 contract](GATEWAY_MULTI_INSTANCE_SPEC.md) and the
 Status: **P1 implementation and local acceptance complete**. Hosted checks and
 review state are tracked on [#990](https://github.com/bitrouter/bitrouter/pull/990).
 
-Runtime source `2495bf8db118de399a11fc11f82ba18bd6a6455d` passed the v9 shared
-selection, 203/203. Eight fixed v8 stability sets passed 40/40, and three fixed
+Runtime source `322f3d87813082085c23389976897207268cfbde` passed the v10 shared
+selection, 204/204. Three fixed v10 guard confirmations passed 3/3. Eight fixed v8 stability sets passed 40/40, and three fixed
 v9 maintenance repeats passed 3/3. Independent source-review findings are closed.
 The [final acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) is the current
 source of truth for candidate identities, results, remaining gates and limits.
 
-- Final full workspace: **4,939/4,939 passed**, 147 configured skips, 677.839s;
-  doctests 11 passed/1 ignored; strict Clippy, rustdoc, registry, distribution and
-  format checks passed. One nextest `LEAK` notice in an unchanged P0 test did not
-  recur in a single exact-case check; its cause remains unexplained and recorded.
+- Final full workspace: **4,939/4,939 passed**, 148 configured skips, 662.705s;
+  strict Clippy and format checks passed. Prior doctest/rustdoc/registry/distribution
+  passes remain source-attributed in the acceptance record. The earlier nextest
+  output-handle notice remains recorded; this run had 0.
 - Local performance: **27 retained samples**, including one fixed default repeat;
   measured footprint/SSE costs accepted for this candidate with follow-ups. See
   [raw data and interpretation](evidence/gateway-multi-instance/README.md).
@@ -49,13 +49,13 @@ review threads remained unresolved. This does not close any P1 gate.
 
 | Stage | Implementation | Verification | Independent review |
 | --- | --- | --- | --- |
-| 1 Authority foundation | Shared store/key authority, startup and explicit stock bootstrap implemented | Included in final 203/203 shared selection | Foundation/runtime/bootstrap findings closed |
+| 1 Authority foundation | Shared store/key authority, startup and explicit stock bootstrap implemented | Included in final 204/204 shared selection | Foundation/runtime/bootstrap findings closed |
 | 2 Admission and execution | Shared admission, execution identity and durable recovery implemented | Final shared selection; applicable admission/idempotency cases passed all eight stability sets | Engine, serving and process findings closed |
 | 3 Gateway integration | Official process startup, authentication, dispatch, delivery and native continuation implemented | Final shared/process selection; OAuth ownership regressions and 3/3 maintenance repeats passed | Integration, ownership and maintenance findings closed |
 | 4 Published authority | Publication and operator HTTP/SDK/CLI implemented | Cross-replica publication, credentials, authority invalidation and backend-loss campaigns passed | Publication/operator/process findings closed |
 | 5 Trajectory authority | Shared history, epochs, guard counters/cost/holds and response observations implemented | Guard red/green and final shared selection; both stock guard campaigns passed all eight stability sets | Guard, observation, fence and process findings closed |
 | 6 Delivery and operations | Bounded transport/custody, projection/outbox, crash recovery and drain implemented | Final shared selection; eight outbox stability passes; stock stalled-reader and shutdown campaigns passed | Delivery/operations/process findings closed |
-| 7 Aggregate acceptance and PR | Local acceptance complete; stacked PR #990 | 203/203 v9, 40/40 v8 stability, 3/3 v9 maintenance, 4,939/4,939 workspace and recorded local comparison | Independent source findings closed; final evidence reviewed |
+| 7 Aggregate acceptance and PR | Local acceptance complete; stacked PR #990 | 204/204 v10, 40/40 v8 stability, 3/3 v9 maintenance, 4,939/4,939 workspace and recorded local comparison | Independent source findings closed; final evidence reviewed |
 
 ## Acceptance ledger
 
@@ -1809,7 +1809,7 @@ multi-process acceptance are still required.
   polling and retry semantics are unchanged. Independent source review and
   strict workspace Clippy passed; repaired execution remains pending.
 
-## Final local candidate closure (2026-10-21)
+## Candidate 2495 local closure (2026-10-21)
 
 Runtime `2495bf8db118de399a11fc11f82ba18bd6a6455d` closes the earlier maintenance
 failure: the v9 aggregate passed 203/203 in 93.149s, followed by three fixed
@@ -1832,3 +1832,27 @@ The [acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) and
 local identities, results, limits and follow-ups. Hosted execution belongs to
 the final pushed head on [#990](https://github.com/bitrouter/bitrouter/pull/990);
 earlier checks do not substitute for it. Neither #984 nor #990 was merged.
+
+## Pooled-read retry closure (2026-10-21)
+
+The hosted candidate `febe1075` exposed an unhandled PostgreSQL serialization
+abort in `Store::get`, observed while reading a guard projection receipt. The
+packaged process selection stopped at 7 passes/1 failure, with 19 cases unrun.
+All 67 other checks passed, with eight configured skips; the failed job remains
+visible and is not credited as acceptance.
+
+Repair `322f3d87813082085c23389976897207268cfbde` retries the complete pooled-read transaction
+under the existing deadline and typed abort allowlist. A deterministic actual
+SELECT abort fails the old implementation and passes the repaired one, preserving
+row metadata and exactly two attempts. Independent source review approved the
+repair. The v10 shared selection passed 204/204 in 88.976s; the original stock
+guard campaign passed three fixed confirmations. Full workspace tests passed
+4,939/4,939 in 662.705s with 148 configured skips, followed by strict Clippy
+and formatting. No whole-test retry or timeout relaxation was introduced.
+
+The [follow-up evidence](evidence/gateway-multi-instance/read-retry-2026-10-21.md)
+records the failure, repair, artifact and result identities. The earlier local
+performance data remains attributed to `2495bf8d`: only the opt-in shared module
+changed, and neither measured local profile compiles it. This is not a new
+measurement or a claim of byte-identical rebuilt binaries. Final-head hosted
+results remain a separate gate on #990.

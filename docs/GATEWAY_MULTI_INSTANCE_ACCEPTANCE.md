@@ -28,30 +28,40 @@ the PR; earlier failed runs are retained in the progress record.
 
 ## Candidate verification
 
-Runtime source: `2495bf8db118de399a11fc11f82ba18bd6a6455d`, based on P0
-`9cbe512d101e777470d113b0086ab9e331b3a638`. The immutable v9 `gateway-shared`
+Runtime source: `322f3d87813082085c23389976897207268cfbde`, based on P0
+`9cbe512d101e777470d113b0086ab9e331b3a638`. The immutable v10 `gateway-shared`
 executable has SHA-256
-`f6ca2bf8820d81c96c4337c609554fa7371f6e88c2b1f85a70bf9b97ff8efb6c`.
-[Artifact identities](evidence/gateway-multi-instance/artifacts-2026-10-21.json)
-record compiler, features, sizes and local comparison binaries.
+`13062838c63d0ce99e012c58810c99b923a95c425c89c4ddcefb4ff036bd8211`.
+[Current shared candidate](evidence/gateway-multi-instance/read-retry-2026-10-21.json)
+records the new artifact and validation identities. The
+[local comparison artifacts](evidence/gateway-multi-instance/artifacts-2026-10-21.json)
+retain their measured `2495bf8d` provenance; the follow-up changes only code gated
+by `multi-instance`, which both measured local profiles exclude.
 
-The final shared selection passed **203/203** in **93.149s**, with two test
+The final shared selection passed **204/204** in **88.976s**, with two test
 threads and zero retries. It includes both ignored PostgreSQL campaigns and
 ordinary shared regressions. The fixed stability campaign passed **40/40**
 across eight five-test sets on v8; the subsequent repair changes only the native
 maintenance deadline and an equivalent Store deadline extraction. That repair
-passed the final v9 aggregate and **3/3** additional fixed focused runs. Strict
-workspace Clippy passed on the final runtime source. The full workspace passed
-**4,939/4,939** in **677.839s**, with 147 configured skips; doctests passed **11**
-with one ignored. Warning-denied rustdoc, registry, generated distribution and
-format checks passed. [Validation evidence](evidence/gateway-multi-instance/validation-2026-10-21.json)
-records commands, counts and log identities. One non-reproduced nextest output
-handle notice in an unchanged P0 test is retained with its scoped review and
-single zero-retry check in the [evidence notes](evidence/gateway-multi-instance/README.md).
+passed the v9 aggregate and **3/3** additional fixed focused runs. The later
+pooled-read repair passed the v10 aggregate and **3/3** fixed confirmations of the
+original guard campaign. Strict workspace Clippy and format checks passed on
+the final runtime source. The full workspace passed **4,939/4,939** in
+**662.705s**, with 148 configured skips and 0 nextest output-handle notices.
+The [read-retry follow-up](evidence/gateway-multi-instance/read-retry-2026-10-21.md)
+retains the hosted failure, deterministic red/green and final local results.
+Earlier doctest (11 passed/one ignored), warning-denied rustdoc, registry and
+generated-distribution passes remain attributed to the
+[prior candidate](evidence/gateway-multi-instance/validation-2026-10-21.json);
+this production repair changes no public signature, rustdoc comment, manifest or
+generated schema. Final-head hosted checks are tracked on the PR. The earlier unchanged-P0
+output-handle notice and its single scoped check remain in the
+[evidence notes](evidence/gateway-multi-instance/README.md).
 
 Independent review closed the shared OAuth ownership defect, the stale guard
-snapshot race, the maintenance deadline/cursor defect, and the foundation
-fixture stack issue. Their failing evidence and scoped repairs remain in the
+snapshot race, the pooled-read retry omission, the maintenance deadline/cursor
+defect, and the foundation fixture stack issue. Their failing evidence and
+scoped repairs remain in the
 progress record; test retries and increased timeout/stack budgets did not hide
 those failures.
 
