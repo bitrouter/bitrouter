@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
 
+#[path = "main/shared_operator.rs"]
+mod shared_operator;
 #[cfg(test)]
 #[path = "main/shared_tests.rs"]
 mod shared_tests;
@@ -237,6 +239,8 @@ enum TaskAction {
 
 #[derive(Subcommand)]
 enum SharedAction {
+    #[command(flatten)]
+    Operator(shared_operator::Action),
     /// Atomically seed a new shared namespace; requires multi-instance.
     Init {
         /// Explicit shared process configuration; no discovery fallback.
@@ -3926,6 +3930,7 @@ async fn run_shared(action: SharedAction, output: &Output) -> Result<()> {
     }
     #[cfg(feature = "multi-instance")]
     match action {
+        SharedAction::Operator(action) => shared_operator::run(action, output).await,
         SharedAction::Init {
             config,
             plan,

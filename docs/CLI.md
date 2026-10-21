@@ -29,6 +29,23 @@ named contexts, local daemon discovery or a serving incarnation. After an
 uncertain response, retain the same actor, operation ID and identical plan;
 replay returns the original receipt without overwriting later configuration.
 See the [seed contract](../skills/bitrouter/references/shared-gateway.md#explicit-initialization).
+Remote shared administration uses the separate operator listener and SDK:
+`bro shared apply --endpoint URL --token-env ENV --input MUTATION.json` submits
+one literal JSON mutation. `--input -` reads stdin; input is limited to 2 MiB
+and contains its caller-owned `operation_id`. No configuration or environment
+substitution occurs inside the input. Endpoint and token are checked before
+opening it. All remote shared commands require `multi-instance` and reject
+named contexts before discovery or input reads.
+
+`bro shared operation --endpoint URL --token-env ENV --operation-id ID` reads
+one actor-scoped receipt. A successfully read `unresolved` result exits zero;
+it does not prove rollback and triggers no retry. The same target flags are
+required for `revision`, `tenant --id ID`, `resource --id ID`,
+`principal --id ID`, `credential --provider ID --account ID`, and
+`execution --id ID`. These commands read metadata only and never export secrets.
+After an unknown apply outcome, retain the original ID and private mutation and
+query that ID with the same actor. A failed lookup cannot resolve the earlier
+write. An output failure after a confirmed commit does not resubmit it.
 Foreground startup reads a selected file once with a 16 MiB bound. Local
 environment expansion is validated as local before daemon/home effects and the
 same parsed input becomes its configuration baseline.

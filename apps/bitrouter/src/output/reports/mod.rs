@@ -19,7 +19,7 @@ pub mod optimization;
 pub mod policy;
 pub mod requests;
 pub mod routing;
-mod shared;
+pub mod shared;
 pub mod skills;
 pub mod tools;
 pub mod trajectory;

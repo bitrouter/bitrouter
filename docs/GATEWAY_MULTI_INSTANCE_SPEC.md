@@ -135,7 +135,13 @@ receipts, and other statuses. Uncertain errors retain only the original operatio
 ID; callers keep the original input privately and use actor-scoped receipt lookup.
 Cancellation also leaves an unknown outcome. Lookup absence never proves rollback.
 Default response input is bounded to 2 MiB and transport deadlines are finite.
-Remote CLI administration remains a separate integration requirement.
+The stock `bro shared` remote commands use this SDK with explicit endpoint and
+token-environment inputs, without named contexts, local configuration or database
+discovery. Apply reads one bounded literal JSON mutation and submits once; other
+commands query a receipt, revision or metadata once. Unknown mutation errors keep
+the original ID prominent and provide a same-target lookup hint without exposing
+the nested source chain. A successful unresolved lookup exits zero and explicitly
+does not claim rollback. Output failure after confirmed commit never resubmits.
 
 Operator serving remains independent of inference readiness during operation.
 Initial assembly still fails fast through the common cleanup path. Both listeners

@@ -2,6 +2,7 @@
 
 mod bootstrap;
 mod operator;
+mod operator_cli;
 
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};

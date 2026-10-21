@@ -152,6 +152,52 @@ during operation. Normal startup still requires valid initialized authority and
 successful initial assembly; this is not an admin-only rescue process. Both
 listeners drain or force-stop under the same process deadline.
 
+## Remote operator commands
+
+Use a build with `multi-instance` and the separate operator token:
+
+```sh
+bro shared apply --endpoint http://127.0.0.1:4358 \
+  --token-env SHARED_OPERATOR_TOKEN --input mutation.json
+bro shared operation --endpoint http://127.0.0.1:4358 \
+  --token-env SHARED_OPERATOR_TOKEN --operation-id original-id
+```
+
+The apply input is one literal JSON `Mutation`, bounded to 2 MiB. `--input -`
+reads stdin. It contains `operation_id` and a `command` with `action`/`input`:
+
+```json
+{
+  "operation_id": "create-pool-1",
+  "command": {
+    "action": "put_resource",
+    "input": {
+      "resource_pool_id": "provider-account-1",
+      "expected_revision": null,
+      "concurrent_attempts": 8
+    }
+  }
+}
+```
+
+Each command requires explicit `--endpoint` and literal `--token-env`; there is
+no named context, local configuration, database or daemon fallback. Token values
+are never command arguments. HTTPS is required remotely; loopback HTTP supports
+a local TLS tunnel. Invalid endpoint/token rejects before input reads. The input
+is not an environment template and can contain write-only secret material; retain
+it privately with the original operation ID. Apply sends once. On an unknown
+outcome, query the original ID with the same actor; never invent a new recovery ID.
+
+`operation` returns a committed receipt or `unresolved`. Both successful reads
+exit zero and emit one JSON value; unresolved does not prove rollback. Failed
+lookups do not settle earlier writes. `--human` renders the same distinction.
+An output failure after a known commit does not repeat the mutation.
+
+The same endpoint/token flags support `revision`, `tenant --id ID`,
+`resource --id ID`, `principal --id ID`, `credential --provider ID --account ID`,
+and `execution --id ID`. These read current metadata without exporting secrets,
+polling, repeating inference or expanding IDs into URL paths.
+
 ## Explicit initialization
 
 Use a build with `multi-instance`:
