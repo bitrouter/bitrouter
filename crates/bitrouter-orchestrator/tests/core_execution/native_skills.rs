@@ -1418,6 +1418,11 @@ async fn cancellation_expires_the_exact_skill_request_and_refuses_a_late_answer(
         .first()
         .cloned()
         .ok_or("consent")?;
+    let first = session.skill_consent_expired(&request);
+    let second = session.skill_consent_expired(&request);
+    tokio::pin!(first, second);
+    assert!(futures::poll!(&mut first).is_pending());
+    assert!(futures::poll!(&mut second).is_pending());
     session
         .cancel_run(
             "cancel-skill",
@@ -1425,10 +1430,9 @@ async fn cancellation_expires_the_exact_skill_request_and_refuses_a_late_answer(
             &waiting.run.ok_or("run")?.run_id,
         )
         .await?;
-    tokio::time::timeout(
-        Duration::from_secs(1),
-        session.skill_consent_expired(&request),
-    )
+    tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(&mut first, &mut second);
+    })
     .await?;
     assert!(
         session

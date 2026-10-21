@@ -555,6 +555,7 @@ struct Shared {
     limits: Limits,
     capabilities: Capabilities,
     changed: Notify,
+    skill_consents_changed: Notify,
     steering_changed: Notify,
     budget_changed: Arc<Notify>,
 }
@@ -712,6 +713,7 @@ impl CoreSession {
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
                 changed: Notify::new(),
+                skill_consents_changed: Notify::new(),
                 steering_changed: Notify::new(),
                 budget_changed: Arc::new(Notify::new()),
             }),
@@ -3851,6 +3853,7 @@ impl CoreSession {
                     reconnect::adopt_pending(&mut live, &payload)?;
                     budget::watch(self, &mut live);
                     self.shared.changed.notify_one();
+                    self.shared.skill_consents_changed.notify_waiters();
                     Ok(())
                 }
                 Ok(None) => Err(reject(

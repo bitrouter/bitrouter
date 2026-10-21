@@ -144,6 +144,7 @@ impl CoreSession {
             }
             release::fence(&mut live);
             self.shared.changed.notify_one();
+            self.shared.skill_consents_changed.notify_waiters();
         }
         result.map(|()| live.gate.head().clone())
     }

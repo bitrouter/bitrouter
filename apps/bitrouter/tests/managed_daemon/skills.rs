@@ -113,7 +113,9 @@ async fn managed_cli_child_inherits_required_selector_but_waits_for_its_own_skil
         .status
         .success()
     );
-    let output = tokio::time::timeout(Duration::from_secs(20), task.wait_with_output()).await??;
+    let output = tokio::time::timeout(Duration::from_secs(20), task.wait_with_output())
+        .await
+        .context("waiting for the approved parent and child CLI to finish")??;
     let snapshot = fixture
         .stored()
         .await?

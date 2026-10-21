@@ -66,11 +66,11 @@ impl CoreSession {
         }))
     }
 
-    /// Observe the existing session notification stream; this creates no
-    /// scheduler, timer, execution, or independent source of approval truth.
+    /// Consent observers must not consume the scheduler's single wake permit.
+    /// Every observer rechecks the original committed consent after a broadcast.
     pub async fn skill_consent_expired(&self, request: &SkillConsentRequest) {
         loop {
-            let changed = self.shared.changed.notified();
+            let changed = self.shared.skill_consents_changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
             if !self.skill_consent_pending(request).await {
