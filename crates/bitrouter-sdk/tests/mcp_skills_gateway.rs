@@ -1,9 +1,8 @@
 //! Real gateway executor and HTTP ingress against an independent stdio peer.
 #![cfg(all(feature = "mcp", feature = "server"))]
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use bitrouter_sdk::caller::CallerContext;
 use bitrouter_sdk::mcp::{
@@ -13,6 +12,9 @@ use bitrouter_sdk::mcp::{
 use rmcp::model::ProtocolVersion;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+#[path = "support/mcp_fixture.rs"]
+mod mcp_fixture;
 
 #[path = "../../bitrouter-orchestrator/tests/support/example_binary.rs"]
 mod example_binary;
@@ -55,22 +57,10 @@ fn page(skills: Vec<Value>, ttl: u64, scope: &str) -> Value {
 
 impl Fixture {
     fn new(capabilities: Value) -> TestResult<Self> {
-        static BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-        let binary = BINARY
-            .get_or_init(|| example_binary::build("bitrouter-sdk", "mcp_skills_fixture"))
-            .as_ref()
-            .map_err(|message| std::io::Error::other(message.clone()))?;
         let root = tempfile::tempdir()?;
         let config = root.path().join("config.json");
         let journal = root.path().join("requests.jsonl");
-        let transport = McpTransport::Stdio {
-            command: binary.to_string_lossy().into_owned(),
-            args: vec![
-                config.to_string_lossy().into_owned(),
-                journal.to_string_lossy().into_owned(),
-            ],
-            env: HashMap::new(),
-        };
+        let transport = mcp_fixture::transport(&config, &journal)?;
         let fixture = Self {
             _root: root,
             config,
@@ -95,10 +85,7 @@ impl Fixture {
     }
 
     fn requests(&self) -> TestResult<Vec<Value>> {
-        std::fs::read_to_string(&self.journal)?
-            .lines()
-            .map(|line| Ok(serde_json::from_str(line)?))
-            .collect()
+        Ok(mcp_fixture::requests(&self.journal)?)
     }
 
     fn target(&self, label: &str) -> McpTarget {

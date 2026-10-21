@@ -50,6 +50,12 @@ impl Drop for Fixture {
 
 impl Fixture {
     pub async fn new(scenario: Option<&str>, provider: Option<&str>) -> Result<Self> {
+        let mut fixture = Self::prepare(scenario, provider)?;
+        fixture.start().await?;
+        Ok(fixture)
+    }
+
+    pub fn prepare(scenario: Option<&str>, provider: Option<&str>) -> Result<Self> {
         let directory = tempfile::tempdir_in("/tmp")?;
         let workspace = directory.path().join("project");
         std::fs::create_dir(&workspace)?;
@@ -103,7 +109,7 @@ impl Fixture {
             }
         }
         std::fs::write(&config, serde_json::to_vec_pretty(&value)?)?;
-        let mut fixture = Self {
+        let fixture = Self {
             directory,
             workspace,
             config,
@@ -113,7 +119,6 @@ impl Fixture {
             daemon: None,
         };
         drop(reservation);
-        fixture.start().await?;
         Ok(fixture)
     }
 

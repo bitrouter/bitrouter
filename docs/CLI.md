@@ -1752,7 +1752,7 @@ For a provider that accepts a pasted key, `--api-key <KEY>` (or `--key-stdin`, w
 
 For `claude-code`, the login menu defaults to the live Claude Code session. For `openai-codex`, the default is **"Import an existing session from the vendor CLI"** — BitRouter reads the credential Codex already stored in `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) first, then the macOS Keychain, and adopts it with no fresh browser sign-in. The imported token refreshes automatically like any other; choose the browser subscription flow when no local Codex session exists.
 
-For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bro cloud login`](#bitrouter-cloud-login--logout--whoami) below.
+For cloud sign-in (signing into your BitRouter Cloud account, not an upstream LLM provider), see [`bro cloud login`](#bro-cloud-login--logout--whoami) below.
 
 ### `bro providers logout <provider>`
 
@@ -1891,7 +1891,7 @@ bro key sign --user <id> --policy strict
 
 ## Cloud account management
 
-`bro cloud …` drives the BitRouter Cloud API using the credential persisted by [`bro cloud login`](#bitrouter-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bro cloud api <relative-endpoint>` for the rest of the Cloud API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, and namespace/account lifecycle endpoints.
+`bro cloud …` drives the BitRouter Cloud API using the credential persisted by [`bro cloud login`](#bro-cloud-login--logout--whoami). Sign in first, then call a typed management subcommand or the generic API command. Typed subcommands cover the common terminal workflows: namespace inspection, API keys, usage and request history, billing balance and checkout, policies, budgets, presets, and BYOK. Use `bro cloud api <relative-endpoint>` for the rest of the Cloud API surface, including public provider and usage discovery, settlement receipts, routing presets, OAuth clients, billing ledgers, checkout status, and namespace/account lifecycle endpoints.
 
 OAuth credentials are **namespace-baked** — keys, usage, and policies are scoped to the workspace chosen at login. API-key credentials use `/v1/namespaces/me/*`. The path segment is always resolved implicitly; callers never pass a workspace argument. `billing` and `byok` are user-level and reach across all workspaces regardless.
 

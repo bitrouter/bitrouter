@@ -15,17 +15,16 @@ the CLI-only contract and implementation record define the current product.
   daemon auto-start, connected-agent inspection, simpler onboarding, MCP CRUD,
   skill installation and workflow selection, with migration and acceptance criteria.
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md) —
-  G00–G11 execution contracts, internal checkpoints, handoff and acceptance slices,
-  scope limits, validation gates and copyable goal prompts.
+  Completed G00–G11 stage index and validation rules; full execution cards and
+  copyable prompts remain linked to their immutable Git revision.
 - [`CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md`](CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md) —
   A27/A28 and M01–M10 distinguish gateway protocol checks from native host loading,
   approval, origin and cache requirements against a pinned specification;
   M01–M10 have local gateway/native evidence, including verified support files,
   independent consent, actual model inputs, budgets and original cache recovery.
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md) —
-  Stage status, retained-capability matrix, A01–A28 evidence and external qualification;
-  G00–G11 have local completion evidence, including final integration acceptance.
-  Real service, external adapter and hosted CI qualification remain separate.
+  Concise stage outcomes, key regressions and immutable implementation history.
+  Detailed A/M/C/T mappings and qualification boundaries live in G11 acceptance.
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md) —
   Current A01–A28/M01–M10 and retained C/T evidence, final local scope and separate external qualifications.
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_G00_AUDIT.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_G00_AUDIT.md) —

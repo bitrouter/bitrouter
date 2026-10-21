@@ -5,7 +5,7 @@
 
 本附件支撑 [spec](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md) 第 6.4 节与
 [G00–G11](CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md) 的增量执行。
-[实现记录](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md) 维护阶段状态和 A 项证据。
+[实现记录](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md) 维护阶段摘要；当前 A/M/C/T 证据统一见 [G11](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md)。
 这里的“已有”只表示在该 HEAD 找到源码/测试，不表示本次执行过测试或通过资格认证。
 后续源码变动时先复核函数与协议，不能把本附件当作永久不变的 API。
 
@@ -182,7 +182,7 @@ TUI crate 内 G01 重点是 `permission.rs` 的非绘制决策/option 选择、`
 ## 7. 验证入口与旧测试处置
 
 G04 维护注：publication 链接已更新为迁移后的无 UI 文件位置；本表仍记录 G00
-起始时的函数名与能力。当前测试映射和资格状态见实现记录第 9 节。
+起始时的函数名与能力。当前测试映射和资格状态见 G11 验收附件。
 
 本节只列审计确认存在的测试符号/文件，不宣称运行通过。测试过滤名与路径可用于
 `cargo test -p <package> --all-features <name>`；app integration 可加 `--test <root>`。

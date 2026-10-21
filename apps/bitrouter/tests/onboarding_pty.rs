@@ -1,26 +1,18 @@
 #![cfg(unix)]
 //! Real canonical-terminal coverage, with stdout captured separately as JSON.
 
-use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtySize};
 use serde_json::{Value, json};
 
 #[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
 mod example_binary;
 
-struct Terminal {
-    home: tempfile::TempDir,
-    writer: Box<dyn Write + Send>,
-    reader: mpsc::Receiver<Vec<u8>>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
-    _master: Box<dyn portable_pty::MasterPty + Send>,
-    transcript: String,
-}
+#[path = "support/terminal.rs"]
+mod terminal;
+use terminal::Terminal;
 
 impl Terminal {
     fn new(args: &[&str], configured: bool) -> Result<Self> {
@@ -109,78 +101,20 @@ impl Terminal {
         ] {
             command.env_remove(name);
         }
-        let pair = native_pty_system().openpty(PtySize {
-            rows: 40,
-            cols: 160,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-        let child = pair.slave.spawn_command(command)?;
-        drop(pair.slave);
-        let writer = pair.master.take_writer()?;
-        let mut reader = pair.master.try_clone_reader()?;
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut bytes = [0; 4096];
-            while let Ok(count) = reader.read(&mut bytes) {
-                if count == 0 || tx.send(bytes[..count].to_vec()).is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(Self {
+        Self::spawn(
             home,
-            writer,
-            reader: rx,
-            child,
-            _master: pair.master,
-            transcript: String::new(),
-        })
-    }
-
-    fn send(&mut self, input: &[u8]) -> Result<()> {
-        self.writer.write_all(input)?;
-        self.writer.flush()?;
-        Ok(())
-    }
-
-    fn wait(&mut self, text: &str) -> Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !self.transcript.contains(text) {
-            let bytes = self
-                .reader
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .with_context(|| {
-                    format!("waiting for {text:?}; transcript: {}", self.transcript)
-                })?;
-            self.transcript.push_str(&String::from_utf8_lossy(&bytes));
-        }
-        Ok(())
+            command,
+            PtySize {
+                rows: 40,
+                cols: 160,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+        )
     }
 
     fn checkpoint(&mut self) {
         self.transcript.clear();
-    }
-
-    fn finish(&mut self, success: bool) -> Result<Value> {
-        self.wait("__ONBOARDING_FIXTURE_DONE__")?;
-        let result: Value =
-            serde_json::from_slice(&std::fs::read(self.home.path().join("result.json"))?)?;
-        assert_eq!(result["success"], success, "{}", self.transcript);
-        assert_eq!(result["restored"], true);
-        assert!(
-            !self.transcript.contains("\u{1b}[?1049"),
-            "must not enter an alternate screen"
-        );
-        Ok(serde_json::from_slice(&std::fs::read(
-            self.home.path().join("stdout"),
-        )?)?)
-    }
-}
-
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
     }
 }
 
@@ -253,7 +187,7 @@ fn provider_retry_repeated_addition_search_skip_and_json_are_canonical_lines() -
 
 #[test]
 fn eof_and_ctrl_c_restore_secret_echo_and_do_not_save_configuration() -> Result<()> {
-    for cancel in [b'\x03', b'\x04'] {
+    for cancel in *b"\x03\x04" {
         let mut terminal = Terminal::new(&["init", "--after", "exit"], true)?;
         let path = terminal.home.path().join("bitrouter.yaml");
         let before = std::fs::read(&path)?;
@@ -337,7 +271,7 @@ fn reset_uses_yes_no_confirmation_and_default_no_keeps_credentials() -> Result<(
 
 #[test]
 fn unconfigured_bare_cancels_or_rejects_redirected_stderr_without_saving() -> Result<()> {
-    for input in [b'\x03', b'\x04'] {
+    for input in *b"\x03\x04" {
         let mut terminal = Terminal::new(&[], false)?;
         terminal.wait("Number/name")?;
         terminal.send(&[input])?;

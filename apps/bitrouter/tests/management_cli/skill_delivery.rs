@@ -23,8 +23,7 @@ async fn fixture(profile: &str, options: &[&str]) -> Result<Fixture> {
     }
     .as_ref()
     .map_err(|error| anyhow::anyhow!("{error}"))?;
-    let mut fixture = Fixture::new(None, None).await?;
-    fixture.stop(false).await?;
+    let mut fixture = Fixture::prepare(None, None)?;
     let mut config: Value = serde_json::from_slice(&std::fs::read(&fixture.config)?)?;
     let marker = match profile {
         "claude-acp" => "@agentclientprotocol/claude-agent-acp@0.75.1",
@@ -45,6 +44,18 @@ async fn fixture(profile: &str, options: &[&str]) -> Result<Fixture> {
 }
 
 async fn install(fixture: &Fixture, marker: &str) -> Result<(PathBuf, String)> {
+    install_with(fixture, marker, false).await
+}
+
+async fn install_via_onboarding(fixture: &Fixture, marker: &str) -> Result<(PathBuf, String)> {
+    install_with(fixture, marker, true).await
+}
+
+async fn install_with(
+    fixture: &Fixture,
+    marker: &str,
+    onboarding: bool,
+) -> Result<(PathBuf, String)> {
     let source = fixture.directory.path().join("source/review");
     std::fs::create_dir_all(source.join("references"))?;
     std::fs::write(
@@ -54,25 +65,27 @@ async fn install(fixture: &Fixture, marker: &str) -> Result<(PathBuf, String)> {
         ),
     )?;
     std::fs::write(source.join("references/check.md"), "original support")?;
-    let report = fixture
-        .run(&[
-            "init",
-            "--yes",
-            "--install-skill",
-            path(&source)?,
-            "--workspace",
-            path(&fixture.workspace)?,
-            "--after",
-            "exit",
-        ])
-        .await?;
-    let installation = report["resources"]
-        .as_array()
-        .context("onboarding resources")?
-        .iter()
-        .find(|row| row["kind"] == "skill" && row["status"] == "installed")
-        .context("onboarding installed skill")?;
-    let installed = installation["receipt"]["skills"]
+    let mut args = if onboarding {
+        vec!["init", "--yes", "--install-skill"]
+    } else {
+        vec!["skills", "install"]
+    };
+    args.extend([path(&source)?, "--workspace", path(&fixture.workspace)?]);
+    if onboarding {
+        args.extend(["--after", "exit"]);
+    }
+    let report = fixture.run(&args).await?;
+    let receipt = if onboarding {
+        &report["resources"]
+            .as_array()
+            .context("onboarding resources")?
+            .iter()
+            .find(|row| row["kind"] == "skill" && row["status"] == "installed")
+            .context("onboarding installed skill")?["receipt"]
+    } else {
+        &report
+    };
+    let installed = receipt["skills"]
         .as_array()
         .context("installation rows")?
         .iter()
@@ -105,7 +118,7 @@ fn delivered(snapshot: &Value, index: usize) -> Result<&Value> {
 async fn codex_cli_delivers_exact_local_binding_and_retains_two_versions_after_restart()
 -> Result<()> {
     let mut fixture = fixture("codex-acp", &[]).await?;
-    let (source, selector) = install(&fixture, "CODEX_ORIGINAL").await?;
+    let (source, selector) = install_via_onboarding(&fixture, "CODEX_ORIGINAL").await?;
     let run = fixture
         .background("review code", &["--direct", "--skill", &selector])
         .await?;
@@ -192,7 +205,7 @@ async fn codex_cli_delivers_exact_local_binding_and_retains_two_versions_after_r
 async fn claude_cli_uses_negotiated_embedded_data_and_keeps_source_receipt_in_original_ledger()
 -> Result<()> {
     let mut fixture = fixture("claude-acp", &[]).await?;
-    let (_, selector) = install(&fixture, "CLAUDE_ORIGINAL").await?;
+    let (_, selector) = install_via_onboarding(&fixture, "CLAUDE_ORIGINAL").await?;
     let run = fixture
         .background("review code", &["--direct", "--skill", &selector])
         .await?;

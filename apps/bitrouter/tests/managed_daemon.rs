@@ -32,6 +32,9 @@ use wiremock::{
 #[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
 mod example_binary;
 
+#[path = "../../../crates/bitrouter-sdk/tests/support/mcp_fixture.rs"]
+mod mcp_fixture;
+
 #[path = "managed_daemon/skills.rs"]
 mod skills;
 

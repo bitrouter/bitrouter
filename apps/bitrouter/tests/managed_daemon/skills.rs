@@ -12,14 +12,11 @@ fn digest(bytes: &[u8]) -> String {
 }
 
 fn requests(journal: &std::path::Path) -> Result<Vec<Value>> {
-    let text = match std::fs::read_to_string(journal) {
-        Ok(text) => text,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error.into()),
-    };
-    text.lines()
-        .map(|line| serde_json::from_str(line).map_err(Into::into))
-        .collect()
+    match mcp_fixture::requests(journal) {
+        Ok(requests) => Ok(requests),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn fixture() -> Result<(Fixture, MockServer, PathBuf)> {
@@ -890,11 +887,6 @@ async fn cold_explain_of_a_lost_managed_owner_never_restores_or_reports_an_unobs
 }
 
 async fn fixture_at(api: Option<std::net::SocketAddr>) -> Result<(Fixture, MockServer, PathBuf)> {
-    static EXECUTABLE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-    let executable = EXECUTABLE
-        .get_or_init(|| example_binary::build("bitrouter-sdk", "mcp_skills_fixture"))
-        .as_ref()
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &wiremock::Request| {
         let Ok(request) = serde_json::from_slice::<bitrouter_sdk::decision_model::types::DecisionRequest>(&request.body) else { return ResponseTemplate::new(400); };
@@ -940,7 +932,7 @@ async fn fixture_at(api: Option<std::net::SocketAddr>) -> Result<(Fixture, MockS
             "get":{ROOT:{"resultType":"complete","skill":entry,"ttlMs":0,"cacheScope":"private"}},
             "files":{ROOT:{"mimeType":"text/markdown","text":body},SUPPORT:{"mimeType":"text/markdown","text":"support\n"}}
         }))?)?;
-        settings["mcp_servers"] = json!({"skills-peer":{"name":"skills-peer","transport":{"type":"stdio","command":executable,"args":[config,root.join("mcp-requests.jsonl")]}}});
+        settings["mcp_servers"] = json!({"skills-peer":{"name":"skills-peer","transport":mcp_fixture::transport(&config,&root.join("mcp-requests.jsonl"))?}});
         settings["skills"] = json!({"mcp_sources":{"skills-peer":{"workspaces":[root.join("project")],"local":true}}});
         settings["decision_model"] = json!({"model":"workflow-fixture","base_url":upstream.uri(),"api_key_env":"BITROUTER_TEST_DECISION_KEY"});
         if let Some(address) = api {

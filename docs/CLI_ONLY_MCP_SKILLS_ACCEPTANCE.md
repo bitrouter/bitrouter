@@ -60,7 +60,7 @@ workspace 授权可见的条目才能进入候选；配置 MCP 工具、连接�
 
 ## 2. 源码核对与已知缺口
 
-以下保留 G09 起点核对；协议修复、native host 与最终本地证据见实现记录第 14 节：
+以下保留 G09 起点核对；最终 gateway/native 证据统一见 [G11](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md#4-m01m10-与角色隔离)：
 
 - [gateway capabilities](../crates/bitrouter-sdk/src/server.rs) 已声明 Resources 与
   Skills extension；`directoryRead` 缺省为 false，可继续不提供可选目录方法。
@@ -137,5 +137,5 @@ strings、磁盘 receipt 和上游声明不能充当 caller 授权凭据。持�
 记录每项真实入口、owner/来源、用例、revision/本地内容摘要、结果和剩余范围。
 本文件的用例是执行要求：M01–M10 的 gateway/native 切片已取得 G09 本地证据，
 包括原来源/完整 entry、独立批准、支持文件、预算、实际请求、更新/卸载与原
-缓存恢复。最终源码摘要和完整 gates 见实现记录第 14 节末；不推定外部 ACP
+缓存恢复。最终源码摘要和完整 gates 见 G11 验收附件；不推定外部 ACP
 adapter、真实上游/provider、hosted CI 或其他操作系统资格通过。G10 的 local prompt 载体与 MCP-origin unsupported 边界已本地验收；G11 全部 A/M/C/T 当前证据、完整 gates 与两条 native 全链已本地完成，见 G11 附件；不推定真实远端互操作通过。

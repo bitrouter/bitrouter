@@ -1,9 +1,7 @@
 //! Native host metadata and byte admission against an independent MCP process.
 //! Resource admission and explicit consent through the native Thread/model path.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use base64::Engine;
 use bitrouter_orchestrator::agent::ToolMode;
@@ -17,6 +15,9 @@ use rmcp::model::ProtocolVersion;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
+
+#[path = "../../bitrouter-sdk/tests/support/mcp_fixture.rs"]
+mod mcp_fixture;
 
 #[path = "support/example_binary.rs"]
 mod example_binary;
@@ -58,25 +59,11 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str, marker: &str) -> TestResult<Self> {
-        static BINARY: OnceLock<Result<PathBuf, String>> = OnceLock::new();
-        let binary = BINARY
-            .get_or_init(|| example_binary::build("bitrouter-sdk", "mcp_skills_fixture"))
-            .as_ref()
-            .map_err(|error| std::io::Error::other(error.clone()))?;
         let root = tempfile::tempdir()?;
         let config = root.path().join("server.json");
         let journal = root.path().join("requests.jsonl");
-        let server = McpServerConfig::with_defaults(
-            name,
-            McpTransport::Stdio {
-                command: binary.to_string_lossy().into_owned(),
-                args: vec![
-                    config.to_string_lossy().into_owned(),
-                    journal.to_string_lossy().into_owned(),
-                ],
-                env: HashMap::new(),
-            },
-        );
+        let server =
+            McpServerConfig::with_defaults(name, mcp_fixture::transport(&config, &journal)?);
         let body = body(marker);
         let fixture = Self {
             _root: root,
@@ -108,15 +95,11 @@ impl Fixture {
     }
 
     fn count(&self, method: &str) -> TestResult<usize> {
-        let text = match std::fs::read_to_string(&self.journal) {
-            Ok(text) => text,
+        let requests = match mcp_fixture::requests(&self.journal) {
+            Ok(requests) => requests,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
             Err(error) => return Err(error.into()),
         };
-        let requests: Vec<Value> = text
-            .lines()
-            .map(serde_json::from_str)
-            .collect::<Result<_, _>>()?;
         Ok(requests
             .iter()
             .filter(|request| request["method"] == method)

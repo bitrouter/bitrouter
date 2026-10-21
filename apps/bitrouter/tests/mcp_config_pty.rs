@@ -1,31 +1,15 @@
 #![cfg(unix)]
 //! Canonical-terminal MCP editing and skill selection; stdout remains JSON.
 
-use std::io::{Read, Write};
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
-
 use anyhow::{Context, Result, ensure};
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use serde_json::Value;
+use portable_pty::{CommandBuilder, PtySize};
 
 #[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
 mod example_binary;
 
-struct Terminal {
-    home: tempfile::TempDir,
-    writer: Box<dyn Write + Send>,
-    reader: mpsc::Receiver<Vec<u8>>,
-    child: Box<dyn portable_pty::Child + Send + Sync>,
-    _master: Box<dyn portable_pty::MasterPty + Send>,
-    transcript: String,
-}
-
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-    }
-}
+#[path = "support/terminal.rs"]
+mod terminal;
+use terminal::Terminal;
 
 impl Terminal {
     fn start(args: &[&str], editor_fail: bool) -> Result<Self> {
@@ -79,71 +63,22 @@ impl Terminal {
         if editor_fail {
             command.env("MCP_EDITOR_FAIL", "1");
         }
-        let pair = native_pty_system().openpty(PtySize {
-            rows: 30,
-            cols: 120,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
-        let child = pair.slave.spawn_command(command)?;
-        drop(pair.slave);
-        let writer = pair.master.take_writer()?;
-        let mut reader = pair.master.try_clone_reader()?;
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut bytes = [0; 4096];
-            while let Ok(count) = reader.read(&mut bytes) {
-                if count == 0 || tx.send(bytes[..count].to_vec()).is_err() {
-                    break;
-                }
-            }
-        });
-        Ok(Self {
+        Self::spawn(
             home,
-            writer,
-            reader: rx,
-            child,
-            _master: pair.master,
-            transcript: String::new(),
-        })
+            command,
+            PtySize {
+                rows: 30,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+        )
     }
-    fn wait(&mut self, text: &str) -> Result<()> {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        while !self.transcript.contains(text) {
-            let bytes = self
-                .reader
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .with_context(|| format!("waiting for {text}: {}", self.transcript))?;
-            self.transcript.push_str(&String::from_utf8_lossy(&bytes));
-        }
-        Ok(())
-    }
-    fn send(&mut self, text: &[u8]) -> Result<()> {
-        self.writer.write_all(text)?;
-        self.writer.flush()?;
-        Ok(())
-    }
+
     fn release(&self, payload: &str) -> Result<()> {
         std::fs::write(self.home.path().join("editor-input.yaml"), payload)?;
         std::fs::write(self.home.path().join("editor.release"), "")?;
         Ok(())
-    }
-    fn finish(&mut self, success: bool) -> Result<Value> {
-        self.wait("__ONBOARDING_FIXTURE_DONE__")?;
-        let result: Value =
-            serde_json::from_slice(&std::fs::read(self.home.path().join("result.json"))?)?;
-        ensure!(
-            result["success"] == success && result["restored"] == true,
-            "{result}: {}",
-            self.transcript
-        );
-        ensure!(
-            !self.transcript.contains("\u{1b}[?1049"),
-            "alternate screen"
-        );
-        let stdout = std::fs::read(self.home.path().join("stdout"))?;
-        ensure!(!stdout.contains(&0x1b));
-        serde_json::from_slice(&stdout).context("separate JSON stdout")
     }
 }
 

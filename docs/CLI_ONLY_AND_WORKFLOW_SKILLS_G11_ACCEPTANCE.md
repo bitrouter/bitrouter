@@ -1,14 +1,17 @@
 # CLI-only 与 Workflow Skills：G11 本地集成交付
 
-状态：**本地完成**。执行日期：2026-10-20（America/New_York）。
+状态：**G11 本地完成；测试与文档精简已复验**。执行日期：2026-10-20（America/New_York）。
+
+第 1–9 节记录提交 `264765f4` 所代表的 G11 验收基线；本轮精简的新源码与
+复验结果见第 10 节。保留同一份 A/M/C/T 映射，不把原始运行冒充精简后的结果。
 
 本附件记录 [spec](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)、[阶段卡片](CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md#g11--集成审计与本地交付) 的完整本地验收；具体执行、失败和修正见 [实现记录](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md#16-g11-执行记录本地完成)。要求仍由原 spec 与 [MCP 附件](CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md) 定义，不另造或缩小清单。
 
 ## 1. 验证对象与判定
 
-- HEAD：`54c822a34d4dbfd75d484ca35e108b497048efef`，保持 G00–G11 未提交差异。
+- G11 验收时 HEAD：`54c822a34d4dbfd75d484ca35e108b497048efef`，当时包含 G00–G11 未提交差异。
 - G11 起点与 G10 最终 Rust/Cargo 摘要相同：`1df4bc3e92a2c8d2b1d6c1fe7b5cf7fac0a7c78d248a4b35a17dd8deff9c4a00`。
-- 本次冻结摘要：`7b3a3f450dbef05915b6021b957fb220540175aaf9f7bf641b0c9223ebb87069`；每个 gate 前后检查同一集合。文件摘要、真实命令、终态与日志保存在 `target/g11-evidence/g11-final-source-checkpoint.json`、`g11-final-check-results.json`。
+- 原 G11 冻结摘要：`7b3a3f450dbef05915b6021b957fb220540175aaf9f7bf641b0c9223ebb87069`；每个 gate 前后检查同一集合。文件摘要、真实命令、终态与日志保存在 `target/g11-evidence/g11-final-source-checkpoint.json`、`g11-final-check-results.json`。
 - 先对照测试中的请求/状态/字节/实际副作用断言与源代码所有者，再匹配当前完整运行的 PASS。函数存在、元数据或绿灯总数本身不能替代业务证据。`coverage-manifest.json` 与 `coverage-results.json` 保留逐项 symbol/path/实际 PASS 的对应关系；下表列出可复现入口，日志丢失后仍可从代码和命令复验。
 - 全量命令：`cargo nextest run --workspace --all-features --no-fail-fast --test-threads 4`。另执行 workspace/all-targets Clippy、doctests、fmt、dist-helper check，以及实际 all-feature/all-target normal/build/dev 依赖图。只在全部 required 本地证据通过后完成阶段。
 - 所有进程、配置、Git、MCP、模型/decision HTTP 均使用临时目录与 Cargo-built Rust/local fixtures。未运行真实 vendor adapter、远端 MCP、付费 provider，未修改用户全局 harness，未推送/发布。
@@ -156,7 +159,7 @@ Native 恢复继续使用原 ThreadService/Core/SQLite；managed CLI 继续使�
 | 真实远端 MCP Skills / 外部 host 互操作 | unverified | 固定规范本地 stdio/HTTP fixtures 不代表任意远端或第三方 host |
 | 外部 ACP 的 MCP-origin allocation | unsupported | 当前明确拒绝；不能借 prompt/落盘把来源降为 local |
 | 远端 Git HTTPS/SSH/auth | unverified | 本地 Git fixtures 验证 ref/commit/bundle/事务 |
-| hosted CI | unverified | 没有 push/PR/远端运行 |
+| hosted CI | separate | 原 G11 只做本地验收；后续远端结果按提交查看 [PR #989 checks](https://github.com/bitrouter/bitrouter/pull/989/checks)，本表不手抄动态状态 |
 | Linux / Windows 进程与终端 | unverified | all-target 依赖图不代表跨平台执行 |
 | merge / release / deployment | not_requested | 本阶段仅本地交付，不推送/发布 |
 
@@ -171,3 +174,49 @@ Native 恢复继续使用原 ThreadService/Core/SQLite；managed CLI 继续使�
 - 同步后全部 Rust/Cargo 内容摘要仍为 `7b3a3f450dbef05915b6021b957fb220540175aaf9f7bf641b0c9223ebb87069`。上述 4368 项完整运行发生于 G11 验收时点；未把它标为同步后重新运行的完整套件。
 - 同步后另行运行 `cargo run -p dist-helper -- registry validate`、`cargo run -p dist-helper -- registry build`、`cargo run -p dist-helper -- check`、`cargo fmt -- --check`，四项均 exit 0，源码摘要前后不变。记录位于 `target/g11-evidence/pr-check-results.json`；提交前重新检查文档、分发清单与 diff 空白。
 - PR 用于代码审阅，不包含合并、发布或部署。hosted CI 以该 PR 的实际远端结果为准，不能由本地检查推定通过。
+
+## 10. 测试与文档精简复验
+
+范围：测试、测试 helper、文档与插件描述；产品命令、协议与 runtime 不变。
+完整历史仍在不可变提交 `264765f4`，实现摘要与阶段索引链接到原记录；当前
+A01–A28/M01–M10/C/T 只在本附件维护，不复制第二份表。
+
+- 共用 PTY 进程/收发/等待/恢复与 JSON 断言，保留两组各自的环境、交互与输入断言。
+- 共用 MCP fixture 的进程 transport 与日志 I/O；gateway、host、Core、CLI 的
+  原始 wire/来源/批准/字节/模型角色预期继续独立，Codex/Claude parser 未合并。
+- ACP fixture 配置完成后首次启动；每个 adapter 保留一条 init→交付 happy path，
+  其余预算/权限/取消/错误用例直接安装 skill，仍走原 daemon/supervisor。
+- 修正原 hosted Clippy 的两个 PTY byte_char_slices 问题，不添加 allow 或放宽断言。
+- 首轮定向编译遗漏了能力变更用例仍使用的 McpTransport import，已恢复该 import；
+  对应负例保留，日志为 `target/cli-cleanup/targeted.log`。
+- 严格 Clippy 另检出重复声明 example_binary 模块与无用 Value import；分别改为
+  复用父模块和移除 import，不加入 allow，失败日志保存在 first/second-final-clippy.log。
+
+本轮基线为 `264765f4d6928e8039ebe44ecef4c94c3b5287d4`；最终 Rust/Cargo
+内容摘要为 `11b51a57a24386e91b86eb482855a3fdf9ca8ca437b06a9fa1fa4b197f566acb`。
+没有生产 Rust/Cargo 变更。先行定向 CLI/PTY/daemon/MCP suites 为 98 passed；
+随后在上述冻结源码上完成全部 8 项 gate，前后摘要均相同：
+
+| 检查 | 本轮实际结果 |
+| --- | --- |
+| `cargo nextest run --workspace --all-features --no-fail-fast --test-threads 4` | 4368 passed / 22 skipped（7 slow），exit 0 |
+| `cargo clippy --workspace --all-features --all-targets -- -D warnings` | exit 0 |
+| `cargo test --workspace --all-features --doc` | 6 passed / 1 ignored，exit 0 |
+| `cargo fmt -- --check`、`cargo run -p dist-helper -- check` | 各 exit 0 |
+| 第 7 节所列 locked/offline metadata、all-target normal/build/dev tree、nextest JSON discovery | 各 exit 0；629 nodes / 7 members，无 TUI/Ratatui/Crossterm |
+
+环境与第 7 节一致，Cargo 串行；discovery 仍有既有 macOS 链接与依赖
+future-incompatibility 提示。实际命令、时间、终态和文件摘要在
+`target/cli-cleanup/final-check-results.json`、`final-source-checkpoint.json`；
+各 gate 日志为同目录 `final-*.log`。这些本地日志不随 PR 分发，可用表中命令复验。
+
+将新 discovery 的全部 4390 个 binary/name/ignored 元组与原 G11 清单逐一比对，
+结果完全相同；本轮实际 PASS 正好覆盖全部 4368 个非 ignored 用例。
+原 61 项 A/M/C/T 映射引用的 149 个唯一测试，均在原路径保留并唯一匹配本轮 PASS。
+核对结果见 `target/cli-cleanup/verification.json`，不以全量总数代替逐项证据。
+
+实现记录由 2421 行压至 209 行，阶段计划由 401 行压至 99 行；完整原文仍可从
+不可变提交读取。10 个测试/支持文件合计 +216 / −242，含两个新增 helper，净减
+26 行；不把迁移当成删除收益。三个插件描述各由 2331 字符减至 235 字符，
+其余字段、skill 路径与注册保持相同。文档相对路径/锚点、JSON、skill 行数和
+diff 空白审计通过；原第 7 节继续只对应原 G11，hosted CI 按 PR 提交单独查看。
