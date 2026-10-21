@@ -284,7 +284,7 @@ impl Store {
         kind: Kind,
         key: &str,
     ) -> Result<Option<Stored<T>>> {
-        self.bounded(async {
+        self.retry(|| async {
             let tx = self.begin().await?;
             let row = self.read(&tx, kind, key).await?;
             tx.commit().await?;

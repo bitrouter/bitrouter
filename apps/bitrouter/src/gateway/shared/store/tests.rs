@@ -167,3 +167,91 @@ async fn delayed_poll_cannot_start_an_attempt_after_the_total_deadline() -> Resu
     ensure!(calls.load(Ordering::SeqCst) == 1);
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL CREATEDB privilege"]
+async fn postgres_get_retries_serialization_abort_with_a_fresh_transaction() -> Result<()> {
+    let mut database = EmptyDatabase::create().await?;
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        // A single registered connection also requires the aborted transaction
+        // to be rolled back before the retry can obtain another transaction.
+        let db = database.connect(1, Duration::from_secs(2)).await?;
+        let store = Store::new(db.clone(), "get-retry-test", Duration::from_secs(2))?;
+        crate::gateway::shared::schema::initialize(&store).await?;
+        let value = serde_json::json!({"execution_id": "fixture", "settled": true});
+        let tx = store.begin().await?;
+        ensure!(
+            store
+                .create(
+                    &tx,
+                    NewRecord {
+                        kind: Kind::ProjectionReceipt,
+                        key: "fixture-terminal",
+                        status: "delivered",
+                        due_at_ms: None,
+                        now_ms: 1,
+                        value: &value,
+                    },
+                )
+                .await?
+        );
+        let expected = store
+            .read::<serde_json::Value>(&tx, Kind::ProjectionReceipt, "fixture-terminal")
+            .await?
+            .context("seeded get fixture record missing")?;
+        tx.commit().await?;
+
+        // Change only this owned database's relation name. The view preserves
+        // the real migrated columns and forces the production SELECT through a
+        // volatile function, without a production hook or RLS/superuser setup.
+        // https://www.postgresql.org/docs/current/sql-createview.html
+        // https://www.postgresql.org/docs/current/sql-createfunction.html
+        // Sequence increments survive the raised transaction abort.
+        // https://www.postgresql.org/docs/current/functions-sequence.html
+        // This injects a real SQLSTATE, not a naturally occurring SSI cycle.
+        // https://www.postgresql.org/docs/current/plpgsql-errors-and-messages.html
+        db.execute_unprepared(
+            "ALTER TABLE gateway_shared_records RENAME TO get_fixture_records;
+             CREATE SEQUENCE get_read_attempts;
+             CREATE FUNCTION get_fixture_read() RETURNS SETOF get_fixture_records
+             LANGUAGE plpgsql VOLATILE AS $$
+             BEGIN
+                 IF current_setting('transaction_isolation') <> 'serializable' THEN
+                     RAISE EXCEPTION 'get changed the expected transaction isolation';
+                 END IF;
+                 IF nextval('get_read_attempts') = 1 THEN
+                     RAISE EXCEPTION 'fixture first SELECT serialization abort'
+                         USING ERRCODE = '40001';
+                 END IF;
+                 RETURN QUERY SELECT * FROM get_fixture_records;
+             END;
+             $$;
+             CREATE VIEW gateway_shared_records AS SELECT * FROM get_fixture_read();",
+        )
+        .await?;
+
+        // Call get itself: wrapping this call in a fixture retry would hide the
+        // missing production transaction boundary that this regression covers.
+        let actual = store
+            .get::<serde_json::Value>(Kind::ProjectionReceipt, "fixture-terminal")
+            .await?
+            .context("retried get lost the committed fixture record")?;
+        ensure!(actual.row == expected.row && actual.value == expected.value);
+        let attempts = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT last_value FROM get_read_attempts",
+            ))
+            .await?
+            .context("get SELECT attempt count missing")?;
+        ensure!(
+            attempts.try_get::<i64>("", "last_value")? == 2,
+            "get did not make exactly one fresh transaction retry"
+        );
+        Ok(())
+    })
+    .await
+    .context("get serialization retry campaign deadline")
+    .and_then(|result| result);
+    database.finish(result).await
+}
