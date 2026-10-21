@@ -152,6 +152,7 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
             RunChannels {
                 events: None,
                 approvals: None,
+                skill_approvals: None,
                 commits: None,
                 control: None,
             },
@@ -754,6 +755,7 @@ async fn native_legacy_capacity_upgrades_between_runs_and_replays()
             RunChannels {
                 events: None,
                 approvals: None,
+                skill_approvals: None,
                 commits: Some(commits),
                 control: None,
             },

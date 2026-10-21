@@ -5,7 +5,7 @@ description: >
   its CLI — a self-hosted LLM proxy on 127.0.0.1:4356 routing OpenAI- or
   Anthropic-shaped traffic to any provider, via a coding-agent subscription,
   hosted BitRouter, or your own keys. Covers bro init, provider
-  credentials, native BRO tasks, ACP harnesses, routing, and spend.
+  credentials, MCP configuration, versioned skills, native BRO tasks, ACP harnesses, routing, and spend.
   Trigger on bitrouter.yaml, port 4356, brk_ keys, "replace litellm", or
   pointing a coding agent at a proxy.
 license: Apache-2.0
@@ -17,12 +17,9 @@ metadata:
 # BitRouter
 BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4. Native CLI tasks use bounded read workers and database execution records; see `references/cli.md` for permissions and restart limitations. Metered `google` uses Chat Completions with `GEMINI_API_KEY`; native Gemini routes, `google-ai` and Vertex Express are retired.
 
-Native BRO execution commits task/model/tool facts to the database; `references/cli.md` covers capabilities and restart limitations.
-`bro task managed` connects native tools to the in-process managed core with released-session continuation. Custom durable harness clients use the negotiated managed-core HTTP/WebSocket profile; see `references/managed-core.md` for binding, ACKs, results and current limits.
+`bro task managed` submits to the local daemon, which owns native tools/Core and the existing durable journal. Use `--request-id` for exact retries, `managed-status` for passive inspection, `managed-cancel` with the original boot/input key for cancellation, and `managed-answer` for explicit MCP skill consent; continuation requires confirmed release. Custom durable harness clients use the negotiated managed-core HTTP/WebSocket profile; see `references/managed-core.md` for binding, ACKs, results and current limits.
 
 ## Activate in one pass
-Work top to bottom, probing before asking.
-
 ### 1. Probe
 ```bash
 bro --version          # not found -> step 2
@@ -43,18 +40,20 @@ Windows: `powershell -ExecutionPolicy Bypass -c "irm https://bitrouter.ai/instal
 Verify with `bro --version`; on failure read `references/diagnose.md`.
 
 ### 3. Configure
-
-A human runs `bro` to complete onboarding using searchable Up/Down lists of registry
-providers (including BitRouter Cloud), ACP harnesses and actions. Credentials alone do not mark setup complete.
-For scripted setup:
+Bare `bro` ensures a ready background daemon and returns to the shell. Router config
+or detected credentials suffice; a verified running target needs neither current client credentials nor YAML. No chat agent is required. Missing setup needs
+stdin/stderr terminals. Menus use number/name or keyword + Enter; Enter accepts the
+shown default. Secrets are hidden; EOF/Ctrl-C cancels. Scripted setup:
 ```bash
-bro init --yes --use-detected --harness codex --after exit
+bro init --yes --use-detected --after exit
+bro                         # ensure readiness; idempotent on repeat
 ```
-
-This saves `chat.agent: codex-acp` in the resolved config, or the BitRouter home when
-no config exists. `--model ID` persists the default model too. Existing settings are
-preserved; `--force` resets them. Read `providers_skipped_interactive` for logins needing
-a human. No hand-written agent entry is needed. See `references/cli.md` for all flags.
+Optional `--harness codex|claude` saves `chat.agent`; `--model` saves the model. Optional MCP/skill setup reuses existing transactions: `--mcp-name NAME --mcp-from FILE` and `--install-skill SOURCE [--skill NAME] [--skill-ref REF] [--workspace PATH|--global]`. Router progress survives resource failures; inspect `resources` outcomes and retry explicitly. `--yes` never prompts for bundle ambiguity. Settings survive; `--force` resets them.
+`init --yes` saves/exits; `--after serve` waits for readiness; `--after launch` invokes
+the selected native tool. Read `providers_skipped_interactive`; `agents_selected`
+is selection evidence, while deprecated `harnesses_installed` stays empty. Saves are
+`saved_only`; daemon `config_state` reports reload/restart needs. Missing non-TTY
+setup and readiness timeouts fail. See `references/cli.md` for output/cancellation.
 
 ### 4. Choose providers — subscription first
 These logins are interactive, so they are what `providers_skipped_interactive`
@@ -82,34 +81,33 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
 
 ### 5. Start the desired agent interface
 
-BitRouter uses native scrollback and explicit inspectors. Empty-composer Left
-opens Agents; Enter previews and `o` explicitly opens a BRO conversation.
-Esc returns; browsing never submits, approves, resumes or stops work:
+Use single-operation CLI controls or the harness's own native interface.
+Observing state never submits, approves, resumes or stops work:
 
 ```bash
-bro code --model openai/gpt-5  # BRO scrollback Conversation; ← opens durable Threads
-bro code codex              # explicit interactive ACP session
+bro threads list           # authorized durable native Threads
+bro run codex "inspect tests" # one headless ACP turn
 bro run claude "summarize this repo"  # headless ACP turn
 bro task run "fix the failing test" --check "cargo test"  # BRO native task
 bro task run "inspect this project" --read-only  # no shell or writes
 bro run codex "audit this repo" --background  # supervised; returns run id
 bro agents sessions --json  # scriptable supervised-run inventory
-bro agents                 # standalone manager; TTY only
+bro agents                 # read-only live instances; no daemon/agent start
 ```
 
-Background runs survive client exit. Attach with `bro agents attach <run-id>`; stop and
+Background runs survive client exit. Inspect with `bro agents show/events <run-id>`; stop and
 remove are separate. Foreground `run` denies unmatched permissions; background asks.
 Same-worktree runs require the warned override. Read `references/sessions.md` first.
 
 `bro task run` joins `bro serve`, creates a Thread and starts one Turn, streams NDJSON,
 defaults to the bundled `bitrouter/auto` policy, and approves its own tools. `--check` adds verification; otherwise
-it is `not_requested`. Bare `bro code` keeps one Thread: Enter starts/enqueues,
-Ctrl-Enter steers, Ctrl-R resumes a paused queue, empty-composer `y`/`n` approves,
-and Ctrl-D detaches. The docked status bar animates active work and shows accepted routing workflow labels plus the selected serving model. Reattach with `--thread-id`; `--task-id` is removed.
+it is `not_requested`. `bro threads` provides explicit start/enqueue/steer,
+identified approvals, cancellation, queue resume and checkpoint recovery.
+`code/tui/chat/agents attach` return migration guidance; no first-party UI or REPL remains.
 `--read-only` permits `read`, `glob`, `grep`; coding adds `write`, unique-span `edit`, and `shell`.
-Native Threads load global and ancestor `AGENTS.md` into durable user context, using overrides and model-read nested rules; see [wiring](references/cli.md#native-project-instructions-mcp-and-skills-wiring). Coding also exposes configured MCP tools through the same approvals; read-only does not connect to MCP. Skills discovery publishes metadata without prompt injection. `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `code <agent>` / `run <agent>` remain ACP. Local protocol is v17; opt-in HTTP uses `/agent/v2`. Durable history/keys
+Native Threads load global and ancestor `AGENTS.md` into durable user context, using overrides and model-read nested rules; see [wiring](references/cli.md#native-project-instructions-mcp-and-skills-wiring). Coding exposes configured MCP tools through the same approvals; read-only connects only to explicitly granted skill sources and exposes no MCP tools. Skills discovery publishes metadata without activation. `read` also paginates directories. Shell/verification share the declared server interpreter; no launch-time retry. `run <agent>` remains ACP. Local protocol is v19; opt-in HTTP uses `/agent/v2`. Durable history/keys
 survive hot unload. Lost instances/unknown effects never trigger automatic resubmission.
-See `references/cli.md` for permissions, controls, retries and recovery.
+Use `bro threads` for native controls and `bro agents pending/answer/show/events` for supervised ACP; read [CLI controls](references/cli.md#single-operation-native-and-acp-controls) for approvals, retries and recovery.
 Resident BRO daemons defer automatic replacement; finish work and use explicit `bro restart` after binary updates.
 Built-in ACP adapters require Node.js 22+ and `npx`. For the harness's native
 interface, use the reversible per-process launcher:
@@ -172,6 +170,8 @@ boundaries. Remote errors never fall back to this machine's configuration.
 - **A Skill does not grant command execution.** If the host cannot run local
   processes, explain that this local integration is unavailable; do not suggest
   the removed OSS origin MCP server as a fallback.
+- Use `bro mcp list/show/add/edit/remove` for local upstream config; writes are saved_only and require explicit restart for startup bindings. Only `mcp check` connects. See [config editing](references/cli.md#mcp-configuration).
+- Use `bro skills list/show/install/update/uninstall` for BitRouter-owned local/Git bundles, with `--workspace PATH` or `--global`. Native tasks accept repeatable `--skill`/`--exclude-skill` with `project:ID`, `global:ID` or `mcp:SERVER:URI`; clients require daemon support. MCP roots need per-skill consent, enter source-tagged user data and retain a verified per-Turn cache; approval never grants tools. Read original facts with `skills explain --thread ID --turn ID`, or `--managed-session NAME --request-id KEY`. Native `skill_read` delivers verified bound UTF-8 files as Turn-scoped data; frozen Turn/model budgets and original cache/permission checks apply; lost owners stay recovery-blocked. Supervised Codex/Claude `run --background` supports local prompt instructions with the same scoped flags; MCP-origin external delivery is unsupported. Vendor history/token admission and real sessions remain unverified. See [skills](references/cli.md#versioned-skills).
 - MCP upstreams default to modern `server/discover` with rmcp's classified
   legacy fallback. Set `mcp.upstream_protocol: latest` only when an upstream
   must use the legacy `initialize` lifecycle.

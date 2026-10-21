@@ -1,8 +1,10 @@
 # Managed core harness integration
 
 The `bro serve` inference listener also exposes the negotiated managed-core
-profile. The explicit `bro task managed` command connects native workspace resources
-to an in-process core; `task run`, `code`, and ACP keep their existing protocols.
+profile. The explicit `bro task managed` command uses the selected daemon's
+native managed endpoint and CoreSession; `task run` and ACP retain their
+respective protocols. Product CLI execution is described below under native
+managed tasks; independent library embeddings remain available.
 
 For typed context routing, negotiate `context_views_v1` and set the task's
 `routing.context` to `auto`. See [decision-native.md](decision-native.md) for
@@ -341,16 +343,26 @@ establish a per-token monetary charge.
 ## Native managed tasks
 
 `bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
-uses CoreSession for routing and child-agent scheduling, and native BRO tools
-for workspace execution. It opens no listener. The configured database stores
+submits to the selected local daemon's versioned managed endpoint. The daemon
+owns CoreSession, native BRO tools and resource connections; the CLI is only a
+client. The daemon's original configured database stores
 exact checkpoints, ACKs, artifacts, start fences and outcomes atomically through
 revision checks. Omit `--session` for a fresh UUID. Output is NDJSON with
-`managed_session` and `terminal`; this entry does not stream tokens.
+`managed_session` and `terminal`, extended with request/daemon/native identities;
+this entry does not stream tokens. The CLI opens no database and has no embedded
+fallback. Stderr prints the original identity before submit without claiming acceptance.
+Managed v1 Hello declares a maximum of four active native sessions; excess
+requests are rejected before native resource/owner admission.
 
-`--read-only` omits writes, shell and MCP connections. Coding mode approves its
+`--read-only` omits writes, shell and MCP tools; explicitly granted skill sources
+may connect for metadata/verified reads (see the CLI wiring reference). Coding mode approves its
 own headless requests. `--check COMMAND` requests shell verification and conflicts
-with read-only mode. `--effort`, `--config`, `--workspace` and required `--model`
-match `task run`. `--max-output-tokens` is an optional positive override; omission follows the selected model.
+with read-only mode. `--effort`, `--config`, `--workspace` and optional `--model`
+match `task run`; an omitted model uses the running daemon's startup default.
+Native verification currently uses tool outcomes: a normally exited shell is
+`Succeeded` even with a nonzero `exit_status`, which remains in its recorded
+output. Nonzero alone does not fail verification; rejected/unexecuted checks do.
+`--max-output-tokens` is an optional positive override; omission follows the selected model.
 For an uncapped subscription route, set it to the known model output ceiling;
 smaller reservations fail before dispatch. Pin Codex explicitly with
 `--model openai-codex:openai/gpt-6.1-sol --max-output-tokens 128000`.
@@ -379,6 +391,44 @@ model loop. Workspace exclusion is shared with existing native tasks.
 
 A successful exit durably releases the session. Reusing its name in another
 process continues context with the same canonical workspace and tool mode.
+`--request-id` identifies one input: an exact duplicate returns its retained
+acceptance without running it again; changed input conflicts. A new input key
+after confirmed release keeps session/harness IDs and advances the epoch.
+`--server-instance` fences submission to the original daemon boot. On a lost
+submit ACK, the CLI queries the same key/boot and never implicitly resubmits.
+
+`bro task managed-status --session NAME [--request-id KEY]` is passive and does
+not start a daemon, restore a session or connect resources. It reports the
+retained receipt separately when a newer run has replaced the original terminal
+projection. `bro task managed-cancel --session NAME --request-id KEY --server-instance BOOT`
+requests cancellation of that exact live input; inspect status for confirmed
+settlement/release. Both support `--config` and an explicit owner-local control
+`--socket`. Ctrl-C requests cancellation and waits; a disconnected/killed CLI
+leaves its daemon-owned driver running. Daemon shutdown requests cancellation
+and joins the existing driver/tools.
+Joined processes with unknown effects remain recovery-required and unreleased.
+
+MCP skill consent is independent of headless command approval. `managed` emits
+`managed_skill_consent` and waits; `managed-status` projects original requests
+without fetching bodies. Answer with `bro task managed-answer --session NAME
+--request-id KEY --server-instance BOOT --consent-id ID --decision allow|deny`.
+The original input, agent Turn, owner epoch, entry digest and permission state
+must match. An identical retry returns its original `answer_receipt`; cold
+inspection cannot accept a new answer, reopen an owner or fetch MCP content.
+After restart, explicitly select the current daemon boot to read back the old
+receipt; that read does not renew the original consent or its owner epoch.
+Approval ACK precedes root-file reads. MCP instructions are source-tagged user
+data, with the complete held entry, and are not shared into unconsenting children.
+Root bytes persist in the original WorkUnit and are reverified before later
+model steps or authenticated Core restoration. A resource-only source may be
+offline; current source permission/configuration remains mandatory. Cache bytes
+never become filesystem skill candidates. Native `skill_read` reads only held
+manifest files and verifies original bytes on each reuse, including authorized
+journal restoration. Lost owners retain their recovery block. `bro skills explain` reads original
+native Thread/Turn or managed-session/input facts directly from the selected
+database, without App/resource setup, owner claims or recovery. Prepared SDK
+context and available provider-attempt outcomes are distinct evidence.
+
 Unreleased sessions or workspace markers fail closed after abrupt process loss.
 Running-owner handoff and automatic effect reconciliation are not implemented;
 never delete authority records to force continuation. Full remote conformance
@@ -389,10 +439,47 @@ bytes at 96 MiB, tool output at 512 KiB, and artifacts at 32 MiB. Admission can
 reject work sooner when cleanup reservations cannot fit those bounds.
 
 
-The native managed CLI publishes skill metadata and optional MCP instruction
-references, but does not automatically select these optional materials for model
-context. Library callers can select their IDs through `TaskInput.required_materials`;
-AGENTS.md is always required. Automatic skill selection remains follow-up work.
+Native managed hosts expose managed-library candidates to Core after Turn
+acceptance. With a configured decision backend, Core can select relevant local
+versions and persist exact receipts, bounded choices and verified instructions
+in the original WorkUnit/decision ledger before model preparation. Optional
+choices stay empty if that backend is unavailable. Library callers can set
+`TaskInput.routing.skills` include/exclude selectors; generic
+`TaskInput.required_materials` retains its evidence semantics. AGENTS.md stays
+required. MCP roots may be selected and explicitly approved through the same
+Core ledger. CLI `--skill`/`--exclude-skill` flags carry exact scoped selectors;
+explicit MCP URIs resolve metadata independently of listing before content consent.
+Before final selection, changed user steering or signal/manifest facts rebase
+the assessment on the latest context and remaining budget. The original catalog
+and prior decision/usage receipts stay intact; committed intent is never resent
+for the same assessment. Selected versions and budgets remain frozen for that Turn.
+Native `skill_read` reads only the selected original file manifest and delivers
+verified UTF-8 content as source-tagged user data. Frozen Turn and final
+model/context budgets apply without truncation. Local CLI/model fixtures cover
+independent child consent, active version changes and original file evidence;
+external adapter delivery and real service qualification remain separate.
+
+Native skill state requires both `native_skills_v1` and `context_views_v1` in
+the acknowledged harness manifest/capabilities. Recovery validates the original
+required features before decoding them as runnable state; an older core must
+reject rather than discard skill or consent bindings. This native host feature
+does not imply support by the independent remote managed HTTP profile.
+
+Supporting-file state additionally negotiates `native_skill_files_v1`. The
+`skill_read {skill_id, reference}` model tool uses the current selected, approved
+parent and its original file manifest. It returns a metadata receipt; verified
+UTF-8 bytes remain in the original WorkUnit and enter later model requests as
+source-tagged user data. No file body enters ordinary tool history or the next
+Turn. Local reads revalidate retained bundle bytes; MCP cache reuse rechecks
+source authority and original raw size/hash. Files never execute or activate a
+nested skill. A legacy Turn without a frozen file budget gets no new tool.
+Known oversized/unlisted files are rejected before reading; mixed tool batches
+still receive the final context/model checks once all results have settled.
+
+Unreadable or invalid skill roots retain their original binding and cause in
+Core checkpoints. Optional roots can be excluded before first activation;
+required or previously loaded roots fail the original work rather than being
+substituted. Stale reads cannot commit bytes after permission/context changes.
 
 ### Model integration boundary
 

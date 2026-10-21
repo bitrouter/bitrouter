@@ -128,6 +128,7 @@ impl CoreSession {
             // Reads and cancellation are safe to repeat with their original
             // identities. An uncertain tool execution requires reconciliation.
             live.sent_materials.clear();
+            live.sent_skill_consents.clear();
             live.cancelled_tools.clear();
             let resolved = live
                 .provisional_blocks

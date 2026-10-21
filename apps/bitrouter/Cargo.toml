@@ -31,6 +31,7 @@ bitrouter-telemetry = { workspace = true, features = ["otel-http", "server"] }
 keyring.workspace = true
 chrono.workspace = true
 sha2.workspace = true
+shell-words.workspace = true
 hmac.workspace = true
 ring.workspace = true
 subtle.workspace = true
@@ -67,21 +68,15 @@ agent-client-protocol.workspace = true
 tokio-util = { workspace = true, features = ["compat", "rt"] }
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
-# Everything drawn by this binary. There is deliberately no `ratatui` here:
-# the app may touch the terminal but may not draw on it, and the absence of the
-# dependency is what makes that a compile error rather than a convention.
-bitrouter-tui = { path = "../../crates/bitrouter-tui", version = "=1.0.0-alpha.33" }
-# Terminal *I/O*, which is this process's: owning stdin, bracketed paste, and
-# reading key events for `bro chat`. Not drawing — see above.
-crossterm.workspace = true
 jsonschema = { version = "0.47.0", default-features = false }
 schemars.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 atomicwrites.workspace = true
+winapi-util = "0.1"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["process", "event", "termios", "fs"] }
 
 [build-dependencies]
 # Reads the committed registry artifacts to generate the ACP harness catalog.
@@ -110,5 +105,3 @@ prost.workspace = true
 # Real-terminal acceptance coverage: the process under test must see a PTY,
 # while the test controls its size, input bytes, output, and child lifetime.
 portable-pty = "0.9"
-# Reconstructs cursor-addressed ratatui frames for semantic PTY assertions.
-vt100 = "0.15"

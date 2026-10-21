@@ -25,6 +25,8 @@ fn config(server: &wiremock::MockServer) -> HarnessConfig {
         servers: vec![fixture::configuration(server)],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
+        skills: Default::default(),
+        library: None,
         instructions: Default::default(),
     }
 }
@@ -324,6 +326,8 @@ fn stdio_config() -> Result<HarnessConfig, String> {
         )],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
+        skills: Default::default(),
+        library: None,
         instructions: Default::default(),
     })
 }

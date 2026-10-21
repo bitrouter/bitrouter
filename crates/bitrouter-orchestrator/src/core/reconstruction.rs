@@ -74,6 +74,8 @@ pub(crate) fn candidate(
         ));
     }
     let materials = selected_materials(state, &turn.input)?;
+    let skill_messages = super::session::skills::messages(state, turn)?.len();
+    let injected_messages = materials.len().saturating_add(skill_messages);
     if agent.history != step.input_history || step.materials != materials {
         return Err(invalid("context reconstruction source changed"));
     }
@@ -125,7 +127,7 @@ pub(crate) fn candidate(
             }),
         });
     }
-    if materials.is_empty() || materials.iter().any(|material| material.content.is_none()) {
+    if injected_messages == 0 || materials.iter().any(|material| material.content.is_none()) {
         return Err(invalid(
             "context reconstruction requires available versioned required material",
         ));
@@ -157,7 +159,7 @@ pub(crate) fn candidate(
             "discardable indices must identify ordered settled assistant/tool messages",
         ));
     }
-    let required_source_len = step.materials.len() + step.input_history.len();
+    let required_source_len = injected_messages + step.input_history.len();
     if required_source_len != step.context.message_sha256.len() {
         return Err(invalid(
             "context reconstruction source manifest is inconsistent",
@@ -198,7 +200,7 @@ pub(crate) fn candidate(
         let matched = step.context.message_sha256.get(source_index) == Some(&commitment);
         let remove = matched
             && source_index
-                .checked_sub(step.materials.len())
+                .checked_sub(injected_messages)
                 .and_then(|index| removable.get(index))
                 .copied()
                 .unwrap_or(false);

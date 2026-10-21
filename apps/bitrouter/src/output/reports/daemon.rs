@@ -12,7 +12,7 @@ use crate::output::human::{Health, Human};
 /// Result of a daemon lifecycle action (`start` / `stop` / `restart` /
 /// `reload`). `pid`/`listen`/`models`/`log` are present only when the action
 /// produced a live daemon (start / restart).
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DaemonActionReport {
     /// The action performed: `start` | `stop` | `restart` | `reload`.
     pub action: &'static str,
@@ -27,6 +27,9 @@ pub struct DaemonActionReport {
     pub models: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log: Option<String>,
+    /// Saved/running comparison returned by the ready daemon, when queried.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_state: Option<Box<crate::reload::ConfigurationState>>,
 }
 
 impl DaemonActionReport {
@@ -46,6 +49,7 @@ impl DaemonActionReport {
             listen: Some(listen),
             models: Some(models),
             log: Some(log),
+            config_state: None,
         }
     }
 
@@ -58,6 +62,7 @@ impl DaemonActionReport {
             listen: None,
             models: None,
             log: Some(log),
+            config_state: None,
         }
     }
 
@@ -70,6 +75,7 @@ impl DaemonActionReport {
             listen: None,
             models: None,
             log: None,
+            config_state: None,
         }
     }
 }
@@ -93,6 +99,15 @@ impl CliReport for DaemonActionReport {
                 }
                 if let Some(log) = &self.log {
                     h.field("log", log)?;
+                }
+                if let Some(state) = &self.config_state {
+                    h.field("saved configuration", format!("{:?}", state.saved))?;
+                    h.field("running configuration", format!("{:?}", state.running))?;
+                    if state.running != crate::reload::RunningConfigState::InSync {
+                        h.note(
+                            "Inspect bro status; no automatic reload or restart was performed.",
+                        )?;
+                    }
                 }
                 Ok(())
             }

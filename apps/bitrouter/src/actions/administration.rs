@@ -71,6 +71,26 @@ pub struct AgentsReport {
     pub resolved_via: String,
     pub readiness_checked: bool,
     pub agents: Vec<AgentEntry>,
+    #[serde(default)]
+    pub skill_delivery: std::collections::BTreeMap<String, String>,
+}
+
+/// Program delivery contracts. Effective ACP support is negotiated per connection.
+pub fn skill_delivery_paths() -> std::collections::BTreeMap<String, String> {
+    [
+        ("native", "native_activation"),
+        (
+            "supervised_acp",
+            "local_prompt_instructions_when_negotiated",
+        ),
+        ("supervised_acp_mcp_origin", "unsupported"),
+        ("native_launcher", "unsupported"),
+        ("inference_only", "unsupported"),
+        ("transparent_or_standalone_acp", "unsupported"),
+    ]
+    .into_iter()
+    .map(|(path, mode)| (path.into(), mode.into()))
+    .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -297,6 +317,7 @@ pub fn providers(config: &Config, source: &str) -> ProvidersReport {
 
 pub fn agents(config: &Config, source: &str) -> AgentsReport {
     AgentsReport {
+        skill_delivery: skill_delivery_paths(),
         resolved_via: source.into(),
         readiness_checked: false,
         agents: crate::agents::list(config)

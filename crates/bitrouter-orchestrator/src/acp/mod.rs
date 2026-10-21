@@ -57,8 +57,13 @@
 
 pub mod capture;
 pub mod client;
+pub mod commands;
 pub mod controller;
+pub mod journal;
 pub mod native;
+pub mod permission;
+pub mod plain;
+pub mod skills;
 pub mod telemetry;
 pub mod translate;
 pub mod up;

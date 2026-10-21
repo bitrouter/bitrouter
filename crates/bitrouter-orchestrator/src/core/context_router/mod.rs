@@ -59,6 +59,9 @@ pub struct WorkUnit {
     pub last_view_id: Option<String>,
     pub status: super::session::AgentStatus,
     pub result_evidence: Vec<String>,
+    /// Frozen native skill decisions survive worker and root Turn reuse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<super::skills::SkillSelection>,
 }
 
 /// An acknowledged decision intent and its independently acknowledged outcome.

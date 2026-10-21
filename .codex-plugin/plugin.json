@@ -2,10 +2,18 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Route model calls and browse durable BRO conversations in native scrollback. Run Thread/Turn conversations with FIFO input, steering, Codex-style AGENTS.md startup context and nested rules, six native tools (read, glob, grep, write, edit, shell), bounded read workers, configured MCP client tools, skills discovery and durable execution records on a background server. Bundles the BitRouter setup and operations skill, including native ACP v1/v2 via bro acp serve, external ACP harnesses, request checks, and custom-host setup.",
+  "description": "Route model calls through the BitRouter background daemon. Bare bro offers line-based first-run setup or ensures daemon readiness and returns to the shell. Read-only bro agents reports daemon-observed live instances separately from catalog and run history. Native local v19 and HTTP explicit-skill-consent gates protect per-skill approvals. Single-operation native Thread and supervised ACP controls retain approvals, session settings, routing and recovery through CLI/API; first-party code/tui/chat and agents attach are retired. The bundled skill covers provider credentials, optional agent configuration and MCP/skill setup through init --mcp-name/--mcp-from and --install-skill with explicit bundle/ref/scope options, preserving Router progress and safe partial receipts on resource failures without prompting under --yes, explicit native launch, ACP v1/v2 via bro acp serve, local MCP config CRUD with saved-only receipts and explicit restart requirements, MCP resources with explicit caller/workspace-scoped native skill metadata, per-skill consent and verified root instructions as source-tagged user data, local/Git versioned skill install/update/uninstall in BitRouter-owned scope libraries with retained versions, nested Git-root lookup and explicit workspace scope priority, native Core workflow selection and verified local instructions bound to original receipts in WorkUnit with verified per-Turn MCP root caching and explicit task --skill/--exclude-skill selectors, including unlisted and rootless MCP URIs with preserved query/fragment identity and cold skills explain for original Thread/Turn or managed-session/input facts (native skill_read delivers verified bound UTF-8 supporting files as Turn-scoped user data with per-file cold explain evidence; frozen Turn/model budgets and original cache/permission checks apply; lost owners stay recovery-blocked; supervisor v3 supports Codex/Claude local prompt instructions on run --background with scoped skill constraints; MCP-origin external delivery is unsupported, while vendor history/token admission and real sessions remain unverified), daemon-owned task managed with exact request keys, passive managed-status, boot-bound managed-cancel and exact managed-answer skill consent (lost native owners remain recovery-blocked), request checks, and custom-host setup.",
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",
   "license": "Apache-2.0",
-  "keywords": ["llm", "router", "gateway", "cost", "openai", "anthropic", "mcp"],
+  "keywords": [
+    "llm",
+    "router",
+    "gateway",
+    "cost",
+    "openai",
+    "anthropic",
+    "mcp"
+  ],
   "skills": "./skills/bitrouter"
 }

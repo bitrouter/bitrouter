@@ -86,6 +86,8 @@ struct CreateBody {
     #[serde(default)]
     max_output_tokens: Option<u32>,
     #[serde(default)]
+    skills: Option<bitrouter_orchestrator::core::skills::SkillConstraints>,
+    #[serde(default)]
     read_only: bool,
     verification_command: Option<String>,
 }
@@ -118,6 +120,9 @@ struct InputBody {
     turn_id: String,
     request_id: String,
     approved: bool,
+    /// Generic command-approval clients cannot approve MCP skill instructions.
+    #[serde(default)]
+    skill_consent: bool,
 }
 #[derive(Deserialize)]
 struct SteeringBody {
@@ -326,7 +331,7 @@ async fn capabilities(
 ) -> Result<Json<Value>, ApiError> {
     authenticated(&headers, &state.token)?;
     Ok(Json(
-        json!({"version": 2, "runtime": state.service.capabilities(), "operations": ["create_thread", "start_turn", "enqueue_turn", "steer", "cancel_turn", "input", "resume_queue", "read_thread", "read_turn", "history", "observe"]}),
+        json!({"version": 2, "explicit_skill_consent":true, "runtime": state.service.capabilities(), "operations": ["create_thread", "start_turn", "enqueue_turn", "steer", "cancel_turn", "input", "resume_queue", "read_thread", "read_turn", "history", "observe"]}),
     ))
 }
 async fn create(
@@ -352,11 +357,13 @@ async fn create(
                     AgentConfig::fixed(body.model, body.effort)
                         .with_model_mode(body.model_mode)
                         .with_output_reservation(body.max_output_tokens)
+                        .with_skill_constraints(body.skills)
                         .read_only()
                 } else {
                     AgentConfig::fixed(body.model, body.effort)
                         .with_model_mode(body.model_mode)
                         .with_output_reservation(body.max_output_tokens)
+                        .with_skill_constraints(body.skills)
                 },
                 permission_profile: if body.read_only {
                     PermissionProfile::ReadOnly
@@ -460,6 +467,25 @@ async fn input(
     Json(body): Json<InputBody>,
 ) -> Result<Json<Value>, ApiError> {
     let target = state.thread(&headers, id, true).await?;
+    let view = state
+        .service
+        .read_thread_view(&target, &api_caller())
+        .map_err(runtime_error)?;
+    if view
+        .latest_turn
+        .as_ref()
+        .filter(|turn| turn.turn_id == body.turn_id)
+        .and_then(|turn| turn.pending_input.as_ref())
+        .is_some_and(|input| {
+            input.request_id == body.request_id && input.tool_name == "mcp_skill.activate"
+        })
+        && !body.skill_consent
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "MCP skill approval requires explicit skill_consent=true; command policy grants no skill consent",
+        ));
+    }
     let receipt = state
         .service
         .answer_thread_input(

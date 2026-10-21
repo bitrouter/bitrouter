@@ -243,6 +243,54 @@ pub struct SkillEntry {
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
+impl SkillEntry {
+    /// Validate metadata without fetching files or asserting trust in content.
+    /// Direct routes retain legal URI schemes that aggregation cannot rewrite.
+    pub fn validate_metadata(&self) -> Result<(), String> {
+        let name = self
+            .frontmatter
+            .get("name")
+            .and_then(|value| value.as_str())
+            .ok_or("invalid skill URI/name/description")?;
+        let description = self
+            .frontmatter
+            .get("description")
+            .and_then(|value| value.as_str());
+        if !valid_agent_skill_name(name)
+            || !description.is_some_and(|text| (1..=1024).contains(&text.chars().count()))
+        {
+            return Err("invalid skill URI/name/description".into());
+        }
+        skill_uri_root(&self.uri, name)?;
+        let SkillResources::Enumerated(files) = &self.resources else {
+            return Ok(());
+        };
+        if files.is_empty() || files.len() > MAX_SKILL_RESOURCES {
+            return Err("skill manifest exceeds the supported file count or is empty".into());
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        let mut bytes = 0_u64;
+        for file in files {
+            if validate_skill_resource_uri(&file.uri).is_err()
+                || !valid_sha256_digest(&file.digest)
+                || !seen.insert(file.uri.as_str())
+            {
+                return Err("skill manifest has an invalid URI/digest or duplicate file".into());
+            }
+            bytes = bytes
+                .checked_add(file.size)
+                .ok_or("skill manifest byte count overflow")?;
+            if bytes > MAX_SKILL_TOTAL_BYTES {
+                return Err("skill manifest exceeds the supported byte budget".into());
+            }
+        }
+        if !seen.contains(self.uri.as_str()) {
+            return Err("skill manifest does not include its SKILL.md URI".into());
+        }
+        Ok(())
+    }
+}
+
 /// The `skills/list` result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -346,22 +394,94 @@ pub fn strip_label(label: &str, uri: &str) -> Option<String> {
     Some(format!("{SKILL_SCHEME}{path}"))
 }
 
-fn valid_agent_skill_name(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && name
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+/// Shared Agent Skills name grammar: Unicode characters, not UTF-8 bytes.
+pub fn valid_agent_skill_name(name: &str) -> bool {
+    (1..=64).contains(&name.chars().count())
+        && name.chars().all(|c| {
+            c == '-'
+                || (c.is_alphanumeric()
+                    && !c.is_uppercase()
+                    && c.to_lowercase().eq(std::iter::once(c)))
+        })
         && !name.starts_with('-')
         && !name.ends_with('-')
         && !name.contains("--")
 }
 
+/// Validate absolute URI/IRI syntax without interpreting its scheme or
+/// resolving an authority. Syntax alone does not identify or activate a skill.
+pub fn validate_skill_resource_uri(uri: &str) -> Result<(), String> {
+    skill_resource_path(uri).map(|_| ())
+}
+
+/// Read the original URI/IRI path independently of query and fragment identity.
+pub fn skill_resource_path(uri: &str) -> Result<&str, String> {
+    fluent_uri::Iri::parse(uri)
+        .map(|parsed| parsed.path().as_str())
+        .map_err(|_| "invalid absolute MCP skill resource URI".into())
+}
+
+/// Return the original directory URI, preserving its spelling and scheme.
+/// The explicit file and parent-name constraints apply equally to rootless,
+/// authority-based and absolute paths. No URL normalization is performed.
+pub fn skill_uri_root<'a>(uri: &'a str, name: &str) -> Result<&'a str, String> {
+    let parsed = fluent_uri::Iri::parse(uri).map_err(|_| "invalid MCP skill URI")?;
+    let file_uri = uri.split(['?', '#']).next().ok_or("skill URI is missing")?;
+    let root = file_uri
+        .strip_suffix("/SKILL.md")
+        .ok_or("skill URI must explicitly end in /SKILL.md")?;
+    let path_root = parsed
+        .path()
+        .as_str()
+        .strip_suffix("/SKILL.md")
+        .ok_or("skill URI has no explicit SKILL.md path")?;
+    let parent = if path_root.is_empty() {
+        parsed
+            .authority()
+            .map(|authority| authority.as_str())
+            .ok_or("skill parent directory is missing")?
+    } else {
+        path_root
+            .rsplit('/')
+            .next()
+            .ok_or("skill parent directory is missing")?
+    };
+    if !valid_agent_skill_name(name) || decode_skill_uri_segment(parent)? != name {
+        return Err("skill parent directory does not match frontmatter.name".into());
+    }
+    Ok(root)
+}
+
+/// Decode one URI segment without resolving an authority or changing origin.
+pub fn decode_skill_uri_segment(segment: &str) -> Result<String, String> {
+    let input = segment.as_bytes();
+    let mut decoded = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' {
+            let encoded = segment
+                .get(index + 1..index + 3)
+                .ok_or("invalid percent-encoded skill URI")?;
+            decoded.push(
+                u8::from_str_radix(encoded, 16).map_err(|_| "invalid percent-encoded skill URI")?,
+            );
+            index += 3;
+        } else {
+            decoded.push(input[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| "skill URI segment requires UTF-8".into())
+}
+
 fn has_dot_segment(uri: &str) -> bool {
-    uri.split('/').any(|segment| {
-        matches!(
-            segment.to_ascii_lowercase().as_str(),
-            "." | ".." | "%2e" | ".%2e" | "%2e." | "%2e%2e"
-        )
+    skill_resource_path(uri).map_or(true, |path| {
+        path.split('/').any(|segment| {
+            matches!(
+                segment.to_ascii_lowercase().as_str(),
+                "." | ".." | "%2e" | ".%2e" | "%2e." | "%2e%2e"
+            )
+        })
     })
 }
 
@@ -370,38 +490,20 @@ fn has_dot_segment(uri: &str) -> bool {
 /// fetching content.
 fn validated_skill_root(entry: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     let uri = entry.get("uri")?.as_str()?;
-    let parsed = url::Url::parse(uri).ok()?;
-    if parsed.scheme() != "skill"
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || has_dot_segment(uri)
-    {
+    if !uri.starts_with(SKILL_SCHEME) || has_dot_segment(uri) {
         return None;
     }
-    let root = uri.strip_suffix("/SKILL.md")?;
-    let uri_name = root.rsplit('/').next()?;
     let frontmatter = entry.get("frontmatter")?.as_object()?;
     let name = frontmatter.get("name")?.as_str()?;
     let description = frontmatter.get("description")?.as_str()?;
-    if uri_name != name
-        || !valid_agent_skill_name(name)
-        || !(1..=1024).contains(&description.chars().count())
-    {
+    if !(1..=1024).contains(&description.chars().count()) {
         return None;
     }
-    Some(root.to_string())
+    skill_uri_root(uri, name).ok().map(str::to_owned)
 }
 
 fn resource_belongs_to(root: &str, uri: &str) -> bool {
-    let parsed = match url::Url::parse(uri) {
-        Ok(parsed) => parsed,
-        Err(_) => return false,
-    };
-    if parsed.scheme() != "skill"
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || has_dot_segment(uri)
-    {
+    if !uri.starts_with(SKILL_SCHEME) || has_dot_segment(uri) {
         return false;
     }
     uri.strip_prefix(root)
@@ -689,6 +791,44 @@ mod tests {
     }
 
     #[test]
+    fn unicode_names_use_character_limits_and_keep_encoded_uri_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for name in ["审阅", "révision-٢", &"é".repeat(64)] {
+            assert!(valid_agent_skill_name(name));
+        }
+        for name in ["É", "ǅ", "𝐀", "review--check", "审阅-😀", &"é".repeat(65)] {
+            assert!(!valid_agent_skill_name(name));
+        }
+        let uri = "skill://%E5%AE%A1%E9%98%85/SKILL.md";
+        let skill: SkillEntry = serde_json::from_value(serde_json::json!({
+            "uri":uri,"frontmatter":{"name":"审阅","description":"unicode workflow","custom":"unchanged"},
+            "resources":[{"uri":uri,"size":1,"digest":format!("sha256:{}", "a".repeat(64))}]
+        }))?;
+        skill.validate_metadata()?;
+        let namespaced = namespace_entry("source", &serde_json::to_value(&skill)?)
+            .ok_or("unicode entry was dropped")?;
+        assert_eq!(
+            namespaced["uri"],
+            "skill://source/%E5%AE%A1%E9%98%85/SKILL.md"
+        );
+        assert_eq!(
+            namespaced["frontmatter"],
+            serde_json::to_value(&skill.frontmatter)?
+        );
+        assert_eq!(
+            strip_label(
+                "source",
+                namespaced["uri"].as_str().ok_or("namespaced URI")?
+            )
+            .as_deref(),
+            Some(uri)
+        );
+        assert!(decode_skill_uri_segment("%ZZ").is_err());
+        assert!(decode_skill_uri_segment("%C3").is_err());
+        Ok(())
+    }
+
+    #[test]
     fn namespacing_round_trips() {
         let namespaced = namespace_uri("acme", "skill://refunds/SKILL.md").expect("skill uri");
         assert_eq!(namespaced, "skill://acme/refunds/SKILL.md");
@@ -900,6 +1040,67 @@ mod tests {
     fn entry_without_a_uri_is_skipped() {
         let entry = serde_json::json!({ "frontmatter": {"name": "x"} });
         assert_eq!(namespace_entry("srv", &entry), None);
+    }
+
+    #[test]
+    fn generic_uri_paths_preserve_identity_and_require_the_exact_skill_parent() -> Result<(), String>
+    {
+        for uri in [
+            "urn:review/SKILL.md",
+            "urn:acme/review/SKILL.md",
+            "urn:/review/SKILL.md",
+            "https:review/SKILL.md",
+            "https://Example.invalid/review/SKILL.md",
+            "skill://review/SKILL.md",
+        ] {
+            validate_skill_resource_uri(uri)?;
+            assert_eq!(
+                skill_uri_root(uri, "review")?,
+                uri.strip_suffix("/SKILL.md").ok_or("suffix")?
+            );
+            entry(uri, "review").validate_metadata()?;
+        }
+        for uri in [
+            "review/SKILL.md",
+            "urn:SKILL.md",
+            "urn:other/SKILL.md",
+            "urn:review/OTHER.md",
+            "skill://review/OTHER.md?next=/SKILL.md",
+            "skill://review/OTHER.md#SKILL.md",
+        ] {
+            assert!(skill_uri_root(uri, "review").is_err(), "accepted {uri}");
+            assert!(
+                entry(uri, "review").validate_metadata().is_err(),
+                "accepted entry {uri}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn query_and_fragment_identity_survive_directory_mapping_and_namespacing() -> Result<(), String>
+    {
+        let uri = "skill://review/SKILL.md?revision=1#instructions";
+        let support = "skill://review/references/check.md?version=2&tag=../other#section";
+        assert_eq!(skill_uri_root(uri, "review")?, "skill://review");
+        assert_eq!(skill_resource_path(uri)?, "/SKILL.md");
+        let mut value =
+            serde_json::to_value(entry(uri, "review")).map_err(|error| error.to_string())?;
+        value["resources"]
+            .as_array_mut()
+            .ok_or("resources")?
+            .push(serde_json::json!({"uri":support,"digest":DIGEST,"size":14}));
+        serde_json::from_value::<SkillEntry>(value.clone())
+            .map_err(|error| error.to_string())?
+            .validate_metadata()?;
+        let mapped = namespace_entry("source", &value).ok_or("namespace mapping")?;
+        let root = "skill://source/review/SKILL.md?revision=1#instructions";
+        let file = "skill://source/review/references/check.md?version=2&tag=../other#section";
+        assert_eq!(mapped["uri"], root);
+        assert_eq!(mapped["resources"][1]["uri"], file);
+        assert_eq!(strip_label("source", root).as_deref(), Some(uri));
+        assert_eq!(strip_label("source", file).as_deref(), Some(support));
+        Ok(())
     }
 
     /// A dynamic skill carries the marker through unchanged — there are no URIs

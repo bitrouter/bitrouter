@@ -1,19 +1,11 @@
-//! Which skills directory to read.
-//!
-//! Moved here from the former `bitrouter-skills` crate's `install` module when
-//! the skills package manager was cut. Only the *read* half survived — there is
-//! no install, remove, clone, or copy path left in this binary. The type is
-//! named for what it now is (a root to read) rather than what it used to be (a
-//! target to install into).
-//!
-//! The CLI (`bro skills list`, with `-g`) resolves every read through
-//! [`SkillsRoot`], keeping project and user-global scopes explicit.
+//! Compatibility discovery roots for existing library/session consumers.
+//! Managed CLI scopes and versioned installation paths live in `managed`.
 //!
 //! ## Containment
 //!
 //! Each root is its own containment anchor: `format::is_safe_installed_path`
 //! is applied with the root a path was discovered under, never with another
-//! root. A project-scoped caller (`bro skills list` with no `-g`) is
+//! root. A project-scoped compatibility caller is
 //! handed only the project root, so the global root cannot become a traversal
 //! surface for it — a global skill is not merely filtered out of that caller's
 //! answer, it is never walked.
@@ -67,7 +59,7 @@ impl SkillsRoot {
         }
     }
 
-    /// The roots the CLI reads for `bro skills list [-g]`.
+    /// The roots used by the compatibility discovery adapter.
     ///
     /// `-g` selects the global root *instead of* the project one, which is what
     /// the flag has always meant. Asking for it on a machine with no home

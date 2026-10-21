@@ -81,7 +81,7 @@ pub struct CommandsReport {
 }
 
 use agent_client_protocol::schema::v1::{AvailableCommand, AvailableCommandInput};
-use bitrouter_tui::machine::{Command, PromptCommand};
+use bitrouter_orchestrator::acp::commands::{Command, PromptCommand};
 
 /// Everything this session offers, in precedence order.
 ///

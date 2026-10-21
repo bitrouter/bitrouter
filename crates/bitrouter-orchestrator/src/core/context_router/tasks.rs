@@ -18,6 +18,9 @@ pub(crate) fn enabled(state: &SessionSnapshot) -> bool {
 /// Opaque provider continuations stay with their originating conversation.
 /// Related tasks can share plain text and complete ordinary tool exchanges.
 pub(crate) fn portable(block: &EvidenceBlock) -> bool {
+    if block.source.skill_binding.is_some() {
+        return false;
+    }
     block
         .messages
         .iter()

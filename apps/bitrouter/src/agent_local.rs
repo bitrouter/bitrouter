@@ -23,7 +23,9 @@ use bitrouter_orchestrator::turn::{
     ApprovalAnswer, CancelTurnRequest, SteeringReceipt, SteeringRequest, TurnReceipt, TurnRequest,
 };
 
-pub const CONTRACT_VERSION: u32 = 17;
+// Older task-run clients auto-approve every pending input. They must not receive
+// MCP skill requests that require independent, explicit content consent.
+pub const CONTRACT_VERSION: u32 = 19;
 const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 const MAX_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -77,7 +79,7 @@ pub struct ThreadCommand {
     pub operation: Operation,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Operation {
     Capabilities,
@@ -94,6 +96,8 @@ pub enum Operation {
         effort: Option<ReasoningEffort>,
         #[serde(default)]
         max_output_tokens: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skills: Option<bitrouter_orchestrator::core::skills::SkillConstraints>,
         #[serde(default)]
         read_only: bool,
         verification_command: Option<String>,
@@ -104,6 +108,19 @@ pub enum Operation {
     },
     UnloadThread {
         thread_id: String,
+    },
+    /// Reconstruct the OS-local workspace grant, then load without continuing.
+    LoadThread {
+        thread_id: String,
+        workspace: PathBuf,
+    },
+    CloseThread {
+        thread_id: String,
+        idempotency_key: String,
+    },
+    RecoverThread {
+        thread_id: String,
+        request: bitrouter_orchestrator::thread::ThreadRecoveryRequest,
     },
     ReadTurn {
         thread_id: String,
@@ -393,6 +410,9 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
                     "steer",
                     "resume_queue",
                     "unload_thread",
+                    "load_thread",
+                    "close_thread",
+                    "recover_thread",
                 ]
                 .into_iter()
                 .map(str::to_owned)
@@ -413,6 +433,7 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
             model_mode,
             effort,
             max_output_tokens,
+            skills,
             read_only,
             verification_command,
             idempotency_key,
@@ -427,11 +448,13 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
                             AgentConfig::fixed(model, effort)
                                 .with_model_mode(model_mode)
                                 .with_output_reservation(max_output_tokens)
+                                .with_skill_constraints(skills)
                                 .read_only()
                         } else {
                             AgentConfig::fixed(model, effort)
                                 .with_model_mode(model_mode)
                                 .with_output_reservation(max_output_tokens)
+                                .with_skill_constraints(skills)
                         },
                         permission_profile: if read_only {
                             PermissionProfile::ReadOnly
@@ -458,6 +481,34 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
             .unload_thread(&make_target(thread_id), &caller)
             .await
             .map(|_| ReplyResult::Ok),
+        Operation::LoadThread {
+            thread_id,
+            workspace,
+        } => match service.register_local_workspace(&workspace) {
+            Ok(workspace) => match service.load_thread(&make_target(thread_id), &caller).await {
+                Ok(view) if view.thread.workspace == workspace => Ok(ReplyResult::View {
+                    view: Box::new(view),
+                }),
+                Ok(_) => Err("Thread workspace cannot change on load".into()),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        },
+        Operation::CloseThread {
+            thread_id,
+            idempotency_key,
+        } => service
+            .close_thread(&make_target(thread_id), &caller, idempotency_key)
+            .await
+            .map(|receipt| ReplyResult::Thread {
+                snapshot: Box::new(receipt.snapshot),
+            }),
+        Operation::RecoverThread { thread_id, request } => service
+            .recover_thread(&make_target(thread_id), &caller, request)
+            .await
+            .map(|view| ReplyResult::View {
+                view: Box::new(view),
+            }),
         Operation::ReadTurn { thread_id, turn_id } => service
             .read_stored_turn(&make_target(thread_id), &caller, &turn_id)
             .await
@@ -605,6 +656,7 @@ fn target(
 pub struct ThreadClient {
     socket: PathBuf,
     pub server_instance_id: String,
+    pub skill_constraints: bool,
 }
 
 impl ThreadClient {
@@ -613,6 +665,7 @@ impl ThreadClient {
             ReplyResult::Capabilities { runtime, .. } => Ok(Self {
                 socket: socket.into(),
                 server_instance_id: runtime.server_instance_id,
+                skill_constraints: runtime.skill_constraints,
             }),
             _ => anyhow::bail!("unexpected task capabilities reply"),
         }
@@ -634,6 +687,10 @@ impl ThreadClient {
         verification_command: Option<String>,
         prompt: String,
     ) -> Result<(ThreadSnapshot, TurnReceipt)> {
+        anyhow::ensure!(
+            config.skills.is_none() || self.skill_constraints,
+            "selected native daemon does not support skill constraints; no Thread created"
+        );
         let request_key = uuid::Uuid::new_v4().to_string();
         let create_key = format!("{request_key}:create");
         let turn_key = format!("{request_key}:start");
@@ -643,6 +700,7 @@ impl ThreadClient {
             model_mode: config.model_mode,
             effort: config.effort,
             max_output_tokens: config.max_output_tokens,
+            skills: config.skills.clone(),
             read_only: config.tool_mode() == bitrouter_orchestrator::agent::ToolMode::ReadOnly,
             verification_command: verification_command.clone(),
             idempotency_key: create_key.clone(),
@@ -760,7 +818,7 @@ pub async fn request(socket: &Path, operation: Operation) -> Result<ReplyResult>
     }
 }
 
-fn uncertain(error: &anyhow::Error) -> bool {
+pub(crate) fn uncertain(error: &anyhow::Error) -> bool {
     error
         .downcast_ref::<bitrouter_orchestrator::service::ServiceError>()
         .is_none_or(|failure| {
@@ -1008,6 +1066,7 @@ mod tests {
         let client = ThreadClient {
             socket,
             server_instance_id: "fixture-epoch".into(),
+            skill_constraints: false,
         };
         let (thread, turn) = client
             .create_and_start(
@@ -1020,6 +1079,36 @@ mod tests {
         assert_eq!(thread.thread_id, "original-thread");
         assert_eq!(turn.turn_id, "original-turn");
         server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_skill_constraints_require_advertised_native_support() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let client = ThreadClient {
+            socket: root.path().join("never-connect.sock"),
+            server_instance_id: "legacy-owner".into(),
+            skill_constraints: false,
+        };
+        let config = AgentConfig::fixed("fixture-model", None).with_skill_constraints(Some(
+            bitrouter_orchestrator::core::skills::SkillConstraints {
+                include: vec![bitrouter_orchestrator::core::skills::SkillSelector::Mcp {
+                    server: "source".into(),
+                    uri: "skill://review/SKILL.md".into(),
+                }],
+                exclude: Vec::new(),
+            },
+        ));
+        let error = client
+            .create_and_start(root.path().into(), config, None, "inspect".into())
+            .await
+            .err()
+            .context("legacy host silently accepted skill constraints")?;
+        assert!(
+            error
+                .to_string()
+                .contains("does not support skill constraints")
+        );
         Ok(())
     }
 }

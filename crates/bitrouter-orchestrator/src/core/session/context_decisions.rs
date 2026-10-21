@@ -84,6 +84,7 @@ pub(super) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                 last_view_id: None,
                 status: turn.status,
                 result_evidence: Vec::new(),
+                skills: None,
             });
         if work.agent_id != *agent_id || work.run_id != turn.run_id {
             return Err(reject(
@@ -105,6 +106,7 @@ pub(super) fn synchronize(state: &mut SessionSnapshot) -> Result<(), CoreError> 
                             workspace_revision: result.workspace_revision.clone(),
                             permission_revision: call.dispatch.permission_revision,
                             tool_manifest_digest: call.dispatch.tool_manifest_digest.clone(),
+                            skill_binding: None,
                         },
                     };
                     let key = format!("{}:{}", turn.agent_turn_id, reference.artifact_id);
@@ -175,6 +177,7 @@ impl CoreSession {
                 "context limit exceeds address space",
             )
         })?;
+        let skill_sources = skills::message_bindings(&snapshot, turn)?;
         self.transition_for(Some(agent_id), "context.catalogued", |state, _| {
             validate_decision_source(state, agent_id, step_id, &source)?;
             let provenance = EvidenceSource::from_manifest(&task_id, agent_id, &state.manifest);
@@ -195,6 +198,7 @@ impl CoreSession {
                                 workspace_revision: result.workspace_revision.clone(),
                                 permission_revision: call.dispatch.permission_revision,
                                 tool_manifest_digest: call.dispatch.tool_manifest_digest.clone(),
+                                skill_binding: None,
                             },
                         )
                     })
@@ -204,6 +208,7 @@ impl CoreSession {
                 &original.messages,
                 &provenance,
                 &call_sources,
+                &skill_sources,
             )?;
             let work = state.context_store.work.get_mut(&task_id).ok_or_else(|| {
                 reject(ErrorCode::CheckpointConflict, "context work unit is absent")
@@ -219,7 +224,12 @@ impl CoreSession {
         let snapshot = self.snapshot().await;
         let provenance = EvidenceSource::from_manifest(&task_id, agent_id, &snapshot.manifest);
         let mut store = snapshot.context_store.clone();
-        let own = store.capture(&original.messages, &provenance)?;
+        let own = store.capture_with_sources(
+            &original.messages,
+            &provenance,
+            &BTreeMap::new(),
+            &skill_sources,
+        )?;
         let mut ordered = store
             .work
             .get(&task_id)

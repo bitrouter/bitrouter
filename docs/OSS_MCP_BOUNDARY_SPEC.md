@@ -1,5 +1,20 @@
 # Spec: OSS agent control without a first-party MCP origin
 
+> **CLI-only G05 entry update (2026-10-19, local worktree).** Runtime, protocol,
+> permission and recovery requirements in this document remain authoritative.
+> First-party code/tui/chat/agents attach interfaces are removed; earlier UI
+> examples and source paths are historical. Use native Thread controls, headless
+> ACP commands or native harness launchers from the [current CLI reference](CLI.md).
+> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
+> **CLI-only v0.5 scope (2026-10-19).** G07 now installs local/Git skills into
+> BitRouter's own versioned library without editing harness directories or
+> publishing an origin MCP server. G09 plans native host consumption of explicitly
+> allowed upstream MCP skills. Gateway conformance and host loading have separate
+> [pending acceptance](CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md); the known upstream
+> capability-gating gap remains open. These plans preserve this document's
+> no-first-party-origin boundary and do not claim runtime changes in this review.
+
 Status: **implemented for review** · Date: 2026-09-14
 Baseline: `b1cd8f33` (`feat(mcp): add native skills gateway support (#912)`)
 

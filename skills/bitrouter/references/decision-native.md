@@ -28,7 +28,7 @@ This semantic backend is separate from the provider-facing `/v1/decisions` API.
 Native decision requests keep their typed input/output and operation-scoped hooks;
 only generation requests enter the model/context planner.
 
-Native `bro code` and `bro task run` use the Core execution adapter. Without a
+Native `bro threads create` and `bro task run` use the Core execution adapter. Without a
 decision backend, the same compiler retains complete conservative context.
 Their selected generation model still writes responses,
 code, task descriptions and evidence summaries. Native commands default to
@@ -63,7 +63,7 @@ source evidence and current workspace permissions can read it. A failed artifact
 commit blocks continuation instead of silently dropping output. Configured tool
 output limits still apply at the tool's source (for example shell output caps).
 
-Thread context-routing events and `bro code` show task status, selected view size,
+Thread context-routing events and `bro threads show/events` report task status, selected view size,
 omitted evidence groups, result references and separate decision usage/estimates.
 
 Worker tasks share admitted evidence references. Each worker compiles its own
@@ -93,7 +93,7 @@ precedence; an unavailable explicit path is an error. Bundled policies cannot
 be published over: initialize a file-backed policy first.
 `inherit_defaults: false` disables the bundled defaults. Each tier
 is an object with `model`, optional `effort`, and `context: preserve` or `evidence`.
-Use that router selector with `bro code --model SELECTOR`.
+Use that router selector with `bro threads create --model SELECTOR --workspace PATH`.
 Create-Thread HTTP/local requests expose the same mode as `model_mode: policy`.
 
 The named policy selects the generation model. The shared planner then chooses
@@ -102,13 +102,13 @@ model catalog. `decision_model.policy.generation_models`, global `policy_table`,
 scalar tiers and lockfile versions 1–3 are rejected. See the version 4 starter
 lock in `templates/auto-router/policy-lock.yaml`.
 
-Native `bro code`, `bro task run` and `bro task managed` accept an optional
+Native `bro threads create`, `bro task run` and `bro task managed` accept an optional
 `--max-output-tokens` override. When omitted, each step resolves the selected
 model's declared output capacity before committing the prompt. Registry canonical
 capacities fill missing provider limits; explicit provider values win. Unknown
 capacities fall back to 4096, while uncappable providers still require a known
 ceiling. The optional override is stored with the Thread and inherited by later
-Turns and child agents; `--thread-id` retains it. Native HTTP/local
+Turns and child agents; loading the same Thread retains it. Native HTTP/local
 Create-Thread requests accept the same optional `max_output_tokens` field.
 A provider that cannot enforce a request output cap requires a reservation
 covering its known model output ceiling; a smaller or unknown bound is rejected.
@@ -129,8 +129,8 @@ compression, not a fixed total disk quota; retained history still grows with use
 Settled older native sessions adopt the larger checkpoint envelope at restore;
 active runs retain their negotiated limits. Conversation input keeps its separate
 2 MiB budget; live Thread state shares a 256 MiB runtime budget. A native capacity
-failure reports the resource cause after cleanup, including in the TUI and after
-reopening the conversation. Prepared
+failure reports the resource cause after cleanup, including CLI inspection after
+loading the same Thread. Prepared
 plans rejected before provider dispatch consume no model attempt; cold recovery
 uses Core attempt counters, including fallback attempts. A stopped, fully
 settled terminal journal permits fresh workspace work without replaying tools.

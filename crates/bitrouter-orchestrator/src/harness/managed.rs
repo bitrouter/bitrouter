@@ -50,6 +50,23 @@ impl NativeResources {
         config: &HarnessConfig,
         cancel: &CancellationToken,
     ) -> Result<Self, ResourceError> {
+        Self::discover_for_caller(
+            workspace,
+            mode,
+            config,
+            &bitrouter_sdk::caller::CallerContext::anonymous(),
+            cancel,
+        )
+        .await
+    }
+
+    pub async fn discover_for_caller(
+        workspace: &Path,
+        mode: ToolMode,
+        config: &HarnessConfig,
+        caller: &bitrouter_sdk::caller::CallerContext,
+        cancel: &CancellationToken,
+    ) -> Result<Self, ResourceError> {
         let tools = WorkspaceTools::new(workspace, mode).map_err(|error| error.to_string())?;
         let root = tools.root().to_path_buf();
         let instruction_config = config.instructions.clone();
@@ -58,10 +75,21 @@ impl NativeResources {
         })
         .await
         .map_err(|error| error.to_string())??;
-        let resources =
-            HarnessResources::discover(tools.root(), config, mode, cancel, Duration::from_secs(30))
-                .await?;
-        let prepared = Self::prepare(&tools, &resources, &startup);
+        let resources = HarnessResources::discover(
+            tools.root(),
+            config,
+            caller,
+            mode,
+            cancel,
+            Duration::from_secs(30),
+        )
+        .await?;
+        let prepared = Self::prepare(
+            &tools,
+            &resources,
+            &startup,
+            config.library.is_some() || !config.skills.mcp_sources.is_empty(),
+        );
         match prepared {
             Ok(signals) => Ok(Self {
                 tools,
@@ -85,6 +113,7 @@ impl NativeResources {
         tools: &WorkspaceTools,
         resources: &HarnessResources,
         startup: &instructions::InstructionSnapshot,
+        native_skills: bool,
     ) -> Result<SignalUpdate, String> {
         let mut declarations = Vec::new();
         for tool in tools.declarations() {
@@ -130,7 +159,15 @@ impl NativeResources {
             max_tool_output_bytes: 512 * 1024,
             artifact_quota_bytes: 32 * 1024 * 1024,
             max_artifact_chunk_bytes: 32 * 1024,
-            required_features: vec![],
+            required_features: if native_skills {
+                vec![
+                    crate::core::context_router::FEATURE.into(),
+                    crate::core::skills::FEATURE.into(),
+                    crate::core::skills::FILES_FEATURE.into(),
+                ]
+            } else {
+                vec![]
+            },
         };
         let mut materials: Vec<_> = resources
             .inventory
@@ -154,6 +191,19 @@ impl NativeResources {
                 content: None,
             })
             .collect();
+        for binding in &resources.inventory.managed_skills.skills {
+            let material = binding.material()?;
+            materials.push(MaterialRef {
+                material_id: material.material_id,
+                version: material.version,
+                sha256: material.sha256,
+                media_type: material.media_type,
+                provenance: material.provenance,
+                required: false,
+                artifact: None,
+                content: None,
+            });
+        }
         let body = format!("{}\n\n{}", instructions::POLICY, startup.body);
         let digest = sha256(body.as_bytes());
         materials.push(MaterialRef {
@@ -166,7 +216,7 @@ impl NativeResources {
             artifact: None,
             content: Some(body),
         });
-        let signals = SignalUpdate {
+        let mut signals = SignalUpdate {
             signal_revision: 1,
             observed_at: crate::store::owner_time_ms()?.to_string(),
             scope: manifest.workspace_id.clone(),
@@ -184,6 +234,23 @@ impl NativeResources {
                 ("instruction_warnings".into(), json!(startup.warnings)),
             ]),
         };
+        if !resources.inventory.mcp_skills.skills.is_empty()
+            || !resources.inventory.mcp_skills.excluded.is_empty()
+        {
+            signals.facts.insert(
+                "mcp_skill_catalog".into(),
+                json!(resources.inventory.mcp_skills),
+            );
+        }
+        if !resources.inventory.managed_skills.skills.is_empty()
+            || !resources.inventory.managed_skills.problems.is_empty()
+            || !resources.inventory.managed_skills.revisions.is_empty()
+        {
+            signals.facts.insert(
+                "managed_skill_catalog".into(),
+                json!(resources.inventory.managed_skills),
+            );
+        }
         // Leave room for the operation envelope before any task is accepted.
         if serde_json::to_vec(&signals)
             .map_err(|error| error.to_string())?
@@ -197,6 +264,56 @@ impl NativeResources {
 
     pub fn manifest(&self) -> &HarnessManifest {
         &self.signals.manifest
+    }
+
+    pub fn mcp_skill_catalog(&self) -> &super::skills::mcp::McpSkillCatalog {
+        &self.resources.inventory.mcp_skills
+    }
+
+    pub fn managed_skill_catalog(&self) -> &super::skills::library::ManagedSkillCatalog {
+        &self.resources.inventory.managed_skills
+    }
+
+    pub async fn managed_skill_file(
+        &self,
+        binding: &super::skills::library::ManagedSkill,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.resources
+            .managed_skill_file(binding, path, max_bytes)
+            .await
+    }
+
+    pub async fn skill_file(
+        &self,
+        source: &crate::core::skills::SkillSource,
+        reference: &str,
+        max_bytes: u64,
+        cached_bytes: Option<&[u8]>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>, String> {
+        self.resources
+            .skill_file(source, reference, max_bytes, cached_bytes, cancel)
+            .await
+    }
+
+    pub async fn mcp_skill(
+        &self,
+        server: &str,
+        uri: &str,
+        cancel: &CancellationToken,
+    ) -> Result<super::skills::mcp::HeldMcpSkill, String> {
+        self.resources.mcp_skill(server, uri, cancel).await
+    }
+
+    pub async fn mcp_skill_file(
+        &self,
+        held: &super::skills::mcp::HeldMcpSkill,
+        read: super::skills::mcp::SkillRead<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<super::skills::mcp::VerifiedSkillFile, String> {
+        self.resources.mcp_skill_file(held, read, cancel).await
     }
 
     pub fn signals(&self, grant: &OwnershipGrant, revision: u64) -> SignalUpdate {
@@ -216,7 +333,27 @@ impl NativeResources {
             .cloned()
             .ok_or("material is not in the frozen native inventory")?;
         if material.content.is_none() {
-            let body = if let Some(path) = material.provenance.strip_prefix("local_skill:") {
+            let body = if material.provenance.starts_with("managed_skill:") {
+                let binding = self
+                    .resources
+                    .inventory
+                    .managed_skills
+                    .skills
+                    .iter()
+                    .find(|binding| {
+                        binding.version == version
+                            && binding
+                                .material()
+                                .is_ok_and(|reference| reference.material_id == id)
+                    })
+                    .ok_or("managed material is not in the frozen native inventory")?;
+                String::from_utf8(
+                    self.resources
+                        .managed_skill_file(binding, "SKILL.md", 256 * 1024)
+                        .await?,
+                )
+                .map_err(|error| error.to_string())?
+            } else if let Some(path) = material.provenance.strip_prefix("local_skill:") {
                 let path = std::path::PathBuf::from(path);
                 tokio::task::spawn_blocking(move || {
                     let file = std::fs::File::open(path).map_err(|error| error.to_string())?;

@@ -1,7 +1,7 @@
 //! One CoreSession drives the native harness. Workspace tools and approvals
 //! remain local, with their start ledger serialized against checkpoint fences.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -12,10 +12,11 @@ use tokio_util::sync::CancellationToken;
 use super::store::{Journal, MAX_STORE_BYTES, NativePort, NativeStore, StartedTool, error};
 use super::{super::HarnessConfig, NativeResources};
 use crate::agent::ToolMode;
-use crate::core::checkpoint::{ToolStartFence, sha256};
+use crate::core::checkpoint::{DurableHead, ToolStartFence, sha256};
 use crate::core::protocol::{
-    Bind, Capabilities, CoreError, ErrorCode, OwnershipGrant, Restore, ServerMessage, TaskInput,
-    ToolEffect, ToolExecute, ToolObservation, ToolOutcome, ToolResult, ToolStatus, VERSION,
+    Bind, Capabilities, CoreError, ErrorCode, OperationReceipt, OwnershipGrant, Restore,
+    ServerMessage, TaskInput, ToolEffect, ToolExecute, ToolObservation, ToolOutcome, ToolResult,
+    ToolStatus, VERSION,
 };
 use crate::core::session::{CoreSession, HarnessPort, RunStatus, SessionSnapshot};
 use crate::service::workspace::WorkspaceFence;
@@ -24,6 +25,13 @@ use crate::store::ExecutionOwner;
 #[async_trait]
 pub trait NativeApproval: Send + Sync {
     async fn approve(&self, command: &ToolExecute) -> Result<bool, CoreError>;
+    /// Generic command approval is never blanket consent for an MCP skill.
+    async fn approve_skill(
+        &self,
+        _request: &crate::core::skills::SkillConsentRequest,
+    ) -> Result<bool, CoreError> {
+        Ok(false)
+    }
 }
 
 pub struct NativeSession {
@@ -35,7 +43,69 @@ pub struct NativeSession {
     effects: Arc<RwLock<()>>,
 }
 
+/// A passive view of the original native journal. Reading it neither claims
+/// ownership nor authorizes recovery, resources, model calls or tools.
+pub struct StoredSession {
+    pub workspace: PathBuf,
+    pub mode: ToolMode,
+    pub grant: OwnershipGrant,
+    pub head: DurableHead,
+    pub released: bool,
+    pub snapshot: Option<SessionSnapshot>,
+}
+
 impl NativeSession {
+    pub async fn inspect(store: &dyn NativeStore) -> Result<Option<StoredSession>, CoreError> {
+        let Some((_, bytes)) = store.load().await? else {
+            return Ok(None);
+        };
+        if bytes.len() > MAX_STORE_BYTES {
+            return Err(error("native session exceeds storage bound"));
+        }
+        let journal: Journal =
+            serde_json::from_slice(&bytes).map_err(|_| error("invalid native journal"))?;
+        if journal.format != 1 || !journal.workspace.is_absolute() {
+            return Err(error("invalid native journal format/workspace"));
+        }
+        journal.grant.validate()?;
+        journal.head.validate()?;
+        let snapshot = match (&journal.checkpoint, &journal.ack) {
+            (Some(batch), Some(retained)) => {
+                let available = journal
+                    .available()
+                    .into_iter()
+                    .map(|artifact| (artifact.artifact_id.clone(), artifact))
+                    .collect();
+                let (ack, payload) = batch.validate_append_with_payload(
+                    &journal.grant,
+                    &journal.head,
+                    &journal.limits,
+                    &available,
+                    Some(retained),
+                )?;
+                if ack.head() != journal.head {
+                    return Err(error("native checkpoint does not match its durable head"));
+                }
+                let snapshot: SessionSnapshot = serde_json::from_value(payload.checkpoint.state)
+                    .map_err(|_| error("invalid native checkpoint snapshot"))?;
+                if snapshot.session_id != journal.grant.session_id {
+                    return Err(error("native checkpoint belongs to another session"));
+                }
+                Some(snapshot)
+            }
+            (None, None) if journal.head == DurableHead::default() && !journal.released => None,
+            _ => return Err(error("native journal has an incomplete checkpoint/ACK")),
+        };
+        Ok(Some(StoredSession {
+            workspace: journal.workspace,
+            mode: journal.mode,
+            grant: journal.grant,
+            head: journal.head,
+            released: journal.released,
+            snapshot,
+        }))
+    }
+
     /// Resume only a durably released session. Abruptly lost native effects or
     /// activity require investigation; a new database revision is not proof.
     pub async fn open(
@@ -45,6 +115,29 @@ impl NativeSession {
         workspace: &Path,
         mode: ToolMode,
         config: &HarnessConfig,
+    ) -> Result<Self, CoreError> {
+        Self::open_cancellable(
+            app,
+            caller,
+            store,
+            workspace,
+            mode,
+            config,
+            &CancellationToken::new(),
+        )
+        .await
+    }
+
+    /// The daemon can cancel resource preparation without dropping a live
+    /// native driver or claiming that unknown effects have settled.
+    pub async fn open_cancellable(
+        app: Arc<App>,
+        caller: CallerContext,
+        store: Arc<dyn NativeStore>,
+        workspace: &Path,
+        mode: ToolMode,
+        config: &HarnessConfig,
+        cancel: &CancellationToken,
     ) -> Result<Self, CoreError> {
         let workspace = workspace
             .canonicalize()
@@ -101,7 +194,7 @@ impl NativeSession {
                 .map_err(|err| error(err.to_string()))?,
         );
         let resources =
-            match NativeResources::discover(&workspace, mode, config, &CancellationToken::new())
+            match NativeResources::discover_for_caller(&workspace, mode, config, &caller, cancel)
                 .await
             {
                 Ok(resources) => Arc::new(resources),
@@ -120,7 +213,13 @@ impl NativeSession {
             journal.manifest = resources.manifest().clone();
             journal.released = false;
             let (sender, receiver) = mpsc::channel(32);
-            let port = Arc::new(NativePort::new(revision, journal.clone(), store, sender));
+            let port = Arc::new(NativePort::new(
+                revision,
+                journal.clone(),
+                store,
+                sender,
+                resources.clone(),
+            ));
             {
                 let mut state = port.state.lock().await;
                 port.persist(&mut state, journal.clone()).await?;
@@ -128,7 +227,7 @@ impl NativeSession {
             let caps = Capabilities {
                 version: VERSION,
                 core_instance_id: grant.core_instance_id.clone(),
-                operations: vec![],
+                operations: resources.manifest().required_features.clone(),
                 transports: vec!["in_process".into()],
                 unsupported_features: vec!["running_restore_handoff".into()],
                 limits: journal.limits.clone(),
@@ -204,14 +303,35 @@ impl NativeSession {
         approval: Arc<dyn NativeApproval>,
         cancel: CancellationToken,
     ) -> Result<SessionSnapshot, CoreError> {
-        self.core
-            .start(
-                &format!("input_{}", uuid::Uuid::new_v4()),
-                self.core.head().await.state_revision,
-                input,
-            )
+        self.start(&format!("input_{}", uuid::Uuid::new_v4()), input)
             .await?;
-        let result = self.drive(approval, cancel).await;
+        self.drive(approval, cancel).await
+    }
+
+    /// Commit an exact input before driving it. Reusing its identity checks the
+    /// original request and returns its durable receipt, never a second run.
+    pub async fn start(
+        &self,
+        operation_id: &str,
+        input: TaskInput,
+    ) -> Result<OperationReceipt, CoreError> {
+        let revision = match self.core.operation(operation_id).await {
+            Some(receipt) => receipt
+                .state_revision
+                .checked_sub(1)
+                .ok_or_else(|| error("invalid input receipt revision"))?,
+            None => self.core.head().await.state_revision,
+        };
+        self.core.start(operation_id, revision, input).await
+    }
+
+    /// Advance only the already-accepted run through the existing Core driver.
+    pub async fn drive(
+        &mut self,
+        approval: Arc<dyn NativeApproval>,
+        cancel: CancellationToken,
+    ) -> Result<SessionSnapshot, CoreError> {
+        let result = self.drive_inner(approval, cancel).await;
         if result.is_err() {
             self.port.cancel_tools();
             self.core.disconnect().await;
@@ -219,7 +339,7 @@ impl NativeSession {
         result
     }
 
-    async fn drive(
+    async fn drive_inner(
         &mut self,
         approval: Arc<dyn NativeApproval>,
         cancel: CancellationToken,
@@ -261,6 +381,22 @@ impl NativeSession {
                         Some(ServerMessage::ToolExecute(command)) => {
                             let (port, resources, fence, effects, approval, core) = (self.port.clone(), self.resources.clone(), self.workspace.clone(), self.effects.clone(), approval.clone(), core.clone());
                             jobs.spawn(async move { execute(&core, port, resources, fence, effects, approval, *command).await });
+                        }
+                        Some(ServerMessage::SkillConsentRequest(request)) => {
+                            let (core, approval) = (core.clone(), approval.clone());
+                            jobs.spawn(async move {
+                                let approved = tokio::select! {
+                                    biased;
+                                    () = core.skill_consent_expired(&request) => return Ok(()),
+                                    approved = approval.approve_skill(&request) => approved?,
+                                };
+                                if !core.skill_consent_pending(&request).await { return Ok(()); }
+                                let result = core.answer_skill_consent(&operation("skill_answer", &request.consent.request_id), request.answer(approved)).await;
+                                if let Err(error) = result
+                                    && (!matches!(error.code, ErrorCode::StaleRevision | ErrorCode::StaleEpoch | ErrorCode::UnauthorizedScope)
+                                        || core.skill_consent_pending(&request).await) { return Err(error); }
+                                Ok(())
+                            });
                         }
                         Some(ServerMessage::MaterialRequest { request_id, material_id, version }) => {
                             let (material, unavailable) = match self.resources.material(&material_id, &version).await { Ok(material) => (Some(material), None), Err(reason) => (None, Some(reason)) };

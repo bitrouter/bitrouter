@@ -164,7 +164,56 @@ async fn stdio_disconnect_restores_same_approval_across_versions_and_daemon_rest
             .pointer("/params/_meta/bitrouter/requestId")
             .context("input missing")?
             .clone();
+        let connected = || async {
+            match bitrouter::daemon::send_command(
+                &home.path().join("bitrouter.sock"),
+                &bitrouter::daemon::DaemonCommand::ConnectedAgents {
+                    after: None,
+                    limit: 16,
+                },
+            )
+            .await?
+            {
+                bitrouter::daemon::DaemonResponse::ConnectedAgents { report } => {
+                    report.instances.context("missing live sample")
+                }
+                other => anyhow::bail!("unexpected snapshot: {other:?}"),
+            }
+        };
+        let live = connected().await?;
+        ensure!(
+            live.iter().any(
+                |row| row.kind == bitrouter::connected_agents::Kind::NativeWorker
+                    && row.thread_id.as_deref() == Some(session.as_str())
+            ),
+            "active worker missing"
+        );
+        ensure!(
+            live.iter().any(|row| row.kind
+                == bitrouter::connected_agents::Kind::NativeAcpAttachment
+                && row.thread_id.as_deref() == Some(session.as_str())),
+            "native attachment missing"
+        );
         first.detach().await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let live = connected().await?;
+                if live
+                    .iter()
+                    .all(|row| row.kind != bitrouter::connected_agents::Kind::NativeAcpAttachment)
+                {
+                    ensure!(
+                        live.iter()
+                            .any(|row| row.kind == bitrouter::connected_agents::Kind::NativeWorker),
+                        "EOF hid accepted native work"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
         ensure!(
             !project.join("once.txt").exists(),
             "disconnect approved an effect"

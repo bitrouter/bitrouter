@@ -89,6 +89,8 @@ async fn sqlite_reopen_retains_resource_inventory_and_known_result_without_conne
         servers: vec![fixture::configuration(&upstream)],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
+        skills: Default::default(),
+        library: None,
         instructions: Default::default(),
     };
     let url = format!("sqlite://{}/runtime.db", directory.path().display());

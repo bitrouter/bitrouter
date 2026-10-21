@@ -191,6 +191,7 @@ pub mod server;
 // ===== per-protocol modules =====
 pub mod language_model;
 pub mod mcp;
+pub mod skills;
 
 pub use app::{App, AppBuilder, Plugin, PromptTransform};
 // Re-exported so downstream `PromptTransform` impls can name the header map

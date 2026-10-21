@@ -1,5 +1,13 @@
 # Spec: the observability TUI — `bro status --watch` and `launch --tui`
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 > **SUPERSEDED 2026-08-16 — the live view is gone.** The `launch --tui` half was
 > already superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md). The
 > `status --watch` half is now superseded too: the self-refreshing ratatui table

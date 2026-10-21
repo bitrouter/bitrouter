@@ -1,5 +1,20 @@
 # Execution plan: the TUI renderer (retained journal + differential writer)
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
+> **CLI-only G01 update (2026-10-18, local worktree):** shared ACP permission
+> policy/replies, command resolution, journal projection and plain transcripts now
+> live in `bitrouter_orchestrator::acp`; process diagnostics and client/UI adapters
+> are separated app-side. The existing UI remains for this phase. See the
+> [implementation evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> Earlier source locations below remain historical evidence; UI deletion is G05.
+
 Companion to [`TUI_RENDERER_SPEC.md`](TUI_RENDERER_SPEC.md). The spec holds the
 *decisions and rationale*; this file holds the *ordered work and its completion
 criteria*. Scope is the spec's **v1 column only** (§15) — every "later" row is

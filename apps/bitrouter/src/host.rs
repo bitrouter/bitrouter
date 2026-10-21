@@ -266,6 +266,9 @@ async fn serve_with_options(
         let managed_core = crate::orchestrator_api::ManagedCoreApi::new(
             app.clone(), assembled.db.clone(), server_instance_id.clone(),
         );
+        let managed_native = crate::managed_task::owner::Owner::new(
+            app.clone(), assembled.db.clone(), cfg.clone(), native_harness_config(&cfg, home),
+        );
         let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(reloader);
 
         let inference_listener = tokio::net::TcpListener::bind(&listen)
@@ -274,6 +277,9 @@ async fn serve_with_options(
         let control_listener = daemon::bind_control_socket(&socket_path).await?;
         let task_socket = crate::agent_local::socket_path(&socket_path);
         let task_listener = daemon::transport::bind(&task_socket).await?;
+        let managed_listener = daemon::transport::bind(
+            &crate::managed_task::protocol::socket_path(&socket_path),
+        ).await?;
         let acp_listener = daemon::transport::bind(&crate::native_acp::socket_path(&socket_path)).await?;
         let task_service = bitrouter_orchestrator::service::ThreadService::with_store(
             app.clone(),
@@ -298,6 +304,11 @@ async fn serve_with_options(
             "agent API and control API must use distinct credential environment variables"
         );
         let agent_api = crate::agent_api::BoundAgentApi::bind(&cfg.agent_api, task_service.clone()).await?;
+        let native_owners = crate::connected_agents::NativeOwners {
+            threads: task_service.clone(), acp: native_acp.clone(),
+            managed: managed_core.clone(),
+            managed_native: managed_native.clone(),
+        };
         let remote_control = match remote_control {
             Some(server) => Some(
                 server
@@ -330,6 +341,7 @@ async fn serve_with_options(
             .as_deref()
             .map(bitrouter_telemetry::otel::http_layer::router_wrapper);
         let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
+        let managed_instance = server_instance_id.clone();
         let http = async move {
             let managed_shutdown = managed_core.clone();
             let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -402,12 +414,22 @@ async fn serve_with_options(
                 }
                 let runtime = task_service.clone();
                 let acp_cleanup = native_acp.clone();
+                let managed_cleanup = managed_native.clone();
                 let runtime_shutdown = task_shutdown_for_server.clone();
-                let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; acp_cleanup.shutdown().await; };
+                let cleanup = async move {
+                    runtime_shutdown.cancelled().await;
+                    runtime.shutdown().await;
+                    acp_cleanup.shutdown().await;
+                    managed_cleanup.shutdown().await
+                };
                 let acp = crate::native_acp::serve(acp_listener, native_acp, task_shutdown_for_server.clone());
                 let local = crate::agent_local::serve(
                     task_listener,
                     task_service,
+                    task_shutdown_for_server.clone(),
+                );
+                let managed = crate::managed_task::local::serve(
+                    managed_listener, managed_native, managed_instance,
                     task_shutdown_for_server.clone(),
                 );
                 let task_shutdown_for_cleanup = task_shutdown_for_server.clone();
@@ -423,11 +445,12 @@ async fn serve_with_options(
                     }
                 };
                 let serving = async {
-                    let result = tokio::try_join!(local, http, acp).map(|_| ());
+                    let result = tokio::try_join!(local, http, acp, managed).map(|_| ());
                     task_shutdown_for_cleanup.cancel();
                     result
                 };
-                let (result, ()) = tokio::join!(serving, cleanup);
+                let (result, cleanup_result) = tokio::join!(serving, cleanup);
+                cleanup_result?;
                 result
             };
             let mut inference = Box::pin(inference);
@@ -493,6 +516,7 @@ async fn serve_with_options(
                 evolution: Some(assembled.evolution.clone()),
             },
             daemon::LocalControlOptions {
+                native: Some(native_owners),
                 administration: Some(administration),
                 gate: handoff_gate.clone(),
                 cli_owned,
@@ -939,6 +963,8 @@ pub(crate) fn native_harness_config(
         servers,
         protocol: bitrouter_sdk::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
         skill_roots,
+        skills: cfg.skills.clone(),
+        library: Some(Arc::new(crate::skills::native::Library::runtime())),
         instructions: bitrouter_orchestrator::harness::instructions::InstructionConfig {
             global_root: Some(home.to_path_buf()),
             ..Default::default()

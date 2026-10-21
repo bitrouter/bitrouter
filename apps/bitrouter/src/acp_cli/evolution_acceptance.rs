@@ -1,6 +1,6 @@
 //! Explicit acceptance with the pinned ACP adapters and their real workers.
 //! Model responses are served locally; no developer credentials are inherited.
-//! The session host is the same launch/capture boundary used by the coding TUI.
+//! The session host is the retained shared launch/capture boundary for ACP clients.
 //!
 //! Adapter contracts: https://github.com/agentclientprotocol/codex-acp and
 //! https://github.com/agentclientprotocol/claude-agent-acp .

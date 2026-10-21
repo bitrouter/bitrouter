@@ -1,4 +1,4 @@
-//! Typed BitRouter actions shared by the CLI, Code session, and HTTP control
+//! Typed BitRouter actions shared by the CLI, ACP discovery, and HTTP control
 //! surfaces.
 //!
 //! Each action owns one report type and, where dependency injection is useful,
@@ -7,7 +7,6 @@
 //! while the independent upstream MCP gateway remains in `bitrouter-sdk`.
 
 pub mod administration;
-pub(crate) mod code;
 pub mod commands;
 pub mod models;
 pub mod requests;
@@ -20,7 +19,7 @@ pub(crate) mod supervised;
 /// A typed action failed.
 ///
 /// The action boundary deliberately carries only a presentation-neutral
-/// message. CLI, TUI, and HTTP adapters decide how to envelope and render it.
+/// message. CLI and HTTP adapters decide how to envelope and render it.
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct ToolError(pub String);
@@ -67,8 +66,8 @@ pub struct ActionSpec {
     pub id: &'static str,
     /// Canonical CLI leaf, when a separate process can answer the question.
     pub cli_leaf: Option<&'static str>,
-    /// Code-session command without the leading slash.
-    pub tui_command: Option<&'static str>,
+    /// Reserved command name reported by ACP command discovery.
+    pub session_command: Option<&'static str>,
     /// Whether the action reads or writes.
     pub effect: Effect,
     /// Session capability needed before it can be offered.
@@ -82,7 +81,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         id: "status",
         cli_leaf: Some("status"),
-        tui_command: Some("status"),
+        session_command: Some("status"),
         effect: Effect::Read,
         requires: Requires::Nothing,
         reach: Reach::Portable,
@@ -90,7 +89,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         id: "list_models",
         cli_leaf: Some("models"),
-        tui_command: Some("models"),
+        session_command: Some("models"),
         effect: Effect::Read,
         requires: Requires::Nothing,
         reach: Reach::Portable,
@@ -98,7 +97,7 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         id: "route",
         cli_leaf: Some("route"),
-        tui_command: Some("preview"),
+        session_command: Some("preview"),
         effect: Effect::Read,
         requires: Requires::Nothing,
         reach: Reach::HostBound,
@@ -106,15 +105,15 @@ pub const ACTIONS: &[ActionSpec] = &[
     ActionSpec {
         id: "commands",
         cli_leaf: Some("acp commands"),
-        tui_command: Some("commands"),
+        session_command: Some("commands"),
         effect: Effect::Read,
         requires: Requires::Nothing,
         reach: Reach::SessionBound,
     },
     ActionSpec {
         id: "route_set",
-        cli_leaf: None,
-        tui_command: Some("route"),
+        cli_leaf: Some("agents route set"),
+        session_command: Some("route"),
         effect: Effect::Write {
             inverse: "route_reset",
         },
@@ -123,8 +122,8 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         id: "route_reset",
-        cli_leaf: None,
-        tui_command: Some("route reset"),
+        cli_leaf: Some("agents route reset"),
+        session_command: Some("route reset"),
         effect: Effect::Write {
             inverse: "route_set",
         },
@@ -140,7 +139,7 @@ mod tests {
     #[test]
     fn every_session_action_is_fully_inventoried() {
         for action in ACTIONS {
-            let Some(command) = action.tui_command else {
+            let Some(command) = action.session_command else {
                 continue;
             };
             assert!(
@@ -164,7 +163,7 @@ mod tests {
                 action.id
             );
             let inverse_details = row.and_then(|row| match row.effect {
-                Effect::Write { inverse } => Some((inverse, row.tui_command)),
+                Effect::Write { inverse } => Some((inverse, row.session_command)),
                 Effect::Read => None,
             });
             assert!(
@@ -176,7 +175,7 @@ mod tests {
             };
             assert_eq!(back, action.id);
             assert!(
-                action.tui_command.is_none() || inverse_command.is_some(),
+                action.session_command.is_none() || inverse_command.is_some(),
                 "a session-visible write must have a session-visible inverse"
             );
         }

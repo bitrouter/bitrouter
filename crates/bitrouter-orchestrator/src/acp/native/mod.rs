@@ -70,6 +70,7 @@ struct Connection {
 }
 
 struct Attachment {
+    connection_id: String,
     target: ThreadTarget,
     stop: CancellationToken,
     projector: Mutex<Projector>,
@@ -94,6 +95,27 @@ fn service_error(error: ServiceError) -> Error {
 }
 
 impl NativeAcpServer {
+    /// Live session attachments, read from the delivery owner's weak handles.
+    /// An initialized connection with no attached session is outside this view.
+    pub async fn connected_attachments(&self) -> Vec<(String, String)> {
+        let owners = self.shared.owners.lock().await;
+        let mut attachments = owners
+            .values()
+            .flat_map(|owner| owner.attachments.iter())
+            .filter_map(Weak::upgrade)
+            .filter(|attachment| !attachment.stop.is_cancelled())
+            .map(|attachment| {
+                (
+                    attachment.connection_id.clone(),
+                    attachment.target.thread_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        attachments.sort();
+        attachments.dedup();
+        attachments
+    }
+
     pub fn new(service: ThreadService, caller: CallerContext, config: NativeSessionConfig) -> Self {
         Self {
             service,
@@ -536,6 +558,7 @@ impl NativeAcpServer {
                 target.thread_id.clone(),
                 self.service.capabilities().limits.context_bytes_per_thread,
             )),
+            connection_id: connection.id.clone(),
             target: target.clone(),
             stop: connection.stop.child_token(),
             projected,

@@ -30,6 +30,42 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
     }
     for (id, block) in &store.evidence {
         block.validate()?;
+        if let Some(binding) = &block.source.skill_binding {
+            let candidate = store
+                .work
+                .get(&block.source.task_id)
+                .and_then(|work| work.skills.as_ref())
+                .and_then(|selection| {
+                    selection.candidates.iter().find(|candidate| {
+                        candidate.source.identity().is_ok_and(|id| id == *binding)
+                    })
+                })
+                .ok_or_else(|| invalid("resource evidence has no original skill binding"))?;
+            let authorized = !matches!(candidate.source, crate::core::skills::SkillSource::Mcp(_))
+                || candidate.consents.iter().any(|consent| {
+                    consent.approved == Some(true)
+                        && consent.permission_revision == block.source.permission_revision
+                        && consent.tool_manifest_digest == block.source.tool_manifest_digest
+                });
+            let mut matches = matches!(candidate.source, crate::core::skills::SkillSource::Mcp(_))
+                && block.messages
+                    == vec![bitrouter_ai::types::Message::text(
+                        bitrouter_ai::types::Role::User,
+                        crate::core::session::skills::mcp_resource_text(candidate)?,
+                    )];
+            for (reference, content) in &candidate.files {
+                matches |= block.messages
+                    == vec![bitrouter_ai::types::Message::text(
+                        bitrouter_ai::types::Role::User,
+                        crate::core::skills::files::text(candidate, reference, content)?,
+                    )];
+            }
+            if !authorized || !matches {
+                return Err(invalid(
+                    "skill evidence does not match its approved resource bytes",
+                ));
+            }
+        }
         if id != &block.block_id {
             return Err(invalid("evidence map identity differs"));
         }
@@ -326,6 +362,97 @@ pub(crate) fn validate_store_history(
                 &work.acceptance_criteria,
             ),
         )?;
+        if let Some(skills) = &work.skills {
+            if let Some(error) = &skills.failure {
+                remember(&mut current, "skill_admission_rejection", id, error)?;
+            }
+            remember(
+                &mut current,
+                "skill_catalog",
+                id,
+                &(
+                    &skills.catalog,
+                    &skills.constraints,
+                    &skills.policy,
+                    skills.max_selected,
+                    &skills.file_limit_bytes,
+                ),
+            )?;
+            if skills.selected {
+                let choices = skills
+                    .candidates
+                    .iter()
+                    .map(|candidate| {
+                        (
+                            &candidate.source,
+                            &candidate.reason,
+                            candidate.selected,
+                            candidate.probability,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                remember(
+                    &mut current,
+                    "skill_selection",
+                    id,
+                    &(
+                        &skills.source,
+                        skills.instruction_limit_bytes,
+                        &skills.decision_id,
+                        choices,
+                    ),
+                )?;
+            }
+            for candidate in &skills.candidates {
+                if let Some(error) = &candidate.failure {
+                    remember(
+                        &mut current,
+                        "skill_load_failure",
+                        &format!("{id}/{}", candidate.source.identity()?),
+                        error,
+                    )?;
+                }
+                for consent in &candidate.consents {
+                    let mut intent = consent.clone();
+                    intent.approved = None;
+                    intent.answer_operation_id = None;
+                    intent.revoked = false;
+                    remember(&mut current, "skill_consent", &consent.request_id, &intent)?;
+                    if let Some(approved) = consent.approved {
+                        remember(
+                            &mut current,
+                            "skill_consent_answer",
+                            &consent.request_id,
+                            &(approved, &consent.answer_operation_id),
+                        )?;
+                    }
+                    if consent.revoked {
+                        remember(
+                            &mut current,
+                            "skill_consent_revoked",
+                            &consent.request_id,
+                            &true,
+                        )?;
+                    }
+                }
+                if let Some(content) = &candidate.content {
+                    remember(
+                        &mut current,
+                        "skill_instructions",
+                        &format!("{id}/{}", candidate.source.identity()?),
+                        content,
+                    )?;
+                }
+                for (reference, content) in &candidate.files {
+                    remember(
+                        &mut current,
+                        "skill_file",
+                        &format!("{id}/{}/{reference}", candidate.source.identity()?),
+                        content,
+                    )?;
+                }
+            }
+        }
     }
     for (id, receipt) in &store.decisions {
         let mut intent = receipt.clone();

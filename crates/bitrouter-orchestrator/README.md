@@ -14,6 +14,8 @@ trace viewer. `apps/bitrouter` enables it for existing ACP commands and sessions
 | --- | --- |
 | `acp/controller.rs` | Manager-facing ACP server, lifecycle forwarding, route controls and attributed cost |
 | `acp/client.rs` | Shared client for a child agent or an in-process controller, updates, permissions and cancellation |
+| `acp/permission.rs`, `acp/commands.rs` | Terminal-independent permission decisions/exact replies and pure session command resolution; the app still validates configured templates |
+| `acp/journal.rs`, `acp/plain.rs` | Protocol message/tool/plan projection and plain transcript output for headless clients, without terminal rendering types |
 | `acp/up.rs` | Agent-process transport, initialize-only health checks and confirmed process cleanup |
 | `acp/capture.rs` | Capture port and protocol events; the app supplies durable storage |
 | `acp/translate.rs`, `acp/telemetry.rs` | Typed session updates, NDJSON contract and context usage |
@@ -78,6 +80,25 @@ policy to system instructions. The model reads deeper directory rules itself.
 Thread snapshots survive Turns; a new server session refreshes them at a safe
 model boundary with an explicit replacement or removal message. MCP inventories
 retain their independent frozen-binding check. Cold browsing reads no instruction files.
+
+Native skill selection and per-entry MCP consent use the original Core WorkUnit
+and operation ledger, with `native_skills_v1` plus `context_views_v1` negotiation.
+MCP root bytes are read only after the exact consent ACK and enter source-tagged
+user data, with the complete held entry. They never become system instructions
+or automatically portable child evidence. Native Thread pending/answer and the
+managed host's separate skill-approval callback preserve ordinary tool grants.
+CLI-only G09 locally verified retained MCP root/support-file reuse, native
+`skill_read`, cold explain and bounded recovery without widening original
+permissions; real provider/remote-MCP qualification remains separate.
+
+External ACP skill carriers live in `acp/skills.rs`; pure candidate policy is
+shared in `core/skills/selection.rs`. The app supervisor retains decision and
+dispatch ownership in its original ledger. Codex receives verified local root
+text; Claude requires negotiated embeddedContext and receives user resources.
+Capabilities distinguish prompt delivery from native activation, protected
+bundle access and vendor model-context admission. Required MCP-origin delivery
+is unsupported. Independent Cargo peers test each carrier; real vendor sessions
+remain unverified. See the [CLI contract](../../docs/CLI.md#acp-workers-local-cli-discovery-and-native-launch).
 
 `service/state.rs` holds live Thread/Turn records and shared resources. Splitting
 methods into files does not create additional state owners, runners or commit

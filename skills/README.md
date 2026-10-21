@@ -60,9 +60,12 @@ snapshots, candidate compilation, and publication.
 All three skills are installable directly from this repository; select a
 specific skill explicitly because the source exposes more than one `SKILL.md`.
 
-BitRouter does not install or originate skills over MCP. Use the generic skills
-CLI, a plugin marketplace, or copy the directory; the agent host loads the
-installed skill and invokes `bro` directly.
+To give an external agent the BitRouter skill, use the generic skills CLI,
+a plugin marketplace, or copy the directory; its host loads the skill and
+invokes `bro` directly. Separately, `bro skills install SOURCE --skill NAME`
+snapshots a bundle into BitRouter's project or user library. That library does
+not edit the external host's skills and does not yet enable workflow selection
+or delivery. BitRouter does not originate local filesystem skills over MCP.
 
 ```bash
 # Generic skills CLI — discovers skills/ automatically. Always pass --skill:

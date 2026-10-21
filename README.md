@@ -61,8 +61,8 @@ you admit and proposes a new policy you can review, publish, or revert.
 Keep the clients and workflows you already use:
 
 - **Model APIs** — OpenAI Chat Completions and Responses, and Anthropic Messages, with cross-protocol routing. Metered Gemini uses Google’s OpenAI-compatible Chat endpoint.
-- **Coding agents** — built-in Codex and Claude support through `bro code`, native launchers, and ACP adapters.
-- **Tools & skills** — aggregate configured MCP servers behind one endpoint, with tools and [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640) skills available through the same gateway.
+- **Coding agents** — built-in Codex and Claude support through native launchers, headless commands, and ACP adapters.
+- **Tools & skills** — manage upstream config with `bro mcp list/show/add/edit/remove`, then aggregate configured MCP servers behind one endpoint, with tools and [MCP Skills](https://modelcontextprotocol.io/extensions/skills/overview) skills available through the same gateway. `bro skills install/update/uninstall` manages complete, versioned local/Git bundles in a separate BitRouter library. Native Core selects managed versions or explicitly allowed MCP entries; MCP roots require per-skill consent through native pending/answer or `task managed-answer` and enter source-tagged user data. Task CLI selectors, persisted MCP root reuse and cold `bro skills explain` are available; native `skill_read` delivers verified bound UTF-8 support as Turn-scoped data. Cached roots/files retain their original identity and current permission checks; lost owners remain recovery-blocked. Supervised Codex/Claude deliver verified local prompt instructions; required MCP-origin external delivery is unsupported. Vendor history/token admission and real sessions remain unverified.
 
 ## Benchmarks
 
@@ -103,39 +103,32 @@ cargo install bitrouter
 
 ## Quick start
 
-`bro code` is BitRouter's CLI workspace for coding-agent conversations. On the
-first run, `bro` guides you through setup and opens the default agent. The
-current source opens a BRO conversation with bare `bro code` and can reopen a
-durable Thread; `bro code <agent>` connects an explicit ACP harness. In the
-published alpha.33 release, bare `bro code` opens an agent picker instead.
+Run `bro` for line-based first-run setup. It ensures the background daemon is
+ready and returns to the shell; subsequent calls reuse that daemon. Native
+harness interfaces remain available through `bro claude`, `bro codex` and
+`bro launch <agent>`.
+
+`bro threads` manages native history, FIFO inputs, approvals and explicit
+recovery. `bro agents` lists current connections; its single-operation commands
+manage supervised ACP runs, settings, routes and native sessions. The existing
+ThreadService, Core and controller retain execution and permission ownership.
+
+`bro code`, `bro tui`, `bro chat` and `bro agents attach` have been removed.
+They return migration guidance and never open an interface or start work.
 
 ```bash
-bro                                  # first-run setup, then the default agent
-bro code                             # conversation (source: ← browses durable Threads)
-bro code codex                       # start an interactive Codex ACP session
-bro code claude                      # start an interactive Claude ACP session
-bro run claude "summarize this repo" # run one headless agent turn
+bro                                  # setup, then background daemon readiness
+bro agents                           # live instances; catalog: agents list
+bro run claude "summarize this repo"  # one headless ACP turn
+bro run codex "inspect tests" --background
+bro agents pending <run-id>          # inspect exact pending approvals
+bro threads list                     # authorized durable native Threads
+bro requests                         # settled requests and spend
+bro route <model>                    # explain model resolution
 ```
 
-BitRouter discovers a compatible local coding-agent CLI automatically. Its
-built-in Codex and Claude adapters require Node.js 22+ and `npx`; when the local
-CLI is unavailable, the adapter uses its bundled worker.
-
-Use the surrounding `bro` commands to inspect and control the router while you
-work:
-
-```bash
-bro requests                      # settled requests and spend
-bro route <model>                 # explain how a model name resolves
-bro start                         # start the local router
-bro stop                          # stop the local router
-bro restart                       # restart the local router
-bro init                          # scaffold advanced routing configuration
-```
-
-`bro claude` and `bro codex` launch each harness's native interface with
-per-process BitRouter overrides. `bro code <agent>` keeps the conversation
-inside BitRouter's interface; `bro run <agent>` is the headless equivalent.
+The maintained Codex and Claude ACP adapters require Node.js 22+ and `npx`;
+native launchers use each harness's own interface and per-process overrides.
 
 See [`docs/CLI.md`](docs/CLI.md) for the complete command reference, session
 controls, flags, and config resolution.

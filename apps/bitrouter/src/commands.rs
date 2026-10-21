@@ -450,14 +450,14 @@ fn available_methods(entry: &crate::providers::entry::ProviderEntry) -> Vec<Auth
     methods
 }
 
-/// Use the same searchable keyboard selector as onboarding.
+/// Use the same line-based selector as onboarding.
 async fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMethod> {
     let index = crate::prompt::select(
         &format!("Log in to {provider}"),
         "Choose an authentication method",
         options
             .iter()
-            .map(|method| bitrouter_tui::select::Item::new(method.label(), ""))
+            .map(|method| crate::prompt::Item::new(method.label(), ""))
             .collect(),
         0,
     )
@@ -598,7 +598,7 @@ async fn login_entry(
                 }
                 bitrouter_ai::auth::credentials::Credential::api_key(key)
             }
-            None => run_api_key_paste(&entry.display_name)?,
+            None => run_api_key_paste(&entry.display_name).await?,
         },
     };
 
@@ -764,6 +764,7 @@ async fn run_claude_code_session() -> Result<bitrouter_ai::auth::credentials::Cr
         .arg("auth")
         .arg("login")
         .arg("--claudeai")
+        .kill_on_drop(true)
         .status()
         .await
         .context("running `claude auth login`")?;
@@ -929,32 +930,17 @@ fn run_cli_import(provider_id: &str) -> Result<bitrouter_ai::auth::credentials::
     Ok(bitrouter_ai::auth::credentials::Credential::from_oauth_token(imported.token))
 }
 
-/// Read a static API key from stdin. Input is **not** masked — the user
-/// sees what they're pasting, which is the simplest correct UX and
-/// matches `gh auth login --with-token`. Future work could wire
-/// `rpassword` for a hidden prompt.
-fn run_api_key_paste(display_name: &str) -> Result<bitrouter_ai::auth::credentials::Credential> {
+/// Read a static API key with terminal echo disabled until the line finishes.
+async fn run_api_key_paste(
+    display_name: &str,
+) -> Result<bitrouter_ai::auth::credentials::Credential> {
     Ok(bitrouter_ai::auth::credentials::Credential::api_key(
-        read_api_key(display_name)?,
+        read_api_key(display_name).await?,
     ))
 }
 
-pub(crate) fn read_api_key(display_name: &str) -> Result<String> {
-    use std::io::BufRead;
-    eprintln!();
-    eprintln!("  Paste your {display_name} API key, then press enter:");
-    eprint!("  > ");
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    stdin
-        .lock()
-        .read_line(&mut line)
-        .context("reading API key from stdin")?;
-    let key = line.trim();
-    if key.is_empty() {
-        anyhow::bail!("no API key entered — aborting login");
-    }
-    Ok(key.to_string())
+pub(crate) async fn read_api_key(display_name: &str) -> Result<String> {
+    crate::prompt::secret(&format!("Paste your {display_name} API key")).await
 }
 
 /// `LoginUx` implementation that drives stderr + stdin. Used by the
@@ -996,32 +982,9 @@ impl bitrouter_ai::auth::login::LoginUx for StderrLoginUx {
     async fn prompt_pasted_redirect(
         &self,
     ) -> std::result::Result<String, bitrouter_ai::auth::login::LoginError> {
-        // The login flow races this future against the loopback
-        // listener. If the listener wins we never read stdin, so a
-        // blocking read here would normally pin a thread for the whole
-        // OAuth round trip. Run the read on a blocking thread so
-        // the login can stop awaiting it when the listener finishes. An already
-        // started blocking stdin read cannot be interrupted by dropping this
-        // async future; that remains an application interaction limitation.
-        let pasted = tokio::task::spawn_blocking(|| {
-            use std::io::BufRead;
-            eprint!("  Paste redirect URL (or just the code): ");
-            let stdin = std::io::stdin();
-            let mut line = String::new();
-            stdin.lock().read_line(&mut line).map_err(|e| {
-                bitrouter_ai::auth::login::LoginError::UserIo(format!(
-                    "reading pasted redirect: {e}"
-                ))
-            })?;
-            Ok::<_, bitrouter_ai::auth::login::LoginError>(line)
-        })
-        .await
-        .map_err(|e| {
-            bitrouter_ai::auth::login::LoginError::UserIo(format!(
-                "join error reading pasted redirect: {e}"
-            ))
-        })??;
-        Ok(pasted)
+        crate::prompt::secret("Paste redirect URL (or just the code)")
+            .await
+            .map_err(|error| bitrouter_ai::auth::login::LoginError::UserIo(error.to_string()))
     }
 }
 
@@ -1040,15 +1003,12 @@ pub async fn logout_provider(provider_id: &str) -> Result<usize> {
     Ok(removed)
 }
 
-// ===== skills (format + local reads) =====
+// ===== shared unmanaged reads and source scaffolding =====
 //
-// `add`, `remove`, `find`, and `update` were removed with the skills package
-// manager: installing skills is the ecosystem's job (`npx skills add`, the
-// Claude Code and Codex plugin marketplaces), not a router's. What remains
-// reads the installed-skills directory and scaffolds a `SKILL.md`. See
-// `crate::skills` for the reasoning.
+// Library/session consumers retain this discovery adapter. The product CLI's
+// managed install/list/show/update/uninstall path lives in crate::skills::cli.
 
-/// `bro skills list` — the skills under the chosen root.
+/// Compatibility discovery of skills under the chosen roots.
 ///
 /// One [action](crate::actions::skills), shared by the CLI report and local
 /// session consumers. It gains two things the old single `read_dir` could not

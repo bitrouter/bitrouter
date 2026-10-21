@@ -34,10 +34,18 @@ fn yaml(listen: &str, key: &str) -> String {
 
 impl RunningFixture {
     async fn start() -> Result<Self> {
+        Self::start_with_skill_source(false).await
+    }
+
+    async fn start_with_skill_source(granted: bool) -> Result<Self> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join("bitrouter.yaml");
         let socket = directory.path().join("bitrouter.sock");
-        tokio::fs::write(&source, yaml("127.0.0.1:14356", "old-private-api-key")).await?;
+        let mut initial = yaml("127.0.0.1:14356", "old-private-api-key");
+        if granted {
+            initial.push_str(&skill_source_yaml(directory.path())?);
+        }
+        tokio::fs::write(&source, initial).await?;
         let baseline =
             bitrouter::reload::load_configuration_baseline(&ConfigSource::File(source.clone()))
                 .await?;
@@ -101,6 +109,44 @@ impl RunningFixture {
             .report()
             .await
     }
+}
+
+fn skill_source_yaml(workspace: &Path) -> Result<String> {
+    Ok(format!(
+        "skills:\n  mcp_sources:\n    private-skill-source:\n      workspaces: [{}]\n      local: true\n      user_ids: [private-user-id]\n",
+        serde_json::to_string(&workspace)?
+    ))
+}
+
+#[tokio::test]
+async fn native_skill_source_changes_and_revocations_require_restart() -> Result<()> {
+    for initially_granted in [false, true] {
+        let fixture = RunningFixture::start_with_skill_source(initially_granted).await?;
+        let before = configuration(&fixture.status(&fixture.source).await?)?;
+        let mut candidate = yaml("127.0.0.1:14356", "old-private-api-key");
+        if !initially_granted {
+            candidate.push_str(&skill_source_yaml(fixture.directory.path())?);
+        }
+        tokio::fs::write(&fixture.source, candidate).await?;
+        let changed = configuration(&fixture.status(&fixture.source).await?)?;
+        ensure!(changed["running"] == "restart_required", "{changed}");
+        ensure!(
+            changed["restart_required_fields"] == serde_json::json!(["skills"]),
+            "{changed}"
+        );
+        ensure!(changed["server_instance_id"] == before["server_instance_id"]);
+        ensure!(!changed.to_string().contains("private-skill-source"));
+        ensure!(!changed.to_string().contains("private-user-id"));
+        ensure!(
+            fixture.reloader.reload().await.is_err(),
+            "routing reload accepted native skill source change"
+        );
+        let refused = configuration(&fixture.status(&fixture.source).await?)?;
+        ensure!(refused["running"] == "restart_required");
+        ensure!(refused["restart_required_fields"] == serde_json::json!(["skills"]));
+        ensure!(refused["server_instance_id"] == before["server_instance_id"]);
+    }
+    Ok(())
 }
 
 fn configuration(report: &StatusReport) -> Result<Value> {
@@ -221,6 +267,62 @@ async fn invalid_or_missing_saved_config_does_not_erase_the_live_daemon() -> Res
         "{unreadable_state}"
     );
     ensure!(unreadable_state["running"] == "unknown");
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_cli_save_requires_restart_and_never_reloads_the_running_target() -> Result<()> {
+    let fixture = RunningFixture::start().await?;
+    let before = configuration(&fixture.status(&fixture.source).await?)?;
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
+        .current_dir(fixture.directory.path())
+        .env("HOME", fixture.directory.path())
+        .env("BITROUTER_HOME", fixture.directory.path())
+        .args([
+            "mcp",
+            "add",
+            "saved",
+            "--command",
+            "/not/a/running/mcp/server",
+            "--config",
+        ])
+        .arg(&fixture.source)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    ensure!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let receipt: Value = serde_json::from_slice(&output.stdout)?;
+    ensure!(receipt["activation"] == "saved_only" && receipt["running"] == "unknown");
+    let report = fixture.status(&fixture.source).await?;
+    let saved = configuration(&report)?;
+    ensure!(
+        report.running && saved["running"] == "restart_required",
+        "{saved}"
+    );
+    ensure!(
+        saved["restart_required_fields"]
+            .as_array()
+            .is_some_and(|fields| fields.contains(&Value::String("mcp_servers".into())))
+    );
+    ensure!(
+        saved["server_instance_id"] == before["server_instance_id"]
+            && saved["generation"] == before["generation"]
+    );
+    ensure!(
+        fixture.reloader.reload().await.is_err(),
+        "routing reload accepted startup MCP binding"
+    );
+    let refused = configuration(&fixture.status(&fixture.source).await?)?;
+    ensure!(
+        refused["running"] == "restart_required"
+            && refused["server_instance_id"] == before["server_instance_id"]
+    );
+    ensure!(report.listen.as_deref() == Some("127.0.0.1:14356"));
     Ok(())
 }
 

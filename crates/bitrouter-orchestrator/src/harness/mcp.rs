@@ -56,6 +56,12 @@ struct Connection {
     service: RunningService<RoleClient, Client>,
     generation: Arc<AtomicU64>,
     catalog_generation: u64,
+    execution_catalog: bool,
+}
+
+struct ConfiguredSource {
+    workspace: std::path::PathBuf,
+    configuration_digest: String,
 }
 
 struct Binding {
@@ -68,6 +74,8 @@ struct Binding {
 #[derive(Default)]
 pub struct McpConnections {
     connections: BTreeMap<String, Connection>,
+    configured_sources: BTreeMap<String, ConfiguredSource>,
+    connection_failures: BTreeMap<String, String>,
     bindings: BTreeMap<String, Binding>,
     catalog_bytes: usize,
     cleanup: Vec<process::ProcessOwner>,
@@ -76,6 +84,8 @@ pub struct McpConnections {
     pub(super) instruction_bodies: BTreeMap<String, String>,
 }
 
+mod skills;
+
 impl McpConnections {
     pub fn tools(&self) -> &[McpTool] {
         &self.tools
@@ -83,8 +93,9 @@ impl McpConnections {
 
     pub fn validate_catalog(&self) -> Result<(), String> {
         if self.connections.values().any(|connection| {
-            connection.catalog_generation != connection.generation.load(Ordering::SeqCst)
-                || connection.service.peer().is_transport_closed()
+            connection.execution_catalog
+                && (connection.catalog_generation != connection.generation.load(Ordering::SeqCst)
+                    || connection.service.peer().is_transport_closed())
         }) {
             return Err(reject("MCP catalog is no longer current"));
         }
@@ -113,6 +124,18 @@ impl McpConnections {
         cancel: &CancellationToken,
         max_duration: Duration,
     ) -> Result<Self, ResourceError> {
+        let tools = servers.iter().map(|server| server.name.clone()).collect();
+        Self::connect_scoped(workspace, servers, &tools, version, cancel, max_duration).await
+    }
+
+    pub(crate) async fn connect_scoped(
+        workspace: &Path,
+        servers: &[McpServerConfig],
+        tool_servers: &BTreeSet<String>,
+        version: ProtocolVersion,
+        cancel: &CancellationToken,
+        max_duration: Duration,
+    ) -> Result<Self, ResourceError> {
         if servers.len() > MAX_SERVERS {
             return Err(reject("MCP catalog exceeds 32 servers").into());
         }
@@ -135,7 +158,7 @@ impl McpConnections {
             biased;
             _ = cancel.cancelled() => Err("MCP discovery cancelled".into()),
             _ = tokio::time::sleep(max_duration) => Err("MCP discovery exceeded the remaining Turn time".into()),
-            result = clients.connect_all(&workspace, servers, version, cancel) => result,
+            result = clients.connect_all(&workspace, servers, tool_servers, version, cancel) => result,
         };
         if let Err(error) = result {
             return Err(match clients.shutdown().await {
@@ -156,10 +179,24 @@ impl McpConnections {
         &mut self,
         workspace: &Path,
         servers: &[McpServerConfig],
+        tool_servers: &BTreeSet<String>,
         version: ProtocolVersion,
         cancel: &CancellationToken,
     ) -> Result<(), String> {
         for server in servers {
+            let configuration_digest = sha256(
+                &serde_json::to_vec(&super::canonical(
+                    serde_json::to_value(server).map_err(|error| error.to_string())?,
+                ))
+                .map_err(|error| error.to_string())?,
+            );
+            self.configured_sources.insert(
+                server.name.clone(),
+                ConfiguredSource {
+                    workspace: workspace.to_path_buf(),
+                    configuration_digest,
+                },
+            );
             let generation = Arc::new(AtomicU64::new(0));
             let handler = Client {
                 version: version.clone(),
@@ -167,16 +204,35 @@ impl McpConnections {
             };
             let probe = process::ProcessOwner::new();
             self.cleanup.push(probe.clone());
-            let service = tokio::select! {
+            let connected = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err("MCP connection cancelled".into()),
-                result = tokio::time::timeout(CONNECT_TIMEOUT, connect(workspace, &server.transport, handler, probe)) =>
-                    result.map_err(|_| reject(format!("MCP {} connection timed out", server.name)))??,
+                result = tokio::time::timeout(CONNECT_TIMEOUT, connect(workspace, &server.transport, handler, probe.clone())) =>
+                    result.map_err(|_| reject(format!("MCP {} connection timed out", server.name))).and_then(|result| result),
+            };
+            let service = match connected {
+                Ok(service) => service,
+                Err(error) if !tool_servers.contains(&server.name) => {
+                    // A resource-only source may be offline. Its metadata is
+                    // absent from new selections; an old held entry can still
+                    // use its original cache after current policy validation.
+                    // Never continue while process ownership is uncertain.
+                    probe.stop().await.map_err(|cleanup| {
+                        format!("{error}; MCP source cleanup could not be confirmed: {cleanup}")
+                    })?;
+                    self.connection_failures.insert(server.name.clone(), error);
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             service
                 .peer()
                 .set_response_cache_config(ClientCacheConfig::disabled())
                 .await;
+            let execution_catalog = service.peer_info().is_some_and(|info| {
+                info.instructions.is_some()
+                    || (tool_servers.contains(&server.name) && info.capabilities.tools.is_some())
+            });
             if let Some(info) = service.peer_info()
                 && let Some(text) = &info.instructions
             {
@@ -188,6 +244,7 @@ impl McpConnections {
                             service,
                             generation,
                             catalog_generation: 0,
+                            execution_catalog,
                         },
                     );
                     return Err(reject("MCP server instructions exceed 64 KiB"));
@@ -210,11 +267,24 @@ impl McpConnections {
                     service,
                     generation,
                     catalog_generation: 0,
+                    execution_catalog,
                 },
             );
-            tokio::time::timeout(CONNECT_TIMEOUT, self.discover(server))
-                .await
-                .map_err(|_| reject("MCP tool discovery exceeded its total deadline"))??;
+            if tool_servers.contains(&server.name)
+                && self
+                    .connections
+                    .get(&server.name)
+                    .is_some_and(|connection| {
+                        connection
+                            .service
+                            .peer_info()
+                            .is_some_and(|info| info.capabilities.tools.is_some())
+                    })
+            {
+                tokio::time::timeout(CONNECT_TIMEOUT, self.discover(server))
+                    .await
+                    .map_err(|_| reject("MCP tool discovery exceeded its total deadline"))??;
+            }
         }
         self.tools.sort_by(|a, b| a.name.cmp(&b.name));
         self.validate_catalog()
@@ -426,6 +496,8 @@ impl McpConnections {
     }
 
     async fn close(&mut self) -> Result<(), String> {
+        self.configured_sources.clear();
+        self.connection_failures.clear();
         self.bindings.clear();
         self.catalog_bytes = 0;
         self.tools.clear();

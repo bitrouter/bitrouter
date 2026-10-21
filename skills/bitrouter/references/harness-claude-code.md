@@ -2,8 +2,8 @@
 
 Claude has two deliberate BitRouter facets:
 
-- `bro code claude` drives the built-in `claude-acp` adapter inside
-  BitRouter's full-screen ACP lifecycle UI.
+- `bro run claude` drives the maintained ACP adapter for one headless turn;
+  `--background` gives controller ownership to the daemon.
 - `bro claude` launches Claude Code's own native interface with
   reversible per-process routing overrides.
 
@@ -17,8 +17,20 @@ bro init --yes --harness claude --after exit
 
 ## ACP session
 
+For daemon skill allocation, use `bro run claude "review changes" --background
+--skill project:INSTALLATION_ID` (one command). Repeat `--skill` or
+`--exclude-skill` with project/global installation IDs. Delivery requires that
+connection's `embeddedContext` capability and uses embedded text resources as
+user context. Original receipt, whole-bundle version, path and input identity are
+retained in `agents show RUN`. Automatic choices use the daemon decision backend.
+This proves prompt delivery; native activation, protected supporting-file access
+and vendor token/history admission are not verified. Earlier text may remain in
+agent history after later exclusion. MCP-origin required entries, required skills
+on native slash commands, and non-background allocation are unsupported. Tool
+approval remains independent. Real Claude sessions remain unverified; local
+independent fixtures establish the carrier contract.
+
 ```bash
-bro code claude
 bro run claude "summarize this repo"
 bro acp serve claude
 ```
@@ -30,7 +42,7 @@ can select a worker explicitly; it does not bypass ACP. `--direct` keeps the
 adapter's own provider authentication; ordinary sessions route through
 BitRouter and can auto-start the local daemon.
 
-`init --model ID` saves the default model. `code claude --model ID` overrides
+`init --model ID` saves the default model. `run claude PROMPT --model ID` overrides
 it for one session. No vendor CLI config file is rewritten.
 
 ## Native interface

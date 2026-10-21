@@ -32,7 +32,8 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
    that doesn't exist. The OSS plugin does not register an origin MCP server.
 4. Only **shippable** skills live in `skills/` — that directory is served
    verbatim by the skills install rails (`npx skills add` and both plugin
-   manifests — BitRouter itself no longer installs skills), so never put
+   manifests). `bro skills install` snapshots skills into BitRouter's own
+   versioned library; it does not edit harness-managed directories. Never put
    contributor-only tooling
    there. Never name any file under `skills/bitrouter/references/` `SKILL.md`
    — Codex's recursive skill scan would load it as a second skill.

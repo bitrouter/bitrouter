@@ -6,6 +6,7 @@ mod journal;
 mod port;
 mod projection;
 mod scheduling;
+mod skills;
 mod tools;
 
 use std::sync::Arc;
@@ -306,6 +307,8 @@ impl Agent {
             core_instance_id: grant.core_instance_id.clone(),
             operations: vec![
                 FEATURE.into(),
+                crate::core::skills::FEATURE.into(),
+                crate::core::skills::FILES_FEATURE.into(),
                 crate::core::context_router::NATIVE_TOOLS.into(),
                 crate::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
             ],
@@ -361,6 +364,8 @@ impl Agent {
             max_artifact_chunk_bytes: limits.input_bytes / 4,
             required_features: vec![
                 FEATURE.into(),
+                crate::core::skills::FEATURE.into(),
+                crate::core::skills::FILES_FEATURE.into(),
                 crate::core::context_router::NATIVE_TOOLS.into(),
                 crate::core::context_router::PORTABLE_RESPONSES_REASONING.into(),
             ],
@@ -488,6 +493,7 @@ impl Agent {
                 routing: RoutingSettings {
                     model: self.config.model_mode,
                     context: ContextMode::Auto,
+                    skills: self.config.skills.clone(),
                 },
                 discardable_history: None,
                 acceptance_criteria: Vec::new(),
@@ -536,6 +542,8 @@ impl Agent {
         };
         let mut workers = FuturesUnordered::new();
         let effects = Arc::new(tokio::sync::RwLock::new(()));
+        let approval_gate = Arc::new(tokio::sync::Mutex::new(()));
+        let mut skill_consents = FuturesUnordered::new();
         let mut task_tokens = std::collections::BTreeMap::new();
         let mut scheduling = scheduling::Tools::default();
         let mut cancelled = false;
@@ -561,8 +569,9 @@ impl Agent {
                 let port = port.clone();
                 let approvals = channels.approvals.clone();
                 let effects = effects.clone();
+                let approval_gate = approval_gate.clone();
                 workers.push(tokio::spawn(async move {
-                    let outcome = tools::execute(agent, core, port, (dispatch.clone(), skip), token, approvals, effects).await;
+                    let outcome = tools::execute(agent, core, port, (dispatch.clone(), skip), token, approvals, (effects, approval_gate)).await;
                     (dispatch, outcome)
                 }));
             }
@@ -594,9 +603,16 @@ impl Agent {
                         ServerMessage::ToolCancel { invocation_id, .. } => {
                             if let Some(token) = task_tokens.get(&invocation_id) { token.cancel(); }
                         }
+                        ServerMessage::SkillConsentRequest(request) => {
+                            skill_consents.push(tokio::spawn(skills::consent(core.clone(), port.clone(), *request, channels.skill_approvals.clone(), approval_gate.clone(), cancel.clone())));
+                        }
                         ServerMessage::Error(error) => break Err(error.message),
                         other => break Err(format!("unsupported native Core command: {other:?}")),
                     }
+                }
+                done = skill_consents.next(), if !skill_consents.is_empty() => {
+                    match done { Some(Ok(Ok(()))) => {}, Some(Ok(Err(error))) => break Err(error), _ => break Err("native skill consent worker lost".into()) }
+                    needs_drive = true;
                 }
                 done = workers.next(), if !workers.is_empty() => {
                     match done {
@@ -610,7 +626,7 @@ impl Agent {
                     driving = None;
                     match done {
                         Some(Ok(Ok(snapshot))) => {
-                            if terminal(&snapshot) && workers.is_empty() && scheduling.is_empty() { break Ok(snapshot); }
+                            if terminal(&snapshot) && workers.is_empty() && skill_consents.is_empty() && scheduling.is_empty() { break Ok(snapshot); }
                         }
                         Some(Ok(Err(error))) => break Err(error.message),
                         _ => break Err("native Core driver lost".into()),
@@ -630,6 +646,11 @@ impl Agent {
         }
         while let Some(result) = workers.next().await {
             if !matches!(result, Ok((_, Ok(_)))) {
+                report.unknown_effect = true;
+            }
+        }
+        while let Some(result) = skill_consents.next().await {
+            if !matches!(result, Ok(Ok(()))) {
                 report.unknown_effect = true;
             }
         }
