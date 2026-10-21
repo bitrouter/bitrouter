@@ -113,7 +113,9 @@ async fn managed_cli_child_inherits_required_selector_but_waits_for_its_own_skil
         .status
         .success()
     );
-    let output = match tokio::time::timeout(Duration::from_secs(20), task.wait_with_output()).await
+    // The child's result can reopen its completed parent for another model step.
+    // Include that step's debug checkpoint persistence on two-core CI runners.
+    let output = match tokio::time::timeout(Duration::from_secs(90), task.wait_with_output()).await
     {
         Ok(output) => output?,
         Err(error) => {

@@ -133,7 +133,7 @@ impl Fixture {
             self.command()
                 .args(["serve", "--config"])
                 .arg(&self.config)
-                .stdout(Stdio::null())
+                .stdout(log.try_clone()?)
                 .stderr(log)
                 .spawn()?,
         );
