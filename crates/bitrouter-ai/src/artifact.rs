@@ -6,12 +6,15 @@
 use serde::{Deserialize, Serialize};
 
 /// Distribution selected by the application's effective Cargo capabilities.
+/// `GatewayShared` is the headless gateway with PostgreSQL shared-mode capability.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DistributionProfile {
     Full,
     Gateway,
+    #[serde(rename = "gateway-shared")]
+    GatewayShared,
     Custom,
 }
 
@@ -21,6 +24,7 @@ impl DistributionProfile {
         match self {
             Self::Full => "full",
             Self::Gateway => "gateway",
+            Self::GatewayShared => "gateway-shared",
             Self::Custom => "custom",
         }
     }

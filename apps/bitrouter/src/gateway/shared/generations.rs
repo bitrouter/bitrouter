@@ -75,16 +75,21 @@ impl Report {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Candidate {
+    #[cfg(test)]
     pub generation: Generation,
+    #[cfg(test)]
     pub joined: bool,
     pub ready: bool,
+    #[cfg(test)]
     pub failure: Option<BuildFailure>,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct ForcedReport {
+    #[cfg(test)]
     pub generation: Generation,
     pub build_joined: bool,
+    #[cfg(test)]
     pub build_failure: Option<BuildFailure>,
     pub has_components: bool,
     pub pipeline: Option<crate::gateway::pipeline::owned_tasks::Summary>,
@@ -93,7 +98,9 @@ pub(super) struct ForcedReport {
     pub producer_closed: bool,
     pub custody: usize,
     pub snapshot_readers: usize,
+    #[cfg(test)]
     pub pipeline_failed: bool,
+    #[cfg(test)]
     pub native_failed: bool,
     pub joining: bool,
 }

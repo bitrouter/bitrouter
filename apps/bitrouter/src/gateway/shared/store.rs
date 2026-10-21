@@ -18,6 +18,9 @@ use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use tracing::instrument::WithSubscriber;
 
+#[cfg(test)]
+mod tests;
+
 pub(super) const MAX_RECORD_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SCAN_ROWS: u64 = 256;
 
@@ -159,8 +162,21 @@ impl Store {
     }
 
     pub async fn bounded<T>(&self, operation: impl Future<Output = Result<T>>) -> Result<T> {
-        tokio::time::timeout(self.transaction_timeout, operation)
+        self.bounded_until(
+            tokio::time::Instant::now() + self.transaction_timeout,
+            operation,
+        )
+        .await
+    }
+
+    async fn bounded_until<T>(
+        &self,
+        deadline: tokio::time::Instant,
+        operation: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
+        tokio::time::timeout_at(deadline, operation)
             .await
+            .inspect_err(|_| tracing::warn!("shared transaction deadline exceeded"))
             .context("shared gateway transaction deadline exceeded")?
     }
 
@@ -171,16 +187,34 @@ impl Store {
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<T>>,
     {
-        self.bounded(async {
-            for attempt in 0..4_u64 {
+        let deadline = tokio::time::Instant::now() + self.transaction_timeout;
+        self.bounded_until(deadline, async {
+            let mut delay_ms = 5_u64;
+            loop {
+                if tokio::time::Instant::now() >= deadline {
+                    // Timeout polls its inner future first. Yield to its expired
+                    // timer without invoking another callback after a late wake.
+                    return std::future::pending().await;
+                }
                 match operation().await {
-                    Err(error) if attempt < 3 && retryable_abort(&error) => {
-                        tokio::time::sleep(Duration::from_millis(5 * (attempt + 1))).await;
+                    Err(error) if retryable_abort(&error) => {
+                        // Contending replicas need more than four short retries.
+                        // The existing outer deadline bounds all attempts and
+                        // backoff together; no provider I/O is repeated here.
+                        let pause = rand::random_range(delay_ms..=delay_ms * 2);
+                        tokio::time::sleep(Duration::from_millis(pause)).await;
+                        delay_ms = (delay_ms * 2).min(50);
                     }
-                    result => return result,
+                    Err(error) => {
+                        tracing::debug!(
+                            class = database_failure_class(&error),
+                            "shared transaction returned an error"
+                        );
+                        return Err(error);
+                    }
+                    Ok(value) => return Ok(value),
                 }
             }
-            anyhow::bail!("shared transaction retry budget exhausted")
         })
         .await
     }
@@ -554,6 +588,28 @@ fn retryable_abort(error: &anyhow::Error) -> bool {
         // https://www.postgresql.org/docs/current/mvcc-serialization-failure-handling.html
         matches!(database.code().as_deref(), Some("40001" | "40P01"))
     })
+}
+
+/// Fixed categories only: database messages can contain SQL and credentials.
+pub(super) fn database_failure_class(error: &anyhow::Error) -> &'static str {
+    use sea_orm::{DbErr, RuntimeErr, SqlxError};
+    for cause in error.chain() {
+        match cause.downcast_ref::<DbErr>() {
+            Some(
+                DbErr::Exec(RuntimeErr::SqlxError(SqlxError::Database(database)))
+                | DbErr::Query(RuntimeErr::SqlxError(SqlxError::Database(database))),
+            ) => {
+                return match database.code().as_deref() {
+                    Some("40001") => "serialization_abort",
+                    Some("40P01") => "deadlock_abort",
+                    _ => "other_database",
+                };
+            }
+            Some(_) => return "database_or_pool",
+            None => {}
+        }
+    }
+    "other"
 }
 
 fn validate_status(status: &str) -> Result<&str> {

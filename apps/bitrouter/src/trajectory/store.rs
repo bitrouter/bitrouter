@@ -231,7 +231,7 @@ pub(crate) struct GuardedRouteResult {
 pub(super) struct GuardedRouteBatch {
     pub(super) route_event: TrajectoryEvent,
     pub(super) guard_event: Option<TrajectoryEvent>,
-    result: GuardedRouteResult,
+    pub(super) result: GuardedRouteResult,
 }
 
 enum CorrelateAttempt {
@@ -285,28 +285,7 @@ impl TrajectoryStore {
         owner_user_id: &str,
         input: CorrelateAndBegin,
     ) -> Result<CorrelateAndBeginResult> {
-        validate_owner(owner_user_id)?;
-        validate_keyed_component(&input.correlation_key_id, "correlation_key_id")?;
-        if input.correlation_key_id != input.full_input_digest.key_id() {
-            anyhow::bail!("correlation key id must match the full input digest")
-        }
-        if input
-            .ancestor_prefix_digests
-            .iter()
-            .any(|digest| digest.key_id() != input.correlation_key_id)
-        {
-            anyhow::bail!("ancestor prefix digest uses a different correlation key")
-        }
-        if input.native_parent_id.is_some() != input.native_parent_digest.is_some() {
-            anyhow::bail!("native parent id and digest must be present together")
-        }
-        if input
-            .native_parent_digest
-            .as_ref()
-            .is_some_and(|digest| digest.key_id() != input.correlation_key_id)
-        {
-            anyhow::bail!("native parent digest uses a different correlation key")
-        }
+        validate_correlation_input(owner_user_id, &input)?;
 
         for attempt in 0..MAX_SEQUENCE_RESERVATION_ATTEMPTS {
             match self.correlate_and_begin_once(owner_user_id, &input).await {
@@ -460,70 +439,19 @@ impl TrajectoryStore {
                 (episode_id, episode_start, 1)
             }
         };
-        let mut event = TrajectoryEvent {
-            schema_version: TRAJECTORY_SCHEMA_VERSION,
-            event_id: input.event_id.clone(),
-            owner_user_id: owner_user_id.to_owned(),
-            episode_id: episode_id.clone(),
-            request_id: Some(input.request_id.clone()),
+        let event = build_start_event(
+            owner_user_id,
+            input,
+            &episode_id,
             sequence,
-            kind: TrajectoryEventKind::RequestStarted,
-            evidence: TrajectoryEvidence {
-                routing_evidence: Vec::new(),
-                structural: std::collections::BTreeMap::from([
-                    (
-                        "correlation.ancestor_prefix_count".to_owned(),
-                        u64::try_from(input.ancestor_prefix_digests.len())
-                            .context("too many ancestor prefix digests")?,
-                    ),
-                    (
-                        "correlation.starts_with_prior_turns".to_owned(),
-                        u64::from(input.starts_with_prior_turns),
-                    ),
-                    (
-                        "correlation.ancestor_prefixes_truncated".to_owned(),
-                        u64::from(input.ancestor_prefixes_truncated),
-                    ),
-                    (
-                        "correlation.prefix_conflict".to_owned(),
-                        u64::from(prefix_conflict),
-                    ),
-                    (
-                        "correlation.native_parent_present".to_owned(),
-                        u64::from(input.native_parent_digest.is_some()),
-                    ),
-                    (
-                        "correlation.key_epoch_conflict".to_owned(),
-                        u64::from(key_epoch_conflict),
-                    ),
-                    (
-                        "request.canonical_input_bytes".to_owned(),
-                        input.canonical_input_bytes,
-                    ),
-                ]),
-                categorical: std::collections::BTreeMap::from([
-                    ("correlation.source".to_owned(), source.as_str().to_owned()),
-                    (
-                        "history.completeness".to_owned(),
-                        completeness_name(completeness).to_owned(),
-                    ),
-                ]),
-                digests: input
-                    .native_parent_digest
-                    .as_ref()
-                    .map(|digest| {
-                        std::collections::BTreeMap::from([(
-                            "correlation.native_parent".to_owned(),
-                            digest.as_str().to_owned(),
-                        )])
-                    })
-                    .unwrap_or_default(),
-                route_measurement: None,
+            &captured_at,
+            StartFacts {
+                source,
+                completeness,
+                prefix_conflict,
+                key_epoch_conflict,
             },
-            captured_at: captured_at.clone(),
-            content_digest: String::new(),
-        };
-        event.content_digest = event.semantic_digest()?;
+        )?;
         let start_event = event.clone();
         let begin = BeginRequest {
             episode: episode_start,
@@ -1937,6 +1865,125 @@ async fn native_parent_request(
         .map_err(Into::into)
 }
 
+/// Pure identity consistency shared by local and shared correlation adapters.
+pub(super) fn validate_correlation_input(
+    owner_user_id: &str,
+    input: &CorrelateAndBegin,
+) -> Result<()> {
+    validate_owner(owner_user_id)?;
+    validate_keyed_component(&input.correlation_key_id, "correlation_key_id")?;
+    if input.correlation_key_id != input.full_input_digest.key_id() {
+        anyhow::bail!("correlation key id must match the full input digest")
+    }
+    if input
+        .ancestor_prefix_digests
+        .iter()
+        .any(|digest| digest.key_id() != input.correlation_key_id)
+    {
+        anyhow::bail!("ancestor prefix digest uses a different correlation key")
+    }
+    if input.native_parent_id.is_some() != input.native_parent_digest.is_some() {
+        anyhow::bail!("native parent id and digest must be present together")
+    }
+    if input
+        .native_parent_digest
+        .as_ref()
+        .is_some_and(|digest| digest.key_id() != input.correlation_key_id)
+    {
+        anyhow::bail!("native parent digest uses a different correlation key")
+    }
+    Ok(())
+}
+
+pub(super) struct StartFacts {
+    pub(super) source: CorrelationSource,
+    pub(super) completeness: HistoryCompleteness,
+    pub(super) prefix_conflict: bool,
+    pub(super) key_epoch_conflict: bool,
+}
+
+/// Construct the same immutable start evidence for both storage adapters.
+pub(super) fn build_start_event(
+    owner_user_id: &str,
+    input: &CorrelateAndBegin,
+    episode_id: &str,
+    sequence: u64,
+    captured_at: &str,
+    facts: StartFacts,
+) -> Result<TrajectoryEvent> {
+    let StartFacts {
+        source,
+        completeness,
+        prefix_conflict,
+        key_epoch_conflict,
+    } = facts;
+    let mut event = TrajectoryEvent {
+        schema_version: TRAJECTORY_SCHEMA_VERSION,
+        event_id: input.event_id.clone(),
+        owner_user_id: owner_user_id.to_owned(),
+        episode_id: episode_id.to_owned(),
+        request_id: Some(input.request_id.clone()),
+        sequence,
+        kind: TrajectoryEventKind::RequestStarted,
+        evidence: TrajectoryEvidence {
+            routing_evidence: Vec::new(),
+            structural: std::collections::BTreeMap::from([
+                (
+                    "correlation.ancestor_prefix_count".to_owned(),
+                    u64::try_from(input.ancestor_prefix_digests.len())
+                        .context("too many ancestor prefix digests")?,
+                ),
+                (
+                    "correlation.starts_with_prior_turns".to_owned(),
+                    u64::from(input.starts_with_prior_turns),
+                ),
+                (
+                    "correlation.ancestor_prefixes_truncated".to_owned(),
+                    u64::from(input.ancestor_prefixes_truncated),
+                ),
+                (
+                    "correlation.prefix_conflict".to_owned(),
+                    u64::from(prefix_conflict),
+                ),
+                (
+                    "correlation.native_parent_present".to_owned(),
+                    u64::from(input.native_parent_digest.is_some()),
+                ),
+                (
+                    "correlation.key_epoch_conflict".to_owned(),
+                    u64::from(key_epoch_conflict),
+                ),
+                (
+                    "request.canonical_input_bytes".to_owned(),
+                    input.canonical_input_bytes,
+                ),
+            ]),
+            categorical: std::collections::BTreeMap::from([
+                ("correlation.source".to_owned(), source.as_str().to_owned()),
+                (
+                    "history.completeness".to_owned(),
+                    completeness_name(completeness).to_owned(),
+                ),
+            ]),
+            digests: input
+                .native_parent_digest
+                .as_ref()
+                .map(|digest| {
+                    std::collections::BTreeMap::from([(
+                        "correlation.native_parent".to_owned(),
+                        digest.as_str().to_owned(),
+                    )])
+                })
+                .unwrap_or_default(),
+            route_measurement: None,
+        },
+        captured_at: captured_at.to_owned(),
+        content_digest: String::new(),
+    };
+    event.content_digest = event.semantic_digest()?;
+    Ok(event)
+}
+
 async fn exact_retry_result(
     txn: &DatabaseTransaction,
     owner_user_id: &str,
@@ -1951,6 +1998,18 @@ async fn exact_retry_result(
         .find(|event| event.event_id == existing.start_event_id)
         .ok_or_else(|| anyhow::anyhow!("trajectory retry is missing its original start event"))?;
     validate_stored_native_parent(txn, owner_user_id, existing.native_parent_id.as_deref()).await?;
+    exact_retry_from_history(owner_user_id, existing, input, &events, start)
+}
+
+/// The caller validates the owner-scoped episode/head and stored native parent.
+/// Only the immutable prefix before `start` determines the retried guard.
+pub(super) fn exact_retry_from_history(
+    owner_user_id: &str,
+    existing: &request_entity::Model,
+    input: &CorrelateAndBegin,
+    events: &[TrajectoryEvent],
+    start: &TrajectoryEvent,
+) -> Result<CorrelateAndBeginResult> {
     let ancestor_count = start
         .evidence
         .structural
@@ -2023,7 +2082,7 @@ async fn exact_retry_result(
         .collect::<Vec<_>>();
     let guarded_route = match &input.guarded_route {
         Some(route) => {
-            reduce(&events, &route.policy.protected_tiers)?;
+            reduce(events, &route.policy.protected_tiers)?;
             let expected = build_guarded_route_batch(&prior_events, start, completeness, route)?;
             let persisted_route = events
                 .iter()
@@ -2670,7 +2729,7 @@ async fn event_matches_existing(
 /// regression. Settlement already pins itself to the last event for the same
 /// reason; do the same here rather than let a sub-millisecond turnaround fail
 /// the request.
-fn episode_monotonic_captured_at(
+pub(super) fn episode_monotonic_captured_at(
     prior_events: &[TrajectoryEvent],
     captured_at: &str,
 ) -> Result<String> {

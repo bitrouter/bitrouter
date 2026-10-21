@@ -72,7 +72,7 @@ async fn key_rotation_and_admission(first: &Store, second: &Store) -> Result<()>
         AdmissionResult::Accepted(view, _) => view,
         AdmissionResult::Existing(_) => anyhow::bail!("unexpected original duplicate"),
     };
-    let authority = Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(second.clone(), DeploymentKey::fixture()?);
     let head = authority
         .rotate_correlation(fixture.revision.key_generation)
         .await?;
@@ -123,11 +123,11 @@ async fn key_rotation_and_admission(first: &Store, second: &Store) -> Result<()>
 
 impl Fixture {
     async fn new(first: &Store, second: &Store, capacity: u32) -> Result<Self> {
-        let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
+        let authority = Authority::new(first.clone(), DeploymentKey::fixture()?);
         let revision = authority.head().await?.revision();
         let a = Engine::join(authority.clone(), 30_000).await?;
         let b = Engine::join(
-            Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?),
+            Authority::new(second.clone(), DeploymentKey::fixture()?),
             30_000,
         )
         .await?;
@@ -426,7 +426,7 @@ async fn expiry_during_lock_wait(first: &Store, second: &Store) -> Result<()> {
 
 async fn finalization_rollback_and_recovery_isolation(first: &Store, second: &Store) -> Result<()> {
     let fixture = Fixture::new(first, second, 2).await?;
-    let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(first.clone(), DeploymentKey::fixture()?);
     let owner = Engine::join(authority, 1_000).await?;
     let bad = accepted(&owner, &fixture.first, fixture.revision).await?;
     let good = accepted(&owner, &fixture.second, fixture.revision).await?;
@@ -733,7 +733,7 @@ async fn late_terminal_and_recovery(first: &Store, second: &Store) -> Result<()>
     use bitrouter_ai::types::UsageOrigin;
     let fixture = Fixture::new(first, second, 1).await?;
     let owner = Engine::join(
-        Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?),
+        Authority::new(first.clone(), DeploymentKey::fixture()?),
         1_000,
     )
     .await?;

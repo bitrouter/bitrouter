@@ -61,6 +61,7 @@ impl Engine {
             .await
     }
 
+    #[cfg(test)]
     pub async fn set_resource(
         &self,
         pool_id: &str,
@@ -466,7 +467,7 @@ impl Engine {
             .await
     }
 
-    async fn authorized_execution(
+    pub(super) async fn authorized_execution(
         &self,
         tx: &DatabaseTransaction,
         key_hash: &str,

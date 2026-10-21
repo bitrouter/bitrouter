@@ -37,9 +37,11 @@ async fn fixture() -> Result<()> {
     let result = async {
         crate::db::run_migrations(first.database()).await?;
         schema::initialize(&first).await?;
-        let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([37; 32])?);
+        let deployment_key = rand::random();
+        let authority = Authority::new(first.clone(), DeploymentKey::from_bytes(deployment_key)?);
         authority.initialize().await?;
-        let peer_authority = Authority::new(second.clone(), DeploymentKey::from_bytes([37; 32])?);
+        let peer_authority =
+            Authority::new(second.clone(), DeploymentKey::from_bytes(deployment_key)?);
         let a = Operator::new(authority.clone());
         let b = Operator::new(peer_authority);
         let actor = Actor::new(
@@ -56,10 +58,10 @@ async fn fixture() -> Result<()> {
             .into(),
         )?;
         policy_receipts(&a, &b, &actor).await?;
-        invalid_reads(&a, &actor).await?;
+        invalid_reads(&a, &actor, deployment_key).await?;
         credentials_and_publication(&a, &b, &actor).await?;
         principals(&a, &b, &actor).await?;
-        cancellation_and_isolation(&a, &b, &actor).await?;
+        cancellation_and_isolation(&a, &b, &actor, deployment_key).await?;
         atomic_rollback_and_reply_loss(&a, &b, &actor).await?;
         // Administration must not join or publish a serving incarnation.
         ensure!(row_count(&first, "instance").await? == 0);
@@ -217,7 +219,7 @@ async fn policy_receipts(a: &Operator, b: &Operator, actor: &Actor) -> Result<()
     Ok(())
 }
 
-async fn invalid_reads(a: &Operator, actor: &Actor) -> Result<()> {
+async fn invalid_reads(a: &Operator, actor: &Actor, deployment_key: [u8; 32]) -> Result<()> {
     let short_store = Store::new(
         a.authority.store().database().clone(),
         a.authority.store().namespace(),
@@ -225,7 +227,7 @@ async fn invalid_reads(a: &Operator, actor: &Actor) -> Result<()> {
     )?;
     let short = Operator::new(Authority::new(
         short_store,
-        DeploymentKey::from_bytes([37; 32])?,
+        DeploymentKey::from_bytes(deployment_key)?,
     ));
     let tx = a.authority.store().begin().await?;
     a.authority.fence_exclusive(&tx).await?;
@@ -487,7 +489,12 @@ async fn principals(a: &Operator, b: &Operator, actor: &Actor) -> Result<()> {
     Ok(())
 }
 
-async fn cancellation_and_isolation(a: &Operator, b: &Operator, actor: &Actor) -> Result<()> {
+async fn cancellation_and_isolation(
+    a: &Operator,
+    b: &Operator,
+    actor: &Actor,
+    deployment_key: [u8; 32],
+) -> Result<()> {
     let tx = a.authority.store().begin().await?;
     a.authority.fence_exclusive(&tx).await?;
     let cancelled = mutation("cancelled", tenant("cancelled-tenant", None));
@@ -514,7 +521,7 @@ async fn cancellation_and_isolation(a: &Operator, b: &Operator, actor: &Actor) -
         &other_namespace,
         Duration::from_secs(3),
     )?;
-    let authority = Authority::new(store, DeploymentKey::from_bytes([37; 32])?);
+    let authority = Authority::new(store, DeploymentKey::from_bytes(deployment_key)?);
     authority.initialize().await?;
     let other = Operator::new(authority);
     ensure!(matches!(

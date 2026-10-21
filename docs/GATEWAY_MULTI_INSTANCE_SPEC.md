@@ -332,7 +332,10 @@ rows in that order (sort multiple resource IDs). The authoritative revisions
 must match those used to prepare the decision. Existing API-key writers update
 that same row; shared policy/credential writers lock and advance the corresponding
 authority row. Serialization failures retry only the local transaction with a
-bounded budget, never provider I/O. Commit is the admission/dispatch boundary.
+single configured transaction deadline, including bounded exponential backoff
+with jitter, never provider I/O. Only database-proven serialization/deadlock
+aborts are eligible; connection failures and ambiguous commits are not retried.
+Commit is the admission/dispatch boundary.
 Configuration publication locks that head exclusively. Concurrent admissions may
 hold shared locks together, but publication waits for their short transactions;
 a transaction that encounters an already committed publication must revalidate
@@ -837,6 +840,14 @@ Use the existing transactional correlation/start/route-intent batch and sequence
 reservation, extending its authority checks where required. Settlement reduction
 must use the committed current episode head. Guard decisions and history appends
 are serialized per episode, never for the whole gateway and never across inference.
+
+Shared policy selection must keep the committed guard treatment intact when
+applying a native continuation. A matching pin or detach is permitted. A pin
+that changes the selected tier, model or reasoning effort is rejected before
+provider dispatch. If the guarded start has already committed, ordinary failure
+finalization projects that bound, never-dispatched request from its original
+route intent. It must not relabel the continuation's choice as the guard's
+decision. Local continuation behavior remains unchanged.
 
 ## Outbox, draining and bounded operation
 

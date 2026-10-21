@@ -293,6 +293,7 @@ fn validate_derivation_bounds(fields: &serde_json::Map<String, serde_json::Value
 impl Authority {
     /// Commit a validated immutable document and its head in the same transaction.
     /// The exclusive head fence orders publication after all older dispatch commits.
+    #[cfg(test)]
     pub async fn publish(
         &self,
         expected_generation: u64,

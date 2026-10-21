@@ -76,7 +76,7 @@ impl Inputs {
                 ..
             } => {
                 let mut attributes = outcome_attributes(record)?;
-                attributes.extend(treatment.attributes.clone());
+                attributes.extend(self.prediction_attributes());
                 if let Some(effort) = treatment.decision.selected_effort {
                     attributes.insert("reasoning_effort".into(), effort.to_string());
                 }
@@ -182,6 +182,15 @@ impl Inputs {
     }
 
     pub fn trajectory_evidence(&self, record: &Record) -> Result<TrajectoryEvidence> {
+        self.check_identity(
+            &record.event.execution.execution_id,
+            &record.event.tenant_id,
+            record.event.execution.operation,
+        )?;
+        ensure!(
+            matches!(self.phase, Phase::Terminal { .. }),
+            "trajectory projection inputs are not terminal"
+        );
         let accounting = record.accounting()?;
         let mut structural = BTreeMap::new();
         for (key, value) in usage_fields(&accounting.usage) {
@@ -204,22 +213,16 @@ impl Inputs {
             ),
             ("settlement.outcome".into(), outcome(record)?.into()),
         ]);
-        if let Policy::Evaluated {
-            treatment: Some(treatment),
-            ..
-        } = &self.policy
-        {
-            for (key, value) in &treatment.attributes {
-                if matches!(
-                    key.as_str(),
-                    "prediction_confidence_ppm"
-                        | "task_family_confidence_ppm"
-                        | "observation_confidence_ppm"
-                ) {
-                    structural.insert(format!("routing.{key}"), value.parse()?);
-                } else {
-                    categorical.insert(format!("routing.{key}"), value.clone());
-                }
+        for (key, value) in self.prediction_attributes() {
+            if matches!(
+                key.as_str(),
+                "prediction_confidence_ppm"
+                    | "task_family_confidence_ppm"
+                    | "observation_confidence_ppm"
+            ) {
+                structural.insert(format!("routing.{key}"), value.parse()?);
+            } else {
+                categorical.insert(format!("routing.{key}"), value);
             }
         }
         Ok(TrajectoryEvidence {

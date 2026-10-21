@@ -125,7 +125,7 @@ pub(super) async fn exercise(
 
 async fn rotate(fixture: &Fixture, store: &Store, serving: &Serving) -> Result<Arc<Snapshot>> {
     let revision = serving.snapshot()?.revision;
-    let authority = Authority::new(store.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(store.clone(), DeploymentKey::fixture()?);
     let head = authority
         .rotate_correlation(revision.key_generation)
         .await?;

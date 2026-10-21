@@ -54,6 +54,7 @@ impl Credentials {
 
     /// Explicit import is the only path that replaces account authority. A
     /// replacement keeps its resource identity; rebinding requires a new slot.
+    #[cfg(test)]
     pub async fn import(
         &self,
         slot: &CredentialKey,
@@ -167,6 +168,7 @@ impl Credentials {
         Ok(account.value.stamp)
     }
 
+    #[cfg(test)]
     pub async fn load(&self, slot: &CredentialKey) -> Result<(CredentialStamp, Credential)> {
         let store = self.authority.store();
         store

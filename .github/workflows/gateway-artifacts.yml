@@ -17,10 +17,20 @@ permissions:
 jobs:
   gateway:
     if: contains(fromJson(inputs.plan).releases.*.app_name, 'bitrouter')
-    name: gateway (${{ matrix.target }})
+    name: ${{ matrix.profile }} (${{ matrix.target }})
     strategy:
       fail-fast: false
       matrix:
+        # Include adds each native runner to both profile/target combinations.
+        # https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs
+        profile: [gateway, gateway-shared]
+        target:
+          - aarch64-apple-darwin
+          - x86_64-apple-darwin
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - x86_64-pc-windows-msvc
         include:
           - target: aarch64-apple-darwin
             runner: macos-14
@@ -44,6 +54,7 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       BITROUTER_BUILD_REVISION: ${{ github.sha }}
+      PACKAGE_DISTRIBUTION: ${{ matrix.profile }}
       PACKAGE_TARGET: ${{ matrix.target }}
       PACKAGE_PROFILE: ${{ inputs.cargo-profile }}
     steps:
@@ -51,7 +62,7 @@ jobs:
         if: matrix.container
         run: |
           apt-get update
-          apt-get install -y ca-certificates curl git build-essential pkg-config
+          apt-get install -y ca-certificates curl git build-essential pkg-config jq
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
@@ -66,10 +77,10 @@ jobs:
       - name: Install musl linker
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Build and package minimum gateway
+      - name: Build and package selected gateway distribution
         shell: bash
         run: |
-          cargo run --locked -p dist-helper -- package --profile gateway \
+          cargo run --locked -p dist-helper -- package --profile "$PACKAGE_DISTRIBUTION" \
             --target "$PACKAGE_TARGET" --cargo-profile "$PACKAGE_PROFILE" \
             --out "$PACKAGE_OUTPUT"
       - name: Verify archive and unpack candidate
@@ -84,11 +95,34 @@ jobs:
           mkdir unpacked
           if [[ "$PACKAGE_TARGET" == *windows* ]]; then
             powershell.exe -NoProfile -NonInteractive -Command \
-              'Expand-Archive -LiteralPath ("bitrouter-gateway-" + $env:PACKAGE_TARGET + ".zip") -DestinationPath unpacked'
+              'Expand-Archive -LiteralPath ("bitrouter-" + $env:PACKAGE_DISTRIBUTION + "-" + $env:PACKAGE_TARGET + ".zip") -DestinationPath unpacked'
           else
-            tar -xzf "bitrouter-gateway-$PACKAGE_TARGET.tar.gz" -C unpacked
+            tar -xzf "bitrouter-$PACKAGE_DISTRIBUTION-$PACKAGE_TARGET.tar.gz" -C unpacked
           fi
+      - name: Verify packaged executable identity and binary digest
+        shell: bash
+        run: |
+          suffix=""
+          if [[ "$PACKAGE_TARGET" == *windows* ]]; then suffix=".exe"; fi
+          root="$PACKAGE_OUTPUT/unpacked/bitrouter-$PACKAGE_DISTRIBUTION-$PACKAGE_TARGET"
+          candidate="$root/bro$suffix"
+          "$candidate" --json build-info > "$PACKAGE_OUTPUT/build-info.json"
+          features='[]'
+          if [[ "$PACKAGE_DISTRIBUTION" == 'gateway-shared' ]]; then features='["db-postgres","multi-instance"]'; fi
+          jq -e --arg profile "$PACKAGE_DISTRIBUTION" --arg target "$PACKAGE_TARGET" \
+            --arg revision "$BITROUTER_BUILD_REVISION" --argjson features "$features" \
+            '.profile == $profile and .target == $target and .source_revision == $revision and .features == $features' \
+            "$PACKAGE_OUTPUT/build-info.json"
+          jq -e --slurpfile actual "$PACKAGE_OUTPUT/build-info.json" \
+            --arg binary "bro$suffix" '.identity == $actual[0] and .binary.path == $binary' "$root/manifest.json"
+          if command -v sha256sum >/dev/null; then
+            digest="$(sha256sum "$candidate" | awk '{print $1}')"
+          else
+            digest="$(shasum -a 256 "$candidate" | awk '{print $1}')"
+          fi
+          test "$digest" = "$(jq -r '.binary.sha256' "$root/manifest.json")"
       - name: Build independent SDK consumer and run packaged acceptance
+        if: matrix.profile == 'gateway'
         shell: bash
         run: |
           consumer_manifest=apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml
@@ -109,9 +143,84 @@ jobs:
       - name: Upload verified gateway archives
         uses: actions/upload-artifact@v6
         with:
-          name: artifacts-gateway-${{ matrix.target }}
+          name: artifacts-${{ matrix.profile }}-${{ matrix.target }}
           if-no-files-found: error
           path: |
             ${{ runner.temp }}/gateway-artifacts/*.tar.gz
             ${{ runner.temp }}/gateway-artifacts/*.zip
             ${{ runner.temp }}/gateway-artifacts/*.sha256
+
+  shared-postgres-processes:
+    name: packaged shared gateway (PostgreSQL processes)
+    needs: gateway
+    if: contains(fromJson(inputs.plan).releases.*.app_name, 'bitrouter')
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_TARGET_DIR: ${{ runner.temp }}/shared-gateway-tests
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+      BITROUTER_TEST_DATABASE_URL: postgres://fixture:fixture-password@127.0.0.1:5432/bitrouter_shared_test
+    # The official image creates this disposable superuser with CREATEDB. The
+    # blank-database campaigns create/drop only their UUID-owned databases.
+    # https://docs.github.com/en/actions/use-cases-and-examples/using-containerized-services/creating-postgresql-service-containers
+    # https://hub.docker.com/_/postgres
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture-password
+          POSTGRES_DB: bitrouter_shared_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fixture -d bitrouter_shared_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.0"
+      - uses: taiki-e/install-action@nextest
+      - uses: actions/download-artifact@v7
+        with:
+          name: artifacts-gateway-shared-x86_64-unknown-linux-gnu
+          path: ${{ runner.temp }}/shared-gateway-package
+      - name: Unpack the already verified shared artifact
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/shared-gateway-package"
+          sha256sum -c *.sha256
+          mkdir unpacked
+          tar -xzf bitrouter-gateway-shared-x86_64-unknown-linux-gnu.tar.gz -C unpacked
+          candidate="$PWD/unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/bro"
+          "$candidate" --json build-info > build-info.json
+          jq -e --slurpfile actual build-info.json \
+            --arg revision "$BITROUTER_BUILD_REVISION" \
+            '.identity == $actual[0] and .identity.profile == "gateway-shared" and .identity.features == ["db-postgres", "multi-instance"] and .identity.source_revision == $revision' \
+            unpacked/bitrouter-gateway-shared-x86_64-unknown-linux-gnu/manifest.json
+          printf 'BITROUTER_TEST_GATEWAY_BINARY=%s\n' "$candidate" >> "$GITHUB_ENV"
+      - name: Validate shared distribution contracts and updater boundaries
+        shell: bash
+        run: |
+          cargo test --locked -p dist-helper distribution::tests
+          cargo test --locked -p bitrouter-ai --all-features --test artifact_contracts
+          cargo test --locked -p bitrouter --no-default-features --features multi-instance --test artifact_build_metadata
+          cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance --lib --test-threads 2 \
+            -E 'test(update::tests::) | test(upgrade::tests::) | test(output::reports::artifact::tests::)'
+      - name: Run actual shared PostgreSQL process campaigns against the archive
+        shell: bash
+        run: |
+          # The test executable may compile, but the child bro always comes from
+          # the archive above; no workspace debug binary is substituted.
+          cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance \
+            --lib --run-ignored only --test-threads 2 \
+            -E 'test(gateway::shared::runtime::process_tests::)'

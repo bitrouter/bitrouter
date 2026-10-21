@@ -13,6 +13,7 @@ use crate::gateway::shared::store::{Kind, Store, Stored};
 impl Engine {
     /// Only the separately authenticated operator surface may call this method.
     /// `expected_revision` refers to the execution projection's revision.
+    #[cfg(test)]
     pub async fn resolve_unknown(
         &self,
         operator_id: &str,

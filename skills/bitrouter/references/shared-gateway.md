@@ -9,7 +9,16 @@ an explicitly initialized namespace, and an environment reference for the
 deployment's base64-encoded 32-byte key. Replicas use the same namespace and key.
 Do not put the key itself in configuration or substitute it into the reference.
 
-Run a build with `multi-instance` using `bro serve --config <file>`. Shared
+Use the official `gateway-shared` archive for your target, or build with
+`cargo build --locked -p bitrouter --bin bro --no-default-features --features multi-instance`.
+`bro --json build-info` must report `profile: "gateway-shared"` and the sorted
+features `["db-postgres", "multi-instance"]`. The `gateway` distribution still
+has no optional application features; `full` retains its existing defaults.
+The shared capability does not select shared mode without explicit configuration.
+For manual archive verification and capability-preserving updates, see
+[updating](updating.md).
+
+Run `bro serve --config <file>`. Shared
 mode is a foreground service managed by the operator; it does not use the
 local daemon launcher, PID/socket locator, home directory or compiled extension
 host. It never initializes or publishes a namespace as a startup side effect.
@@ -84,6 +93,26 @@ be current.
 Shared assembly rejects MCP servers, active server tools, decision-model
 execution, request checkers and the agent API. These execution capabilities
 remain local until they have explicit shared worker ownership.
+
+Shared guarded policies retain the episode's original correlation key across
+rotation. Native continuation pins must match the committed guard's selected
+tier, model and reasoning effort; a conflicting pin is rejected before provider
+dispatch. Local capture/evolution controller headers and local reserved judge
+requests are unsupported. Access policies cannot use local spend or rate counters;
+configure shared admission limits instead.
+
+Run the same shared-gateway build on every replica in a namespace. Rolling
+replacement is supported within that build; mixed versions of private durable
+records are not a supported upgrade protocol. Changes to those records require
+a coordinated stop and a compatible migration before restarting readers,
+workers and operator services. Do not roll back to a reader that rejects newer
+records after the newer writer has accepted work.
+
+Optional action observations describe canonical callback content at execution
+scope. They are separate from the original route decision and do not establish
+provider success, quality, usage or latency. Missing callbacks, a crash before
+terminal persistence, or unresolved provider work can leave these observations
+absent; recovery does not reconstruct them from a current cache.
 
 Shared HTTP serving uses one request per HTTP/1 connection, with no upgrades or
 HTTP/2. Clients must reconnect for subsequent requests. This bounds response-head

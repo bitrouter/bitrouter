@@ -82,15 +82,12 @@ async fn expire(store: &Store, id: &str) -> Result<()> {
 }
 
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
-    let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(first.clone(), DeploymentKey::fixture()?);
     let engine = Engine::join(authority.clone(), 30_000).await?;
     let pool = uuid::Uuid::new_v4().to_string();
     engine.set_resource(&pool, None, 2).await?;
     let a = Credentials::new(authority);
-    let b = Credentials::new(Authority::new(
-        second.clone(),
-        DeploymentKey::from_bytes([9; 32])?,
-    ));
+    let b = Credentials::new(Authority::new(second.clone(), DeploymentKey::fixture()?));
     let key = CredentialKey {
         provider: pool.clone(),
         account: "default".into(),

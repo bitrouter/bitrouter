@@ -219,15 +219,21 @@ impl Resource {
             tokio::time::timeout_at(deadline, std::future::poll_fn(|cx| self.poll_build(cx))).await;
         Ok(match result {
             Ok(outcome) => Candidate {
+                #[cfg(test)]
                 generation: self.id,
+                #[cfg(test)]
                 joined: true,
                 ready: outcome.failure.is_none() && !self.is_retiring(),
+                #[cfg(test)]
                 failure: outcome.failure,
             },
             Err(_) => Candidate {
+                #[cfg(test)]
                 generation: self.id,
+                #[cfg(test)]
                 joined: false,
                 ready: false,
+                #[cfg(test)]
                 failure: None,
             },
         })

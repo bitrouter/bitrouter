@@ -167,6 +167,7 @@ struct Shutdown {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Drain {
     pub quiescent: bool,
+    #[cfg(test)]
     pub started: bool,
     pub forced: bool,
     pub blocking_panicked: bool,
@@ -288,6 +289,7 @@ impl ProcessExporter {
         let state = self.lock();
         Drain {
             quiescent,
+            #[cfg(test)]
             started: state.started,
             forced: state.forced,
             blocking_panicked: state.panicked,

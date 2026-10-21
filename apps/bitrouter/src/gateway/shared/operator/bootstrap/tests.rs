@@ -78,8 +78,9 @@ async fn fixture() -> Result<()> {
         let second = Store::new(second_db.clone(), &namespace, Duration::from_secs(3))?;
         crate::db::run_migrations(first.database()).await?;
         schema::initialize(&first).await?;
-        let authority = Authority::new(first, DeploymentKey::from_bytes([41; 32])?);
-        let peer = Authority::new(second, DeploymentKey::from_bytes([41; 32])?);
+        let deployment_key = rand::random();
+        let authority = Authority::new(first, DeploymentKey::from_bytes(deployment_key)?);
+        let peer = Authority::new(second, DeploymentKey::from_bytes(deployment_key)?);
         let actor = Actor::new(
             "bootstrap-operator".into(),
             [
@@ -133,7 +134,7 @@ async fn fixture() -> Result<()> {
             &format!("bootstrap-{}", uuid::Uuid::new_v4()),
             Duration::from_secs(3),
         )?;
-        let fresh = Authority::new(fresh_store, DeploymentKey::from_bytes([41; 32])?);
+        let fresh = Authority::new(fresh_store, DeploymentKey::from_bytes(deployment_key)?);
         let limited = Actor::new(
             actor.id.clone(),
             [Grant::PolicyWrite, Grant::CredentialWrite, Grant::Publish].into(),
@@ -192,7 +193,7 @@ async fn fixture() -> Result<()> {
             &format!("bootstrap-{}", uuid::Uuid::new_v4()),
             Duration::from_secs(3),
         )?;
-        let foreign = Authority::new(foreign_store, DeploymentKey::from_bytes([41; 32])?);
+        let foreign = Authority::new(foreign_store, DeploymentKey::from_bytes(deployment_key)?);
         foreign.initialize().await?;
         expect_code(
             initialize(foreign.clone(), &actor, "root", &input).await,

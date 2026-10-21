@@ -3070,17 +3070,11 @@ impl ModelSelector for PolicyRuntime {
                 .as_deref()
                 .and_then(|tier| decision.effort_of_tier(tier))
                 .or(input_effort);
-            let owner = ctx.caller().user_id();
-            let trajectory_request_id = trajectory
-                .request_identity(owner, ctx.request_id())
-                .map_err(|error| {
-                    crate::gateway::error::BitrouterError::internal(format!(
-                        "trajectory request identity failed: {error}"
-                    ))
-                })?;
             let guarded_input = GuardedRouteInput {
-                route_event_id: stable_id("route-intent", owner, &trajectory_request_id),
-                guard_event_id: stable_id("guard-activation", owner, &trajectory_request_id),
+                // Identities are derived after the shared episode chooses its
+                // retained key epoch, or by the original local canonicalizer.
+                route_event_id: String::new(),
+                guard_event_id: String::new(),
                 policy_name: policy_name.to_owned(),
                 route_projection: decision.route_projection.clone(),
                 request_key,
@@ -3098,29 +3092,14 @@ impl ModelSelector for PolicyRuntime {
                 tool_use_tier: decision.tool_use_tier(),
                 tool_safe_tiers: decision.tool_safe_tiers(),
             };
-            let (correlated, guarded) = trajectory
-                .begin_guarded_request(
-                    ctx.caller().user_id(),
-                    ctx.request_id(),
-                    inbound_protocol,
-                    ctx.require_generation_prompt()?,
-                    &captured_at,
-                    guarded_input,
-                )
-                .await
-                .map_err(|error| {
-                    if error
-                        .downcast_ref::<crate::trajectory::correlation::InvalidCorrelationEvidence>(
-                        )
-                        .is_some()
-                    {
-                        crate::gateway::error::BitrouterError::bad_request(error.to_string())
-                    } else {
-                        crate::gateway::error::BitrouterError::internal(format!(
-                            "trajectory correlation failed: {error}"
-                        ))
-                    }
-                })?;
+            let (correlated, guarded) = begin_guarded_trajectory(
+                trajectory,
+                ctx,
+                inbound_protocol,
+                &captured_at,
+                guarded_input,
+            )
+            .await?;
             let guard_applied = guarded.intent.clauses.iter().any(|clause| {
                 clause.clause_id.starts_with("progress_guard.")
                     && clause.disposition == RouteIntentClauseDisposition::Applied
@@ -3146,7 +3125,13 @@ impl ModelSelector for PolicyRuntime {
             if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
                 && let Some(adjustment) = plan.adjustment.as_ref()
             {
-                router.apply_continuation_adjustment(&mut decision, adjustment)?;
+                #[cfg(feature = "multi-instance")]
+                let shared = ctx
+                    .extension::<crate::gateway::shared::admitted::SharedAdmission>()
+                    .is_some();
+                #[cfg(not(feature = "multi-instance"))]
+                let shared = false;
+                apply_guarded_continuation(router, &mut decision, adjustment, shared)?;
             }
             let route_projection = decision.route_projection.clone();
             let (selected, captured) = router.record_bound_policy_decision(
@@ -3240,6 +3225,89 @@ impl ModelSelector for PolicyRuntime {
     }
 }
 
+async fn begin_guarded_trajectory(
+    trajectory: &TrajectoryRuntime,
+    ctx: &PipelineContext,
+    protocol: bitrouter_ai::types::ApiProtocol,
+    captured_at: &str,
+    mut input: GuardedRouteInput,
+) -> crate::gateway::error::Result<(
+    crate::trajectory::correlation::CorrelatedRequest,
+    crate::trajectory::store::GuardedRouteResult,
+)> {
+    #[cfg(feature = "multi-instance")]
+    if let Some(admission) = ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>() {
+        return admission
+            .begin_guarded(
+                &protocol,
+                ctx.require_generation_prompt()?,
+                captured_at,
+                input,
+            )
+            .await;
+    }
+    let owner = ctx.caller().user_id();
+    let request_id = trajectory
+        .request_identity(owner, ctx.request_id())
+        .map_err(|error| {
+            crate::gateway::error::BitrouterError::internal(format!(
+                "trajectory request identity failed: {error}"
+            ))
+        })?;
+    input.route_event_id = stable_id("route-intent", owner, &request_id);
+    input.guard_event_id = stable_id("guard-activation", owner, &request_id);
+    trajectory
+        .begin_guarded_request(
+            owner,
+            ctx.request_id(),
+            protocol,
+            ctx.require_generation_prompt()?,
+            captured_at,
+            input,
+        )
+        .await
+        .map_err(|error| {
+            if error
+                .downcast_ref::<crate::trajectory::correlation::InvalidCorrelationEvidence>()
+                .is_some()
+            {
+                crate::gateway::error::BitrouterError::bad_request(error.to_string())
+            } else {
+                crate::gateway::error::BitrouterError::internal(format!(
+                    "trajectory correlation failed: {error}"
+                ))
+            }
+        })
+}
+
+fn apply_guarded_continuation(
+    router: &PolicyTableRouter,
+    decision: &mut crate::policy_table_router::PolicyDecision,
+    adjustment: &ContinuationAdjustment,
+    shared: bool,
+) -> crate::gateway::error::Result<()> {
+    let original = shared.then(|| {
+        (
+            decision.selected_tier.clone(),
+            decision.selected_model.clone(),
+            decision.selected_effort,
+        )
+    });
+    router.apply_continuation_adjustment(decision, adjustment)?;
+    if let Some((tier, model, effort)) = original
+        && (decision.selected_tier != tier
+            || decision.selected_model != model
+            || decision.selected_effort != effort)
+    {
+        // The durable route intent already owns the guard decision. A native
+        // continuation must not silently dispatch a different treatment.
+        return Err(crate::gateway::error::BitrouterError::bad_request(
+            "provider continuation conflicts with the shared trajectory guard",
+        ));
+    }
+    Ok(())
+}
+
 fn pinned_continuation_effort(
     ctx: &PipelineContext,
 ) -> Option<Option<bitrouter_ai::types::ReasoningEffort>> {
@@ -3283,6 +3351,76 @@ pub struct PolicyRuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_guard_continuation_preserves_committed_treatment() -> Result<()> {
+        use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
+
+        let mut policy = definition();
+        policy.tiers.insert(
+            "strong-high".into(),
+            PolicyModelTarget {
+                model: "vendor:strong".into(),
+                effort: Some(ReasoningEffort::High),
+                context: Default::default(),
+            },
+        );
+        let router =
+            PolicyTableRouter::from_config(&policy.as_table_config(PolicyRuntimeMode::Frozen))
+                .context("guard continuation fixture is inert")?;
+        let prompt = Prompt {
+            model: "vendor:strong".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "solve this")],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let original = router.decision_for_routing(&prompt, &http::HeaderMap::new(), None, true);
+        assert_eq!(original.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(original.selected_effort, None);
+        for adjustment in [
+            ContinuationAdjustment::Detach,
+            ContinuationAdjustment::Pin {
+                effective_model: "vendor:strong".into(),
+                effective_effort: None,
+                effort_authoritative: true,
+            },
+        ] {
+            let mut decision = original.clone();
+            apply_guarded_continuation(&router, &mut decision, &adjustment, true)?;
+            assert_eq!(decision.selected_tier, original.selected_tier);
+            assert_eq!(decision.selected_model, original.selected_model);
+            assert_eq!(decision.selected_effort, original.selected_effort);
+        }
+        for (model, effort) in [
+            ("vendor:economy", None),
+            ("vendor:strong", Some(ReasoningEffort::High)),
+        ] {
+            let adjustment = ContinuationAdjustment::Pin {
+                effective_model: model.into(),
+                effective_effort: effort,
+                effort_authoritative: true,
+            };
+            let error =
+                apply_guarded_continuation(&router, &mut original.clone(), &adjustment, true)
+                    .err()
+                    .context("shared continuation changed the guarded treatment")?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("conflicts with the shared trajectory guard")
+            );
+            let mut local = original.clone();
+            apply_guarded_continuation(&router, &mut local, &adjustment, false)?;
+            assert_eq!(local.selected_model.as_deref(), Some(model));
+            assert_eq!(local.selected_effort, effort);
+        }
+        Ok(())
+    }
 
     #[cfg(feature = "multi-instance")]
     #[tokio::test]

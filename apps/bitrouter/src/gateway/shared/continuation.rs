@@ -69,16 +69,11 @@ impl SharedContinuationDb {
 
     #[cfg(test)]
     pub(crate) async fn fixture(database: DatabaseConnection) -> Result<Self> {
-        use ring::rand::{SecureRandom, SystemRandom};
-
         let namespace = format!("native-fixture-{}", uuid::Uuid::new_v4());
         let store =
             super::store::Store::new(database, &namespace, std::time::Duration::from_secs(3))?;
         super::schema::initialize(&store).await?;
-        let mut secret = [0_u8; 32];
-        SystemRandom::new()
-            .fill(&mut secret)
-            .map_err(|_| anyhow::anyhow!("fixture randomness unavailable"))?;
+        let secret = rand::random();
         let authority = Authority::new(store, super::crypto::DeploymentKey::from_bytes(secret)?);
         let head = authority.initialize().await?;
         let key = authority.keys(&head).await?.continuation()?;

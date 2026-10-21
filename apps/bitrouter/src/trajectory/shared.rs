@@ -6,6 +6,8 @@
 //! as decoded row shapes for the existing pure trajectory validators.
 
 mod delivery;
+mod guard;
+mod lookups;
 #[cfg(test)]
 pub(crate) mod tests;
 mod write;
@@ -17,11 +19,16 @@ use sea_orm::{
 };
 
 use super::store::{self, episode_entity, event_entity, outbox_entity, request_entity};
-use super::types::{KeyedDigest, PendingOutbox, StoredEpisode, StoredRequest, TrajectoryEvent};
+#[cfg(test)]
+use super::types::KeyedDigest;
+use super::types::{PendingOutbox, StoredEpisode, StoredRequest, TrajectoryEvent};
 
 pub(crate) const MAX_HISTORY_EVENTS: usize = 4096;
 pub(crate) const MAX_HISTORY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_OUTBOX_BYTES: usize = 1024 * 1024;
+/// Guard admission reserves one event of this canonical JSON size per unsettled
+/// request. Shared settlement producers must enforce this bound before writing.
+pub(crate) const MAX_GUARDED_SETTLEMENT_BYTES: usize = 128 * 1024;
 
 pub(crate) struct SharedTrajectory {
     namespace: String,
@@ -29,6 +36,7 @@ pub(crate) struct SharedTrajectory {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PrefixMatch {
+    #[cfg(test)]
     Missing,
     Unique(String),
     Ambiguous,
@@ -151,6 +159,7 @@ impl SharedTrajectory {
         Ok(events)
     }
 
+    #[cfg(test)]
     pub async fn prefix_in(
         &self,
         tx: &DatabaseTransaction,

@@ -38,6 +38,7 @@ pub(super) struct PackageOptions {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum PackageProfile {
     Gateway,
+    GatewayShared,
     Full,
 }
 
@@ -45,6 +46,7 @@ impl PackageProfile {
     fn identity(self) -> DistributionProfile {
         match self {
             Self::Gateway => DistributionProfile::Gateway,
+            Self::GatewayShared => DistributionProfile::GatewayShared,
             Self::Full => DistributionProfile::Full,
         }
     }
@@ -169,8 +171,14 @@ fn build_command(root: &Path, options: &PackageOptions, build_dir: &Path) -> Com
         "--locked",
     ]);
     command.arg("--target-dir").arg(build_dir);
-    if matches!(options.profile, PackageProfile::Gateway) {
-        command.arg("--no-default-features");
+    match options.profile {
+        PackageProfile::Gateway => {
+            command.arg("--no-default-features");
+        }
+        PackageProfile::GatewayShared => {
+            command.args(["--no-default-features", "--features", "multi-instance"]);
+        }
+        PackageProfile::Full => {}
     }
     command
 }
@@ -337,6 +345,12 @@ fn validate_identity(
         identity.profile == options.profile.identity(),
         "artifact profile does not match selection"
     );
+    if matches!(options.profile, PackageProfile::GatewayShared) {
+        ensure!(
+            identity.features == ["db-postgres", "multi-instance"],
+            "shared gateway artifact must contain exactly db-postgres,multi-instance"
+        );
+    }
     ensure!(
         identity.target == options.target,
         "artifact target does not match selection"
@@ -409,7 +423,7 @@ fn package_archive(
             "# BitRouter {profile}\n\nTarget: `{}`. Cargo profile: `{}`.\n\n\
          This is a distinct profiled artifact for manual installation and use.\n\
          Extract the archive on the matching target, then run `{invocation} --help`.\n\
-         The gateway profile disables default application features; full uses defaults.\n\
+         Gateway disables defaults; gateway-shared adds only multi-instance (including db-postgres); full uses defaults.\n\
          See manifest.json for build identity and the binary SHA-256.\n\
          These archives have their own names and layout, independent of cargo-dist releases.\n",
             options.target,

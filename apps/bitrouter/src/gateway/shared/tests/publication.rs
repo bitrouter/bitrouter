@@ -231,9 +231,10 @@ fn publication_bounds_derivation_before_recursive_resolution() -> Result<()> {
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     // Separate namespace: earlier engine fixtures intentionally use generation 0.
     let namespace = format!("publication-{}", uuid::Uuid::new_v4());
+    let deployment_key = rand::random();
     let a = Authority::new(
         Store::new(first.database().clone(), &namespace, Duration::from_secs(3))?,
-        DeploymentKey::from_bytes([87; 32])?,
+        DeploymentKey::from_bytes(deployment_key)?,
     );
     let b = Authority::new(
         Store::new(
@@ -241,7 +242,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
             &namespace,
             Duration::from_secs(3),
         )?,
-        DeploymentKey::from_bytes([87; 32])?,
+        DeploymentKey::from_bytes(deployment_key)?,
     );
     let head = a.initialize().await?;
     ensure!(b.configuration(&head).await.is_err());
@@ -308,7 +309,10 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     invalid.credentials[0].credential_account = "missing".into();
     ensure!(b.publish(2, &invalid).await.is_err());
     ensure!(a.head().await?.config_generation == 2);
-    let wrong_key = Authority::new(a.store().clone(), DeploymentKey::from_bytes([88; 32])?);
+    let wrong_key = Authority::new(
+        a.store().clone(),
+        DeploymentKey::from_bytes(rand::random())?,
+    );
     ensure!(wrong_key.configuration(&second_head).await.is_err());
     ensure!(wrong_key.publish(2, &next).await.is_err());
 

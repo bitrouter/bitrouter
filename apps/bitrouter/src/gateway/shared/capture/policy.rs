@@ -25,7 +25,7 @@ impl Capture {
             .digest()
             .context("frozen policy digest is missing")?;
         validate_digest(digest)?;
-        let treatment = pending
+        let mut treatment = pending
             .map(|pending| {
                 ensure!(
                     pending.policy == name && pending.policy_digest == digest,
@@ -74,6 +74,16 @@ impl Capture {
             })
             .transpose()?;
         self.update(|input| {
+            if guarded && let (Some(treatment), Some(pending)) = (&mut treatment, pending) {
+                // Guarded evaluation refers to the durable route event, whose
+                // identity was derived with the episode's retained key. The
+                // optional local cache uses a separate request/policy ID.
+                treatment.decision.decision_id = crate::trajectory::correlation::stable_id(
+                    "route-intent",
+                    &input.owner,
+                    &pending.request_id,
+                );
+            }
             input.policy = Policy::Evaluated {
                 policy: name.into(),
                 digest: digest.into(),

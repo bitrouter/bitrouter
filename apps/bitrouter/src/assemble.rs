@@ -4,6 +4,11 @@
 //! `apps/bitrouter` **lib** (above the SDK and the plugins), wiring the builtin
 //! hooks onto the `language_model` pipeline from config.
 
+#[cfg(feature = "multi-instance")]
+mod shared_writers;
+#[cfg(test)]
+mod writers_tests;
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -200,6 +205,7 @@ pub(crate) async fn build_shared_app(
     inputs: &SharedAssembly,
 ) -> Result<Assembled> {
     validate_shared_assembly(config, inputs.continuation.database())?;
+    shared_writers::validate_policies(&inputs.policies)?;
     let crate::config::gateway_state::GatewayStateConfig::Shared(shared) = &config.gateway_state
     else {
         anyhow::bail!("shared assembly requires explicit shared process configuration");
@@ -1200,8 +1206,11 @@ async fn assemble_app(
             trajectory_store.clone(),
             Canonicalizer::new(correlation_key.clone()),
         ));
-        let settlement =
-            TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key);
+        // Shared guard entry still uses this runtime marker; the shared engine
+        // owns its durable start/settlement path rather than this local recorder.
+        let settlement = (!is_shared).then(|| {
+            TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key)
+        });
         Some((runtime, settlement))
     } else {
         None
@@ -1211,7 +1220,7 @@ async fn assemble_app(
         .map(|(runtime, _)| runtime.clone());
     let trajectory_for_settlement = trajectory_services
         .as_ref()
-        .map(|(_, settlement)| settlement.clone());
+        .and_then(|(_, settlement)| settlement.clone());
     #[cfg(feature = "multi-instance")]
     let shared_policy_runtime = shared
         .map(|inputs| {
@@ -1244,31 +1253,37 @@ async fn assemble_app(
         routing_table.clone(),
         policy_runtime.clone(),
     );
-    let block_policies = crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
-        db.clone(),
-        routing_table.clone(),
-        policy_runtime.clone(),
-    );
-    let canonical_binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
-        db.clone(),
-        routing_table.clone(),
-        policy_runtime.clone(),
-    );
+    let block_policies = (!is_shared).then(|| {
+        crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
+            db.clone(),
+            routing_table.clone(),
+            policy_runtime.clone(),
+        )
+    });
+    let canonical_binding = (!is_shared).then(|| {
+        crate::gateway::observability::binding::CanonicalRequestBinding::new(
+            db.clone(),
+            routing_table.clone(),
+            policy_runtime.clone(),
+        )
+    });
     let gateway_requests =
         crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone());
     let gateway_requests_for_hooks = gateway_requests.clone();
-    let judge_costs = crate::gateway::metering::judge::JudgeCosts::new(db.clone());
+    let judge_costs =
+        (!is_shared).then(|| crate::gateway::metering::judge::JudgeCosts::new(db.clone()));
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
     #[cfg(feature = "core")]
-    let untracked_recorder = Some(Arc::new(EvalSettlementRecorder::new(
-        eval_service.store().clone(),
-        pending_eval_decisions.clone(),
-    ))
-        as Arc<dyn crate::gateway::pipeline::settlement::SettlementRecorder>);
+    let untracked_recorder = (!is_shared).then(|| {
+        Arc::new(EvalSettlementRecorder::new(
+            eval_service.store().clone(),
+            pending_eval_decisions.clone(),
+        )) as Arc<dyn crate::gateway::pipeline::settlement::SettlementRecorder>
+    });
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
     #[cfg(feature = "harness")]
@@ -1290,18 +1305,33 @@ async fn assemble_app(
                 lm.owned_drain();
             }
             lm.routing_table(routing_table).executor(executor);
-            lm.native_cost_estimator(pricing_for_native);
-            lm.native_cost_source(Arc::new(metering_for_native_costs));
+            if !is_shared {
+                lm.native_cost_estimator(pricing_for_native);
+                lm.native_cost_source(Arc::new(metering_for_native_costs));
+            }
             lm.native_private_context(Arc::new(private_context.clone()));
             lm.served_operations(OperationScope::Both);
             lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
             lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
-            lm.require_hook::<crate::gateway::metering::judge::JudgeCosts>(
-                HookStage::PreResolution,
-                OperationScope::Both,
-            );
+            if !is_shared {
+                lm.require_hook::<crate::gateway::metering::judge::JudgeCosts>(
+                    HookStage::PreResolution,
+                    OperationScope::Both,
+                );
+                lm.require_hook::<MeteringRecorder>(HookStage::Settlement, OperationScope::Both);
+            }
+            #[cfg(feature = "multi-instance")]
+            if is_shared {
+                lm.require_hook::<shared_writers::RequestScope>(
+                    HookStage::PreResolution,
+                    OperationScope::Both,
+                );
+                lm.require_hook::<shared_writers::DiscardPending>(
+                    HookStage::Settlement,
+                    OperationScope::Both,
+                );
+            }
             lm.require_hook::<PolicyHook>(HookStage::PreRequest, OperationScope::Both);
-            lm.require_hook::<MeteringRecorder>(HookStage::Settlement, OperationScope::Both);
             lm.require_hook::<CaptureTariffs>(HookStage::Route, OperationScope::Both);
             lm.require_hook::<ContinuationRuntime>(
                 HookStage::Finalization,
@@ -1319,15 +1349,25 @@ async fn assemble_app(
             lm.model_selector(policy_runtime_for_selector);
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
-            lm.route_hook(canonical_binding.clone());
-            lm.route_hook(block_policies.clone());
-            let metering_recorder =
-                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
-                    .with_reconciliation_provider("bitrouter");
+            if let Some(binding) = &canonical_binding {
+                lm.route_hook(binding.clone());
+            }
+            if let Some(policies) = &block_policies {
+                lm.route_hook(policies.clone());
+            }
+            // Tariffs are dispatch inputs in both modes. Shared accounting is
+            // projected from the engine's immutable attempt facts, not requests.
             lm.route_hook_for(
-                metering_recorder.tariff_capture(config.server.require_known_pricing),
+                CaptureTariffs::new(
+                    pricing_for_recorder.clone(),
+                    config.server.require_known_pricing,
+                ),
                 OperationScope::Both,
             );
+            let metering_recorder = (!is_shared).then(|| {
+                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
+                    .with_reconciliation_provider("bitrouter")
+            });
             lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
@@ -1340,7 +1380,13 @@ async fn assemble_app(
             }
             // Reserved judge IDs are checked even before auth, so an early
             // rejection cannot overwrite an existing attempt's metering row.
-            lm.pre_resolution_hook_for(judge_costs.clone(), OperationScope::Both);
+            if let Some(costs) = &judge_costs {
+                lm.pre_resolution_hook_for(costs.clone(), OperationScope::Both);
+            }
+            #[cfg(feature = "multi-instance")]
+            if is_shared {
+                lm.pre_resolution_hook_for(shared_writers::RequestScope, OperationScope::Both);
+            }
             // Authenticate and normalize the selector before freezing the router
             // binding and applying its defaults. Session normalization may apply a
             // API-principal-scoped route lease before Stage 2 model selection;
@@ -1352,11 +1398,20 @@ async fn assemble_app(
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
-            lm.router_preparation_hook(gateway_requests_for_hooks.clone());
-            lm.router_preparation_hook(block_policies);
-            lm.router_preparation_hook(canonical_binding);
+            if !is_shared {
+                lm.router_preparation_hook(gateway_requests_for_hooks.clone());
+            }
+            if let Some(policies) = block_policies {
+                lm.router_preparation_hook(policies);
+            }
+            if let Some(binding) = canonical_binding {
+                lm.router_preparation_hook(binding);
+            }
             lm.pre_request_hook_for(
-                PolicyHook::new(policy_store.clone(), Some(metering_store_for_policy)),
+                PolicyHook::new(
+                    policy_store.clone(),
+                    (!is_shared).then_some(metering_store_for_policy),
+                ),
                 OperationScope::Both,
             );
             // OpenTelemetry exporter — register the *same* Arc as a hook
@@ -1367,24 +1422,40 @@ async fn assemble_app(
                 lm.observe_hook_for(OtelObserveHook::new(exporter), OperationScope::Both);
             }
             lm.observe_hook(response_observer);
-            lm.observe_hook(gateway_requests_for_hooks.clone());
-            lm.observe_hook(judge_costs.clone());
-            // OSS metering recorder — writes one `requests` row per
-            // settled request with the estimated µUSD from the pricing
-            // table. The policy module reads back through `MeteringStore`
-            // for spend caps.
-            lm.settlement_recorder_for(metering_recorder, OperationScope::Both);
-            lm.settlement_recorder(gateway_requests_for_hooks);
-            lm.settlement_recorder(judge_costs);
-            lm.settlement_recorder_for(
-                PolicySettlementRecorder::new(
-                    pending_eval_decisions,
-                    trajectory_for_settlement,
-                    #[cfg(feature = "core")]
-                    untracked_recorder,
-                ),
-                OperationScope::Both,
-            );
+            if !is_shared {
+                lm.observe_hook(gateway_requests_for_hooks.clone());
+            }
+            if let Some(costs) = &judge_costs {
+                lm.observe_hook(costs.clone());
+            }
+            // Only local serving owns these legacy durable gateway writers.
+            if let Some(recorder) = metering_recorder {
+                lm.settlement_recorder_for(recorder, OperationScope::Both);
+            }
+            if !is_shared {
+                lm.settlement_recorder(gateway_requests_for_hooks);
+            }
+            if let Some(costs) = judge_costs {
+                lm.settlement_recorder(costs);
+            }
+            #[cfg(feature = "multi-instance")]
+            if is_shared {
+                lm.settlement_recorder_for(
+                    shared_writers::DiscardPending::new(pending_eval_decisions.clone()),
+                    OperationScope::Both,
+                );
+            }
+            if !is_shared {
+                lm.settlement_recorder_for(
+                    PolicySettlementRecorder::new(
+                        pending_eval_decisions,
+                        trajectory_for_settlement,
+                        #[cfg(feature = "core")]
+                        untracked_recorder,
+                    ),
+                    OperationScope::Both,
+                );
+            }
             // Server-side tool loop (router-executed MCP tools), when configured.
             #[cfg(feature = "server-tools")]
             if let Some(server_loop) = server_tool_loop {

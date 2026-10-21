@@ -3,8 +3,11 @@
 mod admission;
 mod attempts;
 mod finalization;
+pub(super) mod guard;
 mod lease;
 pub(super) mod management;
+#[cfg(test)]
+mod observation_tests;
 mod outbox;
 mod projection;
 mod recovery;
@@ -295,6 +298,7 @@ impl Engine {
     }
 
     /// Limits may fall below occupancy; they never erase existing reservations.
+    #[cfg(test)]
     pub async fn set_tenant(
         &self,
         tenant_id: &str,

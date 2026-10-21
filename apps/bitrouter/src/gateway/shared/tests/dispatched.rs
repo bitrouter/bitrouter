@@ -307,7 +307,7 @@ impl Fixture {
 }
 
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
-    let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(first.clone(), DeploymentKey::fixture()?);
     let revision = authority.head().await?.revision();
     let engine = Engine::join(authority.clone(), 30_000).await?;
     let tenant = uuid::Uuid::new_v4().to_string();
@@ -372,7 +372,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     )?
     .require_shared_authority();
     let remote = Engine::join(
-        Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?),
+        Authority::new(second.clone(), DeploymentKey::fixture()?),
         30_000,
     )
     .await?;

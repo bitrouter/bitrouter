@@ -4,6 +4,7 @@
 
 mod policy;
 pub(super) mod projection;
+mod response;
 #[cfg(test)]
 mod tests;
 
@@ -132,9 +133,30 @@ pub(super) struct Inputs {
     phase: Phase,
     policy: Policy,
     routing: Vec<EvidenceItem>,
+    // Optional observed response facts are separate from the frozen treatment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    response_observation: Option<response::ResponseObservation>,
 }
 
 impl Inputs {
+    /// Guard writes must use the contract admitted before policy selection.
+    pub fn check_guard_policy(&self, name: &str, digest: &str) -> Result<()> {
+        self.validate()?;
+        ensure!(
+            self.requirements.trajectory == TrajectoryRequirement::GuardedPolicies
+                && self.requirements.policy_lock_digest.as_deref() == Some(digest)
+                && !matches!(self.phase, Phase::Terminal { .. }),
+            "guard differs from original admitted contract"
+        );
+        ensure!(
+            matches!(&self.policy, Policy::Pending)
+                || matches!(&self.policy, Policy::Evaluated { policy, digest: original, guarded: true, .. }
+                    if policy == name && original == digest),
+            "guard differs from retained policy selection"
+        );
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn fixture_ready(&mut self) -> Result<()> {
         if self.phase == Phase::Preparing && self.policy == Policy::Pending {
@@ -164,6 +186,7 @@ impl Inputs {
             phase: Phase::Preparing,
             policy: Policy::Pending,
             routing: Vec::new(),
+            response_observation: None,
         };
         value.validate()?;
         Ok(value)
@@ -214,6 +237,13 @@ impl Inputs {
                         && treatment.decision.policy_digest == *digest,
                     "projection treatment policy mismatch"
                 );
+                ensure!(
+                    !treatment
+                        .attributes
+                        .keys()
+                        .any(|key| response::is_response_attribute(key)),
+                    "response evidence cannot be part of immutable treatment"
+                );
                 identifier(&treatment.decision.selected_tier)?;
                 chrono::DateTime::parse_from_rfc3339(&treatment.observed_at)
                     .context("invalid policy observation time")?;
@@ -242,6 +272,24 @@ impl Inputs {
             ensure!(
                 self.operation == ModelOperation::Decisions,
                 "projection bypass operation mismatch"
+            );
+        }
+        if let Some(observation) = &self.response_observation {
+            observation.typed()?;
+            ensure!(
+                self.operation == ModelOperation::Generation
+                    && matches!(
+                        self.phase,
+                        Phase::Ready | Phase::Terminal { route_ready: true }
+                    )
+                    && matches!(
+                        self.policy,
+                        Policy::Evaluated {
+                            treatment: Some(_),
+                            ..
+                        }
+                    ),
+                "response observation has no completed policy route"
             );
         }
         check_size_limit(
@@ -334,6 +382,16 @@ impl Inputs {
                 "ready projection evidence changed"
             );
         }
+        if let Some(prior) = &self.response_observation {
+            let next = incoming
+                .response_observation
+                .as_ref()
+                .context("response observation disappeared")?;
+            ensure!(
+                prior.typed()?.merge(next.typed()?) == next.typed()?,
+                "response observation regressed"
+            );
+        }
         *self = incoming.clone();
         Ok(())
     }
@@ -400,6 +458,11 @@ impl Capture {
     pub fn ready(&self) -> Result<()> {
         self.update(|input| {
             input.phase = Phase::Ready;
+            // Reserve space before dispatch, without invalidating historical
+            // ready/terminal rows that predate optional response capture.
+            if input.response_observation.is_none() {
+                check_size_limit(input, MAX_BYTES - 128 - response::MAX_RESPONSE_BYTES)?;
+            }
             Ok(())
         })
     }

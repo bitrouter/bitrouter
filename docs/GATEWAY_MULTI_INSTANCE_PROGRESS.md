@@ -34,8 +34,8 @@ review threads remained unresolved. This does not close any P1 gate.
 | 2 Admission and execution | Private engine and served admission/execution implemented; complete process acceptance pending | Real PostgreSQL transaction/race and scoped served execution tests passed | Private engine and serving substages approved |
 | 3 Gateway integration | Official foreground startup, credential binding, admission, dispatch, delivery and HTTP router implemented; complete process acceptance pending | Scoped HTTP/protocol/executor and PostgreSQL runtime regressions plus official-process startup/idle-drain tests passed | Authentication/context/dispatch/custody/HTTP/runtime substages approved |
 | 4 Published authority | Immutable publication, runtime and operator HTTP/SDK/CLI wiring implemented | PostgreSQL publication/handler, two-process operator and scoped feature regressions passed | Publication and bounded operator HTTP/SDK/CLI stages approved |
-| 5 Trajectory authority | Pending | Pending | Pending |
-| 6 Delivery and operations | Shared submission/query SDK, bounded custody/transport/HTTP, operator HTTP/SDK/CLI, retained runtime workers and durable attempt accounting facts and scoped metering storage implemented; projection receiver and outbox pending | Scoped runtime/service regressions, attempt accounting persistence and independent SDK tests passed | Custody/transport/HTTP/SDK/runtime and bounded operator HTTP/SDK/CLI substages approved; durable attempt evidence approved; bounded metering review approved with recorded validation limitations |
+| 5 Trajectory authority | Shared history, retained correlation epochs, transactional guard reduction, cost/counter holds and canonical observation projection implemented | PostgreSQL engine/trajectory tests and two stock-process guard/cost campaigns passed; final aggregate pending | Guard, observation and writer-isolation reviews approved; process rotation convergence findings closed |
+| 6 Delivery and operations | Shared submission/query SDK, bounded transport/custody, operator HTTP/SDK/CLI, durable attempt evidence, retained projection delivery and outbox implemented | Scoped regressions and stock-process outbox ACK retry, crash/finalization, overload and drain campaigns passed; final aggregate pending | Delivery, operations and bounded process substages reviewed; final candidate review pending |
 | 7 Aggregate acceptance and PR | Pending | Pending | Pending |
 
 ## Acceptance ledger
@@ -1624,3 +1624,93 @@ multi-process acceptance are still required.
 - The coordinator and both evaluation campaigns now create separate fixture-owned PostgreSQL databases, while keeping their two-pool same-database races. The shared test helper verifies database identity before migration, strips decoded `dbname` overrides, retains pools across campaign cancellation, closes them before ordinary DROP, and combines primary/cleanup errors. Only confirmed generated database names authorize cleanup; no FORCE or discovered-backend termination is used. Existing stock-bootstrap tests reuse this helper, but were not executed in this stage. CREATEDB is an explicit opt-in test prerequisite. Negative coordinator tests now require their intended evidence/trigger errors rather than accepting any database failure.
 - Final parallel minimal selection passed **41/41**, 2,409 outside selection, 4.098s (`/tmp/bitrouter-p1-projection-worker-isolated-tests.log`). Final all-feature shared/trajectory/metering selection passed **273/273**, 3,469 outside selection, 24.840s (`final-full-tests.log` with the same prefix). Local no-default trajectory tests passed **142/142**, 2,124 outside selection, 2.814s (`final-local-tests.log`). Each used two test threads and retained its compile output; none reported failures, leaks or test-level retries.
 - Final all-feature library/test Clippy exited 0 in 1m07s with no Clippy diagnostics, 20 staged unused-code warnings in the production library and the unconnected guard catch-up warning in the test build (`/tmp/bitrouter-p1-projection-worker-final-clippy.log`). This is not the final strict workspace gate. An earlier redundant-closure test lint was repaired without suppression. Strict no-default local library/binary Clippy passed in 17.32s (`local-clippy.log` with the same prefix); formatting and whitespace checks passed (`final-format.log`). No fresh stock executable or performance claim follows from these checks. Final candidate evidence review remains pending; guard/writer integration and all P1 acceptance gates remain open.
+- The final independent review subsequently approved the frozen candidate and commit `5444004df2601d0849412fb3d86889f1c1b97304` with zero open findings. It verified all 27 changed files and 16 listed logs, including the owned-database helper, against the candidate. The report is `/tmp/bitrouter-p1-projection-worker-review.md`; the 26-Rust-file code digest is `2f9e3fc691782ad3ecb00e466f8bbc12372e504de534ee80021c05820ec293a1`. This closes the bounded review above; guard/writer integration, fresh stock-process acceptance, strict workspace checks/performance and P1-A01–A09 remain open.
+
+## Shared guard and observation integration (2026-10-21)
+
+- Shared policy selection now searches retained correlation epochs with bounded metadata batches, validates the original admitted capture, and commits execution binding, catch-up, request start and route/guard events in one fenced transaction. Existing committed starts validate and replay their original decision without waiting for later unrelated pending terminals. Review findings EGR-01 (capture identity) and EGR-02 (replay isolation) were repaired and independently closed with real PostgreSQL regression evidence.
+- The shared assembly removes local metering, trajectory, policy-settlement and evaluation writers, while preserving original dispatch tariffs, policy selection, continuation and telemetry. Shared continuation pins must agree with the already committed guard treatment. The original guarded capture now uses the persisted route-event identity; an actual PolicyRuntime/custody test removes the pending cache and verifies exact failed-terminal projection and duplicate delivery.
+- Fresh guards reserve bounded history and required evaluation output for all unsettled requests. The output calculation uses current wire types, existing decisions/receipts, escaped-byte bounds and the 128 KiB future settlement cap. The coordinator enforces that cap on actual settlements before persistence.
+- Canonical response callbacks retain a separate optional categorical observation in custody. Immutable treatment is unchanged; absence stays absent, and no success, quality, cost or latency is inferred. Fixed-size observation/terminal headroom is reserved before dispatch. The shipped shared-gateway reference documents same-build namespaces and coordinated upgrade/rollback constraints for these private durable records.
+- Minimal guard repair tests passed **2/2** (1.049s), including capture corruption without effects and exact A replay while B has an attempt terminal but no execution terminal. The initial combined observation run was **42/43**; its blanket numeric-substring redaction assertion could collide with valid hashes/timestamps. The corrected test checks the exact observation object, unchanged original fields and forbidden field names. The subsequent all-feature selection passed **220/220** (6.129s), covering guard PG/handoff, response capture, local prediction and trajectory tests. Logs: `/tmp/bitrouter-p1-guard-review-repairs-tests.log`, `/tmp/bitrouter-p1-guard-observation-initial-tests.log`, `/tmp/bitrouter-p1-guard-observation-full-tests.log`.
+- Independent guard/observation source and test review found no remaining blocking findings for the bounded slice. Reports: `/tmp/bitrouter-p1-engine-guard-review.md` and `/tmp/bitrouter-p1-response-observation-review.md`. The supplied source/document snapshot contains 13 scoped files, digest `8af7e6951cabf6f18c002d87be27ad235df6e97506bd9777c1a3b53b58744d05`; later test-only fixture/diagnostic gating is reviewed separately. Strict aggregate lint, fresh executable process campaigns and P1-A01–A09 acceptance are not implied by this slice.
+- Preliminary stock admission runs used an explicitly pinned earlier minimal executable. A01 returned a pre-provider 503 in two runs and subsequently passed alone and alongside the engine/A02 campaigns. The failures remain recorded; their cause is not yet established. Review required exit-status validation and counting every provider HTTP arrival before fallible JSON extraction. Those harness repairs are being tested before final executable acceptance; no flaky gate is marked complete.
+
+## Stock process integration and retry diagnosis (2026-10-21)
+
+- The harness repairs now validate every owned child's exit and retain final logs
+  through database cleanup. Provider HTTP arrivals are counted before extraction;
+  malformed and unexpected traffic fails cleanup. Independent review closed both
+  findings. A real ACK-abort trigger proves workers replay an already delivered
+  projection without changing its metering row or redispatching inference.
+- The fresh v2 campaign passed 42/43; A01 again returned 503. A diagnostic-only
+  v3 build first passed, then failed on the third bounded repeat. The failed
+  request entered the pipeline and its fourth transaction returned typed SQLSTATE
+  40001 after three database-proven aborts. It failed after 113ms despite a 1000ms
+  transaction budget. This identifies the fixed four-attempt limit as the cause
+  of this reproduction; it does not retrospectively attribute every earlier 503.
+  Original logs remain under `bitrouter-p1-guard-stock-v2-recheck-tests` and
+  `bitrouter-p1-admission-diagnostic-v3-repeat-3` in the local evidence directory.
+- Retry now uses one absolute transaction deadline with bounded jittered backoff,
+  retaining the existing 40001/40P01 allowlist. No connection failure, ambiguous
+  commit or provider call gains retry authority. The real PostgreSQL regression
+  requires four rolled-back effects followed by exactly one fifth-attempt commit,
+  exact nonretryable SQLSTATEs and a persistent-abort deadline. Independent review
+  additionally required checking the absolute deadline before each callback;
+  a paused-clock regression proves a late poll cannot start another attempt.
+- The v4 minimal executable identifies as `gateway-shared`, with exactly
+  `db-postgres,multi-instance`; SHA-256 is
+  `d67008b59537ba9f77b45423028f3f2360ab5b77d9318478dd92ddf78c82bb1b`.
+  Fourteen stock/harness checks passed in 44.524s, including admission, identity,
+  ACK-abort replay, inference/stream owner kills, Accepted-before-dispatch kill,
+  graceful drain and forced shutdown. This executable precedes the late-poll
+  repair. Review subsequently requested two recovery-oracle repairs: use a
+  separate same-tenant key for the blocked-request status probe, and distinguish
+  second-signal interruption from deadline interruption using client event times.
+  These are being validated; the initial pass does not close those findings.
+- Two stock guard campaigns also passed against v4: concurrent/alternating
+  history, holds, retained key epochs and tenant isolation; and cost thresholds
+  using published tariffs. Both verify durable original treatment and response
+  observations. The combined guard/retry selection passed 4/4 in 2.850s, including
+  the late-poll regression in the harness. Independent guard-process review and
+  final candidate execution remain required.
+- The separately reviewed distribution change adds the `gateway-shared` archive
+  to the existing six-target CI/release path. Linux process checks consume that
+  actual unpacked archive with PostgreSQL. Updater/identity selection passed
+  48/48 alongside the first retry regression. Archive builds, remaining process
+  campaigns, aggregate validation, local performance and final review remain
+  pending; no whole-P1 gate is closed by these intermediate results.
+
+## Reviewed process candidate (2026-10-21)
+
+- The v5 minimal executable includes the absolute retry-deadline repair;
+  SHA-256 `b20cb587c021720242d0e8f929fef4437f3d6ae2bef1ff1c1119ef3a88fd7305`.
+  The first process selection passed 18/20. Both failures were fixture filenames
+  rejected by the existing local-state allowlist, repaired without widening it.
+  Recovery-force oracles and both guard/cost campaigns passed in that selection.
+- The next selection passed 8/8 in 14.505s: both authority campaigns, slow ingress
+  and body bounds, framing validation, Prepared-before-dispatch and
+  attempt-terminal-before-execution-terminal kills, and graceful replacement.
+  Independent review approved the finalization tests and required excluding the
+  replacement inference address when allocating its operator port; that fix is
+  included in the subsequent passing run.
+- The backend/continuation/crypto selection passed 7/7 in 2.896s. It severs every
+  database TCP connection of both stock replicas, observes fail-closed admission
+  and status, then restores the same children and verifies old facts/new progress.
+  Ordinary Responses continuation crosses replicas and same-tenant principals,
+  survives correlation rotation, and rejects stale credential/endpoint authority
+  and foreign tenants. Exact provider counts and strict owned cleanup are checked.
+  A draft enum-pattern compile error was fixed before this run. Independent review
+  additionally required an explicit TCP port in the proxy fixture; the pure
+  rejection check is added and awaits the final aggregate run.
+- Strict Rust 1.97 workspace Clippy with all features/tests and `-D warnings`
+  passed. Crypto fixtures now retain random keys across their paired authorities;
+  production key generation keeps the same fallible ring `SystemRandom` source.
+  Both changes passed independent source review. The v5 child predates this
+  equivalent production expression change; final artifacts will be rebuilt.
+- The final requirements audit identified one remaining A07 process case: a
+  stalled response consumer through the assembled stock service. Its bounded
+  fixture is in preparation. Existing PostgreSQL engine tests must be included
+  explicitly alongside process tests in final local and Linux CI selections.
+  Aggregate regression, SQLite footprint/performance, final source review and
+  hosted checks remain pending. These intermediate passes do not close P1.

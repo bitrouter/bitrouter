@@ -33,15 +33,12 @@ fn request() -> anyhow::Result<reqwest::Request> {
 }
 
 pub(crate) async fn exercise(first: &Store, second: &Store) -> anyhow::Result<()> {
-    let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(first.clone(), DeploymentKey::fixture()?);
     let engine = Engine::join(authority.clone(), 30_000).await?;
     let pool = uuid::Uuid::new_v4().to_string();
     engine.set_resource(&pool, None, 4).await?;
     let credentials = Credentials::new(authority);
-    let remote = Credentials::new(Authority::new(
-        second.clone(),
-        DeploymentKey::from_bytes([9; 32])?,
-    ));
+    let remote = Credentials::new(Authority::new(second.clone(), DeploymentKey::fixture()?));
     let slot = CredentialKey {
         provider: pool.clone(),
         account: "imported".into(),

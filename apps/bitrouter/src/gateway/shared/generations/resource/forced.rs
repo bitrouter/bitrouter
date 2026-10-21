@@ -46,7 +46,7 @@ impl Resource {
     }
 
     pub fn forced_report(&self, serving: &Serving) -> ForcedReport {
-        let (build_joined, failure, components) = {
+        let (build_joined, _build_failure, components) = {
             let build = self.build.lock().unwrap_or_else(|error| error.into_inner());
             match &*build {
                 Build::Joined(outcome) => (true, outcome.failure, outcome.components.clone()),
@@ -72,9 +72,11 @@ impl Resource {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         ForcedReport {
+            #[cfg(test)]
             generation: self.id,
             build_joined,
-            build_failure: failure,
+            #[cfg(test)]
+            build_failure: _build_failure,
             has_components: components.is_some(),
             pipeline: state.pipeline,
             pending,
@@ -83,7 +85,9 @@ impl Resource {
                 || native.is_some_and(|native| native.producer_closed),
             custody: serving.custody.pending_for(self.id),
             snapshot_readers,
+            #[cfg(test)]
             pipeline_failed: state.pipeline_failed,
+            #[cfg(test)]
             native_failed: state.native_failed,
             joining: self.waiting.load(Ordering::Acquire),
         }

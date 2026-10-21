@@ -23,6 +23,7 @@ pub(crate) struct SharedMetering {
 /// Only already projected executions are included. A budget guard must also
 /// establish that its authority scope has no missing or pending projections.
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) struct ProjectedSpend {
     pub executions: u64,
     pub known_subtotal_micro_usd: u64,
@@ -142,6 +143,7 @@ impl SharedMetering {
 
     /// Admission time owns the half-open window; projection/retry time cannot
     /// move spend between windows. Namespace and owner predicates precede SUM.
+    #[cfg(test)]
     pub async fn spend_in(
         &self,
         tx: &DatabaseTransaction,

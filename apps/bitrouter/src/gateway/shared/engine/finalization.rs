@@ -46,7 +46,6 @@ impl Engine {
         );
         if let Some(existing) = &execution.value.trajectory {
             ensure!(existing == binding, "execution trajectory binding changed");
-            return Ok(());
         }
         ensure!(
             matches!(
@@ -60,13 +59,16 @@ impl Engine {
         );
         let now = Store::now(tx).await?;
         self.episode_fence(tx, binding, now).await?;
+        let due = self.live_owner(tx, false).await?;
+        if execution.value.trajectory.is_some() {
+            return Ok(());
+        }
         execution.value.trajectory = Some(binding.clone());
         let status = if matches!(execution.value.view.state, ExecutionState::Accepted) {
             "accepted"
         } else {
             "running"
         };
-        let due = self.live_owner(tx, false).await?;
         self.save_execution(tx, &mut execution, status, Some(due), now)
             .await
     }

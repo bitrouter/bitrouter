@@ -466,6 +466,23 @@ fn process_is_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn shared_gateway_does_not_match_local_gateway_or_custom_handoff_identity() {
+        use bitrouter_ai::artifact::DistributionProfile;
+
+        let mut shared = crate::artifact::current();
+        shared.profile = DistributionProfile::GatewayShared;
+        shared.features = vec!["db-postgres".into(), "multi-instance".into()];
+        assert!(same_capabilities(&shared, &shared));
+        let mut local = shared.clone();
+        local.profile = DistributionProfile::Gateway;
+        local.features.clear();
+        assert!(!same_capabilities(&shared, &local));
+        let mut old_custom = shared.clone();
+        old_custom.profile = DistributionProfile::Custom;
+        assert!(!same_capabilities(&shared, &old_custom));
+    }
+
     fn reply(protocol: u32, artifact: Option<ArtifactIdentity>) -> DaemonResponse {
         DaemonResponse::HandoffHello {
             version: crate::VERSION.into(),

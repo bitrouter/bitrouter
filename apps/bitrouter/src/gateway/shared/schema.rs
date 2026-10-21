@@ -6,6 +6,7 @@ use sea_orm_migration::prelude::*;
 pub(super) struct SharedMigrator;
 
 /// Serialize schema changes only; this lock never participates in inference.
+#[cfg(test)]
 pub(super) async fn initialize(store: &super::store::Store) -> anyhow::Result<()> {
     initialize_selected(store, false).await
 }

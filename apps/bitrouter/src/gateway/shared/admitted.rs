@@ -61,6 +61,41 @@ impl SharedAdmission {
         self.custody.record_pipeline_outcome(successful_terminal);
     }
 
+    pub(crate) async fn begin_guarded(
+        &self,
+        protocol: &bitrouter_ai::types::ApiProtocol,
+        prompt: &bitrouter_ai::types::Prompt,
+        captured_at: &str,
+        route: crate::trajectory::store::GuardedRouteInput,
+    ) -> Result<(
+        crate::trajectory::correlation::CorrelatedRequest,
+        crate::trajectory::store::GuardedRouteResult,
+    )> {
+        self.engine
+            .guarded_route(
+                &self.key_hash,
+                &self.execution_id,
+                &super::engine::guard::Input {
+                    owner: &self.principal.user_id,
+                    protocol,
+                    prompt,
+                    captured_at,
+                    route,
+                },
+            )
+            .await
+            .map_err(|error| {
+                if error
+                    .downcast_ref::<crate::trajectory::correlation::InvalidCorrelationEvidence>()
+                    .is_some()
+                {
+                    BitrouterError::bad_request(error.to_string())
+                } else {
+                    public_error(error)
+                }
+            })
+    }
+
     pub(crate) fn retain_policy(
         &self,
         name: &str,
@@ -71,6 +106,30 @@ impl SharedAdmission {
         self.custody
             .capture
             .policy(name, guarded, decision, snapshot)
+            .map_err(public_error)
+    }
+
+    /// Retain only the classifier's categorical observation. This synchronous
+    /// handoff cannot read mutable authority or wait on the optional cache.
+    pub(crate) fn retain_response_observation(
+        &self,
+        request_id: &str,
+        caller: &CallerContext,
+        invocation: &crate::gateway::observability::decision::EvalInvocation,
+        observation: crate::gateway::observability::prediction::PredictionObservation,
+    ) -> Result<()> {
+        if request_id != self.execution_id
+            || self.operation != bitrouter_ai::types::ModelOperation::Generation
+            || caller.is_local()
+            || caller.api_key_id() != self.principal.api_key_id
+            || caller.user_id() != self.principal.user_id
+            || invocation.owner_user_id() != self.principal.user_id
+        {
+            return Err(BitrouterError::UpstreamUnavailable);
+        }
+        self.custody
+            .capture
+            .observe_response(request_id, caller.user_id(), observation)
             .map_err(public_error)
     }
 
@@ -203,6 +262,15 @@ pub(super) fn public_error(error: anyhow::Error) -> BitrouterError {
             retry_after: Some(1),
         },
         Some(Rejection::NotFound) => BitrouterError::NotFound("shared execution not found".into()),
-        _ => BitrouterError::UpstreamUnavailable,
+        rejection => {
+            let class = match rejection {
+                Some(Rejection::AuthorityChanged) => "authority_changed",
+                Some(Rejection::Unavailable) => "unavailable",
+                Some(Rejection::IdempotencyConflict) => "idempotency_conflict",
+                _ => super::store::database_failure_class(&error),
+            };
+            tracing::warn!(class, "shared request unavailable");
+            BitrouterError::UpstreamUnavailable
+        }
     }
 }

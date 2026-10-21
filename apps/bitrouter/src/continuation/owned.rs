@@ -171,6 +171,7 @@ impl Control {
         self.lock().worker
     }
 
+    #[cfg(test)]
     pub fn healthy(&self) -> bool {
         let state = self.lock();
         state.mode == Mode::Running
@@ -257,6 +258,7 @@ impl ContinuationRegistry {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn owned_worker_healthy(&self) -> bool {
         self.inner
             .reconciler
@@ -394,6 +396,7 @@ impl ContinuationRegistry {
         self.owned_report(Some(Retained::Forced))
     }
 
+    #[cfg(test)]
     pub(crate) async fn force_owned(&self) -> Result<Drain> {
         self.request_force_owned()?;
         self.join_forced_owned().await

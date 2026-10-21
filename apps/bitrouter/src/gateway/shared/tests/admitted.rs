@@ -28,7 +28,7 @@ use crate::gateway::shared::{
 };
 
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
-    let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(first.clone(), DeploymentKey::fixture()?);
     let revision = authority.head().await?.revision();
     let engine = Engine::join(authority, 30_000).await?;
     let tenant = uuid::Uuid::new_v4().to_string();

@@ -30,6 +30,7 @@ pub(in crate::gateway::shared) fn selected(
             })),
         },
         routing: vec![],
+        response_observation: None,
     };
     inputs.validate()?;
     Ok(inputs)

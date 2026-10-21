@@ -8,6 +8,7 @@ fn profiles_keep_stable_wire_and_display_spellings() -> Result<(), Box<dyn std::
     for (profile, spelling) in [
         (DistributionProfile::Full, "full"),
         (DistributionProfile::Gateway, "gateway"),
+        (DistributionProfile::GatewayShared, "gateway-shared"),
         (DistributionProfile::Custom, "custom"),
     ] {
         assert_eq!(profile.as_str(), spelling);
@@ -61,7 +62,7 @@ fn artifact_schema_exposes_nullable_revision_and_closed_profiles()
     assert_eq!(schema["properties"]["features"]["items"]["type"], "string");
     assert_eq!(
         schema["$defs"]["DistributionProfile"]["enum"],
-        json!(["full", "gateway", "custom"])
+        json!(["full", "gateway", "gateway-shared", "custom"])
     );
     let required = schema["required"]
         .as_array()

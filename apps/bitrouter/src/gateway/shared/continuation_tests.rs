@@ -3,7 +3,6 @@
 
 use std::time::Duration;
 
-use ring::rand::{SecureRandom, SystemRandom};
 use sea_orm::DatabaseConnection;
 
 use super::*;
@@ -70,7 +69,7 @@ impl Fixture {
         let a = Store::new(first.clone(), &namespace, Duration::from_secs(3))?;
         let b = Store::new(second.clone(), &namespace, Duration::from_secs(3))?;
         schema::initialize(&a).await?;
-        let key = DeploymentKey::from_bytes(random_key()?)?;
+        let key = DeploymentKey::from_bytes(rand::random())?;
         Ok(Self {
             first,
             second,
@@ -101,14 +100,6 @@ impl Fixture {
         second?;
         Ok(())
     }
-}
-
-fn random_key() -> Result<[u8; 32]> {
-    let mut key = [0_u8; 32];
-    SystemRandom::new()
-        .fill(&mut key)
-        .map_err(|_| anyhow::anyhow!("fixture randomness unavailable"))?;
-    Ok(key)
 }
 
 #[tokio::test]
@@ -220,7 +211,7 @@ async fn cancelled_close_and_old_snapshot_cannot_reopen_producer() -> Result<()>
 async fn key_namespace_and_microsecond_clock_authority() -> Result<()> {
     let fixture = Fixture::new().await?;
     let result = async {
-        let arbitrary = ContinuationKey::from_bytes(random_key()?)?;
+        let arbitrary = ContinuationKey::from_bytes(rand::random())?;
         ensure!(
             SharedContinuationDb::create(fixture.authority.clone(), arbitrary.clone())
                 .await
@@ -262,7 +253,7 @@ async fn key_namespace_and_microsecond_clock_authority() -> Result<()> {
         let namespace = format!("native-other-{}", uuid::Uuid::new_v4());
         let other_authority = Authority::new(
             Store::new(fixture.second.clone(), &namespace, Duration::from_secs(3))?,
-            DeploymentKey::from_bytes(random_key()?)?,
+            DeploymentKey::from_bytes(rand::random())?,
         );
         let head = other_authority.initialize().await?;
         let key = other_authority.keys(&head).await?.continuation()?;

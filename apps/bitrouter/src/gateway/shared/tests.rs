@@ -116,17 +116,17 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
         )
         .await?;
     }
-    let revision = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?)
+    let revision = Authority::new(first.clone(), DeploymentKey::fixture()?)
         .head()
         .await?
         .revision();
     let a = Engine::join(
-        Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?),
+        Authority::new(first.clone(), DeploymentKey::fixture()?),
         30_000,
     )
     .await?;
     let b = Engine::join(
-        Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?),
+        Authority::new(second.clone(), DeploymentKey::fixture()?),
         30_000,
     )
     .await?;
@@ -268,10 +268,7 @@ async fn shared_attempts(
     };
     use bitrouter_ai::types::UsageOrigin;
     a.set_resource("pool-a", None, 1).await?;
-    let credentials = Credentials::new(Authority::new(
-        store.clone(),
-        DeploymentKey::from_bytes([9; 32])?,
-    ));
+    let credentials = Credentials::new(Authority::new(store.clone(), DeploymentKey::fixture()?));
     let slot = CredentialKey {
         provider: "fixture-provider".into(),
         account: "default".into(),
@@ -415,11 +412,11 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
         AttemptState, ExecutionState, ExecutionUsage, TerminalObservation, TerminalOutcome,
     };
     use bitrouter_ai::types::{ModelOperation, UsageOrigin};
-    let authority = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(first.clone(), DeploymentKey::fixture()?);
     let revision = authority.head().await?.revision();
     let owner = Engine::join(authority.clone(), 1_000).await?;
     let reconciler = Engine::join(
-        Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?),
+        Authority::new(second.clone(), DeploymentKey::fixture()?),
         30_000,
     )
     .await?;
@@ -698,7 +695,7 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
             .is_err()
     );
     let delivery_peer = Engine::join(
-        Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?),
+        Authority::new(second.clone(), DeploymentKey::fixture()?),
         30_000,
     )
     .await?;
@@ -843,8 +840,8 @@ async fn namespace_and_rollback(first: &Store, second: &Store) -> Result<()> {
 }
 
 async fn key_authority_and_publication_fence(first: &Store, second: &Store) -> Result<()> {
-    let a = Authority::new(first.clone(), DeploymentKey::from_bytes([9; 32])?);
-    let b = Authority::new(second.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let a = Authority::new(first.clone(), DeploymentKey::fixture()?);
+    let b = Authority::new(second.clone(), DeploymentKey::fixture()?);
     ensure!(
         b.head().await.is_err(),
         "joining must not generate independent keys"
@@ -859,7 +856,7 @@ async fn key_authority_and_publication_fence(first: &Store, second: &Store) -> R
     ensure!(key_a.key_id() == key_b.key_id());
     let first_continuation = format!("{:?}", a.keys(&initial).await?.continuation()?);
     ensure!(first_continuation == format!("{:?}", b.keys(&initial).await?.continuation()?));
-    let wrong_key = Authority::new(second.clone(), DeploymentKey::from_bytes([10; 32])?);
+    let wrong_key = Authority::new(second.clone(), DeploymentKey::from_bytes(rand::random())?);
     ensure!(wrong_key.head().await.is_err());
 
     let reader_a = first.begin().await?;
@@ -960,7 +957,7 @@ async fn pooled_read_timeout(url: &str, blocker: &Store) -> Result<()> {
         blocker.namespace(),
         Duration::from_millis(150),
     )?;
-    let authority = Authority::new(reader.clone(), DeploymentKey::from_bytes([9; 32])?);
+    let authority = Authority::new(reader.clone(), DeploymentKey::fixture()?);
     let blocked = blocker.begin().await?;
     blocked
         .execute(Statement::from_string(

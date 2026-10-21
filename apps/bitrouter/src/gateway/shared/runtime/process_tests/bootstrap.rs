@@ -1,7 +1,11 @@
 //! Stock bootstrap on a newly created, empty PostgreSQL database.
 
+#[path = "admission.rs"]
+mod admission;
+
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
+use super::cleanup::{ExitExpectations, ExpectedExit, finish_children, retain_failed_logs};
 use super::*;
 use crate::gateway::shared::test_database::{EmptyDatabase, combine_results};
 use bitrouter_ai::gateway::operator::BootstrapReceipt;
@@ -51,17 +55,46 @@ async fn empty_fixture(database: &mut EmptyDatabase) -> Result<Fixture> {
 // The shared database owner closes the registered pool after these children
 // are joined. Aggregate every child error with the campaign error before then.
 async fn finish_empty_fixture(mut fixture: Fixture, result: Result<()>) -> Result<()> {
-    let stopped = futures::future::join_all(fixture.children.iter_mut().map(Running::stop)).await;
-    let cleanup = stopped
-        .into_iter()
-        .enumerate()
-        .map(|(index, result)| {
-            result
-                .map(|_| ())
-                .with_context(|| format!("joining fixture gateway {index}"))
-        })
-        .collect();
-    combine_results(result, cleanup)
+    let prefix = failure_log_prefix();
+    finish_children(
+        &mut fixture.children,
+        result,
+        &ExitExpectations::new(),
+        &prefix,
+    )
+    .await
+}
+
+fn failure_log_prefix() -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "bitrouter-process-cleanup-failure-{}",
+        uuid::Uuid::new_v4(),
+    ))
+}
+
+async fn finish_empty_fixture_with_database(
+    database: EmptyDatabase,
+    mut fixture: Fixture,
+    result: Result<()>,
+    expected: &ExitExpectations,
+) -> Result<()> {
+    // Capture final logs AFTER every child wait, including failures discovered
+    // only during cleanup. Admission also retains its earlier diagnostic copy.
+    let prefix = failure_log_prefix();
+    let result = finish_children(&mut fixture.children, result, expected, &prefix).await;
+    let already_retained = result.is_err();
+    // Keep the fixture's TempDir through DB teardown. EmptyDatabase closes its
+    // registered shared pool by reference; this Fixture clone is not a checkout.
+    let result = database.finish(result).await;
+    if already_retained {
+        result
+    } else {
+        retain_failed_logs(
+            fixture.children.iter().map(|child| child.log.as_path()),
+            result,
+            &prefix,
+        )
+    }
 }
 
 async fn spawn_init(

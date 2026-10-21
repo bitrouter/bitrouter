@@ -153,7 +153,8 @@ boundaries. Remote errors never fall back to this machine's configuration.
 ## References — read on demand
 
 Shared gateway deployments explicitly select `gateway_state.mode: shared` and
-require the `multi-instance` feature; a PostgreSQL URL alone retains local mode.
+use the `gateway-shared` distribution (`multi-instance` feature); a PostgreSQL
+URL alone retains local mode.
 See [shared gateway configuration](references/shared-gateway.md).
 
 | File | When to read |

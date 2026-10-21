@@ -64,7 +64,7 @@ pub(super) fn build(
             "operator_acknowledged".into(),
         );
     }
-    crate::trajectory::settlement::build_from_evidence(
+    let settlement = crate::trajectory::settlement::build_from_evidence(
         &binding.owner_user_id,
         request,
         events,
@@ -72,7 +72,13 @@ pub(super) fn build(
         evidence,
         captured_at,
         status,
-    )
+    )?;
+    ensure!(
+        serde_json::to_vec(&settlement.event)?.len()
+            <= crate::trajectory::shared::MAX_GUARDED_SETTLEMENT_BYTES,
+        "shared settlement exceeds its reserved history capacity"
+    );
+    Ok(settlement)
 }
 
 pub(super) fn reference(settlement: &Settlement) -> Result<TrajectoryReference> {

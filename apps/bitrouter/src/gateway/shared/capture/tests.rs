@@ -198,7 +198,9 @@ mod extra_capture_contract {
                             sea_orm::DatabaseConnection::Disconnected,
                         ),
                         crate::trajectory::canonical::Canonicalizer::new(
-                            crate::trajectory::canonical::CorrelationKey::from_bytes([37; 32])?,
+                            crate::trajectory::canonical::CorrelationKey::from_bytes(
+                                rand::random(),
+                            )?,
                         ),
                     ),
                 ))
@@ -274,6 +276,53 @@ mod extra_capture_contract {
                 pending.context("missing direct decision handoff")?,
             ))
         }
+    }
+
+    #[test]
+    fn guard_checks_original_contract_and_frozen_selection() -> Result<()> {
+        let fixture = Fixture::new(document(true)?)?;
+        let capture = fixture.capture()?;
+        let digest = fixture.snapshot.digest().context("missing policy digest")?;
+        let original = capture.snapshot().context("missing original inputs")?;
+        original.check_guard_policy("auto", digest)?;
+        ensure!(
+            original
+                .check_guard_policy("auto", &format!("sha256:{}", "f".repeat(64)))
+                .is_err()
+        );
+        let unguarded = Fixture::new(document(false)?)?;
+        ensure!(
+            unguarded
+                .capture()?
+                .snapshot()
+                .context("missing unguarded input")?
+                .check_guard_policy("auto", digest)
+                .is_err()
+        );
+        let (_, pending) = fixture.handoff()?;
+        capture.policy("auto", true, Some(&pending), &fixture.snapshot)?;
+        let selected = capture.snapshot().context("missing selected input")?;
+        selected.check_guard_policy("auto", digest)?;
+        let Policy::Evaluated {
+            treatment: Some(treatment),
+            ..
+        } = &selected.policy
+        else {
+            anyhow::bail!("guard handoff lost its treatment");
+        };
+        let route_id =
+            crate::trajectory::correlation::stable_id("route-intent", "owner", &pending.request_id);
+        ensure!(treatment.decision.decision_id == route_id);
+        ensure!(treatment.decision.decision_id != pending.decision_id);
+        let mut original = treatment.decision.clone();
+        selected.check_trajectory_decision(&original)?;
+        original.decision_id = pending.decision_id.clone();
+        ensure!(selected.check_trajectory_decision(&original).is_err());
+        ensure!(selected.check_guard_policy("another", digest).is_err());
+        capture.ready()?;
+        let terminal = capture.terminal()?.context("missing terminal input")?;
+        ensure!(terminal.check_guard_policy("auto", digest).is_err());
+        Ok(())
     }
 
     #[test]

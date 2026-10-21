@@ -91,6 +91,7 @@ impl Snapshot {
         }))
     }
 
+    #[cfg(test)]
     pub fn tasks(&self) -> &Arc<OwnedTasks> {
         &self.tasks
     }
@@ -167,11 +168,19 @@ impl Serving {
             .read()
             .unwrap_or_else(|error| error.into_inner());
         if !self.ready.load(Ordering::Acquire) {
+            tracing::warn!(reason = "not_ready", "shared ingress rejected");
             return Err(Rejection::Unavailable.into());
         }
-        let current = current.snapshot.as_ref().ok_or(Rejection::Unavailable)?;
-        let source = current.tasks.acquire()?;
-        let reservation = self.custody.reserve_for(current.owner)?;
+        let current = current.snapshot.as_ref().ok_or_else(|| {
+            tracing::warn!(reason = "no_snapshot", "shared ingress rejected");
+            Rejection::Unavailable
+        })?;
+        let source = current.tasks.acquire().inspect_err(|_| {
+            tracing::warn!(reason = "source_closed", "shared ingress rejected");
+        })?;
+        let reservation = self.custody.reserve_for(current.owner).inspect_err(|_| {
+            tracing::warn!(reason = "custody_capacity", "shared ingress rejected");
+        })?;
         Ok((current.clone(), reservation, source))
     }
 

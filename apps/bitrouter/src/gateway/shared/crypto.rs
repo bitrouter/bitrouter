@@ -37,6 +37,14 @@ impl DeploymentKey {
         Ok(Self { secret, id })
     }
 
+    /// Foundation helpers reconstruct peers in the same namespace. Retain one
+    /// random deployment key per test process so those peers share authority.
+    #[cfg(test)]
+    pub(super) fn fixture() -> Result<Self> {
+        static SECRET: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+        Self::from_bytes(*SECRET.get_or_init(rand::random))
+    }
+
     pub fn from_environment(name: &str) -> Result<Self> {
         let encoded = std::env::var(name).map_err(|_| {
             anyhow::anyhow!("shared gateway deployment key environment is unavailable")
@@ -192,7 +200,8 @@ mod tests {
 
     #[test]
     fn operator_fingerprint_binds_key_namespace_purpose_and_content() -> anyhow::Result<()> {
-        let key = DeploymentKey::from_bytes([7; 32])?;
+        let key = DeploymentKey::from_bytes(rand::random())?;
+        let wrong_key = DeploymentKey::from_bytes(rand::random())?;
         let fingerprint = key.fingerprint("east", "mutation", b"private-token")?;
         assert_eq!(
             fingerprint,
@@ -212,11 +221,7 @@ mod tests {
         );
         assert_ne!(
             fingerprint,
-            DeploymentKey::from_bytes([8; 32])?.fingerprint(
-                "east",
-                "mutation",
-                b"private-token"
-            )?
+            wrong_key.fingerprint("east", "mutation", b"private-token")?
         );
         assert_ne!(
             key.fingerprint("ab", "c", b"d")?,
@@ -227,7 +232,8 @@ mod tests {
 
     #[test]
     fn ciphertext_cannot_move_between_clusters_records_revisions_or_keys() -> anyhow::Result<()> {
-        let key = DeploymentKey::from_bytes([7; 32])?;
+        let key = DeploymentKey::from_bytes(rand::random())?;
+        let wrong_key = DeploymentKey::from_bytes(rand::random())?;
         let identity = SecretIdentity {
             namespace: "east",
             record: "account-a",
@@ -251,11 +257,7 @@ mod tests {
         ] {
             assert!(key.open(other, &sealed).is_err());
         }
-        assert!(
-            DeploymentKey::from_bytes([8; 32])?
-                .open(identity, &sealed)
-                .is_err()
-        );
+        assert!(wrong_key.open(identity, &sealed).is_err());
         let diagnostic = format!("{key:?} {sealed:?}");
         assert!(!diagnostic.contains("private-token"));
         assert!(!diagnostic.contains(&sealed.ciphertext));
@@ -264,7 +266,7 @@ mod tests {
 
     #[test]
     fn truncation_and_modified_ciphertext_fail_authentication() -> anyhow::Result<()> {
-        let key = DeploymentKey::from_bytes([3; 32])?;
+        let key = DeploymentKey::from_bytes(rand::random())?;
         let identity = SecretIdentity {
             namespace: "cluster",
             record: "keys",

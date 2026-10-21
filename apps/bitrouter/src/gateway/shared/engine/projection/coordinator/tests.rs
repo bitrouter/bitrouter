@@ -31,9 +31,10 @@ async fn exercise(database: &mut EmptyDatabase) -> Result<()> {
     let second = Store::new(second_db.clone(), &namespace, Duration::from_secs(3))?;
     async {
         schema::initialize_all(&first).await?;
-        Authority::new(first.clone(), DeploymentKey::from_bytes([41; 32])?).initialize().await?;
-        let a = engine(first.clone()).await?;
-        let b = engine(second.clone()).await?;
+        let deployment_key = rand::random();
+        Authority::new(first.clone(), DeploymentKey::from_bytes(deployment_key)?).initialize().await?;
+        let a = engine(first.clone(), deployment_key).await?;
+        let b = engine(second.clone(), deployment_key).await?;
         lease_recovery(&a, &b).await?;
         for guarded in [false, true] {
             let terminal = seed(&a, guarded).await?;
@@ -72,8 +73,8 @@ async fn exercise(database: &mut EmptyDatabase) -> Result<()> {
     }.await
 }
 
-async fn engine(store: Store) -> Result<Engine> {
-    let authority = Authority::new(store, DeploymentKey::from_bytes([41; 32])?);
+async fn engine(store: Store, deployment_key: [u8; 32]) -> Result<Engine> {
+    let authority = Authority::new(store, DeploymentKey::from_bytes(deployment_key)?);
     Engine::join(authority, 30_000).await
 }
 

@@ -1,7 +1,7 @@
 //! Publication fencing and deployment-private key epochs.
 
 use anyhow::{Context, Result, ensure};
-use ring::rand::{SecureRandom, SystemRandom};
+use ring::rand::SystemRandom;
 use sea_orm::DatabaseTransaction;
 use serde::{Deserialize, Serialize};
 
@@ -128,6 +128,7 @@ impl Authority {
     }
 
     /// Explicit operator initialization. Joining never creates an authority.
+    #[cfg(test)]
     pub async fn initialize(&self) -> Result<Head> {
         self.store
             .retry(|| async {
@@ -240,6 +241,7 @@ impl Authority {
 
     /// Rotation retains every prior epoch. At the bound operators must retain
     /// history rather than silently dropping a key that may still be referenced.
+    #[cfg(test)]
     pub async fn rotate_correlation(&self, expected_generation: u64) -> Result<Head> {
         self.store
             .retry(|| async {
@@ -356,9 +358,7 @@ impl Authority {
 }
 
 fn random_key() -> Result<[u8; 32]> {
-    let mut key = [0; 32];
-    SystemRandom::new()
-        .fill(&mut key)
-        .map_err(|_| anyhow::anyhow!("generating shared authority key failed"))?;
-    Ok(key)
+    ring::rand::generate(&SystemRandom::new())
+        .map(|key| key.expose())
+        .map_err(|_| anyhow::anyhow!("generating shared authority key failed"))
 }

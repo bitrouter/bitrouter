@@ -1,6 +1,7 @@
 //! Exercise the official executable, never an in-process replacement host.
 
 mod bootstrap;
+mod cleanup;
 mod operator;
 mod operator_cli;
 
@@ -43,18 +44,32 @@ impl Running {
     }
 
     async fn stop(&mut self) -> Result<ExitStatus> {
-        if let Some(status) = self.child.try_wait()? {
-            return Ok(status);
-        }
-        let pid = self.child.id().context("fixture gateway has no PID")?;
-        // Signal only the Child created by this fixture, never a discovered PID.
-        let signal = Command::new("/bin/kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .await;
+        let signal = match self.child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => match self.child.id() {
+                Some(pid) => {
+                    // Signal only the Child created by this fixture, never a discovered PID.
+                    Command::new("/bin/kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .status()
+                        .await
+                        .context("sending TERM to fixture gateway")
+                        .and_then(|status| {
+                            ensure!(
+                                status.success(),
+                                "could not signal fixture gateway: {status}"
+                            );
+                            Ok(())
+                        })
+                }
+                None => Err(anyhow::anyhow!("fixture gateway has no PID")),
+            },
+            Err(error) => Err(error).context("checking fixture gateway before shutdown"),
+        };
+        // Even a signal/try_wait failure must drive the retained Child to a
+        // wait (or the existing bounded kill-and-reap fallback). Keep both errors.
         let exited = self.exited().await;
-        ensure!(signal?.success(), "could not signal fixture gateway");
-        exited
+        crate::gateway::shared::test_database::combine_results(exited, vec![signal])
     }
 
     fn logs(&self) -> String {
@@ -183,7 +198,7 @@ impl Fixture {
         });
         if let Some((listen, _)) = operator {
             document["operator"] = json!({"listen": listen.to_string(), "credentials": [{
-                "id": "fixture-operator", "token_env": "FIXTURE_OPERATOR_TOKEN", "grants": ["read", "policy_write"]
+                "id": "fixture-operator", "token_env": "FIXTURE_OPERATOR_TOKEN", "grants": ["read", "policy_write", "rotate_correlation"]
             }]});
         }
         tokio::fs::write(&config, serde_json::to_vec(&document)?).await?;
