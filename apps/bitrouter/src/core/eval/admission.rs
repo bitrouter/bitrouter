@@ -3,6 +3,7 @@
 use crate::config::EvalAuthorityConfig;
 use crate::config::EvalAuthorityKind;
 use crate::config::EvalConfig;
+use crate::trajectory::evaluation::validate_builtin_trajectory_result;
 use anyhow::Result;
 use bitrouter_ai::eval::AdmissionOutcome;
 
@@ -220,32 +221,6 @@ pub async fn submit(
         duplicate,
     )
     .await
-}
-
-pub(crate) fn validate_builtin_trajectory_result(result: &EvaluationResult) -> Result<()> {
-    use crate::trajectory::evaluation::{
-        TRAJECTORY_EVALUATOR_AUTHORITY_ID, TRAJECTORY_EVALUATOR_ID, TRAJECTORY_EVALUATOR_VERSION,
-        trajectory_evaluator_config_digest,
-    };
-
-    if result.evaluator.authority_id != TRAJECTORY_EVALUATOR_AUTHORITY_ID
-        || result.evaluator.evaluator_id != TRAJECTORY_EVALUATOR_ID
-        || result.evaluator.kind != EvaluatorKind::Generic
-        || result.evaluator.version != TRAJECTORY_EVALUATOR_VERSION
-        || result.evaluator.config_digest != trajectory_evaluator_config_digest()?
-        || result.verdict != EvalVerdict::Inconclusive
-        || !result.hard_violations.is_empty()
-        || result.confidence_ppm.is_some()
-    {
-        anyhow::bail!("trusted trajectory principal requires the built-in operational evaluator")
-    }
-    if result.metrics.keys().any(|metric| {
-        !metric.starts_with("trajectory.")
-            && !matches!(metric.as_str(), "cost.usd_micros" | "latency.ms")
-    }) {
-        anyhow::bail!("trusted trajectory principal submitted a metric outside its scope")
-    }
-    Ok(())
 }
 
 async fn record(

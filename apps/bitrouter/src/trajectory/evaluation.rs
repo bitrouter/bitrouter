@@ -56,6 +56,33 @@ pub(crate) fn validate_evaluation_envelope(envelope: &TrajectoryEvaluationEnvelo
     Ok(())
 }
 
+#[cfg(any(feature = "core", feature = "multi-instance"))]
+pub(crate) fn validate_builtin_trajectory_result(result: &EvaluationResult) -> Result<()> {
+    use crate::trajectory::evaluation::{
+        TRAJECTORY_EVALUATOR_AUTHORITY_ID, TRAJECTORY_EVALUATOR_ID, TRAJECTORY_EVALUATOR_VERSION,
+        trajectory_evaluator_config_digest,
+    };
+
+    if result.evaluator.authority_id != TRAJECTORY_EVALUATOR_AUTHORITY_ID
+        || result.evaluator.evaluator_id != TRAJECTORY_EVALUATOR_ID
+        || result.evaluator.kind != EvaluatorKind::Generic
+        || result.evaluator.version != TRAJECTORY_EVALUATOR_VERSION
+        || result.evaluator.config_digest != trajectory_evaluator_config_digest()?
+        || result.verdict != EvalVerdict::Inconclusive
+        || !result.hard_violations.is_empty()
+        || result.confidence_ppm.is_some()
+    {
+        anyhow::bail!("trusted trajectory principal requires the built-in operational evaluator")
+    }
+    if result.metrics.keys().any(|metric| {
+        !metric.starts_with("trajectory.")
+            && !matches!(metric.as_str(), "cost.usd_micros" | "latency.ms")
+    }) {
+        anyhow::bail!("trusted trajectory principal submitted a metric outside its scope")
+    }
+    Ok(())
+}
+
 pub(crate) fn build_operational_evaluation(
     events: &[TrajectoryEvent],
 ) -> Result<TrajectoryEvaluationEnvelope> {

@@ -329,36 +329,55 @@ async fn unobserved_close_result_and_post_lock_evidence_are_recoverable() -> Res
         // producer's evidence snapshot must include that commit after waiting
         // for its advisory lock, rather than retaining an earlier snapshot.
         let writer = SharedContinuationDb::create(fixture.authority.clone(), context.key()).await?;
-        let writing = writer.begin_bind("foreign-identity").await?;
-        let mut inspecting = Box::pin(peer.begin_closed_identity(&closure, "foreign-identity"));
-        ensure!(
-            tokio::time::timeout(Duration::from_millis(80), inspecting.as_mut())
-                .await
-                .is_err()
-        );
-        writer
-            .authority
-            .store()
-            .create(
-                &writing,
-                NewRecord {
-                    kind: Kind::EpisodeFence,
-                    key: "foreign-after-close",
-                    status: "fixture",
-                    due_at_ms: None,
-                    now_ms: SharedContinuationDb::now(&writing)
-                        .await?
-                        .timestamp_millis(),
-                    value: &true,
-                },
-            )
+        // begin_bind lends a Serializable transaction. Like native store callers,
+        // this fixture must retry the complete operation after a proven abort;
+        // unrelated namespaces may still conflict through PostgreSQL SSI.
+        let (inspecting, evidence_key) = writer
+            .retry(|| async {
+                let evidence_key = format!("foreign-after-close-{}", uuid::Uuid::new_v4());
+                let writing = writer
+                    .begin_bind("foreign-identity")
+                    .await
+                    .context("beginning fixture evidence writer")?;
+                let mut inspecting =
+                    Box::pin(peer.begin_closed_identity(&closure, "foreign-identity"));
+                ensure!(
+                    tokio::time::timeout(Duration::from_millis(80), inspecting.as_mut())
+                        .await
+                        .is_err()
+                );
+                writer
+                    .authority
+                    .store()
+                    .create(
+                        &writing,
+                        NewRecord {
+                            kind: Kind::EpisodeFence,
+                            key: &evidence_key,
+                            status: "fixture",
+                            due_at_ms: None,
+                            now_ms: SharedContinuationDb::now(&writing)
+                                .await?
+                                .timestamp_millis(),
+                            value: &true,
+                        },
+                    )
+                    .await?;
+                writing
+                    .commit()
+                    .await
+                    .context("committing fixture evidence writer")?;
+                Ok((inspecting, evidence_key))
+            })
             .await?;
-        writing.commit().await?;
-        let inspection = inspecting.await?;
+        // The writer has committed. Inspection failures cannot replay it.
+        let inspection = inspecting
+            .await
+            .context("acquiring post-lock fixture inspection")?;
         let evidence: Stored<bool> = peer
             .authority
             .store()
-            .read(&inspection, Kind::EpisodeFence, "foreign-after-close")
+            .read(&inspection, Kind::EpisodeFence, &evidence_key)
             .await?
             .context("post-lock evidence used an earlier snapshot")?;
         ensure!(evidence.value);

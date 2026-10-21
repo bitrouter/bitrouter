@@ -443,7 +443,7 @@ async fn limits(
     Ok(())
 }
 
-fn start(episode: &str, request: &str) -> Result<BeginRequest> {
+pub(super) fn start(episode: &str, request: &str) -> Result<BeginRequest> {
     let mut event = event(
         episode,
         request,
@@ -475,7 +475,7 @@ fn digest(hex: char) -> Result<KeyedDigest> {
     KeyedDigest::parse(format!("hmac-sha256:key-1:{}", hex.to_string().repeat(64)))
 }
 
-fn event(
+pub(super) fn event(
     episode: &str,
     request: &str,
     suffix: &str,

@@ -613,6 +613,31 @@ Immutable event/status/outbox content must match and delivery state is preserved
 This persistence layer does not establish retained-epoch correlation, atomic guard
 catch-up, projection receipts or evaluation delivery by itself.
 
+Shared evaluation has separate namespace-keyed subjects, results, admission
+events and snapshots. Its trusted trajectory path validates the existing fixed
+envelope contract and built-in metric allowlist, rejects holdout subjects, and
+writes subject/result/Admitted together in the caller's Serializable transaction.
+It serializes on the subject after any gateway/episode locks. Exact result replay
+compares immutable content and returns the latest admission without re-admitting
+or overwriting it. A preexisting result with no admission is an error.
+
+The adapter and pure built-in validator compile with multi-instance alone; they
+do not require Core, construct a generic evaluation service or expose an external
+admission API. Local evaluation tables, admission behavior and publishers remain
+independent. Envelope JSON and each stored payload are bounded to 1 MiB; shared
+reads validate canonical JSON, content digests and indexed fields before use.
+Admission timestamps use database time after ownership/conflict checks and retain
+the original stored value on replay.
+
+The adopted shared schema also reserves a namespace-keyed snapshot table, but
+snapshot freezing and lookup have no current shared gateway consumer. Those
+methods remain deferred until a scoped compiler/API integration exists; no
+unused production helper or new external API is introduced to consume them.
+Namespace/owner filtering must precede latest-admission selection in that future
+integration. A previous Admitted event must not hide a later dispute, and any
+future selected freeze must validate every requested identity in one transaction.
+Snapshot persistence is not required to acknowledge each trajectory publication.
+
 An explicitly authorized operator can resolve an unknown attempt with a bounded
 evidence reference and expected revision. The audit records the operator's
 assertion as such; it does not masquerade as a provider observation. Resolution

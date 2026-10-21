@@ -15,6 +15,7 @@ use super::store::{self, Kind, NewRecord, Store, Stored};
 
 mod admitted;
 mod dispatched;
+mod evaluation;
 mod metering;
 mod publication;
 mod races;
