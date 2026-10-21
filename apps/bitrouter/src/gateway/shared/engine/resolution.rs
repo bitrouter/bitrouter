@@ -151,6 +151,9 @@ pub(in crate::gateway::shared) async fn resolve_in(
     store.save(tx, &mut resource, "active", None, now).await?;
     replace_attempt(&mut execution.value, &attempt.value.view)?;
     super::finalization::install_projection_fence(store, tx, &execution.value, now).await?;
+    if let Some(inputs) = execution.value.projection.as_mut() {
+        inputs.seal()?;
+    }
     execution.value.view.state = ExecutionState::Resolved { resolution };
     super::attempts::save_execution(store, tx, &mut execution, "resolved", None, now).await?;
     tenant.value.active = tenant

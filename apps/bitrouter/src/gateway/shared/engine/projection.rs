@@ -1,5 +1,7 @@
 //! Immutable projection inputs loaded under the caller's authority transaction.
 
+mod coordinator;
+
 use anyhow::{Context, Result, ensure};
 use sea_orm::DatabaseTransaction;
 

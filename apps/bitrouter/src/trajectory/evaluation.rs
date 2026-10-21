@@ -305,7 +305,7 @@ fn prediction_observation_evidence(settlement: &TrajectoryEvent) -> Result<Optio
     }))
 }
 
-fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRef>> {
+pub(crate) fn decode_eval_decision(event: &TrajectoryEvent) -> Result<Option<EvalDecisionRef>> {
     let Some(schema) = event.evidence.categorical.get("route.eval_schema") else {
         return Ok(None);
     };

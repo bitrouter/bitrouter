@@ -3,122 +3,17 @@
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 
 use super::*;
+use crate::gateway::shared::test_database::{EmptyDatabase, combine_results};
 use bitrouter_ai::gateway::operator::BootstrapReceipt;
 
-struct EmptyDatabase {
-    admin: DatabaseConnection,
-    name: String,
-    url: String,
-}
-
-impl EmptyDatabase {
-    async fn create() -> Result<Self> {
-        let source = std::env::var("BITROUTER_TEST_DATABASE_URL")?;
-        let admin = store::connect(&source, 1, Duration::from_secs(3)).await?;
-        let name = format!("bitrouter_bootstrap_{}", uuid::Uuid::new_v4().simple());
-        let prepared = async {
-            let url = owned_database_url(&source, &name)?;
-            admin
-                .execute(Statement::from_string(
-                    DatabaseBackend::Postgres,
-                    "SET statement_timeout = '10s'".to_owned(),
-                ))
-                .await?;
-            // CREATE DATABASE must run outside a transaction. The identifier is
-            // generated entirely here, never taken from user input.
-            // https://www.postgresql.org/docs/current/sql-createdatabase.html
-            admin
-                .execute(Statement::from_string(
-                    DatabaseBackend::Postgres,
-                    format!("CREATE DATABASE \"{name}\" TEMPLATE template0"),
-                ))
-                .await?;
-            Ok::<_, anyhow::Error>(url)
-        }
-        .await;
-        match prepared {
-            Ok(url) => Ok(Self { admin, name, url }),
-            Err(error) => {
-                admin.close().await?;
-                Err(error
-                    .context("creating dedicated empty bootstrap database (requires CREATEDB)"))
-            }
-        }
-    }
-
-    async fn finish(self, result: Result<()>) -> Result<()> {
-        // Only drop the UUID database successfully created by this fixture,
-        // after all retained children and its connection pool have been closed.
-        // https://www.postgresql.org/docs/current/sql-dropdatabase.html
-        let dropped = self
-            .admin
-            .execute(Statement::from_string(
-                DatabaseBackend::Postgres,
-                format!("DROP DATABASE \"{}\"", self.name),
-            ))
-            .await;
-        let closed = self.admin.close().await;
-        result?;
-        dropped?;
-        closed?;
-        Ok(())
-    }
-}
-
-fn owned_database_url(source: &str, name: &str) -> Result<String> {
-    let mut url = url::Url::parse(source)?;
-    let parameters: Vec<_> = url
-        .query_pairs()
-        .filter(|(key, _)| key != "dbname")
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
-        .collect();
-    url.set_query(None);
-    if !parameters.is_empty() {
-        url.query_pairs_mut().extend_pairs(parameters);
-    }
-    url.set_path(name);
-    Ok(url.into())
-}
-
-#[test]
-fn fixture_database_cannot_be_overridden_by_source_query() -> Result<()> {
-    let url = url::Url::parse(&owned_database_url(
-        "postgres://fixture:secret@localhost/admin?dbname=original&db%6eame=second&sslmode=disable&host=%2Ftmp",
-        "owned_fixture",
-    )?)?;
-    ensure!(url.path() == "/owned_fixture");
-    ensure!(url.query_pairs().all(|(key, _)| key != "dbname"));
-    ensure!(
-        url.query_pairs()
-            .any(|(key, value)| key == "host" && value == "/tmp")
-    );
-    ensure!(
-        url.query_pairs()
-            .any(|(key, value)| key == "sslmode" && value == "disable")
-    );
-    ensure!(url.username() == "fixture" && url.password() == Some("secret"));
-    Ok(())
-}
-
-async fn empty_fixture(url: &str, expected_database: &str) -> Result<Fixture> {
+async fn empty_fixture(database: &mut EmptyDatabase) -> Result<Fixture> {
     let binary = PathBuf::from(std::env::var("BITROUTER_TEST_GATEWAY_BINARY")?);
     ensure!(
         binary.is_absolute() && binary.is_file(),
         "an absolute official gateway binary is required"
     );
-    let db = store::connect(url, 2, Duration::from_secs(3)).await?;
+    let db: DatabaseConnection = database.connect(2, Duration::from_secs(3)).await?;
     let prepared = async {
-        let identity = db
-            .query_one(Statement::from_string(
-                DatabaseBackend::Postgres,
-                "SELECT current_database() AS name".to_owned(),
-            ))
-            .await?
-            .context("missing fixture database identity")?;
-        ensure!(
-            identity.try_get::<String>("", "name")? == expected_database,
-            "bootstrap connection did not reach its fixture-owned database"
-        );
         let row = db
             .query_one(Statement::from_string(
                 DatabaseBackend::Postgres,
@@ -129,7 +24,8 @@ async fn empty_fixture(url: &str, expected_database: &str) -> Result<Fixture> {
             .context("missing empty database check")?;
         ensure!(
             row.try_get::<i64>("", "count")? == 0,
-            "bootstrap database is not empty"
+            "bootstrap database {} is not empty",
+            database.name
         );
         let namespace = format!("bootstrap-process-{}", uuid::Uuid::new_v4());
         let store = Store::new(db.clone(), &namespace, Duration::from_secs(3))?;
@@ -140,22 +36,32 @@ async fn empty_fixture(url: &str, expected_database: &str) -> Result<Fixture> {
         Ok::<_, anyhow::Error>((authority, key, root))
     }
     .await;
-    let (authority, key, root) = match prepared {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            db.close().await?;
-            return Err(error);
-        }
-    };
+    let (authority, key, root) = prepared?;
     Ok(Fixture {
         root,
         binary,
         db,
         authority,
         key,
-        url: url.into(),
+        url: database.url.clone(),
         children: Vec::new(),
     })
+}
+
+// The shared database owner closes the registered pool after these children
+// are joined. Aggregate every child error with the campaign error before then.
+async fn finish_empty_fixture(mut fixture: Fixture, result: Result<()>) -> Result<()> {
+    let stopped = futures::future::join_all(fixture.children.iter_mut().map(Running::stop)).await;
+    let cleanup = stopped
+        .into_iter()
+        .enumerate()
+        .map(|(index, result)| {
+            result
+                .map(|_| ())
+                .with_context(|| format!("joining fixture gateway {index}"))
+        })
+        .collect();
+    combine_results(result, cleanup)
 }
 
 async fn spawn_init(
@@ -222,11 +128,11 @@ async fn completed_init(
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege and BITROUTER_TEST_GATEWAY_BINARY"]
 async fn official_bootstrap_empty_database_and_join_two_replicas() -> Result<()> {
-    let database = EmptyDatabase::create().await?;
+    let mut database = EmptyDatabase::create().await?;
     let result = async {
-        let mut fixture = empty_fixture(&database.url, &database.name).await?;
+        let mut fixture = empty_fixture(&mut database).await?;
         let result = campaign(&mut fixture).await;
-        fixture.finish(result).await
+        finish_empty_fixture(fixture, result).await
     }
     .await;
     database.finish(result).await

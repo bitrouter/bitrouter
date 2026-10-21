@@ -15,6 +15,8 @@ use super::super::generations::Generations;
 use super::health::Health;
 use crate::config::shared_process::Process;
 
+pub(super) mod outbox;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Report {
     pub joined: bool,
@@ -105,6 +107,8 @@ pub(super) struct Workers {
     custody: Option<Worker>,
     recovery: Option<Worker>,
     retirement: Option<Worker>,
+    outbox: Option<Worker>,
+    outbox_control: Option<outbox::Control>,
 }
 
 impl Workers {
@@ -125,6 +129,8 @@ impl Workers {
             custody: None,
             recovery: None,
             retirement: None,
+            outbox: None,
+            outbox_control: None,
         }
     }
 
@@ -140,9 +146,13 @@ impl Workers {
             self.publication.is_none()
                 && self.custody.is_none()
                 && self.recovery.is_none()
-                && self.retirement.is_none(),
+                && self.retirement.is_none()
+                && self.outbox.is_none(),
             "shared workers already started"
         );
+        // Validate before starting any processing roots. The outbox lease covers
+        // its complete transaction sequence, independently of the owner lease.
+        let outbox_budget = outbox::Budget::new(&process.shared)?;
         let stop = CancellationToken::new();
         self.publication = Some(Worker::start(
             "publication",
@@ -182,12 +192,16 @@ impl Workers {
             "recovery",
             stop.clone(),
             recovery_loop(
-                engine,
+                engine.clone(),
                 process.shared.worker_batch_size,
                 Duration::from_millis(process.shared.worker_interval_ms),
                 stop,
             ),
         ));
+        let stop = CancellationToken::new();
+        let (control, work) = outbox::start(engine, outbox_budget, stop.clone());
+        self.outbox_control = Some(control);
+        self.outbox = Some(Worker::start("outbox", stop, work));
         Ok(())
     }
 
@@ -198,6 +212,7 @@ impl Workers {
             _ = wait_optional(&mut self.custody) => "custody",
             _ = wait_optional(&mut self.recovery) => "recovery",
             _ = wait_optional(&mut self.retirement) => "retirement",
+            _ = wait_optional(&mut self.outbox) => "outbox",
         }
     }
 
@@ -229,6 +244,22 @@ impl Workers {
         self.heartbeat.join().await;
     }
 
+    pub async fn finish_outbox_until(&mut self, deadline: Instant) -> Result<()> {
+        if let Some(control) = &self.outbox_control {
+            // Persist the request before borrowing the join. Cancelling this
+            // waiter neither drops the root nor starts another final pass.
+            control.finish(deadline)?;
+        }
+        tokio::time::timeout_at(deadline, join_optional(&mut self.outbox))
+            .await
+            .context("shared terminal outbox final pass deadline exceeded")?;
+        Ok(())
+    }
+
+    pub fn outbox_report(&self) -> Option<outbox::Report> {
+        self.outbox_control.as_ref().map(outbox::Control::report)
+    }
+
     pub fn force(&self) {
         self.heartbeat.force();
         for worker in [
@@ -236,6 +267,7 @@ impl Workers {
             &self.custody,
             &self.recovery,
             &self.retirement,
+            &self.outbox,
         ]
         .into_iter()
         .flatten()
@@ -250,7 +282,8 @@ impl Workers {
             join_optional(&mut self.publication),
             join_optional(&mut self.custody),
             join_optional(&mut self.recovery),
-            join_optional(&mut self.retirement)
+            join_optional(&mut self.retirement),
+            join_optional(&mut self.outbox)
         );
     }
 
@@ -262,6 +295,7 @@ impl Workers {
                     &self.custody,
                     &self.recovery,
                     &self.retirement,
+                    &self.outbox,
                 ]
                 .into_iter()
                 .flatten(),

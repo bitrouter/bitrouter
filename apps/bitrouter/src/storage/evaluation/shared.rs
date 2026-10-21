@@ -1,4 +1,4 @@
-//! Namespace-scoped evaluation persistence for trusted trajectory producers.
+//! Namespace-scoped evaluation persistence for trusted request/trajectory producers.
 //!
 //! Every operation borrows a Serializable transaction. The caller owns timeout,
 //! rollback, whole-transaction retry and gateway/episode locks. This module has
@@ -11,6 +11,7 @@ use bitrouter_ai::eval::{AdmissionStatus, EvalSubject, EvaluationResult};
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseTransaction, QueryResult, Statement, Value,
 };
+use serde::{Deserialize, Serialize};
 
 use super::{result_digest, subject_digest, validate_identifier, validate_result_for_subject};
 
@@ -20,7 +21,8 @@ pub(crate) struct SharedEvaluation {
     namespace: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct SharedAdmission {
     pub sequence: i64,
     pub result_id: String,

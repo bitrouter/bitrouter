@@ -61,6 +61,7 @@ pub(super) enum Kind {
     EpisodeFence,
     ContinuationProducer,
     OperatorReceipt,
+    ProjectionReceipt,
 }
 
 impl Kind {
@@ -79,6 +80,7 @@ impl Kind {
             Self::EpisodeFence => "episode_fence",
             Self::ContinuationProducer => "continuation_producer",
             Self::OperatorReceipt => "operator_receipt",
+            Self::ProjectionReceipt => "projection_receipt",
         }
     }
 }
@@ -96,6 +98,10 @@ impl<T> Stored<T> {
 
     pub fn key(&self) -> &str {
         &self.row.key
+    }
+
+    pub fn status(&self) -> &str {
+        &self.row.status
     }
 
     pub fn due_at_ms(&self) -> Option<i64> {

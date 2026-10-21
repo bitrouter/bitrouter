@@ -1,14 +1,13 @@
 //! Shared built-in evaluation admission using real PostgreSQL.
 
+mod request_subject;
+
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::eval::{AdmissionStatus, MetricUnit, MetricValue};
 use sea_orm::{ConnectionTrait, DatabaseBackend, IsolationLevel, Statement};
 use std::time::Duration;
 
-use super::super::{
-    schema,
-    store::{self, Store},
-};
+use super::super::{schema, store::Store, test_database::EmptyDatabase};
 use crate::{
     storage::evaluation::{result_digest, shared::SharedEvaluation},
     trajectory::{
@@ -22,21 +21,24 @@ const OWNER: &str = "evaluation-owner";
 const FROZEN_AT: &str = "2026-10-21T01:00:00Z";
 
 #[tokio::test]
-#[ignore = "requires BITROUTER_TEST_DATABASE_URL for a dedicated PostgreSQL test database"]
+#[ignore = "requires BITROUTER_TEST_DATABASE_URL with PostgreSQL CREATEDB privilege"]
 async fn postgres_shared_evaluation() -> Result<()> {
-    tokio::time::timeout(Duration::from_secs(30), exercise())
+    let mut database = EmptyDatabase::create().await?;
+    let result = tokio::time::timeout(Duration::from_secs(30), exercise(&mut database))
         .await
-        .context("shared evaluation regression deadline exceeded")?
+        .context("shared evaluation regression deadline exceeded")
+        .and_then(|result| result);
+    // The timed future has been dropped; retained pools are closed before DROP.
+    database.finish(result).await
 }
 
-async fn exercise() -> Result<()> {
-    let url = std::env::var("BITROUTER_TEST_DATABASE_URL")?;
-    let db = store::connect(&url, 3, Duration::from_secs(3)).await?;
-    let other_db = store::connect(&url, 3, Duration::from_secs(3)).await?;
+async fn exercise(database: &mut EmptyDatabase) -> Result<()> {
+    let db = database.connect(3, Duration::from_secs(3)).await?;
+    let other_db = database.connect(3, Duration::from_secs(3)).await?;
     let namespace = format!("evaluation-{}", uuid::Uuid::new_v4());
     let first = Store::new(db.clone(), &namespace, Duration::from_secs(3))?;
     let second = Store::new(other_db.clone(), &namespace, Duration::from_secs(3))?;
-    let result = async {
+    async {
         schema::initialize_all(&first).await?;
         let envelope = fixture()?;
         #[cfg(feature = "core")]
@@ -66,13 +68,7 @@ async fn exercise() -> Result<()> {
         }
         Ok::<(), anyhow::Error>(())
     }
-    .await;
-    let closed = db.close().await;
-    let other_closed = other_db.close().await;
-    result?;
-    closed?;
-    other_closed?;
-    Ok(())
+    .await
 }
 
 fn fixture() -> Result<TrajectoryEvaluationEnvelope> {

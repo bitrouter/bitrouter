@@ -23,4 +23,7 @@ pub(crate) mod telemetry;
 mod transport;
 
 #[cfg(test)]
+mod test_database;
+
+#[cfg(test)]
 mod tests;

@@ -13,7 +13,7 @@ use super::super::ownership::Generation;
 use super::super::telemetry::Telemetry;
 use super::super::transport::owned::Transport;
 use super::health::Health;
-use super::workers::Workers;
+use super::workers::{Workers, outbox};
 
 #[cfg(test)]
 mod tests;
@@ -42,7 +42,10 @@ pub(super) struct Report {
     pub forced: bool,
     pub withdrawal: Withdrawal,
     pub quiescent: bool,
+    /// Generation custody only; this is not terminal delivery completion.
     pub durable_resolved: bool,
+    pub outbox: Option<outbox::Report>,
+    /// Graceful resource joins, not a guarantee of durable outbox completion.
     pub clean: bool,
 }
 
@@ -218,7 +221,11 @@ impl Lifecycle {
         if !transport || !generations {
             return Ok(false);
         }
+        // Producers can publish terminals throughout their joins. Only now
+        // request one bounded late pass, using the original absolute deadline.
+        self.workers.finish_outbox_until(deadline).await?;
         self.workers.stop_heartbeat().await;
+        self.report_outbox();
         let telemetry = self.telemetry.drain_until(deadline).await?;
         if let Some(state) = &mut self.shutdown {
             state.telemetry_joined = telemetry.is_quiescent();
@@ -257,6 +264,7 @@ impl Lifecycle {
                 .iter()
                 .all(|(_, report)| report.joined);
         if all_joined {
+            self.report_outbox();
             let telemetry = self.telemetry.force_join().await?;
             if let Some(state) = &mut self.shutdown {
                 state.telemetry_joined = telemetry.is_quiescent();
@@ -273,6 +281,7 @@ impl Lifecycle {
                 withdrawal: Withdrawal::Unattempted,
                 quiescent: false,
                 durable_resolved: false,
+                outbox: self.workers.outbox_report(),
                 clean: false,
             };
         };
@@ -292,6 +301,7 @@ impl Lifecycle {
             normal_joined
         };
         let workers = self.workers.reports();
+        let outbox = self.workers.outbox_report();
         let quiescent = generations_joined
             && state.telemetry_joined
             && workers.iter().all(|(_, report)| report.joined)
@@ -306,6 +316,7 @@ impl Lifecycle {
             && !state.failed
             && state.withdrawal == Withdrawal::Confirmed
             && state.telemetry_clean
+            && outbox.is_none_or(|report| report.late_pass_completed)
             && workers.iter().all(|(_, report)| report.is_clean())
             && state.retired.iter().all(|report| report.is_clean())
             && self
@@ -318,7 +329,23 @@ impl Lifecycle {
             withdrawal: state.withdrawal,
             quiescent,
             durable_resolved,
+            outbox,
             clean,
+        }
+    }
+
+    fn report_outbox(&self) {
+        if let Some(report) = self.report().outbox {
+            tracing::info!(
+                claimed = report.claimed,
+                delivered = report.delivered,
+                acknowledged = report.acknowledged,
+                deferred = report.deferred,
+                failures = report.failures,
+                late_pass_completed = report.late_pass_completed,
+                backlog = ?report.backlog,
+                "shared terminal outbox attempts observed; None backlog means unknown"
+            );
         }
     }
 }

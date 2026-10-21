@@ -5,6 +5,7 @@
 //! acquire gateway locks, or perform external I/O. Local entities are used only
 //! as decoded row shapes for the existing pure trajectory validators.
 
+mod delivery;
 #[cfg(test)]
 pub(crate) mod tests;
 mod write;

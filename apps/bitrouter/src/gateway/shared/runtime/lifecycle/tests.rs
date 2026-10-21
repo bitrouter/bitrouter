@@ -222,7 +222,8 @@ async fn authority_freshness_expires_during_an_observed_heartbeat_lock_wait() ->
             "SELECT pg_backend_pid() AS pid")).await?.context("blocker PID missing")?.try_get("", "pid")?;
         fixture.lifecycle.health.authority(fixture.lifecycle.generations.serving().loaded_revision());
         let blocked = || async {
-            // The only live worker touching this held namespace is heartbeat.
+            // Outbox has no candidates in this fixture and does not take the
+            // authority fence; heartbeat is the worker blocked on this row.
             // https://www.postgresql.org/docs/current/functions-info.html#FUNCTIONS-INFO-SESSION-TABLE
             let row = observer.query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
                 "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS waiting",
@@ -296,7 +297,7 @@ async fn maintenance_stop_does_not_wait_for_an_exhausted_main_pool() -> Result<(
                 .workers
                 .reports()
                 .iter()
-                .all(|(name, report)| *name == "heartbeat" || report.joined)
+                .all(|(name, report)| matches!(*name, "heartbeat" | "outbox") || report.joined)
         );
         // No cancellation discarded the custodial queue or its permits.
         ensure!(fixture.lifecycle.generations.serving().custody.pending() == 64);
@@ -616,6 +617,249 @@ async fn cancelled_dual_listener_drain_resumes_and_joins_both_before_pipeline_fo
             let mut bytes = Vec::new();
             tokio::time::timeout(Duration::from_secs(1), socket.read_to_end(&mut bytes)).await??;
         }
+        Ok(())
+    }
+    .await;
+    fixture.close(result).await
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+async fn outbox_survives_producer_grace_and_cancelled_late_pass_waiter() -> Result<()> {
+    use super::super::workers::outbox::tests::{finish_deadline, install};
+    use std::sync::atomic::Ordering;
+
+    let mut fixture = Fixture::new().await?;
+    let result = async {
+        fixture.start().await?;
+        let probe = install(&mut fixture.lifecycle.workers, Duration::from_secs(60)).await?;
+        let producer = fixture.lifecycle.generations.serving().acquire_request()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let force = CancellationToken::new();
+        // Cancel and resume the same-D waiter until it has actually begun
+        // retirement while the producer is held. The watchdog only bounds a
+        // missing observation; elapsed time is not evidence of retirement.
+        let (attempt_count, withdrawal) = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                {
+                    let wait = fixture.lifecycle.shutdown_until(deadline, &force);
+                    tokio::pin!(wait);
+                    if let std::task::Poll::Ready(result) = futures::poll!(&mut wait) {
+                        result?;
+                        anyhow::bail!("shutdown completed while the producer was held");
+                    }
+                }
+                let state = fixture
+                    .lifecycle
+                    .shutdown
+                    .as_ref()
+                    .context("shutdown missing")?;
+                ensure!(state.deadline == deadline && !state.forced && !state.failed);
+                ensure!(
+                    finish_deadline(&fixture.lifecycle.workers).is_none(),
+                    "outbox finish requested while the producer was held"
+                );
+                if let Some(attempts) = &state.attempts {
+                    ensure!(
+                        !attempts.is_empty(),
+                        "no generation retirement was attempted"
+                    );
+                    ensure!(state.retired.is_empty(), "held producer already retired");
+                    // Cancellation during withdrawal must retain Unknown;
+                    // only a confirmed withdrawal can later report clean.
+                    ensure!(matches!(
+                        state.withdrawal,
+                        Withdrawal::Unknown | Withdrawal::Confirmed
+                    ));
+                    return Ok::<_, anyhow::Error>((attempts.len(), state.withdrawal));
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .context("held producer retirement attempt was not observed")??;
+        // The attempt is now present and blocked by the held producer. A final
+        // pass must not have been requested by early stop or before its join.
+        ensure!(finish_deadline(&fixture.lifecycle.workers).is_none());
+        ensure!(probe.passes.load(Ordering::SeqCst) == 0);
+        ensure!(
+            fixture
+                .lifecycle
+                .workers
+                .reports()
+                .iter()
+                .any(|(name, report)| { *name == "outbox" && !report.joined })
+        );
+        ensure!(
+            !fixture
+                .lifecycle
+                .shutdown
+                .as_ref()
+                .context("shutdown missing")?
+                .telemetry_joined
+        );
+
+        // Publish at the end of producer grace, after the ordinary polling
+        // opportunity. Only the bounded late pass can observe this work.
+        probe.publish();
+        drop(producer);
+        tokio::time::timeout(Duration::from_secs(1), async {
+            let wait = fixture.lifecycle.shutdown_until(deadline, &force);
+            tokio::pin!(wait);
+            tokio::select! {
+                result = &mut wait => { result?; anyhow::bail!("held outbox joined early"); }
+                () = probe.entered.notified() => Ok::<(), anyhow::Error>(()),
+            }
+        })
+        .await??;
+        ensure!(finish_deadline(&fixture.lifecycle.workers) == Some(deadline));
+        let state = fixture
+            .lifecycle
+            .shutdown
+            .as_ref()
+            .context("shutdown missing")?;
+        let attempts = state
+            .attempts
+            .as_ref()
+            .context("retirement attempts missing at receiver entry")?;
+        ensure!(
+            !attempts.is_empty(),
+            "receiver entered without a retirement attempt"
+        );
+        ensure!(
+            attempts.len() == attempt_count,
+            "retirement attempts changed on resume"
+        );
+        ensure!(
+            state.retired.len() == attempts.len(),
+            "receiver entered before every retirement completed"
+        );
+        ensure!(state.retired.iter().all(|report| report.reclaimed));
+        ensure!(state.deadline == deadline && state.withdrawal == withdrawal);
+        ensure!(!state.forced && !state.failed);
+        ensure!(
+            !fixture
+                .lifecycle
+                .shutdown
+                .as_ref()
+                .context("shutdown missing")?
+                .telemetry_joined
+        );
+        ensure!(
+            fixture
+                .lifecycle
+                .workers
+                .reports()
+                .iter()
+                .any(|(name, report)| { *name == "heartbeat" && !report.joined })
+        );
+        ensure!(
+            fixture
+                .lifecycle
+                .shutdown_until(deadline + Duration::from_secs(1), &force)
+                .await
+                .is_err()
+        );
+
+        probe.release.add_permits(1);
+        let report = fixture.lifecycle.shutdown_until(deadline, &force).await?;
+        ensure!(
+            report.quiescent && report.durable_resolved && !report.forced,
+            "{report:?}"
+        );
+        ensure!(
+            report.withdrawal == withdrawal,
+            "withdrawal changed on resume"
+        );
+        ensure!(
+            report.clean == (withdrawal == Withdrawal::Confirmed),
+            "{report:?}"
+        );
+        // Unknown withdrawal is the only permitted reason for an unclean
+        // result; cancellation must not hide a worker or retirement failure.
+        let state = fixture
+            .lifecycle
+            .shutdown
+            .as_ref()
+            .context("shutdown missing")?;
+        ensure!(!state.failed && state.telemetry_clean);
+        ensure!(state.retired.iter().all(|report| report.is_clean()));
+        ensure!(
+            fixture
+                .lifecycle
+                .workers
+                .reports()
+                .iter()
+                .all(|(_, report)| report.is_clean())
+        );
+        let outbox = report.outbox.context("outbox report missing")?;
+        ensure!(outbox.late_pass_completed && outbox.acknowledged == 1 && outbox.backlog.is_none());
+        ensure!(probe.passes.load(Ordering::SeqCst) == 1);
+        ensure!(probe.dropped.load(Ordering::SeqCst) == 1);
+        Ok(())
+    }
+    .await;
+    fixture.close(result).await
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
+async fn force_joins_blocked_outbox_before_telemetry_and_reports_deferred() -> Result<()> {
+    use super::super::workers::outbox::tests::install;
+    use std::sync::atomic::Ordering;
+
+    let mut fixture = Fixture::new().await?;
+    let result = async {
+        fixture.start().await?;
+        let probe = install(&mut fixture.lifecycle.workers, Duration::from_millis(100)).await?;
+        probe.publish();
+        tokio::time::timeout(Duration::from_secs(1), probe.entered.notified()).await?;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        fixture.lifecycle.begin(deadline)?;
+        fixture.lifecycle.force();
+        // Current-thread test: aborts have been broadcast but no task has yet
+        // been scheduled to destroy its delivery future. An incomplete join
+        // must not reach even the disabled telemetry drain.
+        {
+            let wait = fixture.lifecycle.join_forced();
+            tokio::pin!(wait);
+            ensure!(futures::poll!(&mut wait).is_pending());
+        }
+        ensure!(probe.dropped.load(Ordering::SeqCst) == 0);
+        ensure!(
+            !fixture
+                .lifecycle
+                .shutdown
+                .as_ref()
+                .context("shutdown missing")?
+                .telemetry_joined
+        );
+        let report = fixture
+            .lifecycle
+            .shutdown_until(deadline, &CancellationToken::new())
+            .await?;
+        ensure!(report.forced && report.quiescent && !report.clean);
+        ensure!(
+            fixture
+                .lifecycle
+                .workers
+                .reports()
+                .iter()
+                .any(|(name, report)| { *name == "outbox" && report.joined && report.cancelled })
+        );
+        let outbox = report.outbox.context("outbox report missing")?;
+        ensure!(outbox.deferred == 1 && outbox.acknowledged == 0 && !outbox.late_pass_completed);
+        ensure!(probe.dropped.load(Ordering::SeqCst) == 1);
+        ensure!(probe.acknowledgements.load(Ordering::SeqCst) == 0);
+        ensure!(probe.retries.load(Ordering::SeqCst) == 0);
+        ensure!(
+            fixture
+                .lifecycle
+                .shutdown
+                .as_ref()
+                .context("shutdown missing")?
+                .telemetry_joined
+        );
         Ok(())
     }
     .await;

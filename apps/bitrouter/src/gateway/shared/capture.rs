@@ -3,6 +3,7 @@
 //! This is private durable data, never a public pipeline event or caller input.
 
 mod policy;
+pub(super) mod projection;
 #[cfg(test)]
 mod tests;
 
