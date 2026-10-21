@@ -84,6 +84,13 @@ impl Engine {
                 // still catch up before choosing any new decision.
                 if execution.value.trajectory.is_none() {
                     self.catch_up_in(&tx, &mut fence).await?;
+                    // A row lock alone does not refresh a Serializable snapshot.
+                    // Advance the fence even without catch-up so a waiting new
+                    // start aborts with 40001 before allocating a stale sequence.
+                    // https://www.postgresql.org/docs/current/transaction-iso.html
+                    self.store()
+                        .save(&tx, &mut fence, "ready", None, Store::now(&tx).await?)
+                        .await?;
                 }
                 self.bind_trajectory(&tx, execution_id, &binding).await?;
                 let result = trajectory

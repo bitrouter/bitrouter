@@ -38,6 +38,7 @@ use crate::trajectory::{
 };
 
 mod handoff;
+mod snapshot;
 
 const AT: &str = "2026-01-01T00:00:00Z";
 const LATER: &str = "2026-01-01T00:00:01Z";

@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::types::{GenerationParams, Message, ModelOperation, Prompt, Role, UsageOrigin};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
-use super::{Assembled, Config};
+use super::Assembled;
 use crate::gateway::caller::CallerContext;
 use crate::gateway::pipeline::context::PipelineContext;
 use crate::gateway::pipeline::execution::Pipeline;
@@ -164,6 +164,7 @@ async fn local_assembly_keeps_durable_hooks_and_metering() -> Result<()> {
 
 #[cfg(feature = "multi-instance")]
 mod shared {
+    use super::super::Config;
     use super::super::shared_writers::{DiscardPending, RequestScope, validate_policies};
     use super::*;
     use crate::gateway::observability::decision::EvalInvocation;

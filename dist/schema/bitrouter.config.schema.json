@@ -739,6 +739,13 @@
               "minimum": 0,
               "type": "integer"
             },
+            "max_retired": {
+              "default": 4,
+              "description": "Maximum retired routing generations still retaining resources (1..64).\nThe current generation and one candidate are additional slots.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
             "mode": {
               "const": "shared",
               "type": "string"
@@ -756,7 +763,7 @@
             },
             "pool_connections": {
               "default": 16,
-              "description": "Maximum database connections owned by this process (1..128).",
+              "description": "Total database connections (2..128), including one reserved for heartbeat.",
               "format": "uint32",
               "minimum": 0,
               "type": "integer"

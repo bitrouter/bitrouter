@@ -68,12 +68,21 @@ fn owned(interval: Duration) -> Result<(Worker, Control, Arc<Probe>)> {
                 budget,
                 reports,
                 move || async move {
-                    Ok(probe
-                        .pending
-                        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |pending| {
-                            pending.checked_sub(1)
-                        })
-                        .ok())
+                    let mut pending = probe.pending.load(Ordering::SeqCst);
+                    loop {
+                        let Some(next) = pending.checked_sub(1) else {
+                            return Ok(None);
+                        };
+                        match probe.pending.compare_exchange_weak(
+                            pending,
+                            next,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        ) {
+                            Ok(previous) => return Ok(Some(previous)),
+                            Err(actual) => pending = actual,
+                        }
+                    }
                 },
                 move |_| async move {
                     complete(

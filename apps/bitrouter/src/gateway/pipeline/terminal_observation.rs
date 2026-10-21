@@ -2,7 +2,7 @@
 //!
 //! This records the sender's committed outcome, never a durable claim that a
 //! remote client received bytes after a process crash.
-//! https://docs.rs/tokio/latest/tokio/sync/watch/index.html
+//! <https://docs.rs/tokio/latest/tokio/sync/watch/index.html>
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Outcome {
