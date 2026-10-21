@@ -926,9 +926,16 @@ async fn fixture_at(api: Option<std::net::SocketAddr>) -> Result<(Fixture, MockS
 }
 
 async fn pending(fixture: &Fixture, key: &str) -> Result<Report> {
+    let client = Client::connect(&socket_path(&fixture.socket)).await?;
+    let mut last = None;
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            let report = fixture.inspect(key).await?;
+            let report = client
+                .request(Operation::Status {
+                    name: "continued".into(),
+                    operation_id: Some(key.into()),
+                })
+                .await?;
             ensure!(
                 report.resident || report.state == "not_found",
                 "managed skill stopped before consent: {report:?}"
@@ -940,10 +947,12 @@ async fn pending(fixture: &Fixture, key: &str) -> Result<Report> {
             {
                 return Ok(report);
             }
+            last = Some(report);
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
-    .await?
+    .await
+    .with_context(|| format!("waiting for managed skill consent for {key}; last={last:?}"))?
 }
 
 async fn answer(

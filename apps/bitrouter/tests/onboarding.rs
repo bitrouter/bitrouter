@@ -55,11 +55,15 @@ fn isolated_command(home: &Path) -> tokio::process::Command {
 }
 
 async fn invoke(home: &Path, args: &[&str]) -> anyhow::Result<Output> {
-    Ok(tokio::time::timeout(
+    eprintln!("invoking CLI {args:?} in {}", home.display());
+    let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
         isolated_command(home).args(args).output(),
     )
-    .await??)
+    .await
+    .map_err(|error| anyhow::anyhow!("CLI {args:?} in {}: {error}", home.display()))??;
+    eprintln!("CLI {args:?} exited with {}", output.status);
+    Ok(output)
 }
 
 struct TestDaemon {
@@ -75,9 +79,31 @@ impl Drop for TestDaemon {
         }
         #[cfg(windows)]
         {
-            let _ = Command::new("taskkill")
+            eprintln!("stopping test daemon {}", self.pid);
+            let Ok(mut child) = Command::new("taskkill")
                 .args(["/PID", &self.pid.to_string(), "/T", "/F"])
-                .output();
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                return;
+            };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                match child.try_wait() {
+                    Ok(None) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    Ok(Some(_)) => break,
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
+            eprintln!("test daemon {} cleanup finished", self.pid);
         }
     }
 }
