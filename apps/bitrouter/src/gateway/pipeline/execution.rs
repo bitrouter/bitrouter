@@ -1993,6 +1993,21 @@ impl Pipeline {
         }
         let operation = ctx.operation();
         let resolution = binding.resolution;
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) =
+            ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+        {
+            use crate::gateway::shared::capture::Bypass;
+            if selection == Some(NativeModelSelection::Fixed) {
+                admission.retain_bypass(Bypass::FixedNative)?;
+            } else if resolution.policy.is_none() {
+                admission.retain_bypass(if operation == ModelOperation::Decisions {
+                    Bypass::Decisions
+                } else {
+                    Bypass::UnboundRoute
+                })?;
+            }
+        }
         if selection != Some(NativeModelSelection::Fixed)
             && let Some(policy) = resolution.policy.as_deref()
         {
@@ -2037,6 +2052,12 @@ impl Pipeline {
             prepared.validate_for(ctx.require_generation_prompt()?)?;
             if let Some(receipt) = &prepared.receipt {
                 ctx.emit(receipt.clone());
+                #[cfg(feature = "multi-instance")]
+                if let Some(admission) =
+                    ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+                {
+                    admission.retain_routing(ctx)?;
+                }
             }
             ctx.insert_extension(Arc::new(prepared));
         }
@@ -2164,6 +2185,12 @@ impl Pipeline {
             }
             ctx.apply_routing_prompt(plan.prompt.clone())?;
             ctx.emit(plan.selection.clone());
+            #[cfg(feature = "multi-instance")]
+            if let Some(admission) =
+                ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+            {
+                admission.retain_routing(ctx)?;
+            }
             ctx.insert_extension(Arc::new(plan.selection));
             routing_prompt = Some(plan.prompt);
         }
@@ -2289,6 +2316,13 @@ impl Pipeline {
             return Err(BitrouterError::bad_request(
                 "route hook changed the frozen routing prompt",
             ));
+        }
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) =
+            ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+        {
+            admission.retain_routing(ctx)?;
+            admission.route_ready()?;
         }
         Ok(chain)
     }

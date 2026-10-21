@@ -71,10 +71,20 @@ impl Engine {
             .await
     }
 
+    #[cfg(test)]
     pub async fn finish(
         &self,
         execution_id: &str,
         outcome: &TerminalOutcome,
+    ) -> Result<GatewayExecution> {
+        self.finish_with_inputs(execution_id, outcome, None).await
+    }
+
+    pub async fn finish_with_inputs(
+        &self,
+        execution_id: &str,
+        outcome: &TerminalOutcome,
+        inputs: Option<&crate::gateway::shared::capture::Inputs>,
     ) -> Result<GatewayExecution> {
         validate_outcome(outcome)?;
         self.store()
@@ -95,6 +105,19 @@ impl Engine {
                     .lock(&tx, Kind::Execution, execution_id)
                     .await?;
                 ensure!(execution.value.owner == self.owner, Rejection::Forbidden);
+                if let Some(inputs) = inputs {
+                    inputs.check_identity(
+                        execution_id,
+                        &execution.value.tenant_id,
+                        execution.value.view.operation,
+                    )?;
+                    execution
+                        .value
+                        .projection
+                        .as_mut()
+                        .context("execution projection inputs are missing")?
+                        .merge(inputs)?;
+                }
                 let view = self
                     .finalize_locked(&tx, &mut tenant, &mut execution, outcome)
                     .await?;
@@ -168,6 +191,9 @@ impl Engine {
         execution: &mut Stored<Execution>,
         outcome: &TerminalOutcome,
     ) -> Result<GatewayExecution> {
+        if let Some(inputs) = execution.value.projection.as_mut() {
+            inputs.seal()?;
+        }
         if let ExecutionState::Terminal { result } = &execution.value.view.state {
             ensure!(
                 result.outcome == *outcome,

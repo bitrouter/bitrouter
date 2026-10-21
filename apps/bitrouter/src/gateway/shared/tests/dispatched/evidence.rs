@@ -11,6 +11,23 @@ pub(super) async fn exercise(
     stamp: &CredentialStamp,
 ) -> Result<()> {
     let (admission, ctx, _) = fixture.context().await?;
+    let original_inputs = serde_json::to_value(admission.inputs_for_dispatch(&ctx)?.as_ref())?;
+    let mut forged = original_inputs.clone();
+    forged["owner"] = "another-owner".into();
+    let forged = serde_json::from_value(forged)?;
+    ensure!(
+        fixture
+            .engine
+            .prepare_observed_attempt(
+                &fixture.key.hash,
+                ctx.request_id(),
+                stamp,
+                &crate::metering::shared::evidence::Attribution::fixture(),
+                &forged,
+            )
+            .await
+            .is_err()
+    );
     let mut invalid = fixture.target("ok");
     invalid.service_id = "x".repeat(513);
     ensure!(
@@ -30,6 +47,14 @@ pub(super) async fn exercise(
 
     let mut attempt = Attempt::begin(admission.clone(), stamp, &fixture.target("ok"), &ctx).await?;
     let view = fixture.engine.owned_execution(ctx.request_id()).await?;
+    let prepared = store
+        .get::<serde_json::Value>(Kind::Execution, ctx.request_id())
+        .await?
+        .context("missing prepared execution")?;
+    ensure!(
+        prepared.value["projection"] == original_inputs,
+        "prepare did not atomically retain original inputs"
+    );
     let attempt_id = &view.attempts.first().context("missing attempt")?.attempt_id;
     let blocker = store.begin().await?;
     let _: Stored<serde_json::Value> = store

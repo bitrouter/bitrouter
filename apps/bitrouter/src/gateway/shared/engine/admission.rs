@@ -36,6 +36,7 @@ impl Engine {
         execution_id: &str,
         request: &Admission<'_>,
     ) -> Result<AdmissionResult> {
+        request.requirements.validate()?;
         validate_id(execution_id)?;
         validate_id(request.correlation_id)?;
         validate_digest(request.key_hash)?;
@@ -173,6 +174,12 @@ impl Engine {
                     tenant_revision: tenant.value.policy_revision,
                     owner: self.owner.clone(),
                     trajectory: None,
+                    projection: Some(Box::new(crate::gateway::shared::capture::Inputs::new(
+                        request.requirements.clone(),
+                        execution_id,
+                        &principal.tenant,
+                        request.operation,
+                    )?)),
                     view: view.clone(),
                 };
                 ensure!(

@@ -600,6 +600,7 @@ async fn resolution(a: &Operator, actor: &Actor) -> Result<()> {
     let engine = Engine::join(a.authority.clone(), 30_000).await?;
     let view = match engine
         .admit(&Admission {
+            requirements: crate::gateway::shared::capture::Requirements::fixture(),
             key_hash: &hash,
             correlation_id: "operator-resolution",
             idempotency_key: None,

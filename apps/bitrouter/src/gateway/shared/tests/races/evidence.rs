@@ -31,7 +31,13 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     });
     let attempt = fixture
         .a
-        .prepare_observed_attempt(&fixture.first.hash, &id, &fixture.stamp, &attribution)
+        .prepare_observed_attempt(
+            &fixture.first.hash,
+            &id,
+            &fixture.stamp,
+            &attribution,
+            &fixture.a.fixture_projection_inputs(&id).await?,
+        )
         .await?;
     let prepared = row(second, Kind::Attempt, &attempt.attempt_id).await?;
     ensure!(prepared["attribution"] == serde_json::to_value(&attribution)?);
@@ -124,7 +130,13 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
     let attempt = fixture
         .a
-        .prepare_observed_attempt(&fixture.first.hash, &id, &fixture.stamp, &boundary)
+        .prepare_observed_attempt(
+            &fixture.first.hash,
+            &id,
+            &fixture.stamp,
+            &boundary,
+            &fixture.a.fixture_projection_inputs(&id).await?,
+        )
         .await?;
     fixture
         .a

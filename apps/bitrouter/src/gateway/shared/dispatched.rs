@@ -114,6 +114,7 @@ impl Attempt {
             .find(|snapshot| snapshot.target == PricingTargetKey::from_target(target))
             .map(|snapshot| snapshot.tariff.clone());
         let attribution = Attribution::capture(target, tariff).map_err(public_error)?;
+        let inputs = admission.inputs_for_dispatch(ctx)?;
         {
             let mut state = admission.dispatch.lock();
             if state.occupied {
@@ -143,6 +144,7 @@ impl Attempt {
                 &attempt.admission.execution_id,
                 credential,
                 &attempt.attribution,
+                &inputs,
             )
             .await
             .map_err(public_error)?;

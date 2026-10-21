@@ -188,10 +188,19 @@ impl Fixture {
         &self,
         operation: ModelOperation,
     ) -> Result<(Arc<SharedAdmission>, PipelineContext, Prompt)> {
+        self.operation_context_with_stream(operation, false).await
+    }
+
+    async fn operation_context_with_stream(
+        &self,
+        operation: ModelOperation,
+        stream: bool,
+    ) -> Result<(Arc<SharedAdmission>, PipelineContext, Prompt)> {
         let admission = match self
             .custody
             .reserve()?
             .admit(&Admission {
+                requirements: crate::gateway::shared::capture::Requirements::fixture(),
                 key_hash: &self.key.hash,
                 correlation_id: "untrusted-correlation",
                 idempotency_key: None,
@@ -213,7 +222,7 @@ impl Fixture {
             params: Default::default(),
             response_format: None,
             tool_choice: None,
-            stream: false,
+            stream,
         };
         let mut request =
             PipelineRequest::new("fixture", CallerContext::anonymous(), prompt.clone());
@@ -227,6 +236,51 @@ impl Fixture {
         admission.attach(&mut request);
         let mut ctx = PipelineContext::new(request);
         admission.establish(&mut ctx).await?;
+        // Direct executor fixtures supply the same finite direct-route plan as
+        // the ordinary pipeline, before any provider reservation. Delivery tests
+        // that reuse this request must reproduce that original plan exactly.
+        use crate::gateway::routing::{plan, preparation::Prepared};
+        use crate::gateway::shared::capture::Bypass;
+        admission.retain_bypass(if operation == ModelOperation::Decisions {
+            Bypass::Decisions
+        } else {
+            Bypass::UnboundRoute
+        })?;
+        if operation == ModelOperation::Generation {
+            let prepared = Prepared::from_prompt(&prompt, None, ctx.request_id()).await;
+            let model = plan::AdmittedModel {
+                model: plan::Model {
+                    model: "fixture".into(),
+                    max_prompt_bytes: prepared.hard_limit_bytes,
+                    input_microusd_per_million: None,
+                    output_microusd_per_million: None,
+                },
+                admitted: true,
+            };
+            let plan = plan::select(
+                &[model],
+                "fixture",
+                &prepared.views,
+                plan::Options {
+                    strategy: Default::default(),
+                    policy: plan::CostPolicy {
+                        minimum_savings_fraction: prepared.policy.minimum_savings_fraction,
+                        model_switch_penalty_microusd: prepared
+                            .policy
+                            .model_switch_penalty_microusd,
+                        prefix_loss_penalty_microusd_per_kib: prepared
+                            .policy
+                            .prefix_loss_penalty_microusd_per_kib,
+                    },
+                    previous: None,
+                    hard_limit_bytes: prepared.hard_limit_bytes,
+                    capabilities: &prepared.capabilities,
+                },
+            )?;
+            ctx.emit(plan.selection);
+        }
+        admission.retain_routing(&ctx)?;
+        admission.route_ready()?;
         Ok((admission, ctx, prompt))
     }
 

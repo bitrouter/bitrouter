@@ -96,6 +96,7 @@ impl Engine {
             execution_id,
             credential,
             &Attribution::fixture(),
+            &self.fixture_projection_inputs(execution_id).await?,
         ))
         .await
     }
@@ -106,8 +107,10 @@ impl Engine {
         execution_id: &str,
         credential: &CredentialStamp,
         attribution: &Attribution,
+        inputs: &crate::gateway::shared::capture::Inputs,
     ) -> Result<GatewayAttempt> {
         attribution.validate()?;
+        inputs.require_ready()?;
         let attempt_id = uuid::Uuid::new_v4().to_string();
         self.store()
             .retry(|| async {
@@ -115,6 +118,17 @@ impl Engine {
                 let (tenant, mut execution, principal_expiry) = self
                     .authorized_execution(&tx, key_hash, execution_id)
                     .await?;
+                inputs.check_identity(
+                    execution_id,
+                    &execution.value.tenant_id,
+                    execution.value.view.operation,
+                )?;
+                execution
+                    .value
+                    .projection
+                    .as_mut()
+                    .context("execution projection inputs are missing")?
+                    .merge(inputs)?;
                 ensure!(
                     attribution.protocol.operation() == execution.value.view.operation,
                     "dispatch attribution operation mismatch"
@@ -247,6 +261,17 @@ impl Engine {
                     matches!(attempt.value.view.state, AttemptState::Prepared),
                     "provider dispatch intent is already consumed"
                 );
+                let inputs = execution
+                    .value
+                    .projection
+                    .as_ref()
+                    .context("dispatch projection inputs are missing")?;
+                inputs.check_identity(
+                    execution_id,
+                    &execution.value.tenant_id,
+                    execution.value.view.operation,
+                )?;
+                inputs.require_ready()?;
                 attempt
                     .value
                     .attribution

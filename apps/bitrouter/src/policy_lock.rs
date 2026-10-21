@@ -2656,6 +2656,11 @@ struct PolicySnapshot {
 pub(crate) struct PolicyRoutingSnapshot(Arc<PolicySnapshot>);
 
 impl PolicyRoutingSnapshot {
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn digest(&self) -> Option<&str> {
+        self.0.digest.as_deref()
+    }
+
     pub(crate) fn document(&self) -> Option<&PolicyLock> {
         self.0.document.as_ref()
     }
@@ -2983,6 +2988,14 @@ impl ModelSelector for PolicyRuntime {
         variant: Option<&str>,
         ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<()> {
+        #[cfg(feature = "multi-instance")]
+        if ctx
+            .extension::<crate::gateway::shared::admitted::SharedAdmission>()
+            .is_some()
+            && ctx.extension::<PolicyRoutingSnapshot>().is_none()
+        {
+            return Err(crate::gateway::error::BitrouterError::UpstreamUnavailable);
+        }
         let snapshot = ctx
             .extension::<PolicyRoutingSnapshot>()
             .map(|snapshot| snapshot.0.clone())
@@ -3136,7 +3149,7 @@ impl ModelSelector for PolicyRuntime {
                 router.apply_continuation_adjustment(&mut decision, adjustment)?;
             }
             let route_projection = decision.route_projection.clone();
-            let selected = router.record_bound_policy_decision(
+            let (selected, captured) = router.record_bound_policy_decision(
                 (&correlated.request_id, ctx.request_id()),
                 invocation.as_ref(),
                 input_model,
@@ -3144,6 +3157,22 @@ impl ModelSelector for PolicyRuntime {
                 decision,
                 ctx.headers(),
             );
+            #[cfg(feature = "multi-instance")]
+            if let Some(admission) =
+                ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+            {
+                let name = router
+                    .eval_policy_name()
+                    .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
+                admission.retain_policy(
+                    name,
+                    true,
+                    captured.as_ref(),
+                    &PolicyRoutingSnapshot(snapshot.clone()),
+                )?;
+            }
+            #[cfg(not(feature = "multi-instance"))]
+            drop(captured);
             if let Some(target) = selected {
                 ctx.insert_extension(Arc::new(target.context));
                 ctx.set_model(target.model());
@@ -3172,7 +3201,7 @@ impl ModelSelector for PolicyRuntime {
             router.apply_continuation_adjustment(&mut decision, adjustment)?;
         }
         let route_projection = decision.route_projection.clone();
-        let selected = router.record_bound_policy_decision(
+        let (selected, captured) = router.record_bound_policy_decision(
             (ctx.request_id(), ctx.request_id()),
             invocation.as_ref(),
             input_model,
@@ -3180,6 +3209,22 @@ impl ModelSelector for PolicyRuntime {
             decision,
             ctx.headers(),
         );
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) =
+            ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+        {
+            let name = router
+                .eval_policy_name()
+                .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
+            admission.retain_policy(
+                name,
+                false,
+                captured.as_ref(),
+                &PolicyRoutingSnapshot(snapshot.clone()),
+            )?;
+        }
+        #[cfg(not(feature = "multi-instance"))]
+        drop(captured);
         if let Some(target) = selected {
             ctx.insert_extension(Arc::new(target.context));
             ctx.set_model(target.model());

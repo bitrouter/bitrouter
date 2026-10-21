@@ -31,6 +31,12 @@ impl SharedAdmission {
         principal: Authenticated,
     ) -> anyhow::Result<Arc<Self>> {
         let custody = Custody::fixture(engine, execution.execution_id.clone())?;
+        custody.capture.initialize(super::capture::Inputs::new(
+            super::capture::Requirements::fixture(),
+            &execution.execution_id,
+            &principal.user_id,
+            execution.operation,
+        )?)?;
         Ok(Self::with_custody(custody, key_hash, execution, principal))
     }
 
@@ -55,6 +61,49 @@ impl SharedAdmission {
         self.custody.record_pipeline_outcome(successful_terminal);
     }
 
+    pub(crate) fn retain_policy(
+        &self,
+        name: &str,
+        guarded: bool,
+        decision: Option<&crate::gateway::observability::decision::PendingEvalDecision>,
+        snapshot: &crate::policy_lock::PolicyRoutingSnapshot,
+    ) -> Result<()> {
+        self.custody
+            .capture
+            .policy(name, guarded, decision, snapshot)
+            .map_err(public_error)
+    }
+
+    pub(crate) fn retain_bypass(&self, reason: super::capture::Bypass) -> Result<()> {
+        self.custody.capture.bypass(reason).map_err(public_error)
+    }
+
+    pub(crate) fn retain_routing(&self, ctx: &PipelineContext) -> Result<()> {
+        let evidence = super::capture::routing(ctx).map_err(public_error)?;
+        self.custody.capture.route(evidence).map_err(public_error)
+    }
+
+    pub(crate) fn route_ready(&self) -> Result<()> {
+        self.custody.capture.ready().map_err(public_error)
+    }
+
+    pub(super) fn inputs_for_dispatch(
+        &self,
+        ctx: &PipelineContext,
+    ) -> Result<Arc<super::capture::Inputs>> {
+        let inputs = self
+            .custody
+            .capture
+            .snapshot()
+            .ok_or(BitrouterError::UpstreamUnavailable)?;
+        inputs
+            .check_identity(ctx.request_id(), ctx.caller().user_id(), ctx.operation())
+            .map_err(public_error)?;
+        inputs.require_ready().map_err(public_error)?;
+        inputs.check_routing(ctx).map_err(public_error)?;
+        Ok(inputs)
+    }
+
     /// Required continuation activation precedes this authoritative commit;
     /// HTTP success may only become visible after it has acknowledged.
     pub(crate) async fn finish_delivery(&self, successful_terminal: bool) -> Result<()> {
@@ -73,8 +122,9 @@ impl SharedAdmission {
         if successful_terminal && !matches!(outcome, TerminalOutcome::Succeeded) {
             return Err(BitrouterError::UpstreamUnavailable);
         }
+        let inputs = self.custody.capture.terminal().map_err(public_error)?;
         self.engine
-            .finish(&self.execution_id, &outcome)
+            .finish_with_inputs(&self.execution_id, &outcome, inputs.as_deref())
             .await
             .map_err(public_error)?;
         Ok(())

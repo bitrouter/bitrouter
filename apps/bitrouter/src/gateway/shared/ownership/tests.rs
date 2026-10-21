@@ -75,6 +75,7 @@ impl Fixture {
 
     fn request(&self) -> Admission<'_> {
         Admission {
+            requirements: crate::gateway::shared::capture::Requirements::fixture(),
             key_hash: &self.key_hash,
             correlation_id: "custody-fixture",
             idempotency_key: None,
@@ -98,6 +99,7 @@ pub(in crate::gateway::shared) async fn exercise(first: &Store, second: &Store) 
     Box::pin(cancelled_finish_requeues(first, second)).await?;
     Box::pin(uncertain_admission_probe(first, second)).await?;
     Box::pin(probe_reads_after_wait(first, second)).await?;
+    Box::pin(partial_projection_survives_cancelled_finish(first, second)).await?;
     Ok(())
 }
 
@@ -118,6 +120,7 @@ async fn bounds_and_rejection(first: &Store) -> Result<()> {
     ensure!(fixture.registry.pending() == 1);
     let rejected = fixture.registry.reserve()?;
     let invalid = Admission {
+        requirements: crate::gateway::shared::capture::Requirements::fixture(),
         key_hash: &"b".repeat(64),
         ..fixture.request()
     };
@@ -315,5 +318,183 @@ async fn probe_reads_after_wait(first: &Store, second: &Store) -> Result<()> {
     );
     drop(admission);
     ensure!(fixture.registry.reconcile_one().await?);
+    Ok(())
+}
+
+/// A selected policy survives cache removal, a changed-contract duplicate and a
+/// cancelled finalization, even though no provider attempt was ever prepared.
+async fn partial_projection_survives_cancelled_finish(first: &Store, second: &Store) -> Result<()> {
+    for variant in ["cost", "unavailable"] {
+        Box::pin(partial_projection_variant(first, second, variant)).await?;
+    }
+    Ok(())
+}
+
+async fn partial_projection_variant(first: &Store, second: &Store, variant: &str) -> Result<()> {
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::observability::decision::{EvalInvocation, PendingEvalDecisionStore};
+    use crate::gateway::pipeline::{
+        context::PipelineContext, routing::ModelSelector, types::PipelineRequest,
+    };
+    use crate::gateway::shared::capture::Requirements;
+    use crate::policy_lock::{PolicyLock, PolicyRuntime, semantic_digest};
+    use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+    let fixture = Fixture::new(first, 2).await?;
+    let config = crate::config::parse(
+        "inherit_defaults: false\npresets:\n  coding:\n    model: fixture:strong\n    policy: auto\n",
+    )?;
+    let mut document: PolicyLock =
+        serde_saphyr::from_str(include_str!("../../../../policy/default.yaml"))?;
+    document.policies.insert(
+        "auto:cost".into(),
+        document
+            .policies
+            .get("auto")
+            .context("missing auto policy")?
+            .clone(),
+    );
+    let pending = PendingEvalDecisionStore::default();
+    let runtime =
+        PolicyRuntime::from_document(&config, Some(document.clone()), pending.clone(), None)?;
+    let request = Admission {
+        requirements: Requirements::from_config(&config, Some(&document))?,
+        idempotency_key: Some("original-contract"),
+        ..fixture.request()
+    };
+    let admission = match fixture.registry.reserve()?.admit(&request).await? {
+        Submission::Accepted(admission) => admission,
+        Submission::Existing(_) => anyhow::bail!("unexpected duplicate"),
+    };
+    let id = admission.execution_id.clone();
+    let mut pipeline = PipelineRequest::new(
+        "fixture",
+        CallerContext::anonymous(),
+        bitrouter_ai::types::Prompt {
+            model: "fixture:strong".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![],
+            tools: vec![],
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        },
+    );
+    admission.attach(&mut pipeline);
+    let mut context = PipelineContext::new(pipeline);
+    runtime
+        .prepare_selection("auto", Some(variant), &mut context)
+        .await?;
+    runtime
+        .select_variant("auto", Some(variant), &mut context)
+        .await?;
+    let invocation = context
+        .extension::<EvalInvocation>()
+        .context("missing policy invocation")?;
+    ensure!(
+        pending.remove(&invocation, &fixture.tenant),
+        "fixture did not select an evaluable tier"
+    );
+    let retained = {
+        let entries = lock(&fixture.registry.entries);
+        entries
+            .owned
+            .get(&id)
+            .context("missing custody")?
+            .capture
+            .snapshot()
+            .context("missing capture")?
+    };
+    let mut expected = serde_json::to_value(retained.as_ref())?;
+    ensure!(expected["policy"]["state"] == "evaluated");
+    ensure!(
+        expected["policy"]["policy"]
+            == if variant == "cost" {
+                "auto:cost"
+            } else {
+                "auto"
+            }
+    );
+    ensure!(expected["policy"]["digest"] == semantic_digest(&document)?);
+    ensure!(expected["phase"]["state"] == "preparing");
+    ensure!(expected["policy"]["treatment"]["decision"]["selected_tier"].is_string());
+
+    // The same idempotency binding returns its original authority even when a
+    // later candidate would have a different sink contract.
+    let mut replacement = config.clone();
+    replacement.trajectory.enabled = true;
+    let duplicate = Admission {
+        requirements: Requirements::from_config(&replacement, Some(&document))?,
+        ..request
+    };
+    ensure!(
+        matches!(fixture.registry.reserve()?.admit(&duplicate).await?, Submission::Existing(view) if view.execution_id == id)
+    );
+    ensure!(!fixture.registry.reconcile_one().await?);
+    ensure!(fixture.registry.reconcile_one().await?);
+    let before = second
+        .get::<Value>(Kind::Execution, &id)
+        .await?
+        .context("missing execution")?
+        .value;
+    ensure!(before["projection"]["requirements"]["trajectory"] == "disabled");
+    ensure!(before["projection"]["policy"]["state"] == "pending");
+    drop(context);
+    drop(admission);
+    drop(runtime);
+
+    let blocker = second.begin().await?;
+    let _: Stored<Value> = second.lock(&blocker, Kind::Tenant, &fixture.tenant).await?;
+    let pid: i32 = blocker
+        .query_one(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SELECT pg_backend_pid() AS pid",
+        ))
+        .await?
+        .context("missing pid")?
+        .try_get("", "pid")?;
+    let mut finishing = Box::pin(fixture.registry.reconcile_one());
+    let waiting = async {
+        loop {
+            // https://www.postgresql.org/docs/current/functions-info.html
+            let blocked: bool = second.database().query_one(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))) AS waiting", [pid.into()]
+            )).await?.context("missing blocker result")?.try_get("", "waiting")?;
+            if blocked {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    };
+    tokio::select! {
+        result = &mut finishing => anyhow::bail!("finish completed before observed wait: {result:?}"),
+        result = tokio::time::timeout(Duration::from_secs(1), waiting) => result??,
+    }
+    drop(finishing);
+    ensure!(fixture.registry.pending() == 1);
+    blocker.rollback().await?;
+    ensure!(fixture.registry.reconcile_one().await?);
+    ensure!(fixture.registry.pending() == 0);
+    expected["phase"] = serde_json::json!({"state":"terminal","route_ready":false});
+    let after = second
+        .get::<Value>(Kind::Execution, &id)
+        .await?
+        .context("missing finalized execution")?
+        .value;
+    ensure!(
+        after["projection"] == expected,
+        "cancelled finish lost or recomputed captured policy"
+    );
+    ensure!(
+        after["view"]["attempts"]
+            .as_array()
+            .is_some_and(Vec::is_empty)
+    );
+    ensure!(matches!(
+        fixture.engine.owned_execution(&id).await?.state,
+        ExecutionState::Terminal { .. }
+    ));
     Ok(())
 }

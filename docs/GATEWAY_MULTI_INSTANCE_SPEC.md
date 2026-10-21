@@ -564,6 +564,36 @@ its preparation record. Older staged rows lacking attribution cannot authorize a
 new dispatch, and absent required terminal facts cannot be projected by inventing
 current pricing or a zero measurement.
 
+Execution admission also retains a private versioned projection contract from
+the original published configuration and embedded policy lock. Metering is
+mandatory. Trajectory-enabled guarded policies require trajectory settlement
+and built-in evaluation when bound; a selected untracked policy requires a
+request evaluation subject, not a fabricated result. These obligations do not
+depend on whether the accepting or recovering binary has Core compiled in.
+Missing historical contracts remain explicitly missing.
+
+The existing custody registry retains bounded policy and routing evidence
+directly from the frozen selector and actual receipt emission points. Pending,
+explicit unbound/Decisions/fixed-native bypass, and policy selection without a
+tier are distinct states. A cache miss cannot prove a bypass. Preparing evidence
+may advance while preserving all observed facts; route-ready evidence is
+immutable across attempts. Preparation persists it in the same transaction as
+attempt reservation, and dispatch revalidates its identity. Normal finalization
+and quiescent custody recovery seal the same captured partial or ready state in
+the execution terminal transaction. A process crash before preparation can still
+leave only the original contract and incomplete evidence; memory retention is
+not crash durability.
+
+The serialized execution input budget is 64 KiB, with 128 bytes reserved before
+terminal sealing. Escaped JSON bytes count, and required evidence is rejected
+rather than truncated. Captures exclude prompts, provider bodies, credentials
+and the process-local evaluation invocation token. No separate task registry or
+background writer is introduced. This pre-dispatch handoff does not yet capture
+optional terminal response classifications, switch settlement writers, establish
+rotation-safe trajectory binding, or implement a projection receiver. A guarded
+start must eventually persist its mandatory decision in the same binding/guard
+transaction; a later route hook cannot repair that atomicity gap.
+
 Shared metering uses a separate `gateway_shared_metering_requests` table, with
 `(namespace, execution_id)` as its primary key and namespace-scoped unique event
 and canonical-request identities. Local metering rows and migrations are unchanged.

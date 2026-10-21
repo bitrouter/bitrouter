@@ -106,6 +106,10 @@ impl Resource {
         let id = self.id;
         let mut build = self.build.lock().unwrap_or_else(|error| error.into_inner());
         *build = Build::Running(runtime.spawn(async move {
+            let requirements = crate::gateway::shared::capture::Requirements::from_config(
+                &input.config,
+                input.policy_lock.as_ref(),
+            )?;
             let continuation = registration.open().await?;
             let inputs = SharedAssembly {
                 continuation,
@@ -121,7 +125,7 @@ impl Resource {
                 .language_model()
                 .and_then(|pipeline| pipeline.owned_tasks())
                 .cloned();
-            let snapshot = match Snapshot::assemble(revision, &assembled.app, id) {
+            let snapshot = match Snapshot::assemble(revision, &assembled.app, id, requirements) {
                 Ok(snapshot) => Some(snapshot),
                 Err(_) => {
                     tracing::error!("Shared candidate could not bind its serving snapshot");

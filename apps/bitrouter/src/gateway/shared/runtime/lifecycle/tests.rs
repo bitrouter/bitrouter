@@ -257,6 +257,7 @@ async fn maintenance_stop_does_not_wait_for_an_exhausted_main_pool() -> Result<(
             let (snapshot, reservation, source) =
                 fixture.lifecycle.generations.serving().acquire_request()?;
             let request = crate::gateway::shared::engine::Admission {
+                requirements: crate::gateway::shared::capture::Requirements::fixture(),
                 key_hash: &digest,
                 correlation_id: "maintenance-fixture",
                 idempotency_key: None,

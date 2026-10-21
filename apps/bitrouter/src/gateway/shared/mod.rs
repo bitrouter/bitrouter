@@ -4,6 +4,7 @@ pub(crate) mod admitted;
 mod authentication;
 mod authority;
 pub(crate) mod bootstrap;
+pub(crate) mod capture;
 pub(crate) mod continuation;
 pub(crate) mod credentials;
 mod crypto;

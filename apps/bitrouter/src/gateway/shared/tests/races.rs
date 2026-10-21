@@ -200,6 +200,7 @@ async fn submit(
 ) -> Result<AdmissionResult> {
     engine
         .admit(&Admission {
+            requirements: crate::gateway::shared::capture::Requirements::fixture(),
             key_hash: &principal.hash,
             correlation_id: "fixture-correlation",
             idempotency_key: key,

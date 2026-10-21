@@ -187,7 +187,9 @@ pub(super) async fn exercise(fixture: &Fixture, second: &Store, tenant: &str) ->
 }
 
 async fn pipeline_failure_before_delivery(fixture: &Fixture, streamed: bool) -> Result<()> {
-    let (admission, ctx, mut prompt) = fixture.context().await?;
+    let (admission, ctx, prompt) = fixture
+        .operation_context_with_stream(bitrouter_ai::types::ModelOperation::Generation, streamed)
+        .await?;
     let id = ctx.request_id().to_owned();
     fixture
         .executor
@@ -211,7 +213,6 @@ async fn pipeline_failure_before_delivery(fixture: &Fixture, streamed: bool) -> 
             sea_orm::DatabaseConnection::Disconnected,
         ));
     let pipeline = Arc::new(builder.build()?);
-    prompt.stream = streamed;
     let mut request = PipelineRequest::new("fixture", CallerContext::anonymous(), prompt);
     request.headers = ctx.headers().clone();
     admission.attach(&mut request);
@@ -375,6 +376,15 @@ async fn failed_result_remains_failed(
         );
     }
     let before = fixture.engine.owned_execution(ctx.request_id()).await?;
+    let retained = second
+        .get::<serde_json::Value>(Kind::Execution, ctx.request_id())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("missing execution capture"))?;
+    ensure!(
+        retained.value["projection"]
+            == serde_json::to_value(admission.inputs_for_dispatch(&ctx)?.as_ref())?,
+        "fallback replaced original projection inputs"
+    );
     let Some(AttemptState::Terminal { result }) =
         before.attempts.last().map(|attempt| &attempt.state)
     else {

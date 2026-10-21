@@ -40,6 +40,7 @@ use super::ownership::{Generation, Registry, Reservation, Submission};
 pub(super) struct Snapshot {
     pub revision: Revision,
     pub owner: Generation,
+    requirements: super::capture::Requirements,
     tasks: Arc<OwnedTasks>,
     state: AppState,
 }
@@ -47,18 +48,25 @@ pub(super) struct Snapshot {
 impl Snapshot {
     #[cfg(test)]
     pub fn new(revision: Revision, app: Arc<App>) -> anyhow::Result<Arc<Self>> {
-        Self::assemble(revision, &app, Generation::new())
+        Self::assemble(
+            revision,
+            &app,
+            Generation::new(),
+            super::capture::Requirements::fixture(),
+        )
     }
 
     pub(super) fn assemble(
         revision: Revision,
         app: &App,
         owner: Generation,
+        requirements: super::capture::Requirements,
     ) -> anyhow::Result<Arc<Self>> {
         ensure!(
             revision.config_generation > 0 && revision.key_generation > 0 && !app.skip_auth(),
             "invalid shared serving snapshot"
         );
+        requirements.validate()?;
         let pipeline = app
             .language_model()
             .ok_or_else(|| anyhow::anyhow!("shared application has no model pipeline"))?
@@ -71,6 +79,7 @@ impl Snapshot {
         Ok(Arc::new(Self {
             revision,
             owner,
+            requirements,
             state: AppState {
                 language_model: pipeline,
                 mcp: None,
@@ -318,6 +327,7 @@ async fn infer(state: Arc<Serving>, mut request: Request, inbound: ApiProtocol) 
     };
     let admitted = reservation
         .admit(&Admission {
+            requirements: snapshot.requirements.clone(),
             key_hash: &key_hash,
             correlation_id: &correlation,
             idempotency_key: idempotency.as_deref(),

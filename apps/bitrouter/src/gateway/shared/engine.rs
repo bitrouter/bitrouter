@@ -121,6 +121,8 @@ struct Execution {
     tenant_revision: u64,
     owner: String,
     trajectory: Option<TrajectoryBinding>,
+    #[serde(default)]
+    projection: Option<Box<super::capture::Inputs>>,
     view: GatewayExecution,
 }
 
@@ -169,6 +171,7 @@ struct Idempotency {
 
 /// Raw credentials and request content never enter durable admission records.
 pub(super) struct Admission<'a> {
+    pub requirements: super::capture::Requirements,
     pub key_hash: &'a str,
     pub correlation_id: &'a str,
     pub idempotency_key: Option<&'a str>,

@@ -30,6 +30,7 @@ pub(super) struct Custody {
     pub(super) engine: Engine,
     pub(super) execution_id: String,
     pub(super) dispatch: Arc<Tracker>,
+    pub(super) capture: super::capture::Capture,
     generation: Generation,
     phase: Mutex<AdmissionPhase>,
     pipeline_failed: Mutex<bool>,
@@ -72,6 +73,12 @@ impl Reservation {
         {
             Ok(AdmissionResult::Accepted(execution, principal)) => {
                 *lock(&self.0.phase) = AdmissionPhase::Accepted;
+                self.0.capture.initialize(super::capture::Inputs::new(
+                    request.requirements.clone(),
+                    &execution.execution_id,
+                    &principal.user_id,
+                    execution.operation,
+                )?)?;
                 Ok(Submission::Accepted(SharedAdmission::with_custody(
                     self.0,
                     request.key_hash.to_owned(),
@@ -131,6 +138,7 @@ impl Registry {
             engine: self.engine.clone(),
             execution_id: uuid::Uuid::new_v4().to_string(),
             dispatch: Arc::new(Tracker::default()),
+            capture: super::capture::Capture::default(),
             generation,
             phase: Mutex::new(AdmissionPhase::NotStarted),
             pipeline_failed: Mutex::new(false),
@@ -302,7 +310,10 @@ impl Custody {
                 // tracker has cleared. A failed locked transition retains this
                 // entry; a stale read never proves that capacity was released.
                 let outcome = self.terminal_outcome(&execution);
-                self.engine.finish(&self.execution_id, &outcome).await?;
+                let inputs = self.capture.terminal()?;
+                self.engine
+                    .finish_with_inputs(&self.execution_id, &outcome, inputs.as_deref())
+                    .await?;
                 Ok(())
             }
         }
@@ -315,6 +326,7 @@ impl Custody {
             engine,
             execution_id,
             dispatch: Arc::new(Tracker::default()),
+            capture: super::capture::Capture::default(),
             generation: Generation::new(),
             phase: Mutex::new(AdmissionPhase::Accepted),
             pipeline_failed: Mutex::new(false),

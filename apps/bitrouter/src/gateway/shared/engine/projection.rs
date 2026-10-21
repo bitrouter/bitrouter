@@ -8,6 +8,24 @@ use crate::gateway::shared::store::{Kind, Stored};
 use crate::metering::shared::record::{AttemptEvidence, Record};
 
 impl Engine {
+    #[cfg(test)]
+    pub async fn fixture_projection_inputs(
+        &self,
+        id: &str,
+    ) -> Result<crate::gateway::shared::capture::Inputs> {
+        let execution: Stored<Execution> = self
+            .store()
+            .get(Kind::Execution, id)
+            .await?
+            .context("fixture execution is missing")?;
+        let mut inputs = *execution
+            .value
+            .projection
+            .context("fixture projection is missing")?;
+        inputs.fixture_ready()?;
+        Ok(inputs)
+    }
+
     /// No new row locks: finalization locks execution before the episode fence.
     /// A receiver already holding that fence must not reverse this order. Reads
     /// use the enclosing serializable snapshot; only committed terminal facts

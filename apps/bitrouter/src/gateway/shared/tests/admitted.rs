@@ -60,6 +60,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         .await?;
     let (execution, principal) = match engine
         .admit(&Admission {
+            requirements: crate::gateway::shared::capture::Requirements::fixture(),
             key_hash: &key.hash,
             correlation_id: "caller-supplied-id",
             idempotency_key: None,

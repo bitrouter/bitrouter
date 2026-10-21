@@ -139,6 +139,7 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
     b.set_tenant(&other_tenant, None, &limits).await?;
     let fingerprint = "a".repeat(64);
     let submission = Admission {
+        requirements: crate::gateway::shared::capture::Requirements::fixture(),
         key_hash: &key_hash,
         correlation_id: "caller-correlation",
         idempotency_key: Some("same-key"),
@@ -170,6 +171,7 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
     ));
     let conflict_hash = "b".repeat(64);
     let conflict = Admission {
+        requirements: submission.requirements.clone(),
         fingerprint: &conflict_hash,
         ..submission
     };
@@ -181,6 +183,7 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
         Some(Rejection::IdempotencyConflict)
     ));
     let fresh = Admission {
+        requirements: submission.requirements.clone(),
         idempotency_key: None,
         ..submission
     };
@@ -232,6 +235,7 @@ async fn shared_admission(first: &Store, second: &Store) -> Result<()> {
     a.heartbeat().await?;
     a.drain().await?;
     let other = Admission {
+        requirements: crate::gateway::shared::capture::Requirements::fixture(),
         key_hash: &other_hash,
         ..fresh
     };
@@ -463,6 +467,7 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
     for _ in 0..4 {
         match owner
             .admit(&Admission {
+                requirements: crate::gateway::shared::capture::Requirements::fixture(),
                 key_hash: &key_hash,
                 correlation_id: "same-external-id",
                 idempotency_key: None,
@@ -626,6 +631,7 @@ async fn shared_recovery(first: &Store, second: &Store) -> Result<()> {
     // provider usage. A stale revision or late provider result cannot overwrite it.
     let operator_execution = match reconciler
         .admit(&Admission {
+            requirements: crate::gateway::shared::capture::Requirements::fixture(),
             key_hash: &key_hash,
             correlation_id: "operator-case",
             idempotency_key: None,
