@@ -46,7 +46,11 @@ async fn initialize_selected(store: &super::store::Store, ordinary: bool) -> any
 #[async_trait::async_trait]
 impl MigratorTrait for SharedMigrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(Initial), Box::new(NativeContinuations)]
+        vec![
+            Box::new(Initial),
+            Box::new(NativeContinuations),
+            Box::new(SharedMetering),
+        ]
     }
 
     fn migration_table_name() -> DynIden {
@@ -179,6 +183,73 @@ impl MigrationTrait for NativeContinuations {
         manager
             .get_connection()
             .execute_unprepared("DROP TABLE gateway_shared_native_continuations")
+            .await?;
+        Ok(())
+    }
+}
+
+struct SharedMetering;
+
+impl MigrationName for SharedMetering {
+    fn name(&self) -> &str {
+        "m20261021_000003_shared_metering"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for SharedMetering {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // One terminal execution is the immutable replay unit. Scoped unique
+        // keys also reject reusing an event or canonical request across owners.
+        // https://www.postgresql.org/docs/current/ddl-constraints.html
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "CREATE TABLE gateway_shared_metering_requests (
+                namespace varchar(64) NOT NULL,
+                execution_id varchar(256) NOT NULL,
+                tenant_id varchar(256) NOT NULL,
+                principal_id varchar(256) NOT NULL,
+                request_id varchar(256),
+                event_id varchar(256) NOT NULL,
+                source_revision bigint NOT NULL CHECK (source_revision > 0),
+                source_digest varchar(64) NOT NULL,
+                accepted_at_ms bigint NOT NULL CHECK (accepted_at_ms >= 0),
+                terminal_at_ms bigint NOT NULL CHECK (terminal_at_ms >= accepted_at_ms),
+                known_subtotal_micro_usd numeric(20,0) NOT NULL
+                    CHECK (known_subtotal_micro_usd BETWEEN 0 AND 18446744073709551615),
+                complete_total_micro_usd numeric(20,0)
+                    CHECK (complete_total_micro_usd BETWEEN 0 AND 18446744073709551615),
+                known_attempts integer NOT NULL CHECK (known_attempts >= 0),
+                unknown_attempts integer NOT NULL CHECK (unknown_attempts >= 0),
+                not_dispatched_attempts integer NOT NULL CHECK (not_dispatched_attempts >= 0),
+                payload text NOT NULL CHECK (octet_length(payload) <= 6701056),
+                PRIMARY KEY (namespace, execution_id),
+                UNIQUE (namespace, event_id),
+                UNIQUE (namespace, request_id),
+                CHECK (known_attempts + unknown_attempts + not_dispatched_attempts <= 32),
+                CHECK ((known_attempts = 0 AND known_subtotal_micro_usd = 0) OR known_attempts > 0),
+                CHECK ((unknown_attempts = 0 AND known_attempts > 0
+                        AND complete_total_micro_usd IS NOT NULL
+                        AND complete_total_micro_usd = known_subtotal_micro_usd)
+                    OR ((unknown_attempts > 0 OR known_attempts = 0)
+                        AND complete_total_micro_usd IS NULL))
+             );
+             CREATE INDEX gateway_shared_metering_tenant_time
+                 ON gateway_shared_metering_requests
+                 (namespace, tenant_id, accepted_at_ms, execution_id);
+             CREATE INDEX gateway_shared_metering_principal_time
+                 ON gateway_shared_metering_requests
+                 (namespace, tenant_id, principal_id, accepted_at_ms, execution_id);",
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared("DROP TABLE gateway_shared_metering_requests")
             .await?;
         Ok(())
     }

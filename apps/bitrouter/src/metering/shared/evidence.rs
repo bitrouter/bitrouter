@@ -10,15 +10,15 @@ use crate::metering::pricing::{ChargeEvidence, PricingSource, unavailable_charge
 use crate::metering::tariff::FrozenTariff;
 
 const FORMAT: u8 = 1;
-const MAX_ATTRIBUTION_BYTES: usize = 64 * 1024;
+pub(super) const MAX_ATTRIBUTION_BYTES: usize = 64 * 1024;
 // Terminal charge evidence repeats the admitted tariff plus its pricing version
 // and optional unavailable reason. Those strings together fit within the original
 // attribution bound; the remaining enum/numeric envelope fits in 4 KiB.
-const MAX_TERMINAL_BYTES: usize = 2 * MAX_ATTRIBUTION_BYTES + 4096;
+pub(super) const MAX_TERMINAL_BYTES: usize = 2 * MAX_ATTRIBUTION_BYTES + 4096;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::gateway::shared) struct Attribution {
+pub(crate) struct Attribution {
     format: u8,
     pub provider_id: String,
     pub model_id: String,
@@ -134,7 +134,7 @@ impl Attribution {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::gateway::shared) struct TerminalFacts {
+pub(crate) struct TerminalFacts {
     format: u8,
     pub charge: ChargeEvidence,
     /// Monotonic time from attempt construction through the first observation.
@@ -143,7 +143,7 @@ pub(in crate::gateway::shared) struct TerminalFacts {
 }
 
 #[derive(Clone)]
-pub(in crate::gateway::shared) struct ObservedTerminal {
+pub(crate) struct ObservedTerminal {
     pub observation: TerminalObservation,
     pub facts: TerminalFacts,
 }
@@ -243,6 +243,54 @@ impl ObservedTerminal {
         );
         Ok(())
     }
+}
+
+/// Checked field-wise aggregation shared by finalization and durable projections.
+pub(crate) fn aggregate_usage(observations: &[&ExecutionUsage]) -> Result<ExecutionUsage> {
+    let origin = observations
+        .first()
+        .map(|usage| usage.origin)
+        .filter(|origin| observations.iter().all(|usage| usage.origin == *origin))
+        .unwrap_or(UsageOrigin::Unknown);
+    let sum = |field: fn(&ExecutionUsage) -> Option<u64>| -> Result<Option<u64>> {
+        if observations.is_empty() {
+            return Ok(None);
+        }
+        let mut total = 0_u64;
+        for usage in observations {
+            let Some(value) = field(usage) else {
+                return Ok(None);
+            };
+            total = total
+                .checked_add(value)
+                .context("execution usage overflow")?;
+        }
+        Ok(Some(total))
+    };
+    Ok(ExecutionUsage {
+        origin,
+        prompt_tokens: sum(|usage| usage.prompt_tokens)?,
+        completion_tokens: sum(|usage| usage.completion_tokens)?,
+        reasoning_tokens: sum(|usage| usage.reasoning_tokens)?,
+        cache_read_tokens: sum(|usage| usage.cache_read_tokens)?,
+        cache_write_tokens: sum(|usage| usage.cache_write_tokens)?,
+        total_tokens: sum(|usage| usage.total_tokens)?,
+        cost_micro_usd: sum(|usage| usage.cost_micro_usd)?,
+    })
+}
+
+pub(crate) fn validate_outcome(outcome: &TerminalOutcome) -> Result<()> {
+    if let TerminalOutcome::Failed { code } = outcome {
+        ensure!(
+            !code.is_empty()
+                && code.len() <= 64
+                && code
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
+            "invalid execution terminal code"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

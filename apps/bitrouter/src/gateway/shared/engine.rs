@@ -2,17 +2,18 @@
 
 mod admission;
 mod attempts;
-pub(super) mod evidence;
 mod finalization;
 mod lease;
 pub(super) mod management;
 mod outbox;
+mod projection;
 mod recovery;
 pub(super) mod resolution;
 
 use std::collections::BTreeSet;
 
 use super::credentials::CredentialStamp;
+use crate::metering::shared::evidence;
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::gateway::execution::{GatewayAttempt, GatewayExecution, GatewayTerminalEvent};
 use bitrouter_ai::types::ModelOperation;

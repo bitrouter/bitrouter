@@ -564,6 +564,31 @@ its preparation record. Older staged rows lacking attribution cannot authorize a
 new dispatch, and absent required terminal facts cannot be projected by inventing
 current pricing or a zero measurement.
 
+Shared metering uses a separate `gateway_shared_metering_requests` table, with
+`(namespace, execution_id)` as its primary key and namespace-scoped unique event
+and canonical-request identities. Local metering rows and migrations are unchanged.
+One immutable execution record carries an ordered, typed list of at most 32
+attempts; original attempt IDs and execution membership are validated. Its byte
+budget is 32 attribution/terminal/public-attempt envelopes plus a bounded execution
+header (6,701,056 bytes). Original admission/terminal database times, principal,
+event/revision and a namespace-framed evidence digest are retained. Insertion uses
+the caller's transaction; exact replay verifies existing content and summary
+columns instead of overwriting a prior projection. The row's existence proves
+only its metering application, not trajectory/evaluation completion.
+
+The accounting fold adds frozen per-attempt amounts with checked arithmetic and
+preserves independently optional usage fields. It reports the known subtotal and
+unknown-attempt coverage; a complete execution total requires every applicable
+attempt's cost. An empty attempt list and real NotDispatched attempts do not
+invent a model, usage observation or zero-priced receipt. Both operator resolution
+outcomes remain monetary unknowns while retaining earlier known subtotals. Shared
+spend queries filter namespace, tenant, optional principal and a half-open admission
+window before aggregation. They describe already projected executions; a future
+budget guard must additionally establish that pending/missing projections cannot
+hide spend. Native request lookup must use the stored canonical binding, never
+caller correlation. The scoped storage adapter does not itself switch serving
+assembly or implement the full projection receiver.
+
 An explicitly authorized operator can resolve an unknown attempt with a bounded
 evidence reference and expected revision. The audit records the operator's
 assertion as such; it does not masquerade as a provider observation. Resolution

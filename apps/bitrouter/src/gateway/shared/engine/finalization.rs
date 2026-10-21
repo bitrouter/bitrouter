@@ -5,9 +5,10 @@ use bitrouter_ai::gateway::execution::{
     AttemptState, ExecutionState, ExecutionUsage, GatewayExecution, GatewayTerminalEvent,
     TerminalObservation, TerminalOutcome,
 };
-use bitrouter_ai::types::UsageOrigin;
 use sea_orm::DatabaseTransaction;
 use sha2::{Digest, Sha256};
+
+use crate::metering::shared::evidence::validate_outcome;
 
 use super::{
     Attempt, Engine, EpisodeFence, Execution, Outbox, Rejection, Resource, Tenant,
@@ -311,50 +312,7 @@ fn aggregate_usage(execution: &Execution) -> Result<ExecutionUsage> {
             _ => None,
         })
         .collect();
-    let origin = observations
-        .first()
-        .map(|usage| usage.origin)
-        .filter(|origin| observations.iter().all(|usage| usage.origin == *origin))
-        .unwrap_or(UsageOrigin::Unknown);
-    let sum = |field: fn(&ExecutionUsage) -> Option<u64>| -> Result<Option<u64>> {
-        if observations.is_empty() {
-            return Ok(None);
-        }
-        let mut total = 0_u64;
-        for usage in &observations {
-            let Some(value) = field(usage) else {
-                return Ok(None);
-            };
-            total = total
-                .checked_add(value)
-                .context("execution usage overflow")?;
-        }
-        Ok(Some(total))
-    };
-    Ok(ExecutionUsage {
-        origin,
-        prompt_tokens: sum(|usage| usage.prompt_tokens)?,
-        completion_tokens: sum(|usage| usage.completion_tokens)?,
-        reasoning_tokens: sum(|usage| usage.reasoning_tokens)?,
-        cache_read_tokens: sum(|usage| usage.cache_read_tokens)?,
-        cache_write_tokens: sum(|usage| usage.cache_write_tokens)?,
-        total_tokens: sum(|usage| usage.total_tokens)?,
-        cost_micro_usd: sum(|usage| usage.cost_micro_usd)?,
-    })
-}
-
-pub(super) fn validate_outcome(outcome: &TerminalOutcome) -> Result<()> {
-    if let TerminalOutcome::Failed { code } = outcome {
-        ensure!(
-            !code.is_empty()
-                && code.len() <= 64
-                && code
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_'),
-            "invalid execution terminal code"
-        );
-    }
-    Ok(())
+    crate::metering::shared::evidence::aggregate_usage(&observations)
 }
 
 pub(super) async fn install_projection_fence(

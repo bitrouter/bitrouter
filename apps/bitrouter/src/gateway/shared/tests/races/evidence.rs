@@ -5,8 +5,8 @@ use bitrouter_ai::gateway::execution::TerminalOutcome;
 use bitrouter_ai::types::{Usage, UsageOrigin};
 
 use super::{Fixture, accepted, row};
-use crate::gateway::shared::engine::evidence::{Attribution, ObservedTerminal};
 use crate::gateway::shared::store::{Kind, Store};
+use crate::metering::shared::evidence::{Attribution, ObservedTerminal};
 use crate::metering::{pricing::ModelPricing, tariff::FrozenTariff};
 
 pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
@@ -111,6 +111,15 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     let outbox = row(second, Kind::Outbox, &format!("gateway-terminal-{id}")).await?;
     ensure!(outbox["event"]["execution"]["state"]["result"]["usage"]["cost_micro_usd"] == 19);
     ensure!(!serde_json::to_string(&outbox)?.contains("original-provider"));
+    let tx = second.begin().await?;
+    let projected = fixture
+        .b
+        .metering_record_in(&tx, &format!("gateway-terminal-{id}"))
+        .await?;
+    ensure!(projected.accounting()?.known_subtotal_micro_usd == 19);
+    let metering = crate::metering::shared::SharedMetering::new(second.namespace())?;
+    ensure!(metering.apply_in(&tx, &projected).await?);
+    tx.commit().await?;
     let boundary = Attribution::boundary_fixture()?;
     let id = accepted(&fixture.a, &fixture.first, fixture.revision).await?;
     let attempt = fixture

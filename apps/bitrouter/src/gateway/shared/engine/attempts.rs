@@ -6,12 +6,12 @@ use bitrouter_ai::gateway::execution::{
 };
 use sea_orm::DatabaseTransaction;
 
-use super::evidence::{Attribution, ObservedTerminal, TerminalFacts};
 use super::{Attempt, Engine, Execution, Rejection, Resource, Tenant, admission::authenticate};
 use crate::gateway::shared::credentials::{CredentialStamp, Credentials};
 use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
+use crate::metering::shared::evidence::{Attribution, ObservedTerminal, TerminalFacts};
 
-const MAX_ATTEMPTS: usize = 32;
+use crate::metering::shared::MAX_ATTEMPTS;
 
 impl Engine {
     /// Called only after the request's sending future is gone. A lost prepare
@@ -281,7 +281,7 @@ impl Engine {
         attempt_id: &str,
         observation: &TerminalObservation,
     ) -> Result<()> {
-        super::finalization::validate_outcome(&observation.outcome)?;
+        crate::metering::shared::evidence::validate_outcome(&observation.outcome)?;
         self.conclude_attempt(execution_id, attempt_id, Some(observation), None)
             .await
     }
@@ -292,7 +292,7 @@ impl Engine {
         attempt_id: &str,
         evidence: &ObservedTerminal,
     ) -> Result<()> {
-        super::finalization::validate_outcome(&evidence.observation.outcome)?;
+        crate::metering::shared::evidence::validate_outcome(&evidence.observation.outcome)?;
         self.conclude_attempt(
             execution_id,
             attempt_id,

@@ -9,15 +9,13 @@ use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::{
     context::PipelineContext, stream::PricingTargetKey, types::RoutingTarget,
 };
+use crate::metering::shared::evidence::{Attribution, ObservedTerminal};
 use crate::metering::tariff::TargetTariffSnapshot;
 
 use super::{
     admitted::{SharedAdmission, public_error},
     credentials::CredentialStamp,
-    engine::{
-        Engine,
-        evidence::{Attribution, ObservedTerminal},
-    },
+    engine::Engine,
 };
 
 #[derive(Default)]
