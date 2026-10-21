@@ -3314,26 +3314,46 @@ fn messages_stream_error_preserves_provider_status() -> crate::gateway::model::e
 #[test]
 fn responses_stream_error_preserves_provider_status() -> crate::gateway::model::error::Result<()> {
     // Responses `response.failed` likewise — `error.type` decides
-    // `Upstream.status` so the fallback policy can tell "client did
+    // `Provider.status` so the fallback policy can tell "client did
     // something wrong" (4xx, don't retry) from "upstream broke" (5xx).
     let adapter = adapter_for(ApiProtocol::Responses)?;
     let mut decoder = adapter.stream_decoder();
-    let err = decoder
-        .decode(&SseEvent {
-            event: Some("response.failed".to_string()),
-            data: serde_json::json!({
-                "type": "response.failed",
-                "response": { "error": { "type": "invalid_request_error", "message": "nope" } }
-            })
-            .to_string(),
+    let result = decoder.decode(&SseEvent {
+        event: Some("response.failed".to_string()),
+        data: serde_json::json!({
+            "type": "response.failed",
+            "response": {
+                "id": "resp_error_status",
+                "status": "failed",
+                "error": { "type": "invalid_request_error", "message": "nope" }
+            }
         })
-        .unwrap_err();
-    match err {
-        crate::gateway::model::error::ModelError::Provider { status, .. } => {
-            assert_eq!(status, 400, "invalid_request_error → 400");
-        }
-        other => panic!("expected Upstream, got {other:?}"),
-    }
+        .to_string(),
+    });
+    assert!(
+        matches!(
+            &result,
+            Err(crate::gateway::model::error::ModelError::Provider { status: 400, .. })
+        ),
+        "expected provider status 400, got {result:?}"
+    );
+
+    // Error text alone does not establish a terminal provider response.
+    let malformed = adapter.stream_decoder().decode(&SseEvent {
+        event: Some("response.failed".into()),
+        data: serde_json::json!({
+            "type": "response.failed",
+            "response": { "error": { "type": "invalid_request_error", "message": "nope" } }
+        })
+        .to_string(),
+    });
+    assert!(
+        matches!(
+            &malformed,
+            Err(crate::gateway::model::error::ModelError::InvalidResponse { .. })
+        ),
+        "malformed failure must not establish a provider terminal: {malformed:?}"
+    );
     Ok(())
 }
 

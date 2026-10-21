@@ -10,8 +10,8 @@ tokio::task_local! {
     static CURRENT: Observation;
 }
 
-/// One authentication call. A transaction captures this handle at acquisition,
-/// before OAuth moves its refresh/commit into an independently owned task.
+/// One authentication call. A transaction retains this handle from acquisition
+/// through successful release, including across awaits and cancellation.
 #[derive(Clone, Default)]
 pub(crate) struct Observation(Arc<Mutex<Option<Result<CredentialStamp, StoreError>>>>);
 

@@ -1,5 +1,8 @@
 //! Runtime orchestration against a real shared database and retained sockets.
 
+#[path = "tests/oauth.rs"]
+mod oauth;
+
 use super::*;
 use anyhow::Context as _;
 use axum::body::Body;

@@ -87,7 +87,7 @@ pub(super) fn build(
                         registration.auth.client_id,
                     )
                 };
-                let session = OAuthSession::new(
+                let session = OAuthSession::new_inline(
                     store,
                     Arc::new(RefreshGrant::new(client.clone(), endpoint, client_id)),
                     REFRESH_WINDOW,

@@ -1,5 +1,8 @@
 //! Controlled provider work survives HTTP disconnect until explicitly ended.
 
+#[path = "provider/slow_reader.rs"]
+mod slow_reader;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

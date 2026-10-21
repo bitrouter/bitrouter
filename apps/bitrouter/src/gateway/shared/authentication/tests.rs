@@ -260,8 +260,8 @@ struct Refresh;
 #[async_trait]
 impl OAuthRefresher for Refresh {
     async fn refresh(&self, _: &OAuthToken) -> Result<OAuthToken> {
-        // Yield in the independently owned OAuth task; task locals do not follow
-        // tokio::spawn, while the acquired transaction's observation does.
+        // Yield inside the request-owned refresh. The acquired transaction
+        // must still record only the committed replacement's observation.
         tokio::task::yield_now().await;
         Ok(OAuthToken {
             access_token: "fresh-access".into(),
@@ -297,7 +297,7 @@ async fn oauth_capture(
     let applier = SharedApplier {
         mechanism: "claude-code".into(),
         inner: Arc::new(providers::claude_code::ClaudeCodeAuthApplier::new(
-            OAuthSession::new(store, Arc::new(Refresh), Duration::from_secs(30)),
+            OAuthSession::new_inline(store, Arc::new(Refresh), Duration::from_secs(30)),
         )),
     };
     let applied = applier

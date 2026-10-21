@@ -100,12 +100,12 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         entered: Notify::new(),
         release: Notify::new(),
     });
-    let session_a = OAuthSession::new(
+    let session_a = OAuthSession::new_inline(
         Arc::new(a.clone()),
         refresh.clone(),
         Duration::from_secs(30),
     );
-    let session_b = OAuthSession::new(
+    let session_b = OAuthSession::new_inline(
         Arc::new(b.clone()),
         refresh.clone(),
         Duration::from_secs(30),
@@ -200,7 +200,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     )
     .await?;
     let failed = Arc::new(FailedRefresh(AtomicUsize::new(0)));
-    let session = OAuthSession::new(Arc::new(a), failed.clone(), Duration::from_secs(30));
+    let session = OAuthSession::new_inline(Arc::new(a), failed.clone(), Duration::from_secs(30));
     ensure!(session.resolve(&key).await.is_err());
     expire(first, &stamp.id).await?;
     ensure!(session.resolve(&key).await.is_err());

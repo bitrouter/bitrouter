@@ -171,14 +171,17 @@ pub trait OAuthRefresher: Send + Sync {
 
 /// Account-scoped OAuth resolution using the injected store's transactions.
 ///
-/// After acquiring a lease, an owned Tokio task completes token exchange and
-/// persistence even if the caller drops its future. This guarantee requires a
-/// running Tokio runtime; process/runtime shutdown can still interrupt I/O.
+/// Sessions created by [`Self::new`] complete token exchange and persistence in
+/// a separate Tokio task even if the caller drops its future. This requires a
+/// running runtime. The internal shared variant instead keeps all refresh work
+/// inline under the request owner and relies on durable uncertainty fencing.
 #[derive(Clone)]
 pub struct OAuthSession {
     store: Arc<dyn CredentialStore>,
     refresher: Arc<dyn OAuthRefresher>,
     refresh_window: Duration,
+    #[cfg(feature = "multi-instance")]
+    inline: bool,
 }
 
 impl OAuthSession {
@@ -192,6 +195,22 @@ impl OAuthSession {
             store,
             refresher,
             refresh_window,
+            #[cfg(feature = "multi-instance")]
+            inline: false,
+        }
+    }
+
+    /// Keep refresh, commit and release within the shared request's owned future.
+    /// Its store must durably fence a started or uncertain refresh when dropped.
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn new_inline(
+        store: Arc<dyn CredentialStore>,
+        refresher: Arc<dyn OAuthRefresher>,
+        refresh_window: Duration,
+    ) -> Self {
+        Self {
+            inline: true,
+            ..Self::new(store, refresher, refresh_window)
         }
     }
 
@@ -229,9 +248,7 @@ impl OAuthSession {
     ) -> Result<OAuthToken> {
         let mut transaction = self.store.begin(key).await.map_err(store_error)?;
         let session = self.clone();
-        // Acquiring the lease is cancellable. Once admitted, the owned task is
-        // independent of a dropped caller, including during commit.
-        tokio::spawn(async move {
+        let operation = async move {
             let result = session
                 .run_leased(transaction.as_mut(), rejected_access, fallback)
                 .await;
@@ -243,9 +260,17 @@ impl OAuthSession {
                 }
                 Err(error) => Err(error),
             }
-        })
-        .await
-        .map_err(|_| ModelError::configuration("credential refresh task could not complete"))?
+        };
+        #[cfg(feature = "multi-instance")]
+        if self.inline {
+            // Dropping the request destroys the refresh future and transaction.
+            // A shared store's started fence remains durable; Drop does no I/O.
+            return operation.await;
+        }
+        // Preserve local completion after a caller drops its future.
+        tokio::spawn(operation)
+            .await
+            .map_err(|_| ModelError::configuration("credential refresh task could not complete"))?
     }
 
     async fn run_leased(

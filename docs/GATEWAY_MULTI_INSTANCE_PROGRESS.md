@@ -1714,3 +1714,33 @@ multi-process acceptance are still required.
   explicitly alongside process tests in final local and Linux CI selections.
   Aggregate regression, SQLite footprint/performance, final source review and
   hosted checks remain pending. These intermediate passes do not close P1.
+
+## Aggregate review and first full regression (2026-10-21)
+
+- Candidate `2873200bce4a54c82496de40de5a6a503ce6f9f4` is published as draft
+  [#990](https://github.com/bitrouter/bitrouter/pull/990), based on #984. The
+  workflow validator rejected CI and Release before any job ran: the new shared
+  job used `runner.temp` in job-level environment, where that context is not
+  available. A reviewed repair sets the same path from a runner step; it also
+  adds the explicit ignored PostgreSQL authority/native-continuation/writer
+  selection. No hosted pass is inferred from those rejected runs.
+- The complete Rust 1.97 all-feature workspace selection ran 4,939 tests across
+  90 binaries in 668.320s: 4,938 passed, one failed, 143 skipped. The only failure
+  was an old streaming `response.failed` fixture lacking ID and terminal status.
+  Its positive case now supplies a valid failed response; the original payload
+  remains a negative `InvalidResponse` assertion. Production parsing is unchanged.
+- Final source review identified FSR-01: shared OAuth sessions inherited local
+  detached refresh work, which could outlive the request/generation join. The
+  repair executes shared refresh, commit and release inside the owned request
+  future. Cancelling started refresh leaves the durable uncertainty fence intact.
+  Local sessions retain their existing task behavior; the additional field and
+  branch compile only with `multi-instance`. A PostgreSQL lifecycle/refresh
+  regression and independent closure are pending execution/review.
+- The last A07 stock-process fixture is applied. It observes actual upstream
+  socket write backpressure, requires reader-resume progress on that connection,
+  then checks write-stall interruption, local capacity recovery and retained
+  uncertain provider capacity before explicit operator resolution. Its complete
+  bounded execution and independent review remain pending.
+- The v6 executable at `2873200b` predates FSR-01 and is historical only:
+  SHA-256 `f14c152a078bfd5d92199d53d81bb9df50cc261b1d87d5f9c3fd7b10be5af86b`.
+  Final validation will use a new immutable executable after the ownership repair.
