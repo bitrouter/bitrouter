@@ -2,7 +2,26 @@
 
 Implementation follows the [P1 contract](GATEWAY_MULTI_INSTANCE_SPEC.md) and the
 [original P1 gates](BITROUTER_SERVICE_REFACTOR_PLAN.md#p1-acceptance).
-Status: **in progress; no P1 delivery gate is accepted yet**.
+Status: **P1 implementation and local acceptance complete**. Hosted checks and
+review state are tracked on [#990](https://github.com/bitrouter/bitrouter/pull/990).
+
+Runtime source `2495bf8db118de399a11fc11f82ba18bd6a6455d` passed the v9 shared
+selection, 203/203. Eight fixed v8 stability sets passed 40/40, and three fixed
+v9 maintenance repeats passed 3/3. Independent source-review findings are closed.
+The [final acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) is the current
+source of truth for candidate identities, results, remaining gates and limits.
+
+- Final full workspace: **4,939/4,939 passed**, 147 configured skips, 677.839s;
+  doctests 11 passed/1 ignored; strict Clippy, rustdoc, registry, distribution and
+  format checks passed. One nextest `LEAK` notice in an unchanged P0 test did not
+  recur in a single exact-case check; its cause remains unexplained and recorded.
+- Local performance: **27 retained samples**, including one fixed default repeat;
+  measured footprint/SSE costs accepted for this candidate with follow-ups. See
+  [raw data and interpretation](evidence/gateway-multi-instance/README.md).
+
+Documentation/distribution/format and hosted results remain as recorded in the
+final acceptance record. Historical sections below retain their original dated
+status and failure evidence; later results do not rewrite earlier failures.
 
 Current P0 base (rechecked 2026-10-21): `9cbe512d101e777470d113b0086ab9e331b3a638`.
 [#984](https://github.com/bitrouter/bitrouter/pull/984) is merge ready and remains
@@ -30,27 +49,27 @@ review threads remained unresolved. This does not close any P1 gate.
 
 | Stage | Implementation | Verification | Independent review |
 | --- | --- | --- | --- |
-| 1 Authority foundation | Store/key foundation, shared startup and explicit stock bootstrap implemented | PostgreSQL foundation/runtime and blank-database stock bootstrap passed in minimal/full selections; local regressions and bounded lint passed | Foundation/runtime and bounded bootstrap backend/CLI/process reviews approved |
-| 2 Admission and execution | Private engine and served admission/execution implemented; complete process acceptance pending | Real PostgreSQL transaction/race and scoped served execution tests passed | Private engine and serving substages approved |
-| 3 Gateway integration | Official foreground startup, credential binding, admission, dispatch, delivery and HTTP router implemented; complete process acceptance pending | Scoped HTTP/protocol/executor and PostgreSQL runtime regressions plus official-process startup/idle-drain tests passed | Authentication/context/dispatch/custody/HTTP/runtime substages approved |
-| 4 Published authority | Immutable publication, runtime and operator HTTP/SDK/CLI wiring implemented | PostgreSQL publication/handler, two-process operator and scoped feature regressions passed | Publication and bounded operator HTTP/SDK/CLI stages approved |
-| 5 Trajectory authority | Shared history, retained correlation epochs, transactional guard reduction, cost/counter holds and canonical observation projection implemented | PostgreSQL engine/trajectory tests and two stock-process guard/cost campaigns passed; final aggregate pending | Guard, observation and writer-isolation reviews approved; process rotation convergence findings closed |
-| 6 Delivery and operations | Shared submission/query SDK, bounded transport/custody, operator HTTP/SDK/CLI, durable attempt evidence, retained projection delivery and outbox implemented | Scoped regressions and stock-process outbox ACK retry, crash/finalization, overload and drain campaigns passed; final aggregate pending | Delivery, operations and bounded process substages reviewed; final candidate review pending |
-| 7 Aggregate acceptance and PR | Pending | Pending | Pending |
+| 1 Authority foundation | Shared store/key authority, startup and explicit stock bootstrap implemented | Included in final 203/203 shared selection | Foundation/runtime/bootstrap findings closed |
+| 2 Admission and execution | Shared admission, execution identity and durable recovery implemented | Final shared selection; applicable admission/idempotency cases passed all eight stability sets | Engine, serving and process findings closed |
+| 3 Gateway integration | Official process startup, authentication, dispatch, delivery and native continuation implemented | Final shared/process selection; OAuth ownership regressions and 3/3 maintenance repeats passed | Integration, ownership and maintenance findings closed |
+| 4 Published authority | Publication and operator HTTP/SDK/CLI implemented | Cross-replica publication, credentials, authority invalidation and backend-loss campaigns passed | Publication/operator/process findings closed |
+| 5 Trajectory authority | Shared history, epochs, guard counters/cost/holds and response observations implemented | Guard red/green and final shared selection; both stock guard campaigns passed all eight stability sets | Guard, observation, fence and process findings closed |
+| 6 Delivery and operations | Bounded transport/custody, projection/outbox, crash recovery and drain implemented | Final shared selection; eight outbox stability passes; stock stalled-reader and shutdown campaigns passed | Delivery/operations/process findings closed |
+| 7 Aggregate acceptance and PR | Local acceptance complete; stacked PR #990 | 203/203 v9, 40/40 v8 stability, 3/3 v9 maintenance, 4,939/4,939 workspace and recorded local comparison | Independent source findings closed; final evidence reviewed |
 
 ## Acceptance ledger
 
 | Gate | Evidence required | Current status |
 | --- | --- | --- |
-| P1-A01 | Independent processes share tenant quota and actual account concurrency | Pending |
-| P1-A02 | Cross-instance duplicate/conflict behavior and unknown status query | Pending |
-| P1-A03 | Kill before dispatch, during inference/streaming and around finalization | Pending |
-| P1-A04 | Competing finalization/outbox retries and truthful unknown states | Pending |
-| P1-A05 | Auth/config/credential revisions, cross-instance continuation and backend loss | Pending |
-| P1-A06 | Concurrent/alternating episode guards, history, cost, holds and key rotation | Pending |
-| P1-A07 | Bounded overload, slow consumers and hot-tenant isolation | Pending |
-| P1-A08 | Drain/rolling shutdown with truthful interrupted streams | Pending |
-| P1-A09 | SQLite without shared infrastructure, dependency closure and measured performance | Pending |
+| P1-A01 | Independent processes share tenant quota and actual account concurrency | Local PASS: final shared selection and eight fixed stability sets |
+| P1-A02 | Cross-instance duplicate/conflict behavior and unknown status query | Local PASS: final shared selection and eight fixed stability sets |
+| P1-A03 | Kill before dispatch, during inference/streaming and around finalization | Local PASS: stock-process crash/finalization campaigns |
+| P1-A04 | Competing finalization/outbox retries and truthful unknown states | Local PASS: final shared selection and eight fixed outbox stability sets |
+| P1-A05 | Auth/config/credential revisions, cross-instance continuation and backend loss | Local PASS: final shared selection, OAuth ownership regressions and 3/3 maintenance repeats |
+| P1-A06 | Concurrent/alternating episode guards, history, cost, holds and key rotation | Local PASS: final shared selection, stale-snapshot red/green and eight fixed guard/cost stability sets |
+| P1-A07 | Bounded overload, slow consumers and hot-tenant isolation | Local PASS: stock overload/slow-ingress/stalled-reader campaigns |
+| P1-A08 | Drain/rolling shutdown with truthful interrupted streams | Local PASS: stock graceful/replacement/forced-shutdown campaigns |
+| P1-A09 | SQLite without shared infrastructure, dependency closure and measured performance | Local PASS with explicitly recorded footprint/SSE costs and follow-ups; all initial/repeat data retained |
 
 Use exact revisions, feature profiles, command/log identities and failure
 dispositions when closing these rows. In-process tests cannot close a
@@ -1789,3 +1808,27 @@ multi-process acceptance are still required.
   It retains the original timeout error and row error accounting. Generic Store
   polling and retry semantics are unchanged. Independent source review and
   strict workspace Clippy passed; repaired execution remains pending.
+
+## Final local candidate closure (2026-10-21)
+
+Runtime `2495bf8db118de399a11fc11f82ba18bd6a6455d` closes the earlier maintenance
+failure: the v9 aggregate passed 203/203 in 93.149s, followed by three fixed
+maintenance confirmations, all passing. The complete workspace passed 4,939/4,939
+in 677.839s with 147 configured skips; doctests passed 11 with one ignored.
+Strict Clippy, rustdoc, registry, distribution and format checks passed. One
+nextest captured-output notice is retained; the unchanged P0 test passed a
+single scoped check without that notice, and no source defect was identified.
+
+The final local comparison used immutable P0/P1 default and minimum executables
+with the same Rust 1.97 settings, PostgreSQL absent and no concurrent Cargo
+activity. All 27 samples and 221,616 provider calls remain available. The fixed
+default repeat did not reproduce the initial large SSE slowdown or elevated
+after-load median. Smaller idle/size/SSE differences are explicitly accepted for
+this candidate and retained as follow-up items, without inferring a universal
+budget from the earlier P0 acceptance.
+
+The [acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) and
+[evidence directory](evidence/gateway-multi-instance/README.md) contain final
+local identities, results, limits and follow-ups. Hosted execution belongs to
+the final pushed head on [#990](https://github.com/bitrouter/bitrouter/pull/990);
+earlier checks do not substitute for it. Neither #984 nor #990 was merged.

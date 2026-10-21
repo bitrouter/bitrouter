@@ -5,10 +5,12 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
-- [Gateway multi-instance contract](GATEWAY_MULTI_INSTANCE_SPEC.md) and
-  [progress ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md) — P1 shared PostgreSQL
-  authority, admission, idempotency, recovery, credentials, trajectory guards
-  and nine independent acceptance gates; implementation in progress.
+- [Gateway multi-instance contract](GATEWAY_MULTI_INSTANCE_SPEC.md),
+  [progress ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md), and
+  [final acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) — implemented
+  P1 shared PostgreSQL authority, admission, recovery, credentials and trajectory
+  guards. Local acceptance is complete with recorded performance costs; the
+  acceptance record links raw evidence, hosted results and delivery limits.
 
 - [Service refactor source inventory](BITROUTER_SERVICE_REFACTOR_INVENTORY.md) —
   revision-scoped reconciliation of baseline modules with actual destinations;
@@ -17,7 +19,8 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 - [`DISTRIBUTION.md`](DISTRIBUTION.md) — full and gateway profiles, archive
   identity/checksums, profile-preserving updates and packaged SDK acceptance.
 - [`BITROUTER_SERVICE_REFACTOR_PLAN.md`](BITROUTER_SERVICE_REFACTOR_PLAN.md) —
-  **P0 locally revalidated at `a51effd`; fresh hosted checks are pending.** Complete package/module
+  **P0 accepted at `9cbe512d`; [#984](https://github.com/bitrouter/bitrouter/pull/984)
+  remains unmerged.** Complete package/module
   migration inventory, lightweight AI contracts, HTTP SDK, application-owned
   telemetry, feature dependencies, P0 single-instance delivery and acceptance,
   capability-aware daemon compatibility, profile-preserving updates, and the

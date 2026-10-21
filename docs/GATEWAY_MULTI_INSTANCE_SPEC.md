@@ -1,13 +1,18 @@
 # Native gateway multi-instance implementation
 
-Status: implementation contract; delivery is not yet accepted.
+Status: P1 implementation and local acceptance complete, with recorded
+performance costs and delivery limits. Hosted checks and review state are
+tracked on [#990](https://github.com/bitrouter/bitrouter/pull/990).
 Updated: 2026-10-21. P0 base: `9cbe512d101e777470d113b0086ab9e331b3a638`
 ([#984](https://github.com/bitrouter/bitrouter/pull/984)).
 
-This implements the complete P1 milestone in the
+This defines the complete P1 milestone in the
 [service refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md#p1-native-gateway-multi-instance-operation).
-The [implementation ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md) records actual
-completion separately. A database URL alone does not enable shared authority.
+The [final acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) records current
+candidate results, hosted verification links and delivery limits. The
+[implementation ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md) preserves historical
+failures, repairs and intermediate evidence. A database URL alone does not enable
+shared authority.
 
 ## Product and ownership
 
@@ -937,5 +942,7 @@ two separately launched gateway executables, one counted mock provider, a real
 dedicated PostgreSQL database and ordinary HTTP clients. Faults include worker
 kill, database loss, failed delivery ACK and stale configuration/credential/key
 snapshots. The local campaign uses SQLite with shared services stopped and
-preserves the established development-build performance methodology and accepted
-P0 overhead limits. No production throughput claim follows from fixture results.
+preserves the established development-build performance methodology. The final
+acceptance record separately documents the disposition of measured P1 costs;
+the accepted P0 overhead is not a blanket allowance. No production throughput
+claim follows from fixture results.
