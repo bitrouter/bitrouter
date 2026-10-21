@@ -56,8 +56,10 @@ impl SharedMetering {
         let body = serde_json::to_string(record)?;
         let execution = &record.event.execution;
         let digest = self.digest(record)?;
-        // Conflict handling never overwrites an earlier projection, including
-        // when a later caller offers a higher revision for the same terminal ID.
+        // Cover execution, event and canonical-request uniqueness together:
+        // exact concurrent replay can otherwise fail on a non-arbiter index.
+        // A skipped insert must still pass the owner/content verification below;
+        // no conflict overwrites an earlier immutable projection.
         // https://www.postgresql.org/docs/current/sql-insert.html#SQL-ON-CONFLICT
         let result = tx
             .execute(Statement::from_sql_and_values(
@@ -68,7 +70,7 @@ impl SharedMetering {
               known_subtotal_micro_usd, complete_total_micro_usd, known_attempts,
               unknown_attempts, not_dispatched_attempts, payload)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::text::numeric,$12::text::numeric,$13,$14,$15,$16)
-             ON CONFLICT (namespace, execution_id) DO NOTHING",
+             ON CONFLICT DO NOTHING",
                 vec![
                     self.namespace.clone().into(),
                     execution.execution_id.clone().into(),

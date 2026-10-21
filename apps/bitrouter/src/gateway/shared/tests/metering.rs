@@ -13,6 +13,9 @@ use crate::metering::shared::{
 };
 use store::Store;
 
+#[path = "metering/replay.rs"]
+mod replay;
+
 #[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL for a dedicated PostgreSQL test database"]
 async fn postgres_shared_metering() -> Result<()> {
