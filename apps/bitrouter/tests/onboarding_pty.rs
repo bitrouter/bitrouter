@@ -328,9 +328,7 @@ fn enter_resources(terminal: &mut Terminal) -> Result<()> {
 
 #[test]
 fn optional_resources_retry_real_transactions_and_keep_router_progress() -> Result<()> {
-    let mut terminal = Terminal::new(&["init", "--after", "exit", "--workspace", "project"], true)?;
-    let source = terminal.home.path().join("review");
-    std::fs::create_dir(terminal.home.path().join("project"))?;
+    let mut terminal = Terminal::new(&["init", "--after", "exit"], true)?;
     enter_resources(&mut terminal)?;
     assert!(terminal.home.path().join("bitrouter.yaml").is_file());
     terminal.send(b"Add MCP server\n")?;
@@ -354,22 +352,6 @@ fn optional_resources_retry_real_transactions_and_keep_router_progress() -> Resu
     terminal.send(b"http://127.0.0.1:9/mcp\n")?;
     terminal.wait("Optional resources")?;
     terminal.checkpoint();
-    terminal.send(b"Install skill\n")?;
-    terminal.wait("Skill source")?;
-    terminal.send(b"missing-source\n")?;
-    terminal.wait("Optional skill step failed")?;
-    terminal.wait("Optional resources")?;
-    std::fs::create_dir(&source)?;
-    std::fs::write(
-        source.join("SKILL.md"),
-        "---\nname: review\ndescription: PTY workflow\n---\nPTY_LOCAL_ROOT\n",
-    )?;
-    terminal.checkpoint();
-    terminal.send(b"Install skill\n")?;
-    terminal.wait("Skill source")?;
-    terminal.send(format!("{}\n", source.display()).as_bytes())?;
-    terminal.checkpoint();
-    terminal.wait("Optional resources")?;
     terminal.send(b"Continue\n")?;
     let report = terminal.finish(true)?;
     let statuses: Vec<_> = report["resources"]
@@ -378,23 +360,8 @@ fn optional_resources_retry_real_transactions_and_keep_router_progress() -> Resu
         .iter()
         .map(|row| row["status"].clone())
         .collect();
-    assert_eq!(
-        statuses,
-        vec![
-            json!("failed"),
-            json!("saved"),
-            json!("failed"),
-            json!("installed")
-        ]
-    );
+    assert_eq!(statuses, vec![json!("failed"), json!("saved")]);
     assert_eq!(report["config_activation"], "saved_only");
-    assert!(
-        terminal
-            .home
-            .path()
-            .join("project/.bitrouter/skills/installed.json")
-            .is_file()
-    );
     let config: Value = serde_saphyr::from_str(&std::fs::read_to_string(
         terminal.home.path().join("bitrouter.yaml"),
     )?)?;
@@ -426,48 +393,5 @@ fn optional_resource_input_cancellation_preserves_router_and_stops_following_act
                 .exists()
         );
     }
-    Ok(())
-}
-
-#[test]
-fn yes_on_a_terminal_rejects_ambiguous_skill_source_without_prompting() -> Result<()> {
-    let mut terminal = Terminal::prepared(
-        &[
-            "init",
-            "--yes",
-            "--install-skill",
-            "multi",
-            "--workspace",
-            "project",
-            "--after",
-            "exit",
-        ],
-        true,
-        false,
-        |home| {
-            std::fs::create_dir(home.join("project"))?;
-            for name in ["one", "two"] {
-                let root = home.join("multi").join(name);
-                std::fs::create_dir_all(&root)?;
-                std::fs::write(
-                    root.join("SKILL.md"),
-                    format!("---\nname: {name}\ndescription: {name} workflow\n---\nbody\n"),
-                )?;
-            }
-            Ok(())
-        },
-    )?;
-    let report = terminal.finish(false)?;
-    assert_eq!(report["resources"][0]["status"], "failed");
-    assert!(!terminal.transcript.contains("Skill bundle"));
-    assert!(!terminal.transcript.contains("Number/name"));
-    assert!(terminal.home.path().join("bitrouter.yaml").is_file());
-    assert!(
-        !terminal
-            .home
-            .path()
-            .join("project/.bitrouter/skills/installed.json")
-            .exists()
-    );
     Ok(())
 }

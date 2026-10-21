@@ -62,7 +62,7 @@ Keep the clients and workflows you already use:
 
 - **Model APIs** — OpenAI Chat Completions and Responses, and Anthropic Messages, with cross-protocol routing. Metered Gemini uses Google’s OpenAI-compatible Chat endpoint.
 - **Coding agents** — built-in Codex and Claude support through native launchers, headless commands, and ACP adapters.
-- **Tools & skills** — manage upstream MCP configuration with `bro mcp` and complete, versioned local/Git bundles with `bro skills`. Native workflows select local or explicitly permitted MCP skills with per-skill consent. See the [CLI reference](docs/CLI.md) for supported hosts, commands and delivery limits.
+- **Tools & skills** — manage upstream MCP configuration with `bro mcp` and existing local skill directories with `bro skills`. Install skills with `npx skills`; native tasks and supported ACP runs use explicitly selected skills. MCP content retains independent source permission and per-skill consent. See the [CLI reference](docs/CLI.md) for supported hosts, commands and delivery limits.
 
 ## Benchmarks
 

@@ -191,7 +191,7 @@ impl NativeResources {
                 content: None,
             })
             .collect();
-        for binding in &resources.inventory.managed_skills.skills {
+        for binding in &resources.inventory.local_skills.skills {
             let material = binding.material()?;
             materials.push(MaterialRef {
                 material_id: material.material_id,
@@ -242,13 +242,12 @@ impl NativeResources {
                 json!(resources.inventory.mcp_skills),
             );
         }
-        if !resources.inventory.managed_skills.skills.is_empty()
-            || !resources.inventory.managed_skills.problems.is_empty()
-            || !resources.inventory.managed_skills.revisions.is_empty()
+        if !resources.inventory.local_skills.skills.is_empty()
+            || !resources.inventory.local_skills.problems.is_empty()
         {
             signals.facts.insert(
-                "managed_skill_catalog".into(),
-                json!(resources.inventory.managed_skills),
+                "local_skill_catalog".into(),
+                json!(resources.inventory.local_skills),
             );
         }
         // Leave room for the operation envelope before any task is accepted.
@@ -270,13 +269,13 @@ impl NativeResources {
         &self.resources.inventory.mcp_skills
     }
 
-    pub fn managed_skill_catalog(&self) -> &super::skills::library::ManagedSkillCatalog {
-        &self.resources.inventory.managed_skills
+    pub fn local_skill_catalog(&self) -> &super::skills::library::LocalSkillCatalog {
+        &self.resources.inventory.local_skills
     }
 
     pub async fn managed_skill_file(
         &self,
-        binding: &super::skills::library::ManagedSkill,
+        binding: &super::skills::library::LocalSkill,
         path: &str,
         max_bytes: u64,
     ) -> Result<Vec<u8>, String> {
@@ -337,7 +336,7 @@ impl NativeResources {
                 let binding = self
                     .resources
                     .inventory
-                    .managed_skills
+                    .local_skills
                     .skills
                     .iter()
                     .find(|binding| {

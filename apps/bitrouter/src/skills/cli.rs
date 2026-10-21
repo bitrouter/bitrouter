@@ -1,14 +1,14 @@
-//! Structured management of BitRouter-owned skills, with unmanaged inspection.
+//! Inspect and edit existing local skill directories; acquisition is external.
 
 use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::Subcommand;
 
-use super::managed::{Scope, Store};
+use super::directory;
 use crate::commands;
 use bitrouter_orchestrator::core::skills::{SkillConstraints, SkillSelector};
-use bitrouter_orchestrator::harness::skills::library::LibraryScope;
+use bitrouter_orchestrator::harness::skills::library::LocalScope;
 
 #[derive(Debug, Default, clap::Args)]
 pub struct ConstraintArgs {
@@ -41,13 +41,13 @@ fn parse_selector(value: &str) -> std::result::Result<SkillSelector, String> {
     match kind {
         "project" | "global" => {
             crate::control_output::validate_id(identity).map_err(|error| error.to_string())?;
-            Ok(SkillSelector::Managed {
+            Ok(SkillSelector::Local {
                 scope: if kind == "project" {
-                    LibraryScope::Project
+                    LocalScope::Project
                 } else {
-                    LibraryScope::Global
+                    LocalScope::Global
                 },
-                installation_id: identity.into(),
+                directory_id: identity.into(),
             })
         }
         "mcp" => {
@@ -65,106 +65,78 @@ fn parse_selector(value: &str) -> std::result::Result<SkillSelector, String> {
 
 #[derive(Debug, Subcommand)]
 pub enum SkillsAction {
-    /// Explain original native skill choices and prepared model context, read-only.
+    /// Inspect recorded explicit native skill bindings without executing.
     Explain(super::explain::Options),
-    /// List managed installations and unmanaged discoveries in one scope.
-    List(ScopeArgs),
-    /// Show exact installation/source/version metadata; never activates a skill.
+    /// Discover skills already present in local directories.
+    List(directory::ScopeArgs),
+    /// Show a local skill's path, identity and format validation.
     Show {
         name: String,
         #[command(flatten)]
-        scope: ScopeArgs,
+        scope: directory::ScopeArgs,
     },
-    /// Scaffold source files only; does not register an installation.
+    /// Create source SKILL.md only; acquisition is handled by npx skills.
     Init(InitArgs),
-    /// Snapshot a local skill directory or Git repository; never runs scripts.
-    Install {
-        source: String,
-        #[arg(long)]
-        skill: Option<String>,
-        #[arg(long = "ref")]
-        reference: Option<String>,
-        #[command(flatten)]
-        scope: ScopeArgs,
-    },
-    /// Prepare and validate a new immutable version before moving its alias.
-    Update {
+    /// Read a UTF-8 file inside an existing skill directory.
+    Read {
         name: String,
-        #[arg(long = "ref")]
-        reference: Option<String>,
+        #[arg(long, default_value = "SKILL.md")]
+        file: String,
         #[command(flatten)]
-        scope: ScopeArgs,
+        scope: directory::ScopeArgs,
     },
-    /// Remove the managed alias and retain all immutable versions.
-    Uninstall {
+    /// Atomically write a local skill file from FILE or '-' for stdin.
+    Write {
         name: String,
+        #[arg(long, default_value = "SKILL.md")]
+        file: String,
+        #[arg(long, value_name = "FILE|-")]
+        from: PathBuf,
         #[command(flatten)]
-        scope: ScopeArgs,
+        scope: directory::ScopeArgs,
     },
 }
-
-#[derive(Debug, clap::Args)]
-pub struct ScopeArgs {
-    /// Select the current user's BitRouter home skills library.
-    #[arg(long, short = 'g', conflicts_with = "workspace")]
-    pub global: bool,
-    /// Explicit project root; default is the nearest Git root or current directory.
-    #[arg(long, conflicts_with = "global")]
-    pub workspace: Option<PathBuf>,
-}
-
 #[derive(Debug, clap::Args)]
 pub struct InitArgs {
     pub name: String,
     #[arg(long, short = 'o')]
     pub output: Option<PathBuf>,
 }
-
 pub async fn run(action: SkillsAction, output: &crate::output::Output) -> Result<()> {
-    let report = match action {
-        SkillsAction::Explain(options) => {
-            output.emit(&super::explain::read(options).await?)?;
-            return Ok(());
-        }
+    match action {
+        SkillsAction::Explain(options) => output.emit(&super::explain::read(options).await?)?,
         SkillsAction::Init(args) => {
             let target = args
                 .output
                 .unwrap_or_else(|| PathBuf::from(&args.name).join("SKILL.md"));
             output.emit(&commands::skills_init(&args.name, &target)?)?;
-            return Ok(());
         }
-        SkillsAction::List(args) => Store::load(
-            Scope::resolve(args.global, args.workspace.as_deref()).await?,
-        )?
-        .report(None, "list", "inspected")?,
-        SkillsAction::Show { name, scope } => Store::load(
-            Scope::resolve(scope.global, scope.workspace.as_deref()).await?,
-        )?
-        .report(Some(&name), "show", "inspected")?,
-        SkillsAction::Install {
-            source,
-            skill,
-            reference,
-            scope,
-        } => {
-            Store::load(Scope::resolve(scope.global, scope.workspace.as_deref()).await?)?
-                .install(&source, skill.as_deref(), reference)
-                .await?
+        SkillsAction::List(scope) => output.emit(&scope.list()?)?,
+        SkillsAction::Show { name, scope } => output.emit(&scope.show(&name)?)?,
+        SkillsAction::Read { name, file, scope } => {
+            output.emit(&directory::read(&scope.find(&name)?, &file)?)?
         }
-        SkillsAction::Update {
+        SkillsAction::Write {
             name,
-            reference,
+            file,
+            from,
             scope,
         } => {
-            Store::load(Scope::resolve(scope.global, scope.workspace.as_deref()).await?)?
-                .update(&name, reference)
-                .await?
+            use std::io::Read;
+            let input: Box<dyn Read> = if from == std::path::Path::new("-") {
+                Box::new(std::io::stdin())
+            } else {
+                Box::new(std::fs::File::open(from)?)
+            };
+            let mut bytes = Vec::new();
+            input.take(256 * 1024 + 1).read_to_end(&mut bytes)?;
+            anyhow::ensure!(bytes.len() <= 256 * 1024, "skill file exceeds 256 KiB");
+            output.emit(&directory::write(
+                &scope.find(&name)?,
+                &file,
+                &String::from_utf8(bytes)?,
+            )?)?;
         }
-        SkillsAction::Uninstall { name, scope } => {
-            Store::load(Scope::resolve(scope.global, scope.workspace.as_deref()).await?)?
-                .uninstall(&name)?
-        }
-    };
-    output.emit(&report)?;
+    }
     Ok(())
 }

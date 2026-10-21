@@ -85,7 +85,7 @@ fn response(request: &Value, mut message: Value, finish: &str) -> ResponseTempla
     }
 }
 
-async fn begin(fixture: &Fixture, prompt: &str) -> Result<(String, String)> {
+async fn begin(fixture: &Fixture, prompt: &str, skill: &str) -> Result<(String, String)> {
     let created = cli(
         fixture,
         &[
@@ -97,6 +97,8 @@ async fn begin(fixture: &Fixture, prompt: &str) -> Result<(String, String)> {
             "coding",
             "--request-id",
             "g11-create",
+            "--skill",
+            skill,
         ],
     )
     .await?;
@@ -164,8 +166,7 @@ async fn models(upstream: &MockServer) -> Result<Vec<Value>> {
 }
 
 #[tokio::test]
-async fn local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_reconnect()
--> Result<()> {
+async fn local_directory_to_routed_native_approval_explain_and_cold_reconnect() -> Result<()> {
     let (mut fixture, upstream, _journal) = fixture().await?;
     fixture.stop().await?;
     let mut settings: Value = serde_json::from_slice(&std::fs::read(&fixture.config)?)?;
@@ -178,7 +179,7 @@ async fn local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_r
         .context("settings")?
         .remove("skills");
     std::fs::write(&fixture.config, serde_saphyr::to_string(&settings)?)?;
-    let source = fixture.home.path().join("review");
+    let source = fixture.workspace.join("skills/review");
     std::fs::create_dir_all(source.join("references"))?;
     let body = "---\nname: review\ndescription: local workflow\nallowed-tools: shell\n---\nG11_LOCAL_ORIGINAL\n";
     std::fs::write(source.join("SKILL.md"), body)?;
@@ -198,26 +199,31 @@ async fn local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_r
             "--yes",
             "--config",
             path(&fixture.config)?,
-            "--install-skill",
-            path(&source)?,
-            "--workspace",
-            path(&fixture.workspace)?,
             "--after",
             "serve",
         ],
     )
     .await?;
     ensure!(setup["daemon"]["status"] == "ready");
-    ensure!(
-        setup["resources"]
-            .as_array()
-            .context("resources")?
-            .iter()
-            .any(|row| row["kind"] == "skill" && row["status"] == "installed")
-    );
     let reused = cli(&fixture, &[]).await?;
     ensure!(reused["pid"] == setup["daemon"]["pid"]);
-    let (thread, turn) = begin(&fixture, "review changes and write the approved result").await?;
+    let listing = cli(
+        &fixture,
+        &["skills", "list", "--workspace", path(&fixture.workspace)?],
+    )
+    .await?;
+    let selector = format!(
+        "project:{}",
+        listing["skills"][0]["directory_id"]
+            .as_str()
+            .context("directory identity")?
+    );
+    let (thread, turn) = begin(
+        &fixture,
+        "review changes and write the approved result",
+        &selector,
+    )
+    .await?;
     let waiting = consent(&fixture, &thread, &turn).await?;
     ensure!(waiting["request"]["tool_name"] == "write");
     ensure!(!fixture.workspace.join("approved.txt").exists());
@@ -239,32 +245,6 @@ async fn local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_r
     observer.start_kill()?;
     observer.wait().await?;
     ensure!(consent(&fixture, &thread, &turn).await?["request"]["request_id"] == request);
-    std::fs::write(
-        source.join("SKILL.md"),
-        body.replace("G11_LOCAL_ORIGINAL", "G11_LOCAL_UPDATED"),
-    )?;
-    cli(
-        &fixture,
-        &[
-            "skills",
-            "update",
-            "review",
-            "--workspace",
-            path(&fixture.workspace)?,
-        ],
-    )
-    .await?;
-    cli(
-        &fixture,
-        &[
-            "skills",
-            "uninstall",
-            "review",
-            "--workspace",
-            path(&fixture.workspace)?,
-        ],
-    )
-    .await?;
     let stale = fixture
         .command()
         .args([
@@ -405,7 +385,12 @@ async fn mcp_onboarding_to_native_consent_lazy_files_and_revoked_capability_afte
     }).with_priority(1).mount(&upstream).await;
     let started = cli(&fixture, &[]).await?;
     ensure!(started["status"] == "ready");
-    let (thread, turn) = begin(&fixture, "review using the explicitly permitted source").await?;
+    let (thread, turn) = begin(
+        &fixture,
+        "review using the explicitly permitted source",
+        "mcp:skills-peer:skill://review/SKILL.md",
+    )
+    .await?;
     let waiting = consent(&fixture, &thread, &turn).await?;
     ensure!(waiting["request"]["tool_name"] == "mcp_skill.activate");
     ensure!(

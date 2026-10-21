@@ -148,54 +148,6 @@ fn read<'a>(reference: &'a str, cached_bytes: Option<&'a [u8]>) -> SkillRead<'a>
     }
 }
 
-struct RelevantSkill;
-
-#[async_trait::async_trait]
-impl bitrouter_sdk::decision_model::DecisionExecutor for RelevantSkill {
-    async fn execute(
-        &self,
-        request: &bitrouter_sdk::decision_model::types::DecisionRequest,
-        _: &CancellationToken,
-    ) -> Result<
-        bitrouter_sdk::decision_model::types::DecisionResponse,
-        bitrouter_sdk::decision_model::types::DecisionError,
-    > {
-        use bitrouter_sdk::decision_model::types::{
-            Answer, DecisionError, DecisionResponse, DecisionUsage, Question,
-        };
-        let mut answers = std::collections::BTreeMap::new();
-        for (id, question) in &request.questions {
-            let answer = match question {
-                Question::Noul { .. } => Answer::Noul { noul: 0.99 },
-                Question::Choice { criteria, .. } if criteria.contains_key("full") => {
-                    Answer::Choice {
-                        choice: "full".into(),
-                        confidence: 1.0,
-                        probabilities: criteria
-                            .keys()
-                            .map(|key| (key.clone(), if key == "full" { 1.0 } else { 0.0 }))
-                            .collect(),
-                    }
-                }
-                _ => {
-                    return Err(DecisionError::invalid_request(
-                        "unexpected fixture question",
-                    ));
-                }
-            };
-            answers.insert(id.clone(), answer);
-        }
-        Ok(DecisionResponse {
-            model: request.model.clone(),
-            answers,
-            usage: DecisionUsage {
-                input_tokens: 17,
-                output_tokens: 3,
-            },
-        })
-    }
-}
-
 struct CapturePrompts(std::sync::Arc<tokio::sync::Mutex<Vec<bitrouter_ai::types::Prompt>>>);
 
 #[async_trait::async_trait]
@@ -237,7 +189,6 @@ async fn native_thread_consent_precedes_real_mcp_reads_and_model_data_in_both_pe
     use bitrouter_orchestrator::service::ThreadService;
     use bitrouter_orchestrator::thread::{PermissionProfile, ThreadRequest, ThreadTarget};
     use bitrouter_orchestrator::turn::{ApprovalAnswer, TurnRequest, TurnStatus};
-    use bitrouter_sdk::decision_model::DecisionRuntime;
     use bitrouter_sdk::language_model::{MockExecutor, RoutingTarget, StaticRoutingTable};
     use std::sync::Arc;
     use std::time::Duration;
@@ -285,12 +236,6 @@ async fn native_thread_consent_precedes_real_mcp_reads_and_model_data_in_both_pe
                         ])))
                         .observe_hook(CapturePrompts(prompts.clone()));
                 })
-                .decision_model(DecisionRuntime {
-                    model: "workflow-fixture".into(),
-                    executor: Arc::new(RelevantSkill),
-                    policy: Default::default(),
-                    pricing: None,
-                })
                 .build()?,
         );
         let service = ThreadService::with_workspace_grants(
@@ -303,7 +248,15 @@ async fn native_thread_consent_precedes_real_mcp_reads_and_model_data_in_both_pe
         )?
         .with_resources(fixture.configuration(workspace.path()))?;
         let caller = CallerContext::local();
-        let config = AgentConfig::fixed("fixture-model", None);
+        let config = AgentConfig::fixed("fixture-model", None).with_skill_constraints(Some(
+            bitrouter_orchestrator::core::skills::SkillConstraints {
+                include: vec![bitrouter_orchestrator::core::skills::SkillSelector::Mcp {
+                    server: fixture.server.name.clone(),
+                    uri: ROOT.into(),
+                }],
+                exclude: vec![],
+            },
+        ));
         let created = service
             .create_thread(
                 &service.capabilities().server_instance_id,

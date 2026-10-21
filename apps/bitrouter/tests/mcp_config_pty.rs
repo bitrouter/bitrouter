@@ -83,29 +83,6 @@ impl Terminal {
 }
 
 #[test]
-fn skill_choice_and_cancellation_use_lines_without_publishing_partial_installs() -> Result<()> {
-    let mut terminal = Terminal::start_for("skills", &["install", "source"], false)?;
-    terminal.wait("Skill bundle")?;
-    terminal.send(b"2\n")?;
-    let result = terminal.finish(true)?;
-    ensure!(result["skills"][0]["name"] == "beta" && result["state"] == "installed");
-    for cancel in [b"\x04", b"\x03"] {
-        let mut terminal = Terminal::start_for("skills", &["install", "source"], false)?;
-        terminal.wait("Skill bundle")?;
-        terminal.send(cancel)?;
-        terminal.finish(false)?;
-        ensure!(
-            !terminal
-                .home
-                .path()
-                .join(".bitrouter/skills/installed.json")
-                .exists()
-        );
-    }
-    Ok(())
-}
-
-#[test]
 fn guided_add_and_eof_leave_canonical_terminal_and_json_output() -> Result<()> {
     let mut terminal = Terminal::start(&["add", "two"], false)?;
     terminal.wait("MCP transport")?;

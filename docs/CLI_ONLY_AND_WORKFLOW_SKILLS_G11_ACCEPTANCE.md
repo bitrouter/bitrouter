@@ -1,222 +1,94 @@
-# CLI-only 与 Workflow Skills：G11 本地集成交付
+# CLI-only 与 skills 目录：本轮验收
 
-状态：**G11 本地完成；测试与文档精简已复验**。执行日期：2026-10-20（America/New_York）。
+状态：实现完成；本地逐项 PASS 覆盖完整，最终全量和 doctests 被 macOS 启动阻塞。基线：`c122b437e1ceae64b07151cf8577d0af0214a0bd`。
 
-第 1–9 节记录提交 `264765f4` 所代表的 G11 验收基线；本轮精简的新源码与
-复验结果见第 10 节。保留同一份 A/M/C/T 映射，不把原始运行冒充精简后的结果。
+## 原 G11 证据边界
 
-本附件记录 [spec](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)、[阶段卡片](CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md#g11--集成审计与本地交付) 的完整本地验收；具体执行、失败和修正见 [实现记录](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md#16-g11-执行记录本地完成)。要求仍由原 spec 与 [MCP 附件](CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md) 定义，不另造或缩小清单。
+原 61 项 A/M/C/T、149 个唯一测试及 4368 passed / 22 skipped 对应当时含安装器、
+版本库与自动选择的源码，不是本轮结果。完整保留于
+[不可变 G11 验收](https://github.com/bitrouter/bitrouter/blob/c122b437e1ceae64b07151cf8577d0af0214a0bd/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md)。
+本轮按 [最新 spec](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md) 核验；旧用例退役不改为
+ignored，也不冒充仍通过。
 
-## 1. 验证对象与判定
+## 本轮范围
 
-- G11 验收时 HEAD：`54c822a34d4dbfd75d484ca35e108b497048efef`，当时包含 G00–G11 未提交差异。
-- G11 起点与 G10 最终 Rust/Cargo 摘要相同：`1df4bc3e92a2c8d2b1d6c1fe7b5cf7fac0a7c78d248a4b35a17dd8deff9c4a00`。
-- 原 G11 冻结摘要：`7b3a3f450dbef05915b6021b957fb220540175aaf9f7bf641b0c9223ebb87069`；每个 gate 前后检查同一集合。文件摘要、真实命令、终态与日志保存在 `target/g11-evidence/g11-final-source-checkpoint.json`、`g11-final-check-results.json`。
-- 先对照测试中的请求/状态/字节/实际副作用断言与源代码所有者，再匹配当前完整运行的 PASS。函数存在、元数据或绿灯总数本身不能替代业务证据。`coverage-manifest.json` 与 `coverage-results.json` 保留逐项 symbol/path/实际 PASS 的对应关系；下表列出可复现入口，日志丢失后仍可从代码和命令复验。
-- 全量命令：`cargo nextest run --workspace --all-features --no-fail-fast --test-threads 4`。另执行 workspace/all-targets Clippy、doctests、fmt、dist-helper check，以及实际 all-feature/all-target normal/build/dev 依赖图。只在全部 required 本地证据通过后完成阶段。
-- 所有进程、配置、Git、MCP、模型/decision HTTP 均使用临时目录与 Cargo-built Rust/local fixtures。未运行真实 vendor adapter、远端 MCP、付费 provider，未修改用户全局 harness，未推送/发布。
+保留 native 无界面执行引擎与 SDK 模型路由；删除 BRO skills acquisition/installer、
+Git/ref/alias、版本库存储，以及 native/ACP 自动 skills 和 native 自动上下文决策。
+CLI 与运行时直接使用现有本地目录；MCP 的来源、批准与完整性验证保留。
 
-## 2. 两条贯穿链与外部 ACP
+## Required 本地证据
 
-| 路径 | 实际贯穿入口与关键断言 | 交付边界 |
-| --- | --- | --- |
-| 本地安装 → native | `init --yes --install-skill --after serve` → 同配置裸 bro 复用 PID → `threads create/start` → 已路由的实际模型 HTTP（model=coding 映射到 fixture/model 的 service id）→ write pending → observer 断开不取消 → 错 Turn 答复拒绝 → 更新/卸载原 alias → 正确 answer → 原 V1 继续进入第二次模型调用 → 原 effect/terminal → cold explain → daemon restart → 被动 show 不补 grant → 显式 load/recover 原 checkpoint | 原库/版本/receipt 与 Thread/Turn 不替换；新 alias 不改在用版本；恢复无新模型调用，未知效果与工具重放边界另见 A23/C08/T12 |
-| 获许可 MCP → native | `init --mcp-name/--mcp-from --after exit` → 确认没有隐式 skills-source 许可 → 明确 operator policy → 裸 bro readiness → native task → metadata-only pending（零 resources/read/模型）→ 精确 skill answer → 根 user 数据 → `skill_read` 延迟支持文件 → 实际模型 user/context 与 terminal → 停机 cold explain → 上游撤销能力/修改支持内容 → restart/load 原 Thread → 历史 entry 不变、新必需加载拒绝且零越权 Skills/read RPC | 保存、来源许可、内容批准和执行权限是四个不同事实；MCP 原始身份不降级为本地安装 |
-| Codex/Claude ACP | 两份独立 Rust parser/模型输入变换；G11 通过真实 `init --install-skill` 接入原 supervisor 的版本/预算/权限/取消/错误/cold restart 旅程 | Codex text；Claude 需本连接 embeddedContext；均只证明本地 prompt instructions。真实 vendor 未验证 |
-
-Native 恢复继续使用原 ThreadService/Core/SQLite；managed CLI 继续使用原 NativeSession/journal。未新增调度器、模型循环或镜像任务库。MCP 源断开、current connection 明确未声明扩展、来源/权限撤销、未知 owner/effect 的条件按原策略分别处理，不用一次成功的 load 代表可以恢复执行。
-
-## 3. A01–A28 当前本地证据
-
-| ID | 所有者 / 核验内容 | 当前真实测试入口 | 本地状态 |
-| --- | --- | --- | --- |
-| A01 | CLI/connected owners：旧入口在配置/daemon I/O 前拒绝；连接、catalog、历史分离 | [tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`removed_ui_entrypoints_leave_live_runs_configuration_and_history_intact`<br>[tests/connected_agents.rs](../apps/bitrouter/tests/connected_agents.rs)：`connected_cli_separates_instances_catalog_history_and_stopped_daemon` | local_pass |
-| A02 | onboarding/daemon：首次问答、并发重复 ensure-start、真实后台 readiness 返回 shell | [tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`bare_and_init_ensure_one_ready_background_daemon_and_preserve_running_settings`<br>[tests/onboarding_pty.rs](../apps/bitrouter/tests/onboarding_pty.rs)：`first_bare_onboarding_saves_then_starts_background_daemon_and_returns` | local_pass |
-| A03 | CLI/source transactions：非 TTY 参数不齐或歧义失败；脚本资源选项、Git ref、bundle/scope 与后续动作抑制 | [tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`onboarding_resource_human_receipts_and_incomplete_flags_have_explicit_outcomes`、`onboarding_git_ref_bundle_selection_and_user_scope_reach_the_owned_installer`<br>[tests/onboarding_pty.rs](../apps/bitrouter/tests/onboarding_pty.rs)：`yes_on_a_terminal_rejects_ambiguous_skill_source_without_prompting` | local_pass |
-| A04 | line prompts/output：秘密不回显、EOF/Ctrl-C 恢复；资源取消保留进度；单 JSON/human/broken pipe | [tests/onboarding_pty.rs](../apps/bitrouter/tests/onboarding_pty.rs)：`provider_retry_repeated_addition_search_skip_and_json_are_canonical_lines`、`eof_and_ctrl_c_restore_secret_echo_and_do_not_save_configuration`、`optional_resource_input_cancellation_preserves_router_and_stops_following_actions`<br>[tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`init_rejects_unpaired_keys_and_handles_a_closed_stdout_pipe` | local_pass |
-| A05 | MCP publisher：HTTP/stdio 完整字段、默认值、敏感值、名称/参数校验 | [tests/mcp_config.rs](../apps/bitrouter/tests/mcp_config.rs)：`full_entries_crud_redaction_defaults_and_source_preservation`、`failures_are_noninteractive_secret_safe_and_do_not_replace_source`、`shortcut_conflicts_and_relative_paths_have_explicit_cli_contracts` | local_pass |
-| A06 | source snapshot/CAS：原文注释/未插值引用；并发和失败不覆盖；onboarding resource-only 不重写 Router | [tests/mcp_config.rs](../apps/bitrouter/tests/mcp_config.rs)：`full_entries_crud_redaction_defaults_and_source_preservation`、`unsupported_yaml_and_prefix_conflicts_fail_without_rewriting`<br>[tests/mcp_config_pty.rs](../apps/bitrouter/tests/mcp_config_pty.rs)：`editor_detects_concurrent_changes_and_does_not_save_failed_edits`<br>[tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`onboarding_optional_resources_save_complete_receipts_without_starting_anything` | local_pass |
-| A07 | daemon/config state：保存只报 saved_only；运行实例/代次不变；显式 restart；资源失败无 Finish | [tests/configuration_state.rs](../apps/bitrouter/tests/configuration_state.rs)：`mcp_cli_save_requires_restart_and_never_reloads_the_running_target`<br>[tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`onboarding_optional_failure_preserves_router_and_prior_resource_then_can_retry`<br>[tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_reconnect` | local_pass |
-| A08 | owned installer：本地/Git/multi bundle、格式/路径/配额与明确失败 | [tests/skills_lifecycle.rs](../apps/bitrouter/tests/skills_lifecycle.rs)：`invalid_ambiguous_and_oversized_sources_publish_nothing`、`git_root_bundles_multiple_selection_and_fetch_failure_keep_aliases`、`git_symlinks_submodules_and_quota_failures_keep_the_old_alias`<br>[tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`onboarding_git_ref_bundle_selection_and_user_scope_reach_the_owned_installer` | local_pass |
-| A09 | bundle snapshot：完整 references/scripts/assets/binary 与 whole-bundle 版本；不执行 scripts/hooks | [tests/skills_lifecycle.rs](../apps/bitrouter/tests/skills_lifecycle.rs)：`local_complete_snapshot_updates_and_retains_versions_after_uninstall_and_restart`、`git_hooks_filters_and_bundle_scripts_are_data_only` | local_pass |
-| A10 | installer publication：固定 tag/commit、branch 更新、CAS、冲突与失败保留旧 alias | [tests/skills_lifecycle.rs](../apps/bitrouter/tests/skills_lifecycle.rs)：`git_branch_tracks_exact_commits_tags_and_commits_stay_pinned`、`simultaneous_git_updates_compare_and_swap_one_manifest`、`failed_manifest_commit_keeps_alias_and_reinstall_retains_distinct_receipts` | local_pass |
-| A11 | WorkUnit/version reader：卸载阻止新选择，活跃/恢复绑定仍读取原完整版本 | [tests/managed_daemon/skills.rs](../apps/bitrouter/tests/managed_daemon/skills.rs)：`active_local_support_survives_update_uninstall_and_keeps_original_file_evidence`<br>[tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_reconnect` | local_pass |
-| A12 | scope/caller/source owners：project/global/unmanaged 与同名本地/两个 MCP 来源独立；caller/workspace 不串用 | [tests/skills_lifecycle.rs](../apps/bitrouter/tests/skills_lifecycle.rs)：`same_names_across_scopes_and_unmanaged_content_keep_independent_identity`、`project_root_workspace_override_foreign_index_and_init_remain_explicit`<br>[orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`same_named_local_and_two_mcp_sources_keep_separate_consent_and_model_provenance`<br>[orchestrator/tests/mcp_skill_host.rs](../crates/bitrouter-orchestrator/tests/mcp_skill_host.rs)：`explicit_source_caller_and_workspace_grants_precede_metadata_and_direct_lookup` | local_pass |
-| A13 | original DecisionRuntime/Core policy：按实际任务/职责独立选择，可选空集，显式必需/排除优先；不验证真实模型语义质量 | [orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`child_work_selects_its_own_skills_instead_of_inheriting_parent_activation`、`absent_decision_backend_keeps_optional_skills_out_of_the_prompt`、`explicit_required_skills_load_without_a_semantic_backend`<br>[tests/management_cli/skill_delivery.rs](../apps/bitrouter/tests/management_cli/skill_delivery.rs)：`workflow_choice_and_explicit_exclusion_use_the_original_daemon_decision_runtime` | local_pass |
-| A14 | WorkUnit/model admission：原 Turn 版本/预算冻结；工具结果/steering 仍可追加，旧 intent 不重复付费 | [orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`workflow_selection_reaches_actual_prompt_and_freezes_the_original_bundle`、`changed_workflow_reassesses_unselected_skills_without_replacing_the_catalog_or_replaying_paid_work`、`initial_context_budget_excludes_optional_roots_and_fails_required_roots_before_reads`<br>[orchestrator/tests/core_execution/native_skills/files.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills/files.rs)：`supporting_data_is_counted_before_model_admission_and_cannot_be_dropped` | local_pass |
-| A15 | native + supervised ACP owners：实际 SDK 模型请求/独立 ACP 输入收到约定版本；安装或 catalog 本身不算激活 | [tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_reconnect`、`mcp_onboarding_to_native_consent_lazy_files_and_revoked_capability_after_restart`<br>[tests/management_cli/skill_delivery.rs](../apps/bitrouter/tests/management_cli/skill_delivery.rs)：`codex_cli_delivers_exact_local_binding_and_retains_two_versions_after_restart`、`claude_cli_uses_negotiated_embedded_data_and_keeps_source_receipt_in_original_ledger` | local_pass |
-| A16 | Core allocation/child WorkUnit：子任务独立选择，显式父约束保留；父 MCP 同意不授权子任务 | [orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`child_work_selects_its_own_skills_instead_of_inheriting_parent_activation`、`mcp_resource_data_is_not_shared_into_an_unconsenting_child_context`<br>[tests/managed_daemon/skills.rs](../apps/bitrouter/tests/managed_daemon/skills.rs)：`managed_cli_child_inherits_required_selector_but_waits_for_its_own_skill_consent` | local_pass |
-| A17 | original journals/read-only explain：冷读无新连接/执行；认证恢复重验原缓存；失联/未知 owner 保持阻塞 | [orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`restoration_revalidates_the_original_mcp_cache_without_a_catalog_replacement`<br>[orchestrator/tests/core_execution/native_skills/files.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills/files.rs)：`supporting_cache_restores_with_original_identity_and_requires_its_feature`<br>[tests/managed_daemon/skills.rs](../apps/bitrouter/tests/managed_daemon/skills.rs)：`managed_skill_explain_is_cold_after_shutdown_and_retains_only_original_evidence`、`cold_explain_of_a_lost_managed_owner_never_restores_or_reports_an_unobserved_result`<br>[tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_reconnect` | local_pass |
-| A18 | native/HTTP/ACP approval owners：逐 skill 同意不扩大 grant；错 Turn/fence/epoch/撤销/取消拒绝；普通审批独立 | [orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`permission_changes_revoke_the_old_skill_consent_before_any_body_fetch`、`a_pending_skill_consent_is_reissued_under_the_restored_owner_epoch`<br>[tests/managed_daemon/skills.rs](../apps/bitrouter/tests/managed_daemon/skills.rs)：`native_http_command_approval_cannot_silently_approve_mcp_skill_content`<br>[tests/management_cli/skill_delivery.rs](../apps/bitrouter/tests/management_cli/skill_delivery.rs)：`both_adapters_keep_tool_approval_separate_from_local_skill_allowed_tools`<br>[tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`native_cli_ask_fifo_cancel_resume_verification_and_cold_recovery` | local_pass |
-| A19 | daemon/NativeSession existing store：产品 managed CLI 由 daemon 托管；原 session/epoch/journal 保持，旧 boot/未知 ACK 无本地回退 | [tests/managed_daemon.rs](../apps/bitrouter/tests/managed_daemon.rs)：`cli_startup_and_passive_status_use_the_selected_daemon_without_embedded_fallback`、`version_and_boot_rejection_never_submit_or_fall_back_to_embedded_execution` | local_pass |
-| A20 | Codex/Claude ACP carriers：分别交付本地 prompt；未知/未协商/预算/取消/不确定结果可解释；MCP-origin unsupported | [tests/management_cli/skill_delivery.rs](../apps/bitrouter/tests/management_cli/skill_delivery.rs)：`codex_cli_delivers_exact_local_binding_and_retains_two_versions_after_restart`、`claude_cli_uses_negotiated_embedded_data_and_keeps_source_receipt_in_original_ledger`、`required_skills_fail_without_a_prompt_for_unknown_or_unadvertised_adapter`、`both_adapters_block_dispatch_after_cancel_or_unacknowledged_decision_outcome`、`both_adapters_retain_uncertain_original_delivery_after_error_and_cold_restart`<br>[orchestrator/tests/acp_skill_delivery.rs](../crates/bitrouter-orchestrator/tests/acp_skill_delivery.rs)：`valid_mcp_entries_remain_unsupported_for_both_carriers_without_laundering` | local_pass |
-| A21 | ACP client/controller/shared prompt/output：permissions/prompt/NDJSON/text/quiet/cost 和原运行身份保留 | [tests/acp.rs](../apps/bitrouter/tests/acp.rs)：`prompt_headless_denies_permission_and_completes`、`prompt_format_text_renders_the_transcript`、`prompt_format_quiet_prints_only_the_text`<br>[orchestrator/src/acp/controller.rs](../crates/bitrouter-orchestrator/src/acp/controller.rs)：`callbacks_and_unknown_extensions_are_bidirectional`、`usage_updates_are_decorated_with_attributed_cost_only`<br>[tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`legacy_chat_defaults_keep_headless_expansion_and_report_ui_migration` | local_pass |
-| A22 | Cargo graph/source audit：全 workspace 无 TUI crate；bro normal/build/dev、all-target/all-feature 图无 Ratatui/Crossterm，原 UI drivers 已删除 | [tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`removed_ui_entrypoints_leave_live_runs_configuration_and_history_intact` | local_pass |
-| A23 | durable stores/config/control：保留旧配置/历史/acceptance；未知副作用不可因 UI 删除或冷恢复重放 | [tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`init_preserves_existing_settings_unless_force_is_requested`、`changing_harness_preserves_routes_and_chat_commands`<br>[tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`native_cli_cold_recovery_rejects_unknown_verification_effects_without_replay`、`removed_ui_entrypoints_leave_live_runs_configuration_and_history_intact`<br>[orchestrator/tests/core_execution/recovery.rs](../crates/bitrouter-orchestrator/tests/core_execution/recovery.rs)：`recovery_unknown_writes_and_shells_block_until_harness_supplies_result` | local_pass |
-| A24 | CLI/skill/plugin distribution：实际 help、JSON/human、主 skill 200 行、manifest/AGENTS/CLI/defaults/wiring 一致 | [tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`public_help_exposes_canonical_agent_entry_points`、`onboarding_resource_human_receipts_and_incomplete_flags_have_explicit_outcomes`<br>[tests/management_cli/skill_delivery.rs](../apps/bitrouter/tests/management_cli/skill_delivery.rs)：`claude_cli_uses_negotiated_embedded_data_and_keeps_source_receipt_in_original_ledger` | local_pass |
-| A25 | connected owner projection：idle 活连接、活 worker、停止历史、未启动 catalog、daemon 不可用与查询失败分开；查询不造连接 | [tests/connected_agents.rs](../apps/bitrouter/tests/connected_agents.rs)：`connected_cli_separates_instances_catalog_history_and_stopped_daemon`、`query_failures_are_errors_and_never_an_empty_connected_list` | local_pass |
-| A26 | existing owners / C01-C08 / T01-T15：CLI/API/headless 全能力迁移与回归；事件、路由、费用、委派、恢复与未知效果不丢失 | [tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`native_cli_steering_and_close_control_the_original_worker_and_queue`、`lost_acp_ack_retries_the_exact_fence_and_can_be_inspected_without_replay`、`acp_cli_settings_sessions_routes_and_controller_lease_are_scoped`<br>[tests/orchestrator_core/managed_api/collaboration.rs](../apps/bitrouter/tests/orchestrator_core/managed_api/collaboration.rs)：`local_and_remote_collaboration_preserve_concurrency_context_and_attribution` | local_pass |
-| A27 | SDK gateway/relay：M01-M03 当前连接门控、完整协议/缓存、聚合来源与反向读取；不是 host 激活 | [sdk/tests/mcp_skills_gateway.rs](../crates/bitrouter-sdk/tests/mcp_skills_gateway.rs)：`current_connection_declarations_gate_methods_without_upstream_requests`、`real_pages_and_colliding_origins_preserve_entries_and_route_reads`、`http_gateway_direct_lookup_is_independent_of_listing_and_preserves_errors`、`query_and_fragment_uris_keep_exact_identity_through_real_gateway_mapping` | local_pass |
-| A28 | native host + external boundary：M04-M10 来源/完整 held entry/延迟文件/批准/原缓存与实际 native 模型；外部 MCP 交付拒绝 | [tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`mcp_onboarding_to_native_consent_lazy_files_and_revoked_capability_after_restart`<br>[orchestrator/tests/mcp_skill_host.rs](../crates/bitrouter-orchestrator/tests/mcp_skill_host.rs)：`every_network_and_cached_use_checks_bytes_and_complete_frontmatter`<br>[orchestrator/tests/acp_skill_delivery.rs](../crates/bitrouter-orchestrator/tests/acp_skill_delivery.rs)：`valid_mcp_entries_remain_unsupported_for_both_carriers_without_laundering` | local_pass |
-
-## 4. M01–M10 与角色隔离
-
-规范基线为 MCP `2026-07-28`、ext-skills commit `c1aa87e4c381c82b99aa37471d0eae4ab50f9985`，正文 SHA-256 `6e33a33762783a02dc4c13c889dda5b8d7c525649012cf77da12d80c04ce6851`。本地请求实际协商的版本/声明及必需 `_meta` 由真实 Rust 上游记录断言。
-
-| ID | 所有者 / 核验内容 | 当前真实测试入口 | 本地状态 |
-| --- | --- | --- | --- |
-| M01 | gateway/native connection：实际声明缺失/false 零 Skills RPC；重连刷新；directoryRead 单独门控 | [sdk/tests/mcp_skills_gateway.rs](../crates/bitrouter-sdk/tests/mcp_skills_gateway.rs)：`current_connection_declarations_gate_methods_without_upstream_requests`、`reconnect_uses_new_declaration_and_resources_stay_independent`<br>[orchestrator/tests/mcp_skill_host.rs](../crates/bitrouter-orchestrator/tests/mcp_skill_host.rs)：`native_loading_rechecks_connection_capabilities_and_rejects_undeclared_methods`<br>[tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`mcp_onboarding_to_native_consent_lazy_files_and_revoked_capability_after_restart` | local_pass |
-| M02 | gateway wire/cache：原 frontmatter、完整 resources、分页完整 entry、cacheScope/TTL、get 不依赖 listing、错误与 _meta | [sdk/tests/mcp_skills_gateway.rs](../crates/bitrouter-sdk/tests/mcp_skills_gateway.rs)：`real_pages_and_colliding_origins_preserve_entries_and_route_reads`、`http_gateway_direct_lookup_is_independent_of_listing_and_preserves_errors`、`metadata_validation_rejects_incomplete_entries_without_inventing_manifests`、`current_connection_declarations_gate_methods_without_upstream_requests` | local_pass |
-| M03 | gateway origin mapping：同名同 URI 来源不碰撞；反向 get/read 精确；合法 scheme/direct 与 aggregate 诊断分开 | [sdk/tests/mcp_skills_gateway.rs](../crates/bitrouter-sdk/tests/mcp_skills_gateway.rs)：`real_pages_and_colliding_origins_preserve_entries_and_route_reads`、`unsupported_members_and_unaggregatable_schemes_keep_explicit_diagnostics`、`query_and_fragment_uris_keep_exact_identity_through_real_gateway_mapping` | local_pass |
-| M04 | native source policy：默认无 MCP 来源许可；host label/config + 原 URI/caller/workspace 准入；unlisted/rootless URI lookup | [orchestrator/tests/mcp_skill_host.rs](../crates/bitrouter-orchestrator/tests/mcp_skill_host.rs)：`explicit_source_caller_and_workspace_grants_precede_metadata_and_direct_lookup`、`source_identity_scope_and_manifest_bound_reads_cannot_be_replaced`<br>[tests/managed_daemon/skills.rs](../apps/bitrouter/tests/managed_daemon/skills.rs)：`managed_cli_requires_unlisted_uri_and_keeps_constraints_in_original_input_identity`、`cli_requires_an_unlisted_rootless_mcp_uri_and_delivers_its_exact_held_entry`<br>[orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`same_named_local_and_two_mcp_sources_keep_separate_consent_and_model_provenance` | local_pass |
-| M05 | native verifier/model data：列举/同意零 body；逐次 raw size/hash/完整 frontmatter；实际 user/context，普通 Resources 不激活 | [orchestrator/tests/mcp_skill_host.rs](../crates/bitrouter-orchestrator/tests/mcp_skill_host.rs)：`every_network_and_cached_use_checks_bytes_and_complete_frontmatter`<br>[orchestrator/tests/core_execution/native_skills/files.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills/files.rs)：`supporting_file_is_lazy_verified_user_data_and_does_not_leak_to_the_next_turn`、`corrupt_supporting_bytes_fail_the_original_turn_before_another_model_request`<br>[tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`mcp_onboarding_to_native_consent_lazy_files_and_revoked_capability_after_restart` | local_pass |
-| M06 | held manifest/read authority：原 entry 随数据存续；越界/非清单/歧义/跨源读取拒绝；新 listing 不替换旧绑定 | [orchestrator/tests/mcp_skill_host.rs](../crates/bitrouter-orchestrator/tests/mcp_skill_host.rs)：`source_identity_scope_and_manifest_bound_reads_cannot_be_replaced`、`ambiguous_filesystem_paths_require_an_exact_held_uri_without_guessing_or_reading`<br>[orchestrator/tests/core_execution/native_skills/files.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills/files.rs)：`unlisted_or_escaping_supporting_paths_settle_without_a_resource_read`、`supporting_cache_restores_with_original_identity_and_requires_its_feature` | local_pass |
-| M07 | content/tool approval：逐 skill、原 owner/Turn/epoch；allowed-tools 不扩大 grant；嵌套只作数据；子激活新同意 | [orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`permission_changes_revoke_the_old_skill_consent_before_any_body_fetch`、`a_permission_change_during_a_skill_read_cancels_old_bytes_before_reapproval`<br>[orchestrator/tests/core_execution/native_skills/files.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills/files.rs)：`a_nested_skill_file_is_data_and_never_gets_activation_or_tool_grants`<br>[tests/managed_daemon/skills.rs](../apps/bitrouter/tests/managed_daemon/skills.rs)：`native_http_command_approval_cannot_silently_approve_mcp_skill_content`、`managed_cli_child_inherits_required_selector_but_waits_for_its_own_skill_consent` | local_pass |
-| M08 | original WorkUnit cache/consents：每次 cache 命中重验；文件增删改撤销同意；保留来源，不进入文件系统 discovery；授权撤销阻塞 | [orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`any_support_manifest_change_requires_new_consent_even_when_root_bytes_are_identical`、`restoration_revalidates_the_original_mcp_cache_without_a_catalog_replacement`<br>[orchestrator/tests/mcp_skill_host.rs](../crates/bitrouter-orchestrator/tests/mcp_skill_host.rs)：`an_offline_source_uses_only_held_verified_bytes_without_discovering_cached_skills`、`a_new_connection_configuration_cannot_reuse_an_old_binding_or_cached_bytes`<br>[orchestrator/tests/core_execution/native_skills/files.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills/files.rs)：`supporting_cache_restores_with_original_identity_and_requires_its_feature` | local_pass |
-| M09 | metadata/content budgets：512 文件/16 MiB 完整清单；dynamic 拒绝、内容按预算/编码逐项处理，不截断或预取 | [sdk/tests/mcp_skills_gateway.rs](../crates/bitrouter-sdk/tests/mcp_skills_gateway.rs)：`baseline_manifest_is_atomic_at_512_files_and_16_mib_without_content_reads`<br>[orchestrator/tests/mcp_skill_host.rs](../crates/bitrouter-orchestrator/tests/mcp_skill_host.rs)：`full_baseline_manifest_and_binary_files_have_independent_read_budgets`、`dynamic_and_invalid_structure_are_excluded_without_reading_content`、`metadata_budget_failures_do_not_fetch_content_or_truncate_entries`<br>[orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`four_skill_bound_excludes_optional_sources_and_rejects_five_required_sources`、`initial_context_budget_excludes_optional_roots_and_fails_required_roots_before_reads`<br>[orchestrator/tests/core_execution/native_skills/files.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills/files.rs)：`binary_support_is_rejected_as_model_data_even_with_matching_commitments`、`a_smaller_turn_context_rejects_support_without_caching_or_truncating_it` | local_pass |
-| M10 | native end-to-end/restore/read-only observation：真实 CLI→daemon→Rust MCP→模型；原选择/缓存/entry 持久，取消和重启，explain 零连接/执行 | [tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`local_onboarding_to_routed_native_approval_uninstall_explain_and_cold_reconnect`、`mcp_onboarding_to_native_consent_lazy_files_and_revoked_capability_after_restart`<br>[tests/managed_daemon/skills.rs](../apps/bitrouter/tests/managed_daemon/skills.rs)：`managed_cli_reads_bound_supporting_files_into_verified_model_data_and_cold_explain`、`managed_skill_explain_is_cold_after_shutdown_and_retains_only_original_evidence`、`cold_explain_of_a_lost_managed_owner_never_restores_or_reports_an_unobserved_result`<br>[orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`restoration_revalidates_the_original_mcp_cache_without_a_catalog_replacement`、`cancellation_expires_the_exact_skill_request_and_refuses_a_late_answer` | local_pass |
-
-## 5. C01–C08 / T01–T15 保持与迁移
-
-原始消费者和旧测试路径见 [G00 基线](CLI_ONLY_AND_WORKFLOW_SKILLS_G00_AUDIT.md)。原 TUI permission/commands/plain/cost 的业务逻辑迁到实际 ACP 所有者；背景权限、timeout、native sessions 与演化业务迁到非 UI suites。只删除布局/光标/composer/热键等第一方展示断言；下列当前入口继续验证业务。真实 maintained-adapter campaigns 保持其 ignored qualification，不用 fixture 冒充运行它们。
-
-| ID | 所有者 / 核验内容 | 当前真实测试入口 | 本地状态 |
-| --- | --- | --- | --- |
-| C01 | G00 retained behavior index：Thread/Turn/Item/FIFO | [tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`native_cli_ask_fifo_cancel_resume_verification_and_cold_recovery`<br>[orchestrator/tests/core_execution/root_queue.rs](../crates/bitrouter-orchestrator/tests/core_execution/root_queue.rs)：`queue_preserves_fifo_ids_and_waits_for_owned_tool_cleanup` | local_pass |
-| C02 | G00 retained behavior index：委派/独立上下文/review/结果 | [tests/orchestrator_core/managed_api/collaboration.rs](../apps/bitrouter/tests/orchestrator_core/managed_api/collaboration.rs)：`local_and_remote_collaboration_preserve_concurrency_context_and_attribution`<br>[orchestrator/tests/core_execution/native_skills.rs](../crates/bitrouter-orchestrator/tests/core_execution/native_skills.rs)：`child_work_selects_its_own_skills_instead_of_inheriting_parent_activation` | local_pass |
-| C03 | G00 retained behavior index：预算/workspace/owner fences | [orchestrator/tests/core_execution/authority.rs](../crates/bitrouter-orchestrator/tests/core_execution/authority.rs)：`authority_revoked_during_ack_fences_model_and_tool_dispatch`<br>[orchestrator/tests/core_execution/budget.rs](../crates/bitrouter-orchestrator/tests/core_execution/budget.rs)：`active_budget_fences_approvals_then_cleans_up_and_preserves_failure_over_cancel` | local_pass |
-| C04 | G00 retained behavior index：enqueue/steer/approval/cancel/queue resume | [tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`native_cli_steering_and_close_control_the_original_worker_and_queue`、`native_cli_ask_fifo_cancel_resume_verification_and_cold_recovery` | local_pass |
-| C05 | G00 retained behavior index：MCP/skills/AGENTS.md | [tests/managed_daemon/skills/integration.rs](../apps/bitrouter/tests/managed_daemon/skills/integration.rs)：`mcp_onboarding_to_native_consent_lazy_files_and_revoked_capability_after_restart`<br>[orchestrator/src/service/tests/instructions.rs](../crates/bitrouter-orchestrator/src/service/tests/instructions.rs)：`deeper_instructions_enter_context_through_native_read` | local_pass |
-| C06 | G00 retained behavior index：已协商 ACP lifecycle 与 callbacks | [orchestrator/src/acp/controller.rs](../crates/bitrouter-orchestrator/src/acp/controller.rs)：`native_multi_session_lifecycle_is_transparent`、`callbacks_and_unknown_extensions_are_bidirectional`<br>[tests/native_acp.rs](../apps/bitrouter/tests/native_acp.rs)：`stdio_disconnect_restores_same_approval_across_versions_and_daemon_restart` | local_pass |
-| C07 | G00 retained behavior index：session route/model/attributed cost | [tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`acp_cli_settings_sessions_routes_and_controller_lease_are_scoped`<br>[tests/daemon.rs](../apps/bitrouter/tests/daemon.rs)：`api_principal_scoped_acp_routes_roundtrip_over_the_control_socket`、`acp_session_spend_roundtrips_over_the_control_socket` | local_pass |
-| C08 | G00 retained behavior index：verification/artifacts/checkpoint/recovery | [tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`native_cli_cold_recovery_rejects_unknown_verification_effects_without_replay`<br>[orchestrator/tests/core_execution/recovery.rs](../crates/bitrouter-orchestrator/tests/core_execution/recovery.rs)：`recovery_requires_artifact_bytes_and_complete_checkpoint_dependencies` | local_pass |
-| T01 | G00 retained behavior index：原 headless permission/plain/quiet/NDJSON | [tests/acp.rs](../apps/bitrouter/tests/acp.rs)：`prompt_headless_denies_permission_and_completes`、`prompt_format_text_renders_the_transcript`、`prompt_format_quiet_prints_only_the_text` | local_pass |
-| T02 | G00 retained behavior index：原 TUI permission/command parser → acp 所有者 | [orchestrator/src/acp/permission.rs](../crates/bitrouter-orchestrator/src/acp/permission.rs)：`an_unanswered_permission_never_resolves_to_consent`、`allow_prefers_once_over_always_and_never_invents`<br>[orchestrator/src/acp/commands.rs](../crates/bitrouter-orchestrator/src/acp/commands.rs)：`the_resolver_reads_the_longest_name_first_then_aliases_then_the_agent`、`a_prompt_command_expands_and_never_outranks_a_bitrouter_name` | local_pass |
-| T03 | G00 retained behavior index：Core root_queue 与 service steering 保留 | [orchestrator/tests/core_execution/root_queue.rs](../crates/bitrouter-orchestrator/tests/core_execution/root_queue.rs)：`queue_acceptance_and_activation_each_require_their_own_durable_ack`、`uncertain_tool_effects_cannot_be_bypassed_by_resuming_the_queue`<br>[orchestrator/src/service/tests/steering.rs](../crates/bitrouter-orchestrator/src/service/tests/steering.rs)：`native_core_steering_preserves_thread_receipts_and_fences_stale_effects` | local_pass |
-| T04 | G00 retained behavior index：scheduler/委派/预算/context decisions | [tests/orchestrator_core/managed_api/collaboration.rs](../apps/bitrouter/tests/orchestrator_core/managed_api/collaboration.rs)：`local_and_remote_collaboration_preserve_concurrency_context_and_attribution`<br>[orchestrator/tests/core_execution/context_decisions.rs](../crates/bitrouter-orchestrator/tests/core_execution/context_decisions.rs)：`real_decision_http_selects_prompt_and_retains_raw_source_and_cost`、`committed_decision_survives_restart_without_second_provider_call` | local_pass |
-| T05 | G00 retained behavior index：原 managed native 与 lifecycle/recovery | [tests/managed_native.rs](../apps/bitrouter/tests/managed_native.rs)：`sqlite_native_core_writes_reads_releases_and_continues`、`native_cancel_pending_approval_fences_the_write`<br>[orchestrator/src/service/tests/lifecycle.rs](../crates/bitrouter-orchestrator/src/service/tests/lifecycle.rs)：`approval_is_task_bound_and_one_use`、`configured_verification_records_exit_status_and_controls_outcome` | local_pass |
-| T06 | G00 retained behavior index：原 code_tui_pty/background 业务 → background_cli | [tests/background_cli/lifecycle.rs](../apps/bitrouter/tests/background_cli/lifecycle.rs)：`background_permissions_default_to_ask_and_explicit_modes_win`、`permission_wait_counts_toward_background_turn_timeout`、`background_load_and_resume_use_advertised_native_capabilities`、`failed_run_stop_is_idempotent_and_remove_preserves_native_session` | local_pass |
-| T07 | G00 retained behavior index：原 MCP discovery/approval/catalog fences | [orchestrator/src/service/tests/harness.rs](../crates/bitrouter-orchestrator/src/service/tests/harness.rs)：`mcp_approval_and_discovery_cross_native_durable_barriers`、`denied_mcp_call_does_not_reach_upstream`、`changed_mcp_catalog_rejects_old_dispatch_without_retry` | local_pass |
-| T08 | G00 retained behavior index：原 Harness resources/AGENTS 冷读及来源边界 | [tests/native_harness_resources.rs](../apps/bitrouter/tests/native_harness_resources.rs)：`sqlite_reopen_retains_resource_inventory_and_known_result_without_connections`<br>[orchestrator/src/service/tests/instructions.rs](../crates/bitrouter-orchestrator/src/service/tests/instructions.rs)：`deeper_instructions_enter_context_through_native_read`、`instruction_symlinks_stay_within_the_host_read_root` | local_pass |
-| T09 | G00 retained behavior index：ACP 透明性/更新顺序/费用 | [orchestrator/src/acp/controller.rs](../crates/bitrouter-orchestrator/src/acp/controller.rs)：`native_multi_session_lifecycle_is_transparent`、`route_extensions_are_confirmed_and_cleanup_tracks_harness_success`、`usage_updates_are_decorated_with_attributed_cost_only`<br>[orchestrator/src/acp/client.rs](../crates/bitrouter-orchestrator/src/acp/client.rs)：`prompt_boundary_follows_every_prior_session_update` | local_pass |
-| T10 | G00 retained behavior index：native ACP v1/v2/stdio 与恢复所有权 | [tests/native_acp.rs](../apps/bitrouter/tests/native_acp.rs)：`stdio_disconnect_restores_same_approval_across_versions_and_daemon_restart`<br>[orchestrator/src/service/tests/native_acp.rs](../crates/bitrouter-orchestrator/src/service/tests/native_acp.rs)：`wire_cancel_pauses_queue_and_close_withdraws_it_durably`、`replacement_approval_owner_rejects_old_wire_answer_in_both_versions`、`reconnect_keeps_queue_paused_until_explicit_extension` | local_pass |
-| T11 | G00 retained behavior index：daemon IPC route/cost 归因保留 | [tests/daemon.rs](../apps/bitrouter/tests/daemon.rs)：`api_principal_scoped_acp_routes_roundtrip_over_the_control_socket`、`acp_session_spend_roundtrips_over_the_control_socket` | local_pass |
-| T12 | G00 retained behavior index：unknown effect/artifact bytes/checkpoint ACK | [orchestrator/tests/core_execution/recovery.rs](../crates/bitrouter-orchestrator/tests/core_execution/recovery.rs)：`recovery_unknown_writes_and_shells_block_until_harness_supplies_result`、`recovery_requires_artifact_bytes_and_complete_checkpoint_dependencies`<br>[orchestrator/tests/core_execution/artifact_storage.rs](../crates/bitrouter-orchestrator/tests/core_execution/artifact_storage.rs)：`artifact_quota_reserves_essential_evidence_through_unknown_effect_recovery` | local_pass |
-| T13 | G00 retained behavior index：原 code_tui_pty/evolution 业务 → CLI candidate/checkpoint | [tests/management_cli/evolution.rs](../apps/bitrouter/tests/management_cli/evolution.rs)：`candidate_preview_registration_and_baseline_restore_use_exact_revisions`、`recorded_checkpoint_cli_review_preserves_history_idempotency_and_current_reward`、`candidate_cli_preserves_joint_rules_judge_fences_balanced_accounts_and_recovery` | local_pass |
-| T14 | G00 retained behavior index：旧 bare/launcher 产品语义 → 当前 line-onboarding/daemon 进程证据 | [tests/onboarding.rs](../apps/bitrouter/tests/onboarding.rs)：`init_preserves_existing_settings_unless_force_is_requested`、`bare_and_init_ensure_one_ready_background_daemon_and_preserve_running_settings`<br>[tests/onboarding_pty.rs](../apps/bitrouter/tests/onboarding_pty.rs)：`first_bare_onboarding_saves_then_starts_background_daemon_and_returns`、`optional_resources_retry_real_transactions_and_keep_router_progress` | local_pass |
-| T15 | G00 retained behavior index：仅删除旧画面/热键；迁移 FIFO/timeout/信号/accepted-detach | [tests/management_cli.rs](../apps/bitrouter/tests/management_cli.rs)：`native_cli_ask_fifo_cancel_resume_verification_and_cold_recovery`、`protocol_attachment_keeps_fenced_history_heartbeat_and_release_without_ui`<br>[tests/background_cli/lifecycle.rs](../apps/bitrouter/tests/background_cli/lifecycle.rs)：`permission_wait_counts_toward_background_turn_timeout` | local_pass |
-
-## 6. 整个 spec 的本地交付范围
-
-- 第一方 `code/tui/chat`、agents 控制台/attach renderer 和绘制依赖移除；旧命令仅提供迁移错误。裸 bro 完成行式 setup 或确保后台 readiness 后返回；裸 agents 只读当前实际实例，catalog/历史/查询错误分开。原生 launcher 把终端交给外部 harness，保留其自己的界面。
-- Providers → optional Agents/resources → Finish 仍是有限步骤。MCP/skills 调用原事务；Router 先保存，资源失败可显式重试/跳过，headless 失败报告部分结果并停止后续动作，`--yes` 不消除 bundle/ref/scope 歧义。
-- Native Thread/Turn/Item、Core 委派/上下文路由、队列/steering、权限/审批、验证、artifacts、事件/历史和条件恢复保留 CLI/API/headless 入口。managed 产品 CLI 由 daemon 托管，原 session、store、epoch、acceptance 和恢复 fence 保持；未知副作用/失联 owner 不自动接管或重放。
-- 本地/Git 安装是完整、不可变 bundle 与原子 alias/receipt；更新和卸载保留原版本，unmanaged/harness 目录不受管理。无物理 GC、MCP URI 安装或本地 origin MCP 发布；这些是原 spec 的明确边界。
-- Native workflow 选择复用原 DecisionRuntime 和 WorkUnit；本地库为默认候选，MCP 元数据需明确来源许可，MCP 加载另需内容绑定批准，支持文件按需验证并计入原 Turn/context/model 预算。实际模型路由与 context/resource 内容分别验证。cold explain 只读原数据库，不重建 owner、不连接 MCP、不调用评估或模型。
-- Gateway 证明协议转发/聚合/隔离；本地安装证明 lifecycle；native host 证明实际加载。三者不相互替代。512 文件/16 MiB 清单能力与每次内容/上下文预算分别验证；native dynamic、目录读取和模型二进制文件的产品限制仍明确，不说成远端实现错误。
-- 外部 Codex/Claude 交付限本地 prompt 指令，原 receipt/version/path/session/input 可追溯。MCP-origin external delivery、native launcher/inference-only 的动态分配和未协商 adapter 能力明确 unsupported。prompt 接收不等于 native activation 或受保护 bundle 访问；vendor token/history/compaction 仍未验证，后续排除不证明旧历史已清除。
-- 保留既有 managed verification 的非零 exit_status 语义限制，见 [spec 第 9 节](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md#9-各类-agent-的交付范围)；没有把迁移/回归当作修复该执行层语义。ACP 定义 CRUD、跨用户/Cloud/远程执行 skills 安装和其他延期项未新增。
-
-## 7. 最终检查、依赖与实际行数
-
-| 检查 | 真实命令 | 结果 |
-| --- | --- | --- |
-| workspace-nextest | `cargo nextest run --workspace --all-features --no-fail-fast --test-threads 4` | exit 0；4368 passed / 22 skipped；6 slow，无失败；源码前后不变 |
-| clippy | `cargo clippy --workspace --all-features --all-targets` | exit 0；通过；源码前后不变 |
-| doctest | `cargo test --workspace --all-features --doc` | exit 0；6 passed / 1 ignored，无失败；源码前后不变 |
-| fmt | `cargo fmt -- --check` | exit 0；通过；源码前后不变 |
-| dist | `cargo run -p dist-helper -- check` | exit 0；通过；源码前后不变 |
-| metadata | `cargo metadata --locked --offline --all-features --format-version 1` | exit 0；629 resolve nodes / 7 workspace members；源码前后不变 |
-| tree | `cargo tree --locked --offline --workspace --all-features --target all --edges normal,build,dev` | exit 0；all targets、normal/build/dev，无 TUI/Ratatui/Crossterm；源码前后不变 |
-| test-list | `cargo nextest list --workspace --all-features --message-format json` | exit 0；4390 已发现用例，22 个 ignored 与源码逐一对应；未运行 ignored；源码前后不变 |
-
-61 项契约（A28/M10/C8/T15）引用的 149 个当前测试全部匹配唯一 PASS；A22 另核验实际依赖/源码，A24 另核验真实二进制输出与分发文档，不能只从测试总数推定。`dependency-audit.json`、`cli-audit.json`、`g11-final-doc-audit.json`、`coverage-results.json` 与完整日志保存在同一 evidence 目录。
-
-实际二进制完成 11 组 help/JSON/human/部分失败/旧命令检查；23 份当前文档核对了 426 个本地链接、代码围栏与三个 JSON manifests。主 skill 200 行，无 references 下第二份 SKILL.md；原站点 `/docs/guides/cloud-api` 是站点路由，未伪装成本地文件链接检查。`git diff --check` exit 0。CLI 默认值、env 名称、source scope、native/ACP wiring 与技能/manifest 描述保持同步。
-
-使用本机 stable-aarch64-apple-darwin（rustc 1.97.0），`CARGO_BUILD_JOBS=2`、`CARGO_INCREMENTAL=0`、`CARGO_PROFILE_DEV_DEBUG=0`、`CARGO_PROFILE_TEST_DEBUG=0`，并显式绑定同一 RUSTC/RUSTDOC；Cargo gate 串行。Clippy 有两处既有 PTY `byte_char_slices` 建议；依赖 `proc-macro-error2 2.0.1` 有 future-incompatibility 提示，test-list 构建另有 macOS compact-unwind 链接提示，均非失败。未加入 allow 或调低业务验收。
-
-22 个 ignored 分别是 maintained ACP campaign 10、真实 Hermes/Codex/Claude workflow-state 9、BYOK live search/extraction 2、长时 Docker HTTP fault 1；一个 doctest 示例另行 ignored。实际名称、源码原因和 nextest discovery 身份记录在 `ignored-qualification.json`；没有将它们计为通过。完整图不代表其他 OS 已运行。
-
-| Rust 物理行口径 | G00 HEAD 基线 | G11 最终工作区 / 差异 |
-| --- | --- | --- |
-| 全仓 `.rs` 文件 / 行 | 790 / 468581 | 806 / 465518，净 -3063 行 |
-| 移除整个旧文件 | — | 49 文件 / 38538 行 |
-| 新增整个文件 | — | 65 文件 / 33902 行 |
-| 仍存在的修改文件 | — | 82 文件，+5299 / −3726 行 |
-| 总增删 | — | +39201 / −42264 行 |
-
-该口径含业务测试、注释和空行；对比 tracked HEAD 与 tracked + 非忽略 untracked 源码，不含 docs/lock/schema/target/第三方依赖。`source-statistics.json` 保留逐文件计数和同一冻结摘要。G05 UI 删除阶段是 439345 行（净 −29236）；G06–G11 为管理、安装、host/adapter 与回归新增净 26173 行，因此最终净减 3063，而不是此前估算的 1.3–2.9 万。49 个删除文件包含 UI drivers 与其迁移后的旧测试路径，不等于纯 TUI crate 行数；未删除业务验收以追求行数。
-
-
-## 8. 外部资格
-
-| 资格 / 路径 | 状态 | 与本地证据的区别 |
-| --- | --- | --- |
-| macOS aarch64 本地 CLI/PTY/process、native/gateway/ACP fixtures | local_complete | 只针对实际执行的本机 fixtures |
-| 真实 inference provider / decision backend 语义质量 | unverified | 只使用本地 HTTP fixtures；不推定真实质量/延迟/费用 |
-| 真实 Codex ACP / Claude ACP | unverified | pinned 源码核对及两个独立本地 peer，不运行真实 vendor adapter |
-| 真实远端 MCP Skills / 外部 host 互操作 | unverified | 固定规范本地 stdio/HTTP fixtures 不代表任意远端或第三方 host |
-| 外部 ACP 的 MCP-origin allocation | unsupported | 当前明确拒绝；不能借 prompt/落盘把来源降为 local |
-| 远端 Git HTTPS/SSH/auth | unverified | 本地 Git fixtures 验证 ref/commit/bundle/事务 |
-| hosted CI | separate | 原 G11 只做本地验收；后续远端结果按提交查看 [PR #989 checks](https://github.com/bitrouter/bitrouter/pull/989/checks)，本表不手抄动态状态 |
-| Linux / Windows 进程与终端 | unverified | all-target 依赖图不代表跨平台执行 |
-| merge / release / deployment | not_requested | 本阶段仅本地交付，不推送/发布 |
-
-这些未验证资格不是当前本地目标的替代品，也未被标为 verified。若另行要求 release qualification，须单独取得真实服务/host/平台与 hosted CI 证据。
-
-## 9. 提交到 main 的基线同步
-
-2026-10-20 用户另行要求创建指向 main 的 PR。上文的 HEAD、未提交及未推送描述记录 G11 本地验收时点；PR 准备在该阶段完成之后进行，不改变外部资格结论。
-
-- 分支：`codex/cli-only-workflow-skills`，已同步 `origin/main` 的 `47f67eac`。
-- 上游净变化仅为 README/CLI 文档与 registry YAML/JSON。README 的旧 code quick start 与本实现重叠，保留当前 CLI-only 说明，同时保留上游 routing/Cloud/priority 修正；CLI 的 policy init 修正也保留。
-- 同步后全部 Rust/Cargo 内容摘要仍为 `7b3a3f450dbef05915b6021b957fb220540175aaf9f7bf641b0c9223ebb87069`。上述 4368 项完整运行发生于 G11 验收时点；未把它标为同步后重新运行的完整套件。
-- 同步后另行运行 `cargo run -p dist-helper -- registry validate`、`cargo run -p dist-helper -- registry build`、`cargo run -p dist-helper -- check`、`cargo fmt -- --check`，四项均 exit 0，源码摘要前后不变。记录位于 `target/g11-evidence/pr-check-results.json`；提交前重新检查文档、分发清单与 diff 空白。
-- PR 用于代码审阅，不包含合并、发布或部署。hosted CI 以该 PR 的实际远端结果为准，不能由本地检查推定通过。
-
-## 10. 测试与文档精简复验
-
-范围：测试、测试 helper、文档与插件描述；产品命令、协议与 runtime 不变。
-完整历史仍在不可变提交 `264765f4`，实现摘要与阶段索引链接到原记录；当前
-A01–A28/M01–M10/C/T 只在本附件维护，不复制第二份表。
-
-- 共用 PTY 进程/收发/等待/恢复与 JSON 断言，保留两组各自的环境、交互与输入断言。
-- 共用 MCP fixture 的进程 transport 与日志 I/O；gateway、host、Core、CLI 的
-  原始 wire/来源/批准/字节/模型角色预期继续独立，Codex/Claude parser 未合并。
-- ACP fixture 配置完成后首次启动；每个 adapter 保留一条 init→交付 happy path，
-  其余预算/权限/取消/错误用例直接安装 skill，仍走原 daemon/supervisor。
-- 修正原 hosted Clippy 的两个 PTY byte_char_slices 问题，不添加 allow 或放宽断言。
-- 首轮定向编译遗漏了能力变更用例仍使用的 McpTransport import，已恢复该 import；
-  对应负例保留，日志为 `target/cli-cleanup/targeted.log`。
-- 严格 Clippy 另检出重复声明 example_binary 模块与无用 Value import；分别改为
-  复用父模块和移除 import，不加入 allow，失败日志保存在 first/second-final-clippy.log。
-
-本轮基线为 `264765f4d6928e8039ebe44ecef4c94c3b5287d4`；最终 Rust/Cargo
-内容摘要为 `11b51a57a24386e91b86eb482855a3fdf9ca8ca437b06a9fa1fa4b197f566acb`。
-没有生产 Rust/Cargo 变更。先行定向 CLI/PTY/daemon/MCP suites 为 98 passed；
-随后在上述冻结源码上完成全部 8 项 gate，前后摘要均相同：
-
-| 检查 | 本轮实际结果 |
+| 边界 | 验证入口 |
 | --- | --- |
-| `cargo nextest run --workspace --all-features --no-fail-fast --test-threads 4` | 4368 passed / 22 skipped（7 slow），exit 0 |
-| `cargo clippy --workspace --all-features --all-targets -- -D warnings` | exit 0 |
-| `cargo test --workspace --all-features --doc` | 6 passed / 1 ignored，exit 0 |
-| `cargo fmt -- --check`、`cargo run -p dist-helper -- check` | 各 exit 0 |
-| 第 7 节所列 locked/offline metadata、all-target normal/build/dev tree、nextest JSON discovery | 各 exit 0；629 nodes / 7 members，无 TUI/Ratatui/Crossterm |
+| 目录发现、读取、原子写入，无安装索引 | `tests/skills_lifecycle.rs` |
+| 同名、非法 root 写入、越界与 symlink | `tests/skills_lifecycle.rs` |
+| 原 caller/manifest、修改字节拒绝 | `skills/native.rs` 单元回归与 Core native_skills |
+| Setup 仅 MCP、保存进度、TTY 取消 | onboarding / onboarding_pty / mcp_config_pty |
+| 显式目录 → native 模型、工具审批、支持文件与 cold explain | managed_daemon/skills 与 integration |
+| MCP 来源/metadata-only consent、拒绝/撤销/stale/child/cache/URI | Core native_skills、mcp_skill_host、managed_daemon |
+| 原生配置 backend 后零语义请求，完整上下文、policy 默认与原 learn 证据保留 | agent/tests_native、core_execution/context_decisions、orchestrator_core |
+| ACP 显式本地载体、原 ledger、审批/取消/超限/错误/冷读；零自动决策 | management_cli/skill_delivery、acp_skill_delivery |
+| SDK 路由独立评估保持 | SDK language_model/tests_unified_routing 与全量 SDK tests |
+| 原执行、持久化、容量和恢复 | 全工作区 nextest |
 
-环境与第 7 节一致，Cargo 串行；discovery 仍有既有 macOS 链接与依赖
-future-incompatibility 提示。实际命令、时间、终态和文件摘要在
-`target/cli-cleanup/final-check-results.json`、`final-source-checkpoint.json`；
-各 gate 日志为同目录 `final-*.log`。这些本地日志不随 PR 分发，可用表中命令复验。
+## 本轮最终验证
 
-将新 discovery 的全部 4390 个 binary/name/ignored 元组与原 G11 清单逐一比对，
-结果完全相同；本轮实际 PASS 正好覆盖全部 4368 个非 ignored 用例。
-原 61 项 A/M/C/T 映射引用的 149 个唯一测试，均在原路径保留并唯一匹配本轮 PASS。
-核对结果见 `target/cli-cleanup/verification.json`，不以全量总数代替逐项证据。
+最终 Rust/Cargo 源码摘要：`71ca157a932ee8f9e1097fe93dc3089996804c00906ffe7e83d22af3e8394936`。
+严格 Clippy、fmt、已有 Cargo-built dist-helper、metadata、依赖树与最终二进制
+测试发现通过。完整复跑和 doctests 未通过本轮本地门禁，不能写成八项全绿。
 
-实现记录由 2421 行压至 209 行，阶段计划由 401 行压至 99 行；完整原文仍可从
-不可变提交读取。10 个测试/支持文件合计 +216 / −242，含两个新增 helper，净减
-26 行；不把迁移当成删除收益。三个插件描述各由 2331 字符减至 235 字符，
-其余字段、skill 路径与注册保持相同。文档相对路径/锚点、JSON、skill 行数和
-diff 空白审计通过；原第 7 节继续只对应原 G11，hosted CI 按 PR 提交单独查看。
+| 检查 | 实际结果 |
+| --- | --- |
+| 最终全工作区 / all-features nextest | 4202 passed；3 个 fixture 启动超时、4 个同类运行中用例随后中断，123 项未重跑；22 skipped |
+| 全工作区 / all-features / all-targets Clippy | `-D warnings` 通过 |
+| doctests | 未完成：ring build script 同样停在程序入口，已停止该构建；不沿用旧 6 passed / 1 ignored |
+| fmt 与 dist-helper check | 通过；后者使用已有 Cargo-built executable，配置 schema 与 registry 均匹配 |
+| locked/offline metadata、全目标依赖树 | 629 resolved nodes / 7 workspace members；无 bitrouter-tui、Ratatui、Crossterm |
+| 最终二进制 discovery | 对已有最终构建逐个执行 --list / --ignored，4354 项；原 ignored 集合完全相同 |
+| SDK 独立模型路由 | 3 项 unified-routing 用例实际 PASS；保留 decision assessment |
+
+完整日志、源码快照、测试发现与逐项 PASS 对照保存在本地
+`target/skills-convergence/`，不随 PR 分发。文档审计另核验本地链接、
+anchors、skill 行数与三个 plugin manifests 的描述/wiring；运行证据不等于真实服务资格。
+
+首轮完整执行为 4329 passed / 3 failed / 22 skipped。三个失败对应旧自动分类、旧
+版本路径、旧隐式 MCP 选择预期；修正后定向三项全部通过。两轮之间只修改三个
+集成测试文件，生产 Rust/Cargo 未变化；这三个二进制的全部当前用例又在最终复跑
+通过。按原完整运行、修正定向和最终复跑组合，4354 项发现中的 4332 个 active
+名称都有实际 PASS，22 个 ignored 不变。该逐项覆盖不等于一次最终全量 exit 0。
+
+最终阻塞时，fixture 的请求日志为空，进程采样停在 macOS dyld 入口，未进入
+fixture main；不把它记作协议断言失败或产品通过。CI 单独验证同一提交；Linux
+新增 cli-orchestration 分片，覆盖此前未列入该平台的六个 CLI 集成目标。
+
+## 用例退役与替换
+
+相对 `c122b437` 的 4390 个名称，本轮删除/改名
+57 个、增加/替换 21 个，
+合计 4354 个。名称变化只发生在下列已移除行为或对应替代路径；
+旧 installer/自动调用期望不能用“仍通过”表述。
+
+| 原名称所属范围 | 删除或改名数 | 当前边界与替代证据 |
+| --- | --- | --- |
+| 安装器与版本库 | 22 | 退役 Git/ref/alias/版本保留；实际目录 CLI、manifest/字节与独立目录错误回归 |
+| 自动上下文选择与完整视图替代 | 11 | 退役语义请求/付费 intent 调度；完整上下文、显式 recall/派生与 serving model 检查 |
+| ACP 目录交付与零自动调用 | 4 | 两个独立 adapter 的载体/账本/取消/超限保留；配置 backend 后零自动调用 |
+| 自动 skills 选择与显式 include 替代 | 10 | 退役可选自动选择；显式包括/排除、未选来源零加载与必需项数量预算 |
+| Native 目录与明确批准 | 4 | 目录进入模型、支持文件与 cold evidence；必需 MCP 损坏在模型前失败 |
+| 安装型 onboarding | 6 | 退役技能安装菜单/flags；保留 MCP 部分失败、进度、重试与 TTY 取消 |
+
+保留的用例与 ignored 标志逐项对比；新行为不靠放宽原审批、manifest、MCP 来源、
+文件字节、执行/恢复或容量边界通过。恢复及 cold explain 另拒绝没有显式 include
+的已选来源。新目录无磁盘快照：修改/移除原文件可使旧 Turn 失败；旧安装 ID 和
+`managed` 安装来源不自动迁移为目录绑定。历史数据不删除。
+
+定向迁移时发现并补上 `threads create --skill/--exclude-skill` 的 CLI 入口；
+旧自动调用/可选拒绝断言改为显式必需项或零调用断言。中间失败、编译取消与后续修复
+不计为最终通过；上表分别报告完整执行、修正回归、逐项覆盖与平台阻塞。
+
+## 外部资格
+
+本地 macOS fixtures 不证明真实 provider 语义质量、Codex/Claude vendor 会话、远端
+MCP/host/Git auth 或 Linux/Windows 执行。MCP-origin 外部 ACP 交付仍 unsupported。
+Host CI 单独看 [PR #989 checks](https://github.com/bitrouter/bitrouter/pull/989/checks)。
+本轮不合并、发布或部署。

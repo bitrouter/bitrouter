@@ -619,43 +619,26 @@ fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn onboarding_optional_resources_save_complete_receipts_without_starting_anything()
+async fn onboarding_saves_mcp_without_installing_skills_or_starting_the_resource()
 -> anyhow::Result<()> {
-    use anyhow::Context;
     let home = startup_home()?;
     isolated_config(home.path(), "127.0.0.1:0")?;
-    let config = home.path().join("bitrouter.yaml");
-    let original = std::fs::read_to_string(&config)?;
-    std::fs::write(&config, format!("# ONBOARDING_CONFIG_COMMENT\n{original}"))?;
-    let workspace = home.path().join("project");
-    let source = home.path().join("review");
-    std::fs::create_dir_all(source.join("references"))?;
-    std::fs::create_dir(&workspace)?;
-    std::fs::write(
-        source.join("SKILL.md"),
-        "---\nname: review\ndescription: review workflow\n---\nONBOARDING_LOCAL_ROOT\n",
-    )?;
-    std::fs::write(source.join("references/check.md"), "complete bundle")?;
     let entry = home.path().join("mcp.yaml");
     std::fs::write(
         &entry,
-        "name: review-peer\ntransport:\n  type: stdio\n  command: must-not-be-started-during-setup\n  env:\n    TOKEN: fixture-private-value\n",
+        "name: review-peer\ntransport:\n  type: stdio\n  command: must-not-start\n",
     )?;
     let output = invoke(
         home.path(),
         &[
             "init",
             "--yes",
-            "--config",
-            config.to_str().context("config")?,
             "--mcp-name",
             "review-peer",
             "--mcp-from",
-            entry.to_str().context("entry")?,
-            "--install-skill",
-            source.to_str().context("source")?,
-            "--workspace",
-            workspace.to_str().context("workspace")?,
+            entry
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("entry path"))?,
             "--after",
             "exit",
         ],
@@ -667,77 +650,32 @@ async fn onboarding_optional_resources_save_complete_receipts_without_starting_a
         String::from_utf8_lossy(&output.stderr)
     );
     let report: Value = serde_json::from_slice(&output.stdout)?;
-    assert_eq!(report["config_activation"], "saved_only");
     assert_eq!(report["resources"][0]["status"], "saved");
-    assert_eq!(
-        report["resources"][0]["receipt"]["activation"],
-        "saved_only"
-    );
-    assert_eq!(report["resources"][1]["status"], "installed");
-    assert!(
-        report["resources"][1]["receipt"]["skills"]
-            .as_array()
-            .is_some_and(|rows| rows.iter().any(|row| row["installed"] == true))
-    );
-    assert!(workspace.join(".bitrouter/skills/installed.json").is_file());
-    assert!(!home.path().join(".bitrouter/bitrouter.sock").exists());
-    assert!(!report.to_string().contains("fixture-private-value"));
-    assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-private-value"));
-    let saved: Value = serde_saphyr::from_str(&std::fs::read_to_string(&config)?)?;
-    assert!(std::fs::read_to_string(&config)?.contains("# ONBOARDING_CONFIG_COMMENT"));
-    assert_eq!(
-        saved["mcp_servers"]["review-peer"]["transport"]["env"]["TOKEN"],
-        "fixture-private-value"
-    );
-    let skipped = invoke(
-        home.path(),
-        &[
-            "init",
-            "--yes",
-            "--config",
-            config.to_str().context("config")?,
-        ],
-    )
-    .await?;
-    assert!(skipped.status.success());
-    let skipped: Value = serde_json::from_slice(&skipped.stdout)?;
-    assert_eq!(skipped["resources"][0]["status"], "skipped");
-    assert_eq!(skipped["resources"][1]["status"], "skipped");
-    let after: Value = serde_saphyr::from_str(&std::fs::read_to_string(&config)?)?;
-    assert_eq!(after, saved);
+    assert_eq!(report["resources"].as_array().map(Vec::len), Some(1));
+    assert!(!home.path().join(".bitrouter/skills").exists());
     Ok(())
 }
-
 #[tokio::test]
-async fn onboarding_optional_failure_preserves_router_and_prior_resource_then_can_retry()
+async fn onboarding_rejects_removed_installer_flags_and_keeps_mcp_failure_progress()
 -> anyhow::Result<()> {
-    use anyhow::Context;
     let home = startup_home()?;
+    let removed = invoke(
+        home.path(),
+        &["init", "--yes", "--install-skill", "anything"],
+    )
+    .await?;
+    assert!(!removed.status.success());
+    assert!(!home.path().join(".bitrouter/bitrouter.yaml").exists());
     isolated_config(home.path(), "127.0.0.1:0")?;
-    let config = home.path().join("bitrouter.yaml");
-    let source = home.path().join("review");
-    let workspace = home.path().join("project");
-    std::fs::create_dir(&workspace)?;
-    let entry = home.path().join("mcp.yaml");
-    std::fs::write(
-        &entry,
-        "name: retained-peer\ntransport:\n  type: http\n  url: http://127.0.0.1:9/mcp\n",
-    )?;
     let failed = invoke(
         home.path(),
         &[
             "init",
             "--yes",
-            "--config",
-            config.to_str().context("config")?,
             "--mcp-name",
-            "retained-peer",
+            "review-peer",
             "--mcp-from",
-            entry.to_str().context("entry")?,
-            "--install-skill",
-            source.to_str().context("source")?,
-            "--workspace",
-            workspace.to_str().context("workspace")?,
+            "missing-entry.yaml",
             "--after",
             "serve",
         ],
@@ -745,232 +683,7 @@ async fn onboarding_optional_failure_preserves_router_and_prior_resource_then_ca
     .await?;
     assert!(!failed.status.success());
     let report: Value = serde_json::from_slice(&failed.stdout)?;
-    assert_eq!(report["resources"][0]["status"], "saved");
-    assert_eq!(report["resources"][1]["status"], "failed");
-    assert_eq!(report["after"], "exit");
-    assert_eq!(report["config_activation"], "saved_only");
-    assert!(!home.path().join(".bitrouter/bitrouter.sock").exists());
-    let saved: Value = serde_saphyr::from_str(&std::fs::read_to_string(&config)?)?;
-    assert!(saved["mcp_servers"]["retained-peer"].is_object());
-    assert!(!workspace.join(".bitrouter/skills/installed.json").exists());
-    std::fs::create_dir(&source)?;
-    std::fs::write(
-        source.join("SKILL.md"),
-        "---\nname: review\ndescription: retried workflow\n---\nretry completed\n",
-    )?;
-    let retried = invoke(
-        home.path(),
-        &[
-            "init",
-            "--yes",
-            "--config",
-            config.to_str().context("config")?,
-            "--install-skill",
-            source.to_str().context("source")?,
-            "--workspace",
-            workspace.to_str().context("workspace")?,
-            "--after",
-            "exit",
-        ],
-    )
-    .await?;
-    assert!(
-        retried.status.success(),
-        "{}",
-        String::from_utf8_lossy(&retried.stderr)
-    );
-    let retried: Value = serde_json::from_slice(&retried.stdout)?;
-    let outcomes = retried["resources"]
-        .as_array()
-        .context("resource outcomes")?;
-    assert!(
-        outcomes
-            .iter()
-            .any(|row| row["kind"] == "mcp" && row["status"] == "skipped")
-    );
-    assert!(
-        outcomes
-            .iter()
-            .any(|row| row["kind"] == "skill" && row["status"] == "installed")
-    );
-    let after: Value = serde_saphyr::from_str(&std::fs::read_to_string(&config)?)?;
-    assert_eq!(after, saved);
-    Ok(())
-}
-
-#[tokio::test]
-async fn onboarding_resource_human_receipts_and_incomplete_flags_have_explicit_outcomes()
--> anyhow::Result<()> {
-    use anyhow::Context;
-    let home = startup_home()?;
-    for flags in [
-        vec!["--mcp-name", "unpaired"],
-        vec!["--mcp-from", "entry.yaml"],
-        vec!["--skill", "review"],
-        vec!["--workspace", "project"],
-    ] {
-        let mut args = vec!["init", "--yes"];
-        args.extend(flags);
-        let output = invoke(home.path(), &args).await?;
-        assert!(!output.status.success());
-        assert!(!home.path().join(".bitrouter/bitrouter.yaml").exists());
-    }
-    isolated_config(home.path(), "127.0.0.1:0")?;
-    let source = home.path().join("review");
-    let workspace = home.path().join("project");
-    std::fs::create_dir(&source)?;
-    std::fs::create_dir(&workspace)?;
-    std::fs::write(
-        source.join("SKILL.md"),
-        "---\nname: review\ndescription: human output\n---\nPRIVATE_ROOT_BODY\n",
-    )?;
-    let missing = home.path().join("missing-mcp.yaml");
-    let failed = invoke(
-        home.path(),
-        &[
-            "init",
-            "--yes",
-            "--mcp-name",
-            "missing-peer",
-            "--mcp-from",
-            missing.to_str().context("entry")?,
-            "--install-skill",
-            source.to_str().context("source")?,
-            "--workspace",
-            workspace.to_str().context("workspace")?,
-            "--after",
-            "serve",
-        ],
-    )
-    .await?;
-    assert!(!failed.status.success());
-    let failed: Value = serde_json::from_slice(&failed.stdout)?;
-    assert_eq!(failed["resources"][0]["status"], "failed");
-    assert_eq!(failed["resources"][1]["status"], "skipped");
-    assert_eq!(failed["resources"][1]["reason"], "previous_step_failed");
-    assert!(!workspace.join(".bitrouter/skills/installed.json").exists());
-    let output = invoke(
-        home.path(),
-        &[
-            "init",
-            "--yes",
-            "--human",
-            "--install-skill",
-            source.to_str().context("source")?,
-            "--workspace",
-            workspace.to_str().context("workspace")?,
-        ],
-    )
-    .await?;
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let text = String::from_utf8(output.stdout)?;
-    assert!(
-        text.contains("installed") && text.contains("installation_id") && text.contains("project")
-    );
-    assert!(!text.contains("PRIVATE_ROOT_BODY") && !text.contains('\u{1b}'));
-    Ok(())
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn onboarding_git_ref_bundle_selection_and_user_scope_reach_the_owned_installer()
--> anyhow::Result<()> {
-    use anyhow::{Context, ensure};
-    let home = startup_home()?;
-    isolated_config(home.path(), "127.0.0.1:0")?;
-    let repo = home.path().join("repository");
-    for name in ["review", "other"] {
-        let root = repo.join("skills").join(name);
-        std::fs::create_dir_all(&root)?;
-        std::fs::write(
-            root.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: pinned {name}\n---\nimmutable instructions\n"),
-        )?;
-    }
-    for args in [
-        vec!["init", "--quiet"],
-        vec!["add", "."],
-        vec![
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "-c",
-            "core.hooksPath=/dev/null",
-            "commit",
-            "--quiet",
-            "-m",
-            "fixture",
-        ],
-        vec!["tag", "v1"],
-    ] {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(&repo)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .output()?;
-        ensure!(
-            output.status.success(),
-            "fixture Git failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let source = format!("git+{}", repo.display());
-    let output = invoke(
-        home.path(),
-        &[
-            "init",
-            "--yes",
-            "--install-skill",
-            &source,
-            "--skill",
-            "./skills/review",
-            "--skill-ref",
-            "v1",
-            "--global",
-            "--after",
-            "exit",
-        ],
-    )
-    .await?;
-    ensure!(
-        output.status.success(),
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: Value = serde_json::from_slice(&output.stdout)?;
-    let resource = report["resources"]
-        .as_array()
-        .context("resources")?
-        .iter()
-        .find(|row| row["kind"] == "skill")
-        .context("skill")?;
-    assert_eq!(resource["status"], "installed");
-    assert_eq!(resource["target"], "global");
-    let rows = resource["receipt"]["skills"]
-        .as_array()
-        .context("installed rows")?;
-    let installed = rows
-        .iter()
-        .find(|row| row["ownership"] == "managed" && row["installed"] == true)
-        .context("managed installation")?;
-    assert_eq!(installed["name"], "review");
-    let serialized = installed.to_string();
-    ensure!(
-        serialized.contains("v1")
-            && serialized.contains("git")
-            && serialized.contains("skills/review")
-    );
-    ensure!(
-        home.path()
-            .join(".bitrouter/skills/installed.json")
-            .is_file()
-    );
+    assert_eq!(report["resources"][0]["status"], "failed");
+    assert!(home.path().join("bitrouter.yaml").exists());
     Ok(())
 }

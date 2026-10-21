@@ -81,7 +81,7 @@ Thread snapshots survive Turns; a new server session refreshes them at a safe
 model boundary with an explicit replacement or removal message. MCP inventories
 retain their independent frozen-binding check. Cold browsing reads no instruction files.
 
-Native skill selection and per-entry MCP consent use the original Core WorkUnit
+Explicit native directory/MCP bindings and per-entry MCP consent use the original Core WorkUnit
 and operation ledger, with `native_skills_v1` plus `context_views_v1` negotiation.
 MCP root bytes are read only after the exact consent ACK and enter source-tagged
 user data, with the complete held entry. They never become system instructions
@@ -92,7 +92,7 @@ CLI-only G09 locally verified retained MCP root/support-file reuse, native
 permissions; real provider/remote-MCP qualification remains separate.
 
 External ACP skill carriers live in `acp/skills.rs`; pure candidate policy is
-shared in `core/skills/selection.rs`. The app supervisor retains decision and
+shared in `core/skills/selection.rs`. The app supervisor retains explicit input and
 dispatch ownership in its original ledger. Codex receives verified local root
 text; Claude requires negotiated embeddedContext and receives user resources.
 Capabilities distinguish prompt delivery from native activation, protected
@@ -128,3 +128,8 @@ an external integration test.
 Crate-root `tests/` is for tests that exercise only public APIs. App transport,
 database assembly and PTY tests remain with `apps/bitrouter`. Do not expand public
 visibility just to move a private-state test into an integration-test crate.
+
+Native context/skill preparation does not call a decision backend. Local skills
+are existing directories; acquisition belongs to external installers. No BRO
+installation index or retained-version store is created. SDK model routing
+assessment remains independent.

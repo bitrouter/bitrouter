@@ -58,7 +58,7 @@ fn local_path(reference: &str) -> Result<String, CoreError> {
 impl SkillSource {
     pub fn root_reference(&self) -> &str {
         match self {
-            Self::Managed(_) => "SKILL.md",
+            Self::Local(_) => "SKILL.md",
             Self::Mcp(held) => &held.entry.uri,
         }
     }
@@ -76,7 +76,7 @@ impl SkillSource {
                     bytes: file.size,
                 })
             }
-            Self::Managed(binding) => {
+            Self::Local(binding) => {
                 let reference = local_path(reference)?;
                 if reference == "SKILL.md" {
                     return Ok(File {
@@ -145,8 +145,8 @@ pub(crate) fn prefix(candidate: &SkillCandidate, file: &File) -> Result<String, 
         SkillSource::Mcp(held) => {
             json!({"kind":"mcp","origin":held.origin,"skill_uri":held.entry.uri,"entry_digest":held.entry_digest})
         }
-        SkillSource::Managed(binding) => {
-            json!({"kind":"managed","scope":binding.scope,"installation_id":binding.installation_id,"version":binding.version,"library":binding.library,"workspace":binding.workspace})
+        SkillSource::Local(binding) => {
+            json!({"kind":"local","scope":binding.scope,"directory_id":binding.directory_id,"version":binding.version,"directory":binding.directory,"workspace":binding.workspace})
         }
     };
     Ok(format!(

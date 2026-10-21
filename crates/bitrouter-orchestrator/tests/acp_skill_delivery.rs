@@ -12,7 +12,7 @@ use bitrouter_orchestrator::acp::skills::{self, Adapter, Capabilities, Instructi
 use bitrouter_orchestrator::acp::up::AgentProcess;
 use bitrouter_orchestrator::core::checkpoint::sha256;
 use bitrouter_orchestrator::core::skills::SkillSource;
-use bitrouter_orchestrator::harness::skills::library::{LibraryScope, ManagedSkill};
+use bitrouter_orchestrator::harness::skills::library::{LocalScope, LocalSkill};
 use bitrouter_sdk::caller::CallerContext;
 use serde_json::{Value, json};
 
@@ -68,18 +68,17 @@ impl Peer {
 
     fn source(&self, body: &str) -> SkillSource {
         let caller = CallerContext::local();
-        SkillSource::Managed(ManagedSkill {
-            scope: LibraryScope::Project,
-            library: self.root.path().join(".bitrouter/skills"),
+        SkillSource::Local(LocalSkill {
+            scope: LocalScope::Project,
+            directory: self.root.path().join("skills/review"),
             workspace: self.root.path().to_path_buf(),
             api_key_id: caller.api_key_id().into(),
             user_id: caller.user_id().into(),
             local: true,
-            installation_id: "original-installation".into(),
-            catalog_revision: 1,
+            directory_id: "original-directory".into(),
             name: "review".into(),
             description: "review workflow".into(),
-            version: sha256(b"whole bundle original"),
+            version: sha256(b"directory manifest original"),
             receipt: json!({"provenance":"local_fixture","support":"references/check.md"}),
             instruction_sha256: sha256(body.as_bytes()),
             instruction_bytes: body.len() as u64,
@@ -128,7 +127,7 @@ const BODY: &str =
     "---\nname: review\ndescription: review workflow\n---\nExact 原文\nquotes: \"kept\"\n";
 
 #[tokio::test]
-async fn codex_text_reaches_its_independent_model_input_with_exact_version_and_path() -> TestResult
+async fn codex_text_reaches_its_independent_model_input_with_exact_directory_binding() -> TestResult
 {
     let peer = Peer::open("codex-acp", &[]).await?;
     assert_eq!(peer.capabilities.adapter, Some(Adapter::CodexText));
@@ -158,12 +157,12 @@ async fn codex_text_reaches_its_independent_model_input_with_exact_version_and_p
         .0;
     let binding: Value = serde_json::from_str(binding)?;
     assert_eq!(binding["turn_id"], "original-input-1");
-    assert!(
-        binding["bundle_path"]
-            .as_str()
-            .ok_or("bundle path")?
-            .ends_with(&sha256(b"whole bundle original"))
+    assert_eq!(
+        binding["skill_directory"],
+        serde_json::to_value(peer.root.path().join("skills/review"))?
     );
+    assert_eq!(binding["source"], serde_json::to_value(peer.source(BODY))?);
+    assert!(binding.get("bundle_path").is_none());
     assert_eq!(
         prepared.receipt.request_sha256,
         sha256(&serde_json::to_vec(&prepared.request)?)
@@ -247,7 +246,7 @@ async fn corrupt_or_foreign_bindings_and_small_context_never_send_a_prompt() -> 
         match case {
             "bytes" => bytes.push(b'!'),
             "workspace" => {
-                if let SkillSource::Managed(binding) = &mut source {
+                if let SkillSource::Local(binding) = &mut source {
                     binding.workspace = peer.root.path().join("other");
                 }
             }

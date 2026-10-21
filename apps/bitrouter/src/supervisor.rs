@@ -628,7 +628,6 @@ pub struct Supervisor {
 }
 
 struct SupervisorInner {
-    decision_model: Option<bitrouter_sdk::decision_model::DecisionRuntime>,
     source: ConfigSource,
     routing: Arc<ConfigRoutingTable>,
     runs: RwLock<HashMap<String, Arc<Run>>>,
@@ -876,11 +875,7 @@ impl From<&RunSnapshot> for LedgerEntry {
 
 impl Supervisor {
     /// Restore the minimal ledger and mark every formerly live row interrupted.
-    pub async fn open(
-        source: ConfigSource,
-        routing: Arc<ConfigRoutingTable>,
-        decision_model: Option<bitrouter_sdk::decision_model::DecisionRuntime>,
-    ) -> Result<Self> {
+    pub async fn open(source: ConfigSource, routing: Arc<ConfigRoutingTable>) -> Result<Self> {
         let identity = crate::daemon_locator::config_identity_digest(&source)?;
         let path = source
             .home()
@@ -897,7 +892,6 @@ impl Supervisor {
             .collect();
         Ok(Self {
             inner: Arc::new(SupervisorInner {
-                decision_model,
                 source,
                 routing,
                 runs: RwLock::new(runs),
@@ -1570,7 +1564,6 @@ impl Supervisor {
         );
         run.skill_context = Some(crate::skills::delivery::Context {
             constraints: request.launch.skills.clone().unwrap_or_default(),
-            decision: self.inner.decision_model.clone(),
         });
         let run = Arc::new(run);
         self.inner
@@ -3842,7 +3835,6 @@ mod tests {
     fn test_supervisor(directory: &Path, run: Arc<Run>) -> Supervisor {
         Supervisor {
             inner: Arc::new(SupervisorInner {
-                decision_model: None,
                 source: ConfigSource::Default {
                     home: directory.to_path_buf(),
                 },

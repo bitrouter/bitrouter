@@ -384,7 +384,7 @@
     },
     "DecisionModelConfig": {
       "additionalProperties": false,
-      "description": "An optional `decision_model:` block enables native context decisions.",
+      "description": "An optional `decision_model:` block enables SDK routing assessment.\nNative orchestrator context and skill selection do not invoke this backend.",
       "properties": {
         "api_key_env": {
           "default": "TYPESAFE_API_KEY",

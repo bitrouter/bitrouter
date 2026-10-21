@@ -262,13 +262,13 @@ impl crate::output::CliReport for Report {
                     problem.reason.escape_debug()
                 ))?;
             }
-            for problem in &selection.catalog.managed.problems {
+            for problem in &selection.catalog.local.problems {
                 human.line(&format!("  library: {}", problem.escape_debug()))?;
             }
             for candidate in &selection.candidates {
                 let source = match &candidate.source {
-                    bitrouter_orchestrator::core::skills::SkillSource::Managed(binding) => {
-                        format!("{:?}:{}", binding.scope, binding.installation_id)
+                    bitrouter_orchestrator::core::skills::SkillSource::Local(binding) => {
+                        format!("{:?}:{}", binding.scope, binding.directory_id)
                     }
                     bitrouter_orchestrator::core::skills::SkillSource::Mcp(held) => format!(
                         "mcp:{}:{}",

@@ -2,12 +2,11 @@
 //! filesystem validation, owner restoration or execution is performed here.
 
 use bitrouter_ai::types::{Content, Prompt, Role};
-use bitrouter_sdk::decision_model::policy::DecisionPolicy;
 use serde::Serialize;
 
 use super::{SkillCandidate, SkillCatalog, SkillConsent, SkillConstraints, SkillSource};
 use crate::core::checkpoint::sha256;
-use crate::core::context_router::{DecisionReceipt, digest, planner::SourceRevision};
+use crate::core::context_router::{digest, planner::SourceRevision};
 use crate::core::protocol::CoreError;
 use crate::core::session::{AgentStatus, ProviderWorkRecord, SessionSnapshot, skills};
 
@@ -33,13 +32,10 @@ pub struct SelectionExplanation {
     pub source_revision: SourceRevision,
     pub catalog: SkillCatalog,
     pub constraints: SkillConstraints,
-    pub policy: DecisionPolicy,
     pub max_selected: usize,
     pub instruction_limit_bytes: u64,
     pub file_limit_bytes: Option<u64>,
     pub selected: bool,
-    pub decision_id: Option<String>,
-    pub decision: Option<DecisionReceipt>,
     pub failure: Option<CoreError>,
     pub candidates: Vec<CandidateExplanation>,
 }
@@ -50,7 +46,6 @@ pub struct CandidateExplanation {
     pub source: SkillSource,
     pub selected: bool,
     pub reason: String,
-    pub probability: Option<f64>,
     pub consents: Vec<SkillConsent>,
     pub failure: Option<CoreError>,
     pub instructions: Option<InstructionEvidence>,
@@ -178,7 +173,6 @@ pub fn capture(state: &SessionSnapshot, run_id: &str) -> Result<Explanation, Cor
                             source: candidate.source.clone(),
                             selected: candidate.selected,
                             reason: candidate.reason.clone(),
-                            probability: candidate.probability,
                             consents: candidate.consents.clone(),
                             failure: candidate.failure.clone(),
                             instructions,
@@ -191,19 +185,12 @@ pub fn capture(state: &SessionSnapshot, run_id: &str) -> Result<Explanation, Cor
                     source_revision: selection.source.clone(),
                     catalog: selection.catalog.clone(),
                     constraints: selection.constraints.clone(),
-                    policy: selection.policy.clone(),
                     max_selected: selection.max_selected,
                     instruction_limit_bytes: selection.instruction_limit_bytes,
                     file_limit_bytes: selection.file_limit_bytes,
                     selected: selection.selected,
-                    decision_id: selection.decision_id.clone(),
                     failure: selection.failure.clone(),
                     candidates,
-                    decision: selection
-                        .decision_id
-                        .as_ref()
-                        .and_then(|id| state.context_store.decisions.get(id))
-                        .cloned(),
                 })
             })
             .transpose()?;
@@ -238,7 +225,7 @@ fn contains_instructions(prompt: &Prompt, candidate: &SkillCandidate) -> Result<
                 .flat_map(|message| &message.content)
                 .any(|content| matches!(content, Content::Text { text, .. } if text == &expected)))
         }
-        SkillSource::Managed(_) => {
+        SkillSource::Local(_) => {
             let expected = skills::managed_instruction_text(candidate)?;
             Ok(prompt.system.as_ref().is_some_and(|system| system.contains(&expected))
                 || prompt.messages.iter().filter(|message| message.role == Role::System)

@@ -1,11 +1,8 @@
 # CLI-only：MCP Skills 协议与 Host 验收
 
-状态：**v0.5 固定契约；G09–G11 约定本地范围完成；M01–M10 gateway/native 与外部 unsupported 边界已集成复验**。执行更新：2026-10-20。
-当前 G00–G11 的证据见实现记录及 [G11 验收附件](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md)；真实 adapter、真实服务、hosted CI 与其他 OS 资格分别保留。
-
-本文件细化 [主 spec 第 7.4 节](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md#74-mcp-skills-扩展与本地安装的边界)
-的 A27/A28，执行顺序见 [G09 卡片](CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md#g09--mcp-skills-对齐workflow-选择与-native-激活)，
-实际结果只写入 [实现记录](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md)。
+状态：固定协议契约保留；本轮功能回归已复验，最终全量 macOS 验证启动阻塞。原 G09–G11 的
+通过记录只对应历史源码，当前结果见 [G11 验收](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md)。
+行为边界以 [当前 spec](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md#4-mcp-边界) 为准。
 
 ## 1. 规范与角色
 
@@ -22,17 +19,15 @@
 
 | 角色 | 本项目范围 | 完成证据 |
 | --- | --- | --- |
-| 本地安装器 | G07 本地/Git 来源、完整 bundle、scope、更新、卸载保留 | 既有 A08–A12 安装切片；不证明 MCP wire/host 兼容 |
+| 本地目录 | 发现、读写已有目录，安装获取交给外部工具 | 独立于 MCP wire/host，不提供 Git 安装或版本库 |
 | MCP gateway | SDK 向下游提供协议，向已配置上游转发、聚合、隔离来源 | A27 / M01–M03；不把转发成功称为激活 |
-| Native MCP skill host | G09 daemon/Harness 从获许可上游按需加载并交给 native agent | A28 / M04–M10，另有 A13–A19 的 workflow/执行证据 |
+| Native MCP skill host | G09 daemon/Harness 从获许可上游按需加载并交给 native agent | A28 / M04–M10，明确选择后的执行证据 |
 | 外部 ACP/launcher host | G10 按 adapter 能力交付，保留原执行方的权限和加载责任 | A20 与 A28 的外部交付切片；逐 adapter 验证或报告 unsupported |
 | 本地 origin MCP server | 继续遵守 [OSS 边界](OSS_MCP_BOUNDARY_SPEC.md)，不恢复本地技能库发布 | 不新增 `bro mcp serve --backend skills` 或隐式 origin |
 
-G09 默认候选仍来自本地受管理库。操作者明确允许某个 MCP 来源后，该 caller/
-workspace 授权可见的条目才能进入候选；配置 MCP 工具、连接成功或 server instructions
-提及一个 skill 均不自动授予来源许可。直接 URI 请求也经过同一来源和权限检查。
-本地 `bro skills install` 仍只支持本地/Git；不新增 MCP URI 安装或远程执行安装。
-`bro skills list/show` 保留本地库语义，不因只读检查启动 MCP 子进程或联网。
+当前只加载明确选定的本地目录或获许可 MCP 条目。MCP caller/workspace
+来源许可先于元数据与正文读取；配置工具、连接成功或 server instructions
+提及一个 skill 均不授予该许可。扩展不增加安装或本地资源写入方法。
 
 ### 1.1 规范要求与产品选择
 
@@ -41,7 +36,7 @@ workspace 授权可见的条目才能进入候选；配置 MCP 工具、连接�
 | 扩展要求 | 当前连接能力门控、完整 entry、直接 URI lookup、原始字节与完整 frontmatter 校验、来源/manifest 约束，以及规定的批准和缓存责任 |
 | 扩展要求 | host 支持单 skill 至少 512 文件/16 MiB 的清单；清单处理能力与每次上下文/文件读取预算分别验收 |
 | 规范允许、产品选定 | 不实现可选 directoryRead；native host 第一版拒绝 dynamic；缓存每次命中重验字节；忽略远端 allowed-tools 授权字段 |
-| BitRouter 产品策略 | 本地受管理库为默认候选，MCP 来源需操作者明确允许；Turn 内版本固定，刷新只影响后续安全边界 |
+| BitRouter 产品策略 | 已有本地目录可进入候选，但仅显式 includes 加载；MCP 来源另需操作者明确允许；Turn 内 manifest 固定，刷新只影响后续安全边界 |
 | BitRouter 初始预算 | 最多 4 个选中 skills、初始指令合计 64 KiB，再取现有 host/context/model 的更小上限；这些数值不是 MCP 的协议上限 |
 
 服务器的 512 文件/16 MiB 建议值不是所有合法 entry 的硬性协议上限。更大条目
@@ -49,7 +44,7 @@ workspace 授权可见的条目才能进入候选；配置 MCP 工具、连接�
 时不声明能力；gateway 的 direct relay 与 aggregate 支持范围分别报告。
 
 名称按 [Agent Skills 格式规范](https://agentskills.io/specification) 的 Unicode
-小写字母/数字及单连字符校验，1–64 按字符数计算；安装器、native host 和 gateway
+小写字母/数字及单连字符校验，1–64 按字符数计算；目录解析、native host 和 gateway
 共用规则。URI 父目录在单次 percent 解码后与名称比较，保留原 URI 与来源身份，
 不把 Unicode 名称当作 host 分配的 MCP server label，也不进行 DNS 解析。
 
@@ -58,30 +53,11 @@ workspace 授权可见的条目才能进入候选；配置 MCP 工具、连接�
 不因目录计算而从 entry、批准、RPC 或缓存绑定中删去。相对路径只解析到原
 清单；编码或参数造成歧义时要求精确 URI，不能默认挑选某个版本。
 
-## 2. 源码核对与已知缺口
+## 2. 实现与证据边界
 
-以下保留 G09 起点核对；最终 gateway/native 证据统一见 [G11](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md#4-m01m10-与角色隔离)：
-
-- [gateway capabilities](../crates/bitrouter-sdk/src/server.rs) 已声明 Resources 与
-  Skills extension；`directoryRead` 缺省为 false，可继续不提供可选目录方法。
-- [wire types/URI mapping](../crates/bitrouter-sdk/src/mcp/skills.rs)、
-  [aggregate](../crates/bitrouter-sdk/src/mcp/aggregating_executor.rs) 与
-  [relay](../crates/bitrouter-sdk/src/mcp/rmcp_executor.rs) 已有 entry、digest/size、
-  缓存字段、分页和来源命名空间处理；这只是现有基础，须逐项重验。
-- relay 的 `RELAYED_EXTENSION_METHODS` 分支按白名单直接发送 CustomRequest，
-  起点未核对上游的 Skills/Resources 声明和目录能力；G09.1 已修复并验证。gateway
-  向下游声明扩展，不能替代每个上游自己的能力声明。
-- 起点 [Harness MCP](../crates/bitrouter-orchestrator/src/harness/mcp.rs) 只获取工具和
-  server instructions；[local SkillCatalog](../crates/bitrouter-orchestrator/src/harness/skills/mod.rs)
-  不是 MCP-origin host loader。G09 现已补齐明确来源、逐文件/完整 frontmatter
-  校验、workflow 选择、精确批准、根与支持文件的实际模型交付及原绑定缓存恢复。
-  task run、native Thread、managed CLI/daemon 与停机/失联 owner 冷 explain
-  均有本地证据。失联 daemon owner 保持 recovery-blocked，不自动接管或重放；
-  认证 Core/NativeSession 原缓存恢复与该拒绝边界分别验证。
-  G07 receipt 和 `activation=not_requested` 仍不证明 host 激活。
-
-历史 [Skills MCP spec](SKILLS_MCP_SPEC.md) 的 server/gateway 完成标签只适用于
-当时范围和证据。外部互操作仍单列；本次能力检查缺口不能被历史绿灯覆盖。
+Gateway 与 native host 源码保留独立验证；自动 workflow 选择与安装器现已退役。
+原起点、修复与历史资格见[不可变附件](https://github.com/bitrouter/bitrouter/blob/c122b437e1ceae64b07151cf8577d0af0214a0bd/docs/CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md)。
+当前实际结果统一见 [G11](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md)。
 
 ## 3. Gateway：A27
 
@@ -99,7 +75,7 @@ workspace 授权可见的条目才能进入候选；配置 MCP 工具、连接�
 
 M04–M10 通过现有 Harness/资源准入/审批/持久化边界实现，不新建执行循环、
 镜像任务库或独立选择服务。保留 local 与 MCP 两种来源的身份，不强制把远端
-skill 填成 G07 的安装 ID 或伪造整个 bundle 已下载。
+skill 重解释成本地目录，或伪造整个内容已下载。
 
 | ID | 必须成立 | 必需本地证据 |
 | --- | --- | --- |
@@ -111,7 +87,7 @@ skill 填成 G07 的安装 ID 或伪造整个 bundle 已下载。
 | M09 | 第一版 host 拒绝 resources=dynamic，必需项明确失败/可选项记录排除；gateway 仍可原样转发。能处理协议基准 512 文件/16 MiB 的清单；内容按预算逐项读取，不整包截断 | dynamic、完整基准清单、超 host/上下文预算、二进制内容和不支持编码分别有可解释结果；元数据预算不足不触发正文预取 |
 | M10 | 原生请求含已验证正文、来源和精确 held entry；Turn/子任务持久绑定不能被 refresh 静默替换。恢复复用原绑定和经验证缓存，原字节不可取得则阻塞；解释查询保持只读 | 实际 CLI→daemon→Cargo MCP 上游→native 模型请求 journey；选择、延迟读取、撤销批准、取消、重启恢复与 explain 对应同一身份；查历史零联网/零新执行 |
 
-本地安装器的 1,024 文件/32 MiB 配额继续有效，与 MCP wire/host 预算分别处理。
+本地目录 manifest 的 1,024 文件/32 MiB 配额，与 MCP wire/host 预算分别处理。
 超过当前 gateway 聚合限制的本地包不因此成为可发布的 MCP skill；不新增导出。
 dynamic 拒绝与超预算排除是明确的第一版策略，不宣称已验证任意远端实现。
 
@@ -126,16 +102,7 @@ strings、磁盘 receipt 和上游声明不能充当 caller 授权凭据。持�
 
 ## 5. 执行与完成边界
 
-- G09.1 先完成 M01–M03 的协议修复与定向验收，再推进远端 host 加载。
-- G09.2 完成 M04–M09 的 native 来源与加载契约；之后才做 workflow 选择、
-  Turn 绑定和 M10 的真实集成。已配置但未允许的 MCP 来源保持不可选。
-- G09 完成 A27 和 A28 的 native 切片；G10 单独验证外部 adapter 能保持这些
-  约束，不能仅传 prompt/目录便声明 MCP host 兼容。
-- G11 汇总 A01–A28 与 M01–M10，区分本地 fixture、外部 client、真实上游、
-  provider 和各操作系统的资格。文档检查、类型存在或旧全量测试不等于新验收。
-
-记录每项真实入口、owner/来源、用例、revision/本地内容摘要、结果和剩余范围。
-本文件的用例是执行要求：M01–M10 的 gateway/native 切片已取得 G09 本地证据，
-包括原来源/完整 entry、独立批准、支持文件、预算、实际请求、更新/卸载与原
-缓存恢复。最终源码摘要和完整 gates 见 G11 验收附件；不推定外部 ACP
-adapter、真实上游/provider、hosted CI 或其他操作系统资格通过。G10 的 local prompt 载体与 MCP-origin unsupported 边界已本地验收；G11 全部 A/M/C/T 当前证据、完整 gates 与两条 native 全链已本地完成，见 G11 附件；不推定真实远端互操作通过。
+显式 native 选择后的来源、批准、延迟读取、完整性和恢复要求继续验证。
+不再运行安装/Git/自动相关性选择的旧验收；不以历史通过数代替本轮证据。
+Gateway、本地目录、native host 与外部 ACP 载体各自保留角色边界。
+真实 provider/vendor/远端 host、hosted CI 和其他 OS 资格分别报告。

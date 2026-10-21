@@ -5,7 +5,7 @@ description: >
   its CLI — a self-hosted LLM proxy on 127.0.0.1:4356 routing OpenAI- or
   Anthropic-shaped traffic to any provider, via a coding-agent subscription,
   hosted BitRouter, or your own keys. Covers bro init, provider
-  credentials, MCP configuration, versioned skills, native BRO tasks, ACP harnesses, routing, and spend.
+  credentials, MCP configuration, local skill directories, native BRO tasks, ACP harnesses, routing, and spend.
   Trigger on bitrouter.yaml, port 4356, brk_ keys, "replace litellm", or
   pointing a coding agent at a proxy.
 license: Apache-2.0
@@ -48,7 +48,7 @@ shown default. Secrets are hidden; EOF/Ctrl-C cancels. Scripted setup:
 bro init --yes --use-detected --after exit
 bro                         # ensure readiness; idempotent on repeat
 ```
-Optional `--harness codex|claude` saves `chat.agent`; `--model` saves the model. Optional MCP/skill setup reuses existing transactions: `--mcp-name NAME --mcp-from FILE` and `--install-skill SOURCE [--skill NAME] [--skill-ref REF] [--workspace PATH|--global]`. Router progress survives resource failures; inspect `resources` outcomes and retry explicitly. `--yes` never prompts for bundle ambiguity. Settings survive; `--force` resets them.
+Optional `--harness codex|claude` saves `chat.agent`; `--model` saves the model. Optional MCP setup uses `--mcp-name NAME --mcp-from FILE`. Router progress survives resource failures. Install skills separately with `npx skills`; onboarding has no installer. Settings survive; `--force` resets them.
 `init --yes` saves/exits; `--after serve` waits for readiness; `--after launch` invokes
 the selected native tool. Read `providers_skipped_interactive`; `agents_selected`
 is selection evidence, while deprecated `harnesses_installed` stays empty. Saves are
@@ -162,7 +162,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
 | `references/migrate-from-*.md` | Migrating off `-litellm`, `-openrouter`, `-openai-compatible` (Azure, Together, Groq, Ollama, LM Studio), `-anthropic-compatible` |
 | `references/adaptive-routing.md`, `references/workflow-optimization.md`, `references/metering.md` | `bitrouter/auto`, trace projections, policy locks; history-driven quality/cost optimization; cache-aware pricing, charge evidence, usage export |
 | `references/sessions.md`, `references/updating.md` | ACP controller/supervisor (`acp serve`, foreground/background `run`, `agents`, native sessions, NDJSON, Code); `bro update` and channels |
-| `references/decision-native.md` | TypeSafe decision configuration, native BRO context views, evidence recall and decision accounting |
+| `references/decision-native.md` | Explicit native context, evidence recall and the independent SDK routing boundary |
 
 ## Gotchas
 
@@ -171,7 +171,7 @@ boundaries. Remote errors never fall back to this machine's configuration.
   processes, explain that this local integration is unavailable; do not suggest
   the removed OSS origin MCP server as a fallback.
 - Use `bro mcp list/show/add/edit/remove` for local upstream config; writes are saved_only and require explicit restart for startup bindings. Only `mcp check` connects. See [config editing](references/cli.md#mcp-configuration).
-- Use `bro skills list/show/install/update/uninstall` for BitRouter-owned local/Git bundles, with `--workspace PATH` or `--global`. Native tasks accept repeatable `--skill`/`--exclude-skill` with `project:ID`, `global:ID` or `mcp:SERVER:URI`; clients require daemon support. MCP roots need per-skill consent, enter source-tagged user data and retain a verified per-Turn cache; approval never grants tools. Read original facts with `skills explain --thread ID --turn ID`, or `--managed-session NAME --request-id KEY`. Native `skill_read` delivers verified bound UTF-8 files as Turn-scoped data; frozen Turn/model budgets and original cache/permission checks apply; lost owners stay recovery-blocked. Supervised Codex/Claude `run --background` supports local prompt instructions with the same scoped flags; MCP-origin external delivery is unsupported. Vendor history/token admission and real sessions remain unverified. See [skills](references/cli.md#versioned-skills).
+- Use `bro skills list/show/read/write` for existing local directories, with `--workspace PATH`, `--global` or `--root PATH`; `init` scaffolds source. Install/update acquisition belongs to `npx skills`. Native tasks, `threads create` and supervised ACP runs require explicit `--skill project:ID|global:ID|mcp:SERVER:URI`; no automatic skill selection occurs. MCP sources retain independent permission, per-skill consent and verified Turn-bound reads. `skills explain` reads original native evidence without execution. Changed local files require a new Turn; no installed version is retained. ACP supports explicit local root instructions only. See [skills](references/cli.md#local-skill-directories).
 - MCP upstreams default to modern `server/discover` with rmcp's classified
   legacy fallback. Set `mcp.upstream_protocol: latest` only when an upstream
   must use the legacy `initialize` lifecycle.

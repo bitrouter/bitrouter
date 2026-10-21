@@ -373,7 +373,6 @@ pub(crate) fn validate_store_history(
                 &(
                     &skills.catalog,
                     &skills.constraints,
-                    &skills.policy,
                     skills.max_selected,
                     &skills.file_limit_bytes,
                 ),
@@ -382,25 +381,13 @@ pub(crate) fn validate_store_history(
                 let choices = skills
                     .candidates
                     .iter()
-                    .map(|candidate| {
-                        (
-                            &candidate.source,
-                            &candidate.reason,
-                            candidate.selected,
-                            candidate.probability,
-                        )
-                    })
+                    .map(|candidate| (&candidate.source, &candidate.reason, candidate.selected))
                     .collect::<Vec<_>>();
                 remember(
                     &mut current,
                     "skill_selection",
                     id,
-                    &(
-                        &skills.source,
-                        skills.instruction_limit_bytes,
-                        &skills.decision_id,
-                        choices,
-                    ),
+                    &(&skills.source, skills.instruction_limit_bytes, choices),
                 )?;
             }
             for candidate in &skills.candidates {

@@ -23,7 +23,8 @@ the [orchestrator source guide](../crates/bitrouter-orchestrator/README.md).
 ### External interfaces
 
 `onboarding/resources.rs` runs finite optional setup prompts and delegates MCP
-publication to `mcp_config` and skill snapshots to the existing owned installer.
+publication to `mcp_config`. Skill acquisition belongs to `npx skills`; local
+inspection and file writes use `skills/directory.rs`.
 Router settings are saved first; a resource-only no-op keeps original text,
 comments and environment references. Headless partial failure returns one typed
 onboarding report with a nonzero exit and no Finish action. It grants no MCP
@@ -58,8 +59,8 @@ IDs and a new epoch. CLI disconnect leaves the driver running; Ctrl-C or an
 exact boot/input cancellation requests joined settlement. Daemon cleanup owns
 cancellation and driver joining even if an ingress server fails. Native library
 embeddings remain available independently; no Thread IDs or mirror store are
-introduced. G09 now connects managed-library selection to the existing Core
-WorkUnit/decision ledger. MCP roots use explicit content consent in that ledger;
+introduced. Explicit directory/MCP skill bindings stay in the original Core
+WorkUnit. MCP roots require independent content consent;
 `managed-status` exposes the original requests and `managed-answer` answers an
 exact boot/input/consent identity. Cold answer retries only return committed
 receipts. Persisted roots and supporting files are reverified on reuse; native
@@ -71,10 +72,9 @@ native v19, including explicit load/close/recover. `agent_sessions/control`
 uses exact-scope supervisor grants and transient generation-fenced leases;
 protocol v3 adds background skill constraints while ordinary v1/v2 operations
 remain supported (v2 introduced boot-local ACK inspection). Supervised ACP reuses
-the installed library, DecisionRuntime and pure native candidate policy. The
-original supervisor ledger acknowledges decision intent/outcome and the exact
-prepared receipt before ACP dispatch; no second model loop or skill database is
-introduced. Codex receives local text instructions; Claude requires negotiated
+the existing local directories and explicit candidate constraints. Its original
+supervisor ledger acknowledges selection and the prepared receipt before ACP
+dispatch; no automatic decision request or skill database is introduced. Codex receives local text instructions; Claude requires negotiated
 embeddedContext and receives user resources. MCP-origin external allocation is
 unsupported. Vendor model token/history admission remains outside this guarantee.
 Neither adapter starts a second scheduler, stores mirrored execution state,
@@ -98,7 +98,7 @@ entries and source-bound reads; each network/cache use verifies raw bytes and
 root frontmatter. Read-only owners expose no MCP tools and connect only to
 granted skill sources. Policy changes are startup-only and reported as `skills`
 by the existing configuration-state/reload coordinator. These primitives do
-not alone prove activation. Core selects entries and persists per-skill consent
+not alone prove activation. Core binds explicitly selected entries and persists per-skill consent
 before root reads. The root and complete entry enter source-tagged user data,
 with protected provenance excluded from automatic child sharing; only a fixed
 handling policy enters system context. Root cache reuse preserves the original
@@ -106,32 +106,22 @@ entry and verifies the original bytes. Supporting files retain the same source,
 entry, consent and per-file byte commitments; admission checks their frozen Turn
 allowance and final model/context budget without truncating content.
 
-`skills/managed` owns the CLI's per-scope `installed.json` aliases/receipts and
-immutable `versions/<digest>` bundles. `skills/bundle` bounds and hashes complete
-payloads; `skills/source` acquires local snapshots or exact Git objects without
-checkout, filters or hooks. Publication reuses `policy_lock`'s file lock/CAS and
-atomic writer. Uninstall retains versions; no GC or execution binding service is
-added. The orchestrator still owns standard format validation and existing
-unmanaged discovery. `skills/native` supplies the read-only `SkillLibrary`
-adapter to native hosts: active alias/revision snapshots and exact original
-receipt/version reads use the same installation index, with per-use containment,
-byte and mode verification. Original version reads survive alias update/removal;
-project discovery respects explicit workspace indexes before the nearest Git
-root, while frozen reads keep the original authorized library independently of
-later child-scope installs. Invalid explicit scopes never fall back outward.
-Core now freezes managed selections and verified instructions in its existing
-WorkUnit before context/model preparation, using the configured decision backend
-and preserving exact original receipts across Turns. Catalog refresh does not
-alter the execution tool/instruction grant. Task CLI selectors bind explicit
-include/exclude constraints to the accepted input. `skills explain` reads
-original native Thread/Turn pages or managed-session/input checkpoints directly
-from the selected database, with no App, owner restoration or source access.
-It distinguishes retained verified instructions, prepared SDK requests and
-recorded execution results; missing historical attempt facts remain unknown.
-Native roots/files survive local update/uninstall and authorized journal
-restoration with their original identity. Lost daemon owners remain recovery-blocked;
-cold inspection does not acquire execution authority. External adapters and real
-provider/MCP qualification remain separate.
+`skills/directory` owns CLI discovery and direct file reads/writes, reusing the
+shared format parser and publication lock/atomic writer. Acquisition belongs to
+`npx skills`; BRO owns no installation index, Git downloader or version store.
+`skills/native` implements `SkillDirectory` over existing directories. It freezes
+path/caller/workspace and a complete content manifest for explicit native/ACP
+bindings; each use checks actual bytes and containment. Changed local files
+reject the old binding instead of reading a retained version. New Turns can bind
+new content. `skills explain` reads original native Thread/Turn or managed input
+checkpoints without an App, source reads, owner restoration or execution.
+
+Native Core and ACP skill delivery only select explicit includes. Native context
+preparation keeps complete admitted evidence and never calls the decision backend
+for classification, skill relevance or lossy view choice. Explicit evidence tools,
+checkpoints, tool permissions, budgets and conditional recovery remain. SDK model
+routing assessment and provider Decisions remain separate consumers. Historical
+decision records stay readable for validation/accounting without new dispatch.
 
 The first-party TUI and its app drivers have been removed. `apps/bitrouter`
 uses ordinary CLI reports and line-based onboarding, with no Ratatui/Crossterm

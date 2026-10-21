@@ -1,5 +1,5 @@
-//! ACP delivery reuses the installed library and shared candidate policy.
-//! The supervisor remains the sole owner of decisions, input identity and journal.
+//! ACP delivery reads explicitly selected local skill directories.
+//! The supervisor remains the sole owner of input identity and the dispatch journal.
 
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
@@ -8,21 +8,11 @@ use bitrouter_orchestrator::core::protocol::{CoreError, ErrorCode};
 use bitrouter_orchestrator::core::skills::{
     SkillCandidate, SkillConstraints, SkillSelector, SkillSource, selection,
 };
-use bitrouter_orchestrator::harness::skills::library::SkillLibrary;
-use bitrouter_sdk::decision_model::DecisionRuntime;
-use bitrouter_sdk::decision_model::types::{
-    DecisionError, DecisionFailure, DecisionRequest, DecisionResponse,
-};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tokio_util::sync::CancellationToken;
+use bitrouter_orchestrator::harness::skills::library::SkillDirectory;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DecisionEvidence {
-    pub request: DecisionRequest,
-    pub pricing: Value,
-    pub outcome: Option<Result<DecisionResponse, DecisionError>>,
-}
+use serde::{Deserialize, Serialize};
+
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Report {
@@ -33,7 +23,7 @@ pub struct Report {
     pub constraints: SkillConstraints,
     pub candidates: Vec<SkillCandidate>,
     pub problems: Vec<String>,
-    pub decision: Option<DecisionEvidence>,
+
     pub receipt: Option<skills::Receipt>,
     pub failure: Option<String>,
 }
@@ -46,7 +36,6 @@ pub(crate) trait Journal: Send + Sync {
 
 pub(crate) struct Context {
     pub constraints: SkillConstraints,
-    pub decision: Option<DecisionRuntime>,
 }
 
 impl Context {
@@ -78,7 +67,7 @@ impl Context {
             );
             return Ok(None);
         }
-        if self.constraints.include.is_empty() && self.decision.is_none() {
+        if self.constraints.include.is_empty() {
             return Ok(None);
         }
         let mut report = Report {
@@ -89,7 +78,7 @@ impl Context {
             constraints: self.constraints.clone(),
             candidates: vec![],
             problems: vec![],
-            decision: None,
+
             receipt: None,
             failure: None,
         };
@@ -104,12 +93,6 @@ impl Context {
             );
             return Ok(None);
         }
-        let policy = self
-            .decision
-            .as_ref()
-            .map(|runtime| runtime.policy.clone())
-            .unwrap_or_default();
-        policy.validate().map_err(anyhow::Error::msg)?;
         let library = super::native::Library::runtime();
         let catalog = tokio::select! {
             biased;
@@ -122,18 +105,11 @@ impl Context {
             .take(32)
             .map(|problem| truncate(problem, 2048))
             .collect();
-        // Required identities reserve metadata capacity before automatic choices.
-        let mut sources: Vec<_> = catalog
-            .skills
-            .into_iter()
-            .map(SkillSource::Managed)
-            .collect();
+        // Explicit identities reserve metadata capacity before unrelated entries.
+        let mut sources: Vec<_> = catalog.skills.into_iter().map(SkillSource::Local).collect();
         sources.sort_by_key(|source| !self.constraints.include.contains(&source.selector()));
         let mut metadata_bytes = 0_usize;
-        for source in sources
-            .into_iter()
-            .take(policy.max_candidates.saturating_add(4))
-        {
+        for source in sources.into_iter().take(256) {
             let bytes = serde_json::to_vec(&source)?.len();
             if bytes > 64 * 1024 || metadata_bytes.saturating_add(bytes) > 512 * 1024 {
                 ensure!(
@@ -151,7 +127,6 @@ impl Context {
                 source,
                 reason: String::new(),
                 selected: false,
-                probability: None,
                 content: None,
                 files: Default::default(),
                 failure: None,
@@ -159,92 +134,12 @@ impl Context {
             });
         }
         journal.save(&report).await?;
-        let questions = selection::questions(
-            &mut report.candidates,
-            &self.constraints,
-            policy.max_candidates,
-        )?;
-        if !questions.is_empty() {
-            if let Some(runtime) = &self.decision {
-                let request = DecisionRequest {
-                    model: runtime.model.clone(),
-                    state: json!({"task":prompt,"workflow":"unknown","agent_role":"supervised_acp",
-                        "session_id":target.session_id,"turn_id":target.turn_id,
-                        "workspace":target.workspace,"caller":{"api_key_id":target.caller.api_key_id(),"user_id":target.caller.user_id(),"local":target.caller.is_local()},
-                        "catalog_revisions":catalog.revisions,"constraints":self.constraints,"host_capabilities":capabilities}),
-                    questions,
-                };
-                if serde_json::to_vec(&request)?.len() <= policy.max_request_bytes {
-                    request.validate()?;
-                    report.stage = "decision_intended".into();
-                    report.decision = Some(DecisionEvidence {
-                        request: request.clone(),
-                        pricing: serde_json::to_value(&runtime.pricing)?,
-                        outcome: None,
-                    });
-                    journal.save(&report).await?;
-                    let mut outcome = tokio::select! {
-                        biased;
-                        ()=cancel.cancelled()=>Err(DecisionError{kind:DecisionFailure::Cancelled,message:"ACP skill assessment cancelled".into(),usage:None,may_have_run:true}),
-                        result=runtime.executor.execute(&request,cancel)=>result,
-                    };
-                    if let Ok(response) = &outcome
-                        && let Err(error) = response.validate(&request)
-                    {
-                        outcome = Err(error);
-                    }
-                    if serde_json::to_vec(&outcome)?.len()
-                        > policy
-                            .max_request_bytes
-                            .saturating_mul(2)
-                            .saturating_add(8192)
-                    {
-                        let usage = match &outcome {
-                            Ok(response) => Some(response.usage),
-                            Err(error) => error.usage,
-                        };
-                        outcome = Err(DecisionError {
-                            kind: DecisionFailure::ResponseTooLarge,
-                            message: "ACP skill assessment response budget".into(),
-                            usage,
-                            may_have_run: true,
-                        });
-                    }
-                    for candidate in report
-                        .candidates
-                        .iter_mut()
-                        .filter(|candidate| candidate.reason == "awaiting_workflow_assessment")
-                    {
-                        let id = candidate.source.identity()?;
-                        let answer = outcome
-                            .as_ref()
-                            .ok()
-                            .and_then(|response| response.answers.get(&id));
-                        selection::apply_answer(candidate, answer, policy.confidence_threshold);
-                    }
-                    if let Some(decision) = &mut report.decision {
-                        decision.outcome = Some(outcome);
-                    }
-                    report.stage = "decision_recorded".into();
-                    journal.save(&report).await?;
-                } else {
-                    mark_unassessed(&mut report, "decision_request_budget");
-                }
-            } else {
-                mark_unassessed(&mut report, "decision_model_unavailable");
-            }
-        }
-        selection::bound(
-            &mut report.candidates,
-            &self.constraints,
-            4,
-            64 * 1024,
-            |source| {
-                skills::instruction_size(source, target).map_err(|error| {
-                    CoreError::rejected(ErrorCode::ArtifactUnavailable, error.to_string())
-                })
-            },
-        )?;
+        selection::select(&mut report.candidates, &self.constraints)?;
+        selection::bound(&report.candidates, 4, 64 * 1024, |source| {
+            skills::instruction_size(source, target).map_err(|error| {
+                CoreError::rejected(ErrorCode::ArtifactUnavailable, error.to_string())
+            })
+        })?;
         report.stage = "selected".into();
         journal.save(&report).await?;
         let mut instructions = Vec::new();
@@ -253,7 +148,7 @@ impl Context {
                 continue;
             }
             ensure!(!cancel.is_cancelled(), "skill loading cancelled");
-            let SkillSource::Managed(binding) = &candidate.source else {
+            let SkillSource::Local(binding) = &candidate.source else {
                 anyhow::bail!("unsupported: MCP-origin ACP skill");
             };
             let bytes = tokio::select! {
@@ -307,16 +202,6 @@ impl Context {
             "skill delivery cancelled before dispatch"
         );
         Ok(Some(prepared))
-    }
-}
-
-fn mark_unassessed(report: &mut Report, reason: &str) {
-    for candidate in report
-        .candidates
-        .iter_mut()
-        .filter(|candidate| candidate.reason == "awaiting_workflow_assessment")
-    {
-        candidate.reason = reason.into();
     }
 }
 

@@ -122,8 +122,8 @@ A known start rejection reports the created Thread ID; creating a Thread alone
 never executes a model or tool. There is no independent Task execution API.
 
 `task run` and `task managed` accept repeatable `--skill SELECTOR` and
-`--exclude-skill SELECTOR`. Select exact identities with `project:INSTALLATION_ID`,
-`global:INSTALLATION_ID`, or `mcp:SERVER:URI`, for example
+`--exclude-skill SELECTOR`. Select exact identities with `project:DIRECTORY_ID`,
+`global:DIRECTORY_ID`, or `mcp:SERVER:URI`, for example
 `--skill mcp:reviews:skill://review/SKILL.md`. Inclusion is required; exclusion
 prevents selection. Contradictory selectors fail before submit. MCP URIs missing
 from listing use metadata-only direct lookup under the same caller/workspace
@@ -132,7 +132,7 @@ skills or grant tools. Native Thread constraints persist with its configuration;
 managed constraints persist in the original input and its retry fingerprint.
 Clients require the daemon's `skill_constraints` capability, so older daemons
 cannot silently ignore the selectors. Missing required entries fail the accepted
-work before model execution; passive installation/list/show remain separate.
+work before model execution; directory list/show/read/write remain separate.
 
 Selectors preserve generic URI/IRI identity, including rootless forms such as
 `--skill 'mcp:reviews:urn:review/SKILL.md?revision=1#instructions'`. Query and
@@ -315,7 +315,7 @@ ACP/evolution commands pin the **control daemon boot ID**.
 | Native command | Operation |
 | --- | --- |
 | `threads list [--after N --cutoff N --limit 1..16]` | Bounded cold directory |
-| `threads create --workspace PATH --model SELECTOR` | Create Ask Thread, no Turn; accepts `--effort`, `--model-policy`, `--max-output-tokens`, and `--read-only` or `--check COMMAND` |
+| `threads create --workspace PATH --model SELECTOR` | Create Ask Thread, no Turn; accepts `--skill`/`--exclude-skill`, `--effort`, `--model-policy`, `--max-output-tokens`, and `--read-only` or `--check COMMAND` |
 | `threads show THREAD [--turn TURN]` | Inspect exact native identity and recovery blockers |
 | `threads history THREAD [--after N --cutoff N --limit 1..1000]` | Durable history page |
 | `threads events THREAD [--after CURSOR] [--follow]` | Initial bounded snapshot/catchup; optional NDJSON follow |
@@ -809,30 +809,13 @@ Router progress is saved after provider/agent selection, before optional resourc
 cancelling a resource step preserves that saved setup and does not run Finish.
 Prompts and diagnostics go to stderr.
 
-The optional resources menu offers **Add MCP server**, **Install skill**, and
-**Continue**. It reuses the same source-owned MCP transaction and versioned
-installer as the management commands. Failed attempts return to this menu for
-inspection and retry or continue; earlier successful operations remain saved.
-Installing never executes scripts; saving MCP neither connects nor grants
-permission to use its skill metadata.
-
-For unattended setup, pair `--mcp-name NAME --mcp-from FILE|-` for one complete
-McpServerConfig YAML/JSON entry; `-` is only available outside the interactive
-wizard. Use `--install-skill SOURCE` with optional `--skill NAME_OR_PATH`,
-`--skill-ref REF` and `--workspace PATH` or `--global`. Project scope otherwise
-uses the normal Git-root/current-directory rule. `--yes` never resolves a
-multi-skill ambiguity interactively, even on a terminal. For example:
-
-```bash
-bro init --yes --mcp-name reviews --mcp-from ./reviews.yaml --install-skill ./skills/review --workspace ./project --after exit
-```
-
-The `resources` array records saved/installed/skipped/failed attempts and original
-safe receipts. Headless failure emits one partial onboarding report, exits
-nonzero and reports `after: exit`; it does not launch or start a daemon. Later
-steps are skipped after a failure. Inspect saved state before retrying a possibly
-committed write. Existing entries require `mcp edit` or `skills update`;
-retry never silently overwrites them.
+The optional resources menu offers **Add MCP server** and **Continue**. It uses
+the same source-owned MCP transaction as management commands. Saved progress
+survives failures; use paired `--mcp-name NAME --mcp-from FILE|-` headlessly.
+The wizard owns stdin, so use an entry file there. Failure emits one partial
+report and suppresses Finish; saving MCP does not connect or grant skill consent.
+Install skills with `npx skills` and inspect/write their existing directories
+with `bro skills`. Onboarding has no skill installation or Git-ref step.
 
 `init --yes` is an explicit scaffold/save operation and exits by default. No agent
 is chosen automatically. `--harness claude|codex` selects an optional ACP default;
@@ -865,9 +848,6 @@ A closed stdout pipe ends reporting with a nonzero exit and does not stop a daem
 | `--use-detected` | Accept detected credentials. |
 | `--harness claude\|codex` | Optional ACP adapter default; no automatic installation or connection. |
 | `--mcp-name NAME`, `--mcp-from FILE|-` | Paired optional MCP entry; same validation, CAS/conflict and publication contract as `mcp add --from`. |
-| `--install-skill SOURCE` | Optional local/Git bundle installation; no activation or script execution. |
-| `--skill NAME_OR_PATH`, `--skill-ref REF` | Explicit bundle/ref selection for `--install-skill`. |
-| `--workspace PATH`, `--global` | Skill installation scope; mutually exclusive. |
 | `--after launch\|serve\|exit` | Explicit native launch, ensure a ready daemon, or save and exit. |
 | `--model ID` | Persist the optional default model, also used by native launch. |
 
@@ -1339,17 +1319,17 @@ ACP sessions are retained; migration never rewrites or deletes them.
 
 Daemon-supervised Codex and Claude accept repeatable `--skill project:ID` or
 `--skill global:ID`, and `--exclude-skill SELECTOR`, on `run --background`.
-For example, after installing a bundle, use
-`bro run codex "review changes" --background --skill project:INSTALLATION_ID`.
+For example, after preparing a directory, obtain its identity with
+`bro skills list` and use
+`bro run codex "review changes" --background --skill project:DIRECTORY_ID`.
 These constraints remain on that run; each subsequent `agents prompt` performs
-fresh selection from the installed library. Automatic selection uses the same
-configured decision backend as native tasks; without it optional choices are
-empty. Required local entries still work without the backend.
+fresh discovery and explicitly binds those directories. With no includes, no
+skill is selected; the configured decision backend is never called for this.
 
 Codex receives verified `SKILL.md` as ACP text blocks. Claude receives embedded
 text resources only when that connection advertises `embeddedContext`. Both
-carry the original installation receipt, whole-bundle version, retained version
-path and exact ACP session/input identity. The request is journaled before
+carry the directory path, frozen file manifest/content fingerprint and exact
+ACP session/input identity. Changed bytes reject an old binding. The request is journaled before
 dispatch; at most four selected frames / 64 KiB of instruction text and 2 MiB of
 serialized ACP request are admitted, without truncation. The original supervisor
 ledger retains at most 64 reports / 4 MiB per run and fails when capacity is
@@ -1357,7 +1337,7 @@ exceeded, rather than discarding earlier evidence.
 
 `agents list` reports path contracts in `skill_delivery`; it does not probe live
 readiness. `agents show RUN` reports negotiated `capabilities.skill_delivery` and
-per-input `skill_deliveries`, including decision intent/outcome, usage, reasons,
+per-input `skill_deliveries`, including explicit constraints, candidate reasons,
 prepared receipt and delivered/cancelled/uncertain status. Unknown results are
 not replayed; cold queries restore facts, not an executable agent owner.
 
@@ -1373,7 +1353,7 @@ Required MCP-origin selectors are `unsupported` before dispatch, including with
 cache and execution responsibility. Foreground/standalone/transparent ACP,
 unknown adapters, native launch and inference-only routing retain their existing
 operations but do not support this daemon skill allocation. A native slash
-command retains its original single-text shape and skips automatic allocation;
+command retains its original single-text shape and skips skill delivery;
 combining it with a required skill is explicitly unsupported. No global harness
 configuration or vendor install is part of allocation. Local independent Rust
 fixtures cover both carriers; real vendor sessions remain unverified.
@@ -2038,130 +2018,50 @@ bro cloud byok delete <PROVIDER> [--json]
 
 ## Skills
 
-`bro skills` manages complete Agent Skills bundles in BitRouter's own versioned
-library and inspects compatible unmanaged layouts. Bundles use the standard
-`SKILL.md` frontmatter (`name`, `description`), validated by the orchestrator's
-shared parser. Unknown standard metadata remains in the original file.
+`bro skills` reads and writes existing local skill directories. Installation and
+remote updates belong to `npx skills`; BRO has no Git acquisition, installation
+index, aliases or retained-version store. Existing old `.bitrouter/skills`
+contents are left on disk and are not treated as directory discovery roots.
 
 ```text
-bro skills list [--workspace PATH | -g|--global]
-bro skills show NAME_OR_INSTALLATION_ID [--workspace PATH | --global]
-bro skills install SOURCE [--skill NAME_OR_RELATIVE_PATH] [--ref REF] [--workspace PATH | --global]
-bro skills update NAME_OR_INSTALLATION_ID [--ref REF] [--workspace PATH | --global]
-bro skills uninstall NAME_OR_INSTALLATION_ID [--workspace PATH | --global]
+bro skills list [--workspace PATH | --global | --root PATH]
+bro skills show NAME_OR_DIRECTORY_ID [scope flags]
+bro skills read NAME_OR_DIRECTORY_ID [--file RELATIVE_PATH] [scope flags]
+bro skills write NAME_OR_DIRECTORY_ID [--file RELATIVE_PATH] --from FILE|- [scope flags]
+bro skills init NAME [-o PATH]
 bro skills explain --thread THREAD_ID --turn TURN_ID [--config PATH]
 bro skills explain --managed-session NAME --request-id KEY [--config PATH]
 ```
 
-All commands support JSON by default and `--human`. Project scope is an explicit
-existing `--workspace`, otherwise the nearest Git root, or the current directory
-when outside Git. A project library is `<root>/.bitrouter/skills`; `--global`
-selects `<BITROUTER_HOME-or-default-home>/skills` for the current user. The flags
-conflict. Paths and the local principal are captured before acquisition; copying
-another scope's `installed.json` does not authorize edits to it.
+Project discovery uses the selected workspace or current directory and its
+conventional `skills`, `.agents/skills`, `.claude/skills` and `.codex/skills`
+layouts. `--global` inspects user harness roots, including `CODEX_HOME` when set.
+`--root` selects one existing directory. Scope flags conflict; duplicate names
+require an exact directory identity or a narrower root. Invalid frontmatter stays
+visible in listing. `read` defaults to `SKILL.md`; it returns bounded UTF-8 text.
+`write` reads a file or stdin, validates root frontmatter, and atomically publishes
+only the selected file; it does not execute scripts or register an installation.
+Supporting-file parent directories must already exist. Both operations reject
+paths outside the selected skill and symlink files; file text is bounded to
+256 KiB. JSON is the default; `--human` is available.
 
-Native tasks first use an explicit installation index at their actual workspace;
-otherwise they use that workspace's nearest Git root, or the workspace itself
-outside Git. An empty, invalid or unsafe explicit library never falls back to a
-broader root. Existing Turn bindings keep their original library and exact
-version when a child workspace library is installed later; reads still require
-the original caller/workspace and a valid current Git-root relationship.
+Native `--skill project:ID` / `global:ID` identifies a discovered directory;
+the ID is derived from its canonical path, not an installation UUID. Required
+MCP identities remain `mcp:SERVER:URI`. Only explicit includes are selected;
+`--exclude-skill` remains an explicit constraint. No decision backend is called
+for skill selection, including supervised ACP. Native context preparation retains
+complete admitted evidence and does not call a decision backend for omission,
+summary/extract choice or task classification. SDK model routing remains separate.
 
-Each scope owns `installed.json` and `versions/<bundle-digest>/`. The manifest
-has `format: 1`, a monotonic `revision`, scope/principal, name-to-installation
-`aliases`, and `installations` with UUID-based IDs, current version and retained
-version/provenance history. A digest covers sorted relative directories and all
-file paths, bytes and executable flags, including references, scripts, binary
-assets and empty directories. It does not depend on source mtimes.
-
-### Install and update
-
-`SOURCE` is a local directory or a Git URL. Use `git+/absolute/repository` to
-select a local Git repository instead of its working directory, or supply
-`--ref` for Git acquisition. Git must be installed for Git sources and project
-root resolution inside Git. Git sources may use HTTPS, HTTP, SSH, Git or file
-transport; credential-bearing HTTP URLs, passwords, queries, fragments and
-external-command transports are refused. Existing Git authentication config
-may supply credentials. Git terminal prompting is disabled and SSH uses batch
-mode; configured credential helpers remain Git-owned. Live remote authentication
-is outside the local fixture qualification.
-
-```bash
-bro skills install ./skills/my-skill
-bro skills install git+/path/to/repository --skill ./skills/my-skill --ref main
-bro skills show my-skill --human
-bro skills update my-skill
-bro skills update my-skill --ref v2
-bro skills uninstall my-skill
-```
-
-A multi-skill source needs `--skill NAME` or `--skill ./relative/path`; `.` selects
-a root bundle. A terminal can instead choose one numbered entry. Nonterminal
-ambiguity fails without waiting. A local bundle's directory must match its
-frontmatter name. A Git root bundle uses the frontmatter name; nested bundles
-also require matching directory names. Local snapshots record their absolute
-source and selected relative path. Git receipts record repository, requested
-ref, resolved ref, exact commit, tracking policy and selected relative path.
-
-Local source changes never modify an installed bundle. Update resnapshots the
-original source and preserves the installation ID. A tracked branch may advance;
-tag/commit pins stay fixed without fetching unless a different explicit ref is
-provided. An unchanged version leaves the manifest revision unchanged. Renames
-require explicit uninstall/install. No update runs in the background.
-
-The installer rejects symlinks, special entries and path escapes. Limits are
-32 MiB and 1,024 regular files per bundle, 256 KiB for `SKILL.md`, and 4,096
-directories. Discovery also bounds traversal and skill count. Git reads fixed
-commit objects without checkout, submodule recursion, filters or source hooks.
-Scripts and assets are copied as data; no install hook or script runs.
-
-Preparation precedes the scope's publication lock and exact manifest CAS. A
-complete version is published before one atomic receipt/alias replacement;
-`.pending-*` directories and unregistered versions are not active candidates.
-Duplicate active names, concurrent changes, invalid sources or modified installed
-bundles fail without replacing the prior alias. Files are published read-only;
-integrity checks reject later tampering rather than overwriting it. If the final
-directory sync fails after replacement, the diagnostic states that publication
-may have completed: inspect `list/show` before retrying.
-
-### List, show and uninstall
-
-Reports include scope/root/library/principal, `catalog_revision`, action/state,
-`retained_versions` and `activation: not_requested`. Rows retain `name`,
-`description`, `dir`, `skill_md`, `valid`/`problem`, with `ownership`, installation
-ID, installed/state and exact version/provenance summaries and history.
-`show` accepts a name or installation ID; same-name managed/unmanaged discoveries
-remain separate rows. Update/uninstall operate only on active managed identities
-in the selected scope.
-
-Uninstall removes the active alias and returns `uninstalled_retained`. All
-versions and receipts remain readable by a later CLI process; there is no GC.
-Reinstall creates a new installation ID and preserves the old receipt. Listing
-also retains conventional unmanaged discovery under the project and its `skills/`,
-`.agents/skills/`, `.codex/skills/`, `.claude/skills/`; global inspection uses the
-user's corresponding roots and `$CODEX_HOME`. Invalid/oversized discovered files
-are marked unusable; symlink discoveries are skipped. No unmanaged content is
-moved, overwritten or deleted. BitRouter library roots may not overlap another
-harness's global skills scan root.
-
-Installation is not workflow selection, Turn binding, activation or agent
-delivery. Native Core can select managed aliases through
-[native runtime discovery](BRO_HARNESS_RESOURCES.md) with its configured
-decision backend and commit exact receipts and verified instructions before model
-preparation. Optional choices remain empty if that backend is unavailable. The
-reader uses original retained receipts after update/uninstall. Task CLI selectors
-can require or exclude exact scoped identities, including an unlisted MCP URI.
-MCP roots require explicit consent and retain a verified per-Turn cache. Bound
-UTF-8 supporting files can be read through native `skill_read`; original manifest,
-byte, permission and frozen Turn/model budget checks apply without truncation.
-Local update/uninstall and authorized journal restoration retain original files;
-lost daemon owners remain recovery-blocked. Supervised Codex/Claude local prompt
-delivery is described above; MCP-origin external delivery is unsupported. Real
-provider/remote-MCP qualification are separate.
-No skills management command starts the daemon, MCP or an agent. BitRouter
-does not expose the filesystem library as an origin MCP server; the gateway's
-upstream skills relay keeps its existing behavior. External harness skills can
-still be installed through their own plugin/skills rails.
+A Turn freezes source identity and a file manifest in its original checkpoint.
+This fingerprint is not a stored version. Later reads verify the directory's
+actual bytes against it; edits or removal can reject continuation. A new Turn
+can use the new contents. MCP skills keep their original origin, held manifest,
+content consent, lazy reads and cache verification. Local directory writes do not
+modify MCP resources or imply permission to use them. Native `skill_read` retains
+its original Turn/caller/context bounds. ACP delivery is explicit local root
+prompt instructions only: Codex text, or Claude negotiated embedded context.
+It does not claim protected supporting-file access or MCP-origin delivery.
 
 ### `bro skills explain`
 
@@ -2172,7 +2072,7 @@ These identities do not substitute for supervised ACP run IDs. An optional
 `--database-url URL` selects the stored database directly and conflicts with
 `--config`; relative SQLite addresses otherwise resolve against the config home.
 
-The command reads original checkpoints, metadata, policy, source/version/entry,
+The command reads original checkpoints, metadata, source/fingerprint/entry,
 constraints, reasons and consents. Instruction evidence contains a digest and
 byte count. Prepared model requests are reported only when their exact frozen SDK
 input contains the bound instructions with the correct source and role. This
@@ -2449,7 +2349,7 @@ block when valid monitoring evidence crosses its quality floor or records a
 severe violation. Continued monitoring does not add randomized trial samples or
 prove ongoing comparative cost savings. Original trial corrections can also
 invalidate adoption. Sessions first admitted while off are not enrolled for
-monitoring retroactively. The TUI's block inspector displays these separately.
+monitoring retroactively.
 
 During cold start, learner v2 retains bounded initial allocation until both arms
 have the configured minimum independent quality, cost and latency evidence.
@@ -2459,9 +2359,8 @@ plan holds new trial admission until local reconciliation; this does not require
 another judge call or reassign existing sessions.
 
 See [the evolution contract](ACP_EVOLUTION_SPEC.md) for the block, reward and
-publication semantics. Local coding TUI sessions expose mode controls, manual
-rubric editing and existing-block reconciliation through `/evolution` as
-described above. These controls do not establish that automatic promotion is
+publication semantics. Use the CLI controls above for mode, rubric and existing
+block management. These controls do not establish that automatic promotion is
 safe on real coding tasks.
 
 ## Request-check extensions

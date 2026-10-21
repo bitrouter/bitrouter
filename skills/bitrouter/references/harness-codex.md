@@ -28,10 +28,12 @@ bro init --yes --harness codex --after exit
 ## ACP session
 
 For daemon skill allocation, use `bro run codex "review changes" --background
---skill project:INSTALLATION_ID` (one command). Repeat `--skill` or
-`--exclude-skill` with project/global installation IDs. The daemon sends verified
-local root instructions as ACP text, bound to original receipt, bundle version,
-version path and input identity. Automatic choices use its decision backend.
+--skill project:DIRECTORY_ID` (one command). Obtain directory IDs with
+`bro skills list`; repeat `--skill` or `--exclude-skill` with project/global IDs.
+The daemon sends verified local root instructions as ACP text, bound to the
+directory manifest, content fingerprint, path and input identity. Only explicit
+includes are delivered; no decision backend is called. Acquisition belongs to
+`npx skills`.
 Inspect `agents show RUN` for negotiated delivery capability and original facts.
 This is prompt delivery; native activation, protected supporting-file access and
 vendor token/history admission are not verified. Old skill text may remain in

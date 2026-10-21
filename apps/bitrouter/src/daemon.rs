@@ -788,7 +788,6 @@ pub(crate) async fn run_bound_control_socket(
             crate::supervisor::Supervisor::open(
                 administration.source.clone(),
                 administration.routing.clone(),
-                app.decision_model().cloned(),
             )
             .await?,
         ),

@@ -291,7 +291,7 @@ impl HarnessPort for NativePort {
     async fn skill_catalog(&self) -> Result<Option<crate::core::skills::SkillCatalog>, CoreError> {
         self.authorize_dispatch().await?;
         Ok(Some(crate::core::skills::SkillCatalog {
-            managed: self.resources.managed_skill_catalog().clone(),
+            local: self.resources.local_skill_catalog().clone(),
             mcp: self.resources.mcp_skill_catalog().clone(),
         }))
     }
@@ -318,7 +318,7 @@ impl HarnessPort for NativePort {
     ) -> Result<Vec<u8>, CoreError> {
         self.authorize_dispatch().await?;
         match source {
-            crate::core::skills::SkillSource::Managed(binding) => self
+            crate::core::skills::SkillSource::Local(binding) => self
                 .resources
                 .managed_skill_file(binding, "SKILL.md", max_bytes)
                 .await

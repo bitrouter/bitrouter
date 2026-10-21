@@ -34,8 +34,8 @@ fail before native resource/owner admission. This limit is declared by v1 Hello.
 
 It accepts `--config`, `--effort`, `--read-only`, `--check`,
 `--max-output-tokens`, `--request-id`, `--server-instance`, `--skill` and
-`--exclude-skill`. The last two repeat exact selectors: `project:INSTALLATION_ID`,
-`global:INSTALLATION_ID`, or `mcp:SERVER:URI`; e.g.
+`--exclude-skill`. The last two repeat exact selectors: `project:DIRECTORY_ID`,
+`global:DIRECTORY_ID`, or `mcp:SERVER:URI`; e.g.
 `--skill mcp:reviews:skill://review/SKILL.md`. `task run` accepts the same selectors
 and retains them in the created Thread config; managed retains them in its input
 identity. Inclusion is required, exclusion prevents selection, and conflicting
@@ -270,19 +270,13 @@ Router settings are saved before optional resources; cancellation there preserve
 that progress and skips Finish. Prompts and diagnostics go to stderr.
 
 
-Optional resources reuse the existing MCP publisher and versioned installer.
-The menu supports Add MCP server, Install skill, retry and Continue. Completed
-Router/resource writes survive failures. Headless flags are paired `--mcp-name
-NAME --mcp-from FILE|-`, plus `--install-skill SOURCE`, optional `--skill
-NAME_OR_PATH`, `--skill-ref REF`, and `--workspace PATH` or `--global`. In the
-wizard stdin belongs to prompts, so MCP input must use a file. `--yes` never
-prompts to resolve multi-skill ambiguity, even on a TTY. The `resources` array
-retains each safe receipt or failed/skipped outcome. Headless resource failure
-emits one partial report with nonzero exit and `after: exit`, preserving Router
-settings and suppressing following setup/start/launch actions. Inspect saved
-state before retrying; use `mcp edit`/`skills update` for existing names. These
-steps do not connect MCP, grant skill-source permission, execute scripts or
-activate skills. Explicit Finish may start the configured daemon afterward.
+Optional resources reuse the MCP publisher. The menu offers Add MCP server and
+Continue; failures can be retried without losing saved Router configuration.
+Headless setup accepts paired `--mcp-name NAME --mcp-from FILE|-`. A failure emits
+one partial report and suppresses Finish. Install skills with `npx skills`; use
+`bro skills` to inspect or write existing directory files. Setup has no skill
+installation, Git ref, bundle selector or installation scope flags. Saving MCP
+neither connects nor grants skill-source/content permission.
 
 `init --yes` is an explicit scaffold/save operation and exits by default. No agent
 is chosen automatically. `--harness claude|codex` selects an optional ACP default;
@@ -505,7 +499,7 @@ synthesized, and unmetered traffic (`--direct`, explicit `--base-url`, own-auth
 harnesses, sessions with no priced requests) is forwarded exactly as sent —
 never `$0.00`, never a daemon-wide figure.
 
-**External observability and turns**: `acp serve <agent>` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded. `run` drives the same controller in-process, so it gets identical forwarding; its OTel turn spans are re-derived from the prompt round-trip and correlate on the **harness-native** session id. `--turn-timeout` and cooperative cancellation are the client's there, and in `code <agent>`: every command now drives the same controller through the same client, and no local `record_id` or controller-owned FIFO queue exists. Code may keep an explicit process-local next-turn queue.
+**External observability and turns**: `acp serve <agent>` forwards the harness's session/cancel and session/update wire unchanged, except that a locally bound controller decorates the harness's own `usage_update` with session-attributed `cost` (see **Session cost**); it never synthesizes per-session usage or timeout behavior. Authenticated routed model calls normalize BitRouter's static controller/harness headers and the harness's native Claude/Codex identity into controlled capture/replay, request spans, route decisions, and nullable metering correlation. The normal API/virtual key is the only authentication boundary; authorization, cookies, and credentials remain excluded. `run` drives the same controller in-process, so it gets identical forwarding; its OTel turn spans are re-derived from the prompt round-trip and correlate on the **harness-native** session id. `--turn-timeout` and cooperative cancellation are the client's there, and in one-shot runs: every command now drives the same controller through the same client, and no local `record_id` or controller-owned FIFO queue exists. No first-party conversation loop is provided.
 
 **NDJSON format**: every event carries `"version":1`, a monotonically increasing `"seq"`, and a `"type"`. The first success event is `session`; streamed events include `message_chunk`, `thought_chunk`, `tool_call`, `tool_call_update`, `usage`, and `permission`; exactly one terminal `result` or `error` follows. The old `--format json` value remains an alias for `ndjson` during migration.
 
@@ -543,11 +537,10 @@ selection; a physical-model-only allowlist does not authorize the alias.
 |---|---|
 | `bro init [--yes] [--force] [--reset] [-c PATH] [credential/resource flags] [--harness claude\|codex] [--after launch\|serve\|exit] [--model ID]` | Save Router setup and optional ACP default/model in the resolved configuration, or BitRouter home when absent. Credential flags: `--cloud-login`, `--api-key`, `--provider`, `--provider-api-key`, `--use-detected`. Headless setup reports-and-skips interactive logins. `--after launch` explicitly launches the selected native tool; `--force` resets existing configuration. |
 | `bro config validate [--config PATH]` | Validate a config file by running the real parse path: structure (deserialization), `derives` resolution, the upstream-URL (SSRF) gate, and any referenced `policy-lock.yaml`. Exits non-zero on an invalid config — **CI-safe**. Does *not* load the JSON Schema (that artifact, at `dist/schema/bitrouter.config.schema.json` / regenerated with `cargo run -p dist-helper -- generate-schema`, is for IDE autocomplete + the drift check). Unset `${VAR}` references are substituted with a `.invalid` placeholder and reported as warnings, so secrets need not be present; a value that embeds one mid-string is not authoritatively checked. Also reports `ignored_config` — `plugins.<id>` blocks the binary does not read and therefore ignores, which is otherwise silent (`bitrouter-policy` and `bitrouter-telemetry` are the supported ids). Unknown ids do **not** fail validation. The removed `plugins.bitrouter-guardrails` key is different: any presence fails validation and activation; see `references/guardrails.md` for migration and input-only coverage. The daemon, `bro acp serve` and `bro run` log the same set on every start. |
-| `bro skills list [--workspace PATH\|--global] [--json\|--human]` | Inspect BitRouter-managed installations plus unmanaged discoveries, including invalid and retained versions; see [versioned skills](#versioned-skills). |
-| `bro skills show NAME_OR_ID [--workspace PATH\|--global]` | Exact scope, installation identity, current version/provenance and retained history; no activation. |
-| `bro skills install SOURCE [--skill NAME_OR_RELATIVE_PATH] [--ref REF] [--workspace PATH\|--global]` | Snapshot a complete local/Git bundle; validate and atomically publish its version, receipt and alias without executing hooks/scripts. |
-| `bro skills update NAME_OR_ID [--ref REF] [--workspace PATH\|--global]` | Resnapshot a local source or tracked Git branch. Tag/commit pins stay fixed unless a different explicit ref is provided. Failure preserves the previous alias. |
-| `bro skills uninstall NAME_OR_ID [--workspace PATH\|--global]` | Remove the managed alias, retain every version and receipt; never edit unmanaged directories. |
+| `bro skills list [--workspace PATH\|--global\|--root PATH]` | Discover existing local skill directories, with path, directory identity and frontmatter validation. |
+| `bro skills show NAME_OR_ID [--workspace PATH\|--global\|--root PATH]` | Inspect one existing directory and its validation; no activation. |
+| `bro skills read NAME_OR_ID [--file RELATIVE_PATH] [scope flags]` | Read a bounded UTF-8 file from the selected directory. |
+| `bro skills write NAME_OR_ID [--file RELATIVE_PATH] --from FILE\|- [scope flags]` | Atomically write a bounded UTF-8 file; validate root frontmatter before publication. |
 | `bro skills explain --thread THREAD_ID --turn TURN_ID [--config PATH]` | Read original native skill selection, exact versions/entry, consent, verified-byte commitments and prepared SDK request evidence without a daemon or resource connections. Managed inputs use `--managed-session NAME --request-id KEY`; `--agent-turn ID` narrows the work unit. |
 | `bro skills init <NAME> [--output PATH] [--json\|--human]` | Scaffold a spec-valid skill directory — writes `<NAME>/SKILL.md` unless `--output` names a path. `<NAME>` is written into the generated frontmatter. |
 | `bro policy create <id> [--dir DIR]` | Write a starter access-control policy file under `--dir` (default `./policies`). Bind to a key with `bro key sign --user <id> --policy <id>`. |
@@ -785,119 +778,29 @@ parent name. Relative file references remain inside the held manifest; multiple
 matching URIs require an exact URI rather than a default choice. The URI's
 authority is never resolved as a host. CLI selectors accept these same URI forms.
 
-### Versioned skills
+### Local skill directories
 
-For daemon-supervised external ACP, `run codex|claude PROMPT --background`
-accepts repeatable `--skill project:ID`, `--skill global:ID` and
-`--exclude-skill SELECTOR`. Each input uses the original library and decision
-backend; optional automatic selection is empty without that backend. Required
-entries take priority and must fit four frames / 64 KiB, with a 2 MiB serialized
-ACP request ceiling. Frames bind original receipt, whole-bundle version, path
-and exact input. Codex receives text; Claude requires negotiated embeddedContext
-and receives text resources as user context. `agents list` reports path contracts,
-not live readiness; `agents show RUN` includes negotiated skill capability and
-original per-input decision/usage/delivery receipts. Those facts share the
-original supervisor ledger, capped at 64 reports / 4 MiB per run. Restart does
-not replay an uncertain result or make a lost owner runnable.
+Use `bro skills list/show/read/write` against an existing directory. Scope flags
+are mutually exclusive: `--workspace PATH`, `--global`, or `--root PATH`.
+`read NAME --file references/check.md` returns bounded UTF-8 data.
+`write NAME --file references/check.md --from FILE|-` atomically updates one file;
+`init NAME -o PATH` scaffolds `SKILL.md`. Duplicate names require a specific root
+or directory ID. These commands do not run scripts. Acquire/update third-party
+skills with `npx skills`; BRO creates no installation index or version store.
 
-MCP-origin required entries are unsupported, even with `--approve-all`. Unknown
-adapters, foreground/transparent ACP, native launch and inference-only routing
-retain existing functions but do not support this allocation. Slash commands
-retain their original shape and skip automatic skill selection; required skills
-on the same input are unsupported. Prompt instructions do not establish native
-activation, protected support-file access, tool grants or vendor token/history
-admission. Omitting a skill later does not remove earlier vendor history. Real
-Codex/Claude sessions remain unverified; consult their harness references.
+Native tasks, `threads create` and supervised ACP require explicit `--skill project:ID`,
+`global:ID` or `mcp:SERVER:URI` where supported. IDs identify canonical local
+directories. No decision backend automatically selects skills. A native Turn
+retains the original file manifest; changed local bytes are rejected rather than
+read as the old content. New Turns may bind the new contents. MCP origin,
+permissions, explicit consent and per-file verification remain independent.
+`skills explain` reads original native facts without starting or restoring work.
 
-Project scope is explicit `--workspace PATH`, otherwise the nearest Git root or
-current directory. The library is `<project>/.bitrouter/skills`; `--global`
-selects `<BITROUTER_HOME-or-default-home>/skills`. Flags conflict. `installed.json`
-owns UUID installation identities, aliases and provenance/version histories;
-`versions/<digest>` stores complete immutable bundles. Reports include principal,
-scope/root/library, catalog revision, managed/unmanaged ownership, exact digest,
-source, state and `activation: not_requested`.
+Supervised Codex receives local root text; Claude requires embedded context.
+The original supervisor ledger records the exact prepared request and delivery
+outcome. MCP-origin ACP delivery, protected support-file access, vendor history
+and token admission remain unsupported/unverified as previously documented.
 
-Native discovery uses an existing explicit workspace index before the nearest
-Git-root library. Empty/invalid/unsafe explicit scopes do not fall back outward.
-Creating a child library cannot redirect an existing Turn's original version;
-reads remain bound to its caller/workspace and authorized library root.
-
-Names use 1–64 Unicode lowercase alphanumeric characters and single hyphens;
-count characters rather than UTF-8 bytes. Uppercase, leading/trailing or repeated
-hyphens, path separators and emoji are rejected. The same validator serves local
-installations and MCP entries; encoded URI parent names are compared after decoding.
-
-Use a local directory or Git URL; `git+/absolute/repository` selects local Git
-objects. `--skill NAME` or `--skill ./relative/path` resolves multi-skill sources;
-`.` selects a root bundle. Nonterminal ambiguity fails. `--ref` is Git-only.
-Receipts retain selected path and local source or requested/resolved ref, exact
-commit and branch-tracking policy. Pinned updates work offline without fetching
-unless the user chooses a different ref. Git credentials belong in existing Git
-authentication config, not URLs. Git terminal prompting is disabled; SSH uses
-batch mode. Live remote authentication remains unverified.
-
-Limits are 32 MiB, 1,024 regular files, 256 KiB `SKILL.md` and 4,096 directories.
-The digest includes all paths/content, empty directories and executable flags.
-Links, escapes and special entries are refused. Git acquires fixed objects
-without checkout, submodules, source hooks or filters. Scripts are inert data.
-Scope lock/CAS and atomic publication prevent stale writers or failed updates
-from replacing an alias. Installed-content tampering is reported, not overwritten.
-After a post-replacement sync error inspect `list/show` before retrying.
-
-Uninstall reports `uninstalled_retained`; a later CLI process can read the old
-versions/receipt. Reinstall gets a new installation ID. There is no GC. Project
-conventional skill layouts and user `.agents`, `.codex`, `.claude`, `$CODEX_HOME`
-roots remain unmanaged inspections. Commands never move/delete/overwrite those
-contents, start the daemon/MCP/agent, or change global harness configuration.
-`init` still only scaffolds source and does not install it.
-
-Native hosts now read active project/user aliases from that same installation
-store, retaining independent scope, installation ID, whole-bundle version,
-original receipt/provenance, caller/workspace and catalog revision. Listing
-does not prefetch bodies. Version readers verify manifest containment, real
-directories, raw file size/hash and executable mode on use. Updates/uninstalls
-leave original receipts available to a bound-version reader; an absent old
-version fails explicitly. An unavailable scope is reported separately.
-
-Catalog metadata can refresh between native Turns without changing tool grants.
-Native Core now assesses managed candidates through the configured decision
-backend, freezes complete receipts and bounded choices in the original context
-store's WorkUnit, and commits verified instructions before model preparation.
-Without a decision backend, optional automatic choices remain empty with an
-explicit reason. Library callers can require/exclude scope/installation IDs in
-`TaskInput.routing.skills`; these constraints take priority and survive child
-assignment, while automatic parent choices are not copied into the child.
-Every later model step rechecks original bytes; alias changes never substitute
-a new version. MCP root caches remain in the original WorkUnit and revalidate
-source authority and original bytes; they never become filesystem candidates.
-Explicit MCP inclusions use direct metadata lookup even when not listed and
-still require separate consent. Installation alone does not activate a skill.
-Native `skill_read` delivers verified bound UTF-8 supporting files as Turn-scoped
-user data; original native budgets and permission checks remain enforced. No local origin MCP is added.
-
-`skills explain --thread THREAD_ID --turn TURN_ID` reads the original native
-Thread log. Managed history uses `--managed-session NAME --request-id KEY`;
-`--agent-turn ID` selects one exact work unit. `--config PATH` selects the database
-address without loading providers/MCP; alternatively use `--database-url URL`.
-SQLite is forced to read-only mode and missing databases are not created. Cold
-inspection neither claims an owner nor resumes work; it works with missing current
-source/workspace files or an unreleased lost owner. It reports selected, verified
-bytes and exact prepared SDK contexts separately. Available attempt/HTTP outcomes
-remain separate; `attempts: null` preserves unavailable historical execution detail.
-Supporting files report their original reference, raw digest/size and which
-prepared SDK inputs contain the exact user data frame; bodies are not printed.
-Prepared context is not proof of a network send or model obedience. JSON and
-`--human` are supported; named remote-control contexts cannot fall back locally.
-
-`bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).
-
-### Native model history across protocol boundaries
-
-Native tool errors and execution denials remain typed in the durable journal.
-Model prompts represent them as JSON containing an explicit `status` and the
-original typed `output`, so Chat Completions and Responses preserve the failure
-meaning without a protocol-native error flag. Prompt byte limits include this
-representation.
 
 ## MCP configuration
 

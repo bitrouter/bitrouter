@@ -201,7 +201,7 @@ async fn supporting_file_is_lazy_verified_user_data_and_does_not_leak_to_the_nex
         .start(
             "next-file-turn",
             session.head().await.state_revision,
-            input(),
+            selected_input(&host).await,
         )
         .await?;
     session.drive().await?;

@@ -5,6 +5,8 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::OnceLock;
+use wiremock::matchers::{method, path as http_path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use super::fixture::example_binary;
 use super::{Fixture, text_path as path};
@@ -43,20 +45,8 @@ async fn fixture(profile: &str, options: &[&str]) -> Result<Fixture> {
     Ok(fixture)
 }
 
-async fn install(fixture: &Fixture, marker: &str) -> Result<(PathBuf, String)> {
-    install_with(fixture, marker, false).await
-}
-
-async fn install_via_onboarding(fixture: &Fixture, marker: &str) -> Result<(PathBuf, String)> {
-    install_with(fixture, marker, true).await
-}
-
-async fn install_with(
-    fixture: &Fixture,
-    marker: &str,
-    onboarding: bool,
-) -> Result<(PathBuf, String)> {
-    let source = fixture.directory.path().join("source/review");
+async fn local_skill(fixture: &Fixture, marker: &str) -> Result<(PathBuf, String)> {
+    let source = fixture.workspace.join(".agents/skills/review");
     std::fs::create_dir_all(source.join("references"))?;
     std::fs::write(
         source.join("SKILL.md"),
@@ -65,35 +55,12 @@ async fn install_with(
         ),
     )?;
     std::fs::write(source.join("references/check.md"), "original support")?;
-    let mut args = if onboarding {
-        vec!["init", "--yes", "--install-skill"]
-    } else {
-        vec!["skills", "install"]
-    };
-    args.extend([path(&source)?, "--workspace", path(&fixture.workspace)?]);
-    if onboarding {
-        args.extend(["--after", "exit"]);
-    }
-    let report = fixture.run(&args).await?;
-    let receipt = if onboarding {
-        &report["resources"]
-            .as_array()
-            .context("onboarding resources")?
-            .iter()
-            .find(|row| row["kind"] == "skill" && row["status"] == "installed")
-            .context("onboarding installed skill")?["receipt"]
-    } else {
-        &report
-    };
-    let installed = receipt["skills"]
-        .as_array()
-        .context("installation rows")?
-        .iter()
-        .find(|row| row["ownership"] == "managed" && row["installed"] == true)
-        .context("managed row")?;
-    let id = installed["installation_id"]
+    let report = fixture
+        .run(&["skills", "list", "--workspace", path(&fixture.workspace)?])
+        .await?;
+    let id = report["skills"][0]["directory_id"]
         .as_str()
-        .context("installed identity")?;
+        .context("directory identity")?;
     Ok((source, format!("project:{id}")))
 }
 
@@ -115,17 +82,17 @@ fn delivered(snapshot: &Value, index: usize) -> Result<&Value> {
 }
 
 #[tokio::test]
-async fn codex_cli_delivers_exact_local_binding_and_retains_two_versions_after_restart()
+async fn codex_cli_delivers_directory_fingerprints_and_retains_original_evidence_after_restart()
 -> Result<()> {
     let mut fixture = fixture("codex-acp", &[]).await?;
-    let (source, selector) = install_via_onboarding(&fixture, "CODEX_ORIGINAL").await?;
+    let (source, selector) = local_skill(&fixture, "CODEX_ORIGINAL").await?;
     let run = fixture
         .background("review code", &["--direct", "--skill", &selector])
         .await?;
     let first = idle(&fixture, &run).await?;
     let original = delivered(&first, 0)?.clone();
     assert_eq!(original["capabilities"]["adapter"], "codex_text");
-    assert_eq!(original["receipt"]["sources"][0]["kind"], "managed");
+    assert_eq!(original["receipt"]["sources"][0]["kind"], "local");
     let model = fixture
         .captured()?
         .into_iter()
@@ -139,15 +106,6 @@ async fn codex_cli_delivers_exact_local_binding_and_retains_two_versions_after_r
     ensure!(frame.contains(version));
     // Change a support file only: the whole-bundle version must still change.
     std::fs::write(source.join("references/check.md"), "updated support")?;
-    fixture
-        .run(&[
-            "skills",
-            "update",
-            "review",
-            "--workspace",
-            path(&fixture.workspace)?,
-        ])
-        .await?;
     let followup = fixture.prompt("second.txt", "review again")?;
     fixture
         .run(&["agents", "prompt", &run, "--prompt-file", path(&followup)?])
@@ -164,15 +122,7 @@ async fn codex_cli_delivers_exact_local_binding_and_retains_two_versions_after_r
             .count(),
         2
     );
-    fixture
-        .run(&[
-            "skills",
-            "uninstall",
-            "review",
-            "--workspace",
-            path(&fixture.workspace)?,
-        ])
-        .await?;
+    std::fs::remove_dir_all(&source)?;
     let missing = fixture.prompt("missing.txt", "required skill is now unavailable")?;
     fixture
         .run(&["agents", "prompt", &run, "--prompt-file", path(&missing)?])
@@ -205,7 +155,7 @@ async fn codex_cli_delivers_exact_local_binding_and_retains_two_versions_after_r
 async fn claude_cli_uses_negotiated_embedded_data_and_keeps_source_receipt_in_original_ledger()
 -> Result<()> {
     let mut fixture = fixture("claude-acp", &[]).await?;
-    let (_, selector) = install_via_onboarding(&fixture, "CLAUDE_ORIGINAL").await?;
+    let (_, selector) = local_skill(&fixture, "CLAUDE_ORIGINAL").await?;
     let run = fixture
         .background("review code", &["--direct", "--skill", &selector])
         .await?;
@@ -242,7 +192,7 @@ async fn claude_cli_uses_negotiated_embedded_data_and_keeps_source_receipt_in_or
 async fn required_skills_fail_without_a_prompt_for_unknown_or_unadvertised_adapter() -> Result<()> {
     for (profile, options) in [("unknown", vec![]), ("claude-acp", vec!["--no-context"])] {
         let mut fixture = fixture(profile, &options).await?;
-        let (_, selector) = install(&fixture, "UNSUPPORTED").await?;
+        let (_, selector) = local_skill(&fixture, "UNSUPPORTED").await?;
         let run = fixture
             .background("do not dispatch", &["--direct", "--skill", &selector])
             .await?;
@@ -268,7 +218,7 @@ async fn required_skills_fail_without_a_prompt_for_unknown_or_unadvertised_adapt
 async fn mcp_constraint_and_unsupervised_delivery_are_rejected_before_adapter_requests()
 -> Result<()> {
     let mut fixture = fixture("codex-acp", &[]).await?;
-    let (_, selector) = install(&fixture, "NEVER_SENT").await?;
+    let (_, selector) = local_skill(&fixture, "NEVER_SENT").await?;
     let mcp = fixture
         .rejected(&[
             "run",
@@ -302,7 +252,7 @@ async fn both_adapters_keep_tool_approval_separate_from_local_skill_allowed_tool
     for profile in ["codex-acp", "claude-acp"] {
         for (policy, allowed) in [("--approve-reads", false), ("--approve-all", true)] {
             let mut fixture = fixture(profile, &["--permission"]).await?;
-            let (_, selector) = install(&fixture, "LOCAL_ALLOWED_TOOLS_IS_NOT_A_GRANT").await?;
+            let (_, selector) = local_skill(&fixture, "LOCAL_ALLOWED_TOOLS_IS_NOT_A_GRANT").await?;
             let run = fixture
                 .background(
                     "review with a command",
@@ -336,7 +286,7 @@ async fn both_daemon_owned_adapters_cancel_the_original_prepared_delivery_withou
     use std::time::Duration;
     for profile in ["codex-acp", "claude-acp"] {
         let mut fixture = fixture(profile, &["--hold"]).await?;
-        let (_, selector) = install(&fixture, "CANCEL_ORIGINAL").await?;
+        let (_, selector) = local_skill(&fixture, "CANCEL_ORIGINAL").await?;
         let run = fixture
             .background(
                 "review until cancelled",
@@ -381,7 +331,7 @@ async fn each_adapter_rejects_required_over_budget_instructions_without_partial_
 -> Result<()> {
     for profile in ["codex-acp", "claude-acp"] {
         let mut fixture = fixture(profile, &[]).await?;
-        let (source, selector) = install(&fixture, "BOUNDED").await?;
+        let (source, selector) = local_skill(&fixture, "BOUNDED").await?;
         std::fs::write(
             source.join("SKILL.md"),
             format!(
@@ -389,15 +339,6 @@ async fn each_adapter_rejects_required_over_budget_instructions_without_partial_
                 "large ".repeat(14000)
             ),
         )?;
-        fixture
-            .run(&[
-                "skills",
-                "update",
-                "review",
-                "--workspace",
-                path(&fixture.workspace)?,
-            ])
-            .await?;
         let run = fixture
             .background("do not truncate", &["--direct", "--skill", &selector])
             .await?;
@@ -457,177 +398,6 @@ async fn configure_decisions(fixture: &mut Fixture, base_url: &str) -> Result<()
     Ok(())
 }
 
-fn decision_response(request: &Value) -> Value {
-    let relevant = request["state"]["task"]
-        .as_str()
-        .is_some_and(|task| task.contains("review"));
-    let answers: serde_json::Map<_, _> = request["questions"]
-        .as_object()
-        .into_iter()
-        .flat_map(|questions| questions.keys())
-        .map(|id| {
-            (
-                id.clone(),
-                json!({"type":"noul","noul":if relevant {0.99}else{0.01}}),
-            )
-        })
-        .collect();
-    json!({"model":request["model"],"answers":answers,"usage":{"input_tokens":17,"output_tokens":3}})
-}
-
-struct DecisionGate {
-    url: String,
-    request: tokio::sync::oneshot::Receiver<Value>,
-    release: tokio::sync::oneshot::Sender<()>,
-    worker: tokio::task::JoinHandle<Result<()>>,
-}
-
-impl DecisionGate {
-    async fn start() -> Result<Self> {
-        use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let url = format!("http://{}", listener.local_addr()?);
-        let (received, request) = tokio::sync::oneshot::channel();
-        let (release, released) = tokio::sync::oneshot::channel();
-        let worker = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await?;
-            let mut stream = BufReader::new(stream);
-            let mut length = None;
-            loop {
-                let mut line = String::new();
-                ensure!(stream.read_line(&mut line).await? > 0, "HTTP header EOF");
-                if line == "\r\n" {
-                    break;
-                }
-                if let Some((name, value)) = line.split_once(':')
-                    && name.eq_ignore_ascii_case("content-length")
-                {
-                    length = Some(value.trim().parse::<usize>()?);
-                }
-            }
-            let length = length.context("decision body length")?;
-            ensure!(length <= 1024 * 1024, "fixture body bound");
-            let mut body = vec![0; length];
-            stream.read_exact(&mut body).await?;
-            let request: Value = serde_json::from_slice(&body)?;
-            let response = serde_json::to_vec(&decision_response(&request))?;
-            received
-                .send(request)
-                .map_err(|_| anyhow::anyhow!("gate receiver closed"))?;
-            released.await?;
-            let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                response.len()
-            );
-            // A cancelled decision may already have closed its original socket.
-            for bytes in [header.as_bytes(), response.as_slice()] {
-                if let Err(error) = stream.get_mut().write_all(bytes).await {
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
-                    ) {
-                        return Ok(());
-                    }
-                    return Err(error.into());
-                }
-            }
-            Ok(())
-        });
-        Ok(Self {
-            url,
-            request,
-            release,
-            worker,
-        })
-    }
-}
-
-#[tokio::test]
-async fn both_adapters_block_dispatch_after_cancel_or_unacknowledged_decision_outcome() -> Result<()>
-{
-    use std::time::Duration;
-    for profile in ["codex-acp", "claude-acp"] {
-        for fail_journal in [false, true] {
-            let mut fixture = fixture(profile, &[]).await?;
-            install(&fixture, "MUST_NOT_DISPATCH").await?;
-            let gate = DecisionGate::start().await?;
-            configure_decisions(&mut fixture, &gate.url).await?;
-            let run = fixture
-                .background("review gated input", &["--direct"])
-                .await?;
-            let request = tokio::time::timeout(Duration::from_secs(5), gate.request).await??;
-            assert_eq!(request["state"]["task"], "review gated input");
-            let intended = fixture.run(&["agents", "show", &run]).await?;
-            assert_eq!(
-                intended["payload"]["skill_deliveries"][0]["stage"],
-                "decision_intended"
-            );
-            let original = &intended["payload"]["skill_deliveries"][0];
-            ensure!(original["decision"]["outcome"].is_null());
-            if fail_journal {
-                let ledger = std::fs::read_dir(fixture.directory.path())?
-                    .collect::<std::io::Result<Vec<_>>>()?
-                    .into_iter()
-                    .map(|entry| entry.path())
-                    .find(|path| {
-                        path.file_name().is_some_and(|name| {
-                            name.to_string_lossy().starts_with("supervisor-runs-v1-")
-                                && name.to_string_lossy().ends_with(".json")
-                        })
-                    })
-                    .context("owned supervisor ledger")?;
-                let backup = ledger.with_extension("saved");
-                std::fs::rename(&ledger, &backup)?;
-                std::fs::create_dir(&ledger)?;
-                gate.release
-                    .send(())
-                    .map_err(|_| anyhow::anyhow!("gate closed"))?;
-                let failed = idle(&fixture, &run).await?;
-                ensure!(
-                    failed["payload"]["failure"]
-                        .as_str()
-                        .is_some_and(|error| error.contains("ledger")),
-                    "{failed}"
-                );
-                ensure!(failed["payload"]["skill_deliveries"][0]["receipt"].is_null());
-                let durable: Value = serde_json::from_slice(&std::fs::read(&backup)?)?;
-                let row = durable["runs"]
-                    .as_array()
-                    .context("ledger rows")?
-                    .iter()
-                    .find(|row| row["run_id"] == run)
-                    .context("original durable row")?;
-                assert_eq!(row["skill_deliveries"][0], *original);
-                std::fs::remove_dir(&ledger)?;
-                std::fs::rename(&backup, &ledger)?;
-            } else {
-                fixture.run(&["agents", "cancel", &run]).await?;
-                let cancelled = idle(&fixture, &run).await?;
-                let report = &cancelled["payload"]["skill_deliveries"][0];
-                assert_eq!(report["stage"], "cancelled");
-                assert_eq!(
-                    report["decision"]["request"],
-                    original["decision"]["request"]
-                );
-                assert_eq!(report["decision"]["outcome"]["Err"]["may_have_run"], true);
-                ensure!(report["receipt"].is_null());
-                gate.release
-                    .send(())
-                    .map_err(|_| anyhow::anyhow!("gate closed"))?;
-            }
-            tokio::time::timeout(Duration::from_secs(5), gate.worker).await???;
-            assert!(
-                !fixture
-                    .captured()?
-                    .iter()
-                    .any(|row| row["method"] == "session/prompt")
-            );
-            fixture.stop(false).await?;
-        }
-    }
-    Ok(())
-}
-
 #[tokio::test]
 async fn legacy_supervisor_constraints_are_rejected_before_authority_or_adapter_effects()
 -> Result<()> {
@@ -671,145 +441,11 @@ async fn legacy_supervisor_constraints_are_rejected_before_authority_or_adapter_
 }
 
 #[tokio::test]
-async fn workflow_choice_and_explicit_exclusion_use_the_original_daemon_decision_runtime()
--> Result<()> {
-    use wiremock::matchers::{method, path as request_path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    for profile in ["codex-acp", "claude-acp"] {
-        let mut fixture = fixture(profile, &[]).await?;
-        let (_, selector) = install(&fixture, "AUTO_SELECTED_ORIGINAL").await?;
-        let api = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(request_path("/v1/systemone"))
-            .respond_with(|request: &wiremock::Request| {
-                match serde_json::from_slice::<Value>(&request.body) {
-                    Ok(request) => {
-                        ResponseTemplate::new(200).set_body_json(decision_response(&request))
-                    }
-                    Err(_) => ResponseTemplate::new(400),
-                }
-            })
-            .mount(&api)
-            .await;
-        configure_decisions(&mut fixture, &api.uri()).await?;
-        let run = fixture.background("review the task", &["--direct"]).await?;
-        let first = idle(&fixture, &run).await?;
-        let report = delivered(&first, 0)?;
-        assert_eq!(report["candidates"][0]["reason"], "workflow_match");
-        assert_eq!(
-            report["decision"]["outcome"]["Ok"]["usage"]["input_tokens"],
-            17
-        );
-        assert_eq!(
-            api.received_requests()
-                .await
-                .context("decision requests")?
-                .len(),
-            1
-        );
-        let other = fixture.prompt("unrelated.txt", "describe a sunset")?;
-        fixture
-            .run(&["agents", "prompt", &run, "--prompt-file", path(&other)?])
-            .await?;
-        let second = idle(&fixture, &run).await?;
-        assert_eq!(
-            second["payload"]["skill_deliveries"][1]["stage"],
-            "no_selection"
-        );
-        assert_eq!(
-            second["payload"]["skill_deliveries"][1]["candidates"][0]["reason"],
-            "workflow_no_match"
-        );
-        assert!(second["payload"]["skill_deliveries"][1]["receipt"].is_null());
-        fixture.run(&["agents", "stop", &run]).await?;
-        let excluded = fixture
-            .background(
-                "review but exclude",
-                &["--direct", "--exclude-skill", &selector],
-            )
-            .await?;
-        let excluded = idle(&fixture, &excluded).await?;
-        assert_eq!(
-            excluded["payload"]["skill_deliveries"][0]["candidates"][0]["reason"],
-            "explicitly_excluded"
-        );
-        assert_eq!(
-            api.received_requests()
-                .await
-                .context("decision requests")?
-                .len(),
-            2
-        );
-        let prompts: Vec<_> = fixture
-            .captured()?
-            .into_iter()
-            .filter(|row| row["method"] == "session/prompt")
-            .collect();
-        assert_eq!(prompts.len(), 3);
-        let native = fixture.prompt("native-command.txt", "/compact")?;
-        let excluded_id = excluded["payload"]["run_id"]
-            .as_str()
-            .context("excluded run ID")?;
-        fixture
-            .run(&[
-                "agents",
-                "prompt",
-                excluded_id,
-                "--prompt-file",
-                path(&native)?,
-            ])
-            .await?;
-        idle(&fixture, excluded_id).await?;
-        assert_eq!(
-            api.received_requests()
-                .await
-                .context("decision requests")?
-                .len(),
-            2
-        );
-        let after_native = fixture.captured()?;
-        let native_wire = after_native
-            .iter()
-            .rev()
-            .find(|row| row["method"] == "session/prompt")
-            .context("native command wire")?;
-        assert_eq!(
-            native_wire["params"]["prompt"],
-            json!([{"type":"text","text":"/compact"}])
-        );
-        fixture.run(&["agents", "stop", excluded_id]).await?;
-        let required_command = fixture
-            .background("/compact", &["--direct", "--skill", &selector])
-            .await?;
-        let unsupported = idle(&fixture, &required_command).await?;
-        ensure!(
-            unsupported["payload"]["failure"]
-                .as_str()
-                .is_some_and(|failure| failure.contains("native slash-command"))
-        );
-        assert_eq!(
-            fixture
-                .captured()?
-                .iter()
-                .filter(|row| row["method"] == "session/prompt")
-                .count(),
-            4
-        );
-
-        assert!(prompts[0].to_string().contains("AUTO_SELECTED_ORIGINAL"));
-        assert!(!prompts[1].to_string().contains("AUTO_SELECTED_ORIGINAL"));
-        assert!(!prompts[2].to_string().contains("AUTO_SELECTED_ORIGINAL"));
-        fixture.stop(false).await?;
-    }
-    Ok(())
-}
-
-#[tokio::test]
 async fn both_adapters_retain_uncertain_original_delivery_after_error_and_cold_restart()
 -> Result<()> {
     for profile in ["codex-acp", "claude-acp"] {
         let mut fixture = fixture(profile, &["--reject"]).await?;
-        let (_, selector) = install(&fixture, "UNCERTAIN_ORIGINAL").await?;
+        let (_, selector) = local_skill(&fixture, "UNCERTAIN_ORIGINAL").await?;
         let run = fixture
             .background("review once", &["--direct", "--skill", &selector])
             .await?;
@@ -835,6 +471,38 @@ async fn both_adapters_retain_uncertain_original_delivery_after_error_and_cold_r
         let cold = fixture.run(&["agents", "show", &run]).await?;
         assert_eq!(cold["payload"]["skill_deliveries"][0], *report);
         assert_eq!(fixture.captured()?, captured);
+        fixture.stop(false).await?;
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn configured_decision_backend_is_not_used_for_implicit_acp_skill_selection() -> Result<()> {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(http_path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&upstream)
+        .await;
+    for profile in ["codex-acp", "claude-acp"] {
+        let mut fixture = fixture(profile, &[]).await?;
+        local_skill(&fixture, "NEVER_AUTO_LOAD").await?;
+        configure_decisions(&mut fixture, &upstream.uri()).await?;
+        let run = fixture.background("review code", &["--direct"]).await?;
+        let snapshot = idle(&fixture, &run).await?;
+        ensure!(
+            snapshot["payload"]
+                .get("skill_deliveries")
+                .is_none_or(|rows| rows.as_array().is_some_and(Vec::is_empty))
+        );
+        let model = fixture
+            .captured()?
+            .into_iter()
+            .filter(|row| {
+                row["event"] == "codex_model_input" || row["event"] == "claude_user_message"
+            })
+            .collect::<Vec<_>>();
+        ensure!(!model.is_empty() && !serde_json::to_string(&model)?.contains("NEVER_AUTO_LOAD"));
         fixture.stop(false).await?;
     }
     Ok(())

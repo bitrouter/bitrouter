@@ -1,5 +1,5 @@
 //! Compatibility discovery roots for existing library/session consumers.
-//! Managed CLI scopes and versioned installation paths live in `managed`.
+//! The current directory CLI and native host use the shared bounded discovery.
 //!
 //! ## Containment
 //!

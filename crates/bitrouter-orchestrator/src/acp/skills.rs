@@ -119,13 +119,13 @@ fn frame(
     turn_id: &str,
     body: &str,
 ) -> anyhow::Result<String> {
-    let SkillSource::Managed(binding) = source else {
+    let SkillSource::Local(binding) = source else {
         anyhow::bail!("unsupported: MCP-origin ACP delivery");
     };
-    let root = binding.library.join("versions").join(&binding.version);
+    let root = binding.directory.clone();
     let metadata = serde_json::to_string(&serde_json::json!({
         "delivery":"prompt_instructions", "session_id":session_id,
-        "turn_id":turn_id,"source":source,"bundle_path":root,
+        "turn_id":turn_id,"source":source,"skill_directory":root,
         "verified_bundle_access":false,"native_activation":false
     }))?;
     Ok(format!(
@@ -171,7 +171,7 @@ pub fn prepare(
     let mut sources = Vec::new();
     let mut instruction_bytes = 0_usize;
     for item in instructions {
-        let SkillSource::Managed(binding) = &item.source else {
+        let SkillSource::Local(binding) = &item.source else {
             anyhow::bail!("unsupported: ACP skill source");
         };
         anyhow::ensure!(
@@ -182,13 +182,13 @@ pub fn prepare(
             "skill binding belongs to another caller/workspace"
         );
         anyhow::ensure!(
-            binding.library.is_absolute()
+            binding.directory.is_absolute()
                 && binding.version.len() == 64
                 && binding
                     .version
                     .bytes()
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-            "invalid versioned skill path"
+            "invalid skill directory or content fingerprint"
         );
         item.source.verify(&item.bytes)?;
         let identity = item.source.identity()?;

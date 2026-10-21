@@ -5,10 +5,9 @@ pub mod explain;
 pub mod files;
 pub mod selection;
 
-use bitrouter_sdk::decision_model::policy::DecisionPolicy;
 use serde::{Deserialize, Serialize};
 
-use crate::harness::skills::library::{LibraryScope, ManagedSkill, ManagedSkillCatalog};
+use crate::harness::skills::library::{LocalScope, LocalSkill, LocalSkillCatalog};
 use crate::harness::skills::mcp::{HeldMcpSkill, McpSkillCatalog};
 
 use super::checkpoint::sha256;
@@ -23,9 +22,9 @@ pub const FILES_FEATURE: &str = "native_skill_files_v1";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SkillSelector {
-    Managed {
-        scope: LibraryScope,
-        installation_id: String,
+    Local {
+        scope: LocalScope,
+        directory_id: String,
     },
     Mcp {
         server: String,
@@ -56,10 +55,8 @@ impl SkillConstraints {
         }
         for selector in self.include.iter().chain(&self.exclude) {
             match selector {
-                SkillSelector::Managed {
-                    installation_id, ..
-                } if installation_id.trim().is_empty() => {
-                    return Err(invalid("skill installation identity is empty"));
+                SkillSelector::Local { directory_id, .. } if directory_id.trim().is_empty() => {
+                    return Err(invalid("skill directory identity is empty"));
                 }
                 SkillSelector::Mcp { server, uri }
                     if server.trim().is_empty() || uri.trim().is_empty() =>
@@ -76,16 +73,16 @@ impl SkillConstraints {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "binding", rename_all = "snake_case")]
 pub enum SkillSource {
-    Managed(ManagedSkill),
+    Local(LocalSkill),
     Mcp(HeldMcpSkill),
 }
 
 impl SkillSource {
     pub fn selector(&self) -> SkillSelector {
         match self {
-            Self::Managed(skill) => SkillSelector::Managed {
+            Self::Local(skill) => SkillSelector::Local {
                 scope: skill.scope.clone(),
-                installation_id: skill.installation_id.clone(),
+                directory_id: skill.directory_id.clone(),
             },
             Self::Mcp(skill) => SkillSelector::Mcp {
                 server: skill.origin.server.clone(),
@@ -96,7 +93,7 @@ impl SkillSource {
 
     pub fn identity(&self) -> Result<String, CoreError> {
         match self {
-            Self::Managed(skill) => skill
+            Self::Local(skill) => skill
                 .material()
                 .map(|material| material.material_id)
                 .map_err(invalid),
@@ -112,7 +109,7 @@ impl SkillSource {
 
     pub fn name(&self) -> &str {
         match self {
-            Self::Managed(skill) => &skill.name,
+            Self::Local(skill) => &skill.name,
             Self::Mcp(skill) => skill
                 .entry
                 .frontmatter
@@ -124,7 +121,7 @@ impl SkillSource {
 
     pub fn description(&self) -> &str {
         match self {
-            Self::Managed(skill) => &skill.description,
+            Self::Local(skill) => &skill.description,
             Self::Mcp(skill) => skill
                 .entry
                 .frontmatter
@@ -136,7 +133,7 @@ impl SkillSource {
 
     pub fn instruction_bytes(&self) -> Result<u64, CoreError> {
         match self {
-            Self::Managed(skill) => Ok(skill.instruction_bytes),
+            Self::Local(skill) => Ok(skill.instruction_bytes),
             Self::Mcp(skill) => skill
                 .resource(&skill.entry.uri)
                 .map(|file| file.size)
@@ -146,7 +143,7 @@ impl SkillSource {
 
     pub fn verify(&self, bytes: &[u8]) -> Result<(), CoreError> {
         match self {
-            Self::Managed(skill) => {
+            Self::Local(skill) => {
                 if bytes.len() as u64 != skill.instruction_bytes
                     || sha256(bytes) != skill.instruction_sha256
                 {
@@ -176,17 +173,17 @@ impl SkillSource {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SkillCatalog {
-    pub managed: ManagedSkillCatalog,
+    pub local: LocalSkillCatalog,
     pub mcp: McpSkillCatalog,
 }
 
 impl SkillCatalog {
     pub fn sources(&self) -> Vec<SkillSource> {
-        self.managed
+        self.local
             .skills
             .iter()
             .cloned()
-            .map(SkillSource::Managed)
+            .map(SkillSource::Local)
             .chain(self.mcp.skills.iter().cloned().map(SkillSource::Mcp))
             .collect()
     }
@@ -197,7 +194,6 @@ pub struct SkillCandidate {
     pub source: SkillSource,
     pub reason: String,
     pub selected: bool,
-    pub probability: Option<f64>,
     pub content: Option<String>,
     /// Verified supporting bytes in this original Turn, outside filesystem
     /// discovery. Keys are exact manifest URIs or local bundle-relative paths.
@@ -283,13 +279,11 @@ pub struct SkillSelection {
     pub source: SourceRevision,
     pub catalog: SkillCatalog,
     pub constraints: SkillConstraints,
-    pub policy: DecisionPolicy,
     pub max_selected: usize,
     pub instruction_limit_bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub file_limit_bytes: Option<u64>,
     pub candidates: Vec<SkillCandidate>,
-    pub decision_id: Option<String>,
     /// Selection and loaded bytes are separate durable transitions.
     pub selected: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]

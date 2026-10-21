@@ -642,7 +642,7 @@ enum Command {
         #[command(subcommand)]
         action: bitrouter::cloud::cli::CloudAction,
     },
-    /// Manage versioned skill bundles and inspect unmanaged skills.
+    /// Inspect and edit local skill directories and explain explicit bindings.
     Skills {
         #[command(subcommand)]
         action: bitrouter::skills::cli::SkillsAction,

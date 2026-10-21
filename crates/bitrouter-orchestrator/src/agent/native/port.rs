@@ -78,7 +78,7 @@ impl HarnessPort for Port {
             .resources
             .as_ref()
             .map(|resources| crate::core::skills::SkillCatalog {
-                managed: resources.inventory.managed_skills.clone(),
+                local: resources.inventory.local_skills.clone(),
                 mcp: resources.inventory.mcp_skills.clone(),
             }))
     }
@@ -111,7 +111,7 @@ impl HarnessPort for Port {
             .as_ref()
             .ok_or_else(|| unavailable("native resources are unavailable"))?;
         match source {
-            crate::core::skills::SkillSource::Managed(binding) => resources
+            crate::core::skills::SkillSource::Local(binding) => resources
                 .managed_skill_file(binding, "SKILL.md", max_bytes)
                 .await
                 .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),

@@ -62,10 +62,11 @@ specific skill explicitly because the source exposes more than one `SKILL.md`.
 
 To give an external agent the BitRouter skill, use the generic skills CLI,
 a plugin marketplace, or copy the directory; its host loads the skill and
-invokes `bro` directly. Separately, `bro skills install SOURCE --skill NAME`
-snapshots a bundle into BitRouter's project or user library. That library does
-not edit the external host's skills and does not yet enable workflow selection
-or delivery. BitRouter does not originate local filesystem skills over MCP.
+invokes `bro` directly. Acquisition belongs to external installers such as
+`npx skills`; `bro skills list/show/read/write` inspects and edits existing local
+directories. Native tasks and supervised ACP runs use explicit `--skill`
+selectors, without automatic workflow selection or a BRO version store.
+BitRouter does not originate local filesystem skills over MCP.
 
 ```bash
 # Generic skills CLI — discovers skills/ automatically. Always pass --skill:
@@ -85,7 +86,7 @@ cp -r skills/evaluating-bitrouter-routes  ~/.claude/skills/
 ```
 
 Once installed, the agent host can follow the skill to operate `bro` directly;
-`bro skills list` shows what is installed. Skills exposed by configured
+`bro skills list` discovers existing directories. Skills exposed by configured
 upstream MCP servers remain available through the independent MCP gateway.
 
 ## Editing conventions

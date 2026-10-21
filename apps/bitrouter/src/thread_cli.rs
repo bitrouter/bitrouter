@@ -58,6 +58,8 @@ pub enum Command {
     /// Create an Ask (or read-only) Thread. Starts no Turn.
     Create {
         #[command(flatten)]
+        skills: crate::skills::cli::ConstraintArgs,
+        #[command(flatten)]
         endpoint: Endpoint,
         #[arg(long)]
         workspace: PathBuf,
@@ -229,6 +231,7 @@ pub async fn run(command: Command, output: &Output) -> Result<()> {
             limit: usize::from(limit),
         },
         Command::Create {
+            skills,
             workspace,
             model,
             effort,
@@ -252,7 +255,14 @@ pub async fn run(command: Command, output: &Output) -> Result<()> {
                 effort,
                 max_output_tokens,
                 read_only,
-                skills: None,
+                skills: {
+                    let constraints = skills.constraints()?;
+                    ensure!(
+                        constraints.is_none() || client.skill_constraints,
+                        "daemon does not support explicit skill constraints"
+                    );
+                    constraints
+                },
                 verification_command: check,
                 idempotency_key: key,
             }

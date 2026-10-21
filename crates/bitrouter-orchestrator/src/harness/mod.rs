@@ -48,7 +48,7 @@ pub struct HarnessConfig {
     pub protocol: ProtocolVersion,
     pub skill_roots: Vec<PathBuf>,
     pub skills: SkillsConfig,
-    pub library: Option<Arc<dyn skills::library::SkillLibrary>>,
+    pub library: Option<Arc<dyn skills::library::SkillDirectory>>,
     pub instructions: instructions::InstructionConfig,
 }
 
@@ -107,11 +107,11 @@ pub struct HarnessInventory {
     #[serde(default, skip_serializing_if = "mcp_catalog_empty")]
     pub mcp_skills: skills::mcp::McpSkillCatalog,
     #[serde(default, skip_serializing_if = "managed_catalog_empty")]
-    pub managed_skills: skills::library::ManagedSkillCatalog,
+    pub local_skills: skills::library::LocalSkillCatalog,
 }
 
-fn managed_catalog_empty(catalog: &skills::library::ManagedSkillCatalog) -> bool {
-    catalog.skills.is_empty() && catalog.problems.is_empty() && catalog.revisions.is_empty()
+fn managed_catalog_empty(catalog: &skills::library::LocalSkillCatalog) -> bool {
+    catalog.skills.is_empty() && catalog.problems.is_empty()
 }
 
 fn mcp_catalog_empty(catalog: &skills::mcp::McpSkillCatalog) -> bool {
@@ -160,7 +160,7 @@ pub(crate) struct HarnessResources {
     skill_policy: SkillsConfig,
     caller: CallerContext,
     workspace: PathBuf,
-    library: Option<Arc<dyn skills::library::SkillLibrary>>,
+    library: Option<Arc<dyn skills::library::SkillDirectory>>,
 }
 
 impl HarnessResources {
@@ -179,17 +179,16 @@ impl HarnessResources {
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
-        let managed_skills = if let Some(library) = &config.library {
+        let local_skills = if let Some(library) = &config.library {
             match library.catalog(workspace, caller).await {
                 Ok(catalog) => catalog,
-                Err(error) => skills::library::ManagedSkillCatalog {
+                Err(error) => skills::library::LocalSkillCatalog {
                     skills: Vec::new(),
                     problems: vec![error],
-                    revisions: Vec::new(),
                 },
             }
         } else {
-            skills::library::ManagedSkillCatalog::default()
+            skills::library::LocalSkillCatalog::default()
         };
         // Unknown effects are not exposed in read-only mode, regardless of MCP hints.
         let tool_servers: std::collections::BTreeSet<_> = config
@@ -271,7 +270,7 @@ impl HarnessResources {
             skills: catalog.skills,
             skill_problems: catalog.problems,
             mcp_skills,
-            managed_skills,
+            local_skills,
         };
         if let Err(error) = inventory.validate() {
             return match connections.shutdown().await {
@@ -294,7 +293,7 @@ impl HarnessResources {
 
     pub(crate) async fn managed_skill_file(
         &self,
-        binding: &skills::library::ManagedSkill,
+        binding: &skills::library::LocalSkill,
         path: &str,
         max_bytes: u64,
     ) -> Result<Vec<u8>, String> {
@@ -335,7 +334,7 @@ impl HarnessResources {
         cancel: &CancellationToken,
     ) -> Result<Vec<u8>, String> {
         match source {
-            crate::core::skills::SkillSource::Managed(binding) => {
+            crate::core::skills::SkillSource::Local(binding) => {
                 self.managed_skill_file(binding, reference, max_bytes).await
             }
             crate::core::skills::SkillSource::Mcp(held) => self

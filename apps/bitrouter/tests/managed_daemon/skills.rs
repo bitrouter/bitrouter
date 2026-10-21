@@ -351,7 +351,7 @@ async fn managed_cli_reads_bound_supporting_files_into_verified_model_data_and_c
 }
 
 #[tokio::test]
-async fn active_local_support_survives_update_uninstall_and_keeps_original_file_evidence()
+async fn local_directory_files_keep_turn_binding_and_cold_evidence_after_directory_removal()
 -> Result<()> {
     let (mut fixture, upstream, effect_calls) = effect_fixture().await?;
     Mock::given(method("POST")).and(path("/chat/completions"))
@@ -363,7 +363,7 @@ async fn active_local_support_survives_update_uninstall_and_keeps_original_file_
                 "choices":[{"index":0,"message":{"role":"assistant","content":null,"tool_calls":[{"id":"local-file","type":"function","function":{"name":"skill_read","arguments":json!({"skill_id":skill_id,"reference":"references/check.md"}).to_string()}}]},"finish_reason":"tool_calls"}],
                 "usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}))
         }).with_priority(1).mount(&upstream).await;
-    let source = fixture.home.path().join("review");
+    let source = fixture.workspace.join("skills/review");
     std::fs::create_dir_all(source.join("references"))?;
     std::fs::write(
         source.join("SKILL.md"),
@@ -372,8 +372,7 @@ async fn active_local_support_survives_update_uninstall_and_keeps_original_file_
     std::fs::write(source.join("references/check.md"), "LOCAL_SUPPORT_V1\n")?;
     let installed = fixture
         .command()
-        .args(["--json", "skills", "install"])
-        .arg(&source)
+        .args(["--json", "skills", "list"])
         .arg("--workspace")
         .arg(&fixture.workspace)
         .output()
@@ -384,7 +383,7 @@ async fn active_local_support_survives_update_uninstall_and_keeps_original_file_
         String::from_utf8_lossy(&installed.stderr)
     );
     let installed: Value = serde_json::from_slice(&installed.stdout)?;
-    let identity = installed["skills"][0]["installation_id"]
+    let identity = installed["skills"][0]["directory_id"]
         .as_str()
         .context("installation")?;
     let task = fixture
@@ -408,25 +407,6 @@ async fn active_local_support_survives_update_uninstall_and_keeps_original_file_
         .candidates[0]
         .source
         .clone();
-    std::fs::write(
-        source.join("SKILL.md"),
-        "---\nname: review\ndescription: review workflow\n---\nLOCAL_ROOT_V2\n",
-    )?;
-    std::fs::write(source.join("references/check.md"), "LOCAL_SUPPORT_V2\n")?;
-    for action in ["update", "uninstall"] {
-        let output = fixture
-            .command()
-            .args(["--json", "skills", action, identity])
-            .arg("--workspace")
-            .arg(&fixture.workspace)
-            .output()
-            .await?;
-        ensure!(
-            output.status.success(),
-            "{action}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
     std::fs::write(fixture.home.path().join("effect-gate"), b"continue")?;
     let executed = tokio::time::timeout(Duration::from_secs(20), task.wait_with_output()).await?;
     lines(&executed?)?;
@@ -474,6 +454,7 @@ async fn active_local_support_survives_update_uninstall_and_keeps_original_file_
             .filter(|message| message["role"] != "user")
             .all(|message| !message.to_string().contains("LOCAL_SUPPORT_V1"))
     );
+    std::fs::remove_dir_all(&source)?;
     let missing = fixture
         .coding_command("after-local-uninstall")
         .args(["--read-only", "--skill", &format!("project:{identity}")])
@@ -490,7 +471,6 @@ async fn active_local_support_survives_update_uninstall_and_keeps_original_file_
             == 3
     );
     fixture.stop().await?;
-    std::fs::remove_dir_all(&source)?;
     let report = explain(
         &fixture,
         &[
@@ -1202,6 +1182,7 @@ async fn managed_cli_reuses_its_persisted_mcp_root_after_the_resource_peer_disco
     let client = Client::connect(&socket_path(&fixture.socket)).await?;
     let task = fixture
         .coding_command("cached-mcp-input")
+        .args(["--skill", "mcp:skills-peer:skill://review/SKILL.md"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -1297,6 +1278,7 @@ async fn managed_cli_skill_consent_binds_original_input_and_replays_only_committ
     ensure!(client.skill_consent);
     let task = fixture
         .coding_command("skill-input")
+        .args(["--skill", "mcp:skills-peer:skill://review/SKILL.md"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -1441,6 +1423,7 @@ async fn managed_cli_denial_and_cancellation_never_read_unapproved_mcp_instructi
         let client = Client::connect(&socket_path(&fixture.socket)).await?;
         let task = fixture
             .coding_command("unapproved")
+            .args(["--skill", "mcp:skills-peer:skill://review/SKILL.md"])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
@@ -1486,7 +1469,7 @@ async fn managed_cli_denial_and_cancellation_never_read_unapproved_mcp_instructi
         let output =
             tokio::time::timeout(Duration::from_secs(20), task.wait_with_output()).await??;
         ensure!(
-            output.status.success() == deny,
+            !output.status.success(),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
@@ -1494,7 +1477,7 @@ async fn managed_cli_denial_and_cancellation_never_read_unapproved_mcp_instructi
         ensure!(!settled.resident && settled.released);
         ensure!(settled.run.as_ref().is_some_and(|run| run.status
             == if deny {
-                bitrouter_orchestrator::core::session::RunStatus::Completed
+                bitrouter_orchestrator::core::session::RunStatus::Failed
             } else {
                 bitrouter_orchestrator::core::session::RunStatus::Cancelled
             }));
@@ -1508,7 +1491,7 @@ async fn managed_cli_denial_and_cancellation_never_read_unapproved_mcp_instructi
             .iter()
             .filter(|request| request.url.path() == "/chat/completions")
             .collect();
-        ensure!(models.len() == usize::from(deny));
+        ensure!(models.is_empty());
         ensure!(
             models
                 .iter()
@@ -1534,11 +1517,12 @@ async fn managed_cli_denial_and_cancellation_never_read_unapproved_mcp_instructi
 }
 
 #[tokio::test]
-async fn a_corrupt_optional_mcp_root_is_durably_excluded_before_the_model_request() -> Result<()> {
+async fn a_corrupt_required_mcp_root_fails_before_the_model_request() -> Result<()> {
     let (mut fixture, upstream, journal) = fixture().await?;
     let client = Client::connect(&socket_path(&fixture.socket)).await?;
     let task = fixture
         .coding_command("corrupt-root")
+        .args(["--skill", "mcp:skills-peer:skill://review/SKILL.md"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -1561,7 +1545,7 @@ async fn a_corrupt_optional_mcp_root_is_durably_excluded_before_the_model_reques
         String::from_utf8_lossy(&approved.stderr)
     );
     let output = tokio::time::timeout(Duration::from_secs(20), task.wait_with_output()).await??;
-    lines(&output)?;
+    ensure!(!output.status.success());
     let settled = fixture.inspect("corrupt-root").await?;
     ensure!(settled.released && !settled.resident);
     let stored = fixture.stored().await?;
@@ -1580,12 +1564,7 @@ async fn a_corrupt_optional_mcp_root_is_durably_excluded_before_the_model_reques
         })
         .context("MCP candidate")?;
     ensure!(candidate.selected && candidate.content.is_none());
-    ensure!(
-        candidate
-            .failure
-            .as_ref()
-            .is_some_and(|error| error.code == ErrorCode::ArtifactUnavailable)
-    );
+    ensure!(selection_failure(&snapshot));
     ensure!(
         candidate
             .consents
@@ -1597,7 +1576,7 @@ async fn a_corrupt_optional_mcp_root_is_durably_excluded_before_the_model_reques
         .iter()
         .filter(|request| request.url.path() == "/chat/completions")
         .collect();
-    ensure!(models.len() == 1);
+    ensure!(models.is_empty());
     ensure!(models.iter().all(
         |request| !String::from_utf8_lossy(&request.body).contains(MARKER)
             && !String::from_utf8_lossy(&request.body).contains("CORRUPT_ROOT")
@@ -1874,7 +1853,7 @@ async fn native_http_command_approval_cannot_silently_approve_mcp_skill_content(
         headers
     };
     let created: Value = client.post(format!("{api}/threads")).headers(headers.clone()).header("idempotency-key", "http-create")
-        .json(&json!({"workspace":fixture.workspace,"model":"coding","read_only":true,"max_output_tokens":128})).send().await?.error_for_status()?.json().await?;
+        .json(&json!({"workspace":fixture.workspace,"model":"coding","read_only":true,"max_output_tokens":128,"skills":{"include":[{"kind":"mcp","server":"skills-peer","uri":"skill://review/SKILL.md"}],"exclude":[]}})).send().await?.error_for_status()?.json().await?;
     let thread = created["thread"]["thread_id"]
         .as_str()
         .context("HTTP Thread")?;
@@ -2004,183 +1983,6 @@ async fn native_http_command_approval_cannot_silently_approve_mcp_skill_content(
 }
 
 #[tokio::test]
-async fn local_cli_install_from_git_subdirectory_reaches_the_model_and_preserves_explicit_workspace_scope()
--> Result<()> {
-    let upstream = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(text_result("local skill used")))
-        .mount(&upstream)
-        .await;
-    let mut fixture = Fixture::new(&upstream.uri()).await?;
-    let repository = fixture.workspace.clone();
-    let initialized = Command::new("git")
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            fixture.home.path().join("missing-git-config"),
-        )
-        .args(["init", "--quiet", "--template="])
-        .arg(&repository)
-        .output()
-        .await?;
-    ensure!(initialized.status.success(), "isolated Git init failed");
-    fixture.workspace = repository.join("apps/nested");
-    std::fs::create_dir_all(&fixture.workspace)?;
-    let source = fixture.home.path().join("review");
-    std::fs::create_dir(&source)?;
-    let mut ids = Vec::new();
-    for (key, marker, explicit) in [
-        ("git-root-input", "CLI_GIT_ROOT_INSTRUCTIONS", false),
-        (
-            "explicit-child-input",
-            "CLI_EXPLICIT_WORKSPACE_INSTRUCTIONS",
-            true,
-        ),
-    ] {
-        std::fs::write(
-            source.join("SKILL.md"),
-            format!("---\nname: review\ndescription: review workflow\n---\n{marker}\n"),
-        )?;
-        let mut install = fixture.command();
-        install
-            .current_dir(&fixture.workspace)
-            .args(["--json", "skills", "install"])
-            .arg(&source);
-        if explicit {
-            install.arg("--workspace").arg(&fixture.workspace);
-        }
-        let installed = install.output().await?;
-        ensure!(
-            installed.status.success(),
-            "install: {}",
-            String::from_utf8_lossy(&installed.stderr)
-        );
-        let receipt: Value = serde_json::from_slice(&installed.stdout)?;
-        ensure!(receipt["activation"] == "not_requested");
-        ensure!(
-            receipt["scope"]["root"]
-                == json!(if explicit {
-                    &fixture.workspace
-                } else {
-                    &repository
-                })
-        );
-        let id = receipt["skills"][0]["installation_id"]
-            .as_str()
-            .context("installed identity")?
-            .to_owned();
-        let output = fixture
-            .coding_command(key)
-            .args(["--read-only", "--skill", &format!("project:{id}")])
-            .output()
-            .await?;
-        lines(&output)?;
-        let facts = explain(
-            &fixture,
-            &["--managed-session", "continued", "--request-id", key],
-            false,
-        )
-        .await?;
-        ensure!(
-            facts.status.success(),
-            "explain: {}",
-            String::from_utf8_lossy(&facts.stderr)
-        );
-        let facts: Value = serde_json::from_slice(&facts.stdout)?;
-        let candidate = explained_candidate(&facts)?;
-        ensure!(
-            candidate["source"]["kind"] == "managed"
-                && candidate["source"]["binding"]["installation_id"] == id
-                && candidate["source"]["binding"]["workspace"] == json!(fixture.workspace)
-                && candidate["instructions"].is_object()
-                && candidate["prepared_model_requests"]
-                    .as_array()
-                    .context("model evidence")?
-                    .len()
-                    == 1
-        );
-        ids.push(id);
-    }
-    ensure!(ids[0] != ids[1]);
-    let removed = fixture
-        .command()
-        .args(["--json", "skills", "uninstall", "review", "--workspace"])
-        .arg(&fixture.workspace)
-        .output()
-        .await?;
-    ensure!(removed.status.success());
-    let unavailable = fixture
-        .coding_command("no-broader-fallback")
-        .args(["--read-only", "--skill", &format!("project:{}", ids[0])])
-        .output()
-        .await?;
-    ensure!(
-        !unavailable.status.success(),
-        "empty explicit workspace silently fell back to repository skills"
-    );
-    let failed = fixture.inspect("no-broader-fallback").await?;
-    ensure!(
-        failed.released
-            && failed.receipt.is_some()
-            && failed.run.as_ref().is_some_and(
-                |run| run.status == bitrouter_orchestrator::core::session::RunStatus::Failed
-            )
-    );
-    let models: Vec<_> = upstream
-        .received_requests()
-        .await
-        .context("HTTP requests")?
-        .into_iter()
-        .filter(|request| request.url.path() == "/chat/completions")
-        .collect();
-    ensure!(models.len() == 2);
-    for (index, marker) in [
-        "CLI_GIT_ROOT_INSTRUCTIONS",
-        "CLI_EXPLICIT_WORKSPACE_INSTRUCTIONS",
-    ]
-    .iter()
-    .enumerate()
-    {
-        let request: Value = serde_json::from_slice(&models[index].body)?;
-        ensure!(
-            request["messages"]
-                .as_array()
-                .context("messages")?
-                .iter()
-                .any(|message| message["role"] == "system"
-                    && message["content"]
-                        .as_str()
-                        .is_some_and(|text| text.contains(*marker)))
-        );
-    }
-    ensure!(!String::from_utf8_lossy(&models[1].body).contains("CLI_GIT_ROOT_INSTRUCTIONS"));
-    fixture.stop().await?;
-    for (key, id) in [
-        ("git-root-input", &ids[0]),
-        ("explicit-child-input", &ids[1]),
-    ] {
-        let historical = explain(
-            &fixture,
-            &["--managed-session", "continued", "--request-id", key],
-            false,
-        )
-        .await?;
-        ensure!(historical.status.success());
-        let historical: Value = serde_json::from_slice(&historical.stdout)?;
-        ensure!(explained_candidate(&historical)?["source"]["binding"]["installation_id"] == *id);
-    }
-    ensure!(
-        bitrouter::daemon::probe_status(&fixture.socket)
-            .await?
-            .is_none()
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn cli_requires_an_unlisted_rootless_mcp_uri_and_delivers_its_exact_held_entry() -> Result<()>
 {
     let (mut fixture, upstream, journal) = fixture().await?;
@@ -2274,3 +2076,12 @@ async fn cli_requires_an_unlisted_rootless_mcp_uri_and_delivers_its_exact_held_e
 
 #[path = "skills/integration.rs"]
 mod integration;
+
+fn selection_failure(snapshot: &bitrouter_orchestrator::core::session::SessionSnapshot) -> bool {
+    snapshot
+        .context_store
+        .work
+        .values()
+        .filter_map(|work| work.skills.as_ref())
+        .any(|selection| selection.failure.is_some())
+}

@@ -18,11 +18,13 @@ bro init --yes --harness claude --after exit
 ## ACP session
 
 For daemon skill allocation, use `bro run claude "review changes" --background
---skill project:INSTALLATION_ID` (one command). Repeat `--skill` or
-`--exclude-skill` with project/global installation IDs. Delivery requires that
+--skill project:DIRECTORY_ID` (one command). Obtain directory IDs with
+`bro skills list`; repeat `--skill` or `--exclude-skill` with project/global IDs.
+Delivery requires that
 connection's `embeddedContext` capability and uses embedded text resources as
-user context. Original receipt, whole-bundle version, path and input identity are
-retained in `agents show RUN`. Automatic choices use the daemon decision backend.
+user context. Directory manifest, content fingerprint, path and input identity are
+retained in `agents show RUN`. Only explicit includes are delivered; no decision
+backend is called. Acquisition belongs to `npx skills`.
 This proves prompt delivery; native activation, protected supporting-file access
 and vendor token/history admission are not verified. Earlier text may remain in
 agent history after later exclusion. MCP-origin required entries, required skills

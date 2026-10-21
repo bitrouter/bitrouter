@@ -1,8 +1,8 @@
-//! Complete, bounded snapshots. Payload files are data; nothing is executed.
+//! Bounded directory manifests and verified reads; payload files are never executed.
 
 use std::collections::BTreeSet;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::OpenOptions;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -86,13 +86,6 @@ impl Metadata {
     }
 }
 
-pub(super) struct Bundle {
-    pub staging: tempfile::TempDir,
-    pub metadata: Metadata,
-    pub name: String,
-    pub description: String,
-}
-
 pub(super) fn relative(path: &str) -> Result<PathBuf> {
     ensure!(
         !path.is_empty() && !path.contains(['\\', '\0', ':']),
@@ -142,28 +135,6 @@ pub(super) fn executable(metadata: &std::fs::Metadata) -> bool {
         let _ = metadata;
         false
     }
-}
-
-pub(super) fn mode(path: &Path, execute: bool, readonly: bool) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let value = match (execute, readonly) {
-            (true, true) => 0o555,
-            (false, true) => 0o444,
-            (true, false) => 0o700,
-            (false, false) => 0o600,
-        };
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(value))?;
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = execute;
-        let mut permissions = std::fs::metadata(path)?.permissions();
-        permissions.set_readonly(readonly);
-        std::fs::set_permissions(path, permissions)?;
-    }
-    Ok(())
 }
 
 pub(super) fn read_regular(root: &Path, path: &Path, limit: u64) -> Result<Vec<u8>> {
@@ -217,7 +188,7 @@ struct Inventory {
     files: Vec<(String, PathBuf, bool)>,
 }
 
-fn files(root: &Path, excluded: Option<&Path>) -> Result<Inventory> {
+fn files(root: &Path) -> Result<Inventory> {
     let mut stack = vec![root.to_path_buf()];
     let mut output = Vec::new();
     let mut directories = Vec::new();
@@ -230,7 +201,7 @@ fn files(root: &Path, excluded: Option<&Path>) -> Result<Inventory> {
         for entry in std::fs::read_dir(&directory)? {
             let entry = entry?;
             let path = entry.path();
-            if entry.file_name() == ".git" || excluded.is_some_and(|excluded| path == excluded) {
+            if entry.file_name() == ".git" {
                 continue;
             }
             let metadata = std::fs::symlink_metadata(&path)?;
@@ -282,10 +253,10 @@ fn files(root: &Path, excluded: Option<&Path>) -> Result<Inventory> {
     })
 }
 
-pub(super) fn inspect(root: &Path, excluded: Option<&Path>) -> Result<Metadata> {
+pub(super) fn inspect(root: &Path) -> Result<Metadata> {
     let mut bytes = 0u64;
     let mut entries = Vec::new();
-    let Inventory { directories, files } = files(root, excluded)?;
+    let Inventory { directories, files } = files(root)?;
     for (path, absolute, executable) in files {
         let limit = if path == "SKILL.md" {
             MAX_SKILL_BYTES.min(MAX_BYTES - bytes)
@@ -311,149 +282,4 @@ pub(super) fn inspect(root: &Path, excluded: Option<&Path>) -> Result<Metadata> 
         directories,
         files: entries,
     })
-}
-
-pub(super) struct Builder {
-    staging: tempfile::TempDir,
-    paths: BTreeSet<String>,
-    bytes: u64,
-}
-impl Builder {
-    pub fn new() -> Result<Self> {
-        Ok(Self {
-            staging: tempfile::tempdir()?,
-            paths: BTreeSet::new(),
-            bytes: 0,
-        })
-    }
-    pub fn directory(&mut self, path: &str) -> Result<()> {
-        std::fs::create_dir_all(self.staging.path().join(relative(path)?))?;
-        Ok(())
-    }
-    pub fn push(&mut self, path: &str, data: &[u8], executable: bool) -> Result<()> {
-        let relative = relative(path)?;
-        ensure!(
-            self.paths.len() < MAX_FILES && self.paths.insert(path.into()),
-            "too many or duplicate bundle files"
-        );
-        ensure!(
-            data.len() as u64 <= MAX_BYTES - self.bytes,
-            "bundle exceeds 32 MiB"
-        );
-        ensure!(
-            path != "SKILL.md" || data.len() as u64 <= MAX_SKILL_BYTES,
-            "SKILL.md exceeds 256 KiB"
-        );
-        self.bytes += data.len() as u64;
-        let target = self.staging.path().join(relative);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&target)?;
-        file.write_all(data)?;
-        file.sync_all()?;
-        mode(&target, executable, false)?;
-        Ok(())
-    }
-    pub fn finish(self, expected_name: Option<&str>) -> Result<Bundle> {
-        let content = bitrouter_orchestrator::harness::skills::read_skill(
-            &self.staging.path().join("SKILL.md"),
-        )
-        .context("reading bounded SKILL.md")?;
-        let fm = bitrouter_orchestrator::harness::skills::format::parse_frontmatter(&content)
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "invalid SKILL.md frontmatter; require standard name and description"
-                )
-            })?;
-        fm.validate().map_err(|_|anyhow::anyhow!("invalid skill name or description (1-64 lowercase slug, 1-1024 character description)"))?;
-        if let Some(expected) = expected_name {
-            ensure!(
-                expected == fm.name,
-                "skill directory and frontmatter name must match"
-            );
-        }
-        let metadata = inspect(self.staging.path(), None)?;
-        Ok(Bundle {
-            staging: self.staging,
-            metadata,
-            name: fm.name,
-            description: fm.description,
-        })
-    }
-}
-
-pub(super) fn snapshot(source: &Path, excluded: &Path) -> Result<Bundle> {
-    let source = source.canonicalize()?;
-    let metadata = std::fs::symlink_metadata(&source)?;
-    ensure!(metadata.is_dir(), "skill source must be a directory");
-    let before = inspect(&source, Some(excluded))?;
-    let mut builder = Builder::new()?;
-    for directory in &before.directories {
-        builder.directory(directory)?;
-    }
-    for file in &before.files {
-        let data = read_regular(&source, &source.join(relative(&file.path)?), file.bytes)?;
-        ensure!(
-            hex::encode(Sha256::digest(&data)) == file.digest,
-            "local source changed during snapshot"
-        );
-        builder.push(&file.path, &data, file.executable)?;
-    }
-    ensure!(
-        inspect(&source, Some(excluded))? == before,
-        "local source changed during snapshot; retry explicitly"
-    );
-    let bundle = builder.finish(source.file_name().and_then(|name| name.to_str()))?;
-    ensure!(
-        bundle.metadata == before,
-        "local snapshot differs from its source"
-    );
-    Ok(bundle)
-}
-
-pub(super) fn publish(bundle: &Bundle, versions: &Path) -> Result<PathBuf> {
-    let destination = versions.join(&bundle.metadata.digest);
-    if destination.exists() {
-        ensure!(
-            inspect(&destination, None)? == bundle.metadata,
-            "installed version was modified; refusing to overwrite"
-        );
-        return Ok(destination);
-    }
-    let staging = tempfile::Builder::new()
-        .prefix(".pending-")
-        .tempdir_in(versions)?;
-    for directory in &bundle.metadata.directories {
-        std::fs::create_dir_all(staging.path().join(relative(directory)?))?;
-    }
-    for file in &bundle.metadata.files {
-        let relative = relative(&file.path)?;
-        let target = staging.path().join(&relative);
-        if let Some(parent) = target.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(bundle.staging.path().join(relative), &target)?;
-        mode(&target, file.executable, true)?;
-        File::open(&target)?.sync_all()?;
-    }
-    ensure!(
-        inspect(staging.path(), None)? == bundle.metadata,
-        "staged version integrity failure"
-    );
-    ensure!(!destination.exists(), "version appeared during publication");
-    #[cfg(unix)]
-    {
-        for directory in bundle.metadata.directories.iter().rev() {
-            File::open(staging.path().join(relative(directory)?))?.sync_all()?;
-        }
-        File::open(staging.path())?.sync_all()?;
-    }
-    std::fs::rename(staging.path(), &destination)?;
-    #[cfg(unix)]
-    File::open(versions)?.sync_all()?;
-    Ok(destination)
 }

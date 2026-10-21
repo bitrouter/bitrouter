@@ -1,13 +1,9 @@
 //! Native skills are frozen before model/context preparation, in this Turn's
-//! original checkpoint. Semantic assessment uses the existing decision ledger.
+//! original checkpoint. Only explicitly included sources are selected.
 
 use super::*;
-use crate::core::context_router::{
-    DecisionReceipt,
-    planner::{CandidateSet, SourceRevision},
-};
+use crate::core::context_router::planner::SourceRevision;
 use crate::core::skills::{SkillCandidate, SkillSelection, SkillSelector, SkillSource};
-use bitrouter_sdk::decision_model::types::{DecisionError, DecisionFailure, DecisionRequest};
 
 impl CoreSession {
     pub(super) async fn prepare_skills(&self, agent_id: &str) -> Result<bool, CoreError> {
@@ -66,15 +62,6 @@ impl CoreSession {
                 }
                 return Ok(false);
             };
-            let policy = self
-                .shared
-                .app
-                .decision_model()
-                .map(|runtime| runtime.policy.clone())
-                .unwrap_or_default();
-            policy
-                .validate()
-                .map_err(|error| reject(ErrorCode::NoFeasibleRoute, &error))?;
             let constraints = turn.input.routing.skills.clone().unwrap_or_default();
             // A partial listing is not proof of absence. Resolve only explicit
             // required URIs before freezing this Turn's complete metadata.
@@ -139,7 +126,6 @@ impl CoreSession {
                     source,
                     reason: "awaiting_selection".into(),
                     selected: false,
-                    probability: None,
                     content: None,
                     files: BTreeMap::new(),
                     failure: None,
@@ -158,7 +144,6 @@ impl CoreSession {
                 source,
                 catalog,
                 constraints,
-                policy,
                 max_selected: 4,
                 instruction_limit_bytes: (64 * 1024).min(
                     turn.input
@@ -178,7 +163,6 @@ impl CoreSession {
                     })
                     .map(|run| run.limits.input_bytes),
                 candidates,
-                decision_id: None,
                 selected: false,
                 failure: None,
                 validated_step_count: None,
@@ -260,11 +244,10 @@ impl CoreSession {
                         "skill selection already advanced",
                     ));
                 }
-                // The catalog, constraints and previous paid/intended decision
-                // receipts stay intact. Only this unfinished assessment moves.
+                // The catalog and explicit constraints stay intact while the
+                // unfinished selection is rebound to the current context.
                 current.source = source.clone();
                 current.instruction_limit_bytes = instruction_limit_bytes;
-                current.decision_id = None;
                 Ok(json!({"agent_turn_id":turn.agent_turn_id,"source":source}))
             })
             .await?;
@@ -356,7 +339,7 @@ impl CoreSession {
             let cancel = self.shared.live.lock().await.disconnected.child_token();
             let cached_bytes = match &candidate.source {
                 SkillSource::Mcp(_) => candidate.content.as_deref().map(str::as_bytes),
-                SkillSource::Managed(_) => None,
+                SkillSource::Local(_) => None,
             };
             let bytes = tokio::select! {
                 biased;
@@ -517,189 +500,9 @@ impl CoreSession {
             .skill_selection(&turn.agent_turn_id)
             .ok_or_else(|| reject(ErrorCode::CheckpointConflict, "skill catalog is absent"))?;
         let mut next = selection.clone();
-        let questions = crate::core::skills::selection::questions(
-            &mut next.candidates,
-            &next.constraints,
-            next.policy.max_candidates,
-        )?;
-        if !questions.is_empty() {
-            if let Some(runtime) = self
-                .shared
-                .app
-                .decision_model()
-                .cloned()
-                .filter(|_| context_decisions::enabled(snapshot))
-            {
-                let request = DecisionRequest {
-                    model: runtime.model.clone(),
-                    state: json!({
-                        "task":turn.input.text,
-                        "acceptance_criteria":turn.input.acceptance_criteria,
-                        "required_instructions":snapshot.agents.get(agent_id).map(|agent| &agent.required_instructions),
-                        "workflow":"unknown",
-                        "caller":{"api_key_id":self.shared.caller.api_key_id(),"user_id":self.shared.caller.user_id(),"local":self.shared.caller.is_local()},
-                        "workspace":{"id":snapshot.manifest.workspace_id,"revision":snapshot.manifest.workspace_revision,"permission_revision":snapshot.manifest.permission_revision},
-                        "agent":snapshot.agents.get(agent_id).map(|agent| json!({"id":agent.agent_id,"parent_id":agent.parent_id,"depth":agent.depth,"task_scope":agent.task_scope})),
-                        "catalog_revisions":next.catalog.managed.revisions,
-                        "signals":{"revision":snapshot.signals.revision,"facts":snapshot.signals.facts},
-                        "host_capabilities":{"managed_skill_instructions":true,"mcp_skill_activation":"requires_explicit_consent"},
-                        "constraints":next.constraints,
-                    }),
-                    questions,
-                };
-                if serde_json::to_vec(&request).map_err(json_error)?.len()
-                    > next.policy.max_request_bytes
-                {
-                    for candidate in next
-                        .candidates
-                        .iter_mut()
-                        .filter(|candidate| candidate.reason == "awaiting_workflow_assessment")
-                    {
-                        candidate.reason = "decision_request_budget".into();
-                    }
-                } else {
-                    request
-                        .validate()
-                        .map_err(|error| reject(ErrorCode::NoFeasibleRoute, &error.to_string()))?;
-                    let decision_id = if let Some(id) = &selection.decision_id {
-                        id.clone()
-                    } else {
-                        let decision_id = id("skill_decision");
-                        let response_limit_bytes = next
-                            .policy
-                            .max_request_bytes
-                            .saturating_mul(2)
-                            .saturating_add(8192);
-                        self.transition_for(Some(agent_id), "skills.decision.intent", |state, head| {
-                            validate_selection_source(state, agent_id)?;
-                            budget::ensure(state)?;
-                            let limit = state.run.as_ref().map_or(0, |run| run.limits.model_attempts);
-                            if state.context_store.decisions.values().filter(|receipt| receipt.run_id == turn.run_id).count() >= limit as usize {
-                                return Err(reject(ErrorCode::LimitExceeded, "run decision attempt limit reached"));
-                            }
-                            state.context_store.decisions.insert(decision_id.clone(), DecisionReceipt {
-                                decision_id: decision_id.clone(), run_id: turn.run_id.clone(), task_id: turn.agent_turn_id.clone(), agent_id: agent_id.into(), source: selection.source.clone(),
-                                candidates: CandidateSet { task_id: turn.agent_turn_id.clone(), ordered_blocks: vec![], required: BTreeSet::new(), candidates: BTreeMap::new() },
-                                request: request.clone(), request_sha256: digest(&request)?, policy: next.policy.clone(), pricing: runtime.pricing.clone(), intent_state_revision: head.state_revision + 1,
-                                response_limit_bytes, outcome: None, elapsed_ms: None, stale: false, view_ids: vec![],
-                            });
-                            selection_slot(state, agent_id)?.as_mut().ok_or_else(|| reject(ErrorCode::CheckpointConflict, "skill binding disappeared"))?.decision_id = Some(decision_id.clone());
-                            Ok(json!({"decision_id":decision_id,"agent_turn_id":turn.agent_turn_id}))
-                        }).await?;
-                        self.ensure_work_dispatch(agent_id, None, decision_id.clone(), true)
-                            .await?;
-                        let cancellation = self.shared.live.lock().await.disconnected.child_token();
-                        let started = Instant::now();
-                        let mut outcome = tokio::select! {
-                            biased;
-                            () = cancellation.cancelled() => Err(DecisionError { kind: DecisionFailure::Cancelled, message: "skill decision cancelled".into(), usage: None, may_have_run: true }),
-                            () = self.shared.harness.model_cancelled() => Err(DecisionError { kind: DecisionFailure::Cancelled, message: "native owner cancelled skill decision".into(), usage: None, may_have_run: true }),
-                            outcome = runtime.executor.execute(&request, &cancellation) => outcome,
-                        };
-                        if let Ok(response) = &outcome
-                            && let Err(error) = response.validate(&request)
-                        {
-                            outcome = Err(error);
-                        }
-                        if serde_json::to_vec(&outcome).map_err(json_error)?.len()
-                            > response_limit_bytes
-                        {
-                            let usage = match &outcome {
-                                Ok(response) => Some(response.usage),
-                                Err(error) => error.usage,
-                            };
-                            outcome = Err(DecisionError {
-                                kind: DecisionFailure::ResponseTooLarge,
-                                message: "skill decision exceeds reserved bytes".into(),
-                                usage,
-                                may_have_run: true,
-                            });
-                        }
-                        let elapsed_ms =
-                            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-                        let active_ms = self.shared.live.lock().await.activity.finish(&decision_id);
-                        let recorded = self
-                            .transition_for(
-                                Some(agent_id),
-                                "skills.decision.outcome",
-                                |state, _| {
-                                    let stale = validate_selection_source(state, agent_id).is_err();
-                                    let receipt = state
-                                        .context_store
-                                        .decisions
-                                        .get_mut(&decision_id)
-                                        .ok_or_else(|| {
-                                            reject(
-                                                ErrorCode::CheckpointConflict,
-                                                "skill decision intent disappeared",
-                                            )
-                                        })?;
-                                    if receipt.outcome.is_some() {
-                                        return Err(reject(
-                                            ErrorCode::OperationConflict,
-                                            "skill decision already settled",
-                                        ));
-                                    }
-                                    receipt.outcome = Some(outcome.clone());
-                                    receipt.elapsed_ms = Some(elapsed_ms);
-                                    receipt.stale = stale;
-                                    let run = active_run(state)?;
-                                    run.active_ms = run.active_ms.max(active_ms);
-                                    Ok(json!({"decision_id":decision_id,"stale":stale}))
-                                },
-                            )
-                            .await;
-                        if recorded.is_err() {
-                            self.disconnect().await;
-                        }
-                        recorded?;
-                        decision_id
-                    };
-                    let current = self.snapshot().await;
-                    let receipt = current
-                        .context_store
-                        .decisions
-                        .get(&decision_id)
-                        .ok_or_else(|| {
-                            reject(
-                                ErrorCode::CheckpointConflict,
-                                "skill decision receipt is absent",
-                            )
-                        })?;
-                    next.decision_id = Some(decision_id);
-                    for candidate in next
-                        .candidates
-                        .iter_mut()
-                        .filter(|candidate| candidate.reason == "awaiting_workflow_assessment")
-                    {
-                        let answer = receipt
-                            .outcome
-                            .as_ref()
-                            .filter(|_| !receipt.stale)
-                            .and_then(|outcome| outcome.as_ref().ok())
-                            .and_then(|response| {
-                                response.answers.get(&candidate.source.identity().ok()?)
-                            });
-                        crate::core::skills::selection::apply_answer(
-                            candidate,
-                            answer,
-                            next.policy.confidence_threshold,
-                        );
-                    }
-                }
-            } else {
-                for candidate in next
-                    .candidates
-                    .iter_mut()
-                    .filter(|candidate| candidate.reason == "awaiting_workflow_assessment")
-                {
-                    candidate.reason = "decision_model_unavailable".into();
-                }
-            }
-        }
+        crate::core::skills::selection::select(&mut next.candidates, &next.constraints)?;
         let (count, bytes) = crate::core::skills::selection::bound(
-            &mut next.candidates,
-            &next.constraints,
+            &next.candidates,
             next.max_selected,
             next.instruction_limit_bytes,
             instruction_size,
@@ -846,7 +649,7 @@ pub(crate) fn candidate_for_model(
     {
         return Ok(false);
     }
-    if matches!(candidate.source, SkillSource::Managed(_)) {
+    if matches!(candidate.source, SkillSource::Local(_)) {
         return Ok(true);
     }
     if let Some(consent) = candidate.consents.last() {
@@ -930,10 +733,6 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
             .and_then(|agent| agent.turn.as_ref())
             .filter(|turn| turn.agent_turn_id == work.task_id);
         selection.constraints.validate()?;
-        selection
-            .policy
-            .validate()
-            .map_err(|error| reject(ErrorCode::CheckpointConflict, &error))?;
         if turn.is_some_and(|turn| {
             selection.constraints != turn.input.routing.skills.clone().unwrap_or_default()
         }) || selection.max_selected == 0
@@ -962,9 +761,6 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
             if !sources.contains(&candidate.source)
                 || !seen.insert(candidate.source.identity()?)
                 || candidate.reason.is_empty()
-                || candidate.probability.is_some_and(|probability| {
-                    !probability.is_finite() || !(0.0..=1.0).contains(&probability)
-                })
                 || (!candidate.selected && candidate.content.is_some())
                 || candidate.failure.as_ref().is_some_and(|error| {
                     !candidate.selected
@@ -1039,6 +835,10 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
             }
             if candidate.selected {
                 if !selection.selected
+                    || !selection
+                        .constraints
+                        .include
+                        .contains(&candidate.source.selector())
                     || selection
                         .constraints
                         .exclude
@@ -1121,29 +921,6 @@ pub(crate) fn validate(state: &SessionSnapshot) -> Result<(), CoreError> {
                 ErrorCode::CheckpointConflict,
                 "supporting files exceed their frozen host budget",
             ));
-        }
-        if let Some(decision_id) = &selection.decision_id {
-            let receipt = state
-                .context_store
-                .decisions
-                .get(decision_id)
-                .ok_or_else(|| {
-                    reject(
-                        ErrorCode::CheckpointConflict,
-                        "skill decision receipt is absent",
-                    )
-                })?;
-            if receipt.task_id != work.task_id
-                || receipt.run_id != work.run_id
-                || receipt.agent_id != work.agent_id
-                || receipt.source != selection.source
-                || receipt.policy != selection.policy
-            {
-                return Err(reject(
-                    ErrorCode::CheckpointConflict,
-                    "skill decision belongs to another source or Turn",
-                ));
-            }
         }
     }
     Ok(())

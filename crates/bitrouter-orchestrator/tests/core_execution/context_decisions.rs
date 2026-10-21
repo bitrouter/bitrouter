@@ -1,40 +1,11 @@
 use super::*;
-use bitrouter_orchestrator::core::accounting::work::{CostWorkKind, CostWorkState};
 use bitrouter_orchestrator::core::context_router::FEATURE;
 use bitrouter_orchestrator::core::protocol::ContextMode;
 use bitrouter_sdk::decision_model::DecisionRuntime;
 use bitrouter_sdk::decision_model::policy::{DecisionPolicy, DecisionPricing};
 use bitrouter_sdk::decision_model::typesafe::TypeSafeExecutor;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, Request, ResponseTemplate};
-
-fn decide(request: &Request) -> ResponseTemplate {
-    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else {
-        return ResponseTemplate::new(400);
-    };
-    let Some(questions) = body.get("questions").and_then(serde_json::Value::as_object) else {
-        return ResponseTemplate::new(400);
-    };
-    let answers: serde_json::Map<String, serde_json::Value> = questions
-        .iter()
-        .map(|(id, question)| {
-            let criteria = question.get("criteria").and_then(serde_json::Value::as_object);
-            let selected = if id.starts_with("routing_") { "unknown" } else if body["state"]["task"].as_str() == Some("shared-context child") { "full" }
-                else if criteria.is_some_and(|criteria| criteria.contains_key("summary")) { "summary" }
-                else if criteria.is_some_and(|criteria| criteria.contains_key("extract")) { "extract" } else { "hide" };
-            let probabilities: serde_json::Map<String, serde_json::Value> = criteria.into_iter()
-                .flat_map(|criteria| criteria.keys()).map(|name| (name.clone(), json!(if name == selected { 1.0 } else { 0.0 }))).collect();
-            (
-                id.clone(),
-                json!({"type":"choice","choice":selected,"confidence":0.99,"probabilities":probabilities}),
-            )
-        })
-        .collect();
-    ResponseTemplate::new(200).set_body_json(json!({
-        "model":"fixture-decision-1","answers":answers,
-        "usage":{"input_tokens":100,"output_tokens":4}
-    }))
-}
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 async fn setup_decision(
     server: &MockServer,
@@ -126,7 +97,8 @@ async fn workers_compile_shared_references_and_return_recallable_conclusions() -
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/systemone"))
-        .respond_with(decide)
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
     let harness = Arc::new(Harness::new(None, None));
@@ -231,283 +203,12 @@ fn assert_shared_result(state: &SessionSnapshot, root_task: &str, child_task: &s
 }
 
 #[tokio::test]
-async fn real_decision_http_selects_prompt_and_retains_raw_source_and_cost() -> TestResult {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/v1/systemone"))
-        .respond_with(decide)
-        .expect(1)
-        .mount(&server)
-        .await;
-    let harness = Arc::new(Harness::new(None, None));
-    let (session, executor) = setup_decision(
-        &server,
-        harness.clone(),
-        vec![output(vec![call("read")]), output(vec![text("completed")])],
-    )
-    .await?;
-    read_result(&session, &harness).await?;
-    session.drive().await?;
-    let prompts = executor.prompts.lock().await;
-    assert_eq!(prompts.len(), 2);
-    let prompt = prompts.last().ok_or("missing final prompt")?;
-    assert!(!serde_json::to_string(prompt)?.contains("optional-archive-sentinel"));
-    assert!(
-        prompt
-            .system
-            .as_ref()
-            .is_some_and(|system| system.contains(&task().text))
-    );
-    let snapshot = session.snapshot().await;
-    let root = snapshot
-        .agents
-        .get(&snapshot.agent_id)
-        .ok_or("missing root")?;
-    assert!(serde_json::to_string(&root.history)?.contains("optional-archive-sentinel"));
-    assert!(
-        serde_json::to_string(&snapshot.context_store.evidence)?
-            .contains("optional-archive-sentinel")
-    );
-    let receipt = snapshot
-        .context_store
-        .decisions
-        .values()
-        .next()
-        .ok_or("missing receipt")?;
-    assert!(receipt.outcome.as_ref().is_some_and(Result::is_ok));
-    let cost = snapshot
-        .cost_work
-        .get(&receipt.run_id)
-        .and_then(|run| run.work.get(&receipt.decision_id))
-        .ok_or("missing decision cost")?;
-    assert_eq!(cost.kind, CostWorkKind::DecisionModel);
-    assert_eq!(cost.state, CostWorkState::OutcomeRecorded);
-    assert_eq!(
-        cost.decision_usage.map(|usage| usage.input_tokens),
-        Some(100)
-    );
-    assert_eq!(cost.decision_estimate_micro_usd, Some(10));
-    assert_eq!(
-        snapshot.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn failed_decision_uses_full_context_with_unknown_cost() -> TestResult {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(503))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let harness = Arc::new(Harness::new(None, None));
-    let (session, executor) = setup_decision(
-        &server,
-        harness.clone(),
-        vec![output(vec![call("read")]), output(vec![text("completed")])],
-    )
-    .await?;
-    read_result(&session, &harness).await?;
-    session.drive().await?;
-    let prompts = executor.prompts.lock().await;
-    assert!(
-        serde_json::to_string(prompts.last().ok_or("missing prompt")?)?
-            .contains("optional-archive-sentinel")
-    );
-    let snapshot = session.snapshot().await;
-    let receipt = snapshot
-        .context_store
-        .decisions
-        .values()
-        .next()
-        .ok_or("missing receipt")?;
-    assert!(receipt.outcome.as_ref().is_some_and(Result::is_err));
-    let cost = snapshot
-        .cost_work
-        .get(&receipt.run_id)
-        .and_then(|run| run.work.get(&receipt.decision_id))
-        .ok_or("missing cost")?;
-    assert!(cost.decision_usage.is_none());
-    assert!(cost.decision_estimate_micro_usd.is_none());
-    Ok(())
-}
-
-#[tokio::test]
-async fn unacknowledged_decision_intent_never_dispatches() -> TestResult {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(decide)
-        .expect(0)
-        .mount(&server)
-        .await;
-    let harness = Arc::new(Harness::new(Some("context.decision.intent"), None));
-    let (session, executor) = setup_decision(
-        &server,
-        harness.clone(),
-        vec![
-            output(vec![call("read")]),
-            output(vec![text("must not generate")]),
-        ],
-    )
-    .await?;
-    read_result(&session, &harness).await?;
-    let _ = session.drive().await;
-    assert_eq!(executor.prompts.lock().await.len(), 1);
-    assert!(session.snapshot().await.context_store.decisions.is_empty());
-    Ok(())
-}
-
-#[tokio::test]
-async fn unacknowledged_decision_outcome_cannot_select_or_generate() -> TestResult {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(decide)
-        .expect(1)
-        .mount(&server)
-        .await;
-    let harness = Arc::new(Harness::new(Some("context.decision.outcome"), None));
-    let (session, executor) = setup_decision(
-        &server,
-        harness.clone(),
-        vec![
-            output(vec![call("read")]),
-            output(vec![text("must not generate")]),
-        ],
-    )
-    .await?;
-    read_result(&session, &harness).await?;
-    let _ = session.drive().await;
-    assert_eq!(executor.prompts.lock().await.len(), 1);
-    let snapshot = session.snapshot().await;
-    let receipt = snapshot
-        .context_store
-        .decisions
-        .values()
-        .next()
-        .ok_or("missing acknowledged intent")?;
-    assert!(receipt.outcome.is_none());
-    let cost = snapshot
-        .cost_work
-        .get(&receipt.run_id)
-        .and_then(|run| run.work.get(&receipt.decision_id))
-        .ok_or("missing intent cost")?;
-    assert_eq!(cost.state, CostWorkState::IntentRecorded);
-    Ok(())
-}
-
-#[tokio::test]
-async fn committed_decision_survives_restart_without_second_provider_call() -> TestResult {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(decide)
-        .expect(1)
-        .mount(&server)
-        .await;
-    let harness = Arc::new(Harness::new(None, None));
-    let (session, _) = setup_decision(
-        &server,
-        harness.clone(),
-        vec![output(vec![call("read")]), output(vec![text("completed")])],
-    )
-    .await?;
-    read_result(&session, &harness).await?;
-    session.drive().await?;
-    session.disconnect().await;
-    let store = recovery::prefix(&*harness.store.lock().await, "context.decision.outcome")?;
-    let replacement = recovery::harness_at(store).await;
-    let request = recovery::request(&*replacement.store.lock().await, true)?;
-    let mut capabilities = recovery::capabilities(&request.binding.grant.core_instance_id);
-    capabilities.operations.push(FEATURE.into());
-    let (app, executor) = decision_app(&server, vec![output(vec![text("resumed")])])?;
-    let restored = CoreSession::restore(
-        request,
-        &capabilities,
-        app,
-        CallerContext::local(),
-        replacement,
-    )
-    .await?;
-    restored.drive().await?;
-    let prompts = executor.prompts.lock().await;
-    assert_eq!(prompts.len(), 1);
-    assert!(
-        !serde_json::to_string(prompts.first().ok_or("missing resumed prompt")?)?
-            .contains("optional-archive-sentinel")
-    );
-    assert_eq!(restored.snapshot().await.context_store.decisions.len(), 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn signal_change_invalidates_inflight_decision_and_replans() -> TestResult {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .respond_with(|request: &Request| decide(request).set_delay(Duration::from_millis(150)))
-        .expect(2)
-        .mount(&server)
-        .await;
-    let harness = Arc::new(Harness::new(None, None));
-    let (session, executor) = setup_decision(
-        &server,
-        harness.clone(),
-        vec![output(vec![call("read")]), output(vec![text("completed")])],
-    )
-    .await?;
-    read_result(&session, &harness).await?;
-    let driver = {
-        let session = session.clone();
-        tokio::spawn(async move { session.drive().await })
-    };
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while server
-            .received_requests()
-            .await
-            .is_none_or(|requests| requests.is_empty())
-        {
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    })
-    .await?;
-    session
-        .signals("new_facts", signal_update(&session, Vec::new()).await)
-        .await?;
-    driver.await??;
-    let snapshot = session.snapshot().await;
-    assert_eq!(
-        snapshot
-            .context_store
-            .decisions
-            .values()
-            .filter(|receipt| receipt.stale)
-            .count(),
-        1
-    );
-    assert_eq!(
-        snapshot
-            .context_store
-            .decisions
-            .values()
-            .filter(|receipt| !receipt.stale)
-            .count(),
-        1
-    );
-    assert_eq!(executor.prompts.lock().await.len(), 2);
-    assert_eq!(
-        snapshot.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn omitted_tool_exchange_can_be_recalled_as_one_group() -> TestResult {
+async fn full_tool_exchange_remains_recallable_without_automatic_omission() -> TestResult {
     use bitrouter_orchestrator::core::context_router::tools::ContextAction;
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .respond_with(decide)
-        .expect(2)
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
         .mount(&server)
         .await;
     let harness = Arc::new(Harness::new(None, None));
@@ -526,7 +227,7 @@ async fn omitted_tool_exchange_can_be_recalled_as_one_group() -> TestResult {
     {
         let prompts = executor.prompts.lock().await;
         assert!(
-            !serde_json::to_string(prompts.last().ok_or("missing selected prompt")?)?
+            serde_json::to_string(prompts.last().ok_or("missing selected prompt")?)?
                 .contains("optional-archive-sentinel")
         );
     }
@@ -574,7 +275,7 @@ async fn omitted_tool_exchange_can_be_recalled_as_one_group() -> TestResult {
 }
 
 #[tokio::test]
-async fn derived_representations_keep_exact_sources_and_expire_with_workspace() -> TestResult {
+async fn published_derivations_do_not_replace_exact_sources_or_full_context() -> TestResult {
     use bitrouter_orchestrator::core::context_router::evidence::SourceSpan;
     use bitrouter_orchestrator::core::context_router::tools::ContextAction;
     for (extract, changed, unknown) in [
@@ -586,8 +287,8 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
     ] {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .respond_with(decide)
-            .expect(2)
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
             .mount(&server)
             .await;
         let harness = Arc::new(Harness::new(None, None));
@@ -664,13 +365,8 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
         session.drive().await?;
         let prompts = executor.prompts.lock().await;
         let wire = serde_json::to_string(prompts.last().ok_or("missing final prompt")?)?;
-        if extract {
-            assert!(wire.contains("Exact source extract"));
-            assert!(wire.contains("optional"));
-        } else {
-            assert_eq!(wire.contains("summary-only-sentinel"), !changed);
-        }
-        assert!(!wire.contains("optional-archive-sentinel"));
+        assert!(wire.contains("optional-archive-sentinel"));
+        assert!(!wire.contains("Exact source extract"));
         let final_state = session.snapshot().await;
         assert_eq!(
             final_state.context_store.evidence.get(&block.block_id),
@@ -681,26 +377,16 @@ async fn derived_representations_keep_exact_sources_and_expire_with_workspace() 
 }
 
 #[tokio::test]
-async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -> TestResult {
+async fn routing_inspection_reports_the_serving_model_without_automatic_workflow_classification()
+-> TestResult {
     use bitrouter_orchestrator::core::context_router::inspection::{Inspection, RoutingPhase};
-    use bitrouter_sdk::routing::signals::{NextStepRole, ProgressState, TaskFamily};
     let server = MockServer::start().await;
-    Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &Request| {
-        let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) else { return ResponseTemplate::new(400) };
-        let Some(questions) = body["questions"].as_object() else { return ResponseTemplate::new(400) };
-        let answers = questions.iter().map(|(id, question)| {
-            let selected = match id.as_str() {
-                "routing_task_family" => "code:frontend_ui",
-                "routing_next_role" => "implement",
-                "routing_progress" => "progressing",
-                _ => "full",
-            };
-            let probabilities = question["criteria"].as_object().into_iter().flat_map(|criteria| criteria.keys())
-                .map(|label| (label.clone(), json!(if label == selected { 1.0 } else { 0.0 }))).collect::<serde_json::Map<_, _>>();
-            (id.clone(), json!({"type":"choice","choice":selected,"confidence":0.99,"probabilities":probabilities}))
-        }).collect::<serde_json::Map<_, _>>();
-        ResponseTemplate::new(200).set_delay(Duration::from_millis(500)).set_body_json(json!({"model":"classifier", "answers":answers,"usage":{"input_tokens":10,"output_tokens":3}}))
-    }).mount(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
     let (session, _) = setup_decision(
         &server,
         Arc::new(Harness::new(None, None)),
@@ -713,27 +399,7 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
     session
         .start("work", session.head().await.state_revision, task)
         .await?;
-    let driving = {
-        let session = session.clone();
-        tokio::spawn(async move { session.drive().await })
-    };
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if let Some(inspection) = Inspection::capture(&session.snapshot().await)
-                && let Some(routing) = inspection
-                    .tasks
-                    .first()
-                    .and_then(|task| task.routing.as_ref())
-                && routing.phase == RoutingPhase::Classifying
-            {
-                assert!(routing.workflow.is_none() && routing.model.is_none());
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await?;
-    driving.await??;
+    session.drive().await?;
     let mut state = session.snapshot().await;
     let inspection = Inspection::capture(&state).ok_or("inspection missing")?;
     let routing = inspection
@@ -742,10 +408,7 @@ async fn routing_inspection_binds_workflow_to_current_step_and_serving_model() -
         .and_then(|task| task.routing.as_ref())
         .ok_or("routing missing")?;
     assert_eq!(routing.phase, RoutingPhase::Finished);
-    let workflow = routing.workflow.as_ref().ok_or("workflow missing")?;
-    assert_eq!(workflow.task_family, TaskFamily::CodeFrontendUi);
-    assert_eq!(workflow.next_step_role, NextStepRole::Implement);
-    assert_eq!(workflow.progress_state, ProgressState::Progressing);
+    assert!(routing.workflow.is_none());
     assert_eq!(routing.model.as_deref(), Some("first:fixture-model"));
     let root_id = state.agent_id.clone();
     let turn = state

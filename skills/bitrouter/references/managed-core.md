@@ -439,24 +439,25 @@ bytes at 96 MiB, tool output at 512 KiB, and artifacts at 32 MiB. Admission can
 reject work sooner when cleanup reservations cannot fit those bounds.
 
 
-Native managed hosts expose managed-library candidates to Core after Turn
-acceptance. With a configured decision backend, Core can select relevant local
-versions and persist exact receipts, bounded choices and verified instructions
-in the original WorkUnit/decision ledger before model preparation. Optional
-choices stay empty if that backend is unavailable. Library callers can set
+Native managed hosts expose existing local directory candidates to Core after
+Turn acceptance. Core selects only explicit includes and persists directory
+manifests, bounded choices and verified instructions in the original WorkUnit
+before model preparation. No skill or context decision backend is called.
+Library callers can set
 `TaskInput.routing.skills` include/exclude selectors; generic
 `TaskInput.required_materials` retains its evidence semantics. AGENTS.md stays
 required. MCP roots may be selected and explicitly approved through the same
 Core ledger. CLI `--skill`/`--exclude-skill` flags carry exact scoped selectors;
 explicit MCP URIs resolve metadata independently of listing before content consent.
 Before final selection, changed user steering or signal/manifest facts rebase
-the assessment on the latest context and remaining budget. The original catalog
-and prior decision/usage receipts stay intact; committed intent is never resent
-for the same assessment. Selected versions and budgets remain frozen for that Turn.
+the unfinished selection on the latest context and remaining budget. The original
+catalog and explicit constraints stay intact. Selected directory manifests and
+budgets remain frozen for that Turn; edited or removed files reject the binding
+instead of reading a retained disk version.
 Native `skill_read` reads only the selected original file manifest and delivers
 verified UTF-8 content as source-tagged user data. Frozen Turn and final
 model/context budgets apply without truncation. Local CLI/model fixtures cover
-independent child consent, active version changes and original file evidence;
+independent child consent, changed-directory conflicts and original file evidence;
 external adapter delivery and real service qualification remain separate.
 
 Native skill state requires both `native_skills_v1` and `context_views_v1` in

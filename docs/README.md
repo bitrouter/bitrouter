@@ -10,10 +10,10 @@ the CLI-only contract and implementation record define the current product.
 ## Contents
 
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md) —
-  **execution baseline v0.5; G00–G11 local scope complete.** Retains orchestration and resource
+  **current convergence contract.** Retains native/ACP orchestration and resource
   capabilities behind a CLI, removes first-party TUI entry points, and defines
   daemon auto-start, connected-agent inspection, simpler onboarding, MCP CRUD,
-  skill installation and workflow selection, with migration and acceptance criteria.
+  direct local skill directory operations and explicit resource selection; acquisition is external.
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md) —
   Completed G00–G11 stage index and validation rules; full execution cards and
   copyable prompts remain linked to their immutable Git revision.
@@ -24,9 +24,9 @@ the CLI-only contract and implementation record define the current product.
   independent consent, actual model inputs, budgets and original cache recovery.
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md) —
   Concise stage outcomes, key regressions and immutable implementation history.
-  Detailed A/M/C/T mappings and qualification boundaries live in G11 acceptance.
+  Current verification and immutable original G00–G11 history are linked separately.
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md) —
-  Current A01–A28/M01–M10 and retained C/T evidence, final local scope and separate external qualifications.
+  Current directory/explicit-selection verification, retired behavior and separate external qualifications.
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_G00_AUDIT.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_G00_AUDIT.md) —
   Source and dependency baseline, execution identities, existing protocol operations,
   TUI consumers and retained business-test mappings for G01–G05; no runtime changes.

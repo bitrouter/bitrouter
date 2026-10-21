@@ -1,36 +1,13 @@
-//! BitRouter-owned versioned skills and compatible unmanaged inspection.
-//!
-//! The shared format parser and discovery rules are owned by
-//! `bitrouter_orchestrator::harness::skills`. This module snapshots local/Git
-//! bundles into scope-owned libraries and atomically publishes their receipts.
-//! Unmanaged discovery and source scaffolding remain available. Installation
-//! does not select/activate skills, change harness configuration or run scripts.
+//! Existing local skill directories and explicit native/ACP delivery.
+//! Acquisition belongs to external installers; no installation index or version store.
 
-mod bundle;
 pub mod cli;
 pub mod delivery;
+pub mod directory;
 pub mod explain;
-mod managed;
+mod files;
 pub(crate) mod native;
 pub mod root;
-mod source;
-
-/// Reuse the owned installer from setup without exposing its internal store.
-pub(crate) async fn install_for_setup(
-    source: &str,
-    selected: Option<&str>,
-    reference: Option<String>,
-    global: bool,
-    workspace: Option<&std::path::Path>,
-    interactive: bool,
-) -> anyhow::Result<serde_json::Value> {
-    let store = managed::Store::load(managed::Scope::resolve(global, workspace).await?)?;
-    Ok(serde_json::to_value(
-        store
-            .install_with_interaction(source, selected, reference, interactive)
-            .await?,
-    )?)
-}
 
 /// Errors from `SKILL.md` parsing and skills-directory reads.
 #[derive(Debug, thiserror::Error)]

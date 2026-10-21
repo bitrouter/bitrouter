@@ -236,7 +236,7 @@ pub fn discover_all_skills(root: &Path) -> Vec<DiscoveredSkill> {
     discover(root, usize::MAX, usize::MAX).unwrap_or_default()
 }
 
-pub(super) fn discover_bounded(root: &Path) -> Result<Vec<DiscoveredSkill>> {
+pub fn discover_bounded(root: &Path) -> Result<Vec<DiscoveredSkill>> {
     discover(root, 4096, super::MAX_SKILLS)
 }
 

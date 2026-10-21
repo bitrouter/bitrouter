@@ -4,7 +4,7 @@ use bitrouter_orchestrator::core::context_router::FEATURE;
 use bitrouter_orchestrator::core::skills::{
     SkillCatalog, SkillConstraints, SkillSelector, SkillSource,
 };
-use bitrouter_orchestrator::harness::skills::library::{LibraryScope, ManagedSkill};
+use bitrouter_orchestrator::harness::skills::library::{LocalScope, LocalSkill};
 use bitrouter_sdk::decision_model::types::{
     Answer, DecisionError, DecisionRequest, DecisionResponse, DecisionUsage,
 };
@@ -46,9 +46,9 @@ async fn initial_context_budget_excludes_optional_roots_and_fails_required_roots
         task.context_limit_bytes = Some(limit);
         if required {
             task.routing.skills = Some(SkillConstraints {
-                include: vec![SkillSelector::Managed {
-                    scope: LibraryScope::Project,
-                    installation_id: "installation_review".into(),
+                include: vec![SkillSelector::Local {
+                    scope: LocalScope::Project,
+                    directory_id: "installation_review".into(),
                 }],
                 exclude: vec![],
             });
@@ -71,7 +71,7 @@ async fn initial_context_budget_excludes_optional_roots_and_fails_required_roots
             );
             let selection = root_selection(&snapshot).ok_or("selection")?;
             assert!(!selection.candidates[0].selected);
-            assert_eq!(selection.candidates[0].reason, "skill_instruction_budget");
+            assert_eq!(selection.candidates[0].reason, "not_explicitly_selected");
             assert!(
                 !serde_json::to_string(&executor.prompts.lock().await[0])?.contains("CONTEXT_ROOT")
             );
@@ -104,13 +104,8 @@ async fn same_named_local_and_two_mcp_sources_keep_separate_consent_and_model_pr
         .lock()
         .await
         .insert(SkillSource::Mcp(beta.clone()).identity()?, remote);
-    if let SkillSource::Managed(binding) = &local {
-        host.catalog
-            .lock()
-            .await
-            .managed
-            .skills
-            .push(binding.clone());
+    if let SkillSource::Local(binding) = &local {
+        host.catalog.lock().await.local.skills.push(binding.clone());
     }
     host.catalog.lock().await.mcp.skills.push(beta.clone());
     let (session, executor, _) =
@@ -204,15 +199,14 @@ fn binding(marker: &str) -> (SkillSource, Vec<u8>) {
     let body =
         format!("---\nname: review\ndescription: review workflow\n---\n{marker}\n").into_bytes();
     let digest = sha256(&body);
-    let source = SkillSource::Managed(ManagedSkill {
-        scope: LibraryScope::Project,
-        library: "/fixture/library".into(),
+    let source = SkillSource::Local(LocalSkill {
+        scope: LocalScope::Project,
+        directory: "/fixture/skills/review".into(),
         workspace: "/fixture".into(),
         api_key_id: "local".into(),
         user_id: "local".into(),
         local: true,
-        installation_id: "installation_review".into(),
-        catalog_revision: 1,
+        directory_id: "installation_review".into(),
         name: "review".into(),
         description: "review workflow".into(),
         version: format!("bundle-{marker}"),
@@ -249,13 +243,13 @@ impl NativeSkills {
     async fn publish(&self, marker: &str) -> Result<SkillSource, CoreError> {
         let (source, bytes) = binding(marker);
         self.bytes.lock().await.insert(source.identity()?, bytes);
-        let SkillSource::Managed(skill) = &source else {
+        let SkillSource::Local(skill) = &source else {
             return Err(CoreError::rejected(
                 ErrorCode::CheckpointConflict,
                 "fixture source kind",
             ));
         };
-        self.catalog.lock().await.managed.skills = vec![skill.clone()];
+        self.catalog.lock().await.local.skills = vec![skill.clone()];
         Ok(source)
     }
 
@@ -349,7 +343,7 @@ impl NativeSkills {
         *host.supporting_bytes.lock().await = supporting.to_vec();
         host.bytes.lock().await.insert(source.identity()?, body);
         let mut catalog = host.catalog.lock().await;
-        catalog.managed.skills.clear();
+        catalog.local.skills.clear();
         catalog.mcp.skills = vec![held];
         drop(catalog);
         Ok(host)
@@ -456,7 +450,7 @@ impl HarnessPort for NativeSkills {
                     && selection.candidates.iter().any(|candidate| {
                         candidate.selected
                             && candidate.source == *source
-                            && (matches!(source, SkillSource::Managed(_))
+                            && (matches!(source, SkillSource::Local(_))
                                 || candidate.consents.last().is_some_and(|consent| {
                                     consent.approved == Some(true) && !consent.revoked
                                 }))
@@ -638,143 +632,6 @@ async fn setup_features(
 }
 
 #[tokio::test]
-async fn workflow_selection_reaches_actual_prompt_and_freezes_the_original_bundle() -> TestResult {
-    let durable = Arc::new(Harness::new(None, None));
-    let host = Arc::new(NativeSkills::new(durable.clone(), "ORIGINAL_V1").await?);
-    let (session, executor, backend) = setup(
-        host.clone(),
-        vec![
-            output(vec![call("inspect")]),
-            output(vec![text("done")]),
-            output(vec![text("new Turn done")]),
-        ],
-        true,
-    )
-    .await?;
-    session
-        .start("skill-start", session.head().await.state_revision, input())
-        .await?;
-    assert_eq!(host.reads.load(Ordering::SeqCst), 0);
-    session.drive().await?;
-    let original = root_selection(&session.snapshot().await)
-        .cloned()
-        .ok_or("missing selection")?;
-    assert!(original.selected);
-    assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(original.candidates[0].reason, "workflow_match");
-    let updated = host.publish("REPLACEMENT_V2").await?;
-    let command = durable
-        .sent
-        .lock()
-        .await
-        .first()
-        .ok_or("missing tool")?
-        .clone();
-    session
-        .tool_result("skill-read-result", result(&command))
-        .await?;
-    session.drive().await?;
-    assert_eq!(
-        session.snapshot().await.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
-    );
-    let prompts = executor.prompts.lock().await;
-    assert_eq!(prompts.len(), 2);
-    for prompt in prompts.iter() {
-        let system = prompt.system.as_deref().ok_or("missing system")?;
-        assert!(system.contains("Activated skill instructions"));
-        assert!(system.contains("ORIGINAL_V1"));
-        assert!(system.contains("installation_review"));
-        assert!(!system.contains("REPLACEMENT_V2"));
-        assert!(
-            !prompt
-                .tools
-                .iter()
-                .any(|tool| matches!(tool, Tool::Function { name, .. } if name == "shell"))
-        );
-    }
-    assert_ne!(original.candidates[0].source, updated);
-    assert_eq!(host.reads.load(Ordering::SeqCst), 2);
-    let snapshot = session.snapshot().await;
-    let decision = original
-        .decision_id
-        .as_ref()
-        .and_then(|id| snapshot.context_store.decisions.get(id))
-        .ok_or("missing original decision")?;
-    assert!(decision.outcome.as_ref().is_some_and(Result::is_ok));
-    assert!(
-        snapshot
-            .cost_work
-            .values()
-            .any(|ledger| !ledger.work.is_empty())
-    );
-    let old_turn_id = snapshot
-        .root_turn()
-        .ok_or("original Turn")?
-        .agent_turn_id
-        .clone();
-    drop(prompts);
-    session
-        .start(
-            "next-skill-turn",
-            session.head().await.state_revision,
-            input(),
-        )
-        .await?;
-    session.drive().await?;
-    let latest = session.snapshot().await;
-    assert_eq!(
-        latest
-            .skill_selection(&old_turn_id)
-            .ok_or("historical binding was lost")?
-            .candidates[0]
-            .source,
-        original.candidates[0].source
-    );
-    assert_eq!(
-        root_selection(&latest)
-            .ok_or("new Turn selection")?
-            .candidates[0]
-            .source,
-        updated
-    );
-    assert!(
-        executor
-            .prompts
-            .lock()
-            .await
-            .last()
-            .and_then(|prompt| prompt.system.as_deref())
-            .is_some_and(|system| system.contains("REPLACEMENT_V2"))
-    );
-    let old_run = snapshot
-        .context_store
-        .work
-        .get(&old_turn_id)
-        .ok_or("original work")?
-        .run_id
-        .clone();
-    let explained = bitrouter_orchestrator::core::skills::explain::capture(&latest, &old_run)?;
-    let candidate = &explained
-        .work_units
-        .first()
-        .and_then(|work| work.selection.as_ref())
-        .ok_or("historical explanation")?
-        .candidates[0];
-    assert_eq!(candidate.source, original.candidates[0].source);
-    assert!(candidate.instructions.is_some());
-    assert_eq!(candidate.prepared_model_requests.len(), 2);
-    assert!(
-        candidate
-            .prepared_model_requests
-            .iter()
-            .all(|request| request.attempts.is_none()),
-        "retired steps must not invent missing attempt evidence"
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn explicit_required_skills_load_without_a_semantic_backend() -> TestResult {
     let host =
         Arc::new(NativeSkills::new(Arc::new(Harness::new(None, None)), "EXPLICIT_ONLY").await?);
@@ -782,9 +639,9 @@ async fn explicit_required_skills_load_without_a_semantic_backend() -> TestResul
         setup(host.clone(), vec![output(vec![text("done")])], false).await?;
     let mut task = input();
     task.routing.skills = Some(SkillConstraints {
-        include: vec![SkillSelector::Managed {
-            scope: LibraryScope::Project,
-            installation_id: "installation_review".into(),
+        include: vec![SkillSelector::Local {
+            scope: LocalScope::Project,
+            directory_id: "installation_review".into(),
         }],
         exclude: vec![],
     });
@@ -804,11 +661,11 @@ async fn explicit_required_skills_load_without_a_semantic_backend() -> TestResul
 }
 
 #[tokio::test]
-async fn absent_decision_backend_keeps_optional_skills_out_of_the_prompt() -> TestResult {
+async fn configured_decision_backend_is_not_called_and_unselected_skills_stay_out() -> TestResult {
     let host =
         Arc::new(NativeSkills::new(Arc::new(Harness::new(None, None)), "DO_NOT_LOAD").await?);
-    let (session, executor, _) =
-        setup(host.clone(), vec![output(vec![text("done")])], false).await?;
+    let (session, executor, backend) =
+        setup(host.clone(), vec![output(vec![text("done")])], true).await?;
     session
         .start(
             "optional-skill",
@@ -817,6 +674,7 @@ async fn absent_decision_backend_keeps_optional_skills_out_of_the_prompt() -> Te
         )
         .await?;
     session.drive().await?;
+    assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
     assert_eq!(host.reads.load(Ordering::SeqCst), 0);
     assert!(
         !executor.prompts.lock().await[0]
@@ -827,7 +685,7 @@ async fn absent_decision_backend_keeps_optional_skills_out_of_the_prompt() -> Te
     assert_eq!(
         root_selection(&session.snapshot().await)
             .map(|selection| selection.candidates[0].reason.as_str()),
-        Some("decision_model_unavailable")
+        Some("not_explicitly_selected")
     );
     Ok(())
 }
@@ -839,7 +697,11 @@ async fn a_failed_selection_ack_prevents_content_fetch_and_model_dispatch() -> T
     let (session, executor, _) =
         setup(host.clone(), vec![output(vec![text("must not run")])], true).await?;
     session
-        .start("no-ack", session.head().await.state_revision, input())
+        .start(
+            "no-ack",
+            session.head().await.state_revision,
+            selected_input(&host).await,
+        )
         .await?;
     assert!(session.drive().await.is_err());
     assert_eq!(host.reads.load(Ordering::SeqCst), 0);
@@ -861,7 +723,11 @@ async fn original_bytes_are_rechecked_before_a_later_model_step() -> TestResult 
     )
     .await?;
     session
-        .start("tamper", session.head().await.state_revision, input())
+        .start(
+            "tamper",
+            session.head().await.state_revision,
+            selected_input(&host).await,
+        )
         .await?;
     session.drive().await?;
     let source = root_selection(&session.snapshot().await)
@@ -893,63 +759,6 @@ async fn original_bytes_are_rechecked_before_a_later_model_step() -> TestResult 
     );
     assert!(failed.operations.contains_key("tamper"));
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn an_optional_unreadable_root_is_excluded_with_a_durable_cause_before_first_model()
--> TestResult {
-    let durable = Arc::new(Harness::new(None, None));
-    let host = Arc::new(NativeSkills::new(durable.clone(), "UNREADABLE_OPTIONAL").await?);
-    let source = host
-        .catalog
-        .lock()
-        .await
-        .sources()
-        .first()
-        .cloned()
-        .ok_or("fixture source")?;
-    host.corrupt(&source).await?;
-    let (session, executor, _) = setup(
-        host.clone(),
-        vec![output(vec![text("without optional guidance")])],
-        true,
-    )
-    .await?;
-    session
-        .start(
-            "optional-unreadable",
-            session.head().await.state_revision,
-            input(),
-        )
-        .await?;
-    let completed = session.drive().await?;
-    assert_eq!(
-        completed.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
-    );
-    let selection = root_selection(&completed).ok_or("selection")?;
-    assert!(selection.failure.is_none());
-    let candidate = selection.candidates.first().ok_or("candidate")?;
-    assert!(candidate.selected && candidate.content.is_none());
-    assert_eq!(
-        candidate.failure.as_ref().map(|error| error.code),
-        Some(ErrorCode::ArtifactUnavailable)
-    );
-    assert_eq!(candidate.source, source);
-    assert_eq!(host.reads.load(Ordering::SeqCst), 1);
-    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
-    assert!(
-        !serde_json::to_string(&*executor.prompts.lock().await)?.contains("UNREADABLE_OPTIONAL")
-    );
-    assert!(durable.store.lock().await.batches.iter().any(|batch| {
-        batch.decode(&Limits::default()).is_ok_and(|payload| {
-            payload
-                .events
-                .iter()
-                .any(|event| event.kind == "skills.instructions.unavailable")
-        })
-    }));
     Ok(())
 }
 
@@ -998,114 +807,6 @@ async fn a_required_unreadable_root_fails_the_original_accepted_run_without_a_mo
 }
 
 #[tokio::test]
-async fn an_unacknowledged_unreadable_optional_root_cannot_silently_continue_without_it()
--> TestResult {
-    let durable = Arc::new(Harness::new(Some("skills.instructions.unavailable"), None));
-    let host = Arc::new(NativeSkills::new(durable, "NO_FAILURE_ACK").await?);
-    let source = host
-        .catalog
-        .lock()
-        .await
-        .sources()
-        .first()
-        .cloned()
-        .ok_or("fixture source")?;
-    host.corrupt(&source).await?;
-    let (session, executor, _) =
-        setup(host, vec![output(vec![text("must not run")])], true).await?;
-    session
-        .start(
-            "failure-no-ack",
-            session.head().await.state_revision,
-            input(),
-        )
-        .await?;
-    assert!(session.drive().await.is_err());
-    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
-    Ok(())
-}
-
-#[tokio::test]
-async fn child_work_selects_its_own_skills_instead_of_inheriting_parent_activation() -> TestResult {
-    let host = Arc::new(
-        NativeSkills::new(Arc::new(Harness::new(None, None)), "PARENT_REVIEW_ONLY").await?,
-    );
-    let (session, executor, backend) = setup(
-        host.clone(),
-        vec![
-            output(vec![core_call(
-                "spawn_agent",
-                json!({"task":work("child-a")}),
-                "spawn-child",
-            )]),
-            output(vec![text("done")]),
-            output(vec![text("done")]),
-            output(vec![text("parent consumed the child result")]),
-        ],
-        true,
-    )
-    .await?;
-    session
-        .start("child-skills", session.head().await.state_revision, input())
-        .await?;
-    session.drive().await?;
-    let snapshot = session.snapshot().await;
-    assert_eq!(
-        snapshot.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed),
-        "run={:?}, model_calls={}",
-        snapshot.run,
-        executor.calls.load(Ordering::SeqCst)
-    );
-    let child = snapshot
-        .agents
-        .values()
-        .find(|agent| agent.parent_id.is_some())
-        .ok_or("missing child")?;
-    let selected = child
-        .turn
-        .as_ref()
-        .and_then(|turn| snapshot.skill_selection(&turn.agent_turn_id))
-        .ok_or("child selection")?;
-    assert!(!selected.candidates[0].selected);
-    assert_eq!(selected.candidates[0].reason, "workflow_no_match");
-    assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
-    let prompts = executor.prompts.lock().await;
-    let child_prompt = prompts.iter().find(|prompt| prompt.messages.iter().any(|message| message.role == bitrouter_ai::types::Role::User && message.content.iter().any(|content| matches!(content, Content::Text { text, .. } if text == "child-a")))).ok_or("actual child request")?;
-    assert!(
-        !child_prompt
-            .system
-            .as_deref()
-            .is_some_and(|system| system.contains("PARENT_REVIEW_ONLY"))
-    );
-    Ok(())
-}
-
-#[tokio::test]
-async fn instruction_budget_excludes_an_optional_skill_before_fetching_its_body() -> TestResult {
-    let host = Arc::new(
-        NativeSkills::new(
-            Arc::new(Harness::new(None, None)),
-            &"LARGE_BODY".repeat(7500),
-        )
-        .await?,
-    );
-    let (session, executor, _) =
-        setup(host.clone(), vec![output(vec![text("done")])], true).await?;
-    session
-        .start("skill-budget", session.head().await.state_revision, input())
-        .await?;
-    session.drive().await?;
-    let snapshot = session.snapshot().await;
-    let selected = root_selection(&snapshot).ok_or("skill selection")?;
-    assert_eq!(selected.candidates[0].reason, "skill_instruction_budget");
-    assert!(!selected.candidates[0].selected);
-    assert_eq!(host.reads.load(Ordering::SeqCst), 0);
-    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
-    Ok(())
-}
-
-#[tokio::test]
 async fn an_unavailable_required_skill_never_silently_runs_without_it() -> TestResult {
     let host = Arc::new(NativeSkills::new(Arc::new(Harness::new(None, None)), "AVAILABLE").await?);
     let (session, executor, _) = setup(
@@ -1116,9 +817,9 @@ async fn an_unavailable_required_skill_never_silently_runs_without_it() -> TestR
     .await?;
     let mut task = input();
     task.routing.skills = Some(SkillConstraints {
-        include: vec![SkillSelector::Managed {
-            scope: LibraryScope::Project,
-            installation_id: "missing_installation".into(),
+        include: vec![SkillSelector::Local {
+            scope: LocalScope::Project,
+            directory_id: "missing_installation".into(),
         }],
         exclude: vec![],
     });
@@ -1147,9 +848,9 @@ async fn recovery_settles_a_committed_rejection_without_new_selection_or_executi
     let (session, executor, _) = setup(host, vec![], false).await?;
     let mut task = input();
     task.routing.skills = Some(SkillConstraints {
-        include: vec![SkillSelector::Managed {
-            scope: LibraryScope::Project,
-            installation_id: "missing_installation".into(),
+        include: vec![SkillSelector::Local {
+            scope: LocalScope::Project,
+            directory_id: "missing_installation".into(),
         }],
         exclude: vec![],
     });
@@ -1258,6 +959,19 @@ async fn explain_distinguishes_selected_loaded_and_exact_prepared_mcp_requests_w
     assert!(!serde_json::to_string(&explained)?.contains("EXPLAIN_BODY_IS_NOT_METADATA"));
     assert_eq!(host.reads.load(Ordering::SeqCst), 1);
     assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+
+    let mut implicit = loaded.clone();
+    for work in implicit.context_store.work.values_mut() {
+        if let Some(selection) = &mut work.skills {
+            selection.constraints = SkillConstraints::default();
+        }
+    }
+    for agent in implicit.agents.values_mut() {
+        if let Some(turn) = &mut agent.turn {
+            turn.input.routing.skills = None;
+        }
+    }
+    assert!(capture(&implicit, &run_id).is_err());
 
     let mut wrong_role = loaded.clone();
     for execution in wrong_role.context_store.executions.values_mut() {
@@ -1554,7 +1268,11 @@ async fn mcp_consent_is_metadata_only_then_binds_the_exact_entry_in_the_model_re
     let (session, executor, _) =
         setup(host.clone(), vec![output(vec![text("done")])], true).await?;
     session
-        .start("mcp-start", session.head().await.state_revision, input())
+        .start(
+            "mcp-start",
+            session.head().await.state_revision,
+            selected_input(&host).await,
+        )
         .await?;
     assert_eq!(
         session.drive().await?.run.as_ref().map(|run| run.status),
@@ -1639,45 +1357,6 @@ async fn mcp_consent_is_metadata_only_then_binds_the_exact_entry_in_the_model_re
 }
 
 #[tokio::test]
-async fn denied_optional_mcp_skill_runs_without_its_instructions_or_file_reads() -> TestResult {
-    let host =
-        Arc::new(NativeSkills::with_mcp(Arc::new(Harness::new(None, None)), "DENIED_BODY").await?);
-    let (session, executor, _) =
-        setup(host.clone(), vec![output(vec![text("done")])], true).await?;
-    session
-        .start("optional-mcp", session.head().await.state_revision, input())
-        .await?;
-    session.drive().await?;
-    let request = host
-        .consent_requests
-        .lock()
-        .await
-        .first()
-        .cloned()
-        .ok_or("consent")?;
-    session
-        .answer_skill_consent("deny-optional", request.answer(false))
-        .await?;
-    let snapshot = session.drive().await?;
-    assert_eq!(
-        snapshot.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
-    );
-    assert_eq!(host.reads.load(Ordering::SeqCst), 0);
-    assert!(
-        !executor.prompts.lock().await[0]
-            .system
-            .as_deref()
-            .is_some_and(|system| system.contains("DENIED_BODY"))
-    );
-    assert_eq!(
-        root_selection(&snapshot).ok_or("selection")?.candidates[0].consents[0].approved,
-        Some(false)
-    );
-    Ok(())
-}
-
-#[tokio::test]
 async fn denied_required_mcp_skill_preserves_acceptance_but_fails_execution_admission() -> TestResult
 {
     let host = Arc::new(
@@ -1725,7 +1404,11 @@ async fn cancellation_expires_the_exact_skill_request_and_refuses_a_late_answer(
     );
     let (session, executor, _) = setup(host.clone(), vec![], true).await?;
     session
-        .start("cancel-mcp", session.head().await.state_revision, input())
+        .start(
+            "cancel-mcp",
+            session.head().await.state_revision,
+            selected_input(&host).await,
+        )
         .await?;
     let waiting = session.drive().await?;
     let request = host
@@ -1895,7 +1578,7 @@ async fn permission_changes_revoke_the_old_skill_consent_before_any_body_fetch()
         .start(
             "permission-mcp",
             session.head().await.state_revision,
-            input(),
+            selected_input(&host).await,
         )
         .await?;
     session.drive().await?;
@@ -1940,10 +1623,10 @@ async fn permission_changes_revoke_the_old_skill_consent_before_any_body_fetch()
         .await?;
     assert_eq!(
         session.drive().await?.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
+        Some(RunStatus::Failed)
     );
     assert_eq!(host.reads.load(Ordering::SeqCst), 0);
-    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
     Ok(())
 }
 
@@ -1959,7 +1642,7 @@ async fn a_permission_change_during_a_skill_read_cancels_old_bytes_before_reappr
         .start(
             "read-permission",
             session.head().await.state_revision,
-            input(),
+            selected_input(&host).await,
         )
         .await?;
     session.drive().await?;
@@ -2029,75 +1712,10 @@ async fn a_permission_change_during_a_skill_read_cancels_old_bytes_before_reappr
         .await?;
     assert_eq!(
         session.drive().await?.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
+        Some(RunStatus::Failed)
     );
-    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
     assert!(!serde_json::to_string(&*executor.prompts.lock().await)?.contains("CANCEL_OLD_READ"));
-    Ok(())
-}
-
-#[tokio::test]
-async fn recovery_preserves_an_optional_load_failure_without_reading_a_new_version() -> TestResult {
-    let durable = Arc::new(Harness::new(None, None));
-    let host = Arc::new(NativeSkills::new(durable.clone(), "PINNED_FAILED_ROOT").await?);
-    let source = host
-        .catalog
-        .lock()
-        .await
-        .sources()
-        .first()
-        .cloned()
-        .ok_or("source")?;
-    host.corrupt(&source).await?;
-    let (session, _, _) = setup(host, vec![output(vec![text("old completion")])], true).await?;
-    session
-        .start(
-            "failed-root-input",
-            session.head().await.state_revision,
-            input(),
-        )
-        .await?;
-    session.drive().await?;
-    let prefix = recovery::prefix(
-        &*durable.store.lock().await,
-        "skills.instructions.unavailable",
-    )?;
-    session.disconnect().await;
-    let replacement = recovery::harness_at(prefix).await;
-    let new_host =
-        Arc::new(NativeSkills::new(replacement.clone(), "DO_NOT_SUBSTITUTE_AFTER_FAILURE").await?);
-    let request = recovery::request(&*replacement.store.lock().await, true)?;
-    let mut caps = recovery::capabilities(&request.binding.grant.core_instance_id);
-    caps.operations = vec![
-        FEATURE.into(),
-        bitrouter_orchestrator::core::skills::FEATURE.into(),
-    ];
-    let (app, executor) = recovery::application(vec![output(vec![text(
-        "recovered without unavailable optional guidance",
-    )])])?;
-    let resumed = CoreSession::restore(
-        request,
-        &caps,
-        app,
-        CallerContext::local(),
-        new_host.clone(),
-    )
-    .await?;
-    let settled = resumed.drive().await?;
-    assert_eq!(
-        settled.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
-    );
-    assert!(settled.operations.contains_key("failed-root-input"));
-    let candidate = root_selection(&settled)
-        .ok_or("selection")?
-        .candidates
-        .first()
-        .ok_or("candidate")?;
-    assert_eq!(candidate.source, source);
-    assert!(candidate.failure.is_some() && candidate.content.is_none());
-    assert_eq!(new_host.reads.load(Ordering::SeqCst), 0);
-    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
     Ok(())
 }
 
@@ -2122,7 +1740,11 @@ async fn mcp_resource_data_is_not_shared_into_an_unconsenting_child_context() ->
     )
     .await?;
     session
-        .start("mcp-child", session.head().await.state_revision, input())
+        .start(
+            "mcp-child",
+            session.head().await.state_revision,
+            selected_input(&host).await,
+        )
         .await?;
     session.drive().await?;
     let request = host.consent_requests.lock().await[0].clone();
@@ -2132,7 +1754,7 @@ async fn mcp_resource_data_is_not_shared_into_an_unconsenting_child_context() ->
     let snapshot = session.drive().await?;
     assert_eq!(
         snapshot.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
+        Some(RunStatus::Waiting)
     );
     let child = snapshot
         .agents
@@ -2152,147 +1774,17 @@ async fn mcp_resource_data_is_not_shared_into_an_unconsenting_child_context() ->
             .is_some_and(|block| block.source.skill_binding.is_none())
     }));
     let prompts = executor.prompts.lock().await;
-    let child_prompt = prompts.iter().find(|prompt| prompt.messages.iter().any(|message| message.role == bitrouter_ai::types::Role::User && message.content.iter().any(|content| matches!(content, Content::Text { text, .. } if text == "child-a")))).ok_or("child request")?;
-    assert!(!child_prompt.messages.iter().flat_map(|message| &message.content).any(|content| matches!(content, Content::Text { text, .. } if text.contains("PARENT_MCP_ONLY"))));
-    assert_eq!(host.consent_requests.lock().await.len(), 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn changed_workflow_reassesses_unselected_skills_without_replacing_the_catalog_or_replaying_paid_work()
--> TestResult {
-    let durable = Arc::new(Harness::new(None, None));
-    let host = Arc::new(NativeSkills::new(durable.clone(), "FROZEN_CATALOG").await?);
-    let (session, executor, backend) =
-        setup(host.clone(), vec![output(vec![text("done")])], true).await?;
-    let gate = Arc::new(tokio::sync::Semaphore::new(0));
-    *backend.gate.lock().await = Some(gate.clone());
-    let accepted = session
-        .start(
-            "changing-workflow",
-            session.head().await.state_revision,
-            input(),
-        )
-        .await?;
-    let driving = session.clone();
-    let job = tokio::spawn(async move { driving.drive().await });
-    tokio::time::timeout(Duration::from_secs(5), backend.seen.acquire())
-        .await??
-        .forget();
-    let initial = session.snapshot().await;
-    let original = root_selection(&initial)
-        .cloned()
-        .ok_or("original catalog")?;
-    assert!(!original.selected);
-    assert_eq!(host.reads.load(Ordering::SeqCst), 0);
-    let turn = initial.root_turn().ok_or("original Turn")?;
-    session
-        .steer(
-            "workflow-steer",
-            session.head().await.state_revision,
-            &turn.run_id,
-            &turn.agent_turn_id,
-            "LATEST_USER_WORKFLOW".into(),
-        )
-        .await?;
-    session
-        .signals(
-            "workflow-facts",
-            SignalUpdate {
-                signal_revision: initial.signals.revision + 1,
-                observed_at: "2".into(),
-                scope: initial.session_id.clone(),
-                source: grant().harness_id,
-                workspace_revision: initial.manifest.workspace_revision.clone(),
-                manifest: initial.manifest.clone(),
-                materials: vec![],
-                facts: BTreeMap::from([("workflow_stage".into(), json!("revised"))]),
-            },
-        )
-        .await?;
-    host.publish("MUST_WAIT_FOR_NEXT_TURN").await?;
-    *backend.gate.lock().await = None;
-    gate.add_permits(1);
-    let finished = tokio::time::timeout(Duration::from_secs(5), job).await???;
-    assert_eq!(
-        finished.run.as_ref().map(|run| run.status),
-        Some(RunStatus::Completed)
-    );
-    let selected = root_selection(&finished).ok_or("final selection")?;
-    assert!(selected.selected);
-    assert_eq!(selected.catalog, original.catalog);
-    assert_eq!(selected.candidates[0].source, original.candidates[0].source);
-    assert_eq!(selected.source.signal_revision, finished.signals.revision);
-    assert!(selected.source.context_revision > original.source.context_revision);
-    assert_ne!(selected.source.prompt_sha256, original.source.prompt_sha256);
-    let decision = &finished.context_store.decisions
-        [selected.decision_id.as_ref().ok_or("selected decision")?];
-    assert!(!decision.stale);
-    let stale = finished
-        .context_store
-        .decisions
-        .values()
-        .find(|receipt| receipt.stale)
-        .ok_or("stale receipt retained")?;
-    assert!(stale.outcome.as_ref().is_some_and(Result::is_ok));
-    assert_ne!(stale.decision_id, decision.decision_id);
-    assert_eq!(stale.source, original.source);
-    let requests = backend.requests.lock().await;
-    assert_eq!(requests.len(), 2);
-    assert!(!serde_json::to_string(&requests[0].state)?.contains("LATEST_USER_WORKFLOW"));
-    assert!(serde_json::to_string(&requests[1].state)?.contains("LATEST_USER_WORKFLOW"));
-    assert_eq!(
-        requests[1].state["signals"]["facts"]["workflow_stage"],
-        "revised"
-    );
-    drop(requests);
-    assert_eq!(host.reads.load(Ordering::SeqCst), 1);
-    assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
     assert!(
-        executor.prompts.lock().await[0]
-            .system
-            .as_deref()
-            .is_some_and(
-                |text| text.contains("FROZEN_CATALOG") && !text.contains("MUST_WAIT_FOR_NEXT_TURN")
-            )
+        !prompts
+            .iter()
+            .any(|prompt| prompt.messages.iter().any(|message| message.role
+                == bitrouter_ai::types::Role::User
+                && message
+                    .content
+                    .iter()
+                    .any(|content| matches!(content, Content::Text{text,..} if text=="child-a"))))
     );
-    assert_eq!(session.operation("changing-workflow").await, Some(accepted));
-    session.drive().await?;
-    assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
-
-    let prefix = recovery::prefix(&*durable.store.lock().await, "skills.selected")?;
-    session.disconnect().await;
-    let replacement = recovery::harness_at(prefix).await;
-    let new_host = Arc::new(NativeSkills::new(replacement.clone(), "FROZEN_CATALOG").await?);
-    let restore = recovery::request(&*replacement.store.lock().await, true)?;
-    let mut caps = recovery::capabilities(&restore.binding.grant.core_instance_id);
-    caps.operations = vec![
-        FEATURE.into(),
-        bitrouter_orchestrator::core::skills::FEATURE.into(),
-    ];
-    let (app, resumed_executor) = recovery::application(vec![output(vec![text("resumed")])])?;
-    let resumed = CoreSession::restore(
-        restore,
-        &caps,
-        app,
-        CallerContext::local(),
-        new_host.clone(),
-    )
-    .await?;
-    let recovered = resumed.drive().await?;
-    let recovered_selection = root_selection(&recovered).ok_or("recovered selection")?;
-    assert_eq!(recovered_selection.source, selected.source);
-    assert_eq!(recovered_selection.catalog, original.catalog);
-    assert!(
-        recovered
-            .context_store
-            .decisions
-            .contains_key(&stale.decision_id)
-    );
-    assert_eq!(recovered_selection.decision_id, selected.decision_id);
-    assert_eq!(new_host.reads.load(Ordering::SeqCst), 1);
-    assert_eq!(resumed_executor.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(backend.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(host.consent_requests.lock().await.len(), 2);
     Ok(())
 }
 
@@ -2428,7 +1920,7 @@ async fn any_support_manifest_change_requires_new_consent_even_when_root_bytes_a
 }
 
 #[tokio::test]
-async fn four_skill_bound_excludes_optional_sources_and_rejects_five_required_sources() -> TestResult
+async fn unselected_skills_stay_unloaded_and_five_explicit_sources_exceed_the_bound() -> TestResult
 {
     for required in [false, true] {
         let host = Arc::new(
@@ -2437,15 +1929,15 @@ async fn four_skill_bound_excludes_optional_sources_and_rejects_five_required_so
         let mut bindings = Vec::new();
         for index in 0..5 {
             let (mut source, body) = binding(&format!("COUNTED_SKILL_{index}"));
-            if let SkillSource::Managed(binding) = &mut source {
-                binding.installation_id = format!("installation_{index}");
+            if let SkillSource::Local(binding) = &mut source {
+                binding.directory_id = format!("installation_{index}");
             }
             host.bytes.lock().await.insert(source.identity()?, body);
-            if let SkillSource::Managed(binding) = source {
+            if let SkillSource::Local(binding) = source {
                 bindings.push(binding);
             }
         }
-        host.catalog.lock().await.managed.skills = bindings.clone();
+        host.catalog.lock().await.local.skills = bindings.clone();
         let (session, executor, backend) =
             setup(host.clone(), vec![output(vec![text("done")])], true).await?;
         let mut task = input();
@@ -2453,7 +1945,7 @@ async fn four_skill_bound_excludes_optional_sources_and_rejects_five_required_so
             task.routing.skills = Some(SkillConstraints {
                 include: bindings
                     .into_iter()
-                    .map(|binding| SkillSource::Managed(binding).selector())
+                    .map(|binding| SkillSource::Local(binding).selector())
                     .collect(),
                 exclude: vec![],
             });
@@ -2482,18 +1974,34 @@ async fn four_skill_bound_excludes_optional_sources_and_rejects_five_required_so
                     .iter()
                     .filter(|candidate| candidate.selected)
                     .count(),
-                4
+                0
             );
-            assert_eq!(host.reads.load(Ordering::SeqCst), 4);
-            assert_eq!(backend.calls.load(Ordering::SeqCst), 1);
+            assert_eq!(host.reads.load(Ordering::SeqCst), 0);
+            assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
             let model = serde_json::to_string(&executor.prompts.lock().await[0])?;
             assert_eq!(
                 (0..5)
                     .filter(|index| model.contains(&format!("COUNTED_SKILL_{index}")))
                     .count(),
-                4
+                0
             );
         }
     }
     Ok(())
+}
+
+async fn selected_input(host: &NativeSkills) -> TaskInput {
+    let mut task = super::input();
+    task.routing.skills = Some(SkillConstraints {
+        include: host
+            .catalog
+            .lock()
+            .await
+            .sources()
+            .iter()
+            .map(SkillSource::selector)
+            .collect(),
+        exclude: vec![],
+    });
+    task
 }
