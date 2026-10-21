@@ -3,9 +3,15 @@
 This evidence accompanies the [acceptance record](../../GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md).
 P0 source is `9cbe512d101e777470d113b0086ab9e331b3a638`; measured P1 runtime source is
 `2495bf8db118de399a11fc11f82ba18bd6a6455d`. Later documentation-only commits do
-not change the measured runtime. The later
-[pooled-read follow-up](read-retry-2026-10-21.md) records current shared validation
-and why the original local measurements retain their original provenance. [Artifact identities](artifacts-2026-10-21.json)
+not change the measured runtime. The
+[pooled-read follow-up](read-retry-2026-10-21.md) retains completed v10 validation.
+The newer [concurrency follow-up](concurrency-2026-10-21.md) records the f7 hosted
+failure, v11 failure, production repair `762d80a9`, focused/workspace passes,
+helper controlled red/green, v12 aggregate 206/206 and strict lint/format at
+`a83c7bc0`. Hosted final-head status remains tracked on PR #990. Its
+[machine-readable record](concurrency-2026-10-21.json) preserves each source
+identity; none of these follow-ups relabels the local measurements below.
+[Artifact identities](artifacts-2026-10-21.json)
 record source, hashes, features, compiler, build settings and dependency counts.
 
 ## Local comparison method
@@ -117,6 +123,21 @@ use optimized builds and controlled memory profiles before attributing these
 small footprint changes to particular source edits.
 
 ## Validation and retained failures
+
+Current candidate `a83c7bc0` passed shared aggregate **206/206 in 96.096s**,
+including all 27 stock-process cases, with zero retries. Strict workspace Clippy,
+formatting and whitespace checks passed after the owned PostgreSQL fixture was
+stopped normally. The immutable artifact and log hashes are recorded in the
+[concurrency record](concurrency-2026-10-21.json).
+
+Production source `762d80a9` passed focused metering 3/3 and workspace
+4,939/4,939 in 666.384s. That workspace ran with database variables unset while
+PostgreSQL remained running and idle; it is not a performance or
+PostgreSQL-absent run. The later helper-only commit passed controlled red/green
+and the v12 aggregate; no duplicate full workspace test run is claimed. The
+original metering red's failed cleanup, later ordinary manual DROP and clean
+focused green remain separate observations. Earlier complete results below
+retain their own sources. Hosted final-head checks remain on PR #990.
 
 [Initial-candidate validation](validation-2026-10-21.json) records commands, source revisions,
 counts and log hashes: that workspace passed 4,939/4,939 in 677.839s, with

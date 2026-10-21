@@ -2,26 +2,39 @@
 
 Implementation follows the [P1 contract](GATEWAY_MULTI_INSTANCE_SPEC.md) and the
 [original P1 gates](BITROUTER_SERVICE_REFACTOR_PLAN.md#p1-acceptance).
-Status: **P1 implementation and local acceptance complete**. Hosted checks and
-review state are tracked on [#990](https://github.com/bitrouter/bitrouter/pull/990).
+Status: **P1 implementation and local acceptance complete**. Hosted final-head
+checks and review state are tracked on [#990](https://github.com/bitrouter/bitrouter/pull/990);
+no hosted final-head pass is asserted here.
 
-Runtime source `322f3d87813082085c23389976897207268cfbde` passed the v10 shared
-selection, 204/204. Three fixed v10 guard confirmations passed 3/3. Eight fixed v8 stability sets passed 40/40, and three fixed
-v9 maintenance repeats passed 3/3. Independent source-review findings are closed.
-The [final acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) is the current
-source of truth for candidate identities, results, remaining gates and limits.
+Current source `a83c7bc0505053cd11a4ac3485ff441b3a19e214` passed v12 shared
+**206/206 in 96.096s**, with two test threads and zero retries. This includes
+all 27 stock-process cases and both added metering/cleanup regressions. Strict
+workspace Clippy, formatting and whitespace checks passed. Production repair
+`762d80a9f6299b9e0b026396fcbeff52b2e8b1af` passed workspace **4,939/4,939 in
+666.384s** (five slow, 149 skipped); its database variables were unset while
+PostgreSQL remained running and idle. The later test-only helper is covered by
+v12 without claiming another workspace test run. PostgreSQL was stopped normally
+after v12 shared validation and before Clippy.
 
-- Final full workspace: **4,939/4,939 passed**, 148 configured skips, 662.705s;
-  strict Clippy and format checks passed. Prior doctest/rustdoc/registry/distribution
-  passes remain source-attributed in the acceptance record. The earlier nextest
-  output-handle notice remains recorded; this run had 0.
-- Local performance: **27 retained samples**, including one fixed default repeat;
-  measured footprint/SSE costs accepted for this candidate with follow-ups. See
-  [raw data and interpretation](evidence/gateway-multi-instance/README.md).
+Focused metering passed 3/3. The helper's controlled old-source red reached size
+one without cleanup failure; repaired focused validation passed 4/4 in 3.525s.
+The [concurrency record](evidence/gateway-multi-instance/concurrency-2026-10-21.md)
+retains the historical failures, uncertain causal details and source identities.
+Final evidence review is tracked against the frozen documentation snapshot.
 
-Documentation/distribution/format and hosted results remain as recorded in the
-final acceptance record. Historical sections below retain their original dated
-status and failure evidence; later results do not rewrite earlier failures.
+Historical runtime `322f3d87813082085c23389976897207268cfbde` passed v10 shared
+204/204, three fixed guard confirmations, workspace 4,939/4,939 in 662.705s
+(148 configured skips), strict Clippy and formatting. Eight v8 stability sets
+passed 40/40; three v9 maintenance repeats passed 3/3. These results do not
+replace the separate v12 results above.
+
+Local performance remains **27 retained samples** at measured runtime
+`2495bf8db118de399a11fc11f82ba18bd6a6455d`, with the recorded footprint/SSE costs
+and follow-ups. No new measurement or byte-identical rebuilt artifact is claimed.
+See the [raw data and interpretation](evidence/gateway-multi-instance/README.md).
+The [acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) identifies current
+and historical evidence. Dated sections below retain their original status;
+later results do not rewrite earlier failures.
 
 Current P0 base (rechecked 2026-10-21): `9cbe512d101e777470d113b0086ab9e331b3a638`.
 [#984](https://github.com/bitrouter/bitrouter/pull/984) is merge ready and remains
@@ -47,24 +60,30 @@ review threads remained unresolved. This does not close any P1 gate.
 
 ## Stage ledger
 
+Stage rows combine current v12 validation with source-attributed earlier
+stability and local measurements.
+
 | Stage | Implementation | Verification | Independent review |
 | --- | --- | --- | --- |
-| 1 Authority foundation | Shared store/key authority, startup and explicit stock bootstrap implemented | Included in final 204/204 shared selection | Foundation/runtime/bootstrap findings closed |
+| 1 Authority foundation | Shared store/key authority, startup and explicit stock bootstrap implemented | Included in final 206/206 v12 shared selection | Foundation/runtime/bootstrap findings closed |
 | 2 Admission and execution | Shared admission, execution identity and durable recovery implemented | Final shared selection; applicable admission/idempotency cases passed all eight stability sets | Engine, serving and process findings closed |
 | 3 Gateway integration | Official process startup, authentication, dispatch, delivery and native continuation implemented | Final shared/process selection; OAuth ownership regressions and 3/3 maintenance repeats passed | Integration, ownership and maintenance findings closed |
 | 4 Published authority | Publication and operator HTTP/SDK/CLI implemented | Cross-replica publication, credentials, authority invalidation and backend-loss campaigns passed | Publication/operator/process findings closed |
 | 5 Trajectory authority | Shared history, epochs, guard counters/cost/holds and response observations implemented | Guard red/green and final shared selection; both stock guard campaigns passed all eight stability sets | Guard, observation, fence and process findings closed |
 | 6 Delivery and operations | Bounded transport/custody, projection/outbox, crash recovery and drain implemented | Final shared selection; eight outbox stability passes; stock stalled-reader and shutdown campaigns passed | Delivery/operations/process findings closed |
-| 7 Aggregate acceptance and PR | Local acceptance complete; stacked PR #990 | 204/204 v10, 40/40 v8 stability, 3/3 v9 maintenance, 4,939/4,939 workspace and recorded local comparison | Independent source findings closed; final evidence reviewed |
+| 7 Aggregate acceptance and PR | Local acceptance complete; stacked PR #990 | 206/206 v12, 762 workspace 4,939/4,939, strict Clippy/format and retained local comparison | Source findings closed; final evidence review tracked against frozen snapshot |
 
 ## Acceptance ledger
+
+V12 completes renewed local A04 and aggregate validation. Earlier results retain
+their source identities; hosted final-head status remains on the PR.
 
 | Gate | Evidence required | Current status |
 | --- | --- | --- |
 | P1-A01 | Independent processes share tenant quota and actual account concurrency | Local PASS: final shared selection and eight fixed stability sets |
 | P1-A02 | Cross-instance duplicate/conflict behavior and unknown status query | Local PASS: final shared selection and eight fixed stability sets |
 | P1-A03 | Kill before dispatch, during inference/streaming and around finalization | Local PASS: stock-process crash/finalization campaigns |
-| P1-A04 | Competing finalization/outbox retries and truthful unknown states | Local PASS: final shared selection and eight fixed outbox stability sets |
+| P1-A04 | Competing finalization/outbox retries and truthful unknown states | Local PASS: v12 aggregate, metering replay red/green and retained outbox stability passes |
 | P1-A05 | Auth/config/credential revisions, cross-instance continuation and backend loss | Local PASS: final shared selection, OAuth ownership regressions and 3/3 maintenance repeats |
 | P1-A06 | Concurrent/alternating episode guards, history, cost, holds and key rotation | Local PASS: final shared selection, stale-snapshot red/green and eight fixed guard/cost stability sets |
 | P1-A07 | Bounded overload, slow consumers and hot-tenant isolation | Local PASS: stock overload/slow-ingress/stalled-reader campaigns |
@@ -1856,3 +1875,46 @@ performance data remains attributed to `2495bf8d`: only the opt-in shared module
 changed, and neither measured local profile compiles it. This is not a new
 measurement or a claim of byte-identical rebuilt binaries. Final-head hosted
 results remain a separate gate on #990.
+
+## Concurrency follow-up local closure (2026-10-21)
+
+- Hosted head `f7d8d2811e5ac3b2f53277e7c9eaf73544e4179f` finished with 67
+  successful checks, eight skips and one failure. All 27 packaged-process cases
+  passed in 71.398s; the later non-process PostgreSQL selection ran 31 passes,
+  one continuation COMMIT serialization failure and 42 unrun cases of 74.
+- Test-only `12f75d7df9e020f21a2892ff3f1e5feb0e89fd22` isolates each continuation
+  campaign's database while retaining its same-database two-pool contention and
+  original assertions. The unchanged 74/74 baseline did not reproduce the CI
+  failure; the exact historical SSI graph remains unknown. All five isolated
+  campaigns passed in v11 and in three fixed five-case confirmations (15/15).
+- V11 ran 204 cases: 203 passed, one metering event-ID unique violation, 92.471s.
+  All 27 stock-process cases passed. The failing coordinator already owned a
+  separate database. Production repair `762d80a9f6299b9e0b026396fcbeff52b2e8b1af`
+  uses targetless conflict arbitration, preserving exact owner/content checks
+  and the original typed transaction-retry allowlist.
+- The old-production replay regression reproduced the actual initial-writer
+  `23505`, but its cleanup also failed with two remaining sessions. A later
+  check found zero sessions and an ordinary DROP removed only that confirmed-owned
+  database. The original run remains cleanup-failed. The unchanged fixture with
+  repaired SQL passed 3/3 in 3.360s, including normal cleanup.
+- The exact 762 workspace passed 4,939/4,939 in 666.384s (five slow, 149 skipped).
+  Database variables were unset; PostgreSQL remained running and idle. This
+  predates the test-only close-helper repair, committed as
+  `a83c7bc0505053cd11a4ac3485ff441b3a19e214`. Its controlled old-helper red
+  failed at one live connection in 0.175s summary with no cleanup failure;
+  repaired helper/projection/metering validation passed 4/4 in 3.525s, including
+  normal cleanup. This confirms the controlled interleaving without identifying
+  the original two sessions. The completed 762 production workspace result is
+  retained without a duplicate 4,939-case run solely for this test-only helper.
+- Immutable v12 at `a83c7bc0` has SHA-256
+  `0ecce674a744b74658311d39b192997b5a38385dc31cd1ffa6386b28dec6cb0f`.
+  All 206 shared cases passed in 96.096s, including 27 stock-process cases, with
+  two test threads and zero retries. PostgreSQL was stopped normally afterward;
+  strict Rust 1.97 workspace Clippy passed in 1m09s, and format/diff checks passed.
+  This closes renewed local A04 and aggregate validation. Hosted final-head
+  status remains on #990; final evidence review is tied to the frozen snapshot.
+
+The [durable follow-up](evidence/gateway-multi-instance/concurrency-2026-10-21.md)
+and [fingerprints](evidence/gateway-multi-instance/concurrency-2026-10-21.json)
+preserve completed results and historical failures. Local performance stays at
+measured `2495bf8d`; no new performance or hosted final-head pass is claimed.
