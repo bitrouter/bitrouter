@@ -49,6 +49,7 @@ use crate::{
 };
 
 mod delivery;
+mod evidence;
 mod ingress;
 
 #[derive(Clone)]
@@ -288,7 +289,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
         provider: pool.clone(),
         account: "default".into(),
     };
-    credentials
+    let stamp = credentials
         .import(
             &slot,
             &pool,
@@ -345,11 +346,18 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
 
     // Keep each independent protocol scenario out of the enclosing future's
     // stack layout. The PostgreSQL campaign retains its ordinary stack budget.
-    Box::pin(generation_success(&fixture)).await?;
+    Box::pin(generation_success(&fixture, second)).await?;
+    Box::pin(evidence::exercise(&fixture, second, &stamp)).await?;
+    for _ in 0..fixture.custody.pending() {
+        ensure!(
+            fixture.custody.reconcile_one().await?,
+            "evidence fixture retained live custody"
+        );
+    }
     Box::pin(delivery::exercise(&fixture, second, &tenant)).await?;
     Box::pin(decisions(&fixture)).await?;
     Box::pin(stream_failure(&fixture)).await?;
-    Box::pin(responses_drop(&fixture)).await?;
+    Box::pin(responses_drop(&fixture, second)).await?;
     Box::pin(rejected_trailing_usage(&fixture)).await?;
     Box::pin(rejections(&fixture, &state)).await?;
     Box::pin(ambiguous(&fixture, &state, first)).await?;
@@ -393,7 +401,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     Ok(())
 }
 
-async fn generation_success(fixture: &Fixture) -> Result<()> {
+async fn generation_success(fixture: &Fixture, store: &Store) -> Result<()> {
     // A separate database connection observes intent before responding at all.
     let (admission, ctx, prompt) = fixture.context().await?;
     ensure!(
@@ -419,6 +427,7 @@ async fn generation_success(fixture: &Fixture) -> Result<()> {
             && result.usage.cache_read_tokens == Some(2)
             && result.usage.cost_micro_usd.is_none()
     );
+    assert_persisted_facts(store, &view, ApiProtocol::ChatCompletions).await?;
     admission.finish_delivery(true).await?;
     admission.finish_delivery(true).await?;
     ensure!(
@@ -524,7 +533,7 @@ async fn stream_failure(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
-async fn responses_drop(fixture: &Fixture) -> Result<()> {
+async fn responses_drop(fixture: &Fixture, store: &Store) -> Result<()> {
     let (admission, ctx, prompt) = fixture.context().await?;
     let mut target = fixture.target("responses-drop");
     target.api_protocol = ApiProtocol::Responses;
@@ -546,6 +555,7 @@ async fn responses_drop(fixture: &Fixture) -> Result<()> {
     ensure!(
         matches!(view.attempts.first().map(|attempt| &attempt.state), Some(AttemptState::Terminal { result }) if result.usage.total_tokens == Some(10))
     );
+    assert_persisted_facts(store, &view, ApiProtocol::Responses).await?;
     fixture
         .engine
         .finish(ctx.request_id(), &TerminalOutcome::Succeeded)
@@ -808,5 +818,28 @@ async fn failed_responses(fixture: &Fixture) -> Result<()> {
             ensure!(matches!(view.state, ExecutionState::Unknown { .. }));
         }
     }
+    Ok(())
+}
+
+async fn assert_persisted_facts(
+    store: &Store,
+    view: &bitrouter_ai::gateway::execution::GatewayExecution,
+    protocol: ApiProtocol,
+) -> Result<()> {
+    let id = &view.attempts.first().context("attempt missing")?.attempt_id;
+    let facts = store
+        .get::<serde_json::Value>(Kind::Attempt, id)
+        .await?
+        .context("attempt row missing")?
+        .value;
+    ensure!(facts["attribution"]["provider_id"] == "dispatch-fixture");
+    ensure!(facts["attribution"]["model_id"] == "fixture");
+    ensure!(facts["attribution"]["protocol"] == serde_json::to_value(protocol)?);
+    ensure!(facts["terminal_facts"]["charge"]["charge_micro_usd"].is_null());
+    ensure!(
+        facts["terminal_facts"]["observed_lifetime_ms"]
+            .as_u64()
+            .is_some()
+    );
     Ok(())
 }

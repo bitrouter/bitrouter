@@ -2,6 +2,7 @@
 
 mod admission;
 mod attempts;
+pub(super) mod evidence;
 mod finalization;
 mod lease;
 pub(super) mod management;
@@ -96,6 +97,10 @@ struct Attempt {
     execution_id: String,
     credential: CredentialStamp,
     resource_revision: u64,
+    #[serde(default)]
+    attribution: Option<Box<evidence::Attribution>>,
+    #[serde(default)]
+    terminal_facts: Option<Box<evidence::TerminalFacts>>,
     view: GatewayAttempt,
 }
 

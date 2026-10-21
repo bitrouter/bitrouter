@@ -6,6 +6,7 @@ use bitrouter_ai::gateway::execution::{
 };
 use sea_orm::DatabaseTransaction;
 
+use super::evidence::{Attribution, ObservedTerminal, TerminalFacts};
 use super::{Attempt, Engine, Execution, Rejection, Resource, Tenant, admission::authenticate};
 use crate::gateway::shared::credentials::{CredentialStamp, Credentials};
 use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
@@ -83,12 +84,30 @@ impl Engine {
             .await
     }
 
+    #[cfg(test)]
     pub async fn prepare_attempt(
         &self,
         key_hash: &str,
         execution_id: &str,
         credential: &CredentialStamp,
     ) -> Result<GatewayAttempt> {
+        Box::pin(self.prepare_observed_attempt(
+            key_hash,
+            execution_id,
+            credential,
+            &Attribution::fixture(),
+        ))
+        .await
+    }
+
+    pub async fn prepare_observed_attempt(
+        &self,
+        key_hash: &str,
+        execution_id: &str,
+        credential: &CredentialStamp,
+        attribution: &Attribution,
+    ) -> Result<GatewayAttempt> {
+        attribution.validate()?;
         let attempt_id = uuid::Uuid::new_v4().to_string();
         self.store()
             .retry(|| async {
@@ -96,6 +115,10 @@ impl Engine {
                 let (tenant, mut execution, principal_expiry) = self
                     .authorized_execution(&tx, key_hash, execution_id)
                     .await?;
+                ensure!(
+                    attribution.protocol.operation() == execution.value.view.operation,
+                    "dispatch attribution operation mismatch"
+                );
                 ensure!(
                     tenant
                         .value
@@ -150,6 +173,8 @@ impl Engine {
                     execution_id: execution_id.into(),
                     credential: credential.clone(),
                     resource_revision: resource.value.policy_revision,
+                    attribution: Some(Box::new(attribution.clone())),
+                    terminal_facts: None,
                     view: view.clone(),
                 };
                 ensure!(
@@ -222,6 +247,12 @@ impl Engine {
                     matches!(attempt.value.view.state, AttemptState::Prepared),
                     "provider dispatch intent is already consumed"
                 );
+                attempt
+                    .value
+                    .attribution
+                    .as_ref()
+                    .context("dispatch attribution is missing")?
+                    .validate()?;
                 let due = self.live_owner(&tx, false).await?;
                 let now = Store::now(&tx).await?;
                 ensure!(
@@ -243,6 +274,7 @@ impl Engine {
 
     /// Late provider evidence belongs to the original owner even after its lease
     /// expires. It may resolve unknown state, but cannot reverse a terminal fact.
+    #[cfg(test)]
     pub async fn record_terminal(
         &self,
         execution_id: &str,
@@ -250,13 +282,30 @@ impl Engine {
         observation: &TerminalObservation,
     ) -> Result<()> {
         super::finalization::validate_outcome(&observation.outcome)?;
-        self.conclude_attempt(execution_id, attempt_id, Some(observation))
+        self.conclude_attempt(execution_id, attempt_id, Some(observation), None)
             .await
+    }
+
+    pub async fn record_observed_terminal(
+        &self,
+        execution_id: &str,
+        attempt_id: &str,
+        evidence: &ObservedTerminal,
+    ) -> Result<()> {
+        super::finalization::validate_outcome(&evidence.observation.outcome)?;
+        self.conclude_attempt(
+            execution_id,
+            attempt_id,
+            Some(&evidence.observation),
+            Some(&evidence.facts),
+        )
+        .await
     }
 
     /// Only a prepared reservation proves that no send was authorized.
     pub async fn abandon_prepared(&self, execution_id: &str, attempt_id: &str) -> Result<()> {
-        self.conclude_attempt(execution_id, attempt_id, None).await
+        self.conclude_attempt(execution_id, attempt_id, None, None)
+            .await
     }
 
     async fn conclude_attempt(
@@ -264,6 +313,7 @@ impl Engine {
         execution_id: &str,
         attempt_id: &str,
         observation: Option<&TerminalObservation>,
+        facts: Option<&TerminalFacts>,
     ) -> Result<()> {
         self.store()
             .retry(|| async {
@@ -300,11 +350,26 @@ impl Engine {
                     attempt.value.execution_id == execution_id,
                     "provider attempt identity mismatch"
                 );
+                if let (Some(observation), Some(facts)) = (observation, facts) {
+                    ObservedTerminal {
+                        observation: observation.clone(),
+                        facts: facts.clone(),
+                    }
+                    .validate(
+                        attempt
+                            .value
+                            .attribution
+                            .as_ref()
+                            .context("terminal attribution is missing")?,
+                    )?;
+                }
                 if let (AttemptState::Terminal { result }, Some(observation)) =
                     (&attempt.value.view.state, observation)
                 {
                     ensure!(
-                        result.outcome == observation.outcome && result.usage == observation.usage,
+                        result.outcome == observation.outcome
+                            && result.usage == observation.usage
+                            && attempt.value.terminal_facts.as_deref() == facts,
                         "conflicting provider terminal evidence"
                     );
                     tx.commit().await?;
@@ -349,6 +414,7 @@ impl Engine {
                 } else {
                     AttemptState::NotDispatched
                 };
+                attempt.value.terminal_facts = facts.map(|facts| Box::new(facts.clone()));
                 let status = if observation.is_some() {
                     "terminal"
                 } else {

@@ -23,6 +23,7 @@ use crate::gateway::shared::{
     store::{Kind, NewRecord, Store, Stored},
 };
 
+mod evidence;
 mod terminal;
 
 struct Principal {
@@ -53,6 +54,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     revocation_and_dispatch(first, second).await?;
     late_terminal_and_recovery(first, second).await?;
     terminal::exercise(first, second).await?;
+    Box::pin(evidence::exercise(first, second)).await?;
     key_rotation_and_admission(first, second).await?;
     Ok(())
 }

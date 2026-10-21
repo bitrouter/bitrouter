@@ -2,22 +2,22 @@
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use bitrouter_ai::gateway::execution::{ExecutionUsage, TerminalObservation, TerminalOutcome};
-use bitrouter_ai::types::{FinishReason, StreamPart, Usage, UsageOrigin};
+use bitrouter_ai::gateway::execution::TerminalOutcome;
+use bitrouter_ai::types::{FinishReason, StreamPart, Usage};
 
 use crate::gateway::error::{BitrouterError, Result};
 use crate::gateway::pipeline::{
     context::PipelineContext, stream::PricingTargetKey, types::RoutingTarget,
 };
-use crate::metering::{
-    pricing::PricingSource,
-    tariff::{FrozenTariff, TargetTariffSnapshot},
-};
+use crate::metering::tariff::TargetTariffSnapshot;
 
 use super::{
     admitted::{SharedAdmission, public_error},
     credentials::CredentialStamp,
-    engine::Engine,
+    engine::{
+        Engine,
+        evidence::{Attribution, ObservedTerminal},
+    },
 };
 
 #[derive(Default)]
@@ -29,7 +29,7 @@ struct State {
     occupied: bool,
     dropped: bool,
     attempt_id: Option<String>,
-    evidence: Option<TerminalObservation>,
+    evidence: Option<Arc<ObservedTerminal>>,
 }
 
 impl Tracker {
@@ -57,7 +57,9 @@ impl Tracker {
             (state.attempt_id.clone(), state.evidence.clone())
         };
         if let (Some(id), Some(evidence)) = pending {
-            engine.record_terminal(execution_id, &id, &evidence).await?;
+            engine
+                .record_observed_terminal(execution_id, &id, &evidence)
+                .await?;
         } else {
             engine.interrupt_attempts(execution_id).await?;
         }
@@ -85,7 +87,9 @@ impl SharedAdmission {
 /// for the bounded execution owner, including a terminal seen before disconnect.
 pub(crate) struct Attempt {
     admission: Arc<SharedAdmission>,
-    tariff: Option<FrozenTariff>,
+    attribution: Box<Attribution>,
+    started: std::time::Instant,
+    observed: Option<Arc<ObservedTerminal>>,
     usage: Option<Usage>,
     terminal: Option<TerminalOutcome>,
     completed: bool,
@@ -105,6 +109,13 @@ impl Attempt {
                 "shared dispatch operation differs from admission",
             ));
         }
+        let tariff = ctx
+            .get_events::<TargetTariffSnapshot>()
+            .into_iter()
+            .rev()
+            .find(|snapshot| snapshot.target == PricingTargetKey::from_target(target))
+            .map(|snapshot| snapshot.tariff.clone());
+        let attribution = Attribution::capture(target, tariff).map_err(public_error)?;
         {
             let mut state = admission.dispatch.lock();
             if state.occupied {
@@ -115,17 +126,13 @@ impl Attempt {
                 ..Default::default()
             };
         }
-        let tariff = ctx
-            .get_events::<TargetTariffSnapshot>()
-            .into_iter()
-            .rev()
-            .find(|snapshot| snapshot.target == PricingTargetKey::from_target(target))
-            .map(|snapshot| snapshot.tariff.clone());
-        // Construct before either await: cancellation of preparation can leave
-        // a committed reservation even if its acknowledgement was never read.
+        // Retain ownership before either await: preparation may commit even
+        // when its acknowledgement is never observed.
         let attempt = Self {
             admission,
-            tariff,
+            attribution: Box::new(attribution),
+            started: std::time::Instant::now(),
+            observed: None,
             usage: None,
             terminal: None,
             completed: false,
@@ -133,10 +140,11 @@ impl Attempt {
         let reserved = attempt
             .admission
             .engine
-            .prepare_attempt(
+            .prepare_observed_attempt(
                 &attempt.admission.key_hash,
                 &attempt.admission.execution_id,
                 credential,
+                &attempt.attribution,
             )
             .await
             .map_err(public_error)?;
@@ -208,12 +216,23 @@ impl Attempt {
         self.persist().await
     }
 
-    fn observation(&self) -> Option<TerminalObservation> {
-        self.terminal.as_ref().map(|outcome| TerminalObservation {
-            outcome: outcome.clone(),
-            usage: usage_evidence(self.usage.as_ref(), self.tariff.as_ref()),
-            recorded_at_ms: 0, // Replaced by the transaction's database clock.
-        })
+    fn observation(&mut self) -> Option<Arc<ObservedTerminal>> {
+        if self.observed.is_none() {
+            self.observed = self.terminal.as_ref().map(|outcome| {
+                Arc::new(ObservedTerminal::capture(
+                    outcome.clone(),
+                    self.usage.as_ref(),
+                    &self.attribution,
+                    u64::try_from(self.started.elapsed().as_millis()).ok(),
+                ))
+            });
+        }
+        self.observed.clone()
+    }
+
+    #[cfg(test)]
+    pub(super) fn captured_terminal(&self) -> Option<&ObservedTerminal> {
+        self.observed.as_deref()
     }
 
     async fn persist(&mut self) -> Result<()> {
@@ -230,7 +249,7 @@ impl Attempt {
         };
         self.admission
             .engine
-            .record_terminal(&self.admission.execution_id, &id, &observation)
+            .record_observed_terminal(&self.admission.execution_id, &id, &observation)
             .await
             .map_err(public_error)?;
         *self.admission.dispatch.lock() = State::default();
@@ -242,37 +261,16 @@ impl Attempt {
 impl Drop for Attempt {
     fn drop(&mut self) {
         if !self.completed {
+            let evidence = self.observation();
             let mut state = self.admission.dispatch.lock();
             state.dropped = true;
             // Store only counts and stable outcome codes; raw usage and content
             // remain out of the coordinator's reconciliation queue.
-            state.evidence = self.observation();
+            state.evidence = evidence;
         }
     }
 }
 
 pub(crate) fn failed(code: &str) -> TerminalOutcome {
     TerminalOutcome::Failed { code: code.into() }
-}
-
-fn usage_evidence(usage: Option<&Usage>, tariff: Option<&FrozenTariff>) -> ExecutionUsage {
-    let usage = usage.filter(|usage| usage.origin != UsageOrigin::Unknown);
-    ExecutionUsage {
-        origin: usage.map_or(UsageOrigin::Unknown, |usage| usage.origin),
-        prompt_tokens: usage.map(|usage| usage.prompt_tokens),
-        completion_tokens: usage.map(|usage| usage.completion_tokens),
-        reasoning_tokens: usage.map(|usage| usage.reasoning_tokens),
-        cache_read_tokens: usage.map(|usage| usage.cache_read_tokens),
-        cache_write_tokens: usage.map(|usage| usage.cache_write_tokens),
-        total_tokens: usage
-            .and_then(|usage| usage.prompt_tokens.checked_add(usage.completion_tokens)),
-        cost_micro_usd: usage.and_then(|usage| {
-            tariff.and_then(|tariff| {
-                tariff
-                    .charge_evidence(usage, PricingSource::Configured)
-                    .charge_micro_usd
-                    .and_then(|value| u64::try_from(value).ok())
-            })
-        }),
-    }
 }

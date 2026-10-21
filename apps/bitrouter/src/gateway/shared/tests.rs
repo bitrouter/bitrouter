@@ -56,7 +56,15 @@ async fn foundation() -> Result<()> {
         publication::exercise(&first, &second).await?;
         super::authentication::tests::exercise(&first, &second).await?;
         admitted::exercise(&first, &second).await?;
-        Box::pin(dispatched::exercise(&first, &second)).await?;
+        // Give the executor campaign its own polling root, as production HTTP
+        // connections do, rather than nesting it inside every foundation frame.
+        let mut executors = tokio::task::JoinSet::new();
+        let inputs = (first.clone(), second.clone());
+        executors.spawn(async move { dispatched::exercise(&inputs.0, &inputs.1).await });
+        executors
+            .join_next()
+            .await
+            .context("missing executor campaign")???;
         Box::pin(super::ownership::tests::exercise(&first, &second)).await?;
         Ok::<(), anyhow::Error>(())
     }

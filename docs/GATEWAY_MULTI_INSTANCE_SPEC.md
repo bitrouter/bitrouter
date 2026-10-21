@@ -545,6 +545,25 @@ delivery requires the authoritative terminal commit and all existing required
 continuation finalizers; a swallowed best-effort settlement error is not this
 durability boundary.
 
+Private per-attempt evidence records the original provider, concrete model, wire
+protocol and frozen tariff before dispatch authorization. It is versioned and
+separate from the public execution DTO. Observed terminal charge evidence uses
+that admitted tariff, excludes raw provider JSON, and commits together with the
+terminal observation and capacity transition. Exact retries preserve the first
+observation, including optional measurements; cancellation must not recompute a
+duration or reprice an already observed terminal. The measured attempt lifetime
+includes reservation and dispatch authorization, so it is not upstream latency.
+
+Attribution is bounded to 64 KiB before reservation. The terminal envelope allows
+two attribution bounds plus 4 KiB: its tariff snapshot and duplicated pricing
+version/unavailability reason are bounded by the admitted attribution, while its
+remaining numeric/enum fields have fixed maximum encodings. This budget must
+remain sufficient for every accepted attribution; a legitimate upstream terminal
+must not become permanently unpersistable because its envelope is larger than
+its preparation record. Older staged rows lacking attribution cannot authorize a
+new dispatch, and absent required terminal facts cannot be projected by inventing
+current pricing or a zero measurement.
+
 An explicitly authorized operator can resolve an unknown attempt with a bounded
 evidence reference and expected revision. The audit records the operator's
 assertion as such; it does not masquerade as a provider observation. Resolution
