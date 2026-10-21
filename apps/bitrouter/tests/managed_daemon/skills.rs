@@ -113,9 +113,29 @@ async fn managed_cli_child_inherits_required_selector_but_waits_for_its_own_skil
         .status
         .success()
     );
-    let output = tokio::time::timeout(Duration::from_secs(20), task.wait_with_output())
-        .await
-        .context("waiting for the approved parent and child CLI to finish")??;
+    let output = match tokio::time::timeout(Duration::from_secs(20), task.wait_with_output()).await
+    {
+        Ok(output) => output?,
+        Err(error) => {
+            let report = client
+                .request(Operation::Status {
+                    name: "continued".into(),
+                    operation_id: Some("required-child-input".into()),
+                })
+                .await;
+            let snapshot = fixture
+                .stored()
+                .await?
+                .snapshot
+                .context("stalled checkpoint")?;
+            anyhow::bail!(
+                "approved parent/child CLI did not finish: {error}; roots={} children={} report={report:?} agents={}",
+                roots.load(Ordering::SeqCst),
+                children.load(Ordering::SeqCst),
+                serde_json::to_string(&snapshot.agents)?
+            );
+        }
+    };
     let snapshot = fixture
         .stored()
         .await?
