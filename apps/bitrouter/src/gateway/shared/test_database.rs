@@ -158,12 +158,26 @@ impl EmptyDatabase {
 }
 
 async fn close_pool(pool: &DatabaseConnection) -> Result<()> {
-    // SQLx Pool::close affects every clone and waits for checked-out connections.
-    // A timeout is a failed cleanup, never permission to DROP a still-live pool.
-    // https://docs.rs/sqlx/0.8.6/sqlx/struct.Pool.html#method.close
-    tokio::time::timeout(ADMIN_TIMEOUT, pool.close_by_ref())
-        .await
-        .context("fixture pool close deadline exceeded")??;
+    ensure!(
+        matches!(pool, DatabaseConnection::SqlxPostgresPoolConnection(_)),
+        "fixture cleanup requires a PostgreSQL pool"
+    );
+    let postgres = pool.get_postgres_connection_pool();
+    // SQLx 0.8.6 can return from close after an in-flight return task puts a
+    // connection into the idle queue. Drain again until size proves closure.
+    // Keep every pass inside one existing deadline; never retry DROP or kill.
+    // https://github.com/launchbadge/sqlx/blob/v0.8.6/sqlx-core/src/pool/inner.rs
+    tokio::time::timeout(ADMIN_TIMEOUT, async {
+        loop {
+            pool.close_by_ref().await?;
+            if postgres.size() == 0 {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .context("fixture pool close deadline exceeded")??;
     Ok(())
 }
 
@@ -274,4 +288,75 @@ fn cleanup_failure_keeps_primary_and_every_cleanup_error() -> Result<()> {
     ensure!(combine_results(Ok(()), vec![Err(anyhow::anyhow!("cleanup only"))]).is_err());
     ensure!(combine_results::<()>(Err(anyhow::anyhow!("primary only")), vec![Ok(())]).is_err());
     combine_results(Ok(()), vec![Ok(())])
+}
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL CREATEDB via BITROUTER_TEST_DATABASE_URL"]
+async fn postgres_fixture_close_waits_for_a_late_pool_return() -> Result<()> {
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+
+    let mut database = EmptyDatabase::create().await?;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        let entered_callback = entered.clone();
+        let release_callback = release.clone();
+        let pool = sea_orm::sqlx::postgres::PgPoolOptions::new()
+            .min_connections(0)
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .acquire_timeout(Duration::from_secs(3))
+            .after_release(move |_, _| {
+                let entered = entered_callback.clone();
+                let release = release_callback.clone();
+                Box::pin(async move {
+                    entered.notify_one();
+                    release.notified().await;
+                    Ok(true)
+                })
+            })
+            .connect_lazy(&database.url)?;
+        let connection = DatabaseConnection::from(pool.clone());
+        // Register before the first await, exactly as connect() does. This
+        // custom pool exists only to control SQLx's asynchronous return path.
+        database.pools.push(connection.clone());
+        let mut checked_out = pool.acquire().await?;
+        // Verify the generated physical database before exercising pool teardown.
+        // https://www.postgresql.org/docs/17/functions-info.html
+        let name = sea_orm::sqlx::query_scalar::<_, String>("SELECT current_database()")
+            .fetch_one(&mut *checked_out)
+            .await?;
+        database.verify_name(&name)?;
+
+        // Run the same return future used by PoolConnection::drop inline, so
+        // the regression retains it and can force the precise interleaving.
+        // https://github.com/launchbadge/sqlx/blob/v0.8.6/sqlx-core/src/pool/connection.rs
+        let mut returning = Box::pin(checked_out.return_to_pool());
+        tokio::select! {
+            () = returning.as_mut() => anyhow::bail!("pool return bypassed its release barrier"),
+            () = entered.notified() => {}
+        }
+        // The return path has passed is_closed() but has not returned its
+        // permit. The close path must wait with an initially empty idle queue.
+        let mut closing = Box::pin(close_pool(&connection));
+        ensure!(futures::poll!(closing.as_mut()).is_pending());
+        ensure!(pool.is_closed());
+        release.notify_one();
+        let ((), closed) = tokio::join!(returning, closing);
+        closed?;
+        ensure!(
+            pool.size() == 0,
+            "fixture close returned with {} live pool connections",
+            pool.size()
+        );
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("late pool return regression deadline exceeded")
+    .and_then(|result| result);
+    // Also unblock a Drop-created return after an early error or timeout.
+    release.notify_one();
+    database.finish(result).await
 }
