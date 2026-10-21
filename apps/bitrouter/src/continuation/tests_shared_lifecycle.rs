@@ -544,14 +544,40 @@ async fn maintenance_cancellation_and_deadline_preserve_unattempted_suffix() -> 
                     "total deadline did not stop the blocked pass"
                 );
             }
+            let interrupted_cursor = native
+                .maintenance_cursor
+                .lock()
+                .map_err(|_| anyhow::anyhow!("maintenance cursor lock poisoned"))?
+                .clone();
+            let interrupted_index = expired
+                .iter()
+                .position(|row| Some(&row.continuation_identity) == interrupted_cursor.as_ref());
             // The first lock stays held. Later rows must progress on the next
             // pass rather than waiting for the first record a second time.
             let next = native
                 .maintain(32)
                 .await
                 .context("unattempted suffix remained behind the blocked first row")?;
-            ensure!(next.scanned == count - 1 && next.scrubbed == u64::try_from(count - 1)?);
-            ensure!(next.failed == 0);
+            let current_cursor = native
+                .maintenance_cursor
+                .lock()
+                .map_err(|_| anyhow::anyhow!("maintenance cursor lock poisoned"))?
+                .clone();
+            ensure!(
+                next.scanned == count - 1
+                    && next.scrubbed == u64::try_from(count - 1)?
+                    && next.failed == 0,
+                "maintenance suffix mismatch: cancel={cancel}, count={count}, \
+                 scanned={}, scrubbed={}, failed={}, purged={}, \
+                 interrupted_cursor={interrupted_cursor:?}, \
+                 interrupted_index={interrupted_index:?}, \
+                 current_cursor={current_cursor:?}, first_identity={}",
+                next.scanned,
+                next.scrubbed,
+                next.failed,
+                next.purged,
+                first.continuation_identity,
+            );
             for row in expired.iter().skip(1) {
                 ensure!(
                     read(&native, &row.continuation_identity)

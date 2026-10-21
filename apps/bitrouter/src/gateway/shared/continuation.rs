@@ -90,6 +90,23 @@ impl SharedContinuationDb {
         self.authority.store().bounded(operation).await
     }
 
+    /// Capture the same absolute budget used by the maintenance timeout.
+    pub(crate) fn deadline(&self) -> tokio::time::Instant {
+        self.authority.store().deadline()
+    }
+
+    /// Use a previously captured deadline without extending its budget.
+    pub(crate) async fn bounded_until<T>(
+        &self,
+        deadline: tokio::time::Instant,
+        operation: impl Future<Output = Result<T>>,
+    ) -> Result<T> {
+        self.authority
+            .store()
+            .bounded_until(deadline, operation)
+            .await
+    }
+
     /// Retry only proven transaction aborts. Recompute ciphertext/time each try.
     pub(crate) async fn retry<T, F, Fut>(&self, operation: F) -> Result<T>
     where

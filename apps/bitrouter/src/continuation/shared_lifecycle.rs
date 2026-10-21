@@ -130,14 +130,26 @@ impl SharedNative {
             "invalid native maintenance batch size"
         );
         let limit = requested.min(RECONCILIATION_BATCH_SIZE);
+        let deadline = self.authority.deadline();
         self.authority
-            .bounded(async {
+            .bounded_until(deadline, async {
+                if tokio::time::Instant::now() >= deadline {
+                    return std::future::pending().await;
+                }
                 let rows = self.scan_due(limit).await?;
                 let mut result = Maintenance {
                     scanned: rows.len(),
                     ..Default::default()
                 };
                 for record in rows {
+                    // Timeout polls its inner future first. A row timeout can become
+                    // ready on the same late wake as this pass's expired deadline.
+                    // Yield to that timer before advancing the cursor or starting
+                    // another row operation; retain the unattempted suffix.
+                    // https://docs.rs/tokio/latest/src/tokio/time/timeout.rs.html
+                    if tokio::time::Instant::now() >= deadline {
+                        return std::future::pending().await;
+                    }
                     let outcome = async {
                         let identity: String = record.try_get("", "identity")?;
                         // Persist only attempted progress, before waiting on
@@ -160,6 +172,9 @@ impl SharedNative {
                             tracing::warn!(error = %error, "shared native maintenance row failed");
                         }
                     }
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return std::future::pending().await;
                 }
                 // Wrap only after exhausting the suffix. An interrupted pass
                 // retains the identity it reached instead of skipping its tail.

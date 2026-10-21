@@ -161,15 +161,16 @@ impl Store {
         &self.namespace
     }
 
-    pub async fn bounded<T>(&self, operation: impl Future<Output = Result<T>>) -> Result<T> {
-        self.bounded_until(
-            tokio::time::Instant::now() + self.transaction_timeout,
-            operation,
-        )
-        .await
+    /// Capture one budget boundary for callers which also guard loop progress.
+    pub(super) fn deadline(&self) -> tokio::time::Instant {
+        tokio::time::Instant::now() + self.transaction_timeout
     }
 
-    async fn bounded_until<T>(
+    pub async fn bounded<T>(&self, operation: impl Future<Output = Result<T>>) -> Result<T> {
+        self.bounded_until(self.deadline(), operation).await
+    }
+
+    pub(super) async fn bounded_until<T>(
         &self,
         deadline: tokio::time::Instant,
         operation: impl Future<Output = Result<T>>,

@@ -1744,3 +1744,48 @@ multi-process acceptance are still required.
 - The v6 executable at `2873200b` predates FSR-01 and is historical only:
   SHA-256 `f14c152a078bfd5d92199d53d81bb9df50cc261b1d87d5f9c3fd7b10be5af86b`.
   Final validation will use a new immutable executable after the ownership repair.
+
+## Candidate repairs and bounded stability (2026-10-21)
+
+- FSR-01 and the stock stalled-reader campaign passed independent review and
+  PostgreSQL execution. The first v7 aggregate passed 201/202 tests; its sole
+  failure was a debug-stack overflow in the aggregate foundation fixture.
+  Heap-pinning its sequential campaign futures preserves the original ownership,
+  assertions, concurrency and 60-second deadline. The marker-free foundation
+  subsequently passed in 14.199s, and again in 14.273s with v8.
+- The next v7 aggregate passed 201/202 but exposed a real guard race: two fresh
+  decisions could lock an unchanged episode fence while retaining different
+  Serializable snapshots, then attempt the same history sequence. The repair
+  advances the existing fence revision inside each fresh guard transaction,
+  after catch-up and before history allocation. Exact replay remains read-only;
+  the retry allowlist remains only database-proven `40001` and `40P01` aborts.
+  A deterministic stale-snapshot regression failed on the old source in 0.436s
+  and passed after the repair in 0.427s. Independent review approved the repair.
+- Source `e0cf0e621f89466506736e7a7282d3d6a6547d9c` produced the immutable v8
+  minimal shared executable with SHA-256
+  `15361fa644576932287f81791ba88aa28ee307ac7c4e01d7c85e9f6860dd6c77`.
+  Its profile is `gateway-shared`, features `db-postgres,multi-instance`, native
+  macOS arm64, Rust 1.97, development optimization with debug/incremental off.
+  The v8 aggregate passed 202/203 in 93.257s, including the repaired guard and
+  all stock process cases. One native-maintenance cancellation/deadline test
+  failed its unattempted-suffix count; that boundary remains under investigation.
+- Eight predeclared stability sets against v8 all passed, 40/40 total, with two
+  test threads and no automatic retries. Each set covers shared tenant/account
+  admission, duplicate/conflicting submissions, outbox ACK-abort replay, guard
+  history/holds/key epochs, and published-tariff cost thresholds. Set durations
+  ranged from 11.475s to 11.804s. These passes do not close the separate
+  maintenance failure or the final aggregate, workspace and performance gates.
+- Hosted CI exposed conditional-import, deprecated test atomic API, rustdoc URL,
+  stale schema and Windows digest-script failures. Reviewed repairs preserve
+  feature isolation, Rust 1.93 compatibility and exact binary digest checking.
+  They are published through `f9467ca7`; hosted validation is still in progress.
+  The Windows digest repair hashes binary stdin and compares inside jq, avoiding
+  filename escaping and native output newline decorations. Local positive and
+  wrong-digest checks passed; actual Windows execution remains a separate gate.
+- The maintenance diagnostic reproduced the old failure in 3.598s: after the
+  deadline, the cursor had advanced to the second of 32 identities and the next
+  pass scanned/scrubbed only 30. The repaired pass captures one absolute deadline
+  and checks it before scanning, advancing a row cursor, or wrapping/completing.
+  It retains the original timeout error and row error accounting. Generic Store
+  polling and retry semantics are unchanged. Independent source review and
+  strict workspace Clippy passed; repaired execution remains pending.
