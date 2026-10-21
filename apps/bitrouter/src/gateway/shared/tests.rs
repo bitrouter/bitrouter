@@ -19,6 +19,7 @@ mod metering;
 mod publication;
 mod races;
 mod refresh;
+mod trajectory;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 struct Counter {

@@ -589,6 +589,30 @@ hide spend. Native request lookup must use the stored canonical binding, never
 caller correlation. The scoped storage adapter does not itself switch serving
 assembly or implement the full projection receiver.
 
+Shared trajectory uses separate namespace-keyed episode, event, request, prefix
+and outbox tables. SQL scopes namespace and owner before history reads or prefix
+resolution; local tables remain independent. Domain helpers borrow the caller's
+Serializable transaction and require whole-transaction rollback on any failure.
+They acquire no gateway locks, commit no nested transaction and perform no
+external I/O. The coordinator must hold the episode fence before mutation.
+
+The storage budget is 4,096 events and 16 MiB for the sum of stored event JSON
+bytes, excluding array delimiters. Metadata is bounded before payload transfer;
+stored events must use canonical JSON so read and append budgets agree. A
+complete candidate batch must fit before insertion. Over-limit history fails
+closed rather than returning a truncated prefix. Outbox JSON has a separate
+1 MiB bound. These are serialized-data bounds, not decoded-heap budgets. Before
+serving integration, admission must reserve terminal event/byte headroom for
+already-started work; storage rejection alone cannot establish dispatch liveness.
+
+Raw starts preserve the existing Started-only exact retry contract. Typed route
+intent and optional guard activation are one reducer-validated batch. Settlement
+and its outbox share the caller's transaction; exact settlement replay rebuilds
+only the prefix preceding the original terminal event, even after later requests.
+Immutable event/status/outbox content must match and delivery state is preserved.
+This persistence layer does not establish retained-epoch correlation, atomic guard
+catch-up, projection receipts or evaluation delivery by itself.
+
 An explicitly authorized operator can resolve an unknown attempt with a bounded
 evidence reference and expected revision. The audit records the operator's
 assertion as such; it does not masquerade as a provider observation. Resolution

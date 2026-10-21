@@ -22,7 +22,7 @@ use super::types::{
 use crate::gateway::routing::workflow::ir::RouteProjection;
 use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
 
-mod episode_entity {
+pub(super) mod episode_entity {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -47,7 +47,7 @@ mod episode_entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-mod event_entity {
+pub(super) mod event_entity {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -70,7 +70,7 @@ mod event_entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-mod request_entity {
+pub(super) mod request_entity {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -113,7 +113,7 @@ mod prefix_entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-mod outbox_entity {
+pub(super) mod outbox_entity {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -228,9 +228,9 @@ pub(crate) struct GuardedRouteResult {
     pub causal_completeness: HistoryCompleteness,
 }
 
-struct GuardedRouteBatch {
-    route_event: TrajectoryEvent,
-    guard_event: Option<TrajectoryEvent>,
+pub(super) struct GuardedRouteBatch {
+    pub(super) route_event: TrajectoryEvent,
+    pub(super) guard_event: Option<TrajectoryEvent>,
     result: GuardedRouteResult,
 }
 
@@ -2133,7 +2133,7 @@ async fn append_guarded_route_in_tx(
     Ok(batch.result)
 }
 
-fn build_guarded_route_batch(
+pub(super) fn build_guarded_route_batch(
     prior_events: &[TrajectoryEvent],
     start: &TrajectoryEvent,
     completeness: HistoryCompleteness,
@@ -2410,7 +2410,7 @@ async fn validate_stored_native_parent(
     Ok(())
 }
 
-fn validate_episode_head(
+pub(super) fn validate_episode_head(
     episode: &episode_entity::Model,
     events: &[TrajectoryEvent],
 ) -> Result<()> {
@@ -2565,7 +2565,7 @@ async fn events_for_episode_in_tx(
     decode_event_history(rows)
 }
 
-fn decode_event_history(rows: Vec<event_entity::Model>) -> Result<Vec<TrajectoryEvent>> {
+pub(super) fn decode_event_history(rows: Vec<event_entity::Model>) -> Result<Vec<TrajectoryEvent>> {
     let mut events = Vec::with_capacity(rows.len());
     for (index, row) in rows.into_iter().enumerate() {
         let event = stored_event(row)?;
@@ -2789,7 +2789,7 @@ async fn update_episode_head(
     Ok(())
 }
 
-fn validate_begin(owner_user_id: &str, input: &BeginRequest) -> Result<()> {
+pub(super) fn validate_begin(owner_user_id: &str, input: &BeginRequest) -> Result<()> {
     validate_event(&input.event)?;
     if input.event.owner_user_id != owner_user_id
         || input.event.episode_id != input.episode.episode_id
@@ -2808,7 +2808,7 @@ fn validate_begin(owner_user_id: &str, input: &BeginRequest) -> Result<()> {
     Ok(())
 }
 
-fn validate_settlement(owner_user_id: &str, settlement: &Settlement) -> Result<()> {
+pub(super) fn validate_settlement(owner_user_id: &str, settlement: &Settlement) -> Result<()> {
     validate_event(&settlement.event)?;
     if settlement.event.owner_user_id != owner_user_id
         || settlement.event.kind != TrajectoryEventKind::RequestSettled
@@ -2823,7 +2823,7 @@ fn validate_settlement(owner_user_id: &str, settlement: &Settlement) -> Result<(
     Ok(())
 }
 
-fn validate_existing_episode(
+pub(super) fn validate_existing_episode(
     existing: &episode_entity::Model,
     episode: &EpisodeStart,
     event: &TrajectoryEvent,
@@ -2846,7 +2846,7 @@ fn validate_episode_start(episode: &EpisodeStart) -> Result<()> {
     validate_opaque(&episode.correlation_source, "correlation_source")
 }
 
-fn validate_new_episode_start(input: &BeginRequest) -> Result<()> {
+pub(super) fn validate_new_episode_start(input: &BeginRequest) -> Result<()> {
     let event_completeness = match input
         .event
         .evidence
@@ -2892,7 +2892,7 @@ fn validate_new_episode_start(input: &BeginRequest) -> Result<()> {
     Ok(())
 }
 
-fn validate_outbox(outbox: &OutboxWrite) -> Result<()> {
+pub(super) fn validate_outbox(outbox: &OutboxWrite) -> Result<()> {
     validate_opaque(&outbox.outbox_id, "outbox_id")?;
     validate_opaque(&outbox.topic, "outbox.topic")?;
     validate_timestamp(&outbox.created_at, "outbox.created_at")?;
@@ -2923,7 +2923,7 @@ async fn insert_outbox(
     Ok(())
 }
 
-fn begin_matches(
+pub(super) fn begin_matches(
     existing: &request_entity::Model,
     episode: &episode_entity::Model,
     start_event: &TrajectoryEvent,
@@ -3006,7 +3006,7 @@ async fn settlement_outbox_matches(
     }
 }
 
-fn stored_request(row: request_entity::Model) -> Result<StoredRequest> {
+pub(super) fn stored_request(row: request_entity::Model) -> Result<StoredRequest> {
     Ok(StoredRequest {
         request_id: row.request_id,
         episode_id: row.episode_id,
@@ -3020,7 +3020,7 @@ fn stored_request(row: request_entity::Model) -> Result<StoredRequest> {
     })
 }
 
-fn stored_episode(row: episode_entity::Model) -> Result<StoredEpisode> {
+pub(super) fn stored_episode(row: episode_entity::Model) -> Result<StoredEpisode> {
     Ok(StoredEpisode {
         episode_id: row.episode_id,
         owner_user_id: row.owner_user_id,
@@ -3053,7 +3053,7 @@ fn first_reducer_failure(events: &[TrajectoryEvent]) -> Option<(Option<String>, 
     None
 }
 
-fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> {
+pub(super) fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> {
     let payload = serde_json::from_str::<super::types::OutboxPayload>(&row.payload_json)
         .context("stored trajectory outbox payload is invalid")?;
     validate_outbox_payload(&payload)?;
@@ -3088,11 +3088,11 @@ fn stored_outbox_batch_item(row: outbox_entity::Model) -> OutboxBatchItem {
     }
 }
 
-fn validate_owner(owner_user_id: &str) -> Result<()> {
+pub(super) fn validate_owner(owner_user_id: &str) -> Result<()> {
     validate_opaque(owner_user_id, "owner_user_id")
 }
 
-fn validate_opaque(value: &str, field: &str) -> Result<()> {
+pub(super) fn validate_opaque(value: &str, field: &str) -> Result<()> {
     if value.trim().is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
         anyhow::bail!("{field} must be a non-empty bounded value")
     }
@@ -3105,7 +3105,7 @@ fn validate_timestamp(value: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
-fn event_kind_name(kind: TrajectoryEventKind) -> &'static str {
+pub(super) fn event_kind_name(kind: TrajectoryEventKind) -> &'static str {
     match kind {
         TrajectoryEventKind::RequestStarted => "request_started",
         TrajectoryEventKind::RouteIntentRecorded => "route_intent_recorded",
@@ -3115,7 +3115,7 @@ fn event_kind_name(kind: TrajectoryEventKind) -> &'static str {
     }
 }
 
-fn completeness_name(completeness: HistoryCompleteness) -> &'static str {
+pub(super) fn completeness_name(completeness: HistoryCompleteness) -> &'static str {
     match completeness {
         HistoryCompleteness::Complete => "complete",
         HistoryCompleteness::Incomplete => "incomplete",
@@ -3132,7 +3132,7 @@ fn parse_completeness(value: &str) -> Result<HistoryCompleteness> {
     }
 }
 
-fn request_status_name(status: RequestStatus) -> &'static str {
+pub(super) fn request_status_name(status: RequestStatus) -> &'static str {
     match status {
         RequestStatus::Started => "started",
         RequestStatus::Settled => "settled",

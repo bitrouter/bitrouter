@@ -50,6 +50,7 @@ impl MigratorTrait for SharedMigrator {
             Box::new(Initial),
             Box::new(NativeContinuations),
             Box::new(SharedMetering),
+            Box::new(SharedTrajectory),
         ]
     }
 
@@ -250,6 +251,113 @@ impl MigrationTrait for SharedMetering {
         manager
             .get_connection()
             .execute_unprepared("DROP TABLE gateway_shared_metering_requests")
+            .await?;
+        Ok(())
+    }
+}
+
+struct SharedTrajectory;
+
+impl MigrationName for SharedTrajectory {
+    fn name(&self) -> &str {
+        "m20261021_000004_shared_trajectory"
+    }
+}
+
+#[async_trait::async_trait]
+impl MigrationTrait for SharedTrajectory {
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        // All natural identities and secondary indexes include the deployment
+        // namespace. Local trajectory tables are not altered or copied.
+        // https://www.postgresql.org/docs/current/ddl-constraints.html
+        manager.get_connection().execute_unprepared(
+            "CREATE TABLE gateway_shared_trajectory_episodes (
+                namespace varchar(64) NOT NULL,
+                episode_id varchar(512) NOT NULL,
+                owner_user_id varchar(512) NOT NULL,
+                correlation_digest varchar(512) NOT NULL,
+                correlation_key_id varchar(128) NOT NULL,
+                correlation_source varchar(512) NOT NULL,
+                history_completeness varchar(32) NOT NULL,
+                next_sequence bigint NOT NULL CHECK (next_sequence > 0),
+                first_captured_at varchar(64) NOT NULL,
+                last_captured_at varchar(64) NOT NULL,
+                closed_at varchar(64),
+                latest_request_id varchar(512),
+                PRIMARY KEY (namespace, episode_id)
+             );
+             CREATE INDEX gateway_shared_trajectory_episode_owner
+                 ON gateway_shared_trajectory_episodes (namespace, owner_user_id, episode_id);
+             CREATE TABLE gateway_shared_trajectory_events (
+                namespace varchar(64) NOT NULL,
+                event_id varchar(512) NOT NULL,
+                owner_user_id varchar(512) NOT NULL,
+                episode_id varchar(512) NOT NULL,
+                request_id varchar(512),
+                sequence bigint NOT NULL CHECK (sequence > 0),
+                kind varchar(32) NOT NULL,
+                event_json text NOT NULL,
+                content_digest varchar(128) NOT NULL,
+                captured_at varchar(64) NOT NULL,
+                PRIMARY KEY (namespace, event_id),
+                UNIQUE (namespace, episode_id, sequence)
+             );
+             CREATE INDEX gateway_shared_trajectory_history
+                 ON gateway_shared_trajectory_events (namespace, owner_user_id, episode_id, sequence);
+             CREATE TABLE gateway_shared_trajectory_requests (
+                namespace varchar(64) NOT NULL,
+                request_id varchar(512) NOT NULL,
+                owner_user_id varchar(512) NOT NULL,
+                episode_id varchar(512) NOT NULL,
+                start_event_id varchar(512) NOT NULL,
+                settlement_event_id varchar(512),
+                settlement_outbox_id varchar(512),
+                full_input_digest varchar(512) NOT NULL,
+                native_parent_id varchar(512),
+                protocol varchar(512) NOT NULL,
+                status varchar(32) NOT NULL,
+                PRIMARY KEY (namespace, request_id)
+             );
+             CREATE INDEX gateway_shared_trajectory_request_episode
+                 ON gateway_shared_trajectory_requests (namespace, owner_user_id, episode_id, request_id);
+             CREATE TABLE gateway_shared_trajectory_prefix_index (
+                namespace varchar(64) NOT NULL,
+                owner_user_id varchar(512) NOT NULL,
+                full_input_digest varchar(512) NOT NULL,
+                episode_id varchar(512) NOT NULL,
+                ambiguous boolean NOT NULL,
+                PRIMARY KEY (namespace, owner_user_id, full_input_digest)
+             );
+             CREATE INDEX gateway_shared_trajectory_prefix_episode
+                 ON gateway_shared_trajectory_prefix_index (namespace, owner_user_id, episode_id);
+             CREATE TABLE gateway_shared_trajectory_outbox (
+                namespace varchar(64) NOT NULL,
+                outbox_id varchar(512) NOT NULL,
+                owner_user_id varchar(512) NOT NULL,
+                topic varchar(512) NOT NULL,
+                payload_json text NOT NULL,
+                payload_digest varchar(128) NOT NULL,
+                attempts bigint NOT NULL CHECK (attempts >= 0),
+                created_at varchar(64) NOT NULL,
+                delivered_at varchar(64),
+                PRIMARY KEY (namespace, outbox_id)
+             );
+             CREATE INDEX gateway_shared_trajectory_outbox_pending
+                 ON gateway_shared_trajectory_outbox (namespace, delivered_at, attempts, created_at, outbox_id);"
+        ).await?;
+        Ok(())
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .get_connection()
+            .execute_unprepared(
+                "DROP TABLE gateway_shared_trajectory_outbox;
+             DROP TABLE gateway_shared_trajectory_prefix_index;
+             DROP TABLE gateway_shared_trajectory_requests;
+             DROP TABLE gateway_shared_trajectory_events;
+             DROP TABLE gateway_shared_trajectory_episodes;",
+            )
             .await?;
         Ok(())
     }
