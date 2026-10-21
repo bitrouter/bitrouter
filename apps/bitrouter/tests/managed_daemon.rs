@@ -114,6 +114,7 @@ impl Fixture {
             .env("HOME", self.home.path())
             .env("BITROUTER_HOME", self.home.path())
             .env("NO_COLOR", "1")
+            .env("RUST_LOG", "bitrouter_orchestrator::core::session::preparation_work=debug,bitrouter::evolution::runtime=debug")
             .env("BITROUTER_TEST_DECISION_KEY", "fixture")
             .env(
                 "BITROUTER_TEST_AGENT_TOKEN",

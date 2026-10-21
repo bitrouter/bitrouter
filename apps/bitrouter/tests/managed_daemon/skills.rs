@@ -128,11 +128,16 @@ async fn managed_cli_child_inherits_required_selector_but_waits_for_its_own_skil
                 .await?
                 .snapshot
                 .context("stalled checkpoint")?;
+            let agents = snapshot.agents.values().map(|agent| {
+                json!({"agent":agent.agent_id,"turn":agent.turn.as_ref().map(|turn|json!({"status":turn.status,"answer":turn.final_answer,"step":turn.steps.last().map(|step|json!({"id":step.step_id,"preparation":step.preparation_work.last()}))}))})
+            }).collect::<Vec<_>>();
+            let log = std::fs::read(fixture.home.path().join("daemon.log"))?;
+            let tail = String::from_utf8_lossy(&log[log.len().saturating_sub(16_384)..]);
             anyhow::bail!(
-                "approved parent/child CLI did not finish: {error}; roots={} children={} report={report:?} agents={}",
+                "approved parent/child CLI did not finish: {error}; roots={} children={} report={report:?} agents={} daemon log={tail}",
                 roots.load(Ordering::SeqCst),
                 children.load(Ordering::SeqCst),
-                serde_json::to_string(&snapshot.agents)?
+                serde_json::to_string(&agents)?
             );
         }
     };
