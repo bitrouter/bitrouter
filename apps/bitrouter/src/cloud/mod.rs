@@ -293,6 +293,7 @@ mod tests {
 
     fn target_for_origin(origin: &str) -> RoutingTarget {
         RoutingTarget {
+            registry: None,
             provider_name: crate::gateway::providers::hosted::PROVIDER_ID.to_owned(),
             service_id: "gpt-4o".to_owned(),
             api_base: origin.to_owned(),

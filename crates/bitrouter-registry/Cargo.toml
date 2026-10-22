@@ -10,12 +10,13 @@ rust-version.workspace = true
 
 [dependencies]
 serde.workspace = true
-serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
+serde_json = { workspace = true, features = ["raw_value"] }
+registry-json.workspace = true
 thiserror.workspace = true
 chrono.workspace = true
 url.workspace = true
 http.workspace = true
-jsonschema = { version = "0.47.0", default-features = false, features = ["arbitrary-precision"] }
+jsonschema = { version = "0.47.0", default-features = false }
 num-bigint = "0.4"
 num-rational = "0.4"
 num-traits = "0.2"

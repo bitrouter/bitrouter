@@ -71,7 +71,7 @@ pub fn zero_config() -> Config {
 /// files or network. OAuth/native providers have no variable and are omitted.
 /// The application chooses the catalog used for reload/onboarding hints.
 pub fn zero_config_env_var_providers(
-    catalog: Option<&bitrouter_ai::catalog::types::RegistryData>,
+    catalog: Option<&crate::gateway::catalog::RegistryData>,
 ) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = builtin::all()
         .iter()

@@ -1,5 +1,6 @@
 //! JSON-compatible YAML with exact numeric lexemes and bounded alias expansion.
 
+use registry_json as serde_json;
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::sync::Arc;
@@ -141,9 +142,19 @@ fn scalar(text: &str) -> Result<Value, RegistryError> {
                 return Err(invalid("Non-finite YAML numbers are not supported"));
             }
             // Parse the original decimal lexeme directly, never through f64.
-            Ok(text
-                .parse::<serde_json::Number>()
-                .map_or_else(|_| Value::String(text.into()), Value::Number))
+            if ::serde_json::from_str::<&::serde_json::value::RawValue>(text)
+                .ok()
+                .is_some_and(|raw| {
+                    raw.get()
+                        .as_bytes()
+                        .first()
+                        .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
+                })
+            {
+                crate::document::parse_json(text.as_bytes())
+            } else {
+                Ok(Value::String(text.into()))
+            }
         }
     }
 }

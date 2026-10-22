@@ -1,5 +1,6 @@
 //! Credential-isolated, bounded GET feeds. No endpoint or credential discovery.
 
+use registry_json as serde_json;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -369,7 +370,7 @@ fn error(code: &'static str, message: &str) -> RegistryError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use registry_json::json;
 
     #[test]
     fn pagination_has_explicit_terminal_states_and_no_host_changes() -> Result<(), RegistryError> {

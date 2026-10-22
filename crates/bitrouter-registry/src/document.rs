@@ -1,5 +1,7 @@
 //! Bounded, duplicate-key rejecting admission with open extension vocabularies.
 
+use ::serde_json as strict_json;
+use registry_json as serde_json;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::OnceLock;
@@ -152,7 +154,8 @@ impl Document {
             ));
         }
         let schema = validator()?;
-        if let Err(error) = schema.validate(&value) {
+        let schema_view = crate::json::schema_view(&value)?;
+        if let Err(error) = schema.validate(&schema_view) {
             // A schema error's Display includes the rejected value. Keep only
             // its path here; source input can contain confidential metadata.
             return Err(RegistryError::invalid(
@@ -204,7 +207,8 @@ fn validator() -> Result<&'static jsonschema::Validator, RegistryError> {
     static VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> = OnceLock::new();
     VALIDATOR
         .get_or_init(|| {
-            let schema: Value = serde_json::from_str(SCHEMA).map_err(|e| e.to_string())?;
+            let schema: strict_json::Value =
+                strict_json::from_str(SCHEMA).map_err(|e| e.to_string())?;
             // Local-only schema; no remote references or network retrievers.
             // https://docs.rs/jsonschema/0.47.0/jsonschema/fn.validator_for.html
             jsonschema::validator_for(&schema).map_err(|e| e.to_string())
@@ -224,7 +228,7 @@ pub fn parse_json(bytes: &[u8]) -> Result<Value, RegistryError> {
             "Document exceeds the decoded byte limit",
         ));
     }
-    let raw: &serde_json::value::RawValue = serde_json::from_slice(bytes)
+    let raw: &strict_json::value::RawValue = strict_json::from_slice(bytes)
         .map_err(|_| RegistryError::invalid("", "Invalid or trailing JSON data"))?;
     let value = value_from_raw(raw, 0, &std::cell::Cell::new(0))?;
     validate_resources(&value)?;
@@ -232,7 +236,7 @@ pub fn parse_json(bytes: &[u8]) -> Result<Value, RegistryError> {
 }
 
 fn value_from_raw(
-    raw: &serde_json::value::RawValue,
+    raw: &strict_json::value::RawValue,
     depth: usize,
     nodes: &std::cell::Cell<usize>,
 ) -> Result<Value, RegistryError> {
@@ -254,14 +258,14 @@ fn value_from_raw(
     // https://docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html
     match raw.get().as_bytes().first() {
         Some(b'{' | b'[') => {
-            let mut decoder = serde_json::Deserializer::from_str(raw.get());
+            let mut decoder = strict_json::Deserializer::from_str(raw.get());
             serde::Deserializer::deserialize_any(&mut decoder, RawContainer { depth, nodes })
                 .map_err(|_| invalid())
         }
-        Some(b'"') => serde_json::from_str::<String>(raw.get())
+        Some(b'"') => strict_json::from_str::<String>(raw.get())
             .map(Value::String)
             .map_err(|_| invalid()),
-        Some(b't' | b'f') => serde_json::from_str::<bool>(raw.get())
+        Some(b't' | b'f') => strict_json::from_str::<bool>(raw.get())
             .map(Value::Bool)
             .map_err(|_| invalid()),
         Some(b'n') => Ok(Value::Null),
@@ -290,7 +294,7 @@ impl<'de> Visitor<'de> for RawContainer<'_> {
             if object.contains_key(&key) {
                 return Err(serde::de::Error::custom("duplicate object key"));
             }
-            let raw: &'de serde_json::value::RawValue = access.next_value()?;
+            let raw: &'de strict_json::value::RawValue = access.next_value()?;
             let value = value_from_raw(raw, self.depth + 1, self.nodes)
                 .map_err(serde::de::Error::custom)?;
             object.insert(key, value);
@@ -299,7 +303,7 @@ impl<'de> Visitor<'de> for RawContainer<'_> {
     }
     fn visit_seq<A: SeqAccess<'de>>(self, mut access: A) -> Result<Value, A::Error> {
         let mut values = Vec::new();
-        while let Some(raw) = access.next_element::<&'de serde_json::value::RawValue>()? {
+        while let Some(raw) = access.next_element::<&'de strict_json::value::RawValue>()? {
             values.push(
                 value_from_raw(raw, self.depth + 1, self.nodes)
                     .map_err(serde::de::Error::custom)?,

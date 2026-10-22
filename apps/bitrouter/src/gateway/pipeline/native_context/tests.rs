@@ -112,6 +112,7 @@ impl NativePrivateContextPolicy for FailAfterWrite {
 
 fn target() -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: "fixture".into(),
         service_id: "served".into(),
         api_base: "https://example.invalid".into(),

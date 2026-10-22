@@ -1219,6 +1219,7 @@ fn grant() -> OwnershipGrant {
 
 fn target(provider: &str) -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         chat_google_extensions: false,
         provider_name: provider.into(),
         service_id: "fixture-model".into(),

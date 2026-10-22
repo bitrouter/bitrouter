@@ -1778,6 +1778,7 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     table.insert(
         "gpt-5.5",
         vec![RoutingTarget {
+            registry: None,
             provider_name: "mock".to_string(),
             service_id: "gpt-5.5".to_string(),
             api_base: "http://unused.invalid".to_string(),

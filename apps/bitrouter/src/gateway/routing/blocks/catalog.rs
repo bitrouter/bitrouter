@@ -61,7 +61,10 @@ pub(crate) async fn request_compatible(
     }
     let table = ConfigRoutingTable::from_config(stable);
     let mut prefs = resolution.prefs;
-    prefs.require_capabilities = required_capabilities(preview.require_generation_prompt()?);
+    let prompt = preview.require_generation_prompt()?;
+    prefs.require_capabilities = required_capabilities(prompt);
+    prefs.registry_requirements =
+        Some(crate::gateway::catalog::execution::RequestRequirements::generation(prompt));
     prefs.inbound_protocol = ctx.inbound_protocol();
     for model in models {
         match table.route_resolved(&model, &prefs, ctx.caller()).await {
@@ -70,13 +73,9 @@ pub(crate) async fn request_compatible(
                 // evidence, not an exhaustive denylist. A new treatment needs
                 // positive support for every required capability on every hop.
                 if !chain.iter().all(|target| {
-                    config
-                        .providers
-                        .get(&target.provider_name)
-                        .is_some_and(|provider| {
-                            prefs.require_capabilities.iter().all(|capability| {
-                                provider.model_supports_capability(&target.service_id, *capability)
-                            })
+                    crate::gateway::catalog::execution::validate_generation(target, prompt).is_ok()
+                        && prefs.require_capabilities.iter().all(|capability| {
+                            target.model_constraints.capabilities.contains(capability)
                         })
                 }) {
                     return Ok(false);
@@ -222,8 +221,63 @@ fn target_contract(config: &Config, target: &RoutingTarget) -> Result<Value> {
         "chat_supports_stream_options": target.chat_supports_stream_options,
         "chat_google_extensions": target.chat_google_extensions,
         "reasoning_effort": target.reasoning_effort,
-        "capabilities": metadata.map(|model| &model.capabilities),
+        "capabilities": target.model_constraints.capabilities,
+        "limits": target.model_constraints.token_limits,
+        "registry_provider_contract": provider.registry.as_ref().map(|raw| digest(&raw.to_string())).transpose()?,
+        "registry_contract": target.registry.as_ref().map(|selected| json!({"interface":selected.interface.to_string(),"auth":selected.auth.to_string(),"provider":selected.provider_id,"native_model":selected.provider_model_id,"billing":selected.billing,"verified_profile":selected.verified_profile})),
         "pricing": metadata.map(|model| format!("{:?}", model.pricing)),
         "timeouts": format!("{:?}", provider.timeouts)}),
     )
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn registry_preview_and_digest_cover_alternative_native_offers() -> Result<()> {
+        let mut raw = crate::gateway::catalog::tests::document("a-low");
+        raw["data"]["providers"][0]["models"][0]["interfaces"] = registry_json::json!([{"protocol":"responses","operation":"generation","capabilities":["reasoning"],"reasoning_effort":{"levels":["low"]}}]);
+        let mut second = raw["data"]["providers"][0]["models"][0].clone();
+        second["provider_model_id"] = registry_json::json!("b-high");
+        second["interfaces"][0]["reasoning_effort"]["levels"] = registry_json::json!(["high"]);
+        raw["data"]["providers"][0]["models"]
+            .as_array_mut()
+            .context("offers missing")?
+            .push(second);
+        let data = crate::gateway::catalog::decode::from_slice(&registry_json::to_vec(&raw)?)?;
+        let mut config = Config::default();
+        crate::providers::registry::apply::apply_registry(&mut config, &data);
+        let home = tempfile::tempdir()?;
+        let runtime = crate::policy_lock::PolicyRuntime::new(
+            &config,
+            Some(&home.path().join("bitrouter.yaml")),
+            None,
+            Default::default(),
+            None,
+        )
+        .await?;
+        let policies = runtime.routing_snapshot();
+        let prompt = serde_json::from_value(
+            json!({"model":"org/model","messages":[],"tools":[],"params":{"reasoning_effort":"high"},"stream":false}),
+        )?;
+        let ctx = PipelineContext::new(PipelineRequest::new(
+            "org/model",
+            CallerContext::local(),
+            prompt,
+        ));
+        assert!(request_compatible(&config, &policies, "org/model", &ctx).await?);
+        let table = ConfigRoutingTable::from_config(config.clone());
+        let before = route_contract(&config, &table, &policies, "org/model").await?;
+        let provider = config
+            .providers
+            .get_mut("fixture")
+            .context("provider missing")?;
+        provider.registry.as_mut().context("raw provider missing")?["models"][1]["interfaces"][0]
+            ["limits"] = registry_json::json!({"max_output_tokens":321});
+        let table = ConfigRoutingTable::from_config(config.clone());
+        let after = route_contract(&config, &table, &policies, "org/model").await?;
+        assert_ne!(before, after);
+        Ok(())
+    }
 }

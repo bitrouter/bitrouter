@@ -728,6 +728,7 @@ dependencies = [
  "base64 0.22.1",
  "bitrouter-ai",
  "bitrouter-guardrails",
+ "bitrouter-registry",
  "bitrouter-sdk",
  "bytes",
  "chrono",
@@ -750,6 +751,8 @@ dependencies = [
  "ignore",
  "jsonschema",
  "keyring",
+ "num-rational",
+ "num-traits",
  "opentelemetry",
  "opentelemetry-http",
  "opentelemetry-otlp",
@@ -775,6 +778,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
+ "serde_json_lenient",
  "sha2 0.11.0",
  "shell-words",
  "similar",
@@ -839,6 +843,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "serde_json_lenient",
  "tempfile",
  "thiserror 2.0.18",
  "time",
@@ -1717,6 +1722,7 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
+ "serde_json_lenient",
  "sha2 0.11.0",
  "tar",
  "tempfile",
@@ -2921,9 +2927,7 @@ dependencies = [
  "getrandom 0.3.4",
  "idna",
  "itoa",
- "jsonschema-macros",
  "jsonschema-regex",
- "num-bigint",
  "num-cmp",
  "num-traits",
  "percent-encoding",
@@ -2933,35 +2937,6 @@ dependencies = [
  "serde_json",
  "unicode-general-category",
  "uuid-simd",
-]
-
-[[package]]
-name = "jsonschema-macros"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33814349f9eb1e2f5814207c40d92413098d4d57d0fb5b5972b1c47d63a79137"
-dependencies = [
- "jsonschema-macros-core",
- "proc-macro2",
-]
-
-[[package]]
-name = "jsonschema-macros-core"
-version = "0.47.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bc971df1f0042bff8020f1db975da867b56e11c519821e6e573f489dd909a94"
-dependencies = [
- "fancy-regex",
- "indexmap 2.14.0",
- "jsonschema-regex",
- "percent-encoding",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "referencing",
- "regex",
- "serde_json",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -4832,6 +4807,19 @@ dependencies = [
  "serde",
  "serde_core",
  "zmij",
+]
+
+[[package]]
+name = "serde_json_lenient"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e033097bf0d2b59a62b42c18ebbb797503839b26afdda2c4e1415cb6c813540"
+dependencies = [
+ "indexmap 2.14.0",
+ "itoa",
+ "memchr",
+ "ryu",
+ "serde",
 ]
 
 [[package]]

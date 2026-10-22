@@ -58,6 +58,10 @@ otel-grpc = [
 ]
 
 [dependencies]
+registry-json.workspace = true
+bitrouter-registry.workspace = true
+num-rational = "0.4"
+num-traits = "0.2"
 bitrouter-sdk.workspace = true
 async-stream.workspace = true
 eventsource-stream.workspace = true

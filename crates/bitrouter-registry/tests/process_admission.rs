@@ -1,3 +1,4 @@
+use registry_json as serde_json;
 use std::io::{BufRead, Write};
 use std::process::{Command, Stdio};
 

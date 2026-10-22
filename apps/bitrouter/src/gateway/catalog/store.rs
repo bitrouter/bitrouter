@@ -5,15 +5,14 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use bitrouter_ai::catalog::types::RegistryData;
+use super::RegistryData;
 
 /// One complete provider/model snapshot, with its fetch timestamp.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CatalogSnapshot {
-    /// Unix seconds when both artifacts were fetched.
+    /// Unix seconds when the complete document was downloaded and admitted.
     pub fetched_at: u64,
-    /// The complete parsed pair of artifacts.
-    #[serde(deserialize_with = "super::decode::deserialize")]
+    /// UI projection together with the complete admitted raw document.
     pub data: RegistryData,
 }
 
@@ -45,7 +44,7 @@ pub enum StoreError {
 pub trait CatalogStore: Send + Sync {
     /// Load this source without network discovery.
     fn load(&self, source: &str) -> Result<Option<CatalogSnapshot>, StoreError>;
-    /// Save the complete validated pair before acknowledging durability.
+    /// Save the complete validated document before acknowledging durability.
     fn save(&self, source: &str, snapshot: &CatalogSnapshot) -> Result<Durability, StoreError>;
 }
 

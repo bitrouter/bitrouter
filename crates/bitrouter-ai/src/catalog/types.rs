@@ -1,20 +1,8 @@
-//! Parsed shape of the public registry distribution artifacts.
+//! Internal catalog projections for application metadata and local configuration.
 //!
-//! Source of truth: the public registry in <https://github.com/bitrouter/bitrouter>.
-//! It publishes two deterministic JSON files under `dist/`, each an envelope
-//! `{ "data": [ … ] }`:
-//!
-//! - `providers.json` — the provider view: one entry per provider, each model
-//!   carrying its dist-resolved `api_protocol` + `rate_limits` (the source
-//!   YAML's glob patterns are expanded by the registry build, so bitrouter
-//!   reads concrete values and runs no glob engine).
-//! - `models.json` — the model view: one entry per canonical model. bitrouter
-//!   consumes `data[].id` as the authoritative canonical vocabulary; the
-//!   per-model `providers[]` reverse index is for other consumers.
-//!
-//! The structs below model only the fields bitrouter consumes; unknown fields
-//! are ignored (no `deny_unknown_fields`) so the registry can add fields
-//! without breaking this consumer.
+//! These closed types are not a Registry v1 wire parser. The first-party reader
+//! admits and retains a complete bitrouter-registry Document, then projects
+//! understood metadata here. Executable interface semantics remain independent.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -23,7 +11,7 @@ use serde::Deserialize;
 use crate::types::ModelCompatibility;
 use crate::types::{ApiProtocol, Capability, ProtocolList};
 
-/// The distribution envelope shared by both dist files: `{ "data": [ … ] }`.
+/// Legacy internal projection envelope; not a Registry v1 wire document.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Envelope<T> {
     /// The list of entries.
@@ -34,15 +22,14 @@ pub struct Envelope<T> {
 /// plus the canonical model vocabulary.
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryData {
-    /// Every provider entry from `providers.json`.
+    /// Understood UI metadata for every admitted provider.
     pub providers: Vec<RegistryProvider>,
-    /// Every canonical model id from `models.json`.
+    /// Understood UI metadata for the independent curated recommendation list.
     pub canonical: Vec<CanonicalModel>,
 }
 
-/// The wire protocol a provider serves, in the registry's vocabulary. Maps onto
-/// bitrouter's [`ApiProtocol`] at merge time: `openai`→Chat Completions,
-/// `anthropic`→Messages, `responses`→Responses.
+/// Legacy internal UI vocabulary. Registry v1 uses pure protocol names and
+/// projects them here only after admission; execution uses [`ApiProtocol`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryProtocol {
@@ -145,6 +132,8 @@ pub enum RegistryAccess {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegistryAuthKind {
+    /// Explicitly unauthenticated invocation; no credential may be inferred.
+    None,
     /// `Authorization: Bearer <env>`.
     Bearer,
     /// `<header>: <env>` plus any constant `extra_headers`.
@@ -301,7 +290,7 @@ impl RegistryProvider {
     pub fn env_credential_var(&self) -> Option<String> {
         if matches!(
             self.auth.as_ref().map(|a| a.kind),
-            Some(RegistryAuthKind::Oauth | RegistryAuthKind::Native)
+            Some(RegistryAuthKind::None | RegistryAuthKind::Oauth | RegistryAuthKind::Native)
         ) {
             return None;
         }

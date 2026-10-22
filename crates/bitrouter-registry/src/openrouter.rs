@@ -9,6 +9,7 @@ use crate::{
     document::{RegistryError, canonical_id, integer},
     mapping::{Observation, normalize},
 };
+use registry_json as serde_json;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 

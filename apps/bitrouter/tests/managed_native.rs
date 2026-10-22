@@ -73,6 +73,7 @@ fn app(content: Vec<Content>) -> Result<Arc<App>, Box<dyn std::error::Error>> {
     routing.insert(
         "fixture-model",
         vec![RoutingTarget {
+            registry: None,
             provider_name: "fixture".into(),
             service_id: "fixture-model".into(),
             api_base: "https://example.invalid".into(),

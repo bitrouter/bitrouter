@@ -1,5 +1,6 @@
 //! Bounded JSON Pointer normalization, without implicit coercion or passthrough.
 
+use registry_json as serde_json;
 use std::collections::{BTreeMap, BTreeSet};
 
 use num_rational::BigRational;

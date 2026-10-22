@@ -74,7 +74,7 @@ pub fn generate(root: &Path, out_dir: &Path) -> Result<()> {
     let providers = document
         .providers()
         .iter()
-        .map(|p| serde_json::from_value::<ProviderEntry>(p.clone()))
+        .map(bitrouter_registry::json::project::<ProviderEntry>)
         .collect::<std::result::Result<Vec<_>, _>>()?;
     let groups = group_by_lab(&models)?;
     let totals = Totals {

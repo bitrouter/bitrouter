@@ -1,5 +1,6 @@
 //! Real TLS HTTP exchanges; keys and certificates are fixture-only public data.
 use bitrouter_registry::feed::Transport;
+use registry_json as serde_json;
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use tokio::{
@@ -48,9 +49,14 @@ async fn fixture(
     let signing_key = rcgen::KeyPair::generate()?;
     let cert = params.signed_by(&signing_key, &issuer)?.der().clone();
     let key = rustls::pki_types::PrivatePkcs8KeyDer::from(signing_key.serialize_der());
-    let config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert], key.into())?;
+    // Workspace feature unification can enable both Rustls crypto providers.
+    // https://docs.rs/rustls/0.23/rustls/struct.ServerConfig.html#method.builder_with_provider
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()?
+    .with_no_client_auth()
+    .with_single_cert(vec![cert], key.into())?;
     let acceptor = TlsAcceptor::from(Arc::new(config));
     let requests = Arc::new(Mutex::new(Vec::new()));
     let recorded = Arc::clone(&requests);

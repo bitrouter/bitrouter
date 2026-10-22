@@ -18,7 +18,7 @@
   "community": false,
   "display_name": "GitHub Copilot",
   "doc_url": "https://docs.github.com/en/copilot/reference/api-reference/copilot-api-endpoints",
-  "kind": "gateway",
+  "kind": "aggregator",
   "metadata": {
     "headquarters": "US",
     "name": "GitHub",

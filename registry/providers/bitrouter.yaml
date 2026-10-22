@@ -11,7 +11,7 @@
   "community": false,
   "display_name": "BitRouter Cloud",
   "doc_url": "https://docs.bitrouter.ai",
-  "kind": "cloud",
+  "kind": "aggregator",
   "metadata": {
     "headquarters": "US",
     "name": "BitRouter",

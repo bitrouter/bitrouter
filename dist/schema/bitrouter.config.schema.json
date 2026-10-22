@@ -1498,6 +1498,14 @@
           "$ref": "#/$defs/PatternMap_for_RateLimit",
           "description": "Glob-prefix `rate_limits` pattern list, keyed per matched pattern."
         },
+        "registry_endpoint_profile": {
+          "default": null,
+          "description": "Operator-verified processing/project profile for registry tariffs.\nRegistry declarations alone do not establish deployment eligibility.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tags": {
           "default": [],
           "description": "Free-form tags, used by `RoutingPrefs.require_tags` filtering.",
@@ -1758,6 +1766,11 @@
     "RegistryConfig": {
       "description": "Runtime public registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",
       "properties": {
+        "auto_refresh": {
+          "default": true,
+          "description": "Download compatible updates in the background. Startup uses local data.",
+          "type": "boolean"
+        },
         "enabled": {
           "default": true,
           "description": "Whether to fetch the registry and merge its BYOK providers into the\nrouting table. Default `true`. Also gated by\n[`inherit_defaults`](Config::inherit_defaults) — either being false\ndisables the merge.",
@@ -1771,9 +1784,12 @@
           "type": "array"
         },
         "url": {
-          "default": "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry",
-          "description": "Base URL of the registry `dist/` artifacts. Defaults to\n[`DEFAULT_REGISTRY_URL`]. Point it at a pinned `reg-<timestamp>` tag or\nan internal mirror for reproducible deployments.",
-          "type": "string"
+          "default": null,
+          "description": "Exact complete document URL, defaulting to [`DEFAULT_REGISTRY_URL`].\nAn immutable Git commit URL pins a snapshot; a custom mirror is isolated\nfrom the packaged default and every other source's cache.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "type": "object"

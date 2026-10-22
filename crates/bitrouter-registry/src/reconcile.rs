@@ -1,5 +1,6 @@
 //! Atomic source reconciliation, scoped ownership, and monotonic replay control.
 
+use registry_json as serde_json;
 use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};

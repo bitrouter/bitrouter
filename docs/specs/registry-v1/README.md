@@ -587,6 +587,11 @@ they do not define a cross-model numeric budget or grant unlisted support.
 understood by the selected codec, or the interface is unavailable. Future
 execution-affecting members also require an interface-level feature guard;
 purely descriptive additions belong under `extensions`.
+For `chat_completions`, the current flat members are `token_limit_field`
+(`max_tokens` or `max_completion_tokens`), `supports_store`,
+`supports_stream_options`, and `google_extensions` (booleans). These fields
+apply only to that selected interface. Unknown members or values cannot be
+silently discarded when deciding whether it is executable.
 
 The source may declare `defaults.interfaces` once per provider. A model omitting
 `interfaces` in source inherits that whole ordered array; an explicit array
@@ -1423,6 +1428,14 @@ may finish against their captured view. Persist the full accepted document and
 report unavailable persistence, and keep the new valid in-memory view active.
 A valid identical download also advances `checked_at`. No download or cache
 operation rewrites `as_of` or provider/model evidence timestamps.
+
+A locally configured provider `models` list is a complete explicit routing
+inventory: its model constraints, protocols, and prices remain authoritative.
+An empty local provider stub may instead opt into the registry inventory.
+Registry-only refresh uses the last applied local configuration, never pending
+file edits, and shares serialization with ordinary configuration reload. A
+candidate waiting for that serialization is not yet a successful check and
+must not become the cache or schedule the next 24-hour interval.
 
 After success, the next automatic check is due 24 hours later. After any
 download/admission failure, retain the current document and retry once after

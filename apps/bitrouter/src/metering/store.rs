@@ -1159,6 +1159,7 @@ impl MeteringStore {
                         )
                     })?;
                     ChargeEvidence {
+                        exact_registry_charge: None,
                         tariff_snapshot: None,
                         status: ChargeStatus::Computed,
                         charge_micro_usd: Some(charge),

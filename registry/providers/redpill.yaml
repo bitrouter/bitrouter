@@ -4,7 +4,7 @@
   "weight": 1,
   "display_name": "RedPill (Phala Network)",
   "doc_url": "https://docs.redpill.ai/get-started/introduction",
-  "kind": "gateway",
+  "kind": "aggregator",
   "metadata": {
     "headquarters": "SG",
     "name": "RedPill",

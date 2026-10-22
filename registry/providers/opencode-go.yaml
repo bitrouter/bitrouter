@@ -9,7 +9,7 @@
   "billing": "subscription",
   "display_name": "opencode go",
   "doc_url": "https://opencode.ai/docs/go/",
-  "kind": "gateway",
+  "kind": "aggregator",
   "metadata": {
     "headquarters": "US",
     "name": "OpenCode",

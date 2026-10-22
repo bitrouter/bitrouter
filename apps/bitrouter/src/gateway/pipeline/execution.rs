@@ -2094,6 +2094,13 @@ impl Pipeline {
             .map(crate::gateway::model::capabilities::required_capabilities)
             .unwrap_or_default();
         prefs.operation = ctx.operation();
+        prefs.registry_requirements = ctx
+            .generation_prompt()
+            .map(crate::gateway::catalog::execution::RequestRequirements::generation)
+            .or_else(|| {
+                ctx.decision_request()
+                    .map(crate::gateway::catalog::execution::RequestRequirements::decisions)
+            });
         // Carry the inbound protocol so the table can prefer a native,
         // same-protocol upstream for each chosen target.
         prefs.inbound_protocol = ctx.inbound_protocol();
@@ -3319,6 +3326,7 @@ mod policy_effort_target_tests {
 
     fn target(name: &str, levels: Option<Vec<ReasoningEffort>>) -> RoutingTarget {
         RoutingTarget {
+            registry: None,
             provider_name: name.to_string(),
             service_id: "model".to_string(),
             api_base: "https://example.test/v1".to_string(),

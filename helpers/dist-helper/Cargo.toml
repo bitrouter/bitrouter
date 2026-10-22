@@ -12,6 +12,7 @@ publish = false
 dist = false
 
 [dependencies]
+registry-json.workspace = true
 semver = "1"
 bitrouter-ai.workspace = true
 bitrouter-registry.workspace = true

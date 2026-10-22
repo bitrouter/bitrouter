@@ -277,6 +277,10 @@ pub struct EffectivePricingRates {
 /// Auditable result of normalizing usage and applying effective pricing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChargeEvidence {
+    /// Exact Registry v1 USD rational amount. Integer micro-USD remains a
+    /// rounded operational estimate, not a substitute for this amount.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exact_registry_charge: Option<ExactRegistryCharge>,
     /// Frozen wire/profile/tariff evidence; absent for legacy or explicit offline calculations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tariff_snapshot: Option<crate::metering::tariff::FrozenTariff>,
@@ -294,6 +298,16 @@ pub struct ChargeEvidence {
     pub pricing_version: String,
     /// Stable reason when a charge could not be computed.
     pub unknown_reason: Option<String>,
+}
+
+/// Lossless, nonnegative rational currency value for one proven scope.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExactRegistryCharge {
+    pub currency: String,
+    pub numerator: String,
+    pub denominator: String,
+    /// `attempt` estimates must not be mistaken for complete logical totals.
+    pub scope: String,
 }
 
 /// A `(provider, service_id)` → `ModelPricing` table. In Phase 4 this is built
@@ -519,6 +533,7 @@ pub fn calculate_charge_evidence(
         };
 
     ChargeEvidence {
+        exact_registry_charge: None,
         tariff_snapshot: None,
         status: ChargeStatus::Computed,
         charge_micro_usd: Some(charge_micro_usd),
@@ -626,6 +641,7 @@ fn unknown_evidence(
     reason: &str,
 ) -> ChargeEvidence {
     ChargeEvidence {
+        exact_registry_charge: None,
         tariff_snapshot: None,
         status: ChargeStatus::Unknown,
         charge_micro_usd: None,

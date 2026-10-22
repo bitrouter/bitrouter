@@ -1,10 +1,31 @@
 use bitrouter_registry::document::{
     Document, ReaderPolicy, RegistryError, SPEC_REVISION, parse_json,
 };
+use registry_json as serde_json;
 use serde_json::{Value, json};
 
 fn minimal() -> Value {
     json!({"version":1,"spec_revision":SPEC_REVISION,"as_of":"2026-10-23T00:00:00Z","data":{"models":[],"providers":[]}})
+}
+
+#[test]
+fn schema_checks_positive_weight_without_binary64_underflow() -> Result<(), RegistryError> {
+    for (raw, valid) in [
+        ("0.00000000000000000001e-308", true),
+        ("-0.00000000000000000001e-308", false),
+        ("-0e-308", false),
+    ] {
+        let mut value = minimal();
+        let mut p = provider();
+        p["weight"] = parse_json(raw.as_bytes())?;
+        value["data"]["providers"] = json!([p]);
+        assert_eq!(
+            Document::from_value(value, &ReaderPolicy::default()).is_ok(),
+            valid,
+            "{raw}"
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -211,5 +232,19 @@ fn duplicate_keys_depth_trailing_data_and_excessive_decimals_fail_normally()
         "1.00000000000000000000000000001"
     );
     assert!(parse_json(b"1e999999999").is_err());
+    Ok(())
+}
+
+#[test]
+fn known_compatibility_types_are_validated_but_future_profiles_remain_open()
+-> Result<(), RegistryError> {
+    let mut value = minimal();
+    let mut p = provider();
+    p["models"] = json!([{"provider_model_id":"native","status":"active","interfaces":[{"protocol":"chat_completions","operation":"generation","compatibility":{"supports_store":"invalid"}}]}]);
+    value["data"]["providers"] = json!([p]);
+    assert!(Document::from_value(value.clone(), &ReaderPolicy::default()).is_err());
+    value["data"]["providers"][0]["models"][0]["interfaces"][0]["protocol_profile"] =
+        json!("future");
+    Document::from_value(value, &ReaderPolicy::default())?;
     Ok(())
 }

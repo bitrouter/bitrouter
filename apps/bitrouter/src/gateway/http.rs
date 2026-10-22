@@ -2204,6 +2204,7 @@ mod tests {
         table.insert(
             "gpt-5.5",
             vec![RoutingTarget {
+                registry: None,
                 provider_name: "openai-codex".to_string(),
                 service_id: "gpt-5.5".to_string(),
                 api_base: "https://example.invalid".to_string(),
@@ -2252,6 +2253,7 @@ mod tests {
         table.insert(
             "gpt-5.5",
             vec![RoutingTarget {
+                registry: None,
                 provider_name: "openai-codex".to_string(),
                 service_id: "gpt-5.5".to_string(),
                 api_base: "https://example.invalid".to_string(),
@@ -2319,6 +2321,7 @@ mod tests {
         table.insert(
             "gpt-5.5",
             vec![RoutingTarget {
+                registry: None,
                 provider_name: "test-provider".into(),
                 service_id: "gpt-5.5".into(),
                 api_base: "https://example.invalid".into(),

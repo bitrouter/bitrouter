@@ -310,6 +310,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         .on_hop_end(
             &context,
             &RoutingTarget {
+                registry: None,
                 provider_name: "provider".into(),
                 service_id: "model".into(),
                 api_base: "https://example.invalid".into(),

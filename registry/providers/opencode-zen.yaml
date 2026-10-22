@@ -12,7 +12,7 @@
   "community": false,
   "display_name": "opencode zen",
   "doc_url": "https://opencode.ai/docs/zen/",
-  "kind": "gateway",
+  "kind": "aggregator",
   "metadata": {
     "headquarters": "US",
     "name": "OpenCode",

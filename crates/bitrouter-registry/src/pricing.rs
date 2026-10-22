@@ -1,5 +1,6 @@
 //! Exact proportional charges. Native codecs must prove counter semantics.
 
+use registry_json as serde_json;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
@@ -210,7 +211,7 @@ fn unavailable(message: &str) -> RegistryError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use registry_json::json;
 
     #[test]
     fn decisions_are_proportional_and_unknown_attempts_never_become_free()

@@ -5,6 +5,7 @@
 
 pub mod document;
 pub mod feed;
+pub mod json;
 pub mod mapping;
 pub mod openrouter;
 pub mod pricing;

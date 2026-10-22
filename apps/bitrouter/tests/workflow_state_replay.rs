@@ -324,6 +324,7 @@ fn computed_usage(
         final_charge_micro_usd: Some(charge_micro_usd),
         charge_status: ChargeStatus::Computed,
         charge_evidence: Some(ChargeEvidence {
+            exact_registry_charge: None,
             tariff_snapshot: None,
             status: ChargeStatus::Computed,
             charge_micro_usd: Some(charge_micro_usd as i64),

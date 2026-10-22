@@ -2,9 +2,10 @@
 //! installation can list providers and resolve login/models without a cache;
 //! fetched metadata takes precedence when it is available.
 
+use super::RegistryData;
 use crate::config::RegistryConfig;
 use anyhow::Result;
-use bitrouter_ai::catalog::types::RegistryData;
+use registry_json as serde_json;
 
 /// OAuth providers have no credential env var, so the generic registry merge
 /// cannot auto-add them. A saved CLI login supplies the activation signal.
@@ -20,7 +21,7 @@ fn enable_with_store(
 ) {
     if !config.inherit_defaults
         || !config.registry.enabled
-        || config.registry.url != RegistryConfig::default().url
+        || config.registry.source() != RegistryConfig::default().source()
     {
         return;
     }
@@ -32,10 +33,10 @@ fn enable_with_store(
 }
 
 fn bundled() -> Result<RegistryData> {
-    Ok(super::decode::from_slice(include_bytes!(concat!(
+    super::decode::from_slice(include_bytes!(concat!(
         env!("OUT_DIR"),
         "/provider_registry.json"
-    )))?)
+    )))
 }
 
 pub(crate) fn provider(id: &str) -> Result<Option<crate::providers::entry::ProviderEntry>> {
@@ -67,195 +68,76 @@ pub(crate) fn supplement(
     remote: Option<RegistryData>,
 ) -> Result<Option<RegistryData>> {
     // An operator's custom registry or explicit disable remains authoritative.
-    if !registry.enabled || registry.url != RegistryConfig::default().url {
+    if !registry.enabled || registry.source() != RegistryConfig::default().source() {
         return Ok(remote);
     }
-    let defaults = bundled()?;
-    let Some(mut data) = remote else {
-        return Ok(Some(defaults));
-    };
-    for provider in defaults.providers {
-        if let Some(published) = data.providers.iter_mut().find(|p| p.name == provider.name) {
-            for model in provider.models {
-                if !published.models.iter().any(|m| m.id == model.id) {
-                    published.models.push(model);
-                }
-            }
-        } else {
-            data.providers.push(provider);
-        }
+    if remote.is_some() {
+        return Ok(remote);
     }
-    for model in defaults.canonical {
-        if let Some(published) = data.canonical.iter_mut().find(|m| m.id == model.id) {
-            // Older caches retained only identity. Restore missing capacities
-            // offline while keeping every explicit value from the remote catalog.
-            published.max_input_tokens = published.max_input_tokens.or(model.max_input_tokens);
-            published.max_output_tokens = published.max_output_tokens.or(model.max_output_tokens);
-            published.context_window = published.context_window.or(model.context_window);
-        } else {
-            data.canonical.push(model);
-        }
+    let metadata: serde_json::Value = serde_json::from_slice(include_bytes!(concat!(
+        env!("OUT_DIR"),
+        "/registry_source.json"
+    )))?;
+    if metadata["source"] != registry.source() {
+        return Ok(None);
     }
-    Ok(Some(data))
+    Ok(Some(bundled()?))
+}
+
+/// Native/OAuth handlers have compiled behavior. Remote metadata cannot alter
+/// their public parameter contract or select a handler for another provider.
+pub(crate) fn supported_auth(provider: &str, auth: &serde_json::Value) -> bool {
+    if !matches!(
+        provider,
+        "bitrouter" | "openai-codex" | "claude-code" | "github-copilot" | "supergrok"
+    ) {
+        return false;
+    }
+    bitrouter_registry::document::Document::parse(
+        include_bytes!(concat!(env!("OUT_DIR"), "/provider_registry.json")),
+        &bitrouter_registry::document::ReaderPolicy::default(),
+    )
+    .ok()
+    .is_some_and(|doc| {
+        doc.providers().iter().any(|p| {
+            p["name"] == provider
+                && [
+                    "kind",
+                    "handler",
+                    "params",
+                    "env",
+                    "header",
+                    "extra_headers",
+                ]
+                .iter()
+                .all(|key| p["auth"].get(key) == auth.get(key))
+        })
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use anyhow::Context;
-
+    use registry_json as serde_json;
     #[test]
-    fn offline_catalog_preserves_all_committed_providers() -> Result<()> {
-        let committed: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../../dist/registry/providers.json"))?;
-        let data = supplement(&RegistryConfig::default(), None)?.context("no offline catalog")?;
-        let actual: std::collections::BTreeSet<_> = data
-            .providers
-            .iter()
-            .map(|provider| provider.name.as_str())
-            .collect();
-        let expected: std::collections::BTreeSet<_> = committed["data"]
+    fn handler_contract_ignores_descriptive_extensions_but_not_parameters() -> anyhow::Result<()> {
+        let document = super::bundled()?
+            .document
+            .ok_or_else(|| anyhow::anyhow!("no document"))?;
+        let provider = document["data"]["providers"]
             .as_array()
-            .context("no provider array")?
-            .iter()
-            .filter_map(|provider| provider["name"].as_str())
-            .collect();
-        assert_eq!(actual, expected);
-        for provider in data
-            .providers
-            .iter()
-            .filter(|provider| provider.is_active() && provider.is_public())
-        {
-            crate::providers::builtin::entry_from_registry(provider)?;
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn subscription_login_defaults_are_available_without_a_cache() -> Result<()> {
-        let data = supplement(&RegistryConfig::default(), None)?
-            .ok_or_else(|| anyhow::anyhow!("no defaults"))?;
-        for id in ["openai-codex", "claude-code"] {
-            assert!(provider(id)?.is_some());
-            assert!(
-                data.providers
-                    .iter()
-                    .any(|p| p.name == id && !p.models.is_empty())
-            );
-        }
-        assert!(provider("custom")?.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn stored_login_activates_subscription_without_a_provider_config_entry() -> Result<()> {
-        use crate::gateway::providers::auth::credentials::Credential;
-        use crate::gateway::providers::auth::file::snapshot::CredentialStore;
-        let dir = tempfile::tempdir()?;
-        let mut store = CredentialStore::load(dir.path().join("credentials.json"))?;
-        let mut config = crate::config::Config::default();
-        enable_with_store(&mut config, &store);
-        assert!(!config.providers.contains_key("openai-codex"));
-        store.set("openai-codex", "default", Credential::api_key("test-only"))?;
-        enable_with_store(&mut config, &store);
-        crate::providers::registry::apply::apply_registry(&mut config, &bundled()?);
-        let provider = config
-            .providers
-            .get("openai-codex")
-            .ok_or_else(|| anyhow::anyhow!("provider not activated"))?;
-        assert!(provider.active);
-        assert!(!provider.api_base.is_empty());
-        assert!(!provider.models.is_empty());
-        assert!(!config.providers.contains_key("claude-code"));
-        Ok(())
-    }
-
-    #[test]
-    fn supplementation_keeps_remote_metadata_and_is_idempotent() -> Result<()> {
-        let mut remote = bundled()?;
-        let first = remote
-            .providers
-            .first_mut()
-            .ok_or_else(|| anyhow::anyhow!("empty defaults"))?;
-        let id = first.name.clone();
-        first.api_base = Some("https://example.invalid/new-endpoint".into());
-        first.models.clear();
-        let once = supplement(&RegistryConfig::default(), Some(remote))?
-            .ok_or_else(|| anyhow::anyhow!("no registry"))?;
-        let provider = once
-            .providers
-            .iter()
-            .find(|p| p.name == id)
-            .ok_or_else(|| anyhow::anyhow!("lost provider"))?;
-        assert_eq!(
-            provider.api_base.as_deref(),
-            Some("https://example.invalid/new-endpoint")
-        );
-        assert!(!provider.models.is_empty());
-        let twice = supplement(&RegistryConfig::default(), Some(once.clone()))?;
-        assert_eq!(
-            serde_json::to_value(twice)?,
-            serde_json::to_value(Some(once))?
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn old_identity_only_cache_recovers_bundled_capacities() -> Result<()> {
-        let defaults = bundled()?;
-        let metadata = defaults
-            .canonical
-            .iter()
-            .find(|model| model.max_output_tokens.is_some())
-            .context("no output capacity")?;
-        let mut old = defaults.clone();
-        for model in &mut old.canonical {
-            model.max_input_tokens = None;
-            model.max_output_tokens = None;
-            model.context_window = None;
-        }
-        let repaired = supplement(&RegistryConfig::default(), Some(old))?.context("no registry")?;
-        let model = repaired
-            .canonical
-            .iter()
-            .find(|model| model.id == metadata.id)
-            .context("lost model")?;
-        assert_eq!(model.max_output_tokens, metadata.max_output_tokens);
-        let mut remote = repaired;
-        let model = remote
-            .canonical
-            .iter_mut()
-            .find(|model| model.id == metadata.id)
-            .context("lost model")?;
-        model.max_output_tokens = Some(12345);
-        let retained =
-            supplement(&RegistryConfig::default(), Some(remote))?.context("no registry")?;
-        assert_eq!(
-            retained
-                .canonical
-                .iter()
-                .find(|model| model.id == metadata.id)
-                .context("lost model")?
-                .max_output_tokens,
-            Some(12345)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn disabled_and_custom_registries_do_not_receive_defaults() -> Result<()> {
-        for registry in [
-            RegistryConfig {
-                enabled: false,
-                ..Default::default()
-            },
-            RegistryConfig {
-                url: "https://example.invalid/private".into(),
-                ..Default::default()
-            },
-        ] {
-            assert!(supplement(&registry, None)?.is_none());
-        }
+            .and_then(|p| p.iter().find(|p| p["name"] == "openai-codex"))
+            .ok_or_else(|| anyhow::anyhow!("no OAuth provider"))?;
+        let mut auth = provider["auth"].clone();
+        auth["extensions"] = serde_json::json!({"description":"future harmless metadata"});
+        assert!(super::supported_auth("openai-codex", &auth));
+        auth["extra_headers"] = serde_json::json!({"future-header":"changed"});
+        assert!(!super::supported_auth("openai-codex", &auth));
+        auth.as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("auth is not object"))?
+            .remove("extra_headers");
+        auth["params"]["future_parameter"] = serde_json::json!(true);
+        assert!(!super::supported_auth("openai-codex", &auth));
+        assert!(!super::supported_auth("other-provider", &provider["auth"]));
         Ok(())
     }
 }

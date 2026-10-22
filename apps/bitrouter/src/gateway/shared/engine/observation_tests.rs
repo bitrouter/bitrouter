@@ -141,6 +141,7 @@ impl Fixture {
 
 fn target() -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: "provider".into(),
         service_id: "model".into(),
         api_base: "https://example.invalid".into(),

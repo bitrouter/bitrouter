@@ -3818,7 +3818,7 @@
         },
         "billing": "usage",
         "display_name": "Atlas Cloud",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "datacenters": [
             "US"
@@ -5825,7 +5825,7 @@
         "community": false,
         "display_name": "BitRouter Cloud",
         "doc_url": "https://docs.bitrouter.ai",
-        "kind": "cloud",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
           "name": "BitRouter",
@@ -7060,7 +7060,7 @@
         "billing": "usage",
         "display_name": "BytePlus ModelArk",
         "doc_url": "https://docs.byteplus.com/en/docs/ModelArk",
-        "kind": "cloud",
+        "kind": "aggregator",
         "metadata": {
           "datacenters": [
             "SG"
@@ -7474,7 +7474,7 @@
         "community": false,
         "display_name": "GitHub Copilot",
         "doc_url": "https://docs.github.com/en/copilot/reference/api-reference/copilot-api-endpoints",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
           "name": "GitHub",
@@ -7784,7 +7784,7 @@
         "billing": "usage",
         "display_name": "GMI Cloud",
         "doc_url": "https://docs.gmicloud.ai/inference-engine/api-reference/llm-api-reference",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
           "name": "GMI Cloud",
@@ -8531,7 +8531,7 @@
         },
         "billing": "usage",
         "display_name": "Novita AI",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
           "name": "Novita AI",
@@ -9232,7 +9232,17 @@
                 }
               },
               {
+                "extensions": {
+                  "verification_url": "https://developers.openai.com/api/docs/guides/decisions"
+                },
+                "input_modalities": [
+                  "text",
+                  "image"
+                ],
                 "operation": "decisions",
+                "output_modalities": [
+                  "structured"
+                ],
                 "pricing": {
                   "context_tiers": [
                     {
@@ -9255,6 +9265,11 @@
                   }
                 },
                 "protocol": "decisions",
+                "question_types": [
+                  "predicate",
+                  "choice",
+                  "score"
+                ],
                 "rate_limits": {
                   "requests_per_minute": 60
                 }
@@ -9562,7 +9577,7 @@
         "billing": "subscription",
         "display_name": "opencode go",
         "doc_url": "https://opencode.ai/docs/go/",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
           "name": "OpenCode",
@@ -9858,7 +9873,7 @@
         "community": false,
         "display_name": "opencode zen",
         "doc_url": "https://opencode.ai/docs/zen/",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
           "name": "OpenCode",
@@ -10696,7 +10711,7 @@
         "community": false,
         "display_name": "OpenRouter",
         "doc_url": "https://openrouter.ai/docs/api-reference/overview",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
           "name": "OpenRouter",
@@ -14376,7 +14391,7 @@
         },
         "billing": "usage",
         "display_name": "Phala",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "US",
           "name": "Phala",
@@ -14454,7 +14469,7 @@
         },
         "billing": "usage",
         "display_name": "Baidu Qianfan (International)",
-        "kind": "cloud",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "CN",
           "name": "Baidu AI Cloud",
@@ -14499,7 +14514,7 @@
         },
         "billing": "usage",
         "display_name": "Baidu Qianfan (China)",
-        "kind": "cloud",
+        "kind": "aggregator",
         "metadata": {
           "datacenters": [
             "CN"
@@ -14526,7 +14541,7 @@
         "billing": "usage",
         "display_name": "RedPill (Phala Network)",
         "doc_url": "https://docs.redpill.ai/get-started/introduction",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "SG",
           "name": "RedPill",
@@ -14603,7 +14618,7 @@
         },
         "billing": "usage",
         "display_name": "SiliconFlow",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "headquarters": "CN",
           "name": "SiliconFlow",
@@ -14732,7 +14747,7 @@
         },
         "billing": "usage",
         "display_name": "SiliconFlow (China)",
-        "kind": "gateway",
+        "kind": "aggregator",
         "metadata": {
           "datacenters": [
             "CN"

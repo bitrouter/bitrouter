@@ -1,5 +1,6 @@
 //! Registry v1 source transactions and deterministic public artifacts.
 
+use registry_json as serde_json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};

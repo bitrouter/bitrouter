@@ -3,7 +3,7 @@
   "billing": "usage",
   "weight": 1,
   "display_name": "Baidu Qianfan (China)",
-  "kind": "cloud",
+  "kind": "aggregator",
   "metadata": {
     "datacenters": [
       "CN"

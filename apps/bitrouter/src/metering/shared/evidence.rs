@@ -76,6 +76,7 @@ impl Attribution {
         facts.provider_id = "p".into();
         facts.model_id = "m".into();
         facts.tariff = Some(FrozenTariff {
+            registry_price: None,
             protocol: facts.protocol.clone(),
             endpoint_profile: "fixture".into(),
             tariff_profile: Some("fixture".into()),

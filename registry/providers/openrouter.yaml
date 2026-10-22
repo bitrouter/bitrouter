@@ -12,7 +12,7 @@
   "community": false,
   "display_name": "OpenRouter",
   "doc_url": "https://openrouter.ai/docs/api-reference/overview",
-  "kind": "gateway",
+  "kind": "aggregator",
   "metadata": {
     "headquarters": "US",
     "name": "OpenRouter",

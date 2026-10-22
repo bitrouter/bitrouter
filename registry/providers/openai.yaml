@@ -450,6 +450,12 @@
         {
           "protocol": "decisions",
           "operation": "decisions",
+          "question_types": ["predicate", "choice", "score"],
+          "input_modalities": ["text", "image"],
+          "output_modalities": ["structured"],
+          "extensions": {
+            "verification_url": "https://developers.openai.com/api/docs/guides/decisions"
+          },
           "rate_limits": {
             "requests_per_minute": 60
           },

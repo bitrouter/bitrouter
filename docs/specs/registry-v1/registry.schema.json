@@ -502,6 +502,30 @@
         "protocol",
         "operation"
       ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {"const": "chat_completions"},
+              "protocol_profile": {"const": "default"}
+            },
+            "required": ["protocol"]
+          },
+          "then": {
+            "properties": {
+              "compatibility": {
+                "properties": {
+                  "token_limit_field": {"type": "string"},
+                  "supports_store": {"type": "boolean"},
+                  "supports_stream_options": {"type": "boolean"},
+                  "google_extensions": {"type": "boolean"},
+                  "extensions": {"type": "object"}
+                }
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": true
     },
     "offer": {
