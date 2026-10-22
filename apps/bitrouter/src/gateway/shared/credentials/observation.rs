@@ -24,8 +24,9 @@ impl Observation {
         CURRENT.try_with(Clone::clone).ok()
     }
 
-    /// Only an awaited successful release may expose a version. A refresh records
-    /// its committed replacement, never the pre-refresh version or a later read.
+    /// Only an awaited successful snapshot read or lease release may expose a
+    /// version. A refresh records its committed replacement, never the
+    /// pre-refresh version or a later read.
     pub fn record(&self, stamp: &CredentialStamp) -> Result<(), StoreError> {
         let mut observed = self.0.lock().map_err(|_| StoreError::Unavailable)?;
         if observed

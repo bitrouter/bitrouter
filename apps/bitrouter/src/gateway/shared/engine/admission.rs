@@ -13,6 +13,9 @@ use super::{
 };
 use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 
+#[cfg(test)]
+mod contention_tests;
+
 pub(super) struct Principal {
     pub(super) id: String,
     pub(super) tenant: String,
@@ -47,7 +50,16 @@ impl Engine {
         // Retry only the transaction, using the same retained service identity.
         self.store()
             .retry(|| async {
-                let tx = self.store().begin().await?;
+                // The locked tenant serializes quota and idempotency decisions;
+                // head/principal/owner locks fence their corresponding writers.
+                // Read Committed observes those rows after a lock wait. A fixed
+                // Serializable snapshot would repeatedly abort when queued
+                // admissions or heartbeat updates commit before our lock.
+                // https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED
+                let tx = self
+                    .store()
+                    .begin_with_isolation(IsolationLevel::ReadCommitted)
+                    .await?;
                 let head = self.authority.fence(&tx).await?;
                 let principal = authenticate(&tx, request.key_hash).await?;
                 let mut tenant: Stored<Tenant> = self
@@ -94,6 +106,8 @@ impl Engine {
                     head.value.revision() == request.revision,
                     Rejection::AuthorityChanged
                 );
+                #[cfg(test)]
+                contention_tests::before_owner().await?;
                 let due = self.live_owner(&tx, true).await?;
                 ensure!(
                     tenant.value.active < tenant.value.limits.concurrent_executions,
@@ -323,7 +337,10 @@ pub(super) async fn authenticate(
     validate_digest(key_hash)?;
     let row = api_keys::Entity::find()
         .filter(api_keys::Column::KeyHash.eq(key_hash))
-        .lock_exclusive()
+        // Readers may coexist; FOR SHARE still excludes revocation and all
+        // policy updates. FOR KEY SHARE would not fence non-key changes.
+        // https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS
+        .lock_shared()
         .one(tx)
         .await?
         .ok_or(Rejection::Unauthorized)?;

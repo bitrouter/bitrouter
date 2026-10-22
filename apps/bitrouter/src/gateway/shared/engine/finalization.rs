@@ -5,7 +5,7 @@ use bitrouter_ai::gateway::execution::{
     AttemptState, ExecutionState, ExecutionUsage, GatewayExecution, GatewayTerminalEvent,
     TerminalObservation, TerminalOutcome,
 };
-use sea_orm::DatabaseTransaction;
+use sea_orm::{DatabaseTransaction, IsolationLevel};
 use sha2::{Digest, Sha256};
 
 use crate::metering::shared::evidence::validate_outcome;
@@ -91,7 +91,14 @@ impl Engine {
         validate_outcome(outcome)?;
         self.store()
             .retry(|| async {
-                let tx = self.store().begin().await?;
+                // Tenant and execution are exclusively locked before accounting;
+                // the episode fence orders terminal publication with guards.
+                // Waiting completions must observe the latest locked counters.
+                // https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED
+                let tx = self
+                    .store()
+                    .begin_with_isolation(IsolationLevel::ReadCommitted)
+                    .await?;
                 self.authority.fence(&tx).await?;
                 let prior: Stored<Execution> = self
                     .store()

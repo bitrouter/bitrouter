@@ -4,6 +4,89 @@ use super::*;
 use crate::gateway::shared::engine::EpisodeFence;
 
 #[tokio::test]
+#[ignore = "requires PostgreSQL CREATEDB privilege"]
+async fn postgres_read_committed_terminal_invalidates_guard_snapshot() -> Result<()> {
+    let mut database = EmptyDatabase::create().await?;
+    let result = tokio::time::timeout(Duration::from_secs(30), async {
+        let f = Fixture::new(&mut database).await?;
+        let root = prompt("terminal-snapshot");
+        let root_id = f.admit().await?;
+        f.route(&root_id, &root, AT).await?;
+        let binding = f.binding(&root_id).await?;
+        let child_id = f.admit().await?;
+        let setup = f.observer.begin().await?;
+        let fence = f
+            .engine
+            .episode_fence(&setup, &binding, Store::now(&setup).await?)
+            .await?;
+        let key = fence.key().to_owned();
+        setup.rollback().await?;
+        let stale = f.observer.begin().await?;
+        let result = async {
+            let before: Stored<EpisodeFence> = f
+                .observer
+                .read(&stale, Kind::EpisodeFence, &key)
+                .await?
+                .context("missing fence")?;
+            ensure!(before.value.pending.is_empty());
+            // The production terminal writer uses Read Committed. Its atomic
+            // episode-fence update must still invalidate the older Serializable
+            // reader before that reader can authorize a new guarded start.
+            f.engine
+                .finish_with_inputs(
+                    &root_id,
+                    &TerminalOutcome::Failed {
+                        code: "fixture_before_dispatch".into(),
+                    },
+                    None,
+                )
+                .await?;
+            let error = f
+                .engine
+                .episode_fence(&stale, &binding, Store::now(&stale).await?)
+                .await
+                .err()
+                .context("stale terminal fence remained lockable")?;
+            ensure!(is_serialization_abort(&error));
+            Ok(())
+        }
+        .await;
+        let rollback = stale.rollback().await.map_err(anyhow::Error::from);
+        combine_results(result, vec![rollback])?;
+        let pending: Stored<EpisodeFence> = f
+            .observer
+            .get(Kind::EpisodeFence, &key)
+            .await?
+            .context("missing pending fence")?;
+        ensure!(pending.value.pending.contains(&root_id));
+        let next = f.route(&child_id, &continued(&root), LATER).await?;
+        ensure!(next.0.episode_id == binding.episode_id);
+        ensure!(next.1.snapshot.health.settled_request_count == 1);
+        let settlement = next
+            .0
+            .prior_events
+            .iter()
+            .find(|event| {
+                event.kind == TrajectoryEventKind::RequestSettled
+                    && event.request_id.as_deref() == Some(binding.request_id.as_str())
+            })
+            .context("new guard omitted the committed terminal")?;
+        ensure!(settlement.sequence < next.1.route_sequence);
+        let settled: Stored<EpisodeFence> = f
+            .observer
+            .get(Kind::EpisodeFence, &key)
+            .await?
+            .context("missing settled fence")?;
+        ensure!(settled.value.pending.is_empty());
+        Ok(())
+    })
+    .await
+    .context("terminal snapshot campaign deadline")
+    .and_then(|result| result);
+    database.finish(result).await
+}
+
+#[tokio::test]
 #[ignore = "requires BITROUTER_TEST_DATABASE_URL with PostgreSQL CREATEDB privilege"]
 async fn postgres_new_guard_invalidates_an_already_taken_episode_snapshot() -> Result<()> {
     let mut database = EmptyDatabase::create().await?;
