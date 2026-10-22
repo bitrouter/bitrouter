@@ -1,7 +1,7 @@
 # Registry v1 delivery and conformance plan
 
 Status: **design only; implementation not started.** Contract revision:
-[`1.0.0-beta.1`](REGISTRY_V1_SPEC.md). Date: 2026-10-22.
+[`1.0.0-beta.2`](REGISTRY_V1_SPEC.md). Date: 2026-10-22.
 
 This work stacks on [#990](https://github.com/bitrouter/bitrouter/pull/990),
 `codex/gateway-multi-instance` at
@@ -49,10 +49,15 @@ Their success today would not establish v1 conformance.
   disk cache. Avoid `#[serde(other)]` if it discards the original string.
 - Decode unsupported records without activating them. Do not put an unknown
   protocol into an implicit default generation adapter.
+- Include protocol profiles and native question types in the open interface
+  contract. Unknown profiles disable only the affected interface. Return stable,
+  scoped compatibility errors with truthful upgrade guidance; bound parsing and
+  mapping resources so untrusted data cannot terminate the host.
 - Add the synthetic old-reader/new-data cases before replacing current catalog
   types. Keep private cache changes distinct from the public wire version.
 
-Exit: C01–C06 pass against standalone fixtures; no runtime default switches yet.
+Exit: C01–C06 and C39 pass against standalone fixtures; no runtime default
+switches yet. Process-boundary survival checks follow in P4.
 
 ### P2 — Data migration and independent inventories
 
@@ -63,9 +68,14 @@ Exit: C01–C06 pass against standalone fixtures; no runtime default switches ye
 - Replace `api_protocol`, `protocol_endpoints`, and `pricing_by_protocol` with
   ordered interfaces. Preserve effective endpoint overrides, compatibility
   settings, reasoning effort, rate limits, and Decisions tariff applicability.
-- Introduce provider-native primary keys, optional canonical bindings, explicit
+- Introduce provider-native primary keys, explicit `canonical_id` bindings, explicit
   offer status, `billing: usage`, and scoped source ownership. Existing manually
   authored records begin manually owned until reviewed feed ownership is assigned.
+- Add the independent source identity ledger backed by OpenRouter `data[].id`.
+  Verify exact native-to-canonical bindings, including non-curated models; retain
+  historical evidence after delisting. Known bindings must be materialized;
+  uncertain ones remain absent without discarding the native offer. Do not
+  fabricate IDs, substitute `canonical_slug`, or silently migrate identities.
 - Move copied model facts needed for explicit routing into provider interfaces.
   Removing a curated record must not erase limits, capabilities, or a canonical
   binding needed by an older still-active offer.
@@ -76,7 +86,7 @@ Exit: C01–C06 pass against standalone fixtures; no runtime default switches ye
   stay in their existing location and schema. Produce a migration report of
   every old offer's new identity/interface/price and unresolved facts.
 
-Exit: C07–C13 and C23 pass; inventory count differences are individually
+Exit: C07–C13, C23, and C37 pass; inventory count differences are individually
 explained in the migration report, not frozen in permanent provider-specific tests.
 
 ### P3 — Feed execution and reconciliation
@@ -94,8 +104,10 @@ explained in the migration report, not frozen in permanent provider-specific tes
 - Fetch all cursor pages before computing changes. Stage normalized rows,
   ownership-aware updates, and missing-offer evidence. Withdraw only with the
   required complete public snapshot evidence; preserve inactive history.
-- Preserve manual/unknown data. Match existing interfaces by protocol/operation
-  before merging separately owned pricing. Reject ambiguous merges.
+- Preserve manual/unknown data. Match existing interfaces by protocol, operation,
+  and effective protocol profile before merging separately owned pricing.
+  Reject ambiguous merges or canonical binding conflicts. Validate mapped
+  canonical candidates against independent identity/binding evidence.
 - Implement idempotent run observation IDs, atomic provider writes, dry-run
   parity, and sanitized machine-readable reports. `models_dev` and reviewed
   agentic output use the same update/ownership validator.
@@ -109,8 +121,20 @@ No live provider key is required for CI fixtures.
   application, onboarding, chart generation, and every `RegistryData` consumer.
   There must be no hidden unversioned or old-cache entry point around admission.
 - Separate explicit inventory routes from automatic curated candidates. Join
-  only verified canonical bindings and check protocol/operation/capability,
+  only verified canonical bindings and check protocol/profile/operation/capability,
   expiry, auth, account policy, health, and required-price constraints.
+- Let user-defined router candidate sets explicitly include non-curated canonical
+  or native offers. Missing quality scores do not block manual routes; policies
+  requiring scores must report the missing evidence. Do not confuse scores with
+  the verified interface capabilities required for dispatch.
+- Keep one identity for a language model that also offers decisions. Verify
+  codec/converter fidelity for each decision profile; merely sharing an operation
+  or endpoint suffix is insufficient. System One adapter implementation is a
+  separate feature, not an implied part of this metadata migration.
+- Select tariffs and normalize usage per exact offer/interface/profile. Implement
+  each enabled meter's counter semantics; unsupported billing stays unknown.
+  Exercise multi-question requests, partial answers, cached counters, and distinct
+  generation/decision tariffs without assuming all decisions are token-priced.
 - Preserve explicit local provider configuration and the existing subscription
   opt-in boundary; automatic curation does not authorize personal subscriptions.
 - Implement the reserved native selector form in spec section 4.3 consistently
@@ -119,12 +143,17 @@ No live provider key is required for CI fixtures.
 - Adopt a versioned cache namespace keyed by source URL and public major/revision;
   retain the last complete valid pair after refresh failures. Known expiry still
   applies when working offline; stale data is not fresh availability evidence.
+- Keep the host serving known routes after unsupported or malformed refreshes.
+  At cold start, try a compatible bundled pair, otherwise expose an empty registry
+  and structured diagnostics while local routes and control surfaces remain alive.
+  Test all public fetch/cache/bundled/request entry points in a running process.
 - Point beta clients at an immutable commit/tag ending in `dist/registry/v1`.
   After stable freeze, the default can follow the stable v1 stream at that path.
   The legacy unversioned location can remain a frozen historical snapshot; no
   dual reader or continuing v0 synchronization is required.
 
-Exit: C24–C28 pass, including the official packaged application path.
+Exit: C24–C28, C32–C36, and C38 pass, including the official packaged application
+path. Recheck C39 through runtime admission, not just standalone parsing.
 
 ### P5 — Trusted scheduled sync and stable freeze
 
@@ -174,14 +203,14 @@ of unintended catalog/routing/credential effects.
 | C12 | Grace boundary, repeated sync, re-entry, discovery failure | UTC expiry; no deadline sliding; cancellation works; failures do not fabricate releases |
 | C13 | Provider withdraws last eligible offer | Only its inventory changes; publication removes unavailable curated recommendation; no provider suspension |
 | C14 | Custom nested mapping, escaped dot/backslash, JSON Pointer, root array | Exact reads/writes, fixed-index arrays, no expression evaluation |
-| C15 | One source copied to native/canonical targets with fixed prefix | Native ID untouched; canonical binding independent of curated list |
+| C15 | One source copied to native/canonical targets with fixed prefix | Native ID untouched; `canonical_id` assigned only after independent identity/binding verification |
 | C16 | Missing versus null versus wrong type, conflicting destinations, unsupported transform | Preserve/default/clear/fail exactly as specified; no silent identity or capability defaults |
 | C17 | Per-token string price scaled by 1,000,000; unknown or invalid unit/value | Exact checked conversion when declared; otherwise unknown/error, never free |
 | C18 | Public feed, bearer key, custom header/version, empty/missing key | Correct headers; no credential inheritance, network request on missing key, or secret in logs |
 | C19 | Redirect, 401/403, timeout/429/5xx, oversize/malformed body | Bounded execution; no auth downgrade or partial inventory publication |
 | C20 | Multiple pages, empty middle page, duplicate ID/cursor, page cap, missing cursor | Complete traversal or whole-feed failure; never retire from first-page-only data |
 | C21 | Complete missing runs, failed run between, repeated observation ID, account scope, empty listing | Withdrawal only with both count/time evidence; no double-count; account/empty guards preserved |
-| C22 | Manual override, separate pricing feed, interface reorder, unknown extension, reappearance | Ownership respected; prices join by pair; no accidental reactivation or extension loss |
+| C22 | Manual override, separate pricing feed, interface reorder, unknown extension, reappearance | Ownership respected; prices join by protocol/operation/profile triple; no accidental reactivation or extension loss |
 | C23 | Same inputs built across a wall-clock expiry boundary; paired generation | Same explicit `as_of` yields identical bytes/snapshot; reverse references valid; agents/runtimes unchanged |
 | C24 | Mismatched fetched snapshots, invalid cache, unsupported version, offline refresh | No mixed pair; last good pair retained; explicit expiries still enforced |
 | C25 | Model supports generation and Decisions with different tariffs | Matching operation selected; Decisions never charged generation rate |
@@ -191,6 +220,14 @@ of unintended catalog/routing/credential effects.
 | C29 | Failed required feed A, successful B, discovery failure | B can be proposed coherently; A preserved; final CI failure visible |
 | C30 | Fork PR changes URL/auth/feed instructions | Offline validation only; no privileged credentialed request or agent execution |
 | C31 | Trusted dry-run/write and real scheduled sync | Same plan; valid paired artifacts; explicit secret prerequisites and sanitized failures |
+| C32 | One native LLM has both generation and decision interfaces | One native/canonical identity; both roles usable only through their verified interfaces; no support inferred from type labels |
+| C33 | OpenAI Decisions and two System One profiles, including a `/decisions` path alias | Select the declared codec; reject unsupported/lossy conversion; preserve question IDs/types, typed choices, refusal and confidence semantics |
+| C34 | Token, answered-question, and completed-request decision tariffs; partial answers, retries, cached/repeated inputs | Exact registered counter and applicable tariff; no question/request confusion, inferred multiplication, missing charge, or cross-interface rate fallback |
+| C35 | Malformed, oversized, deeply nested, or unsupported catalog refresh in a running host | Bounded normal error with scope/recovery hint; process survives, last good pair and independent routes still work |
+| C36 | Cold start has no usable cache and an incompatible bundled catalog | Empty registry, actionable compatibility error; control surfaces/local routes survive; registry-dependent requests fail normally |
+| C37 | Verified, unknown, delisted, renamed, and conflicting OpenRouter identities | Known `canonical_id` required; history retained; uncertain offers remain native-addressable; conflicts fail reviewably without silent rebinding |
+| C38 | User-defined router explicitly selects non-curated canonical/native offers with no quality scores | Routes work when execution gates pass; default automatic pool unchanged; score-dependent policy reports missing evidence |
+| C39 | Unknown protocol profile/question type/meter among known interfaces; source/cache round-trip | Preserve raw values; disable only unsupported scope; unknown question semantics grant no support and unknown meters make price unavailable |
 
 ## 4. Validation and review record
 
@@ -216,6 +253,12 @@ Pre-freeze review must specifically challenge:
 - Can source/default expansion or cache serialization discard unknown data?
 - Can media/Decisions metadata accidentally become a generation route through
   the current custom-protocol fallback?
+- Do endpoint aliases or shared operation names hide different decision codecs,
+  usage counters, or tariffs? Can a partial answer silently change billing units?
+- Can malformed or future registry input terminate the host at any entry point,
+  including cold start without a compatible fallback?
+- Does curation expiry or missing quality scoring accidentally disable an
+  explicitly configured route or erase a verified canonical binding?
 - Does a missing secret stop a provider safely while still making scheduled
   synchronization failure visible?
 

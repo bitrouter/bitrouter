@@ -11,7 +11,7 @@
     "path_syntax": "dotted",
     "items_path": "payload.models",
     "mapping": {
-      "model.id": ["provider_model_id", "id"],
+      "model.id": ["provider_model_id", "canonical_id"],
       "profile.name": "name",
       "cost.input": "interfaces.0.pricing.input_tokens.no_cache"
     },
@@ -26,7 +26,7 @@
       }]
     },
     "transforms": {
-      "id": [{"kind": "prefix", "value": "example/"}],
+      "canonical_id": [{"kind": "prefix", "value": "example/"}],
       "interfaces.0.pricing.input_tokens.no_cache": [
         {"kind": "parse_decimal"},
         {"kind": "multiply", "factor": 1000000}

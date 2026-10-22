@@ -1,0 +1,66 @@
+[
+  {
+    "canonical_id": "example/chat-1",
+    "source_url": "https://example.com/synthetic-openrouter-catalog",
+    "observed_at": "2026-10-22T00:00:00Z",
+    "bindings": [
+      {
+        "provider": "example",
+        "provider_model_id": "chat-v1",
+        "source_url": "https://example.com/evidence/chat-v1",
+        "verified_at": "2026-10-22T00:00:00Z"
+      },
+      {
+        "provider": "feed-example",
+        "provider_model_id": "chat-1",
+        "source_url": "https://example.com/evidence/feed-chat-1",
+        "verified_at": "2026-10-22T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "example/chat-2",
+    "source_url": "https://example.com/synthetic-openrouter-catalog",
+    "observed_at": "2026-10-22T00:00:00Z",
+    "bindings": [
+      {
+        "provider": "example",
+        "provider_model_id": "chat-v2",
+        "source_url": "https://example.com/evidence/chat-v2",
+        "verified_at": "2026-10-22T00:00:00Z"
+      },
+      {
+        "provider": "feed-example",
+        "provider_model_id": "chat-2",
+        "source_url": "https://example.com/evidence/feed-chat-2",
+        "verified_at": "2026-10-22T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "example/judge-1",
+    "source_url": "https://example.com/synthetic-openrouter-catalog",
+    "observed_at": "2026-10-22T00:00:00Z",
+    "bindings": [
+      {
+        "provider": "example",
+        "provider_model_id": "judge-v1",
+        "source_url": "https://example.com/evidence/judge-v1",
+        "verified_at": "2026-10-22T00:00:00Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "example/paint-1",
+    "source_url": "https://example.com/synthetic-openrouter-catalog",
+    "observed_at": "2026-10-22T00:00:00Z",
+    "bindings": [
+      {
+        "provider": "example",
+        "provider_model_id": "paint-v1",
+        "source_url": "https://example.com/evidence/paint-v1",
+        "verified_at": "2026-10-22T00:00:00Z"
+      }
+    ]
+  }
+]

@@ -36,7 +36,7 @@
           "status": "active"
         },
         {
-          "id": "example/chat-1",
+          "canonical_id": "example/chat-1",
           "interfaces": [
             {
               "input_modalities": [
@@ -69,7 +69,7 @@
           "status": "active"
         },
         {
-          "id": "example/chat-2",
+          "canonical_id": "example/chat-2",
           "interfaces": [
             {
               "capabilities": [
@@ -120,7 +120,12 @@
                   "text": 0
                 }
               },
-              "protocol": "decisions"
+              "protocol": "decisions",
+              "question_types": [
+                "predicate",
+                "choice",
+                "score"
+              ]
             }
           ],
           "model_types": [
@@ -131,7 +136,7 @@
           "status": "active"
         },
         {
-          "id": "example/judge-1",
+          "canonical_id": "example/judge-1",
           "interfaces": [
             {
               "input_modalities": [
@@ -151,7 +156,75 @@
                   "text": 0
                 }
               },
-              "protocol": "decisions"
+              "protocol": "decisions",
+              "question_types": [
+                "predicate",
+                "choice",
+                "score"
+              ]
+            },
+            {
+              "base_url": "https://decision.example.com/v1",
+              "input_modalities": [
+                "text"
+              ],
+              "operation": "decisions",
+              "output_modalities": [
+                "structured"
+              ],
+              "pricing": {
+                "currency": "USD",
+                "kind": "metered",
+                "meters": [
+                  {
+                    "amount": "0.20",
+                    "id": "answered_question",
+                    "quantity": 1000,
+                    "unit": "decision"
+                  }
+                ],
+                "requires": [
+                  "pricing.metered.v1"
+                ]
+              },
+              "protocol": "systemone",
+              "protocol_profile": "vllm_systemone_v1",
+              "question_types": [
+                "choice",
+                "noul",
+                "score"
+              ]
+            },
+            {
+              "base_url": "https://noulxp.example.com/v1",
+              "input_modalities": [
+                "text"
+              ],
+              "operation": "decisions",
+              "output_modalities": [
+                "structured"
+              ],
+              "pricing": {
+                "currency": "USD",
+                "kind": "metered",
+                "meters": [
+                  {
+                    "amount": "0.50",
+                    "id": "completed_request",
+                    "quantity": 1000,
+                    "unit": "request"
+                  }
+                ],
+                "requires": [
+                  "pricing.metered.v1"
+                ]
+              },
+              "protocol": "systemone",
+              "protocol_profile": "noulxp_http_v1",
+              "question_types": [
+                "choice",
+                "noul"
+              ]
             }
           ],
           "model_types": [
@@ -161,7 +234,7 @@
           "status": "active"
         },
         {
-          "id": "example/paint-1",
+          "canonical_id": "example/paint-1",
           "interfaces": [
             {
               "input_modalities": [
@@ -205,7 +278,7 @@
     }
   ],
   "requires": [],
-  "snapshot": "59dea4db4f330d3d659a0069502e0f31423e7763db65b518ef661be648b8130d",
-  "spec_revision": "1.0.0-beta.1",
+  "snapshot": "0095b290419ce991b8bb2a7c36c7f960459e4879a684d2dc826f5fd2568a42f3",
+  "spec_revision": "1.0.0-beta.2",
   "version": 1
 }

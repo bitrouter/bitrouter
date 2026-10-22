@@ -1,12 +1,15 @@
 # BitRouter Registry v1
 
-Status: **normative beta preview, `1.0.0-beta.1`; design only.**
+Status: **normative beta preview, `1.0.0-beta.2`; design only.**
 
 Date: 2026-10-22. Wire version: **`"version": 1`**.
 
 Base: [PR #990](https://github.com/bitrouter/bitrouter/pull/990),
 `codex/gateway-multi-instance`, commit
 `337123edd7a3992f3202a6a43a8753f7d0dec8d4`.
+
+Beta 2 adds explicit provider `canonical_id`, decision protocol profiles and
+billing rules, and process-survival requirements. Beta 1 is superseded.
 
 This document defines the proposed registry contract, not behavior already
 implemented by that base. MUST, MUST NOT, SHOULD, and MAY are requirements of
@@ -44,6 +47,9 @@ The other decisions are:
    A provider can use its own listing for membership and another feed for prices.
 5. Readers accept additive data, preserve unfamiliar information when rewriting,
    and execute only semantics they understand.
+6. Verified provider-to-model bindings use explicit `canonical_id` values from
+   OpenRouter's model identity vocabulary, independently of curated membership.
+   Registry input errors are recoverable errors, never reasons to crash a host.
 
 This specification covers model/provider YAML sources, deterministic JSON
 artifacts, feed reconciliation, and their consumer contract. It does not revise
@@ -58,10 +64,11 @@ version directory:
 
 | Path | v1 content |
 | --- | --- |
-| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.1`, and UTC `as_of` |
+| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.2`, and UTC `as_of` |
 | `registry/models/<vendor>.yaml` | Sequence of curated model records |
 | `registry/providers/<provider>.yaml` | One provider record, including source-only sync configuration |
 | `registry/model-discovery.yaml` | Curation policy; never provider inventory policy |
+| `registry/model-identities.yaml` | Source-only OpenRouter identity evidence and verified provider bindings; not a recommendation list |
 | `dist/registry/v1/{models,providers}.json` | Separate public envelopes below |
 | `apps/bitrouter/registry-dist/v1/{models,providers}.json` | Byte-identical packaged copies |
 
@@ -74,9 +81,9 @@ Each model/provider artifact has this envelope (example contains no records):
 ```json
 {
   "version": 1,
-  "spec_revision": "1.0.0-beta.1",
+  "spec_revision": "1.0.0-beta.2",
   "as_of": "2026-10-22T00:00:00Z",
-  "snapshot": "4c8071480121b44e1c880ab422aaa3565477821d1babfe6de6f38107968b861e",
+  "snapshot": "25b6e00961029d7f8c842f3942bfef2ebc69829676ca4006330f5c7fb4ae27d8",
   "requires": [],
   "data": []
 }
@@ -133,7 +140,7 @@ values reject the artifact; there is no v0/unversioned fallback in the v1 reader
 catalog snapshot. Its major MUST match `version`.
 
 During beta, readers MUST accept only explicitly supported prerelease revisions;
-support for `1.0.0-beta.1` does not imply support for `beta.2` or stable `1.0.0`.
+support for `1.0.0-beta.2` does not imply support for `beta.3` or stable `1.0.0`.
 An incompatible beta edit increments `spec_revision`, even though `version`
 remains 1. Production defaults MUST NOT follow an unpinned beta artifact stream.
 
@@ -154,7 +161,8 @@ schema break. Reusing an old identifier for a different model is a break.
 
 All objects are open to additional members. All named vocabularies in this
 specification are open string sets, including protocol, operation, model type,
-modality, capability, lifecycle status, auth kind, billing kind, and feed kind.
+protocol profile, question type, modality, capability, lifecycle status, auth
+kind, billing kind, and feed kind.
 Unknown is different from malformed: a string with an unfamiliar value is
 unknown; an object where a string is required is malformed.
 
@@ -162,7 +170,8 @@ unknown; an object where a string is required is malformed.
 | --- | --- |
 | Optional metadata field | Accept; ignore for decisions it does not understand |
 | Model type | Preserve; do not assume it is a language model; type-based selection cannot match it |
-| Protocol or operation | Preserve the interface; exclude it from invocation unless a registered adapter explicitly supports that pair |
+| Protocol, operation, or protocol profile | Preserve the interface; exclude it from invocation unless a registered adapter explicitly supports that triple |
+| Decision question type | Preserve; do not send a request requiring it through a codec/converter that lacks its semantics |
 | Additional input/output modality | Preserve; a request needing that modality cannot use an adapter that lacks it |
 | Capability | Preserve; never count it as proof of another capability |
 | Provider/model status | Preserve; only the exact known `active` status is eligible |
@@ -196,8 +205,9 @@ SHOULD warn about unfamiliar spellings to catch typos without making the reader
 vocabulary a closed enum. Private descriptive extensions SHOULD live under
 `extensions`, keyed by a reverse-domain namespace.
 
-The documented source-only containers (`auto_sync`, `sync`, `defaults`) are
-excluded from public artifacts as a whole. Their unknown members remain intact
+The identity ledger is source-only. The documented source-only containers
+(`auto_sync`, `sync`, `defaults`) are excluded from public artifacts as a whole.
+Their unknown members remain intact
 in source rewrites; this exception does not permit dropping unfamiliar members
 of published records or cached documents.
 
@@ -206,13 +216,49 @@ The publisher MUST reject an invalid build. A runtime MUST reject an invalid
 new pair and retain the last valid pair. Merely unsupported records remain in
 the parsed pair with diagnostics and disabled execution; they are not invalid.
 
+### 3.3 Recoverable errors and upgrade guidance
+
+Every failure caused by registry input or forward incompatibility MUST be
+returned as an ordinary structured error. Parsing, validation, mapping, identity
+lookup, compatibility negotiation, and price resolution MUST NOT panic, abort,
+terminate the daemon, or use an unchecked assumption about catalog contents.
+Unknown enum strings and malformed/oversized/deeply nested input are included;
+parsers must enforce bounded sizes/depth before resource exhaustion. This is not
+a claim to recover from an unrelated internal program defect or a killed process.
+
+Diagnostics contain a stable code, affected artifact/provider/model/interface,
+field path where applicable, observed version/profile/feature, supported values,
+and a recovery hint. Codes include `registry.unsupported_version`,
+`registry.unsupported_revision`, `registry.unsupported_interface`,
+`registry.unsupported_feature`, `registry.invalid_data`, and
+`registry.pricing_unavailable`. Compatibility errors MUST recommend upgrading
+BitRouter or using a registry revision supported by the installed version. Do
+not claim that an available upgrade implements a feature without evidence.
+Malformed source or missing credentials also identify the actual corrective
+action; repeatedly refreshing the same incompatible data is not recovery.
+
+A refresh failure retains the last complete valid pair without refreshing its
+evidence timestamp. With no previous pair, try a compatible bundled pair; if
+none is usable, the registry view remains empty. The host remains alive with
+explicitly configured usable routes and its diagnostic/control surfaces.
+Requests requiring unavailable registry routes receive a normal error response.
+An explicit request for an unsupported interface returns an error with upgrade
+guidance; it does not silently reroute to another operation. Known independent
+routes continue to work. Harmless unknown optional metadata needs no warning.
+
+One-shot validation/sync commands may return a normal nonzero exit status with
+diagnostics; this is not a crash. The long-running host must contain the error
+at the refresh/request boundary. Do not use a blanket panic catcher to disguise
+internal bugs as compatibility errors. Conformance tests must assert process
+survival and continued service, not just that deserialization returns `Err`.
+
 ## 4. Identity and the two catalogs
 
 ### 4.1 Curated model record
 
 | Field | Contract |
 | --- | --- |
-| `id` | Required stable canonical `<vendor>/<model>` ID; unique across `models` |
+| `id` | Required canonical ID from the independent identity ledger below; unique across `models` |
 | `name`, `description`, `family` | Optional display/grouping strings; not identity or ordering rules |
 | `model_types` | Optional unique string array; e.g. `language`, `decision`, `image_generation`, `audio_generation`, `video_generation`, `embedding`, `reranking` |
 | `input_modalities`, `output_modalities` | Optional unique arrays of known model-level facts; not endpoint support guarantees |
@@ -222,11 +268,47 @@ the parsed pair with diagnostics and disabled execution; they are not invalid.
 | `curation` | Required object described below |
 | `providers` | Generated reverse index only; absent from sources |
 
-Canonical IDs keep the existing lowercase ASCII vocabulary: vendor and each
-slash-separated model segment match `[a-z0-9][a-z0-9._-]*`. The vendor equals
-the model source filename stem. An ID is not reassigned when a model rolls out
-of curation. Routing aliases such as `latest` are not immutable canonical model
-identities and require a separate, explicit alias policy if introduced later.
+For a model with an established OpenRouter correspondence, the canonical ID is
+the exact `data[].id` of its underlying model in OpenRouter's full model list.
+The [OpenRouter response](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)
+also exposes `canonical_slug`; that is recorded as optional source evidence,
+not silently substituted for the chosen public `id` vocabulary. This is a
+BitRouter normalization decision, not a claim that OpenRouter IDs are immutable.
+
+IDs are preserved exactly, with a nonempty namespace and model portion separated
+by `/`, no whitespace/control characters, and no reserved `~native/` namespace.
+Do not lowercase, strip suffixes, or manufacture IDs by concatenation alone.
+The namespace determines the source model filename stem. Provider-routing
+variants such as `:free` or `:nitro`, and moving `latest` aliases, cannot establish
+model equivalence merely by stripping their suffix; their underlying model
+requires a verified explicit binding. Incompatible model revisions stay distinct.
+
+`registry/model-identities.yaml` is a sequence of records with required
+`canonical_id`, `source_url` (the OpenRouter catalog), and `observed_at` (UTC
+timestamp), optional `canonical_slug`, and optional `bindings`. Each binding is
+`{provider, provider_model_id, source_url, verified_at}`: an exact native offer
+and evidence that it is the same model. Canonical IDs and bound native pairs
+are unique in this ledger. Providers need no live OpenRouter lookup to run.
+Identity discovery uses the full OpenRouter catalog independently of curated
+family/retention filters. Failed or partial discovery preserves previous evidence.
+New verified identities and bindings are staged with affected provider records;
+publication validates that complete source transaction before replacing either
+artifact. An identity discovery failure does not prevent importing an unbound
+native offer from a successful provider feed.
+
+This ledger includes identities outside `models` and retains historical verified
+bindings when OpenRouter delists a model or discovery fails. Its sync does not
+delete provider inventory. A changed upstream ID or conflicting binding requires
+an explicit reviewed migration; never silently repoint an old ID to a different
+model. An old identity may remain usable through surviving provider offers.
+The ledger is source-only; provider artifacts materialize the bindings needed
+for routing, so consumers do not need a third network artifact.
+
+If no reliable OpenRouter correspondence exists, omit `canonical_id` from the
+offer and keep its native identity. This revision does not invent a substitute
+OpenRouter ID. Such offers remain usable through explicit provider/native routes
+and user-defined candidate sets. They do not enter the default curated vocabulary
+until a canonical identity is established.
 
 `curation` contains required `reason` (nonempty string), `source_url` (HTTPS
 evidence), and `checked_at` (UTC timestamp), and optional `expires_at` (UTC
@@ -272,7 +354,7 @@ Each provider model contains:
 | Field | Contract |
 | --- | --- |
 | `provider_model_id` | Required nonempty upstream string, preserved exactly, including case and slashes |
-| `id` | Optional canonical identity, independent of current membership in `models` |
+| `canonical_id` | Required whenever a verified OpenRouter correspondence exists; otherwise absent; independent of `models` membership |
 | `status` | Required; same known vocabulary as provider status; active means advertised as callable, not necessarily recommended |
 | `name`, `description`, `model_types` | Optional provider-local metadata |
 | `interfaces` | Required ordered array; may be empty when endpoint support is unknown |
@@ -281,23 +363,30 @@ Each provider model contains:
 | `availability` | Optional provenance: `source_url`, `checked_at`, and `scope` (`public` or `account`) |
 | `sync` | Source-only ownership/observation data, defined in section 9 |
 
-The storage identity is **(provider name, provider_model_id)**. `id` is not the
-inventory primary key. Multiple upstream IDs may map to one canonical model;
+The storage identity is **(provider name, provider_model_id)**. `canonical_id`
+is not the inventory primary key. Multiple upstream IDs may map to one canonical model;
 each remains a separate offer and selection must be deterministic. A native ID
-with no verified canonical identity is retained with `id` absent. It can be
-explicitly addressed through its provider and native ID, but it is not a
+with no verified canonical identity is retained with `canonical_id` absent.
+It can be explicitly addressed through its provider and native ID, but it is not a
 cross-provider alias and cannot enter curated automatic routing.
 
 Identity assignment precedence is an explicit maintainer binding, an explicit
-feed mapping to a canonical `id`, then no binding. A reviewed mapping may attach
+feed mapping to `canonical_id`, then no binding. A reviewed mapping may attach
 a fixed verified vendor prefix to a native ID, using the `prefix` transform in
 section 8; this makes first-party discovery work without joining the rolling
-curated list. Such a rule must establish stable identity, not turn an upstream
-moving alias into a versioned model. Feed imports MUST NOT infer
+curated list. The resulting candidate must match an independently observed
+OpenRouter identity and have verified same-model evidence before assignment;
+a matching string alone is insufficient. Record the binding in the ledger.
+If correspondence remains uncertain, retain the native offer unbound and report
+it; do not drop the offer or present a guessed canonical ID. Preserve any existing
+verified binding when a new candidate is unresolved. Feed imports MUST NOT infer
 identity from suffix matching, lowercasing native IDs, vendor ownership strings,
 or the rolling `models` list. A conflicting binding is reported for review;
 sync MUST NOT silently rename an existing offer. Maintainer bindings live on
-the record and survive curation changes.
+the ledger and survive curation changes. A known binding missing from a provider
+record is materialized by sync/migration and rejected if still missing or
+different at publication validation. Provider-model `id` is removed in this beta;
+curated `models[].id` equals the corresponding `canonical_id`.
 
 Generated `models[].providers` contains only references
 `{provider, provider_model_id}` to statically active, unexpired offers with the
@@ -308,7 +397,7 @@ an entitlement or current-health assertion.
 
 ### 4.3 Automatic and explicit routing
 
-Automatic model selection uses the intersection of:
+Default automatic model selection uses the intersection of:
 
 1. An unexpired curated record.
 2. An active provider and active, unexpired provider model with that canonical ID.
@@ -329,6 +418,16 @@ membership in the curated vocabulary. Choosing a provider for an already
 specified model is different from automatically choosing which model to use.
 Existing account/subscription opt-in restrictions apply to both paths.
 
+A user-defined router may explicitly enumerate canonical or provider/native
+targets outside `models`, including a native decision model not listed by
+OpenRouter. That configured candidate set replaces the default curation gate;
+it does not relax interface, auth, status, or billing requirements. A missing
+benchmark or future capability-quality score does not prohibit manual routes
+and is not treated as zero. A scoring policy that requires unavailable scores
+must report missing evidence or exclude that candidate explicitly. Verified
+execution capabilities belong to the provider interface and remain required;
+quality/recommendation metadata is a separate layer.
+
 The public inference `/v1/models` projection continues to describe the configured
 providers' callable inventory, not just the curated list. Consumers MUST NOT
 deduplicate unrelated unbound native IDs across providers. Unbound IDs require
@@ -347,12 +446,20 @@ IDs must not be empty, whitespace-only, or contain control characters.
 ## 5. Interfaces, modalities, and operation-specific data
 
 An offer's `interfaces` array is ordered by preference, most preferred first.
-Each entry describes one **(protocol, operation)** pair; duplicates are invalid.
+Each entry describes one **(protocol, operation, effective protocol_profile)**
+triple; duplicates are invalid. An absent profile means `default` only for a
+protocol whose default wire contract is defined. Profile names below are
+BitRouter identifiers for documented wire contracts, not upstream version claims.
+For unfamiliar protocols, preserve an absent profile as absent without inferring
+a codec. For a known default, omission and explicit `default` identify the same
+interface and therefore cannot appear as separate entries.
 
 | Field | Contract |
 | --- | --- |
 | `protocol` | Required open string; names the wire format, not the vendor |
 | `operation` | Required open string; semantic operation, never inferred for unknown protocols |
+| `protocol_profile` | Optional open string selecting a precise wire dialect; required for `systemone`; unknown profile disables only that interface |
+| `question_types` | Optional unique open string array of verified decision question types in this interface's own profile; absence means unknown |
 | `base_url` | Optional HTTPS API base; overrides provider `api_base` for this interface |
 | `input_modalities`, `output_modalities` | Optional unique string arrays; absence means unknown |
 | `capabilities` | Optional unique verified feature names; absence/empty grants none |
@@ -363,7 +470,7 @@ Each entry describes one **(protocol, operation)** pair; duplicates are invalid.
 | `pricing` | Optional interface-specific price (section 6) |
 | `requires` | Optional mandatory feature IDs |
 
-Known v1 pairs align with `bitrouter-ai`:
+Current built-in v1 pairs align with `bitrouter-ai` (all have profile `default`):
 
 | Protocol | Operation | Existing relative endpoint |
 | --- | --- | --- |
@@ -371,6 +478,48 @@ Known v1 pairs align with `bitrouter-ai`:
 | `messages` | `generation` | `/messages` |
 | `responses` | `generation` | `/responses` |
 | `decisions` | `decisions` | `/decisions` |
+
+### 5.1 Models with both generation and decision interfaces
+
+A single provider model can declare `model_types: [language, decision]` and
+both `responses/generation` and `decisions/decisions` interfaces, with the same
+`provider_model_id` and `canonical_id`. Do not duplicate its identity, require
+exclusive model types, or infer Decisions support from ordinary structured
+generation. OpenAI's [Decisions guide](https://developers.openai.com/api/docs/guides/decisions)
+uses `gpt-6-luna` for native decisions; its ordinary LLM interfaces retain their
+own capabilities and prices. Capability is verified per provider, not inherited
+automatically by every provider serving that model.
+
+### 5.2 Different decision wire formats
+
+`operation: decisions` is the routing category. `protocol` and
+`protocol_profile` select the actual request, response, errors, and usage codec:
+
+| Protocol/profile | Operation | Contract and adapter status |
+| --- | --- | --- |
+| `decisions` / `default` | `decisions` | OpenAI Decisions contract; adapter exists in the base |
+| `systemone` / `vllm_systemone_v1` | `decisions` | vLLM Semantic Router System One wire; representable in v1, requires a registered adapter |
+| `systemone` / `noulxp_http_v1` | `decisions` | NoulXP HTTP binding as documented by its serving API; representable in v1, requires a registered adapter |
+
+The [vLLM System One endpoint](https://decision.vllm-sr.ai/docs) uses `state`
+and question/answer objects keyed by IDs; it documents `/v1/decisions` as an
+alias for that wire. An endpoint path ending in `decisions` therefore does not
+prove the OpenAI codec is appropriate. The
+[NoulXP serving API](https://systemonemodels.ai/docs/inference) documents its
+own question representation. Keep the profiles distinct unless an adapter has
+verified the relevant common subset. A similar question-type name does not
+establish interchangeable semantics.
+
+A shared operation does not authorize arbitrary format conversion. Selection
+must verify an adapter/converter can preserve the specific question types,
+identifiers/order, typed choices, probabilities/confidence, refusal/partial-error
+semantics, modalities, and usage basis required by the request. Unsupported
+profiles or lossy conversions return a recoverable compatibility error. No
+fallback to text generation, guessed schema, dropped question, or invented
+probability is permitted. This registry revision represents both formats; it
+does not claim that a new System One runtime adapter has already shipped.
+
+### 5.3 Interface defaults and expansion
 
 The base URL includes the API prefix (typically `/v1`); it excludes the operation
 suffix. The registered adapter owns suffix and transport behavior. An interface
@@ -409,6 +558,10 @@ models are priced in tokens. Unknown billing disables cost-aware selection and
 settlement until supported; it does not erase the inventory.
 
 Each interface owns its entire tariff; there is no cross-protocol fallback.
+The full tariff lookup includes provider, native model, operation, protocol,
+effective protocol profile, and applicable deployment/processing terms. A shared
+canonical ID or the same `decisions` operation is not permission to reuse a
+different provider's, dialect's, or generation interface's price.
 Omitted pricing means **unknown**, not free. A provider model with unknown
 pricing can remain active and be explicitly invoked where application policy
 does not require a price. A selection or settlement path that requires prices
@@ -427,7 +580,8 @@ interface. An unknown endpoint profile or unverified effective deployment makes
 the tariff inapplicable. Existing metering evidence requirements still apply;
 a tariff does not establish cache-counter semantics.
 
-For non-token billing, v1 reserves an additive, explicitly gated shape:
+For decision-count, request-count, and other non-token billing, v1 defines an
+explicitly gated shape:
 
 ```json
 {
@@ -447,6 +601,37 @@ such as `second`, `image`, or `request` is not enough. Unknown meters make the
 whole affected tariff unavailable, rather than dropping charges. Additional
 conditioned/tiered meter semantics require their own feature IDs. This preview
 does not require a media billing engine to ship with the registry migration.
+
+### 6.1 Decision billing and usage semantics
+
+Do not assume every decision model uses generation token rates or charges once
+per HTTP request. As checked on 2026-10-22, the
+[OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability)
+describes `gpt-6-luna` Decisions as input-only billing, with region and long-context
+terms; its other interfaces have separate tariffs. This fact belongs to the
+offer's sourced tariff, not a global special case for all decision models.
+
+Metered tariffs may use `unit: decision` or `unit: request`. Each meter's
+registered `id` defines which observable counter is billable. For example, a
+synthetic `answered_question` meter counts billable answered questions, not one
+request or every supplied question. Unknown refusal, partial-error, retry, or
+batched-state counting rules make that meter unavailable until implemented and
+verified. The [System One serving API](https://systemonemodels.ai/docs/inference#plans-and-limits)
+illustrates why question counts and request counts must remain distinct.
+
+Any per-question/per-input token repetition must come from the selected codec's
+documented usage contract. Do not multiply a shared input count by the number
+of questions, or subtract a reported cached subset, merely because another
+decision format does so. The normalized usage must retain the native counters
+and provenance needed to verify applicability. Missing counters are unknown,
+not zero; declared zero charges are different from an unimplemented meter.
+No supported billable path may silently drop a meter or borrow another tariff.
+
+Subscription allowances and rate-limit quotas are not monetary per-decision
+prices. A subscription with usage overages requires an explicit supported billing
+extension; it cannot be flattened into a free token tariff. Unknown billing
+semantics yield `registry.pricing_unavailable` and upgrade/configuration guidance
+where prices are required, while retaining the offer for inspection.
 
 ## 7. Curated discovery and rolling validity
 
@@ -541,7 +726,7 @@ auto_sync:
         items_path: payload.models
         mapping:
           model.id: provider_model_id
-          model.canonical_id: id
+          model.canonical_id: canonical_id
           model.display_name: name
           lifecycle: upstream_lifecycle
           features.interfaces: interfaces
@@ -610,7 +795,7 @@ The mapping direction is **source path -> normalized provider-model path**:
 `"a.b.c": "x.y.z"` reads `a.b.c` from one upstream item and writes `x.y.z`
 on that item's normalized record. A value may also be a nonempty array of
 destination paths, copying the same source value to each target before their
-individual transforms. This permits `id: [provider_model_id, id]` without
+individual transforms. This permits `id: [provider_model_id, canonical_id]` without
 duplicate YAML keys. There is no implicit passthrough of the raw item and no
 default canonical-ID inference.
 
@@ -634,7 +819,7 @@ never an empty inventory. Each item must be an object. `mapping` is required;
 the minimal conventional list mapping is `{id: provider_model_id}` with
 `items_path: data`. `provider_model_id` must resolve to a nonempty string.
 
-Destination paths may target `provider_model_id`, `id`, `name`, `description`,
+Destination paths may target `provider_model_id`, `canonical_id`, `name`, `description`,
 `status`, `model_types`, `upstream_lifecycle`, `available_until`, and known
 members of `interfaces`. They MUST NOT target provider configuration, auth,
 feed configuration, curation, `requires`, ownership, or arbitrary filesystem
@@ -660,7 +845,7 @@ error activates a default. No coercion occurs without a declared transform.
 Optional `transforms` is a destination-path-to-ordered-steps map. v1 knows only:
 
 - `{kind: prefix, value: <string>}`: prepend a fixed public string to a string
-  value, e.g. `openai/` on the canonical `id` target only; no interpolation,
+  value, e.g. `openai/` on the `canonical_id` target only; no interpolation,
   lowercasing, alias resolution, or modification of the native ID occurs.
 - `{kind: parse_decimal}`: a finite base-10 decimal string to a JSON number;
   reject empty, exponent, nonnumeric, overflow, and non-finite input.
@@ -750,8 +935,9 @@ Source-only `sync` records the membership `owner` feed ID, `last_seen_at`, and,
 when missing, `missing_since` and `missing_runs`. `last_observation_id` prevents
 reapplying the same membership observation. `sync.field_owners` maps model field
 paths to feed IDs; `sync.interface_owners` is an array of objects containing
-`protocol`, `operation`, and their own `field_owners` map of interface-relative
-paths to feed IDs. Ownership paths use JSON Pointer, never mutable interface
+`protocol`, `operation`, effective `protocol_profile`, and their own
+`field_owners` map of interface-relative paths to feed IDs. Ownership paths use
+JSON Pointer, never mutable interface
 array indices; parent/child ownership claims cannot overlap. For example,
 `/status` may belong to the membership feed while an interface's `/pricing`
 belongs to its pricing feed. Absence from an ownership map means manually owned
@@ -767,8 +953,8 @@ Domain boundaries are fixed: `models` owns membership, `status`, and
 support/capabilities; `pricing` owns interface tariff subtrees. A `models` feed
 can create identity and an empty `interfaces` array without metadata authority.
 Deleting/replacing a metadata array must preserve separately owned prices and
-manual fields, joining interfaces by `(protocol, operation)`, never by incidental
-array position. If it cannot do so unambiguously, reconciliation fails and
+manual fields, joining interfaces by `(protocol, operation, effective protocol_profile)`,
+never by incidental array position. If it cannot do so unambiguously, reconciliation fails and
 requires a reviewed change.
 
 For each feed, the importer MUST:
