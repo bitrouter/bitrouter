@@ -4,7 +4,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::gateway::execution::{
     AttemptState, ExecutionState, GatewayAttempt, TerminalObservation,
 };
-use sea_orm::DatabaseTransaction;
+use sea_orm::{DatabaseTransaction, IsolationLevel};
 
 use super::{Attempt, Engine, Execution, Rejection, Resource, Tenant, admission::authenticate};
 use crate::gateway::shared::credentials::{CredentialStamp, Credentials};
@@ -12,6 +12,11 @@ use crate::gateway::shared::store::{Kind, NewRecord, Store, Stored};
 use crate::metering::shared::evidence::{Attribution, ObservedTerminal, TerminalFacts};
 
 use crate::metering::shared::MAX_ATTEMPTS;
+
+pub(super) enum TenantLock {
+    Shared,
+    Exclusive,
+}
 
 impl Engine {
     /// Called only after the request's sending future is gone. A lost prepare
@@ -45,9 +50,12 @@ impl Engine {
     pub async fn revalidate(&self, key_hash: &str, execution_id: &str) -> Result<()> {
         self.store()
             .retry(|| async {
-                let tx = self.store().begin().await?;
+                let tx = self
+                    .store()
+                    .begin_with_isolation(IsolationLevel::ReadCommitted)
+                    .await?;
                 let (_, _, expiry) = self
-                    .authorized_execution(&tx, key_hash, execution_id)
+                    .authorized_execution(&tx, key_hash, execution_id, TenantLock::Shared)
                     .await?;
                 self.live_owner(&tx, false).await?;
                 let now = Store::now(&tx).await?;
@@ -115,9 +123,16 @@ impl Engine {
         let attempt_id = uuid::Uuid::new_v4().to_string();
         self.store()
             .retry(|| async {
-                let tx = self.store().begin().await?;
+                // Execution/resource locks serialize reservation writes. Read
+                // Committed sees the current locked owner/policy after waiting,
+                // without replaying transactions invalidated by other requests.
+                // https://www.postgresql.org/docs/current/transaction-iso.html#XACT-READ-COMMITTED
+                let tx = self
+                    .store()
+                    .begin_with_isolation(IsolationLevel::ReadCommitted)
+                    .await?;
                 let (tenant, mut execution, principal_expiry) = self
-                    .authorized_execution(&tx, key_hash, execution_id)
+                    .authorized_execution(&tx, key_hash, execution_id, TenantLock::Shared)
                     .await?;
                 inputs.check_identity(
                     execution_id,
@@ -228,9 +243,12 @@ impl Engine {
     ) -> Result<()> {
         self.store()
             .retry(|| async {
-                let tx = self.store().begin().await?;
+                let tx = self
+                    .store()
+                    .begin_with_isolation(IsolationLevel::ReadCommitted)
+                    .await?;
                 let (_, mut execution, principal_expiry) = self
-                    .authorized_execution(&tx, key_hash, execution_id)
+                    .authorized_execution(&tx, key_hash, execution_id, TenantLock::Shared)
                     .await?;
                 let selected = execution
                     .value
@@ -343,7 +361,13 @@ impl Engine {
     ) -> Result<()> {
         self.store()
             .retry(|| async {
-                let tx = self.store().begin().await?;
+                // All terminal facts and capacity changes are protected by the
+                // execution/resource/attempt and episode fences below. A stale
+                // snapshot must not turn concurrent completions into retries.
+                let tx = self
+                    .store()
+                    .begin_with_isolation(IsolationLevel::ReadCommitted)
+                    .await?;
                 self.authority.fence(&tx).await?;
                 let prior: Stored<Execution> = self
                     .store()
@@ -352,7 +376,7 @@ impl Engine {
                     .ok_or(Rejection::NotFound)?;
                 let _: Stored<Tenant> = self
                     .store()
-                    .lock(&tx, Kind::Tenant, &prior.value.tenant_id)
+                    .lock_shared(&tx, Kind::Tenant, &prior.value.tenant_id)
                     .await?;
                 let mut execution: Stored<Execution> = self
                     .store()
@@ -472,13 +496,25 @@ impl Engine {
         tx: &DatabaseTransaction,
         key_hash: &str,
         execution_id: &str,
+        tenant_lock: TenantLock,
     ) -> Result<(Stored<Tenant>, Stored<Execution>, Option<i64>)> {
         let head = self.authority.fence(tx).await?;
         let principal = authenticate(tx, key_hash).await?;
-        let tenant: Stored<Tenant> = self
-            .store()
-            .lock(tx, Kind::Tenant, &principal.tenant)
-            .await?;
+        // Provider authorization only reads tenant policy. Guarded routing
+        // retains Exclusive because its binding path acquires that lock again;
+        // never introduce a concurrent Shared-to-Exclusive upgrade.
+        let tenant: Stored<Tenant> = match tenant_lock {
+            TenantLock::Shared => {
+                self.store()
+                    .lock_shared(tx, Kind::Tenant, &principal.tenant)
+                    .await?
+            }
+            TenantLock::Exclusive => {
+                self.store()
+                    .lock(tx, Kind::Tenant, &principal.tenant)
+                    .await?
+            }
+        };
         let execution: Stored<Execution> =
             self.store().lock(tx, Kind::Execution, execution_id).await?;
         ensure!(

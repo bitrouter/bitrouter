@@ -722,6 +722,8 @@ jobs:
           export BITROUTER_TEST_GATEWAY_BINARY="$GITHUB_WORKSPACE/target/debug/bro"
           cargo test --locked -p bitrouter --no-default-features --features multi-instance,http2 \
           --lib official_http2_tenant_and_account_concurrency_cross_replicas -- --ignored --test-threads=1
+          cargo test --locked -p bitrouter --no-default-features --features multi-instance,http2 \
+          --lib official_concurrent_static_ -- --ignored --test-threads=1
 
   telemetry-transports:
     name: telemetry (${{ matrix.transport }})

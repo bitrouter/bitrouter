@@ -47,7 +47,12 @@ impl Engine {
                     Rejection::AuthorityChanged
                 );
                 let (_, execution, _) = self
-                    .authorized_execution(&tx, key_hash, execution_id)
+                    .authorized_execution(
+                        &tx,
+                        key_hash,
+                        execution_id,
+                        super::attempts::TenantLock::Exclusive,
+                    )
                     .await?;
                 ensure!(
                     execution.value.tenant_id == input.owner,

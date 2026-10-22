@@ -17,6 +17,14 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 # https://nexte.st/docs/configuration/test-groups/
 [test-groups]
 core-tree-pressure = { max-threads = 1 }
+shared-gateway-process = { max-threads = 1 }
+
+# Each shared process campaign owns a PostgreSQL workload and multiple servers.
+# Keep separate campaigns from competing for host resources, including the
+# delayed-database C16 cases. Concurrency inside each campaign is unchanged.
+[[profile.default.overrides]]
+filter = 'test(gateway::shared::runtime::process_tests::)'
+test-group = 'shared-gateway-process'
 
 [[profile.default.overrides]]
 filter = 'test(capacity::tree_limits::maximum_tree_)'

@@ -82,6 +82,20 @@ pub trait CredentialTransaction: Send {
 /// Caller-injected storage; every transaction names exactly one selected slot.
 #[async_trait]
 pub trait CredentialStore: Send + Sync {
+    /// Read the selected credential without authorizing a refresh. Distributed
+    /// backends may return a concurrent snapshot, binding its version to the
+    /// request for validation immediately before dispatch. Refresh decisions
+    /// must use [`Self::begin`] instead. The default retains local lease behavior.
+    async fn read(
+        &self,
+        key: &CredentialKey,
+    ) -> std::result::Result<Option<Credential>, StoreError> {
+        let mut transaction = self.begin(key).await?;
+        let credential = transaction.credential().cloned();
+        transaction.release().await?;
+        Ok(credential)
+    }
+
     /// Acquire the slot's exclusive lease. No network refresh may start before it.
     async fn begin(
         &self,

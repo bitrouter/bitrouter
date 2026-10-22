@@ -330,10 +330,18 @@ supplied tenant header. Principal identity is the virtual-key ID. The existing
 `api_keys` authority is read from the database; its effective authorization
 revision is a content digest of activation, expiry, owner, policy and limit
 fields, computed from the locked database row. Shared tenant/resource policy
-has an explicit revision. Admission and dispatch-intent writes use serializable
-transactions: hold a shared row lock on the active configuration head, then lock the original
-API-key row, then tenant, execution, selected resource/credential and attempt
-rows in that order (sort multiple resource IDs). The authoritative revisions
+has an explicit revision. Admission uses Read Committed with an exclusive tenant
+row lock serializing quota and idempotency decisions. This lets queued admissions
+observe preceding tenant updates and committed heartbeats without repeatedly
+aborting a stale snapshot. Provider revalidation, preparation, dispatch and
+terminal accounting also use Read Committed with explicit row fences. Their
+read-only tenant checks use shared locks; admission and finalization retain the
+exclusive tenant lock when changing occupancy. Guard and projection transactions
+retain Serializable isolation, including the exclusive tenant lock before guard
+binding to avoid a shared-to-exclusive upgrade. Hold a shared row lock on the
+active configuration head, then a shared lock on the original API-key row, then
+lock tenant, execution, selected resource/credential and attempt rows in that
+order (sort multiple resource IDs). The authoritative revisions
 must match those used to prepare the decision. Existing API-key writers update
 that same row; shared policy/credential writers lock and advance the corresponding
 authority row. Serialization failures retry only the local transaction with a
@@ -688,6 +696,14 @@ The shared secret store encrypts provider credentials and service-private keys
 with authenticated encryption bound to namespace, record identity and revision.
 Secret values never enter public execution DTOs, outbox payloads or diagnostics.
 Configuration/status APIs expose references and revisions only.
+
+Static API-key authentication reads a versioned snapshot without acquiring or
+mutating a refresh lease. It binds the exact credential version used to build
+the wire request; preparation and dispatch still fence that version, resource
+scope and publication. A replacement invalidates the old stamp, and an account
+with unresolved refresh intent cannot supply a readable credential. Ordinary
+static readers therefore coexist across requests and replicas without granting
+permission to consume an OAuth refresh token.
 
 OAuth refresh acquires a durable, fenced account lease in a short transaction,
 records refresh intent before network I/O, and persists the rotated replacement
