@@ -776,6 +776,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "bitrouter-registry"
+version = "1.0.0-alpha.33"
+dependencies = [
+ "chrono",
+ "http",
+ "jsonschema",
+ "num-bigint",
+ "num-rational",
+ "num-traits",
+ "semver",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "url",
+]
+
+[[package]]
 name = "bitrouter-sdk"
 version = "1.0.0-alpha.33"
 dependencies = [
@@ -2833,7 +2851,9 @@ dependencies = [
  "getrandom 0.3.4",
  "idna",
  "itoa",
+ "jsonschema-macros",
  "jsonschema-regex",
+ "num-bigint",
  "num-cmp",
  "num-traits",
  "percent-encoding",
@@ -2843,6 +2863,35 @@ dependencies = [
  "serde_json",
  "unicode-general-category",
  "uuid-simd",
+]
+
+[[package]]
+name = "jsonschema-macros"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33814349f9eb1e2f5814207c40d92413098d4d57d0fb5b5972b1c47d63a79137"
+dependencies = [
+ "jsonschema-macros-core",
+ "proc-macro2",
+]
+
+[[package]]
+name = "jsonschema-macros-core"
+version = "0.47.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bc971df1f0042bff8020f1db975da867b56e11c519821e6e573f489dd909a94"
+dependencies = [
+ "fancy-regex",
+ "indexmap 2.14.0",
+ "jsonschema-regex",
+ "percent-encoding",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "referencing",
+ "regex",
+ "serde_json",
+ "syn 2.0.118",
 ]
 
 [[package]]

@@ -1,0 +1,712 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BitRouter Registry v1",
+  "description": "Structural rules; identity, compatibility, provenance, ownership, and execution checks are additional normative requirements.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": 1,
+      "type": "integer"
+    },
+    "spec_revision": {
+      "type": "string",
+      "minLength": 1
+    },
+    "as_of": {
+      "type": "string",
+      "pattern": "Z$"
+    },
+    "requires": {
+      "$ref": "#/$defs/requires"
+    },
+    "data": {
+      "type": "object",
+      "properties": {
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/model"
+          }
+        },
+        "providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/provider"
+          }
+        }
+      },
+      "required": [
+        "models",
+        "providers"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "version",
+    "spec_revision",
+    "as_of",
+    "data"
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "requires": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "context_window": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "input_rates": {
+      "type": "object",
+      "properties": {
+        "no_cache": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cache_read": {
+          "type": "number",
+          "minimum": 0
+        },
+        "cache_write": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "output_rates": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "number",
+          "minimum": 0
+        },
+        "reasoning": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "tier": {
+      "type": "object",
+      "properties": {
+        "above_input_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "input_tokens": {
+          "$ref": "#/$defs/input_rates"
+        },
+        "output_tokens": {
+          "$ref": "#/$defs/output_rates"
+        }
+      },
+      "required": [
+        "above_input_tokens"
+      ],
+      "additionalProperties": true
+    },
+    "curation": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "checked_at": {
+          "type": "string",
+          "pattern": "Z$"
+        },
+        "expires_at": {
+          "type": "string",
+          "pattern": "Z$"
+        }
+      },
+      "required": [
+        "reason",
+        "source_url",
+        "checked_at"
+      ],
+      "additionalProperties": true
+    },
+    "availability": {
+      "type": "object",
+      "properties": {
+        "source_url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "checked_at": {
+          "type": "string",
+          "pattern": "Z$"
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "additionalProperties": true
+    },
+    "auth": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "env": {
+          "type": "string",
+          "pattern": "^[A-Z_][A-Z0-9_]*$"
+        },
+        "header": {
+          "type": "string",
+          "minLength": 1
+        },
+        "extra_headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "handler": {
+          "type": "string",
+          "minLength": 1
+        },
+        "params": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "bearer"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "env"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "header"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "env",
+              "header"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "oauth"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "handler",
+              "params"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "native"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "handler",
+              "params"
+            ]
+          }
+        }
+      ]
+    },
+    "meter": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "amount": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?$"
+        }
+      },
+      "required": [
+        "id",
+        "unit",
+        "quantity",
+        "amount"
+      ],
+      "additionalProperties": true
+    },
+    "price": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requires": {
+          "$ref": "#/$defs/requires"
+        },
+        "endpoint_profile": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "token"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "currency": {
+                "const": "USD"
+              },
+              "input_tokens": {
+                "$ref": "#/$defs/input_rates"
+              },
+              "output_tokens": {
+                "$ref": "#/$defs/output_rates"
+              },
+              "context_tiers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/tier"
+                }
+              }
+            },
+            "required": [
+              "currency"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "metered"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "currency": {
+                "const": "USD"
+              },
+              "meters": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/$defs/meter"
+                }
+              }
+            },
+            "required": [
+              "currency",
+              "meters",
+              "requires"
+            ]
+          }
+        }
+      ]
+    },
+    "interface": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "minLength": 1
+        },
+        "operation": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protocol_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "question_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "base_url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "input_modalities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "output_modalities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "rate_limits": {
+          "type": "object",
+          "properties": {
+            "requests_per_minute": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            },
+            "tokens_per_minute": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [],
+          "additionalProperties": true
+        },
+        "compatibility": {
+          "type": "object"
+        },
+        "reasoning_effort": {
+          "type": "object",
+          "properties": {
+            "levels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "uniqueItems": true,
+              "minItems": 1
+            },
+            "default": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "levels"
+          ],
+          "additionalProperties": true
+        },
+        "pricing": {
+          "$ref": "#/$defs/price"
+        },
+        "requires": {
+          "$ref": "#/$defs/requires"
+        }
+      },
+      "required": [
+        "protocol",
+        "operation"
+      ],
+      "additionalProperties": true
+    },
+    "offer": {
+      "type": "object",
+      "properties": {
+        "provider_model_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonical_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "model_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/interface"
+          }
+        },
+        "available_until": {
+          "type": "string",
+          "pattern": "Z$"
+        },
+        "upstream_lifecycle": {
+          "type": "string"
+        },
+        "availability": {
+          "$ref": "#/$defs/availability"
+        },
+        "requires": {
+          "$ref": "#/$defs/requires"
+        }
+      },
+      "required": [
+        "provider_model_id",
+        "status",
+        "interfaces"
+      ],
+      "additionalProperties": true
+    },
+    "provider": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9_-]*$"
+        },
+        "status": {
+          "type": "string",
+          "minLength": 1
+        },
+        "models": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/offer"
+          }
+        },
+        "billing": {
+          "type": "string",
+          "minLength": 1
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "contact": {
+          "type": "object"
+        },
+        "submitted_at": {
+          "type": "string",
+          "pattern": "Z$"
+        },
+        "community": {
+          "type": "boolean"
+        },
+        "doc_url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "weight": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "kind": {
+          "type": "string"
+        },
+        "api_base": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "access": {
+          "type": "string"
+        },
+        "auth": {
+          "$ref": "#/$defs/auth"
+        },
+        "requires": {
+          "$ref": "#/$defs/requires"
+        }
+      },
+      "required": [
+        "name",
+        "status",
+        "models",
+        "billing"
+      ],
+      "additionalProperties": true
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string"
+        },
+        "model_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "input_modalities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "output_modalities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "context_window": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "release_date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "knowledge_cutoff": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}(-[0-9]{2})?$"
+        },
+        "open_weights": {
+          "type": "boolean"
+        },
+        "benchmarks": {
+          "type": "object"
+        },
+        "curation": {
+          "$ref": "#/$defs/curation"
+        },
+        "requires": {
+          "$ref": "#/$defs/requires"
+        }
+      },
+      "required": [
+        "id",
+        "curation"
+      ],
+      "additionalProperties": true
+    }
+  }
+}

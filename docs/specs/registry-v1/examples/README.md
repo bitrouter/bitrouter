@@ -1,7 +1,7 @@
 # Registry v1 worked examples
 
 These are informative synthetic examples for
-[`1.0.0-beta.5`](../README.md), not production records or claims about commercial
+[`1.0.0-beta.6`](../README.md), not production records or claims about commercial
 model support, prices, or credentials. The provider URLs and model identities
 are fictional. The identity-source request uses the real documented API shape;
 its response fixture is synthetic and establishes no live OpenRouter validity.
@@ -78,8 +78,9 @@ schedules the next check 24 hours later. Disabling automatic refresh cancels
 that timer without removing the admitted document. Document/evidence timestamps
 are never renewed by these events.
 
-An implicit source in a beta-only release resolves to that release's immutable
-commit URL. A stable-supporting software upgrade changes the implicit default
+An implicit source in a beta-only release resolves to that release's exact
+protocol-revision stream, which may receive compatible data updates. An explicit
+commit URL instead freezes a snapshot. A stable-supporting upgrade changes the implicit default
 to the stable v1 stream and uses that source's local data; an explicit URL
 remains fixed. A custom URL never borrows the official bundle on failure. See
 the [first-party consumption profile](../README.md#11-bitrouter-first-party-consumption-profile)

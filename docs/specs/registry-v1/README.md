@@ -1,19 +1,21 @@
 # BitRouter Registry v1
 
-Status: **normative beta protocol, `1.0.0-beta.5`.**
+Status: **normative beta protocol, `1.0.0-beta.6`.**
 
 Date: 2026-10-23. Wire version: **`"version": 1`**.
 
 MUST and MUST NOT express mandatory requirements; SHOULD expresses a recommended
 practice with a justified exception; MAY expresses an optional behavior. The
 [conformance requirements](conformance.md) define observable outcomes for
-implementations. The [worked examples](examples/README.md) are informative
+implementations. The [structural schema](registry.schema.json) complements the
+semantic rules; it does not replace identity, ownership, compatibility, or
+execution checks. The [worked examples](examples/README.md) are informative
 synthetic examples. Publication of this contract does not assert implementation
 availability in a particular release.
 
 Beta revisions may change incompatibly; stable v1 has the compatibility
-commitments in section 3. Beta 5 adds the BitRouter first-party consumption
-profile in section 11. It retains one public document, JSON Pointer mappings,
+commitments in section 3. Beta 6 adds explicit resource bounds and the structural schema. The BitRouter
+first-party consumption profile is in section 11. It retains one public document, JSON Pointer mappings,
 explicit reconciliation, price arithmetic, and execution metadata. All published
 canonical IDs require a fresh complete OpenRouter audit; historical evidence
 cannot replace current validation.
@@ -63,12 +65,13 @@ version directory:
 
 | Path | v1 content |
 | --- | --- |
-| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.5`, UTC `as_of`, and source-only `identity_source` (section 10.1) |
+| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.6`, UTC `as_of`, and source-only `identity_source` (section 10.1) |
 | `registry/models/<vendor>.yaml` | Sequence of curated model records |
 | `registry/providers/<provider>.yaml` | One provider record, including source-only sync configuration |
 | `registry/model-discovery.yaml` | Curation policy; never provider inventory policy |
 | `registry/model-identities.yaml` | Source-only OpenRouter identity evidence and verified provider bindings; not a recommendation list |
 | `dist/registry/v1/registry.json` | One public document containing both lists |
+| `dist/registry/v1/<beta-revision>/registry.json` | Complete same-revision beta update stream; no companion file or cross-file join |
 
 The source root versions the whole model/provider source tree; individual YAML
 files do not repeat it. Agent/runtime sources and artifacts keep their existing
@@ -79,7 +82,7 @@ The public document has this envelope (example contains no records):
 ```json
 {
   "version": 1,
-  "spec_revision": "1.0.0-beta.5",
+  "spec_revision": "1.0.0-beta.6",
   "as_of": "2026-10-22T00:00:00Z",
   "requires": [],
   "data": {"models": [], "providers": []}
@@ -112,11 +115,24 @@ Truncated/invalid input, unsupported versions, and incompatible beta revisions
 leave the previous valid document intact. Partial updates are invalid. Packaged
 fallback and disk caches obey the same admission rule.
 
+V1's bounded public-document profile permits at most 32 MiB of decoded UTF-8
+JSON and nesting depth 64 (the root is depth zero). Numeric literals have at
+most 128 characters, absolute decimal exponent at most 308, and finite binary64
+magnitude; rates within this range are still interpreted and calculated exactly,
+never rounded through binary64. Known integer fields are exact mathematical
+integers in their declared range, at most 18446744073709551615 unless a smaller
+bound is specified. Equivalent integral spellings such as `1.0` and `1e3` are
+accepted. Producers must stay within this profile, including optional metadata;
+readers reject excess normally before evaluating schemas/arithmetic. Future
+larger resource profiles require explicit compatibility treatment.
+
 JSON duplicate object keys are invalid. YAML must be representable as JSON:
 string mapping keys, no custom tags or non-finite numbers, and no duplicate
 mapping keys. YAML aliases may share values but have no identity semantics.
-Optional fields are omitted for unknown information; `null` is invalid in
-registry records unless a field explicitly permits it. Empty arrays mean an
+Optional known fields are omitted for unknown information; `null` is invalid
+in those fields unless explicitly permitted. Unfamiliar optional fields remain
+opaque JSON, including nulls; readers must not assign known-field semantics by
+matching a name at an unrelated location. Empty arrays mean an
 explicitly empty set, not an unknown set. Strings are case-sensitive unless a
 field says otherwise. Dates use `YYYY-MM-DD`; timestamps use UTC RFC 3339 with
 `Z`. All expiry comparisons use UTC, independent of the reader's timezone.
@@ -131,7 +147,7 @@ values reject the artifact; there is no v0/unversioned fallback in the v1 reader
 catalog snapshot. Its major MUST match `version`.
 
 During beta, readers MUST accept only explicitly supported prerelease revisions;
-support for `1.0.0-beta.5` does not imply support for `beta.6` or stable `1.0.0`.
+support for `1.0.0-beta.6` does not imply support for `beta.7` or stable `1.0.0`.
 An incompatible beta edit increments `spec_revision`, even though `version`
 remains 1. Production defaults MUST NOT follow an unpinned beta artifact stream.
 
@@ -214,7 +230,9 @@ returned as an ordinary structured error. Parsing, validation, mapping, identity
 lookup, compatibility negotiation, and price resolution MUST NOT panic, abort,
 terminate the daemon, or use an unchecked assumption about catalog contents.
 Unknown enum strings and malformed/oversized/deeply nested input are included;
-parsers must enforce bounded sizes/depth before resource exhaustion. This is not
+parsers must enforce bounded sizes/depth and numeric precision/exponent budgets
+before schema evaluation or exact arithmetic can exhaust resources. Library
+validation failures must not bypass this boundary. This is not
 a claim to recover from an unrelated internal program defect or a killed process.
 
 Diagnostics contain a stable code, affected artifact/provider/model/interface,
@@ -1256,7 +1274,7 @@ The `registry` configuration has three consumption settings:
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `enabled` | `true` | Load and use registry data; `false` also disables registry downloads |
-| `url` | Omitted | Complete HTTPS document URL; when supplied, replaces the build-selected default |
+| `url` | Omitted | Complete document URL; when supplied, replaces the build-selected default |
 | `auto_refresh` | `true` | Allow startup and periodic background downloads; `false` uses only eligible local data |
 
 These settings do not change locally configured routes or existing credential,
@@ -1275,14 +1293,21 @@ then on, publication to that location MUST contain only stable `1.x.y`
 documents. Future beta or version 2 artifacts MUST NOT replace it. This defines
 the publication contract; it does not assert that the URL already serves v1.
 
-A beta-only release instead MUST embed a default URL pinned to a complete
-40-hex Git commit in the same repository, with the same artifact path, and
-declare the exact beta revisions it accepts. A beta-only release MUST NOT
-default to `main`, a moving tag, or a guessed latest-beta URL. Release metadata MUST
-identify its pin; the packaged document must come from that pin. With `url`
-omitted and no valid default pin, use an empty registry and disable automatic
-downloads with a diagnostic rather than inventing a source. An explicit URL
-can still be used normally.
+A beta-only release pins its default stream to one declared exact protocol
+revision. For this revision the URL is:
+
+```text
+https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry/v1/1.0.0-beta.6/registry.json
+```
+
+That location MUST serve only `spec_revision: 1.0.0-beta.6`. Data-only catalog
+updates may roll there; a breaking beta edit uses a new revision and path.
+The build emits one complete document at its revision path as well as the
+pre-stable v1 location; they are alternative sources, never paired inputs.
+Publishing a new beta or stable v1 MUST preserve older beta paths at their
+last published contents, without promising ongoing maintenance of all betas.
+The packaged fallback must declare the same source and revision. A beta-only
+release MUST NOT default to a latest-beta alias or unqualified moving v1 URL.
 
 The software selects wire major 1 and applies section 3 to every document,
 including custom URLs. An explicit `url` is retained across software upgrades;
@@ -1290,6 +1315,15 @@ it is never rewritten to follow a new release or channel. There is no version
 negotiation, probing for other majors, or automatic downgrade to legacy files.
 An operator pins a particular snapshot by choosing an immutable URL; disabling
 `auto_refresh` alone is an offline policy, not a reproducible snapshot pin.
+For example, a complete 40-hex Git commit URL pins content, whereas the default
+beta revision URL pins its contract and continues receiving compatible data.
+
+Artifact URLs require HTTPS, except that an explicitly configured custom URL
+may use HTTP with a literal loopback IP (`127.0.0.0/8` or `::1`). No DNS name
+qualifies for that exception. Such requests connect directly without proxies;
+all artifact URLs forbid userinfo and fragments and follow no redirects.
+This local-mirror exception does not apply to provider feeds or inference
+endpoints, and never changes the public default source.
 
 ### 11.2 Startup and cache
 

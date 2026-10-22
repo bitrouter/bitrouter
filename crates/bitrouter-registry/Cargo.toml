@@ -1,0 +1,25 @@
+[package]
+name = "bitrouter-registry"
+description = "Registry v1 validation, synchronization, and exact pricing contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json = { workspace = true, features = ["arbitrary_precision", "raw_value"] }
+thiserror.workspace = true
+chrono.workspace = true
+url.workspace = true
+http.workspace = true
+jsonschema = { version = "0.47.0", default-features = false, features = ["arbitrary-precision"] }
+num-bigint = "0.4"
+num-rational = "0.4"
+num-traits = "0.2"
+semver = "1"
+
+[dev-dependencies]
+tempfile.workspace = true

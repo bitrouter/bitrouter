@@ -2,7 +2,7 @@
   "description": "Synthetic first-party trace; private cache/event encoding is illustrative, not a wire schema.",
   "reader": {
     "version": 1,
-    "supported_revisions": ["1.0.0-beta.5"]
+    "supported_revisions": ["1.0.0-beta.6"]
   },
   "settings": {
     "enabled": true,
@@ -28,7 +28,7 @@
       "at": "2026-10-23T02:00:01Z",
       "event": "refresh_failed",
       "diagnostic": "registry.unsupported_revision",
-      "observed_revision": "1.0.0-beta.6",
+      "observed_revision": "1.0.0-beta.7",
       "expected": {
         "active_document": "registry.json",
         "checked_at": "2026-10-22T01:00:00Z",

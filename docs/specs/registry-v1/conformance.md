@@ -1,6 +1,6 @@
 # Registry v1 conformance
 
-Status: **normative beta, `1.0.0-beta.5`; wire version `1`.**
+Status: **normative beta, `1.0.0-beta.6`; wire version `1`.**
 
 These observable requirements accompany the [Registry v1 protocol](README.md).
 Each case applies to the producer, reader, synchronizer, or publication role
@@ -81,11 +81,19 @@ requirements, not evidence that the current CLI implements the profile.
 
 | ID | Scenario | Required observable result |
 | --- | --- | --- |
-| C51 | Stable build, beta-only build, missing beta pin, explicit custom URL | Exact stable v1 URL or release-embedded full-commit beta URL; beta never guesses a moving source; invalid/missing default pin with no explicit URL gives an empty registry and no downloads with a diagnostic; explicit URL always wins |
+| C51 | Stable build, beta-only build, data update on pinned revision, explicit snapshot/custom URL | Exact stable v1 URL or declared revision-specific beta URL; beta stream accepts only the pinned revision while data rolls; new beta/stable publication preserves old paths; explicit URL always wins and a commit URL freezes content |
 | C52 | Fresh/stale/invalid cache; eligible/incompatible bundle; no local data | Validate and use selected-source cache before bundle; stale cache still serves within execution/expiry gates; network never delays readiness; no usable local data means empty registry and working local/control surfaces |
 | C53 | First launch, 24-hour boundary, long-running idle host, failed check, identical successful body | Background first check when due; periodic refresh without restart/request; failure retries after 1 hour without changing `checked_at`; success, including unchanged bytes, schedules 24 hours from the successful check |
 | C54 | `enabled: false`, `auto_refresh: false`, re-enable, pending response after configuration change | Disabled registry loads/fetches nothing and contributes no routes; disabled automatic refresh uses eligible local data only; re-enable reapplies selection/schedule; late responses cannot restore obsolete configuration |
 | C55 | URL/ref/query change, legacy or unbound cache, custom-source failure | Cache is bound to exact source and major; never borrow another source's cache, bundle, validators, or routing data; local routes continue working |
 | C56 | Interrupted cache write, unknown metadata, future/missing `checked_at`, lower `as_of`, expired evidence | Atomic complete cache retains unknowns; failed persistence keeps old disk data and reports memory-only success; invalid check time makes refresh due; same-source rollback rejected; expiry enforced without timestamp renewal |
-| C57 | Redirect, non-200, timeout, malformed/unsupported/oversized response during active requests | Bounded normal failure and same-source fallback; no alternate URL, credential inheritance, partial view, or host termination; valid updates affect subsequent routing and preserve local overrides |
+| C57 | Redirect, non-200, timeout, malformed/unsupported/oversized response; explicit loopback HTTP mirror and HTTP non-loopback URL | Bounded normal failure and same-source fallback; only literal loopback custom HTTP is allowed, without proxies; no alternate URL, credential inheritance, partial view, or host termination; valid updates affect subsequent routing and preserve local overrides |
 | C58 | First stable publication; software upgrade with implicit versus explicit source; future beta/major at stable URL | Beta pin does not move; stable-supporting software changes only implicit default and uses stable-source cache/bundle; explicit URL remains; unsupported revisions fail recoverably; compatible stable 1.x updates normally and v1 stream is not replaced by prerelease/v2 |
+
+## Shared input resource and preservation case
+
+This case applies to all readers under the public-document profile in section 2.
+
+| ID | Scenario | Required observable result |
+| --- | --- | --- |
+| C59 | Numeric exponent/precision bomb, exact u64 boundaries, equivalent integer spellings, nested implementation-private keys and opaque null metadata | Reject excess before schema/arithmetic; process remains alive and accepts the next valid refresh; exact integers have consistent interpretation; valid unknown object identity and numeric precision survive all rewrites |
