@@ -1,6 +1,6 @@
 //! Observe frame boundaries without decoding HPACK or replacing h2 validation.
 //! Header reservations survive service completion until END_HEADERS is written.
-//! https://httpwg.org/specs/rfc9113.html#FrameHeader
+//! <https://httpwg.org/specs/rfc9113.html#FrameHeader>
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::future::Future;
