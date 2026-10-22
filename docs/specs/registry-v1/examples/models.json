@@ -51,7 +51,7 @@
     }
   },
   "requires": [],
-  "snapshot": "0095b290419ce991b8bb2a7c36c7f960459e4879a684d2dc826f5fd2568a42f3",
-  "spec_revision": "1.0.0-beta.2",
+  "snapshot": "bd380038fe9121ebec855b4b8a3689a56c2bb19777247b1cc01d765a025452aa",
+  "spec_revision": "1.0.0-beta.3",
   "version": 1
 }

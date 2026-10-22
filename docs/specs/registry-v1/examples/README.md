@@ -1,7 +1,7 @@
 # Registry v1 worked examples
 
 These are synthetic design examples for
-[`1.0.0-beta.2`](../../REGISTRY_V1_SPEC.md), not generated production data or
+[`1.0.0-beta.3`](../../REGISTRY_V1_SPEC.md), not generated production data or
 claims about real model support, prices, or credentials. All URLs and providers
 are fictional. The artifact pair has a computed shared snapshot digest.
 
@@ -12,6 +12,11 @@ are fictional. The artifact pair has a computed shared snapshot digest.
   in for OpenRouter identity evidence; real bindings require actual evidence.
   It includes non-curated IDs and bindings for both the artifact provider and
   the separate `feed-example` importer below. It is not a third public artifact.
+- [`openrouter-models.json`](openrouter-models.json) is a minimal synthetic full
+  identity response for the publication audit. All public canonical IDs in this
+  example pair appear in `data[].id`; `canonical_slug` intentionally differs for
+  one row and cannot replace the ID. The identity ledger alone is insufficient.
+  This offline fixture does not establish live OpenRouter validity.
 - [`providers.json`](providers.json) also retains an older active chat model,
   a native model with no canonical binding or known price, and a future image
   interface with a gated non-token tariff. An older reader can keep the image
@@ -58,6 +63,11 @@ The extension fields at envelope/model/interface levels are intentional
 round-trip data. An unknown decision profile is retained but not invoked; an
 unknown meter is not a zero price. Malformed or incompatible input must produce
 a recoverable diagnostic, preserve the last good pair, and leave the host alive.
+Removing any referenced ID from the synthetic OpenRouter response must fail
+publication even if the ledger still contains it and the provider still serves
+the native model. An unavailable identity response also blocks publication;
+neither failure deletes provider inventory. Unreferenced historical ledger
+entries may remain. Audit all rows again after any final candidate edit.
 Later implementation tests should build both positive and
 negative scenarios from small synthetic fixtures rather than freeze commercial
 catalog contents. The full conformance list is in the

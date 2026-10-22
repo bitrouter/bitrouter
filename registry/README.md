@@ -2,6 +2,8 @@
 
 The proposed next contract is the [Registry v1 beta specification](../docs/specs/REGISTRY_V1_SPEC.md),
 with a [delivery and conformance plan](../docs/specs/REGISTRY_V1_IMPLEMENTATION.md).
+The proposed [sync publication gate](../docs/specs/REGISTRY_V1_SPEC.md#101-mandatory-openrouter-canonical-identity-audit)
+checks every published canonical ID against the full OpenRouter list on each run.
 It is design-only; the remainder of this README documents the current
 unversioned implementation until that migration lands.
 

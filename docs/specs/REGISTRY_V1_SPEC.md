@@ -1,6 +1,6 @@
 # BitRouter Registry v1
 
-Status: **normative beta preview, `1.0.0-beta.2`; design only.**
+Status: **normative beta preview, `1.0.0-beta.3`; design only.**
 
 Date: 2026-10-22. Wire version: **`"version": 1`**.
 
@@ -8,8 +8,10 @@ Base: [PR #990](https://github.com/bitrouter/bitrouter/pull/990),
 `codex/gateway-multi-instance`, commit
 `337123edd7a3992f3202a6a43a8753f7d0dec8d4`.
 
-Beta 2 adds explicit provider `canonical_id`, decision protocol profiles and
-billing rules, and process-survival requirements. Beta 1 is superseded.
+Beta 3 requires a complete OpenRouter identity audit before publishing a sync.
+It supersedes beta 2's historical-ID publication allowance; historical evidence
+is retained, but cannot replace current membership validation. Beta 2 introduced
+explicit provider `canonical_id`, decision profiles, billing, and recoverable errors.
 
 This document defines the proposed registry contract, not behavior already
 implemented by that base. MUST, MUST NOT, SHOULD, and MAY are requirements of
@@ -64,7 +66,7 @@ version directory:
 
 | Path | v1 content |
 | --- | --- |
-| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.2`, and UTC `as_of` |
+| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.3`, UTC `as_of`, and source-only `identity_source` (section 10.1) |
 | `registry/models/<vendor>.yaml` | Sequence of curated model records |
 | `registry/providers/<provider>.yaml` | One provider record, including source-only sync configuration |
 | `registry/model-discovery.yaml` | Curation policy; never provider inventory policy |
@@ -81,9 +83,9 @@ Each model/provider artifact has this envelope (example contains no records):
 ```json
 {
   "version": 1,
-  "spec_revision": "1.0.0-beta.2",
+  "spec_revision": "1.0.0-beta.3",
   "as_of": "2026-10-22T00:00:00Z",
-  "snapshot": "25b6e00961029d7f8c842f3942bfef2ebc69829676ca4006330f5c7fb4ae27d8",
+  "snapshot": "2d999e69709897a44f21c39bf2ff70c054f763ca5aeca26972e10bded282e58d",
   "requires": [],
   "data": []
 }
@@ -140,7 +142,7 @@ values reject the artifact; there is no v0/unversioned fallback in the v1 reader
 catalog snapshot. Its major MUST match `version`.
 
 During beta, readers MUST accept only explicitly supported prerelease revisions;
-support for `1.0.0-beta.2` does not imply support for `beta.3` or stable `1.0.0`.
+support for `1.0.0-beta.3` does not imply support for `beta.4` or stable `1.0.0`.
 An incompatible beta edit increments `spec_revision`, even though `version`
 remains 1. Production defaults MUST NOT follow an unpinned beta artifact stream.
 
@@ -288,19 +290,27 @@ requires a verified explicit binding. Incompatible model revisions stay distinct
 timestamp), optional `canonical_slug`, and optional `bindings`. Each binding is
 `{provider, provider_model_id, source_url, verified_at}`: an exact native offer
 and evidence that it is the same model. Canonical IDs and bound native pairs
-are unique in this ledger. Providers need no live OpenRouter lookup to run.
+are unique in this ledger. Runtime providers need no live OpenRouter lookup to run.
 Identity discovery uses the full OpenRouter catalog independently of curated
 family/retention filters. Failed or partial discovery preserves previous evidence.
 New verified identities and bindings are staged with affected provider records;
 publication validates that complete source transaction before replacing either
-artifact. An identity discovery failure does not prevent importing an unbound
-native offer from a successful provider feed.
+artifact. An identity discovery failure does not prevent staging an unbound
+native offer from a successful provider feed, but the global identity audit in
+section 10.1 must pass before any sync candidate is published.
 
 This ledger includes identities outside `models` and retains historical verified
 bindings when OpenRouter delists a model or discovery fails. Its sync does not
 delete provider inventory. A changed upstream ID or conflicting binding requires
 an explicit reviewed migration; never silently repoint an old ID to a different
-model. An old identity may remain usable through surviving provider offers.
+model. A reviewed migration moves the current binding atomically and retains
+the previous mapping in Git history; it does not create two current ledger
+bindings for one native offer. Historical evidence alone does not validate a
+current published ID.
+Every canonical ID referenced by either candidate artifact must exist in the
+full OpenRouter response fetched for that publication run. A delisted ID blocks
+publication pending reviewed resolution; it does not delete provider inventory
+or invalidate a previously admitted runtime snapshot retroactively.
 The ledger is source-only; provider artifacts materialize the bindings needed
 for routing, so consumers do not need a third network artifact.
 
@@ -354,7 +364,7 @@ Each provider model contains:
 | Field | Contract |
 | --- | --- |
 | `provider_model_id` | Required nonempty upstream string, preserved exactly, including case and slashes |
-| `canonical_id` | Required whenever a verified OpenRouter correspondence exists; otherwise absent; independent of `models` membership |
+| `canonical_id` | Required whenever a verified current OpenRouter correspondence exists; otherwise absent; independent of `models` membership |
 | `status` | Required; same known vocabulary as provider status; active means advertised as callable, not necessarily recommended |
 | `name`, `description`, `model_types` | Optional provider-local metadata |
 | `interfaces` | Required ordered array; may be empty when endpoint support is unknown |
@@ -383,9 +393,11 @@ verified binding when a new candidate is unresolved. Feed imports MUST NOT infer
 identity from suffix matching, lowercasing native IDs, vendor ownership strings,
 or the rolling `models` list. A conflicting binding is reported for review;
 sync MUST NOT silently rename an existing offer. Maintainer bindings live on
-the ledger and survive curation changes. A known binding missing from a provider
-record is materialized by sync/migration and rejected if still missing or
-different at publication validation. Provider-model `id` is removed in this beta;
+the ledger and survive curation changes. A known binding with an ID present in
+the current identity audit is materialized by sync/migration and rejected if
+still missing or different at publication validation. A historical binding whose
+ID is absent is reported, never silently cleared or reassigned to pass the audit.
+Provider-model `id` is removed in this beta;
 curated `models[].id` equals the corresponding `canonical_id`.
 
 Generated `models[].providers` contains only references
@@ -993,8 +1005,9 @@ availability refresh.
 Provider jobs are isolated: failure of provider A does not prevent a validated
 transaction for provider B from being proposed. Curation discovery and provider
 sync stages do not write each other's source trees. A final publication step
-reconciles curated availability and builds a coherent artifact pair; it never
-deletes provider offers because of curation. Dry-run computes the same candidate
+reconciles curated availability, audits all canonical IDs against OpenRouter,
+and builds a coherent artifact pair; it never deletes provider offers because
+of curation. Dry-run computes the same candidate
 and validation as write mode, without changing source/dist files.
 
 The machine-readable report includes provider/feed ID, outcome (`updated`,
@@ -1007,6 +1020,83 @@ and IDs belong to source sync state/reporting, not invented build timestamps.
 
 ## 10. CI and release contract
 
+### 10.1 Mandatory OpenRouter canonical identity audit
+
+Every scheduled/manual sync and publication run MUST fetch OpenRouter's full
+model list from `https://openrouter.ai/api/v1/models`, using the
+[documented list API](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties).
+Omit `offset`, `limit`, and all filtering parameters to request the full list.
+Do not substitute a user-filtered catalog, a curated family subset, a provider's
+own feed, or the previous run's cached response. Request execution remains
+bounded and uses the explicit authentication rules in section 8.2.
+
+The source root has `identity_source: {kind: openrouter, request: ...}`. Its
+`request` uses the same URL/header/auth shape as provider feeds, with the fixed
+full-list URL above and no query filters. Unknown identity-source kinds fail
+the audit. Authentication is explicit; the documented bearer configuration uses
+`auth: {kind: bearer, env: OPENROUTER_REGISTRY_API_KEY}`, bound to a repository
+secret by the trusted workflow. An explicitly configured `none` requires
+verified anonymous full-list support; a failed authenticated request never
+downgrades to anonymous. This source-only configuration is not published.
+
+The workflow MUST perform these stages in order:
+
+1. Fetch and validate one complete identity snapshot for the run. Require a
+   successful response with a nonempty `data` array, well-formed unique IDs,
+   and understood full-list semantics. Missing/malformed IDs, duplicate IDs,
+   truncation, an unexpected continuation, or unsupported pagination make the
+   audit unavailable; a successful HTTP status alone is insufficient. Unknown
+   optional metadata remains acceptable. If the API changes its completeness
+   contract, update the adapter before using it as authority.
+2. Stage provider imports, identity bindings, curation, and any agentic enrichment
+   against that same snapshot. These stages may proceed for diagnostic purposes
+   when fetching fails, but cannot commit/publish a sync candidate in that run.
+3. After all mutations, scan the complete final candidate: every `models[].id`
+   and every present `providers[].models[].canonical_id`, including unchanged,
+   non-curated, manually maintained, suspended, and withdrawn records. Every
+   value MUST exactly match a `data[].id` in the run's OpenRouter snapshot.
+   `canonical_slug`, suffix stripping, case folding, and historical evidence
+   are not substitutes. Also validate each provider binding's same-model evidence;
+   merely finding a real but unrelated OpenRouter ID does not validate a mapping.
+4. Check the source ledger for missing required current bindings and conflicting
+   mappings. Report unreferenced historical IDs separately; they may remain in
+   the source ledger but cannot justify an absent ID in either public artifact.
+   Unbound native offers remain valid and are explicitly counted, not mislabeled
+   as verified canonical IDs. Do not clear existing IDs automatically to make
+   the audit pass or infer provider withdrawal from OpenRouter absence.
+5. Only after a passing audit, run structural validation, deterministic build,
+   and stale-dist checks, then commit/propose the complete source/artifact pair.
+   Bind the audit to a digest of the complete candidate inputs and the final
+   artifact snapshot. Any later source change, including agentic edits or rebase
+   changes, invalidates the result and requires another audit. A later publication
+   run fetches fresh evidence rather than treating an old PR report as approval.
+
+The machine-readable audit records `outcome` (`passed`, `invalid_ids`, or
+`unavailable`), source URL, fetch time, response SHA-256, run observation ID,
+candidate digest, final artifact snapshot when built, counts of checked
+references/distinct IDs/unbound offers, and every mismatch with source field
+path, provider/native identity where relevant, and diagnostic code. Persist
+the public response as a workflow audit artifact for reproduction; never store
+request credentials. Reports distinguish `canonical_id_not_found`,
+`canonical_binding_conflict`, and `canonical_source_unavailable`.
+
+Any invalid referenced ID or unavailable/incomplete identity snapshot fails the
+global publication gate and the final workflow status. Preserve the last valid
+published pair, source bindings, and provider inventory; retain the failure
+report and staged proposals for review without updating the publishable sync PR.
+A missing ID requires reviewed correction, a verified migration to a current ID,
+or removal of the public binding while retaining the native offer and historical
+evidence. No automatic deletion, guessed remapping, or historical-ID exemption
+is allowed. An ordinary provider-feed failure may still permit unrelated valid
+updates; failure of this global audit permits no candidate publication.
+
+Offline contributor checks and deterministic rebuilds may use a pinned synthetic
+or recorded snapshot. They MUST identify that evidence and cannot claim fresh
+OpenRouter validation or satisfy the trusted publication gate. Runtime readers
+continue to use admitted registry snapshots without live OpenRouter requests.
+
+### 10.2 Trusted workflow and publication
+
 Scheduled sync runs on trusted repository code, using GitHub repository secrets
 explicitly bound to feed environment names. For example:
 
@@ -1014,6 +1104,7 @@ explicitly bound to feed environment names. For example:
 - name: Sync deterministic registry feeds
   env:
     EXAMPLE_REGISTRY_API_KEY: ${{ secrets.EXAMPLE_REGISTRY_API_KEY }}
+    OPENROUTER_REGISTRY_API_KEY: ${{ secrets.OPENROUTER_REGISTRY_API_KEY }}
   run: cargo run -p dist-helper -- registry sync --write --report target/registry-sync.md
 ```
 
@@ -1030,17 +1121,18 @@ manual trusted sync uses the checked-in feed URL/auth configuration. An agentic
 enrichment step receives only its own credentials, not all provider feed keys,
 and cannot change feed URLs, auth, ownership, or CI policy as part of sync.
 
-Feed failures are collected, not swallowed. The scheduled workflow validates
-and proposes successful independent provider updates, includes the failure
-summary, and records an unsuccessful final run status when required feeds fail
+Feed failures are collected, not swallowed. Subject to the global identity audit,
+the scheduled workflow validates and proposes successful independent provider
+updates, includes the failure summary, and records an unsuccessful final run status when required feeds fail
 or lack secrets. A failure does not publish an invalid pair or masquerade as
 “already up to date.” Implementation must arrange the report/build/PR steps
 and final failure step explicitly so an early nonzero exit does not discard
 successful independent results.
 
-Before publication, run source validation, deterministic build, and stale-dist
-check; commit both source and generated artifacts together. Readers switch a
-whole validated pair atomically. Private cache layout/versioning must prevent an
+Before publication, pass the canonical identity audit, source validation,
+deterministic build, and stale-dist check; commit both source and generated
+artifacts together. Readers switch a whole validated pair atomically.
+Private cache layout/versioning must prevent an
 old unversioned cache from being mistaken for v1. Publish v1 through an explicit
 v1 artifact location/configuration; do not replace the legacy consumer's default
 feed in place during beta. A historical legacy snapshot may remain pinned, but

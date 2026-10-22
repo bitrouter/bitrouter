@@ -1,7 +1,7 @@
 # Registry v1 delivery and conformance plan
 
 Status: **design only; implementation not started.** Contract revision:
-[`1.0.0-beta.2`](REGISTRY_V1_SPEC.md). Date: 2026-10-22.
+[`1.0.0-beta.3`](REGISTRY_V1_SPEC.md). Date: 2026-10-22.
 
 This work stacks on [#990](https://github.com/bitrouter/bitrouter/pull/990),
 `codex/gateway-multi-instance` at
@@ -27,7 +27,7 @@ layout. The v1 migration must respect the parent's service/AI ownership split.
 | `apps/bitrouter/src/gateway/routing/` and automatic selector callers | Model alias and operation routing integration | Curated automatic candidates separate from explicit/provider inventory; collision-free native selectors |
 | `apps/bitrouter/src/config/mod.rs`, `apps/bitrouter/build.rs` | Unversioned default URL and build-time embedded catalogs | v1 artifact URL, exact beta pin, package directory/cache migration |
 | `helpers/dist-helper/src/chart.rs` | Existing envelope/model fields | Read v1; distinguish curated versus inventory views without dropping unknown entries |
-| `.github/workflows/registry-sync.yml` | Single deterministic stage, no provider feed env bindings | Explicit repository-secret env bindings, isolated outcomes, failure summaries and coherent publication |
+| `.github/workflows/registry-sync.yml` | Single deterministic stage, no provider feed env bindings | Explicit secret bindings, full OpenRouter canonical audit after all edits, isolated provider outcomes and gated publication |
 | `registry/README.md`, `docs/README.md`, `skills/bitrouter/` | Documentation of current lifecycle and defaults | Update when behavior ships; this design only adds links/status notices |
 
 The design does not modify `registry/`, runtime code, workflows, or packaged
@@ -76,6 +76,8 @@ switches yet. Process-boundary survival checks follow in P4.
   historical evidence after delisting. Known bindings must be materialized;
   uncertain ones remain absent without discarding the native offer. Do not
   fabricate IDs, substitute `canonical_slug`, or silently migrate identities.
+  Retained history cannot authorize a canonical ID absent from the publication
+  run's OpenRouter list; explicit resolution must preserve the native inventory.
 - Move copied model facts needed for explicit routing into provider interfaces.
   Removing a curated record must not erase limits, capabilities, or a canonical
   binding needed by an older still-active offer.
@@ -111,6 +113,11 @@ explained in the migration report, not frozen in permanent provider-specific tes
 - Implement idempotent run observation IDs, atomic provider writes, dry-run
   parity, and sanitized machine-readable reports. `models_dev` and reviewed
   agentic output use the same update/ownership validator.
+- Implement the independent full-list identity source from spec section 10.1:
+  explicit source-root request/auth configuration, bounded complete fetch,
+  exact ID membership and binding validation over the whole candidate, and
+  reproducible audit reports. Historical membership and stale caches cannot
+  turn an unavailable or failed current audit into success.
 
 Exit: C14–C22 pass with a local synthetic HTTP server and synthetic credentials.
 No live provider key is required for CI fixtures.
@@ -164,9 +171,20 @@ path. Recheck C39 through runtime admission, not just standalone parsing.
 - Bind each key only to the deterministic sync step that needs it. Keep the
   agentic stage's credentials separate. Validate contributor PRs offline; trusted
   scheduled/manual jobs alone perform credentialed provider requests.
+- Bind the identity source's `OPENROUTER_REGISTRY_API_KEY` explicitly when using
+  the documented bearer mode. Fetch the unfiltered full OpenRouter model list
+  once per publication run; audit every final canonical reference after both
+  deterministic and agentic edits, including unchanged/non-curated/inactive rows.
+  Persist the source response/hash, fetch time, candidate digest, report, and
+  built artifact snapshot as evidence. Later edits/rebases require revalidation;
+  a later publication run needs a fresh fetch. Offline fixture checks do not
+  satisfy this gate.
 - Continue independent successful provider work after feed failures. A final
   always-run outcome step fails the scheduled run when required feeds failed;
-  report/build/PR steps still propose the coherent successful portion. Treat
+  report/build/PR steps may propose the coherent successful portion only after
+  the global identity audit passes. Invalid IDs or an unavailable identity source
+  block the entire sync publication/PR update; retain reports and staged proposals
+  for review, without deleting or clearing provider records to make it pass. Treat
   every configured feed as required in this beta; optional feeds need an
   explicit later contract, not a swallowed error.
 - Update the registry README, skill/default configuration documentation, source
@@ -177,7 +195,7 @@ path. Recheck C39 through runtime admission, not just standalone parsing.
   prerequisite and must be reported; do not invent them or commit placeholders
   as credentials. Incompatible design changes before freeze increment beta.
 
-Exit: C29–C31 pass; the acceptance record identifies the tested source revision,
+Exit: C29–C31 and C40–C44 pass; the acceptance record identifies the tested source revision,
 artifact snapshot, configured/skipped providers, and remaining live coverage.
 
 ## 3. Conformance matrix
@@ -225,9 +243,14 @@ of unintended catalog/routing/credential effects.
 | C34 | Token, answered-question, and completed-request decision tariffs; partial answers, retries, cached/repeated inputs | Exact registered counter and applicable tariff; no question/request confusion, inferred multiplication, missing charge, or cross-interface rate fallback |
 | C35 | Malformed, oversized, deeply nested, or unsupported catalog refresh in a running host | Bounded normal error with scope/recovery hint; process survives, last good pair and independent routes still work |
 | C36 | Cold start has no usable cache and an incompatible bundled catalog | Empty registry, actionable compatibility error; control surfaces/local routes survive; registry-dependent requests fail normally |
-| C37 | Verified, unknown, delisted, renamed, and conflicting OpenRouter identities | Known `canonical_id` required; history retained; uncertain offers remain native-addressable; conflicts fail reviewably without silent rebinding |
+| C37 | Verified, unknown, delisted, renamed, and conflicting OpenRouter identities | Current known `canonical_id` required; history retained but cannot bypass current audit; uncertain offers remain native-addressable; conflicts fail reviewably |
 | C38 | User-defined router explicitly selects non-curated canonical/native offers with no quality scores | Routes work when execution gates pass; default automatic pool unchanged; score-dependent policy reports missing evidence |
 | C39 | Unknown protocol profile/question type/meter among known interfaces; source/cache round-trip | Preserve raw values; disable only unsupported scope; unknown question semantics grant no support and unknown meters make price unavailable |
+| C40 | Full-list audit of curated IDs and all provider canonical IDs, including unchanged/non-curated/inactive rows | Every reference is checked against exact `data[].id`; neither `canonical_slug` nor curation filters substitute; missing known bindings and unrelated-model bindings fail |
+| C41 | One or multiple invalid canonical IDs while other provider updates succeed | Report all offending paths/IDs; global audit fails; no source/artifact publication or sync PR update; existing inventory/published pair preserved |
+| C42 | OpenRouter timeout/auth failure, empty/malformed/duplicate-ID/truncated response, unexpected pagination, or old cache | Audit unavailable and final CI failure; no historical/cache fallback, credential downgrade, or absence-driven deletion |
+| C43 | Historical ID no longer listed, with and without public references | Referenced ID blocks publication; unreferenced ledger history is reported and retained; reviewed native-only resolution does not withdraw provider offer |
+| C44 | Agentic edit, manual edit, rebase, or later publication after a passing audit | Changed candidate requires a new audit; later run refetches; recorded evidence/digests identify exact validated output; offline checks never claim live success |
 
 ## 4. Validation and review record
 
@@ -259,6 +282,9 @@ Pre-freeze review must specifically challenge:
   including cold start without a compatible fallback?
 - Does curation expiry or missing quality scoring accidentally disable an
   explicitly configured route or erase a verified canonical binding?
+- Does the final audit cover all canonical references after every mutation, or
+  only new/curated rows? Can historical evidence, stale data, or a real but
+  unrelated OpenRouter ID incorrectly authorize publication?
 - Does a missing secret stop a provider safely while still making scheduled
   synchronization failure visible?
 

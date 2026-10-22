@@ -7,7 +7,7 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 - [Registry v1 specification](specs/REGISTRY_V1_SPEC.md) and
   [delivery/conformance plan](specs/REGISTRY_V1_IMPLEMENTATION.md) — normative
-  `1.0.0-beta.2` design preview, stacked on #990; implementation pending.
+  `1.0.0-beta.3` design preview, stacked on #990; implementation pending.
   Separates curated automatic-routing models from provider inventories and
   defines protocol names, extensibility, mapped/authenticated feeds, and rollout.
 
