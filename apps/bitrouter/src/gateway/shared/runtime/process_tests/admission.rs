@@ -68,6 +68,8 @@ type Requests = JoinSet<Result<(String, Wire)>>;
 #[derive(Clone, Copy)]
 enum Campaign {
     Concurrency,
+    #[cfg(feature = "http2")]
+    Http2Concurrency,
     Identity,
     Guards,
     GuardCost,
@@ -77,6 +79,13 @@ enum Campaign {
 #[ignore = "requires PostgreSQL CREATEDB privilege and BITROUTER_TEST_GATEWAY_BINARY"]
 async fn official_tenant_and_aliased_account_concurrency_cross_replicas() -> Result<()> {
     run(Campaign::Concurrency).await
+}
+
+#[cfg(feature = "http2")]
+#[tokio::test]
+#[ignore = "requires PostgreSQL CREATEDB privilege and an HTTP/2 BITROUTER_TEST_GATEWAY_BINARY"]
+async fn official_http2_tenant_and_account_concurrency_cross_replicas() -> Result<()> {
+    run(Campaign::Http2Concurrency).await
 }
 
 #[tokio::test]
@@ -128,6 +137,29 @@ async fn campaign(
             }
             _ => World::start(fixture, &mock.base).await?,
         };
+        #[cfg(feature = "http2")]
+        let world = {
+            let mut world = world;
+            if matches!(case, Campaign::Http2Concurrency) {
+                world.http = reqwest::Client::builder()
+                    .no_proxy()
+                    .http2_prior_knowledge()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .retry(reqwest::retry::never())
+                    .timeout(Duration::from_secs(8))
+                    .build()?;
+                for address in world.replicas {
+                    let response = world
+                        .http
+                        .get(format!("http://{address}/health"))
+                        .send()
+                        .await?;
+                    ensure!(response.version() == reqwest::Version::HTTP_2);
+                    ensure!(response.status() == StatusCode::OK);
+                }
+            }
+            world
+        };
         for child in world.children {
             expected.insert(child, ExpectedExit::CleanServe);
         }
@@ -136,6 +168,8 @@ async fn campaign(
         }
         match case {
             Campaign::Concurrency => concurrency(&world, &mut mock, &mut requests).await?,
+            #[cfg(feature = "http2")]
+            Campaign::Http2Concurrency => concurrency(&world, &mut mock, &mut requests).await?,
             Campaign::Identity => identity(&world, &mut mock, &mut requests, expected).await?,
             Campaign::Guards => guards::campaign(fixture, &world, &mut mock, &mut requests).await?,
             Campaign::GuardCost => {

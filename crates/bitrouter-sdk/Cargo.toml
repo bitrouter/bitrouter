@@ -13,7 +13,9 @@ rust-version.workspace = true
 exclude = ["public-api-deps.txt", "public-api.pins"]
 
 [features]
-default = []
+default = ["http2"]
+# HTTP transport only; cleartext HTTP/2 requires explicit prior knowledge.
+http2 = ["reqwest/http2"]
 # Client transport only; this does not enable the application's scheduler.
 core = ["dep:tokio-tungstenite", "futures-util/sink"]
 
@@ -36,6 +38,6 @@ flate2 = "1"
 axum.workspace = true
 bytes.workspace = true
 http-body-util = "0.1"
-hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper = { version = "1", features = ["client", "server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util"] }

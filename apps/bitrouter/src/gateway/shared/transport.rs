@@ -1,11 +1,13 @@
-//! Bounded shared-mode HTTP/1 transport, separate from execution custody.
+//! Bounded shared-mode HTTP transport, separate from execution custody.
 //!
-//! Each connection serves one request. Hyper's DATA threshold does not bound
+//! Each HTTP/1 connection serves one request. Hyper's DATA threshold does not bound
 //! accumulated response heads on a persistent, pipelined connection. Disabling
 //! reuse also prevents an unread rejected body from admitting another request.
-//! Local mode keeps its existing transport.
+//! Optional HTTP/2 multiplexes bounded streams through the same Router.
 
 mod body;
+#[cfg(feature = "http2")]
+mod http2;
 mod io;
 pub(super) mod owned;
 
@@ -47,6 +49,8 @@ const METADATA_BYTES: usize = 65_536;
 #[derive(Clone, Copy)]
 pub(super) struct Limits {
     connections: usize,
+    #[cfg(feature = "http2")]
+    requests: usize,
     request_bytes: usize,
     header_timeout: Duration,
     request_timeout: Duration,
@@ -59,6 +63,8 @@ impl From<&SharedGatewayConfig> for Limits {
     fn from(config: &SharedGatewayConfig) -> Self {
         Self {
             connections: config.max_connections,
+            #[cfg(feature = "http2")]
+            requests: config.local_max_in_flight,
             request_bytes: config.max_request_bytes,
             header_timeout: Duration::from_millis(config.header_timeout_ms),
             request_timeout: Duration::from_millis(config.request_timeout_ms),
@@ -73,6 +79,8 @@ impl Limits {
     pub fn for_operator(config: &SharedGatewayConfig, connections: usize) -> Self {
         Self {
             connections,
+            #[cfg(feature = "http2")]
+            requests: connections,
             request_bytes: 2 * 1024 * 1024,
             ..Self::from(config)
         }

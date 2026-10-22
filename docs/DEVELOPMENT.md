@@ -460,6 +460,29 @@ transports use application `mcp`. ACP uses application `harness`. Existing
 `agents:` configuration and its schema remain compatible. The SDK currently has
 no server API; its gateway/control/evaluation methods do not enable service features.
 
+The application enables `http2` by default, forwarding `axum/http2`,
+`reqwest/http2`, `bitrouter-sdk/http2` and `dep:h2`. The SDK independently enables
+its own `http2` feature by default; dependencies with `default-features = false`
+must opt in explicitly. This is a transport capability for the existing HTTP
+and SSE APIs; it adds neither a TLS listener nor a gRPC server.
+
+The explicit no-default-features `gateway` and `gateway-shared` distributions
+remain HTTP/1-only. Their release identities and feature selections are
+unchanged: no optional application features for `gateway`, and exactly
+`db-postgres,multi-instance` for `gateway-shared`. Lean HTTP/2 builds are custom
+profiles:
+
+```sh
+# Local gateway with HTTP/2.
+cargo build --locked -p bitrouter --bin bro --no-default-features --features http2
+# Shared gateway and operator transport with HTTP/2.
+cargo build --locked -p bitrouter --bin bro --no-default-features --features multi-instance,http2
+```
+
+Both report `profile: "custom"` in `bro --json build-info`; the default build
+remains `full` and includes `http2`. Enabling `multi-instance` still requires
+explicit shared-mode configuration before it changes the runtime mode.
+
 AI observation declarations are ungated. Its pure conformance helpers use the
 default-off `testing` feature. The [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md)
 defines the final feature graph and isolated validation matrix.
@@ -562,6 +585,49 @@ The axum server is application-owned (`apps/bitrouter/src/gateway/http.rs`):
 | `GET  /metrics`                     | OTLP-migration banner (see below)|
 | `GET  /health`                      | health check                    |
 
+With `http2`, local mode uses axum's HTTP/1 and HTTP/2 serving on the same
+cleartext port. Shared inference and the separate operator listener each detect
+the HTTP/2 prior-knowledge preface on their existing port and otherwise serve
+HTTP/1. Shared/operator HTTP/1 still closes after each request, without upgrades;
+HTTP/2 reuses a connection for concurrent streams. There is no h2c Upgrade
+handshake, TLS termination or new gRPC server.
+
+Shared HTTP/2 connections admit at most
+`min(128, gateway_state.local_max_in_flight)` concurrent streams, with a
+process-wide transport stream cap of `gateway_state.local_max_in_flight` across
+the inference listener. The operator listener uses
+`min(128, operator.max_connections)` per connection and `operator.max_connections`
+across its connections. Existing connection/task caps remain independent.
+Stream futures belong to the connection task, so connection teardown or forced
+shutdown drops all of its handlers and body owners. Each stream has its own
+body-ingress deadline; `write_stall_timeout_ms` also bounds waiting for HTTP/2
+flow-control capacity. Waiting for inference output is not a network write
+stall. See the [shared gateway reference](../skills/bitrouter/references/shared-gateway.md)
+for configuration bounds and drain behavior.
+
+Shared HTTP/2 also accounts at most 1 MiB of queued response metadata per
+connection, including overhead, trailers and overload responses. Reservations
+are released when the corresponding END_HEADERS reaches the socket; cancelled
+metadata discarded before encoding is reclaimed after the encoder flushes.
+Application completion alone does not release reservations. Exhaustion closes that connection
+to bound encoder accumulation under a non-reading or trickling peer. This is
+a metadata budget, not an exact RSS limit. The header timeout covers the initial
+preface/SETTINGS and incomplete frames/header blocks; an idle, established
+connection and a healthy long inference are not timed out by that deadline.
+Response fields and trailers use HPACK never-index literals so a peer's large
+advertised table size cannot retain arbitrary metadata after those writes finish.
+Their wire values and static Huffman compression are preserved.
+
+For cleartext HTTP/2, SDK callers explicitly set
+`bitrouter_sdk::gateway::TransportOptions::http_version` to
+`HttpVersion::Http2PriorKnowledge`; operator callers use
+`OperatorOptions::http_version` with the same enum. The default `Auto` policy
+uses HTTP/1.1 on cleartext HTTP and negotiates HTTP/2 over HTTPS when supported.
+With SDK defaults disabled and no `http2` feature, `Auto` uses HTTP/1.1 and the
+prior-knowledge option is unavailable. Protocol selection does not probe or
+retry a request with another HTTP version. Core WebSocket upgrades retain their
+separate HTTP/1.1 client. See the [SDK transport options](../crates/bitrouter-sdk/README.md).
+
 `GET /metrics` is retained for endpoint compatibility only. Prometheus accumulation was removed: metrics are now *pushed* over OTLP by application telemetry, and the endpoint serves a short banner pointing at `plugins.bitrouter-telemetry.otel` (`EmptyMetricsRenderer` in `apps/bitrouter/src/assemble.rs`). The gateway `observability::metrics::MetricsRenderer` trait and its `text/plain; version=0.0.4` content-type default still exist — a deployment that wants a real pull-based endpoint implements the trait itself.
 
 Daemon mutation (`stop` / `restart` / `reload`) runs over a Unix domain socket.
@@ -658,6 +724,24 @@ cargo test --workspace --all-features
 ```
 
 CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum, the OTel stack never reaches the SDK at any feature combination, and the two OTLP transports stay isolated), `sdk-public-api` (see below), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../CLAUDE.md).
+
+### HTTP/2 feature isolation
+
+The `application-features` matrix checks the lean `http2` and
+`multi-instance,http2` combinations and runs `http2_ingress` for both. Shared
+transport unit tests run with `multi-instance` both with and without `http2`,
+covering HTTP/1 compatibility as well as HTTP/2 bounds and connection ownership.
+The all-features gateway integration shard also runs `http2_ingress`.
+The PostgreSQL backend job builds the lean HTTP/2 executable and exercises
+tenant/account concurrency enforcement across two official gateway processes.
+
+`feature-isolation` checks the SDK without default features, including its
+independent `core` option, and runs the feature-off `transport_protocol` tests.
+Production dependency guards use `cargo tree -e normal,build` and require `h2`
+to be absent only from the application's minimal `''` and `multi-instance`
+feature selections. Test dependencies and other combinations such as
+`otel-grpc` may legitimately require `h2`; absence from every HTTP/2-disabled
+feature combination is not a contract.
 
 ### Shared gateway distribution
 
