@@ -2,6 +2,8 @@
 
 The next contract is the [Registry v1 beta protocol](../docs/specs/registry-v1/README.md),
 with [conformance requirements](../docs/specs/registry-v1/conformance.md).
+Its [first-party consumption profile](../docs/specs/registry-v1/README.md#11-bitrouter-first-party-consumption-profile)
+defines source selection, local-first startup, refresh, and the beta-to-stable transition.
 The proposed [sync publication gate](../docs/specs/registry-v1/README.md#101-mandatory-openrouter-canonical-identity-audit)
 checks every published canonical ID against the full OpenRouter list on each run.
 It is design-only; the remainder of this README documents the current

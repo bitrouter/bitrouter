@@ -1,7 +1,7 @@
 # Registry v1 worked examples
 
 These are informative synthetic examples for
-[`1.0.0-beta.4`](../README.md), not production records or claims about commercial
+[`1.0.0-beta.5`](../README.md), not production records or claims about commercial
 model support, prices, or credentials. The provider URLs and model identities
 are fictional. The identity-source request uses the real documented API shape;
 its response fixture is synthetic and establishes no live OpenRouter validity.
@@ -34,6 +34,10 @@ its response fixture is synthetic and establishes no live OpenRouter validity.
 - [`charges.json`](charges.json) gives exact proportional decision/request and
   disjoint-token arithmetic. Three decisions at USD 0.20 per 1000 cost USD 0.0006.
   No per-question/request rounding or started-block charging is implied.
+- [`consumption.json`](consumption.json) traces first-party startup from a stale
+  source-bound cache, a failed refresh, a successful unchanged download, and
+  disabling automatic refresh. Its settings are the proposed v1 contract, not
+  a claim of current CLI support; its URL is fictional and never fetched.
 
 The mixed language/decision offer retains one native and canonical identity, with
 separate interfaces and rates. The judge illustrates `decisions/default` and two
@@ -65,3 +69,18 @@ host alive. Any missing referenced canonical ID, failed complete identity fetch,
 or post-audit candidate edit prevents publication without deleting native offers.
 See the [conformance requirements](../conformance.md#conformance-cases) for the
 corresponding observable behavior; these fixtures are not completed runtime tests.
+
+The consumption trace uses `registry.json` as its accepted complete document.
+At startup it serves the stale cache immediately; an incompatible response
+preserves both the document and old `checked_at`, then schedules a retry one hour
+later. An identical valid response advances only the local check time and
+schedules the next check 24 hours later. Disabling automatic refresh cancels
+that timer without removing the admitted document. Document/evidence timestamps
+are never renewed by these events.
+
+An implicit source in a beta-only release resolves to that release's immutable
+commit URL. A stable-supporting software upgrade changes the implicit default
+to the stable v1 stream and uses that source's local data; an explicit URL
+remains fixed. A custom URL never borrows the official bundle on failure. See
+the [first-party consumption profile](../README.md#11-bitrouter-first-party-consumption-profile)
+for the default URL and complete selection rules.

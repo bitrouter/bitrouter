@@ -1,8 +1,8 @@
 # BitRouter Registry v1
 
-Status: **normative beta protocol, `1.0.0-beta.4`.**
+Status: **normative beta protocol, `1.0.0-beta.5`.**
 
-Date: 2026-10-22. Wire version: **`"version": 1`**.
+Date: 2026-10-23. Wire version: **`"version": 1`**.
 
 MUST and MUST NOT express mandatory requirements; SHOULD expresses a recommended
 practice with a justified exception; MAY expresses an optional behavior. The
@@ -12,10 +12,11 @@ synthetic examples. Publication of this contract does not assert implementation
 availability in a particular release.
 
 Beta revisions may change incompatibly; stable v1 has the compatibility
-commitments in section 3. Beta 4 uses one public document, no reverse index, and
-JSON Pointer mappings. It makes reconciliation, price arithmetic, and execution
-metadata explicit. All published canonical IDs still require a fresh complete
-OpenRouter audit; historical evidence cannot replace current validation.
+commitments in section 3. Beta 5 adds the BitRouter first-party consumption
+profile in section 11. It retains one public document, JSON Pointer mappings,
+explicit reconciliation, price arithmetic, and execution metadata. All published
+canonical IDs require a fresh complete OpenRouter audit; historical evidence
+cannot replace current validation.
 
 ## 1. Scope and decisions
 
@@ -62,7 +63,7 @@ version directory:
 
 | Path | v1 content |
 | --- | --- |
-| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.4`, UTC `as_of`, and source-only `identity_source` (section 10.1) |
+| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.5`, UTC `as_of`, and source-only `identity_source` (section 10.1) |
 | `registry/models/<vendor>.yaml` | Sequence of curated model records |
 | `registry/providers/<provider>.yaml` | One provider record, including source-only sync configuration |
 | `registry/model-discovery.yaml` | Curation policy; never provider inventory policy |
@@ -78,7 +79,7 @@ The public document has this envelope (example contains no records):
 ```json
 {
   "version": 1,
-  "spec_revision": "1.0.0-beta.4",
+  "spec_revision": "1.0.0-beta.5",
   "as_of": "2026-10-22T00:00:00Z",
   "requires": [],
   "data": {"models": [], "providers": []}
@@ -130,7 +131,7 @@ values reject the artifact; there is no v0/unversioned fallback in the v1 reader
 catalog snapshot. Its major MUST match `version`.
 
 During beta, readers MUST accept only explicitly supported prerelease revisions;
-support for `1.0.0-beta.4` does not imply support for `beta.5` or stable `1.0.0`.
+support for `1.0.0-beta.5` does not imply support for `beta.6` or stable `1.0.0`.
 An incompatible beta edit increments `spec_revision`, even though `version`
 remains 1. Production defaults MUST NOT follow an unpinned beta artifact stream.
 
@@ -227,9 +228,10 @@ not claim that an available upgrade implements a feature without evidence.
 Malformed source or missing credentials also identify the actual corrective
 action; repeatedly refreshing the same incompatible data is not recovery.
 
-A refresh failure retains the last complete valid document without refreshing its
-evidence timestamp. With no previous document, try a compatible bundled document; if
-none is usable, the registry view remains empty. The host remains alive with
+A refresh failure retains the last complete valid document for the selected
+source without refreshing its evidence timestamp. With no previous document,
+try an eligible compatible bundled document; if none is usable, the registry
+view remains empty. The host remains alive with
 explicitly configured usable routes and its diagnostic/control surfaces.
 Requests requiring unavailable registry routes receive a normal error response.
 An explicit request for an unsupported interface returns an error with upgrade
@@ -1239,7 +1241,153 @@ v1 artifact location/configuration; do not replace the legacy consumer's default
 feed in place during beta. A historical legacy snapshot may remain pinned, but
 v1 code does not maintain a dual-format reader or promise ongoing v0 updates.
 
-## 11. Conformance and stable freeze
+## 11. BitRouter first-party consumption profile
+
+This section is normative for BitRouter's model/provider registry integration.
+Other readers follow the document and compatibility rules but may choose their
+own source and refresh policy. These are v1 behavior requirements, not a claim
+that the current CLI already implements these settings. No discovery manifest,
+companion file, provider-feed access, or runtime OpenRouter audit is required.
+
+### 11.1 Configuration, default source, and version selection
+
+The `registry` configuration has three consumption settings:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Load and use registry data; `false` also disables registry downloads |
+| `url` | Omitted | Complete HTTPS document URL; when supplied, replaces the build-selected default |
+| `auto_refresh` | `true` | Allow startup and periodic background downloads; `false` uses only eligible local data |
+
+These settings do not change locally configured routes or existing credential,
+access, and interface eligibility rules. Other application settings may further
+restrict whether registry defaults are applied. Artifact downloads MUST NOT
+inherit provider inference credentials or source-feed secrets.
+
+A release supporting stable v1 uses this default URL:
+
+```text
+https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry/v1/registry.json
+```
+
+This becomes the stable v1 update stream when `1.0.0` is first published. From
+then on, publication to that location MUST contain only stable `1.x.y`
+documents. Future beta or version 2 artifacts MUST NOT replace it. This defines
+the publication contract; it does not assert that the URL already serves v1.
+
+A beta-only release instead MUST embed a default URL pinned to a complete
+40-hex Git commit in the same repository, with the same artifact path, and
+declare the exact beta revisions it accepts. A beta-only release MUST NOT
+default to `main`, a moving tag, or a guessed latest-beta URL. Release metadata MUST
+identify its pin; the packaged document must come from that pin. With `url`
+omitted and no valid default pin, use an empty registry and disable automatic
+downloads with a diagnostic rather than inventing a source. An explicit URL
+can still be used normally.
+
+The software selects wire major 1 and applies section 3 to every document,
+including custom URLs. An explicit `url` is retained across software upgrades;
+it is never rewritten to follow a new release or channel. There is no version
+negotiation, probing for other majors, or automatic downgrade to legacy files.
+An operator pins a particular snapshot by choosing an immutable URL; disabling
+`auto_refresh` alone is an offline policy, not a reproducible snapshot pin.
+
+### 11.2 Startup and cache
+
+When `enabled` is false, BitRouter MUST NOT load registry cache/bundle data or
+make registry requests. Otherwise it resolves one source and starts as follows:
+
+1. Load and fully validate that source's disk cache under the installed reader's
+   compatibility policy. Use it immediately if valid, even when a refresh is due.
+2. If no usable cache exists, try the packaged document. It is eligible only
+   when bound to the build-selected default source currently in use and accepted
+   by this reader. It MUST NOT supplement or replace a custom source's data.
+3. If neither is usable, start with an empty registry. Local routes and control
+   surfaces remain available; registry-dependent requests receive normal errors.
+4. If automatic refresh is enabled and due, fetch in the background. Startup
+   readiness MUST NOT wait for network access. `auto_refresh: false` suppresses
+   this download as well as periodic downloads.
+
+Use the platform's user cache directory under a BitRouter-owned namespace.
+Private cache encoding/layout is not a wire contract, but its key MUST include
+the exact resolved document URL, including query and Git revision, and wire
+major. Never infer a source for an old unbound cache, mix legacy/v1 data, or
+reuse another source's document or HTTP validators. Cache the complete document, preserving
+unknown data, and revalidate it on every load. Bundled and cached data are whole
+alternatives, never a field-by-field union.
+
+Cache metadata records `checked_at`, the local UTC time of the last successful
+download and admission for that source. Reading a cache, loading a bundle, or
+failing a refresh does not advance it. Bundled data alone has no successful
+remote check. A missing, invalid, or future `checked_at` makes a refresh due;
+it does not invalidate an otherwise valid document. Cache age only schedules
+refresh; it grants no new model availability or curation evidence. Expiries
+continue to apply against current UTC even while offline.
+
+### 11.3 Automatic refresh and failures
+
+With `auto_refresh: true`, a refresh is due when there has been no successful
+check or 24 hours have elapsed since `checked_at`. A running host MUST schedule
+that background refresh without requiring restart or an inference request.
+Only one refresh for the selected source may be in flight. Use a complete GET
+of the configured document; HTTP conditional requests are not required by this
+profile. Each attempt has a 5-second connection timeout and 15-second total
+HTTP timeout, plus bounded response size and parser depth under section 3.3.
+
+Only a successful HTTP 200 containing a complete valid compatible document
+counts as success. Do not follow redirects or fall back to another URL. A
+candidate whose `as_of` precedes the current document for the same source is
+rejected as a rollback; switching to an explicit historical URL is a source
+change, not an exception to this check.
+
+After validation, atomically replace the registry view used by subsequent route
+selection, respecting local overrides and execution gates. In-flight requests
+may finish against their captured view. Persist the full accepted document and
+`checked_at` atomically; a failed disk write MUST preserve the old disk cache,
+report unavailable persistence, and keep the new valid in-memory view active.
+A valid identical download also advances `checked_at`. No download or cache
+operation rewrites `as_of` or provider/model evidence timestamps.
+
+After success, the next automatic check is due 24 hours later. After any
+download/admission failure, retain the current document and retry once after
+1 hour; never spin or retry on every routed request. Failure backoff may be
+process-local; a restart may make one new attempt when the cache is still due.
+If persistence failed after admission, use the successful check's in-memory
+schedule and report that it was not saved. With no retained document, the same
+eligible-bundle/empty fallback from section 11.2 applies. Retry scheduling does
+not suppress the corrective or upgrade diagnostic in section 3.3, and does not
+claim that a compatibility problem has been resolved.
+
+Disabling automatic refresh cancels scheduled downloads. Disabling the registry
+also removes its contribution to subsequent routing. Changing only
+`auto_refresh` retains the admitted document and applies the new scheduling
+policy. A source change or re-enabling the registry reapplies startup selection.
+Discard late responses from a previous configuration. Never retain the previous
+source as fallback.
+
+Registry updates do not install software, fetch adapters, enroll subscriptions,
+or grant credentials.
+
+### 11.4 Beta-to-stable transition
+
+The first stable publication does not move a beta consumer off its pin. Moving
+from beta to stable requires software that explicitly supports stable v1:
+
+- With `url` omitted, that software resolves the stable default URL, selects
+  that source's cache or its eligible stable bundle, and schedules refresh by
+  the ordinary rules above. It does not import a beta pin's cache as stable.
+- With an explicit beta/snapshot/custom `url`, retain that URL. Use its document
+  only if the installed reader explicitly supports its revision; otherwise
+  report incompatibility with upgrade/source guidance and apply ordinary
+  same-source fallback. Stable support does not imply beta support.
+
+Once on stable v1, compatible stable `1.x.y` documents update at the same URL
+without a software upgrade. Unknown optional values follow section 3; unknown
+required semantics reject or disable only their prescribed scope. Neither a
+beta revision nor a new major is adopted automatically. A later protocol major
+needs its own explicit artifact location and supporting software; existing v1
+consumers keep the stable v1 stream.
+
+## 12. Conformance and stable freeze
 
 Implementations are evaluated against the [conformance requirements](conformance.md)
 for the roles and features they support. Schemas express structural rules; they
@@ -1251,7 +1399,7 @@ consistent worked examples, and verified old-reader/new-data compatibility.
 The producer/consumer obligations and compatibility commitments in this contract
 remain authoritative independently of implementation layout and release cadence.
 
-## 12. References
+## 13. References
 
 External references explain why the feed contract is deliberately explicit:
 [OpenAI's listing](https://developers.openai.com/api/reference/resources/models/methods/list)

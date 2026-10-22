@@ -1,0 +1,62 @@
+{
+  "description": "Synthetic first-party trace; private cache/event encoding is illustrative, not a wire schema.",
+  "reader": {
+    "version": 1,
+    "supported_revisions": ["1.0.0-beta.5"]
+  },
+  "settings": {
+    "enabled": true,
+    "url": "https://registry.example.test/v1/registry.json",
+    "auto_refresh": true
+  },
+  "initial_cache": {
+    "source": "https://registry.example.test/v1/registry.json",
+    "document": "registry.json",
+    "checked_at": "2026-10-22T01:00:00Z"
+  },
+  "events": [
+    {
+      "at": "2026-10-23T02:00:00Z",
+      "event": "start",
+      "expected": {
+        "active_document": "registry.json",
+        "network_blocks_readiness": false,
+        "background_refresh": true
+      }
+    },
+    {
+      "at": "2026-10-23T02:00:01Z",
+      "event": "refresh_failed",
+      "diagnostic": "registry.unsupported_revision",
+      "observed_revision": "1.0.0-beta.6",
+      "expected": {
+        "active_document": "registry.json",
+        "checked_at": "2026-10-22T01:00:00Z",
+        "next_refresh_at": "2026-10-23T03:00:01Z",
+        "host_alive": true
+      }
+    },
+    {
+      "at": "2026-10-23T03:00:01Z",
+      "event": "refresh_succeeded",
+      "http_status": 200,
+      "response_document": "registry.json",
+      "expected": {
+        "active_document": "registry.json",
+        "checked_at": "2026-10-23T03:00:01Z",
+        "next_refresh_at": "2026-10-24T03:00:01Z",
+        "as_of": "2026-10-22T00:00:00Z"
+      }
+    },
+    {
+      "at": "2026-10-23T04:00:00Z",
+      "event": "set_auto_refresh",
+      "value": false,
+      "expected": {
+        "active_document": "registry.json",
+        "checked_at": "2026-10-23T03:00:01Z",
+        "next_refresh_at": null
+      }
+    }
+  ]
+}
