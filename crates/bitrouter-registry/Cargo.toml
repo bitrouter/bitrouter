@@ -20,6 +20,13 @@ num-bigint = "0.4"
 num-rational = "0.4"
 num-traits = "0.2"
 semver = "1"
+granit-parser = "0.0.7"
+reqwest.workspace = true
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
+tokio-rustls = "0.26"
+rcgen = "0.14"
+time = "0.3"

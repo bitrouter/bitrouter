@@ -1,73 +1,236 @@
-name: tencent
-metadata:
-  headquarters: CN
-  datacenters:
-    - SG
-  name: Tencent Cloud
-  privacy_policy_url: https://www.tencentcloud.com/document/product/301/17345
-  slug: tencent-cloud
-  status_page_url: https://status.tencentcloud.com
-  terms_of_service_url: https://www.tencentcloud.com/document/product/301/9248
-# Tencent Cloud "TokenHub" international (Singapore station) — an OpenAI-
-# compatible model marketplace re-serving DeepSeek / GLM / Kimi / MiniMax.
-# Bearer-token auth (OpenAI transport). Prices below are the Singapore-station
-# USD-per-1M-token rates. Manual provider (no auto_sync): TokenHub's catalog is
-# recorded here from the vendor's published model + price list.
-# Official: https://www.tencentcloud.com/ (TI / MaaS TokenHub)
-api_protocol:
-  - minimax/minimax-m3: [openai, responses, anthropic]
-  - "*": [openai, anthropic]
-api_base: https://tokenhub-intl.tencentcloudmaas.com/v1
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  # TokenHub bills these dated GA models at peak/off-peak rates. The registry
-  # is static, so publish the peak rates to avoid underestimating route cost.
-  - id: z-ai/glm-5.2
-    provider_model_id: glm-5.2
-    # Singapore station prices GLM-5.2 at the GLM-5.1 rate.
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-        cache_read: 0.26
-      output_tokens:
-        text: 4.4
-    capabilities:
-      - reasoning
-      - tools
-  - id: minimax/minimax-m2.7
-    provider_model_id: minimax-m2.7
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-      output_tokens:
-        text: 1.2
-    capabilities:
-      - reasoning
-      - tools
-  - id: minimax/minimax-m3
-    provider_model_id: minimax-m3
-    api_protocol: [openai, responses, anthropic]
-    # Context-tiered: inputs above 512k tokens bill at double the base rate
-    # (step function — the bracket's rate applies to the whole request).
-    pricing:
-      input_tokens:
-        no_cache: 0.6
-        cache_read: 0.12
-      output_tokens:
-        text: 2.4
-      context_tiers:
-        - above_input_tokens: 512000
-          input_tokens:
-            no_cache: 1.2
-            cache_read: 0.24
-          output_tokens:
-            text: 4.8
-    capabilities:
-      - reasoning
-      - tools
-status: active
-weight: 1
-submitted_at: 2026-05-23
+{
+  "api_base": "https://tokenhub-intl.tencentcloudmaas.com/v1",
+  "billing": "usage",
+  "metadata": {
+    "datacenters": [
+      "SG"
+    ],
+    "headquarters": "CN",
+    "name": "Tencent Cloud",
+    "privacy_policy_url": "https://www.tencentcloud.com/document/product/301/17345",
+    "slug": "tencent-cloud",
+    "status_page_url": "https://status.tencentcloud.com",
+    "terms_of_service_url": "https://www.tencentcloud.com/document/product/301/9248"
+  },
+  "models": [
+    {
+      "provider_model_id": "glm-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    },
+    {
+      "provider_model_id": "minimax-m2.7",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m2.7"
+    },
+    {
+      "provider_model_id": "minimax-m3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 512000,
+                "input_tokens": {
+                  "cache_read": 0.24,
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 512000,
+                "input_tokens": {
+                  "cache_read": 0.24,
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 512000,
+                "input_tokens": {
+                  "cache_read": 0.24,
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.12,
+              "no_cache": 0.6
+            },
+            "output_tokens": {
+              "text": 2.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3"
+    }
+  ],
+  "name": "tencent",
+  "weight": 1,
+  "status": "active",
+  "submitted_at": "2026-05-23T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "TENCENT_API_KEY"
+  }
+}

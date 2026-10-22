@@ -7,15 +7,19 @@ use std::sync::OnceLock;
 use chrono::{DateTime, Utc};
 use num_traits::ToPrimitive;
 use serde::Serialize;
-use serde::de::{DeserializeSeed, MapAccess, SeqAccess, Visitor};
+use serde::de::{MapAccess, SeqAccess, Visitor};
 use serde_json::Value;
 
 /// Current normative prerelease. Stable support is deliberately opt-in.
 pub const SPEC_REVISION: &str = "1.0.0-beta.6";
+/// Promoted same-revision stream. Ordinary source PRs do not publish this branch.
+pub const DEFAULT_SOURCE_URL: &str = "https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.6/registry.json";
 /// Bound applies to decoded JSON bytes, including caches and packaged data.
 pub const MAX_DOCUMENT_BYTES: usize = 32 * 1024 * 1024;
 /// Nested JSON depth allowed before constructing a full value tree.
 pub const MAX_DOCUMENT_DEPTH: usize = 64;
+/// Maximum number of scalar/container values, bounding decoded allocation.
+pub const MAX_DOCUMENT_NODES: usize = 1_000_000;
 /// Structural schema, also exported with the protocol specification.
 pub const SCHEMA: &str = include_str!("../schema/registry-v1.json");
 
@@ -123,9 +127,7 @@ impl Document {
     /// # Errors
     /// Returns structural, identity, or compatibility errors for the candidate.
     pub fn from_value(value: Value, policy: &ReaderPolicy) -> Result<Self, RegistryError> {
-        check_depth(&value, 0)?;
-        serde_json::to_writer(ByteBudget(MAX_DOCUMENT_BYTES), &value)
-            .map_err(|_| RegistryError::invalid("", "Document exceeds the decoded byte limit"))?;
+        validate_resources(&value)?;
         if value.get("version").and_then(integer) != Some(1) {
             return Err(RegistryError::unsupported(
                 "registry.unsupported_version",
@@ -222,47 +224,39 @@ pub fn parse_json(bytes: &[u8]) -> Result<Value, RegistryError> {
             "Document exceeds the decoded byte limit",
         ));
     }
-    let mut decoder = serde_json::Deserializer::from_slice(bytes);
-    Unique { depth: 0 }.deserialize(&mut decoder).map_err(|_| {
-        RegistryError::invalid(
-            "",
-            "Invalid JSON, duplicate object key, or nesting limit exceeded",
-        )
-    })?;
-    decoder
-        .end()
-        .map_err(|_| RegistryError::invalid("", "Trailing data after the JSON document"))?;
     let raw: &serde_json::value::RawValue = serde_json::from_slice(bytes)
-        .map_err(|_| RegistryError::invalid("", "Invalid JSON value"))?;
-    value_from_raw(raw, 0)
+        .map_err(|_| RegistryError::invalid("", "Invalid or trailing JSON data"))?;
+    let value = value_from_raw(raw, 0, &std::cell::Cell::new(0))?;
+    validate_resources(&value)?;
+    Ok(value)
 }
 
-fn value_from_raw(raw: &serde_json::value::RawValue, depth: usize) -> Result<Value, RegistryError> {
-    if depth > MAX_DOCUMENT_DEPTH {
-        return Err(RegistryError::invalid("", "Nesting limit exceeded"));
+fn value_from_raw(
+    raw: &serde_json::value::RawValue,
+    depth: usize,
+    nodes: &std::cell::Cell<usize>,
+) -> Result<Value, RegistryError> {
+    if depth > MAX_DOCUMENT_DEPTH || nodes.get() >= MAX_DOCUMENT_NODES {
+        return Err(RegistryError::invalid(
+            "",
+            "JSON nesting or node limit exceeded",
+        ));
     }
-    let invalid = || RegistryError::invalid("", "Invalid JSON value");
-    // Raw tokens distinguish a literal object from serde_json's private
-    // arbitrary-precision Number map. That map's key is valid user metadata.
+    nodes.set(nodes.get() + 1);
+    let invalid = || {
+        RegistryError::invalid(
+            "",
+            "Invalid JSON, duplicate key, or exceeded resource budget",
+        )
+    };
+    // Dispatch raw numeric tokens directly. Literal objects using serde_json's
+    // private Number key remain ordinary objects, including sibling members.
     // https://docs.rs/serde_json/latest/serde_json/value/struct.RawValue.html
     match raw.get().as_bytes().first() {
-        Some(b'{') => {
-            let fields: std::collections::BTreeMap<String, &serde_json::value::RawValue> =
-                serde_json::from_str(raw.get()).map_err(|_| invalid())?;
-            let mut map = serde_json::Map::new();
-            for (key, value) in fields {
-                map.insert(key, value_from_raw(value, depth + 1)?);
-            }
-            Ok(Value::Object(map))
-        }
-        Some(b'[') => {
-            let items: Vec<&serde_json::value::RawValue> =
-                serde_json::from_str(raw.get()).map_err(|_| invalid())?;
-            items
-                .iter()
-                .map(|v| value_from_raw(v, depth + 1))
-                .collect::<Result<Vec<_>, _>>()
-                .map(Value::Array)
+        Some(b'{' | b'[') => {
+            let mut decoder = serde_json::Deserializer::from_str(raw.get());
+            serde::Deserializer::deserialize_any(&mut decoder, RawContainer { depth, nodes })
+                .map_err(|_| invalid())
         }
         Some(b'"') => serde_json::from_str::<String>(raw.get())
             .map(Value::String)
@@ -280,8 +274,39 @@ fn value_from_raw(raw: &serde_json::value::RawValue, depth: usize) -> Result<Val
     }
 }
 
-struct Unique {
+struct RawContainer<'a> {
     depth: usize,
+    nodes: &'a std::cell::Cell<usize>,
+}
+
+impl<'de> Visitor<'de> for RawContainer<'_> {
+    type Value = Value;
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("bounded JSON object or array")
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<Value, A::Error> {
+        let mut object = serde_json::Map::new();
+        while let Some(key) = access.next_key::<String>()? {
+            if object.contains_key(&key) {
+                return Err(serde::de::Error::custom("duplicate object key"));
+            }
+            let raw: &'de serde_json::value::RawValue = access.next_value()?;
+            let value = value_from_raw(raw, self.depth + 1, self.nodes)
+                .map_err(serde::de::Error::custom)?;
+            object.insert(key, value);
+        }
+        Ok(Value::Object(object))
+    }
+    fn visit_seq<A: SeqAccess<'de>>(self, mut access: A) -> Result<Value, A::Error> {
+        let mut values = Vec::new();
+        while let Some(raw) = access.next_element::<&'de serde_json::value::RawValue>()? {
+            values.push(
+                value_from_raw(raw, self.depth + 1, self.nodes)
+                    .map_err(serde::de::Error::custom)?,
+            );
+        }
+        Ok(Value::Array(values))
+    }
 }
 
 struct ByteBudget(usize);
@@ -299,80 +324,26 @@ impl std::io::Write for ByteBudget {
     }
 }
 
-impl<'de> DeserializeSeed<'de> for Unique {
-    type Value = ();
-    fn deserialize<D: serde::Deserializer<'de>>(self, decoder: D) -> Result<(), D::Error> {
-        // serde_json presents arbitrary-precision scalars through one synthetic
-        // map layer; the raw-token builder below enforces actual JSON depth.
-        if self.depth > MAX_DOCUMENT_DEPTH + 1 {
-            return Err(serde::de::Error::custom("nesting limit"));
-        }
-        decoder.deserialize_any(self)
-    }
+pub(crate) fn validate_resources(value: &Value) -> Result<(), RegistryError> {
+    check_depth(value, 0, &mut 0)?;
+    serde_json::to_writer(ByteBudget(MAX_DOCUMENT_BYTES), value)
+        .map_err(|_| RegistryError::invalid("", "Document exceeds the decoded byte limit"))
 }
 
-impl<'de> Visitor<'de> for Unique {
-    type Value = ();
-    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("bounded JSON without duplicate keys")
-    }
-    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
-        Ok(())
-    }
-    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
-        Ok(())
-    }
-    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
-        Ok(())
-    }
-    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
-        Ok(())
-    }
-    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<(), E> {
-        Ok(())
-    }
-    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
-        Ok(())
-    }
-    fn visit_none<E: serde::de::Error>(self) -> Result<(), E> {
-        Ok(())
-    }
-    fn visit_seq<A: SeqAccess<'de>>(self, mut access: A) -> Result<(), A::Error> {
-        while access
-            .next_element_seed(Unique {
-                depth: self.depth + 1,
-            })?
-            .is_some()
-        {}
-        Ok(())
-    }
-    fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<(), A::Error> {
-        let mut seen = BTreeSet::new();
-        while let Some(key) = access.next_key::<String>()? {
-            if !seen.insert(key) {
-                return Err(serde::de::Error::custom("duplicate object key"));
-            }
-            access.next_value_seed(Unique {
-                depth: self.depth + 1,
-            })?;
-        }
-        Ok(())
-    }
-}
-
-fn check_depth(value: &Value, depth: usize) -> Result<(), RegistryError> {
-    if depth > MAX_DOCUMENT_DEPTH {
+fn check_depth(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), RegistryError> {
+    if depth > MAX_DOCUMENT_DEPTH || *nodes >= MAX_DOCUMENT_NODES {
         return Err(RegistryError::invalid("", "Nesting limit exceeded"));
     }
+    *nodes += 1;
     match value {
         Value::Object(map) => {
             for value in map.values() {
-                check_depth(value, depth + 1)?;
+                check_depth(value, depth + 1, nodes)?;
             }
         }
         Value::Array(values) => {
             for value in values {
-                check_depth(value, depth + 1)?;
+                check_depth(value, depth + 1, nodes)?;
             }
         }
         Value::Number(number) => {

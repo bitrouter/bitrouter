@@ -15,11 +15,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  AGENTIC_SYNC_MODEL: moonshotai/kimi-k2.7-code
 
 jobs:
   sync:
-    name: sync source registry feeds
+    name: sync and audit Registry v1
     runs-on: ubuntu-latest
     steps:
       - name: Generate GitHub token
@@ -36,111 +35,75 @@ jobs:
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
 
-      - name: Sync deterministic registry feeds
-        run: |
-          cargo run -p dist-helper -- registry sync --write \
-            --report target/registry-sync-lifecycle.md
-
-      - name: Install agentic sync tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl ripgrep
-          curl --version
-          rg --version
-
-      - uses: actions/setup-node@v4
-
-      - name: Sync agentic registry feeds
+      - name: Stage feeds and audit the complete candidate
+        id: sync
+        continue-on-error: true
         env:
-          BITROUTER_API_KEY: ${{ secrets.BITROUTER_API_KEY }}
+          OPENAI_REGISTRY_API_KEY: ${{ secrets.OPENAI_REGISTRY_API_KEY }}
+          ANTHROPIC_REGISTRY_API_KEY: ${{ secrets.ANTHROPIC_REGISTRY_API_KEY }}
+          BITROUTER_REGISTRY_API_KEY: ${{ secrets.BITROUTER_REGISTRY_API_KEY }}
+        run: cargo run -p dist-helper -- registry sync --write --report target/registry-sync.json
+
+      - name: Preserve public evidence and sanitized diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-publication-audit
+          path: |
+            target/registry-sync.json
+            target/registry-identity-response.json
+          if-no-files-found: warn
+
+      - name: Check publication admission
+        if: always()
+        id: gate
         run: |
-          cargo run -p dist-helper -- registry agentic-prompt > target/registry-agentic-sync.md
-          if grep -Fqx '(No `auto_sync.feed: agentic` providers are configured.)' target/registry-agentic-sync.md; then
-            echo "no agentic registry providers configured"
-            exit 0
-          fi
-          if [ -z "${BITROUTER_API_KEY:-}" ]; then
-            echo "::warning::BITROUTER_API_KEY is not set; skipping agentic registry sync"
-            exit 0
+          if [ -f target/registry-sync.json ] && jq -e '.audit.outcome == "passed"' target/registry-sync.json > /dev/null; then
+            echo "passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "passed=false" >> "$GITHUB_OUTPUT"
           fi
 
-          npm install -g @openai/codex
-          export CODEX_HOME="${RUNNER_TEMP}/codex-home"
-          mkdir -p "$CODEX_HOME"
-          mkdir -p target/agentic-sync
-          codex --search -a never exec \
-            --ignore-user-config \
-            --ignore-rules \
-            --ephemeral \
-            --output-last-message target/registry-agentic-result.md \
-            -C "$GITHUB_WORKSPACE" \
-            -m "$AGENTIC_SYNC_MODEL" \
-            -c 'model_provider="bitrouter"' \
-            -c 'model_providers.bitrouter.name="BitRouter"' \
-            -c 'model_providers.bitrouter.base_url="https://api.bitrouter.ai/v1"' \
-            -c 'model_providers.bitrouter.wire_api="responses"' \
-            -c 'model_providers.bitrouter.env_key="BITROUTER_API_KEY"' \
-            -s danger-full-access \
-            - < target/registry-agentic-sync.md
-          if ! grep -q 'registry valid:' target/registry-agentic-result.md; then
-            echo "::error::agentic registry sync did not report successful validation"
-            cat target/registry-agentic-result.md
-            exit 1
-          fi
-          cargo run -p dist-helper -- registry agentic-diff-check
-
-      - name: Build and check registry dist
+      - name: Validate complete independent changes
+        if: steps.gate.outputs.passed == 'true'
+        id: build
         run: |
-          cargo run -p dist-helper -- registry build
+          cargo run -p dist-helper -- registry validate
+          cargo run -p dist-helper -- registry build --check
           cargo run -p dist-helper -- check
 
-      - name: Open registry sync PR
+      - name: Propose validated independent updates
+        if: steps.gate.outputs.passed == 'true' && steps.build.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
           BRANCH: automation/registry-sync
         run: |
           if git diff --quiet -- registry dist/registry apps/bitrouter/registry-dist; then
-            echo "registry source and dist are already up to date"
+            echo "registry source and artifacts are unchanged"
             exit 0
           fi
-
-          cp target/registry-sync-lifecycle.md /tmp/registry-sync-pr.md
-          cat >> /tmp/registry-sync-pr.md <<'EOF'
-
-          ## Provider feed sync
-
-          Automated source registry sync from provider `auto_sync` feeds.
-
-          ## Validation
-
-          - `cargo run -p dist-helper -- registry sync --write --report target/registry-sync-lifecycle.md`
-          - `cargo run -p dist-helper -- registry agentic-prompt`
-          - `codex --search exec ... < target/registry-agentic-sync.md`
-          - `cargo run -p dist-helper -- registry build`
-          - `cargo run -p dist-helper -- check`
-          EOF
-
+          jq -r '"Refresh Registry v1 from explicitly configured provider feeds.\n\nIdentity audit: " + .audit.outcome + "\n\nRequired feed outcomes:\n" + ([.feeds[] | "- " + .provider + "/" + .feed + ": " + .outcome] | join("\n")) + "\n\nThe complete JSON report and public identity response are attached to the workflow run."' target/registry-sync.json > "$RUNNER_TEMP/registry-sync-pr.md"
           git config user.name "bitrouter-automation[bot]"
           git config user.email "267229870+bitrouter-automation[bot]@users.noreply.github.com"
           git add registry dist/registry apps/bitrouter/registry-dist
           git commit -m "chore: sync registry catalog"
-          remote_ref="$(git ls-remote --heads origin "${BRANCH}")"
-          remote_sha="$(printf '%s\n' "${remote_ref}" | awk '{print $1}')"
-          if [ -n "${remote_sha}" ]; then
-            git push --force-with-lease="refs/heads/${BRANCH}:${remote_sha}" origin "HEAD:${BRANCH}"
+          remote_sha="$(git ls-remote --heads origin "$BRANCH" | awk '{print $1}')"
+          if [ -n "$remote_sha" ]; then
+            git push --force-with-lease="refs/heads/$BRANCH:$remote_sha" origin "HEAD:$BRANCH"
           else
-            git push origin "HEAD:${BRANCH}"
+            git push origin "HEAD:$BRANCH"
+          fi
+          pr_number="$(gh pr list --head "$BRANCH" --json number --jq '.[0].number // empty')"
+          if [ -n "$pr_number" ]; then
+            gh pr edit "$pr_number" --title "chore: sync registry catalog" --body-file "$RUNNER_TEMP/registry-sync-pr.md"
+          else
+            gh pr create --base main --head "$BRANCH" --title "chore: sync registry catalog" --body-file "$RUNNER_TEMP/registry-sync-pr.md"
           fi
 
-          pr_number="$(gh pr list --head "${BRANCH}" --json number --jq '.[0].number // empty')"
-          if [ -n "${pr_number}" ]; then
-            gh pr edit "${pr_number}" \
-              --title "chore: sync registry catalog" \
-              --body-file /tmp/registry-sync-pr.md
-          else
-            gh pr create \
-              --base main \
-              --head "${BRANCH}" \
-              --title "chore: sync registry catalog" \
-              --body-file /tmp/registry-sync-pr.md
+      - name: Report required feed or global admission failures
+        if: always()
+        run: |
+          if [ '${{ steps.sync.outcome }}' != 'success' ] || [ '${{ steps.gate.outputs.passed }}' != 'true' ] || [ '${{ steps.build.outcome }}' != 'success' ]; then
+            echo '::error::Registry sync failed; inspect its sanitized audit report. Valid independent updates were proposed only after global admission.'
+            exit 1
           fi

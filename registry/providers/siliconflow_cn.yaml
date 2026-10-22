@@ -1,30 +1,45 @@
-name: siliconflow_cn
-display_name: SiliconFlow (China)
-metadata:
-  headquarters: CN
-  datacenters:
-    - CN
-  name: SiliconFlow
-  slug: siliconflow
-api_base: https://api.siliconflow.cn/v1
-api_protocol:
-  - "*": openai
-kind: gateway
-# Catalog source: https://models.dev/api.json (provider key `siliconflow-cn`,
-# api=https://api.siliconflow.cn/v1). China endpoint; models.dev normalizes
-# pricing to USD per 1M tokens. GLM / Kimi / MiniMax are served under the paid
-# `Pro/` tier on this endpoint. Refreshed by the daily models_dev auto_sync.
-models:
-  - id: z-ai/glm-5.2
-    provider_model_id: zai-org/GLM-5.2
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-      output_tokens:
-        text: 4.4
-status: active
-weight: 1
-submitted_at: 2026-07-07
-auto_sync:
-  feed: models_dev
-  key: siliconflow-cn
+{
+  "api_base": "https://api.siliconflow.cn/v1",
+  "billing": "usage",
+  "weight": 1,
+  "display_name": "SiliconFlow (China)",
+  "kind": "gateway",
+  "metadata": {
+    "datacenters": [
+      "CN"
+    ],
+    "headquarters": "CN",
+    "name": "SiliconFlow",
+    "slug": "siliconflow"
+  },
+  "models": [
+    {
+      "provider_model_id": "zai-org/GLM-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    }
+  ],
+  "name": "siliconflow_cn",
+  "status": "active",
+  "submitted_at": "2026-07-07T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "SILICONFLOW_CN_API_KEY"
+  }
+}

@@ -48,25 +48,30 @@ enum Command {
 enum RegistryCommand {
     /// Validate `registry/` source YAML.
     Validate,
-    /// Generate `dist/registry/{providers,models}.json`.
+    /// Generate the complete Registry v1 document and independent agent catalogs.
     Build {
         /// Fail if committed registry dist is stale instead of writing it.
         #[arg(long)]
         check: bool,
+    },
+    /// Audit the exact committed candidate against a fresh complete identity list.
+    Audit {
+        /// Write the machine-readable publication admission report.
+        #[arg(long)]
+        report: Option<PathBuf>,
+        /// Previously promoted document for the same source; reject rollback.
+        #[arg(long)]
+        previous: Vec<PathBuf>,
     },
     /// Sync canonical model lifecycle and provider catalog feeds.
     Sync {
         /// Write canonical and provider YAML updates. Otherwise, print a dry-run report.
         #[arg(long)]
         write: bool,
-        /// Write a Markdown summary suitable for the registry sync PR body.
+        /// Write a machine-readable JSON sync and publication audit report.
         #[arg(long)]
         report: Option<PathBuf>,
     },
-    /// Render the prompt used by the headless agentic registry sync step.
-    AgenticPrompt,
-    /// Check that an agentic sync touched only registry source files.
-    AgenticDiffCheck,
 }
 
 #[tokio::main]
@@ -89,14 +94,12 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Registry { command } => match command {
             RegistryCommand::Validate => registry::validate(&root),
             RegistryCommand::Build { check } => registry::build(&root, check),
+            RegistryCommand::Audit { report, previous } => {
+                registry::audit(&root, report.as_deref(), &previous).await
+            }
             RegistryCommand::Sync { write, report } => {
                 registry::sync(&root, write, report.as_deref()).await
             }
-            RegistryCommand::AgenticPrompt => {
-                print!("{}", registry::agentic_prompt(&root)?);
-                Ok(())
-            }
-            RegistryCommand::AgenticDiffCheck => registry::agentic_diff_check(&root),
         },
         Command::Chart { out } => chart::generate(&root, &root.join(out)),
         Command::Check => {

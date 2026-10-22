@@ -116,7 +116,8 @@ leave the previous valid document intact. Partial updates are invalid. Packaged
 fallback and disk caches obey the same admission rule.
 
 V1's bounded public-document profile permits at most 32 MiB of decoded UTF-8
-JSON and nesting depth 64 (the root is depth zero). Numeric literals have at
+JSON, at most 1,000,000 scalar/container values, and nesting depth 64 (the root
+is depth zero). Numeric literals and parsed monetary decimal strings have at
 most 128 characters, absolute decimal exponent at most 308, and finite binary64
 magnitude; rates within this range are still interpreted and calculated exactly,
 never rounded through binary64. Known integer fields are exact mathematical
@@ -127,8 +128,11 @@ readers reject excess normally before evaluating schemas/arithmetic. Future
 larger resource profiles require explicit compatibility treatment.
 
 JSON duplicate object keys are invalid. YAML must be representable as JSON:
-string mapping keys, no custom tags or non-finite numbers, and no duplicate
-mapping keys. YAML aliases may share values but have no identity semantics.
+string mapping keys, no explicit tags or non-finite numbers, and no duplicate
+mapping keys. Source YAML uses JSON scalar resolution: quoted scalars are
+strings; unquoted JSON boolean, null and numeric literals retain those types;
+other plain scalars are strings. Empty scalars are null. YAML aliases may share
+values but have no identity semantics and must satisfy expanded resource bounds.
 Optional known fields are omitted for unknown information; `null` is invalid
 in those fields unless explicitly permitted. Unfamiliar optional fields remain
 opaque JSON, including nulls; readers must not assign known-field semantics by
@@ -779,13 +783,34 @@ One provider may have a membership feed and a separate pricing feed; two feeds
 MUST NOT own the same domain on the same offer. `writes: [pricing]` cannot add,
 remove, rename, or reactivate inventory entries.
 
-The core defines only `kind: v1_models`, requiring `request`, `response`, and
-`pagination` below. Other adapters need their own named extension contract;
+The generic core defines `kind: v1_models`, requiring `request`, `response`, and
+`pagination` below. The registered `openrouter_models` adapter is defined below.
+Other adapters need their own named extension contract;
 unknown kinds are retained but not executed and cannot reconcile absence.
 Manual or assisted enrichment may propose ordinary source edits outside the
 feed protocol. Those edits still require identity/ownership/publication checks;
 they cannot assert an authoritative complete listing without provider evidence.
 No feed kind guesses its source URL.
+
+`openrouter_models` is restricted to provider `openrouter` with
+`api_base: https://openrouter.ai/api/v1`. It requires the exact full-list URL
+`https://openrouter.ai/api/v1/models?output_modalities=all`, explicit request
+authentication, `pagination: {kind: none}`, `writes: [models, metadata]`, and
+complete public inventory. It forbids response mapping and request query
+overrides. The [official model-list contract](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)
+defines native `id` as the exact canonical vocabulary. Each observed ID must
+also occur in the independent fresh identity audit before its same-model binding
+is recorded. This privilege never extends to another provider or generic feed.
+
+This adapter imports typed names/descriptions and, only for text output with
+text input, a `chat_completions` / `generation` interface with documented
+modalities, supported parameters, and context length. Other model types remain
+native inventory with no executable interface until their codecs are registered.
+It does not infer executable decision/multimedia interfaces or tariff semantics
+from a model name, modality alone, or aggregate OpenRouter prices. Existing
+manually owned interfaces and prices remain protected by normal ownership rules.
+Generic feeds with an unverified new canonical proposal retain the native offer
+unbound and report the pending binding; they cannot manufacture ledger evidence.
 
 Every configured feed is required: failure, missing credentials, or unsupported
 semantics makes the final sync run unsuccessful. Valid independent feed changes
@@ -927,7 +952,9 @@ including existing rows. If neither exists, the feed fails. Apply that observed
 status only when the feed owns `/status`; explicit mapped status wins over the
 default. This permits deterministic reactivation while preserving manual status.
 Null optional metadata is an explicit clear when the feed owns
-that field; it is emitted as omission in the registry. Null identity, status,
+that field; it is emitted as omission in the registry. A container clear or
+replacement that would erase unknown members or foreign/manual descendants
+requires a reviewed change and fails the automatic feed transaction. Null identity, status,
 interfaces, or other required data fails the feed. Neither null nor a type
 error activates a default. No coercion occurs without a declared transform.
 
@@ -942,6 +969,9 @@ Optional `transforms` is a destination-path-to-ordered-steps map. v1 knows only:
   range; used for explicit unit conversion, such as per-token to per-million.
 - `{kind: value_map, values: [{from: <JSON>, to: <JSON>}, ...]}`: exact typed
   equality lookup, with unique `from` values; unmapped input is an error.
+
+Numeric typed equality compares exact mathematical values (`1` equals `1.0`),
+without string/number coercion.
 
 Transforms run after reading a present non-null source value and before target
 validation; they do not run on missing/null values or defaults. Each transform
@@ -973,7 +1003,7 @@ written. Identity reads are allowed for joining a pricing-only observation.
 Optional `filter` has `path` and nonempty `in` array of exact typed values. It
 runs before normalization. A present recognized value outside the allowlist is
 an excluded observation, not malformed data. A missing/null filter value makes
-the run incomplete. A feed using lifecycle filtering must additionally declare
+the run incomplete. A feed using filtering must additionally declare
 `filter.known_values` (including both allowed and intentionally excluded states)
 before it can assert a complete snapshot. A value outside `known_values` makes
 the run incomplete and forbids removals. `known_values` must include every value
@@ -985,7 +1015,10 @@ lifecycle vocabulary is fictional and must be verified for an actual provider.
 `pagination` is required; `kind: none` explicitly asserts one response is the
 complete listing within the declared scope. `kind: cursor` requires a response
 `cursor_path`, query `parameter`, and positive `max_pages` (default limit 100
-when omitted). `has_more_path` is optional.
+when omitted). `has_more_path` is optional. `max_pages` cannot exceed 1000. The aggregate
+page bytes/nodes and expanded normalized observation must each stay within
+the section 2 resource profile; defaults and transforms do not bypass it.
+JSON Pointer paths have at most 64 tokens.
 
 For cursor pagination, the first request has no cursor. With `has_more_path`,
 each response must contain a boolean: false completes the listing; true requires
@@ -1103,7 +1136,8 @@ Withdrawal sets model `status: withdrawn`; it does not erase the record, identit
 manual metadata, or last known prices. Inventory may retain inactive records for
 audit; only active ones are callable. A later accepted present observation MUST
 apply its resolved status to a feed-owned `/status`, including active after an
-absence-driven withdrawal. Explicit mapped status wins over `defaults.status`;
+absence-driven withdrawal. An unknown mapped membership status makes the observation incomplete; it must
+not authorize absence reconciliation. Explicit mapped status wins over `defaults.status`;
 all other missing fields remain unobserved as in section 8.3. It MUST NOT
 override a manual suspension or withdrawal. Manual pruning of inactive historical rows is allowed; stable IDs
 must not be reassigned. Missing inventory data never suspends the provider.
@@ -1226,7 +1260,7 @@ explicitly bound to feed environment names. For example:
   env:
     EXAMPLE_REGISTRY_API_KEY: ${{ secrets.EXAMPLE_REGISTRY_API_KEY }}
     OPENROUTER_REGISTRY_API_KEY: ${{ secrets.OPENROUTER_REGISTRY_API_KEY }}
-  run: cargo run -p dist-helper -- registry sync --write --report target/registry-sync.md
+  run: cargo run -p dist-helper -- registry sync --write --report target/registry-sync.json
 ```
 
 This is a configuration example, not a request to create a secret. Adding a
@@ -1253,6 +1287,15 @@ successful independent results.
 Before publication, pass the canonical identity audit, source validation,
 deterministic build, and stale-dist check; commit both source and generated
 artifacts together. Readers switch a whole validated document atomically.
+The first-party update streams are served from the dedicated `registry-v1`
+publication branch. A trusted post-merge workflow audits the exact final main
+commit afresh and promotes only its admitted artifact bytes. A sync-PR audit
+alone cannot authorize publication after further edits or rebasing. Promotion
+preserves older revision paths, rejects an `as_of` rollback against the previous
+promoted revision, and cannot replace a stable unqualified v1 artifact with beta
+data. Normal source commits do not directly change consumer streams. Repository
+administration must restrict writes to that branch to this trusted publication
+path; branch policy does not substitute for the fresh audit.
 Private cache layout/versioning must prevent an
 old unversioned cache from being mistaken for v1. Publish v1 through an explicit
 v1 artifact location/configuration; do not replace the legacy consumer's default
@@ -1285,7 +1328,7 @@ inherit provider inference credentials or source-feed secrets.
 A release supporting stable v1 uses this default URL:
 
 ```text
-https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry/v1/registry.json
+https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/registry.json
 ```
 
 This becomes the stable v1 update stream when `1.0.0` is first published. From
@@ -1297,7 +1340,7 @@ A beta-only release pins its default stream to one declared exact protocol
 revision. For this revision the URL is:
 
 ```text
-https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry/v1/1.0.0-beta.6/registry.json
+https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.6/registry.json
 ```
 
 That location MUST serve only `spec_revision: 1.0.0-beta.6`. Data-only catalog

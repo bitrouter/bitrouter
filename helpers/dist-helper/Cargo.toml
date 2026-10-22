@@ -12,7 +12,9 @@ publish = false
 dist = false
 
 [dependencies]
+semver = "1"
 bitrouter-ai.workspace = true
+bitrouter-registry.workspace = true
 schemars.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

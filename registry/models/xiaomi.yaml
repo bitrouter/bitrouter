@@ -1,62 +1,109 @@
-- id: xiaomi/mimo-v2.5-pro
-  name: 'Xiaomi: MiMo V2.5 Pro'
-  description: Xiaomi MiMo V2.5 Pro — high-capability tier of the MiMo V2.5 family.
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 262144
-  max_output_tokens: 32768
-  release_date: 2026-04-22
-  knowledge_cutoff: 2024-12
-  open_weights: true
-  family: mimo
-- id: xiaomi/mimo-v2.5
-  name: 'Xiaomi: MiMo V2.5'
-  description: Xiaomi MiMo V2.5 — standard tier of the MiMo V2.5 family.
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 262144
-  max_output_tokens: 32768
-  release_date: 2026-04-22
-  knowledge_cutoff: 2024-12
-  open_weights: true
-  family: mimo
-- id: xiaomi/mimo-v2.6-flash
-  name: 'Xiaomi: MiMo-V2.6-Flash'
-  input_modalities:
-  - audio
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 131072
-  release_date: 2026-09-21
-- id: xiaomi/mimo-v2.6-pro
-  name: 'Xiaomi: MiMo-V2.6-Pro'
-  input_modalities:
-  - audio
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 131072
-  release_date: 2026-09-21
-- id: xiaomi/mimo-v2.6-pro-ultraspeed
-  name: 'Xiaomi: MiMo-V2.6-Pro-UltraSpeed'
-  input_modalities:
-  - audio
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 131072
-  release_date: 2026-09-21
+[
+  {
+    "description": "Xiaomi MiMo V2.5 Pro — high-capability tier of the MiMo V2.5 family.",
+    "family": "mimo",
+    "id": "xiaomi/mimo-v2.5-pro",
+    "input_modalities": [
+      "text"
+    ],
+    "knowledge_cutoff": "2024-12",
+    "max_input_tokens": 262144,
+    "max_output_tokens": 32768,
+    "name": "Xiaomi: MiMo V2.5 Pro",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-04-22",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "description": "Xiaomi MiMo V2.5 — standard tier of the MiMo V2.5 family.",
+    "family": "mimo",
+    "id": "xiaomi/mimo-v2.5",
+    "input_modalities": [
+      "text"
+    ],
+    "knowledge_cutoff": "2024-12",
+    "max_input_tokens": 262144,
+    "max_output_tokens": 32768,
+    "name": "Xiaomi: MiMo V2.5",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-04-22",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "xiaomi/mimo-v2.6-flash",
+    "input_modalities": [
+      "audio",
+      "image",
+      "text",
+      "video"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "name": "Xiaomi: MiMo-V2.6-Flash",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-21",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "xiaomi/mimo-v2.6-pro",
+    "input_modalities": [
+      "audio",
+      "image",
+      "text",
+      "video"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "name": "Xiaomi: MiMo-V2.6-Pro",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-21",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "xiaomi/mimo-v2.6-pro-ultraspeed",
+    "input_modalities": [
+      "audio",
+      "image",
+      "text",
+      "video"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "name": "Xiaomi: MiMo-V2.6-Pro-UltraSpeed",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-21",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  }
+]

@@ -1,162 +1,510 @@
-name: anthropic
-display_name: Anthropic
-metadata:
-  headquarters: US
-  name: Anthropic
-  privacy_policy_url: https://www.anthropic.com/privacy
-  slug: anthropic
-  status_page_url: https://status.anthropic.com
-  terms_of_service_url: https://www.anthropic.com/legal/consumer-terms
-kind: first_party
-api_protocol:
-  - "*": anthropic
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  - id: anthropic/claude-opus-4.8
-    provider_model_id: claude-opus-4-8
-    reasoning_effort: &claude_full_effort
-      levels: [low, medium, high, xhigh, max]
-      default: high
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: anthropic/claude-sonnet-5
-    provider_model_id: claude-sonnet-5
-    reasoning_effort: *claude_full_effort
-    # Introductory pricing through 2026-08-31; rises to $3/$15 after.
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-        cache_write: 2.5
-      output_tokens:
-        text: 10
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-      - image_input
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: claude-sonnet-4-6
-    reasoning_effort: &claude_max_effort
-      levels: [low, medium, high, max]
-      default: high
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-      - image_input
-  - id: anthropic/claude-sonnet-4.5
-    provider_model_id: claude-sonnet-4-5
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: anthropic/claude-fable-5
-    provider_model_id: claude-fable-5
-    reasoning_effort: *claude_full_effort
-    pricing:
-      input_tokens:
-        no_cache: 10
-        cache_read: 1
-        cache_write: 12.5
-      output_tokens:
-        text: 50
-    capabilities:
-      - reasoning
-  # Official tool-use docs: https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview
-  - id: anthropic/claude-haiku-4.5
-    provider_model_id: claude-haiku-4-5
-    pricing:
-      input_tokens:
-        no_cache: 1
-        cache_read: 0.1
-        cache_write: 1.25
-      output_tokens:
-        text: 5
-    capabilities: [tools]
-  - id: anthropic/claude-opus-5
-    provider_model_id: claude-opus-5
-    reasoning_effort: *claude_full_effort
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
-    capabilities:
-      - reasoning
-  - id: anthropic/claude-fable-5.1
-    provider_model_id: claude-fable-5-1
-    pricing:
-      input_tokens:
-        no_cache: 10
-        cache_read: 0.25
-        cache_write: 12.5
-      output_tokens:
-        text: 50
-  - id: anthropic/claude-opus-5.5
-    provider_model_id: claude-opus-5-5
-    pricing:
-      input_tokens:
-        no_cache: 4
-        cache_read: 0.2
-        cache_write: 5
-      output_tokens:
-        text: 20
-  - id: anthropic/claude-sonnet-5.5
-    provider_model_id: claude-sonnet-5-5
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-        cache_write: 2.5
-      output_tokens:
-        text: 10
-  - id: anthropic/claude-haiku-5.5
-    provider_model_id: claude-haiku-5-5
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-        cache_read: 0.01
-        cache_write: 0.125
-      output_tokens:
-        text: 0.5
-status: active
-weight: 1
-submitted_at: 2026-05-25
-api_base: https://api.anthropic.com/v1
-doc_url: https://docs.anthropic.com/en/api/messages
-auth:
-  kind: header
-  header: x-api-key
-  env: ANTHROPIC_API_KEY
-  extra_headers:
-    anthropic-version: "2023-06-01"
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://api.anthropic.com/v1",
+  "billing": "usage",
+  "auth": {
+    "env": "ANTHROPIC_API_KEY",
+    "extra_headers": {
+      "anthropic-version": "2023-06-01"
+    },
+    "header": "x-api-key",
+    "kind": "header"
+  },
+  "submitted_at": "2026-05-25T00:00:00Z",
+  "display_name": "Anthropic",
+  "doc_url": "https://docs.anthropic.com/en/api/messages",
+  "kind": "first_party",
+  "metadata": {
+    "headquarters": "US",
+    "name": "Anthropic",
+    "privacy_policy_url": "https://www.anthropic.com/privacy",
+    "slug": "anthropic",
+    "status_page_url": "https://status.anthropic.com",
+    "terms_of_service_url": "https://www.anthropic.com/legal/consumer-terms"
+  },
+  "models": [
+    {
+      "provider_model_id": "claude-opus-4-8",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "output_tokens": {
+              "text": 25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-4.8",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-sonnet-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-5",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-sonnet-4-6",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "cache_write": 3.75,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-4.6",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-sonnet-4-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "cache_write": 3.75,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-4.5",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-fable-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "output_tokens": {
+              "text": 50
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-fable-5",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-haiku-4-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 1.25,
+              "no_cache": 1
+            },
+            "output_tokens": {
+              "text": 5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-haiku-4.5",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-opus-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "output_tokens": {
+              "text": 25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-5",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-fable-5-1",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "output_tokens": {
+              "text": 50
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-fable-5.1",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-opus-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5,
+              "no_cache": 4
+            },
+            "output_tokens": {
+              "text": 20
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-5.5",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-sonnet-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-5.5",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "claude-haiku-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-haiku-5.5",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    }
+  ],
+  "name": "anthropic",
+  "weight": 1,
+  "status": "active",
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "catalog",
+        "kind": "v1_models",
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "request": {
+          "url": "https://api.anthropic.com/v1/models",
+          "auth": {
+            "kind": "header",
+            "header": "x-api-key",
+            "env": "ANTHROPIC_REGISTRY_API_KEY"
+          },
+          "headers": {
+            "anthropic-version": "2023-06-01"
+          }
+        },
+        "pagination": {
+          "kind": "cursor",
+          "cursor_path": "/last_id",
+          "has_more_path": "/has_more",
+          "parameter": "after_id",
+          "max_pages": 100
+        },
+        "inventory": {
+          "mode": "merge",
+          "scope": "account",
+          "complete": false,
+          "allow_empty": false
+        },
+        "response": {
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id",
+            "/display_name": "/name"
+          },
+          "defaults": {
+            "status": "active",
+            "interfaces": [
+
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

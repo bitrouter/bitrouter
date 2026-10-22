@@ -1,158 +1,636 @@
-name: openai
-display_name: OpenAI
-metadata:
-  headquarters: US
-  name: OpenAI
-  privacy_policy_url: https://openai.com/privacy
-  slug: openai
-  status_page_url: https://status.openai.com
-  terms_of_service_url: https://openai.com/terms
-kind: first_party
-api_protocol:
-  - "*": [openai, responses]
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  # GPT-5.6 family. Pricing per 1M tokens from OpenAI's launch catalog. Like
-  # GPT-5.5, input above 272k tokens bills at the long-context tier (roughly 2x
-  # input, higher output) — encoded via context_tiers. cache_read is the 90%-off
-  # input rate; cache_write is the one-time cost to populate the prompt cache.
-  - id: openai/gpt-5.6-sol
-    provider_model_id: gpt-5.6-sol
-    reasoning_effort: &gpt_56_effort
-      levels: [none, low, medium, high, xhigh, max]
-      default: medium
-    compatibility: &modern_openai_chat
-      chat_completions:
-        token_limit_field: max_completion_tokens
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 30
-      context_tiers:
-        - above_input_tokens: 272000
-          input_tokens:
-            no_cache: 10
-            cache_read: 1
-            cache_write: 12.5
-          output_tokens:
-            text: 45
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: openai/gpt-5.6-terra
-    provider_model_id: gpt-5.6-terra
-    reasoning_effort: *gpt_56_effort
-    compatibility: *modern_openai_chat
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-        cache_write: 2.5
-      output_tokens:
-        text: 12
-      context_tiers:
-        - above_input_tokens: 272000
-          input_tokens:
-            no_cache: 5
-            cache_read: 0.5
-            cache_write: 6.25
-          output_tokens:
-            text: 22.5
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: openai/gpt-5.6-luna
-    provider_model_id: gpt-5.6-luna
-    reasoning_effort: *gpt_56_effort
-    compatibility: *modern_openai_chat
-    pricing:
-      input_tokens:
-        no_cache: 0.2
-        cache_read: 0.02
-        cache_write: 0.25
-      output_tokens:
-        text: 1.2
-      context_tiers:
-        - above_input_tokens: 272000
-          input_tokens:
-            no_cache: 2
-            cache_read: 0.2
-            cache_write: 2.5
-          output_tokens:
-            text: 9
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: openai/gpt-6-astra
-    provider_model_id: gpt-6-astra
-    pricing:
-      input_tokens:
-        no_cache: 10
-        cache_read: 1
-        cache_write: 12.5
-      output_tokens:
-        text: 50
-  - id: openai/gpt-6-luna
-    provider_model_id: gpt-6-luna
-    # Native endpoint support and input-only tariff: Decisions guide, verified
-    # 2026-10-06. The >272K whole-input multiplier comes from the model page.
-    # Cached subsets remain unavailable in metering until their basis is verified.
-    # https://developers.openai.com/api/docs/guides/decisions
-    # https://developers.openai.com/api/docs/models/gpt-6-luna
-    api_protocol: [openai, responses, decisions]
-    pricing_by_protocol:
-      decisions:
-        endpoint_profile: openai_global
-        input_tokens:
-          no_cache: 0.10
-          cache_read: 0
-          cache_write: 0
-        output_tokens:
-          text: 0
-        context_tiers:
-          - above_input_tokens: 272000
-            input_tokens:
-              no_cache: 0.20
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-        cache_read: 0.01
-        cache_write: 0.125
-      output_tokens:
-        text: 0.5
-  - id: openai/gpt-6-sol
-    provider_model_id: gpt-6-sol
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-        cache_write: 2.5
-      output_tokens:
-        text: 10
-  - id: openai/gpt-6.1-sol
-    provider_model_id: gpt-6.1-sol
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.1
-        cache_write: 2.5
-      output_tokens:
-        text: 10
-status: active
-weight: 1
-submitted_at: 2026-05-25
-api_base: https://api.openai.com/v1
-doc_url: https://platform.openai.com/docs/api-reference
-auth:
-  kind: bearer
-  env: OPENAI_API_KEY
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://api.openai.com/v1",
+  "billing": "usage",
+  "auth": {
+    "env": "OPENAI_API_KEY",
+    "kind": "bearer"
+  },
+  "submitted_at": "2026-05-25T00:00:00Z",
+  "display_name": "OpenAI",
+  "doc_url": "https://platform.openai.com/docs/api-reference",
+  "kind": "first_party",
+  "metadata": {
+    "headquarters": "US",
+    "name": "OpenAI",
+    "privacy_policy_url": "https://openai.com/privacy",
+    "slug": "openai",
+    "status_page_url": "https://status.openai.com",
+    "terms_of_service_url": "https://openai.com/terms"
+  },
+  "models": [
+    {
+      "provider_model_id": "gpt-5.6-sol",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "compatibility": {
+            "token_limit_field": "max_completion_tokens"
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 1,
+                  "cache_write": 12.5,
+                  "no_cache": 10
+                },
+                "output_tokens": {
+                  "text": 45
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "output_tokens": {
+              "text": 30
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 1,
+                  "cache_write": 12.5,
+                  "no_cache": 10
+                },
+                "output_tokens": {
+                  "text": 45
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "output_tokens": {
+              "text": 30
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-5.6-sol",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.6-terra",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "compatibility": {
+            "token_limit_field": "max_completion_tokens"
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.5,
+                  "cache_write": 6.25,
+                  "no_cache": 5
+                },
+                "output_tokens": {
+                  "text": 22.5
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 12
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.5,
+                  "cache_write": 6.25,
+                  "no_cache": 5
+                },
+                "output_tokens": {
+                  "text": 22.5
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 12
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-5.6-terra",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "gpt-5.6-luna",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "compatibility": {
+            "token_limit_field": "max_completion_tokens"
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.2,
+                  "cache_write": 2.5,
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 9
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "medium",
+            "levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "cache_read": 0.2,
+                  "cache_write": 2.5,
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 9
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.02,
+              "cache_write": 0.25,
+              "no_cache": 0.2
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-5.6-luna",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "gpt-6-astra",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "output_tokens": {
+              "text": 50
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "output_tokens": {
+              "text": 50
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6-astra",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "gpt-6-luna",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "decisions",
+          "operation": "decisions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "no_cache": 0.2
+                }
+              }
+            ],
+            "endpoint_profile": "openai_global",
+            "input_tokens": {
+              "cache_read": 0,
+              "cache_write": 0,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6-luna",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "gpt-6-sol",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6-sol",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    },
+    {
+      "provider_model_id": "gpt-6.1-sol",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.1,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6.1-sol",
+      "sync": {
+        "owner": "catalog",
+        "field_owners": {
+          "/status": "catalog"
+        }
+      }
+    }
+  ],
+  "name": "openai",
+  "weight": 1,
+  "status": "active",
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "catalog",
+        "kind": "v1_models",
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "request": {
+          "url": "https://api.openai.com/v1/models",
+          "auth": {
+            "kind": "bearer",
+            "env": "OPENAI_REGISTRY_API_KEY"
+          },
+          "headers": {
+          }
+        },
+        "pagination": {
+          "kind": "none"
+        },
+        "inventory": {
+          "mode": "merge",
+          "scope": "account",
+          "complete": false,
+          "allow_empty": false
+        },
+        "response": {
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id",
+            "/name": "/name"
+          },
+          "defaults": {
+            "status": "active",
+            "interfaces": [
+
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

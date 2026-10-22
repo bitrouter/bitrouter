@@ -210,10 +210,6 @@ fn duplicate_keys_depth_trailing_data_and_excessive_decimals_fail_normally()
         parse_json(b"1.00000000000000000000000000001")?.to_string(),
         "1.00000000000000000000000000001"
     );
-    let mut value = minimal();
-    let mut p = provider();
-    p["models"][0]["interfaces"][0]["pricing"] = json!({"kind":"token","currency":"USD","input_tokens":{"no_cache":parse_json(b"1e999999999")?}});
-    value["data"]["providers"] = json!([p]);
-    assert!(Document::from_value(value, &ReaderPolicy::default()).is_err());
+    assert!(parse_json(b"1e999999999").is_err());
     Ok(())
 }

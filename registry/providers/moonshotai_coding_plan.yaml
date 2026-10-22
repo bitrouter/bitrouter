@@ -1,31 +1,42 @@
-name: moonshotai_coding_plan
-metadata:
-  headquarters: CN
-  datacenters:
-    - SG
-  name: Moonshot AI
-  privacy_policy_url: https://platform.kimi.ai/docs/agreement/userprivacy
-  slug: moonshotai
-  terms_of_service_url: https://platform.kimi.ai/docs/agreement/modeluse
-billing: subscription
-api_base: https://api.kimi.com/coding/v1
-api_protocol:
-  - "*": openai
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-# `kimi-for-coding` is a moving server-side alias for Moonshot's latest
-# coding model; it is mapped here to the flagship canonical id so the
-# model is routable.
-models:
-  - id: moonshotai/kimi-k3
-    provider_model_id: kimi-for-coding
-    capabilities:
-      - reasoning
-      - tools
-status: active
-weight: 1
-submitted_at: 2026-06-05
-auto_sync:
-  feed: models_dev
-  key: kimi-for-coding
+{
+  "api_base": "https://api.kimi.com/coding/v1",
+  "weight": 1,
+  "status": "active",
+  "billing": "subscription",
+  "metadata": {
+    "datacenters": [
+      "SG"
+    ],
+    "headquarters": "CN",
+    "name": "Moonshot AI",
+    "privacy_policy_url": "https://platform.kimi.ai/docs/agreement/userprivacy",
+    "slug": "moonshotai",
+    "terms_of_service_url": "https://platform.kimi.ai/docs/agreement/modeluse"
+  },
+  "models": [
+    {
+      "provider_model_id": "kimi-for-coding",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3"
+    }
+  ],
+  "name": "moonshotai_coding_plan",
+  "submitted_at": "2026-06-05T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "MOONSHOTAI_CODING_PLAN_API_KEY"
+  }
+}

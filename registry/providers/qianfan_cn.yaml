@@ -1,24 +1,28 @@
-# Verified 2026-07-08 from Baidu Qianfan China `/v2/models` documentation. The
-# live catalog endpoint requires a Bearer API key, so this remains a manual
-# provider rather than `auto_sync: v1_models`. Official prices are RMB per 1K
-# tokens; values below are converted to USD per 1M tokens at ~7.2 CNY/USD.
-name: qianfan_cn
-display_name: Baidu Qianfan (China)
-metadata:
-  headquarters: CN
-  datacenters:
-    - CN
-  name: Baidu AI Cloud
-  privacy_policy_url: https://intl.cloud.baidu.com/en/doc/Agreements/s/Plr0fi68q-intl-en
-  slug: qianfan
-  status_page_url: https://cloud.baidu.com/status.html
-  terms_of_service_url: https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en
-api_base: https://qianfan.baidubce.com/v2
-api_protocol:
-  - "*": openai
-auth_scheme: bearer
-kind: cloud
-models: []
-status: suspended
-weight: 1
-submitted_at: 2026-07-07
+{
+  "api_base": "https://qianfan.baidubce.com/v2",
+  "billing": "usage",
+  "weight": 1,
+  "display_name": "Baidu Qianfan (China)",
+  "kind": "cloud",
+  "metadata": {
+    "datacenters": [
+      "CN"
+    ],
+    "headquarters": "CN",
+    "name": "Baidu AI Cloud",
+    "privacy_policy_url": "https://intl.cloud.baidu.com/en/doc/Agreements/s/Plr0fi68q-intl-en",
+    "slug": "qianfan",
+    "status_page_url": "https://cloud.baidu.com/status.html",
+    "terms_of_service_url": "https://intl.cloud.baidu.com/doc/Agreements/s/Kjwvy245m-en"
+  },
+  "models": [
+
+  ],
+  "name": "qianfan_cn",
+  "status": "suspended",
+  "submitted_at": "2026-07-07T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "QIANFAN_CN_API_KEY"
+  }
+}

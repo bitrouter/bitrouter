@@ -1,39 +1,75 @@
-name: cerebras
-metadata:
-  headquarters: US
-  name: Cerebras
-  privacy_policy_url: https://www.cerebras.ai/privacy-policy
-  slug: cerebras
-  status_page_url: https://status.cerebras.ai
-  terms_of_service_url: https://www.cerebras.ai/terms-of-service
-api_protocol:
-  - "*": openai
-api_base: https://api.cerebras.ai/v1
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  - id: openai/gpt-oss-120b
-    provider_model_id: gpt-oss-120b
-    pricing:
-      input_tokens:
-        no_cache: 0.35
-      output_tokens:
-        text: 0.75
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: qwen/qwen3.8-27b
-    provider_model_id: qwen-3.8-27b
-    pricing:
-      input_tokens:
-        no_cache: 0.99
-      output_tokens:
-        text: 1.49
-status: active
-weight: 1
-submitted_at: 2026-06-16
-auth_scheme: x-api-key
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://api.cerebras.ai/v1",
+  "billing": "usage",
+  "submitted_at": "2026-06-16T00:00:00Z",
+  "status": "active",
+  "metadata": {
+    "headquarters": "US",
+    "name": "Cerebras",
+    "privacy_policy_url": "https://www.cerebras.ai/privacy-policy",
+    "slug": "cerebras",
+    "status_page_url": "https://status.cerebras.ai",
+    "terms_of_service_url": "https://www.cerebras.ai/terms-of-service"
+  },
+  "models": [
+    {
+      "provider_model_id": "gpt-oss-120b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.35
+            },
+            "output_tokens": {
+              "text": 0.75
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-oss-120b"
+    },
+    {
+      "provider_model_id": "qwen-3.8-27b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.99
+            },
+            "output_tokens": {
+              "text": 1.49
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-27b"
+    }
+  ],
+  "name": "cerebras",
+  "weight": 1,
+  "auth": {
+    "kind": "bearer",
+    "env": "CEREBRAS_API_KEY"
+  }
+}
