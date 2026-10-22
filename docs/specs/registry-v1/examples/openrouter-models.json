@@ -2,22 +2,46 @@
   "data": [
     {
       "canonical_slug": "example/chat-1-revision-a",
-      "id": "example/chat-1"
+      "id": "example/chat-1",
+      "architecture": {
+        "output_modalities": [
+          "text"
+        ]
+      }
     },
     {
       "canonical_slug": "example/chat-2",
-      "id": "example/chat-2"
+      "id": "example/chat-2",
+      "architecture": {
+        "output_modalities": [
+          "text"
+        ]
+      }
     },
     {
       "canonical_slug": "example/judge-1",
-      "id": "example/judge-1"
+      "id": "example/judge-1",
+      "architecture": {
+        "output_modalities": [
+          "decisions"
+        ]
+      }
     },
     {
       "canonical_slug": "example/paint-1",
-      "id": "example/paint-1"
+      "id": "example/paint-1",
+      "architecture": {
+        "output_modalities": [
+          "image"
+        ]
+      }
     }
   ],
   "future_metadata": {
     "note": "Unknown optional response metadata is preserved; not an identity authority"
+  },
+  "total_count": 4,
+  "links": {
+    "next": null
   }
 }

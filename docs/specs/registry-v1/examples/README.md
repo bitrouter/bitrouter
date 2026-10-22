@@ -1,74 +1,67 @@
 # Registry v1 worked examples
 
-These are synthetic design examples for
-[`1.0.0-beta.3`](../README.md), not generated production data or
-claims about real model support, prices, or credentials. All URLs and providers
-are fictional. The artifact pair has a computed shared snapshot digest.
+These are informative synthetic examples for
+[`1.0.0-beta.4`](../README.md), not production records or claims about commercial
+model support, prices, or credentials. The provider URLs and model identities
+are fictional. The identity-source request uses the real documented API shape;
+its response fixture is synthetic and establishes no live OpenRouter validity.
 
-- [`models.json`](models.json) curates only `example/chat-2` and
-  `example/judge-1`.
-- [`identities.json`](identities.json) illustrates the source-only identity ledger
-  (JSON-compatible with the proposed YAML source). Its fictional catalog stands
-  in for OpenRouter identity evidence; real bindings require actual evidence.
-  It includes non-curated IDs and bindings for both the artifact provider and
-  the separate `feed-example` importer below. It is not a third public artifact.
-- [`openrouter-models.json`](openrouter-models.json) is a minimal synthetic full
-  identity response for the publication audit. All public canonical IDs in this
-  example pair appear in `data[].id`; `canonical_slug` intentionally differs for
-  one row and cannot replace the ID. The identity ledger alone is insufficient.
-  This offline fixture does not establish live OpenRouter validity.
-- [`providers.json`](providers.json) also retains an older active chat model,
-  a native model with no canonical binding or known price, and a future image
-  interface with a gated non-token tariff. An older reader can keep the image
-  record without invoking its unknown protocol or treating the tariff as free.
-- The mixed chat/Decisions offer has interface-specific capabilities and prices;
-  the chat price must not be applied to a Decisions request.
-- The judge offer illustrates `decisions/default`,
-  `systemone/vllm_systemone_v1`, and `systemone/noulxp_http_v1`. Their question
-  types, endpoints, and token/decision/request tariffs remain separate. The
-  metered rates and IDs are synthetic: this asserts neither real provider
-  prices nor currently implemented System One adapters/counters.
-- `answered_question` represents a hypothetical registered billable-answer
-  counter; `completed_request` represents a hypothetical successful-request
-  counter. One successful request with three billable answers counts three in
-  the first and one in the second. Partial errors/refusals need explicit counter
-  rules; an implementation without those rules must report unavailable pricing.
-- `example/chat-1` remains manually routable through its explicit `canonical_id`
-  despite being absent from recommendations and having no quality score. The
-  unbound native offer can likewise be an explicit user-defined router target.
-- `example:~native/Vendor%2FExperimental%3ABeta%251` addresses the exact native
-  ID `Vendor/Experimental:Beta%1`. It is not an alias for another provider's
-  model with the same spelling.
-- [`feed.json`](feed.json) is one source-only feed object. Its two responses are
-  [`page-1.json`](page-1.json) and [`page-2.json`](page-2.json). It is a separate
-  import example, not the complete source for the artifact pair.
+- [`registry.json`](registry.json) is the sole public document. `data.models`
+  recommends `example/chat-2` and `example/judge-1`; `data.providers` additionally
+  retains an older active chat model, an unbound native offer with unknown price,
+  and a future image interface. Canonical joins are derived from provider rows;
+  no reverse index, companion document, or embedded paired digest is needed.
+- [`identities.json`](identities.json) illustrates the source-only identity ledger,
+  including non-curated identities and exact bindings for `example` and the
+  separate `feed-example` importer. Actual bindings require actual evidence.
+- [`identity-source.json`](identity-source.json) is the source root's
+  `identity_source` configuration. It explicitly requests
+  `output_modalities=all`; omitting that query would default to text-only output.
+- [`openrouter-models.json`](openrouter-models.json) is the minimal full identity
+  response fixture, including text, decision, and image output. Every public
+  canonical ID appears in `data[].id`. One `canonical_slug` differs intentionally;
+  substituting it, narrowing by output modality, or relying on ledger history
+  fails the audit. `total_count` agrees with the complete list.
+- [`feed.json`](feed.json) is one source-only required feed. It uses JSON Pointer
+  for every mapping/response path and an explicit header credential env binding.
+  [`page-1.json`](page-1.json) and [`page-2.json`](page-2.json) are its responses.
+  It is not the entire source of the public registry example.
+- [`reconciliation.json`](reconciliation.json) illustrates absence observations
+  A(10), B(11), stale replay A(10), return C(12), and explicit status D(13).
+  With two missing runs and a 24-hour minimum, B withdraws the offer; replay A
+  changes nothing; C restores feed-owned active status through the declared
+  status default. Explicit mapped status wins; manual status stays authoritative.
+- [`charges.json`](charges.json) gives exact proportional decision/request and
+  disjoint-token arithmetic. Three decisions at USD 0.20 per 1000 cost USD 0.0006.
+  No per-question/request rounding or started-block charging is implied.
 
-For that feed, the importer sends a first request without `after`; page 1
-requires a second request with query value `after=cursor/2` (URL-encoded).
-Both pages must succeed before reconciliation. The two observed native IDs are
-`chat-2` and `chat-1`; the explicit prefix transform proposes `canonical_id`
-values `example/chat-2` and `example/chat-1`. The independent ledger verifies
-their exact `feed-example` bindings without consulting curated membership.
-Without that evidence the importer retains the native offers unbound and reports
-unresolved identity; a matching prefix alone is insufficient.
-Input rates `"0.00000125"` and `"0.000001"` normalize to 1.25 and 1 USD per
-million tokens. No output rate is invented. Both models remain in provider
-inventory even though only the newer one is curated.
+The mixed language/decision offer retains one native and canonical identity, with
+separate interfaces and rates. The judge illustrates `decisions/default` and two
+`systemone` profiles. Its metered rates and counter names are hypothetical; an
+implementation lacking their codec/counter rules retains the records but cannot
+invoke or price them. Matching operation names do not authorize lossy conversion.
 
-`EXAMPLE_REGISTRY_API_KEY` names a hypothetical environment variable. With no
-value, this feed reports `missing_secret` and makes no request. It does not
-inherit the runtime credential `EXAMPLE_API_KEY` in the provider artifact.
+`example/chat-1` is absent from recommendations and has no quality score, yet an
+explicit user-defined router can select it. The native selector
+`example:~native/Vendor%2FExperimental%3ABeta%251` resolves exactly to
+`Vendor/Experimental:Beta%1`. It grants no cross-provider alias or extra capability.
 
-The extension fields at envelope/model/interface levels are intentional
-round-trip data. An unknown decision profile is retained but not invoked; an
-unknown meter is not a zero price. Malformed or incompatible input must produce
-a recoverable diagnostic, preserve the last good pair, and leave the host alive.
-Removing any referenced ID from the synthetic OpenRouter response must fail
-publication even if the ledger still contains it and the provider still serves
-the native model. An unavailable identity response also blocks publication;
-neither failure deletes provider inventory. Unreferenced historical ledger
-entries may remain. Audit all rows again after any final candidate edit.
-Later implementation tests should build both positive and
-negative scenarios from small synthetic fixtures rather than freeze commercial
-catalog contents. The full conformance list is in the
-[protocol conformance requirements](../conformance.md#conformance-cases).
+For the feed, page 1 requires a second request with `after=cursor/2`, URL-encoded.
+Both pages must succeed before reconciliation. Prefixing the native IDs `chat-2`
+and `chat-1` proposes `example/chat-2` and `example/chat-1`; the ledger's exact
+`feed-example` bindings verify them independently of curation. Without evidence,
+keep native offers unbound and report unresolved identity. Input strings
+`"0.00000125"` and `"0.000001"` normalize to 1.25 and 1 USD per million tokens;
+missing output prices remain unknown.
+
+`EXAMPLE_REGISTRY_API_KEY` and `OPENROUTER_REGISTRY_API_KEY` name hypothetical
+environment variables, never secret values. Missing values make no authenticated
+request and fail the required stage. Inference credentials are independent.
+
+Unknown optional metadata round-trips through the entire document. Unsupported
+profiles disable their interface; unknown meters make prices unavailable.
+Malformed/incompatible refreshes preserve the last valid document and leave the
+host alive. Any missing referenced canonical ID, failed complete identity fetch,
+or post-audit candidate edit prevents publication without deleting native offers.
+See the [conformance requirements](../conformance.md#conformance-cases) for the
+corresponding observable behavior; these fixtures are not completed runtime tests.

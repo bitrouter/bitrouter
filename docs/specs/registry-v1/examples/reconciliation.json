@@ -1,0 +1,80 @@
+{
+  "description": "Synthetic observation trace; status is feed-owned unless stated otherwise",
+  "feed_id": "catalog",
+  "provider_model_id": "chat-1",
+  "initial": {
+    "checkpoint": {
+      "sequence": 9,
+      "id": "initial",
+      "observed_at": "2026-10-20T00:00:00Z"
+    },
+    "status": "active",
+    "missing_runs": 0
+  },
+  "observations": [
+    {
+      "sequence": 10,
+      "id": "A",
+      "observed_at": "2026-10-21T00:00:00Z",
+      "present": false,
+      "expected": {
+        "outcome": "updated",
+        "status": "active",
+        "missing_runs": 1
+      }
+    },
+    {
+      "sequence": 11,
+      "id": "B",
+      "observed_at": "2026-10-22T00:00:00Z",
+      "present": false,
+      "expected": {
+        "outcome": "updated",
+        "status": "withdrawn",
+        "missing_runs": 2
+      }
+    },
+    {
+      "sequence": 10,
+      "id": "A",
+      "observed_at": "2026-10-21T00:00:00Z",
+      "present": false,
+      "expected": {
+        "outcome": "unchanged",
+        "status": "withdrawn",
+        "missing_runs": 2,
+        "diagnostic": "stale"
+      }
+    },
+    {
+      "sequence": 12,
+      "id": "C",
+      "observed_at": "2026-10-22T01:00:00Z",
+      "present": true,
+      "expected": {
+        "outcome": "updated",
+        "status": "active",
+        "missing_runs": 0
+      }
+    },
+    {
+      "sequence": 13,
+      "id": "D",
+      "observed_at": "2026-10-22T02:00:00Z",
+      "present": true,
+      "mapped_status": "withdrawn",
+      "expected": {
+        "outcome": "updated",
+        "status": "withdrawn",
+        "missing_runs": 0
+      }
+    }
+  ],
+  "manual_status_case": {
+    "status": "suspended",
+    "status_owner": "manual",
+    "present": true,
+    "defaults_status": "active",
+    "expected_status": "suspended"
+  }
+}

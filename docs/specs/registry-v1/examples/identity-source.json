@@ -1,0 +1,13 @@
+{
+  "kind": "openrouter",
+  "request": {
+    "url": "https://openrouter.ai/api/v1/models",
+    "query": {
+      "output_modalities": "all"
+    },
+    "auth": {
+      "kind": "bearer",
+      "env": "OPENROUTER_REGISTRY_API_KEY"
+    }
+  }
+}

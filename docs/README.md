@@ -8,7 +8,7 @@ authorship and compatibility rules; development plans are not protocol standards
 
 - [Protocol specifications](specs/README.md) — tracked interoperability contracts.
   [Registry v1](specs/registry-v1/README.md) is the first protocol, currently
-  `1.0.0-beta.3`, with [conformance requirements](specs/registry-v1/conformance.md).
+  `1.0.0-beta.4`, with [conformance requirements](specs/registry-v1/conformance.md).
   Separates curated automatic-routing models from provider inventories and
   defines protocol names, extensibility, and mapped/authenticated synchronization.
 
