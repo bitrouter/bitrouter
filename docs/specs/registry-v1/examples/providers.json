@@ -1,0 +1,211 @@
+{
+  "as_of": "2026-10-22T00:00:00Z",
+  "data": [
+    {
+      "access": "api_key",
+      "api_base": "https://api.example.com/v1",
+      "auth": {
+        "env": "EXAMPLE_API_KEY",
+        "kind": "bearer"
+      },
+      "billing": "usage",
+      "models": [
+        {
+          "extensions": {
+            "com.example": {
+              "quality_annotation": "unrated"
+            }
+          },
+          "interfaces": [
+            {
+              "input_modalities": [
+                "text"
+              ],
+              "operation": "generation",
+              "output_modalities": [
+                "text"
+              ],
+              "protocol": "chat_completions"
+            }
+          ],
+          "model_types": [
+            "language",
+            "future_classification"
+          ],
+          "provider_model_id": "Vendor/Experimental:Beta%1",
+          "status": "active"
+        },
+        {
+          "id": "example/chat-1",
+          "interfaces": [
+            {
+              "input_modalities": [
+                "text"
+              ],
+              "limits": {
+                "max_input_tokens": 32000
+              },
+              "operation": "generation",
+              "output_modalities": [
+                "text"
+              ],
+              "pricing": {
+                "currency": "USD",
+                "input_tokens": {
+                  "no_cache": 1
+                },
+                "kind": "token",
+                "output_tokens": {
+                  "text": 2
+                }
+              },
+              "protocol": "chat_completions"
+            }
+          ],
+          "model_types": [
+            "language"
+          ],
+          "provider_model_id": "chat-v1",
+          "status": "active"
+        },
+        {
+          "id": "example/chat-2",
+          "interfaces": [
+            {
+              "capabilities": [
+                "tools",
+                "reasoning"
+              ],
+              "extensions": {
+                "com.example": {
+                  "display_note": "chat only"
+                }
+              },
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "operation": "generation",
+              "output_modalities": [
+                "text"
+              ],
+              "pricing": {
+                "currency": "USD",
+                "input_tokens": {
+                  "no_cache": 1.25
+                },
+                "kind": "token",
+                "output_tokens": {
+                  "text": 3
+                }
+              },
+              "protocol": "chat_completions"
+            },
+            {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "operation": "decisions",
+              "output_modalities": [
+                "structured"
+              ],
+              "pricing": {
+                "currency": "USD",
+                "input_tokens": {
+                  "no_cache": 0.1
+                },
+                "kind": "token",
+                "output_tokens": {
+                  "text": 0
+                }
+              },
+              "protocol": "decisions"
+            }
+          ],
+          "model_types": [
+            "language",
+            "decision"
+          ],
+          "provider_model_id": "chat-v2",
+          "status": "active"
+        },
+        {
+          "id": "example/judge-1",
+          "interfaces": [
+            {
+              "input_modalities": [
+                "text"
+              ],
+              "operation": "decisions",
+              "output_modalities": [
+                "structured"
+              ],
+              "pricing": {
+                "currency": "USD",
+                "input_tokens": {
+                  "no_cache": 0.05
+                },
+                "kind": "token",
+                "output_tokens": {
+                  "text": 0
+                }
+              },
+              "protocol": "decisions"
+            }
+          ],
+          "model_types": [
+            "decision"
+          ],
+          "provider_model_id": "judge-v1",
+          "status": "active"
+        },
+        {
+          "id": "example/paint-1",
+          "interfaces": [
+            {
+              "input_modalities": [
+                "text",
+                "image"
+              ],
+              "operation": "image_generation",
+              "output_modalities": [
+                "image"
+              ],
+              "pricing": {
+                "currency": "USD",
+                "kind": "metered",
+                "meters": [
+                  {
+                    "amount": "0.04",
+                    "id": "image.standard",
+                    "quantity": 1,
+                    "unit": "image"
+                  }
+                ],
+                "requires": [
+                  "pricing.metered.v1"
+                ]
+              },
+              "protocol": "images"
+            }
+          ],
+          "model_types": [
+            "image_generation"
+          ],
+          "provider_model_id": "paint-v1",
+          "status": "active"
+        }
+      ],
+      "name": "example",
+      "required_config": [
+        "api_key"
+      ],
+      "status": "active"
+    }
+  ],
+  "requires": [],
+  "snapshot": "59dea4db4f330d3d659a0069502e0f31423e7763db65b518ef661be648b8130d",
+  "spec_revision": "1.0.0-beta.1",
+  "version": 1
+}

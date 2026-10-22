@@ -1,0 +1,905 @@
+# BitRouter Registry v1
+
+Status: **normative beta preview, `1.0.0-beta.1`; design only.**
+
+Date: 2026-10-22. Wire version: **`"version": 1`**.
+
+Base: [PR #990](https://github.com/bitrouter/bitrouter/pull/990),
+`codex/gateway-multi-instance`, commit
+`337123edd7a3992f3202a6a43a8753f7d0dec8d4`.
+
+This document defines the proposed registry contract, not behavior already
+implemented by that base. MUST, MUST NOT, SHOULD, and MAY are requirements of
+this specification. The [delivery plan](REGISTRY_V1_IMPLEMENTATION.md) separates
+the migration and acceptance work from this design. The
+[worked examples](registry-v1/examples/README.md) show the artifact pair and a
+mapped, authenticated, paginated feed. Beta revisions may change
+incompatibly; stable v1 has the compatibility commitments in section 3.
+
+## 1. Scope and decisions
+
+The registry has two independently maintained model views:
+
+| View | Meaning | Authority over membership |
+| --- | --- | --- |
+| `models` | The rolling, curated selection for automatic routing | Explicit curation policy and validated discovery evidence |
+| `providers[].models` | A provider's inventory, including active models outside the curated selection | That provider's feeds and explicit maintainer overrides |
+
+Removing an entry from `models` MUST NOT remove, suspend, rename, or change the
+price of a provider model. Discovering a provider model MUST NOT automatically
+promote it into `models`. A provider inventory does not need to resolve every
+entry against the current curated selection.
+
+The other decisions are:
+
+1. Protocol identifiers describe wire protocols: `chat_completions`, `messages`,
+   `responses`, `decisions`. Vendor names remain valid provider/model identity
+   components, but `openai` and `anthropic` are not v1 protocol identifiers.
+2. Model identity, model classification, operation, wire protocol, modalities,
+   and billing are separate concepts. No one field implies the others.
+3. Provider inventory membership does not require known pricing or a locally
+   implemented adapter. Cataloguing, invoking, automatic selection, and pricing
+   each have separate eligibility checks.
+4. A feed is a bounded declarative import, with explicit mapping and credentials.
+   A provider can use its own listing for membership and another feed for prices.
+5. Readers accept additive data, preserve unfamiliar information when rewriting,
+   and execute only semantics they understand.
+
+This specification covers model/provider YAML sources, deterministic JSON
+artifacts, feed reconciliation, and their consumer contract. It does not revise
+agent/runtime records, inference request/response formats, account entitlements,
+or the learned router's scoring algorithm. Existing Decisions semantics in
+[`DECISIONS_API_SPEC.md`](../DECISIONS_API_SPEC.md) remain authoritative.
+
+## 2. Files and versioned envelopes
+
+The source paths stay in place; model/provider artifacts gain an explicit major
+version directory:
+
+| Path | v1 content |
+| --- | --- |
+| `registry/registry.yaml` | Required source root: `version: 1`, `spec_revision: 1.0.0-beta.1`, and UTC `as_of` |
+| `registry/models/<vendor>.yaml` | Sequence of curated model records |
+| `registry/providers/<provider>.yaml` | One provider record, including source-only sync configuration |
+| `registry/model-discovery.yaml` | Curation policy; never provider inventory policy |
+| `dist/registry/v1/{models,providers}.json` | Separate public envelopes below |
+| `apps/bitrouter/registry-dist/v1/{models,providers}.json` | Byte-identical packaged copies |
+
+The source root versions the whole model/provider source tree; individual YAML
+files do not repeat it. Agent/runtime sources and artifacts keep their existing
+contract and are not implicitly declared v1 by this manifest.
+
+Each model/provider artifact has this envelope (example contains no records):
+
+```json
+{
+  "version": 1,
+  "spec_revision": "1.0.0-beta.1",
+  "as_of": "2026-10-22T00:00:00Z",
+  "snapshot": "4c8071480121b44e1c880ab422aaa3565477821d1babfe6de6f38107968b861e",
+  "requires": [],
+  "data": []
+}
+```
+
+`version`, `spec_revision`, `as_of`, `snapshot`, and `data` are required. `requires`
+defaults to an empty list. `data` is always an array, even when empty. The
+artifact path determines its record type; it is not an inference `/v1/models`
+response and need not imitate that API's `object` field.
+
+For published artifacts, `snapshot` is a lowercase SHA-256 hex digest identifying
+the resolved pair. First render both envelopes without their `snapshot` member,
+using the builder's deterministic JSON serializer. Feed `models.json`, NUL, its
+rendered UTF-8 bytes, NUL, then `providers.json`, NUL, its rendered bytes, NUL into
+SHA-256. Insert the resulting digest in both final envelopes. The serializer
+sorts object keys, uses two-space indentation, LF line endings and one terminal
+LF; record arrays sort by identity while interface preference order is retained.
+Both artifacts have the same snapshot even if fetched separately. Builds do not
+introduce wall-clock timestamps. Identical inputs and compiler version MUST
+produce byte-identical artifacts. This digest detects mixed generations; it is
+not a signature or independent proof of publisher authenticity.
+
+`as_of` is the source manifest's explicit publication evaluation time, copied
+unchanged into both envelopes. Curation/expiry validation and reverse-index
+generation use it, never the builder's wall clock. A sync/publication transaction
+advances it explicitly and must not move it backward; it does not refresh any
+provider's individual availability evidence. A later rebuild with unchanged
+inputs remains identical even across an expiry boundary. Runtime expiry checks
+use the reader's current UTC time, so an expired cached entry is still excluded.
+
+Readers MUST validate both envelopes before publishing a new combined view.
+Mismatched snapshots, unsupported versions, and incompatible beta revisions
+leave the previous valid pair intact; they MUST NOT combine new providers with
+old curated models. A fetcher SHOULD fetch both files at one immutable Git
+revision, or retry a mismatched pair within its bounded retry budget. Packaged
+fallback and disk caches obey the same rule.
+
+JSON duplicate object keys are invalid. YAML must be representable as JSON:
+string mapping keys, no custom tags or non-finite numbers, and no duplicate
+mapping keys. YAML aliases may share values but have no identity semantics.
+Optional fields are omitted for unknown information; `null` is invalid in
+registry records unless a field explicitly permits it. Empty arrays mean an
+explicitly empty set, not an unknown set. Strings are case-sensitive unless a
+field says otherwise. Dates use `YYYY-MM-DD`; timestamps use UTC RFC 3339 with
+`Z`. All expiry comparisons use UTC, independent of the reader's timezone.
+
+## 3. Compatibility and extension rules
+
+### 3.1 Version lifecycle
+
+`version` is an integer compatibility major. Missing, non-integral, or unsupported
+values reject the artifact; there is no v0/unversioned fallback in the v1 reader.
+`spec_revision` identifies a revision of this contract, independently of the
+catalog snapshot. Its major MUST match `version`.
+
+During beta, readers MUST accept only explicitly supported prerelease revisions;
+support for `1.0.0-beta.1` does not imply support for `beta.2` or stable `1.0.0`.
+An incompatible beta edit increments `spec_revision`, even though `version`
+remains 1. Production defaults MUST NOT follow an unpinned beta artifact stream.
+
+After `1.0.0` freezes, stable `1.x.y` revisions are compatible within version 1:
+
+- Optional fields, new named values, and new optional feature definitions may
+  be added with safe old-reader behavior.
+- Existing field types, units, identity rules, default values, and meanings
+  MUST NOT change. New fields MUST NOT become universally required in v1.
+- A deprecation is documentation, not permission to remove a stable v1 field.
+- Incompatible required core semantics require version 2. A new optional
+  interface can instead be isolated with the feature mechanism below.
+
+Old snapshots becoming editorially obsolete is a data lifecycle change, not a
+schema break. Reusing an old identifier for a different model is a break.
+
+### 3.2 Open data, explicit execution
+
+All objects are open to additional members. All named vocabularies in this
+specification are open string sets, including protocol, operation, model type,
+modality, capability, lifecycle status, auth kind, billing kind, and feed kind.
+Unknown is different from malformed: a string with an unfamiliar value is
+unknown; an object where a string is required is malformed.
+
+| Unfamiliar value or field | Required reader behavior |
+| --- | --- |
+| Optional metadata field | Accept; ignore for decisions it does not understand |
+| Model type | Preserve; do not assume it is a language model; type-based selection cannot match it |
+| Protocol or operation | Preserve the interface; exclude it from invocation unless a registered adapter explicitly supports that pair |
+| Additional input/output modality | Preserve; a request needing that modality cannot use an adapter that lacks it |
+| Capability | Preserve; never count it as proof of another capability |
+| Provider/model status | Preserve; only the exact known `active` status is eligible |
+| Auth/access/required configuration kind | Disable that provider's invocation until understood; no auth fallback |
+| Price kind, meter, or applicability condition | Price unavailable for the affected interface; never zero or a cheaper fallback |
+| Feed/auth/pagination/transform kind | Do not run that feed; do not reconcile removals from it |
+
+`requires: [<feature-id>, ...]` is available on envelopes, providers, model
+records, interfaces, prices, and feeds. These lists are unordered and unique;
+they declare semantics the reader MUST implement before using the containing
+object. Requirements are inherited by children. An unsupported envelope
+requirement rejects that artifact; an unsupported provider requirement disables
+that provider; an unsupported model/interface requirement disables only that
+model/interface. An unsupported price requirement blocks pricing, not catalog
+retention. An unsupported feed requirement blocks that feed, not unrelated feeds.
+
+Feature IDs are stable strings, such as `pricing.metered.v1`. A required feature
+is a declaration of built-in reader support, never a URL to fetch code from.
+New fields that constrain credentials, request interpretation, route eligibility,
+or billing MUST either have harmless behavior when ignored or carry a new
+requirement at the smallest affected scope. Writers MUST NOT hide mandatory
+restrictions in an unknown optional field. Unrecognized executable discriminants
+already fail closed by the table; `requires` also protects changes to otherwise
+recognized objects.
+
+Parsers, sync writers, builders, and caches that reserialize data MUST preserve
+unknown fields and raw unknown values at every nesting level, including opaque
+interfaces and prices. A read-only consumer may project only known fields into
+its execution view, but a cache MUST retain the complete document. Source lint
+SHOULD warn about unfamiliar spellings to catch typos without making the reader
+vocabulary a closed enum. Private descriptive extensions SHOULD live under
+`extensions`, keyed by a reverse-domain namespace.
+
+The documented source-only containers (`auto_sync`, `sync`, `defaults`) are
+excluded from public artifacts as a whole. Their unknown members remain intact
+in source rewrites; this exception does not permit dropping unfamiliar members
+of published records or cached documents.
+
+A malformed known field is a validation error, not a compatibility extension.
+The publisher MUST reject an invalid build. A runtime MUST reject an invalid
+new pair and retain the last valid pair. Merely unsupported records remain in
+the parsed pair with diagnostics and disabled execution; they are not invalid.
+
+## 4. Identity and the two catalogs
+
+### 4.1 Curated model record
+
+| Field | Contract |
+| --- | --- |
+| `id` | Required stable canonical `<vendor>/<model>` ID; unique across `models` |
+| `name`, `description`, `family` | Optional display/grouping strings; not identity or ordering rules |
+| `model_types` | Optional unique string array; e.g. `language`, `decision`, `image_generation`, `audio_generation`, `video_generation`, `embedding`, `reranking` |
+| `input_modalities`, `output_modalities` | Optional unique arrays of known model-level facts; not endpoint support guarantees |
+| `max_input_tokens`, `max_output_tokens`, `context_window` | Optional positive integers; combined context is not inferred from either separate limit |
+| `release_date`, `knowledge_cutoff`, `open_weights` | Optional verified facts; `open_weights` is a boolean |
+| `benchmarks` | Open object keyed by benchmark/version; results retain harness, configuration, measurer, date, and source provenance |
+| `curation` | Required object described below |
+| `providers` | Generated reverse index only; absent from sources |
+
+Canonical IDs keep the existing lowercase ASCII vocabulary: vendor and each
+slash-separated model segment match `[a-z0-9][a-z0-9._-]*`. The vendor equals
+the model source filename stem. An ID is not reassigned when a model rolls out
+of curation. Routing aliases such as `latest` are not immutable canonical model
+identities and require a separate, explicit alias policy if introduced later.
+
+`curation` contains required `reason` (nonempty string), `source_url` (HTTPS
+evidence), and `checked_at` (UTC timestamp), and optional `expires_at` (UTC
+timestamp). Absence of `expires_at` means no scheduled editorial removal, not
+permanent upstream availability. Only verified, currently useful models enter
+this list. Inclusion is a routing recommendation, not proof that any particular
+account can invoke the model.
+
+A multimodal model expresses multiple modalities. It need not acquire a new
+exclusive `type: multimodal`. A model may have both `language` and `decision`
+types; those labels alone grant neither operation. A decision result's modality
+may be `structured`, rather than pretending it is generated prose.
+
+### 4.2 Provider and provider model records
+
+The provider has required `name`, `status`, and `models`. `name` equals the
+filename stem, matches `[a-z0-9][a-z0-9_-]*`, and is unique. The generated `id`
+duplicate is removed; `name` is the only provider identity field.
+
+The following existing descriptive/provider fields keep their meanings:
+`display_name`, `metadata`, `contact`, `submitted_at`, `community` (default
+false), `kind`, `weight` (positive finite number, default 1), `doc_url`,
+`api_base`, `access` (default `api_key`), and `required_config` (default `[]`).
+Metadata is descriptive, never an auth or routing authority. An unknown provider
+`kind` gets no first-party preference; it need not prevent explicit invocation.
+
+`status` is required: `active`, `staging`, `suspended`, `withdrawn` are known.
+Only `active` permits invocation. An active provider MAY temporarily have an
+empty inventory; it then offers zero static routes. Sync never changes provider
+status merely because the curated list or a fetched inventory becomes empty.
+
+`auth` is explicit when invocation requires credentials. Known shapes are
+`{kind: bearer, env: ...}`, `{kind: header, env: ..., header: ...}`, and
+`{kind: oauth|native, handler: ..., params: {...}}`. Optional `extra_headers`
+contain public constants. `kind: none` explicitly declares unauthenticated
+invocation. An absent auth declaration is unknown and cannot enable an automatic
+provider. Credential discovery from `access` or a provider name is not permitted.
+`auth_scheme` and generated `byok` are removed; consumers derive presentation
+from the explicit auth/access declaration. Feed auth is separate (section 8).
+
+Each provider model contains:
+
+| Field | Contract |
+| --- | --- |
+| `provider_model_id` | Required nonempty upstream string, preserved exactly, including case and slashes |
+| `id` | Optional canonical identity, independent of current membership in `models` |
+| `status` | Required; same known vocabulary as provider status; active means advertised as callable, not necessarily recommended |
+| `name`, `description`, `model_types` | Optional provider-local metadata |
+| `interfaces` | Required ordered array; may be empty when endpoint support is unknown |
+| `available_until` | Optional UTC timestamp: upstream retirement, not editorial expiry |
+| `upstream_lifecycle` | Optional raw lifecycle label, e.g. an upstream's still-callable `deprecated` |
+| `availability` | Optional provenance: `source_url`, `checked_at`, and `scope` (`public` or `account`) |
+| `sync` | Source-only ownership/observation data, defined in section 9 |
+
+The storage identity is **(provider name, provider_model_id)**. `id` is not the
+inventory primary key. Multiple upstream IDs may map to one canonical model;
+each remains a separate offer and selection must be deterministic. A native ID
+with no verified canonical identity is retained with `id` absent. It can be
+explicitly addressed through its provider and native ID, but it is not a
+cross-provider alias and cannot enter curated automatic routing.
+
+Identity assignment precedence is an explicit maintainer binding, an explicit
+feed mapping to a canonical `id`, then no binding. A reviewed mapping may attach
+a fixed verified vendor prefix to a native ID, using the `prefix` transform in
+section 8; this makes first-party discovery work without joining the rolling
+curated list. Such a rule must establish stable identity, not turn an upstream
+moving alias into a versioned model. Feed imports MUST NOT infer
+identity from suffix matching, lowercasing native IDs, vendor ownership strings,
+or the rolling `models` list. A conflicting binding is reported for review;
+sync MUST NOT silently rename an existing offer. Maintainer bindings live on
+the record and survive curation changes.
+
+Generated `models[].providers` contains only references
+`{provider, provider_model_id}` to statically active, unexpired offers with the
+same canonical ID. It contains no duplicated prices, capabilities, or auth.
+Consumers join against the providers artifact from the same snapshot and apply
+their own supported-interface/account gates. This index is a convenience, not
+an entitlement or current-health assertion.
+
+### 4.3 Automatic and explicit routing
+
+Automatic model selection uses the intersection of:
+
+1. An unexpired curated record.
+2. An active provider and active, unexpired provider model with that canonical ID.
+3. A supported interface matching the requested operation, protocol conversion
+   constraints, modalities, and required capabilities.
+4. Configured credentials, account entitlement, runtime health/admission, and
+   any caller requirements such as known cost.
+
+Unknown metadata MUST NOT be treated as a positive capability or infinite limit.
+Type-based selection can use understood type labels; a known interface remains
+usable even if the model has an additional unfamiliar classification label.
+No eligible intersection means no automatic candidate, not a fallback into the
+full provider inventory. Explicit model selection, by canonical ID or
+provider/native ID, does not require curation, but still observes status, expiry,
+operation, auth, and execution constraints. Resolving an explicitly requested
+canonical ID uses verified bindings across the full provider inventory, not
+membership in the curated vocabulary. Choosing a provider for an already
+specified model is different from automatically choosing which model to use.
+Existing account/subscription opt-in restrictions apply to both paths.
+
+The public inference `/v1/models` projection continues to describe the configured
+providers' callable inventory, not just the curated list. Consumers MUST NOT
+deduplicate unrelated unbound native IDs across providers. Unbound IDs require
+an unambiguous provider-qualified API identity; listing and resolving that
+identity must round-trip without changing the native ID.
+
+The reserved explicit selector is `<provider>:~native/<encoded-native-id>`.
+Encode the native ID's UTF-8 bytes: keep ASCII letters, digits, `.`, `_`, and
+`-`; encode every other byte as `%HH` with uppercase hex. Decode exactly once,
+reject malformed escapes/UTF-8, and perform exact native-ID lookup within that
+provider. The `~native/` prefix cannot collide with the canonical ID grammar.
+This selector works for bound and unbound offers; listing uses it when there is
+no canonical binding. Existing canonical selectors keep their meaning. Native
+IDs must not be empty, whitespace-only, or contain control characters.
+
+## 5. Interfaces, modalities, and operation-specific data
+
+An offer's `interfaces` array is ordered by preference, most preferred first.
+Each entry describes one **(protocol, operation)** pair; duplicates are invalid.
+
+| Field | Contract |
+| --- | --- |
+| `protocol` | Required open string; names the wire format, not the vendor |
+| `operation` | Required open string; semantic operation, never inferred for unknown protocols |
+| `base_url` | Optional HTTPS API base; overrides provider `api_base` for this interface |
+| `input_modalities`, `output_modalities` | Optional unique string arrays; absence means unknown |
+| `capabilities` | Optional unique verified feature names; absence/empty grants none |
+| `limits` | Optional open object; known positive integer token limits: `max_input_tokens`, `max_output_tokens`, `context_window` |
+| `rate_limits` | Optional positive integer `requests_per_minute`, `tokens_per_minute` |
+| `compatibility` | Optional protocol-specific object interpreted only by that protocol's adapter |
+| `reasoning_effort` | Optional existing levels/default configuration; requires verified `reasoning` capability |
+| `pricing` | Optional interface-specific price (section 6) |
+| `requires` | Optional mandatory feature IDs |
+
+Known v1 pairs align with `bitrouter-ai`:
+
+| Protocol | Operation | Existing relative endpoint |
+| --- | --- | --- |
+| `chat_completions` | `generation` | `/chat/completions` |
+| `messages` | `generation` | `/messages` |
+| `responses` | `generation` | `/responses` |
+| `decisions` | `decisions` | `/decisions` |
+
+The base URL includes the API prefix (typically `/v1`); it excludes the operation
+suffix. The registered adapter owns suffix and transport behavior. An interface
+without a concrete base may use a declared `required_config: [base_url]` or an
+explicit native handler; no URL is guessed from the protocol name.
+
+The source may declare `defaults.interfaces` once per provider. A model omitting
+`interfaces` in source inherits that whole ordered array; an explicit array
+replaces it in full, including `[]`. The build materializes the result on every
+offer and removes `defaults`. There are no implicit per-field merges or glob
+rules. Feed defaults apply to imported new records, not a blanket claim about
+every model a provider might expose. Heterogeneous feeds must map verified
+interfaces or retain unknown ones as `[]`.
+
+This is a deliberate v1 replacement for `api_protocol`, `protocol_endpoints`,
+provider protocol globs, model-wide `capabilities`, and `pricing_by_protocol`.
+It prevents falsely combining image output on one interface with tools on a
+different interface, or borrowing generation tariffs for Decisions. The one-time
+migration expands existing globs and then copies verified facts into each
+appropriate interface. Compatibility fields such as `google_extensions` remain
+protocol details, not new manufacturer-named protocols.
+
+Future `image_generation`, `audio_transcription`, `video_generation`, embedding,
+or other operations can add their own protocol/operation pairs, limits, and
+pricing. Those example names do not claim adapters are implemented today.
+Old clients retain the records and skip unsupported interfaces. In particular,
+the base's `Custom(...) => Generation` behavior MUST NOT be used as permission
+to execute an unfamiliar registry interface. A registered adapter must declare
+its supported operation and fidelity explicitly.
+
+## 6. Billing and pricing
+
+Provider `billing` is an open string. Known values are `usage` and `subscription`;
+it is required in v1. `usage_token` migrates to `usage` because not all future
+models are priced in tokens. Unknown billing disables cost-aware selection and
+settlement until supported; it does not erase the inventory.
+
+Each interface owns its entire tariff; there is no cross-protocol fallback.
+Omitted pricing means **unknown**, not free. A provider model with unknown
+pricing can remain active and be explicitly invoked where application policy
+does not require a price. A selection or settlement path that requires prices
+MUST reject unknown/inapplicable pricing. Subscription is not a synthetic
+zero-dollar token tariff; subscription entries omit usage prices in this revision.
+
+Known `pricing.kind: token` retains the existing numerical USD-per-million-token
+fields: `input_tokens.{no_cache,cache_read,cache_write}`,
+`output_tokens.{text,reasoning}`, `context_tiers`, and `endpoint_profile`.
+`currency: USD` is required. Rates are finite nonnegative JSON numbers; omission
+is unknown and explicit zero is a known zero rate. `context_tiers` have unique,
+ascending `above_input_tokens` positive integers; the greatest threshold strictly
+below the request input count applies to the entire request. A tier overrides
+specified rates and inherits unspecified rates from the base, never another
+interface. An unknown endpoint profile or unverified effective deployment makes
+the tariff inapplicable. Existing metering evidence requirements still apply;
+a tariff does not establish cache-counter semantics.
+
+For non-token billing, v1 reserves an additive, explicitly gated shape:
+
+```json
+{
+  "kind": "metered",
+  "requires": ["pricing.metered.v1"],
+  "currency": "USD",
+  "meters": [
+    {"id": "image.standard", "unit": "image", "quantity": 1, "amount": "0.04"}
+  ]
+}
+```
+
+Meter IDs are unique within a tariff. `quantity` is a positive integer and
+`amount` is a nonnegative decimal string without exponent notation. A runtime
+must explicitly implement the meter's usage counter and applicability; a label
+such as `second`, `image`, or `request` is not enough. Unknown meters make the
+whole affected tariff unavailable, rather than dropping charges. Additional
+conditioned/tiered meter semantics require their own feature IDs. This preview
+does not require a media billing engine to ship with the registry migration.
+
+## 7. Curated discovery and rolling validity
+
+The existing family selection policy remains explicit: approved family patterns,
+numeric version ordering, `retain_versions` (default 2), variant exclusions, and
+a configurable grace window (default 30 days). Discovery is evidence for
+curation; the provider listing and provider sync are independent jobs.
+
+Within an approved family, only validated, eligible, non-retired releases count
+toward the retention window. A newer unusable/withdrawn release MUST NOT push out
+a usable older release. Numeric components compare numerically with trailing
+zero components equivalent; timestamps and ID lexical order do not choose the
+latest version. All eligible variants of retained versions may be included.
+Excluded variants do not by themselves establish an eligible version.
+
+| Event | Curated effect | Provider effect |
+| --- | --- | --- |
+| Valid new release in an approved family | Add after identity/metadata/availability validation | None; provider feed decides its offers |
+| Healthy release leaves retention window | Set `curation.expires_at` once, to now plus grace | None |
+| Expiry reached | Remove from curated artifact; reader also excludes an expired cached record | None |
+| Release re-enters window before expiry | Clear scheduled editorial expiry | None |
+| Confirmed globally unsuitable/broken release | Remove immediately and retain curation tombstone with reason/evidence | None; explicit invocation remains a separate policy decision |
+| Provider withdraws an offer | Recompute availability; do not recommend a model with no eligible offers | Update only that provider offer |
+| Discovery failure or an unverified/partial response | Preserve existing membership; elapsed explicit expiries still apply | None |
+
+`retired_models` becomes an explicit curation tombstone list with `id`, `reason`,
+`source_url`, and `recorded_at`. Tombstones prevent rediscovery until deliberately
+removed. They are not a global provider denylist. A global execution ban, if
+needed, belongs to a separately explicit routing policy and MUST NOT be inferred
+from editorial membership. The old ambiguous `deprecation_date` is removed:
+editorial expiry is `curation.expires_at`; upstream end-of-service is
+`available_until`. Do not mechanically translate one into the other.
+
+For this specification, “valid” means identity and required routing facts have
+verified provenance, the model is not tombstoned/expired, and at least one
+active compatible offer exists in the published snapshot. It is not a promise
+of live uptime, universal account access, or measured model quality beyond the
+cited curation evidence. Runtime health and admission remain additional gates.
+The build fails if a newly curated entry has no active offer with a declared
+interface; when a provider sync removes the last offer, the same publication
+removes that now-unavailable curated record. Restoration requires fresh evidence
+and curation policy, never arbitrary provider promotion.
+
+## 8. Provider sync feeds
+
+### 8.1 Feed declaration and authority
+
+`auto_sync` is source-only and contains `feeds`, an array of feed objects. Each
+feed has a unique stable `id`, a `kind`, and an explicit `writes` array selected
+from `models`, `metadata`, and `pricing`. Unknown write domains disable the feed.
+One provider may have a membership feed and a separate pricing feed; two feeds
+MUST NOT own the same domain on the same offer. `writes: [pricing]` cannot add,
+remove, rename, or reactivate inventory entries.
+
+Known kinds are `v1_models`, `models_dev`, and `agentic`. The latter two retain
+dedicated adapters; they must emit the same normalized observations and obey
+the same ownership rules. `models_dev` is enrichment by default, not evidence
+that a first-party endpoint still serves a model. `agentic` produces a reviewed
+proposal, not an authoritative complete snapshot for automatic removal.
+
+`v1_models` requires the `request`, `response`, and `pagination` blocks below.
+`models_dev` requires `request` with the same HTTP/auth rules and a nonempty
+`key` naming the exact provider object in its catalog; its dedicated adapter
+defines normalization, so generic `response`/`pagination` blocks are invalid.
+It may write inventory only in documented provisional `merge` mode. `agentic`
+requires a nonempty `urls` array of HTTPS evidence pages and accepts no
+credential-bearing `request` block. Its generated proposal must pass the same
+domain/ownership validation before being applied; it cannot assert a complete
+snapshot or alter sync configuration. No feed kind guesses its source URL.
+
+A provider's own documented feed is preferred for membership. A provider with
+no usable machine feed may remain manual or use a documented, reviewed proxy
+source. Do not describe third-party metadata as authoritative provider lifecycle.
+
+Example of the source shape (fictional API, not a real credential request):
+
+```yaml
+auto_sync:
+  feeds:
+    - id: catalog
+      kind: v1_models
+      writes: [models, metadata]
+      request:
+        url: https://api.example.com/v1/models
+        headers:
+          example-api-version: '2026-01-01'
+        auth:
+          kind: bearer
+          env: EXAMPLE_REGISTRY_API_KEY
+      response:
+        path_syntax: dotted
+        items_path: payload.models
+        mapping:
+          model.id: provider_model_id
+          model.canonical_id: id
+          model.display_name: name
+          lifecycle: upstream_lifecycle
+          features.interfaces: interfaces
+        defaults:
+          status: active
+          interfaces: []
+        filter:
+          path: lifecycle
+          in: [active, deprecated]
+          known_values: [active, deprecated, retired]
+      pagination:
+        kind: cursor
+        cursor_path: payload.next_cursor
+        has_more_path: payload.has_more
+        parameter: after
+        max_pages: 100
+      inventory:
+        mode: snapshot
+        scope: public
+        complete: true
+        allow_empty: false
+        missing_runs: 2
+        minimum_missing_hours: 24
+```
+
+The endpoint must actually document `deprecated` as still callable for that
+filter to be correct. Unsupported future lifecycle values are not silently
+mapped to `active`; section 9 defines how incomplete interpretation affects
+removal. `v1_models` names the JSON-list importer, not a promise that all model
+listing APIs have the same response shape.
+
+### 8.2 Request and credentials
+
+`request.url` is the exact absolute HTTPS listing URL, including `/models` or
+another documented path. No suffix is appended. It has no userinfo, fragment,
+or secret-bearing query parameter. Optional `request.query` is a string-to-string
+map of public parameters; it must not collide with URL query names or the
+pagination parameter. Method is GET in this revision. `request.headers` carries
+public constant headers only.
+
+Feed `request.auth` is required: `none`, `bearer` with `env`, or `header` with
+`env` and `header`. `env` matches `[A-Z_][A-Z0-9_]*`. Header names are
+case-insensitive; duplicate names or collisions between constant headers and
+the auth header are errors. Header names/values must be valid HTTP headers;
+CR/LF are rejected. `bearer` produces `Authorization: Bearer <value>`; `header`
+places the value exactly in the configured header. OAuth/SDK/signing support can
+be a future feed-auth kind and is not emulated as an unauthenticated request.
+
+Secrets are read only from the named process environment variable at execution.
+Missing or empty values produce `missing_secret`, no request, and no catalog
+mutation. There is no fallback to provider runtime auth, local OAuth caches,
+inferred `{PROVIDER}_API_KEY`, another feed's key, or an anonymous retry. This
+permits a public feed for an authenticated inference provider and a separate
+least-privilege CI credential for a private listing.
+
+Secrets MUST NOT appear in source, dist, cache, command arguments, reports,
+request/body debug logs, or PR text. Responses are untrusted data, never
+instructions or code. Authenticated requests do not follow redirects in this
+revision; a changed endpoint requires updating the configured URL. Requests
+use bounded timeouts, response sizes, and retries. Retry transient timeouts,
+429, and 5xx with backoff; do not retry authentication failure anonymously.
+
+### 8.3 Mapping and normalization
+
+The mapping direction is **source path -> normalized provider-model path**:
+`"a.b.c": "x.y.z"` reads `a.b.c` from one upstream item and writes `x.y.z`
+on that item's normalized record. A value may also be a nonempty array of
+destination paths, copying the same source value to each target before their
+individual transforms. This permits `id: [provider_model_id, id]` without
+duplicate YAML keys. There is no implicit passthrough of the raw item and no
+default canonical-ID inference.
+
+`response.path_syntax` defaults to `dotted`. Dotted paths use `.` between object
+keys, `\.` for a literal dot, and `\\` for a literal backslash; other escapes,
+empty segments, and trailing escapes are invalid. On an array, a segment is a
+zero-based decimal index without leading zeros. On an object the same segment
+is a literal key. Empty string denotes the root, allowed for `items_path` and
+read paths, not mapping destinations. No wildcards, recursive descent, filters,
+expressions, function calls, or evaluation are supported.
+
+`path_syntax: json_pointer` is also supported for keys that dotted paths cannot
+represent, following [RFC 6901](https://www.rfc-editor.org/rfc/rfc6901).
+The selected syntax applies to all response, transform, and pagination paths
+in that feed; mixing syntaxes is an error. JSON Pointer destinations cannot use
+the root or the append token `-`.
+
+`items_path` is required and is evaluated against each response document. It
+must resolve to an array; absent, null, scalar, or object is a feed failure,
+never an empty inventory. Each item must be an object. `mapping` is required;
+the minimal conventional list mapping is `{id: provider_model_id}` with
+`items_path: data`. `provider_model_id` must resolve to a nonempty string.
+
+Destination paths may target `provider_model_id`, `id`, `name`, `description`,
+`status`, `model_types`, `upstream_lifecycle`, `available_until`, and known
+members of `interfaces`. They MUST NOT target provider configuration, auth,
+feed configuration, curation, `requires`, ownership, or arbitrary filesystem
+paths. Future mapping destinations require importer support before use.
+`availability` is generated from the feed's request/scope and successful run.
+
+Mapping is simultaneous, not order-dependent. Duplicate destinations and
+ancestor/descendant collisions (such as `interfaces` and
+`interfaces.0.protocol`) are configuration errors. Missing intermediate object
+members may be created. Destination arrays must already exist in `defaults`
+with an in-range fixed index; no sparse creation or append is allowed. Unsafe
+object keys such as `__proto__`, `prototype`, and `constructor` are rejected by
+the importer. Defaults use normalized nested objects, not path-expression keys.
+
+`defaults` provides reviewed constants for new entries and destination array
+shape. A present mapped value overrides the default. A missing source path
+produces **no observation**: existing data remains unchanged; a new record may
+use its default. Null optional metadata is an explicit clear when the feed owns
+that field; it is emitted as omission in the registry. Null identity, status,
+interfaces, or other required data fails the feed. Neither null nor a type
+error activates a default. No coercion occurs without a declared transform.
+
+Optional `transforms` is a destination-path-to-ordered-steps map. v1 knows only:
+
+- `{kind: prefix, value: <string>}`: prepend a fixed public string to a string
+  value, e.g. `openai/` on the canonical `id` target only; no interpolation,
+  lowercasing, alias resolution, or modification of the native ID occurs.
+- `{kind: parse_decimal}`: a finite base-10 decimal string to a JSON number;
+  reject empty, exponent, nonnumeric, overflow, and non-finite input.
+- `{kind: multiply, factor: <finite-number>}`: multiply a numeric value, checking
+  range; used for explicit unit conversion, such as per-token to per-million.
+- `{kind: value_map, values: [{from: <JSON>, to: <JSON>}, ...]}`: exact typed
+  equality lookup, with unique `from` values; unmapped input is an error.
+
+Transforms run after reading a present non-null source value and before target
+validation; they do not run on missing/null values or defaults. Each transform
+target must be a mapped destination. Arithmetic for money uses checked decimal
+operations, not accumulated binary floating-point arithmetic. No arbitrary
+scripts, templates, regex replacements, or automatic currency conversion are
+allowed. Dates and model IDs require correct source values or a dedicated
+adapter, rather than speculative generic transformations.
+
+For example, given a default `interfaces[0]` with a verified token tariff shape,
+an upstream per-token decimal string may map as follows:
+
+```yaml
+mapping:
+  id: provider_model_id
+  cost.input: interfaces.0.pricing.input_tokens.no_cache
+transforms:
+  interfaces.0.pricing.input_tokens.no_cache:
+    - kind: parse_decimal
+    - kind: multiply
+      factor: 1000000
+```
+
+The feed must document the upstream unit and currency. Absence of feed prices
+MUST NOT remove models, fabricate a zero price, or copy another provider's
+prices. Fields outside `writes` are rejected in the mapping rather than silently
+written. Identity reads are allowed for joining a pricing-only observation.
+
+Optional `filter` has `path` and nonempty `in` array of exact typed values. It
+runs before normalization. A present recognized value outside the allowlist is
+an excluded observation, not malformed data. A missing/null filter value makes
+the run incomplete. A feed using lifecycle filtering must additionally declare
+`filter.known_values` (including both allowed and intentionally excluded states)
+before it can assert a complete snapshot. A value outside `known_values` makes
+the run incomplete and forbids removals. `known_values` must include every value
+in `in`; duplicate values in either list are invalid. The example's full
+lifecycle vocabulary is fictional and must be verified for an actual provider.
+
+### 8.4 Pagination and complete responses
+
+`pagination` is required; `kind: none` explicitly asserts one response is the
+complete listing within the declared scope. `kind: cursor` requires a response
+`cursor_path`, query `parameter`, and positive `max_pages` (default limit 100
+when omitted). `has_more_path` is optional.
+
+For cursor pagination, the first request has no cursor. With `has_more_path`,
+each response must contain a boolean: false completes the listing; true requires
+a nonempty string cursor. Without it, the cursor field must exist: null or an
+empty string terminates, a nonempty string continues. A missing field or wrong
+type is failure, not completion. Cursors are opaque and URL-encoded as query
+values; pagination never changes host, path, or auth.
+
+Repeated cursors, exceeding `max_pages` while continuation remains, conflicting
+duplicate native IDs, any failed page, or any item normalization error invalidate
+the whole feed transaction. Identical duplicate observations may be deduplicated.
+An empty intermediate page with a valid next cursor continues. A feed that needs
+offsets, continuation headers, or another pagination mechanism requires an
+explicit supported adapter; declaring `none` is not a workaround.
+
+## 9. Reconciliation, ownership, and failures
+
+`inventory` is required for a feed writing `models`:
+
+| Field | Meaning |
+| --- | --- |
+| `mode` | `merge` only adds/updates; `snapshot` may also withdraw missing offers |
+| `scope` | `public` provider inventory or credential-scoped `account` visibility |
+| `complete` | Explicit boolean assertion of complete coverage of this feed's owned inventory |
+| `allow_empty` | Default false; whether an observed empty complete listing is meaningful |
+| `missing_runs` | Positive integer, default 2 |
+| `minimum_missing_hours` | Nonnegative number, default 24 |
+
+`snapshot` withdrawals require `complete: true`, all pages and items interpreted,
+and a documented provider-authoritative membership source. An account-scoped
+listing is not evidence of global withdrawal. In this revision `scope: account`
+is restricted to `merge`; a separately scoped inventory can be introduced later.
+Feeds that cannot establish completeness must use `merge` and report that limit.
+
+Source-only `sync` records the membership `owner` feed ID, `last_seen_at`, and,
+when missing, `missing_since` and `missing_runs`. `last_observation_id` prevents
+reapplying the same membership observation. `sync.field_owners` maps model field
+paths to feed IDs; `sync.interface_owners` is an array of objects containing
+`protocol`, `operation`, and their own `field_owners` map of interface-relative
+paths to feed IDs. Ownership paths use JSON Pointer, never mutable interface
+array indices; parent/child ownership claims cannot overlap. For example,
+`/status` may belong to the membership feed while an interface's `/pricing`
+belongs to its pricing feed. Absence from an ownership map means manually owned
+for an existing field. `sync.owner` grants membership reconciliation, not
+permission to overwrite a manually owned status. Existing manually maintained
+paths are not silently claimed: migration or a maintainer explicitly assigns
+ownership. New imports assign the fields they observed/defaulted to the feed's
+declared domains. A manual override removes that path from feed ownership.
+Identity binding is maintainer-owned unless explicitly assigned to a feed.
+
+Domain boundaries are fixed: `models` owns membership, `status`, and
+`available_until`; `metadata` owns descriptive fields and verified interface
+support/capabilities; `pricing` owns interface tariff subtrees. A `models` feed
+can create identity and an empty `interfaces` array without metadata authority.
+Deleting/replacing a metadata array must preserve separately owned prices and
+manual fields, joining interfaces by `(protocol, operation)`, never by incidental
+array position. If it cannot do so unambiguously, reconciliation fails and
+requires a reviewed change.
+
+For each feed, the importer MUST:
+
+1. Validate configuration, feature support, and environment prerequisites.
+2. Fetch and normalize the entire listing into a staged observation set.
+3. Resolve exact native IDs and explicit canonical bindings; detect conflicts.
+4. Apply only owned field changes. Preserve unobserved, manually owned, and
+   unknown data. Report conflicts instead of choosing an arbitrary winner.
+5. For a complete authoritative snapshot, count absence only for that feed's
+   owned offers. Withdraw only after both `missing_runs` and
+   `minimum_missing_hours` are satisfied by consecutive successful complete
+   runs in the sequence of successful complete observations. A failed/incomplete
+   run pauses that sequence without incrementing or clearing evidence; a
+   successfully observed present offer clears the window. Time elapsed during
+   failures cannot substitute for a new complete absence observation.
+6. Validate the entire candidate provider, then publish its changes atomically.
+
+Withdrawal sets model `status: withdrawn`; it does not erase the record, identity,
+manual metadata, or last known prices. Inventory may retain inactive records for
+audit; only active ones are callable. A later complete/present observation can
+reactivate a feed-owned status, but MUST NOT override a manual suspension or
+withdrawal. Manual pruning of inactive historical rows is allowed; stable IDs
+must not be reassigned. Missing inventory data never suspends the provider.
+
+If membership belongs to a feed but a status override is manually owned, an
+absence-driven status change is a reported ownership conflict, not an overwrite.
+The maintainer must resolve that conflict explicitly before automatic withdrawal.
+
+An empty listing without `allow_empty: true`, 401/403, missing secret, timeout,
+invalid JSON, malformed row, failed page, unsupported feed semantics, or
+uninterpretable lifecycle state MUST NOT count as missing models. Keep the last
+good inventory and report the failure. Validating a failure is not a successful
+availability refresh.
+
+Provider jobs are isolated: failure of provider A does not prevent a validated
+transaction for provider B from being proposed. Curation discovery and provider
+sync stages do not write each other's source trees. A final publication step
+reconciles curated availability and builds a coherent artifact pair; it never
+deletes provider offers because of curation. Dry-run computes the same candidate
+and validation as write mode, without changing source/dist files.
+
+The machine-readable report includes provider/feed ID, outcome (`updated`,
+`unchanged`, `missing_secret`, `failed`, `unsupported`, `incomplete`), scope,
+completeness, counts, changed field paths, proposed withdrawals, and sanitized
+diagnostics. It never includes credentials or raw response bodies. Repeating
+the same run observation must not double-count absence; each scheduled run has
+a unique observation ID, and reapplying that ID is idempotent. Observation times
+and IDs belong to source sync state/reporting, not invented build timestamps.
+
+## 10. CI and release contract
+
+Scheduled sync runs on trusted repository code, using GitHub repository secrets
+explicitly bound to feed environment names. For example:
+
+```yaml
+- name: Sync deterministic registry feeds
+  env:
+    EXAMPLE_REGISTRY_API_KEY: ${{ secrets.EXAMPLE_REGISTRY_API_KEY }}
+  run: cargo run -p dist-helper -- registry sync --write --report target/registry-sync.md
+```
+
+This is a configuration example, not a request to create a secret. Adding a
+credentialed feed includes its explicit workflow env binding and documents the
+required repository secret name. Do not export the entire secrets context or
+interpolate secret values into shell commands. GitHub supplies an empty string
+for an unset secret, and fork PRs normally receive no repository secrets;
+see [GitHub's secret handling contract](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets).
+
+PR validation MUST be credential-free and use synthetic fixtures. It MUST NOT
+run network feeds from untrusted PR YAML with privileged secrets. Scheduled or
+manual trusted sync uses the checked-in feed URL/auth configuration. An agentic
+enrichment step receives only its own credentials, not all provider feed keys,
+and cannot change feed URLs, auth, ownership, or CI policy as part of sync.
+
+Feed failures are collected, not swallowed. The scheduled workflow validates
+and proposes successful independent provider updates, includes the failure
+summary, and records an unsuccessful final run status when required feeds fail
+or lack secrets. A failure does not publish an invalid pair or masquerade as
+“already up to date.” Implementation must arrange the report/build/PR steps
+and final failure step explicitly so an early nonzero exit does not discard
+successful independent results.
+
+Before publication, run source validation, deterministic build, and stale-dist
+check; commit both source and generated artifacts together. Readers switch a
+whole validated pair atomically. Private cache layout/versioning must prevent an
+old unversioned cache from being mistaken for v1. Publish v1 through an explicit
+v1 artifact location/configuration; do not replace the legacy consumer's default
+feed in place during beta. A historical legacy snapshot may remain pinned, but
+v1 code does not maintain a dual-format reader or promise ongoing v0 updates.
+
+## 11. Migration and freeze conditions
+
+The implementation is a one-time breaking migration. It must update source
+types, artifact generation, runtime consumers, bundled copies, cache decoding,
+router metadata projection, charts, and fixtures together. Merely adding an
+envelope version or replacing two strings is insufficient.
+
+All existing entries must be accounted for. Migration must expand existing
+protocol/rate-limit globs, preserve effective URLs/auth and per-protocol prices,
+retain native IDs exactly, and distinguish known facts from defaults that
+previously guessed capability or identity. In particular, preserve the existing
+Decisions endpoint profile and input-only tariff behavior. Entries whose facts
+cannot be verified remain catalogued with unknown data or inactive status;
+do not manufacture evidence dates or broad protocol support.
+
+Stable v1 freeze requires the delivery plan's conformance matrix, published
+machine-readable schemas with open extension points, complete worked fixtures,
+an older-reader/newer-data compatibility test, and a documented beta-to-stable
+artifact rollout. This document is the normative contract; a schema expresses
+structural rules but cannot replace ownership, lifecycle, and routing semantics.
+
+## 12. Evidence and design rationale
+
+The base implementation shows the problems this contract resolves:
+
+- `helpers/dist-helper/src/registry.rs`: `ApiProtocol` uses vendor names,
+  while selected endpoint/price keys are translated to runtime names.
+- `apply_model_discovery_plan` removes provider entries on curated retirement.
+- `v1_models_plan_for_provider` deserializes one fixed response, joins only
+  against curated identities, adds rather than reconciles, and drops metered
+  offers without prices; `v1_auth_headers` returns no headers.
+- `crates/bitrouter-ai/src/catalog/types.rs` ignores unknown object fields but
+  has closed registry enums; unfamiliar values can still invalidate a catalog.
+- `apps/bitrouter/src/gateway/catalog/` loads and caches model/provider views;
+  all fetch, decode, bundled, and cache paths need the same version contract.
+
+External references explain why the feed contract is deliberately explicit:
+[OpenAI's listing](https://developers.openai.com/api/reference/resources/models/methods/list)
+returns IDs and basic metadata, not a complete price/capability contract.
+[Claude's listing](https://platform.claude.com/docs/en/api/models/list) has cursor
+pagination and lifecycle semantics. These are distinct wire responses even
+though both use a `/v1/models` URL. Refer to provider documentation when enabling
+each actual feed; the fictional examples above are not provider configurations.

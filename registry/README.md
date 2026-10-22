@@ -1,5 +1,10 @@
 # BitRouter Registry
 
+The proposed next contract is the [Registry v1 beta specification](../docs/specs/REGISTRY_V1_SPEC.md),
+with a [delivery and conformance plan](../docs/specs/REGISTRY_V1_IMPLEMENTATION.md).
+It is design-only; the remainder of this README documents the current
+unversioned implementation until that migration lands.
+
 The source catalog of **models** and **providers** that BitRouter blesses by
 default. It is generated into `dist/registry/{models,providers}.json` and
 consumed by BitRouter — both the hosted service and the

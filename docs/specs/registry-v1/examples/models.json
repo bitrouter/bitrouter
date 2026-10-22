@@ -1,0 +1,57 @@
+{
+  "as_of": "2026-10-22T00:00:00Z",
+  "data": [
+    {
+      "curation": {
+        "checked_at": "2026-10-22T00:00:00Z",
+        "reason": "Synthetic current-generation candidate",
+        "source_url": "https://example.com/evidence/chat-2"
+      },
+      "id": "example/chat-2",
+      "input_modalities": [
+        "text",
+        "image"
+      ],
+      "model_types": [
+        "language",
+        "decision"
+      ],
+      "output_modalities": [
+        "text",
+        "structured"
+      ],
+      "providers": [
+        {
+          "provider": "example",
+          "provider_model_id": "chat-v2"
+        }
+      ]
+    },
+    {
+      "curation": {
+        "checked_at": "2026-10-22T00:00:00Z",
+        "reason": "Synthetic decision-only candidate",
+        "source_url": "https://example.com/evidence/judge-1"
+      },
+      "id": "example/judge-1",
+      "model_types": [
+        "decision"
+      ],
+      "providers": [
+        {
+          "provider": "example",
+          "provider_model_id": "judge-v1"
+        }
+      ]
+    }
+  ],
+  "extensions": {
+    "com.example": {
+      "annotation": "preserve this metadata"
+    }
+  },
+  "requires": [],
+  "snapshot": "59dea4db4f330d3d659a0069502e0f31423e7763db65b518ef661be648b8130d",
+  "spec_revision": "1.0.0-beta.1",
+  "version": 1
+}

@@ -5,6 +5,12 @@ workspace architecture guide, and design specs. It is *not* published anywhere.
 
 ## Contents
 
+- [Registry v1 specification](specs/REGISTRY_V1_SPEC.md) and
+  [delivery/conformance plan](specs/REGISTRY_V1_IMPLEMENTATION.md) — normative
+  `1.0.0-beta.1` design preview, stacked on #990; implementation pending.
+  Separates curated automatic-routing models from provider inventories and
+  defines protocol names, extensibility, mapped/authenticated feeds, and rollout.
+
 - [Gateway multi-instance contract](GATEWAY_MULTI_INSTANCE_SPEC.md),
   [progress ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md), and
   [final acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) — implemented

@@ -1,0 +1,48 @@
+{
+  "id": "catalog",
+  "kind": "v1_models",
+  "writes": ["models", "metadata", "pricing"],
+  "request": {
+    "url": "https://api.example.com/v1/models",
+    "headers": {"example-api-version": "2026-01-01"},
+    "auth": {"kind": "header", "env": "EXAMPLE_REGISTRY_API_KEY", "header": "x-api-key"}
+  },
+  "response": {
+    "path_syntax": "dotted",
+    "items_path": "payload.models",
+    "mapping": {
+      "model.id": ["provider_model_id", "id"],
+      "profile.name": "name",
+      "cost.input": "interfaces.0.pricing.input_tokens.no_cache"
+    },
+    "defaults": {
+      "status": "active",
+      "interfaces": [{
+        "protocol": "chat_completions",
+        "operation": "generation",
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "pricing": {"kind": "token", "currency": "USD"}
+      }]
+    },
+    "transforms": {
+      "id": [{"kind": "prefix", "value": "example/"}],
+      "interfaces.0.pricing.input_tokens.no_cache": [
+        {"kind": "parse_decimal"},
+        {"kind": "multiply", "factor": 1000000}
+      ]
+    },
+    "filter": {
+      "path": "lifecycle", "in": ["active", "deprecated"],
+      "known_values": ["active", "deprecated", "retired"]
+    }
+  },
+  "pagination": {
+    "kind": "cursor", "cursor_path": "payload.next_cursor",
+    "has_more_path": "payload.has_more", "parameter": "after", "max_pages": 100
+  },
+  "inventory": {
+    "mode": "snapshot", "scope": "public", "complete": true,
+    "allow_empty": false, "missing_runs": 2, "minimum_missing_hours": 24
+  }
+}
