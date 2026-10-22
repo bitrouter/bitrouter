@@ -46,6 +46,11 @@ English/Chinese lockstep, and `sourceHash` tracking live there now — not here.
 (`docs/CLI.md`), the workspace architecture guide (`docs/DEVELOPMENT.md`), and
 design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
 
+`docs/specs/` is reserved for tracked **protocol specifications**, starting with
+Registry v1. Follow `docs/specs/README.md`; keep wire contracts, compatibility
+rules, schemas, examples, and conformance requirements there. Implementation
+plans, progress, and acceptance evidence belong outside this directory.
+
 1. **The docs site generates its supported-models table** from its committed
    catalog snapshot. Refreshing that snapshot reads the public `/v1/models`
    catalog and uses this repo's committed `dist/registry/models.json` only as

@@ -1,7 +1,7 @@
 # Registry v1 worked examples
 
 These are synthetic design examples for
-[`1.0.0-beta.3`](../../REGISTRY_V1_SPEC.md), not generated production data or
+[`1.0.0-beta.3`](../README.md), not generated production data or
 claims about real model support, prices, or credentials. All URLs and providers
 are fictional. The artifact pair has a computed shared snapshot digest.
 
@@ -71,4 +71,4 @@ entries may remain. Audit all rows again after any final candidate edit.
 Later implementation tests should build both positive and
 negative scenarios from small synthetic fixtures rather than freeze commercial
 catalog contents. The full conformance list is in the
-[delivery plan](../../REGISTRY_V1_IMPLEMENTATION.md#3-conformance-matrix).
+[protocol conformance requirements](../conformance.md#conformance-cases).

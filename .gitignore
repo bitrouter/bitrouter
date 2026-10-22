@@ -31,6 +31,10 @@ skills/bitrouter-e2e-test/
 /docs/superpowers/
 /.superpowers/
 
+# Protocol specifications are versioned contracts, not local working docs.
+!/docs/specs/
+!/docs/specs/**
+
 # Per-repo BitRouter state (session records, worktrees, runtime files)
 .bitrouter/
 .worktrees/

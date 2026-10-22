@@ -1,25 +1,20 @@
 # BitRouter Registry v1
 
-Status: **normative beta preview, `1.0.0-beta.3`; design only.**
+Status: **normative beta protocol, `1.0.0-beta.3`.**
 
 Date: 2026-10-22. Wire version: **`"version": 1`**.
 
-Base: [PR #990](https://github.com/bitrouter/bitrouter/pull/990),
-`codex/gateway-multi-instance`, commit
-`337123edd7a3992f3202a6a43a8753f7d0dec8d4`.
+MUST and MUST NOT express mandatory requirements; SHOULD expresses a recommended
+practice with a justified exception; MAY expresses an optional behavior. The
+[conformance requirements](conformance.md) define observable outcomes for
+implementations. The [worked examples](examples/README.md) are informative
+synthetic examples. Publication of this contract does not assert implementation
+availability in a particular release.
 
-Beta 3 requires a complete OpenRouter identity audit before publishing a sync.
-It supersedes beta 2's historical-ID publication allowance; historical evidence
-is retained, but cannot replace current membership validation. Beta 2 introduced
-explicit provider `canonical_id`, decision profiles, billing, and recoverable errors.
-
-This document defines the proposed registry contract, not behavior already
-implemented by that base. MUST, MUST NOT, SHOULD, and MAY are requirements of
-this specification. The [delivery plan](REGISTRY_V1_IMPLEMENTATION.md) separates
-the migration and acceptance work from this design. The
-[worked examples](registry-v1/examples/README.md) show the artifact pair and a
-mapped, authenticated, paginated feed. Beta revisions may change
-incompatibly; stable v1 has the compatibility commitments in section 3.
+Beta revisions may change incompatibly; stable v1 has the compatibility
+commitments in section 3. Beta 3 requires a complete OpenRouter identity audit
+before publishing a sync. Historical evidence cannot replace current membership
+validation.
 
 ## 1. Scope and decisions
 
@@ -56,8 +51,8 @@ The other decisions are:
 This specification covers model/provider YAML sources, deterministic JSON
 artifacts, feed reconciliation, and their consumer contract. It does not revise
 agent/runtime records, inference request/response formats, account entitlements,
-or the learned router's scoring algorithm. Existing Decisions semantics in
-[`DECISIONS_API_SPEC.md`](../DECISIONS_API_SPEC.md) remain authoritative.
+or the learned router's scoring algorithm. Native decision request/response
+semantics are defined by the wire contracts referenced in section 5.
 
 ## 2. Files and versioned envelopes
 
@@ -72,7 +67,6 @@ version directory:
 | `registry/model-discovery.yaml` | Curation policy; never provider inventory policy |
 | `registry/model-identities.yaml` | Source-only OpenRouter identity evidence and verified provider bindings; not a recommendation list |
 | `dist/registry/v1/{models,providers}.json` | Separate public envelopes below |
-| `apps/bitrouter/registry-dist/v1/{models,providers}.json` | Byte-identical packaged copies |
 
 The source root versions the whole model/provider source tree; individual YAML
 files do not repeat it. Agent/runtime sources and artifacts keep their existing
@@ -482,9 +476,9 @@ interface and therefore cannot appear as separate entries.
 | `pricing` | Optional interface-specific price (section 6) |
 | `requires` | Optional mandatory feature IDs |
 
-Current built-in v1 pairs align with `bitrouter-ai` (all have profile `default`):
+The following wire contracts have profile `default`:
 
-| Protocol | Operation | Existing relative endpoint |
+| Protocol | Operation | Relative endpoint |
 | --- | --- | --- |
 | `chat_completions` | `generation` | `/chat/completions` |
 | `messages` | `generation` | `/messages` |
@@ -507,11 +501,11 @@ automatically by every provider serving that model.
 `operation: decisions` is the routing category. `protocol` and
 `protocol_profile` select the actual request, response, errors, and usage codec:
 
-| Protocol/profile | Operation | Contract and adapter status |
+| Protocol/profile | Operation | Wire contract |
 | --- | --- | --- |
-| `decisions` / `default` | `decisions` | OpenAI Decisions contract; adapter exists in the base |
-| `systemone` / `vllm_systemone_v1` | `decisions` | vLLM Semantic Router System One wire; representable in v1, requires a registered adapter |
-| `systemone` / `noulxp_http_v1` | `decisions` | NoulXP HTTP binding as documented by its serving API; representable in v1, requires a registered adapter |
+| `decisions` / `default` | `decisions` | OpenAI Decisions contract |
+| `systemone` / `vllm_systemone_v1` | `decisions` | vLLM Semantic Router System One wire |
+| `systemone` / `noulxp_http_v1` | `decisions` | NoulXP HTTP binding as documented by its serving API |
 
 The [vLLM System One endpoint](https://decision.vllm-sr.ai/docs) uses `state`
 and question/answer objects keyed by IDs; it documents `/v1/decisions` as an
@@ -528,8 +522,8 @@ identifiers/order, typed choices, probabilities/confidence, refusal/partial-erro
 semantics, modalities, and usage basis required by the request. Unsupported
 profiles or lossy conversions return a recoverable compatibility error. No
 fallback to text generation, guessed schema, dropped question, or invented
-probability is permitted. This registry revision represents both formats; it
-does not claim that a new System One runtime adapter has already shipped.
+probability is permitted. An implementation may retain either format without
+invoking it; invocation requires explicit support for its wire contract.
 
 ### 5.3 Interface defaults and expansion
 
@@ -546,21 +540,19 @@ rules. Feed defaults apply to imported new records, not a blanket claim about
 every model a provider might expose. Heterogeneous feeds must map verified
 interfaces or retain unknown ones as `[]`.
 
-This is a deliberate v1 replacement for `api_protocol`, `protocol_endpoints`,
-provider protocol globs, model-wide `capabilities`, and `pricing_by_protocol`.
-It prevents falsely combining image output on one interface with tools on a
-different interface, or borrowing generation tariffs for Decisions. The one-time
-migration expands existing globs and then copies verified facts into each
-appropriate interface. Compatibility fields such as `google_extensions` remain
-protocol details, not new manufacturer-named protocols.
+Model-wide protocol globs, `api_protocol`, `protocol_endpoints`, and
+`pricing_by_protocol` are not v1 interface declarations. Support and tariffs
+belong to the specific interface; do not combine image output on one interface
+with tools on another, or apply generation tariffs to Decisions. Compatibility
+fields such as `google_extensions` remain protocol details rather than new
+manufacturer-named protocols.
 
 Future `image_generation`, `audio_transcription`, `video_generation`, embedding,
 or other operations can add their own protocol/operation pairs, limits, and
-pricing. Those example names do not claim adapters are implemented today.
-Old clients retain the records and skip unsupported interfaces. In particular,
-the base's `Custom(...) => Generation` behavior MUST NOT be used as permission
-to execute an unfamiliar registry interface. A registered adapter must declare
-its supported operation and fidelity explicitly.
+pricing. These example names do not establish execution support.
+Old clients retain the records and skip unsupported interfaces. An unfamiliar
+registry interface MUST NOT be treated as generation by default. A registered
+adapter must declare its supported operation and fidelity explicitly.
 
 ## 6. Billing and pricing
 
@@ -611,8 +603,9 @@ Meter IDs are unique within a tariff. `quantity` is a positive integer and
 must explicitly implement the meter's usage counter and applicability; a label
 such as `second`, `image`, or `request` is not enough. Unknown meters make the
 whole affected tariff unavailable, rather than dropping charges. Additional
-conditioned/tiered meter semantics require their own feature IDs. This preview
-does not require a media billing engine to ship with the registry migration.
+conditioned/tiered meter semantics require their own feature IDs. An
+implementation may retain these tariffs without a billing engine, but MUST
+report pricing as unavailable until it supports all applicable meters.
 
 ### 6.1 Decision billing and usage semantics
 
@@ -1138,41 +1131,19 @@ v1 artifact location/configuration; do not replace the legacy consumer's default
 feed in place during beta. A historical legacy snapshot may remain pinned, but
 v1 code does not maintain a dual-format reader or promise ongoing v0 updates.
 
-## 11. Migration and freeze conditions
+## 11. Conformance and stable freeze
 
-The implementation is a one-time breaking migration. It must update source
-types, artifact generation, runtime consumers, bundled copies, cache decoding,
-router metadata projection, charts, and fixtures together. Merely adding an
-envelope version or replacing two strings is insufficient.
+Implementations are evaluated against the [conformance requirements](conformance.md)
+for the roles and features they support. Schemas express structural rules; they
+do not replace identity, ownership, lifecycle, billing, or routing semantics.
+A claim of conformance must identify the supported protocol revision and roles.
 
-All existing entries must be accounted for. Migration must expand existing
-protocol/rate-limit globs, preserve effective URLs/auth and per-protocol prices,
-retain native IDs exactly, and distinguish known facts from defaults that
-previously guessed capability or identity. In particular, preserve the existing
-Decisions endpoint profile and input-only tariff behavior. Entries whose facts
-cannot be verified remain catalogued with unknown data or inactive status;
-do not manufacture evidence dates or broad protocol support.
+Stable v1 freeze requires complete structural schemas with open extension points,
+consistent worked examples, and verified old-reader/new-data compatibility.
+The producer/consumer obligations and compatibility commitments in this contract
+remain authoritative independently of implementation layout and release cadence.
 
-Stable v1 freeze requires the delivery plan's conformance matrix, published
-machine-readable schemas with open extension points, complete worked fixtures,
-an older-reader/newer-data compatibility test, and a documented beta-to-stable
-artifact rollout. This document is the normative contract; a schema expresses
-structural rules but cannot replace ownership, lifecycle, and routing semantics.
-
-## 12. Evidence and design rationale
-
-The base implementation shows the problems this contract resolves:
-
-- `helpers/dist-helper/src/registry.rs`: `ApiProtocol` uses vendor names,
-  while selected endpoint/price keys are translated to runtime names.
-- `apply_model_discovery_plan` removes provider entries on curated retirement.
-- `v1_models_plan_for_provider` deserializes one fixed response, joins only
-  against curated identities, adds rather than reconciles, and drops metered
-  offers without prices; `v1_auth_headers` returns no headers.
-- `crates/bitrouter-ai/src/catalog/types.rs` ignores unknown object fields but
-  has closed registry enums; unfamiliar values can still invalidate a catalog.
-- `apps/bitrouter/src/gateway/catalog/` loads and caches model/provider views;
-  all fetch, decode, bundled, and cache paths need the same version contract.
+## 12. References
 
 External references explain why the feed contract is deliberately explicit:
 [OpenAI's listing](https://developers.openai.com/api/reference/resources/models/methods/list)
