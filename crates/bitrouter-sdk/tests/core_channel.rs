@@ -41,6 +41,7 @@ impl tokio_tungstenite::tungstenite::handshake::server::Callback for CheckHandsh
         tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
     > {
         assert_eq!(request.uri().path(), "/prefix/v1/orchestrator/channel");
+        assert_eq!(request.version(), axum::http::Version::HTTP_11);
         assert_eq!(request.headers()["authorization"], "Bearer fixture-key");
         assert_eq!(request.headers()["bitrouter-beta"], "orchestrator_core=v1");
         response.headers_mut().insert(
@@ -77,6 +78,36 @@ async fn finish(mut socket: WebSocketStream<TcpStream>) -> TestResult {
     socket.close(None).await?;
     // Drive the server's close reply after the client acknowledges it.
     let _ = tokio::time::timeout(Duration::from_secs(2), socket.next()).await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(feature = "http2")]
+async fn prior_knowledge_http2_keeps_the_core_upgrade_on_http1() -> TestResult {
+    use bitrouter_sdk::gateway::{HttpVersion, TransportOptions};
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let client = GatewayClient::with_options(
+        &format!("http://{}/prefix/v1", listener.local_addr()?),
+        Some("fixture-key"),
+        TransportOptions {
+            http_version: HttpVersion::Http2PriorKnowledge,
+            request_timeout: Some(Duration::from_secs(3)),
+            ..Default::default()
+        },
+    )?;
+    let server = tokio::spawn(async move {
+        let mut socket = accept(listener).await?;
+        socket.send(event()?).await?;
+        finish(socket).await
+    });
+    let mut channel = client.core_channel(ChannelOptions::default()).await?;
+    assert!(matches!(
+        channel.receive().await?,
+        Some(ServerMessage::UnknownOperation { .. })
+    ));
+    assert!(channel.receive().await?.is_none());
+    tokio::time::timeout(Duration::from_secs(3), server).await???;
     Ok(())
 }
 

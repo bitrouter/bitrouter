@@ -3,7 +3,8 @@
 `bro build-info` reports the installed executable's compiled profile, effective
 features, source revision, target and handoff fingerprint without opening config
 or service state. `full` means the default capability set, `gateway` means no
-optional features, and other combinations are `custom`. Compare it with
+optional features, `gateway-shared` means exactly `db-postgres,multi-instance`,
+and other combinations are `custom`. Compare it with
 `bro status`'s `daemon_artifact`; an absent artifact is unknown. Common inspection
 works across profiles, but execution never automatically replaces a daemon with
 a different feature set. An explicit cross-profile restart requires candidate
@@ -11,6 +12,32 @@ preflight, launcher ownership and proven idleness; a native core+harness daemon
 retains its lifetime handoff blocker. Finish its work before a planned stop and
 start with the other profile. See the updating reference for profile-preserving
 installation instructions.
+
+HTTP/2 is a default-on application Cargo feature (`http2`), forwarded to axum,
+reqwest, the SDK and the shared transport's `h2` dependency. The explicitly
+no-default-features `gateway` and `gateway-shared` distributions remain
+HTTP/1-only with their existing release identities. Build a lean HTTP/2
+executable with either of these commands:
+
+```sh
+cargo build --locked -p bitrouter --bin bro --no-default-features --features http2
+cargo build --locked -p bitrouter --bin bro --no-default-features --features multi-instance,http2
+```
+
+Both report `profile: "custom"`; `bro --json build-info` lists `http2` among
+their effective features. This is a build-time capability, with no new CLI
+flag or HTTP port. Local axum serving accepts HTTP/1 and HTTP/2. Shared inference
+and operator listeners detect cleartext HTTP/2 prior knowledge on their
+respective existing ports; HTTP/1 still closes after each request there. No TLS
+listener, h2c Upgrade handshake or gRPC server is added. See
+[shared gateway configuration](shared-gateway.md) for stream caps, timeouts and
+connection-owned shutdown.
+
+The SDK also enables `http2` by default. For cleartext HTTP/2, explicitly select
+`bitrouter_sdk::gateway::HttpVersion::Http2PriorKnowledge` via
+`TransportOptions::http_version` or `OperatorOptions::http_version`. Its default
+`Auto` uses HTTP/1.1 for cleartext URLs. Consumers using `default-features = false`
+must explicitly enable SDK `http2` to use prior knowledge.
 
 BitRouter's terminal views require `tui`, which includes `harness` but does not
 enable `core`. Without TUI, `code`, the `tui` alias, interactive `chat`, the

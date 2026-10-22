@@ -13,7 +13,13 @@ Use the official `gateway-shared` archive for your target, or build with
 `cargo build --locked -p bitrouter --bin bro --no-default-features --features multi-instance`.
 `bro --json build-info` must report `profile: "gateway-shared"` and the sorted
 features `["db-postgres", "multi-instance"]`. The `gateway` distribution still
-has no optional application features; `full` retains its existing defaults.
+has no optional application features. Both named gateway distributions remain
+HTTP/1-only; `full` includes the default-on `http2` feature. For a lean shared
+build with HTTP/2, use
+`cargo build --locked -p bitrouter --bin bro --no-default-features --features multi-instance,http2`.
+It reports `profile: "custom"` and sorted features
+`["db-postgres", "http2", "multi-instance"]`, not the `gateway-shared` release
+identity. For a lean local HTTP/2 build, use `--features http2` instead.
 The shared capability does not select shared mode without explicit configuration.
 For manual archive verification and capability-preserving updates, see
 [updating](updating.md).
@@ -114,19 +120,41 @@ provider success, quality, usage or latency. Missing callbacks, a crash before
 terminal persistence, or unresolved provider work can leave these observations
 absent; recovery does not reconstruct them from a current cache.
 
-Shared HTTP serving uses one request per HTTP/1 connection, with no upgrades or
-HTTP/2. Clients must reconnect for subsequent requests. This bounds response-head
-accumulation while a peer stops reading, at the cost of connection reuse. Local
-mode retains its existing HTTP transport. Connections and unreaped connection
-tasks are capped together at `max_connections` (1–65536); overload closes the
-new socket without queuing a task.
+Shared HTTP/1 serving uses one request per connection, with no upgrades. Clients
+must reconnect for subsequent HTTP/1 requests. With the application's `http2`
+feature enabled, the same listener detects the cleartext HTTP/2 prior-knowledge
+preface and accepts concurrent streams on that connection. There is no h2c
+Upgrade handshake, TLS listener or gRPC server. Local mode uses axum's HTTP/1
+and, when enabled, HTTP/2 transport.
+
+Connections and unreaped connection tasks are capped together at
+`max_connections` (1–65536); overload closes the new socket without queuing a
+task. HTTP/2 additionally caps concurrent streams per connection at
+`min(128, local_max_in_flight)` and holds a process-wide transport stream budget
+of `local_max_in_flight` across the inference listener. Exhausted stream
+admission returns 503 without a waiting queue. Stream futures are owned by the
+connection task; connection teardown and forced shutdown drop their handlers
+and bodies together, without detached stream tasks.
 
 Header, body-ingress and write-stall deadlines each accept 100–300000 milliseconds.
-The ingress deadline ends when the body is consumed and does not limit inference
-duration. Write-stall timing starts only on output backpressure; reads and no-op
-flushes do not extend it. Positive output progress permits a longer stream.
+The ingress deadline applies separately to each HTTP/2 stream, ends when its
+body is consumed and does not limit inference duration. Write-stall timing
+starts only on output backpressure; reads and no-op flushes do not extend it.
+For HTTP/2 it also bounds waiting for stream or connection flow-control
+capacity. Waiting for the application to produce output is not a write stall.
+Positive output progress permits a longer stream.
+For HTTP/2, the header deadline covers the initial preface/SETTINGS and each
+incomplete frame or HEADERS/CONTINUATION block. It does not limit idle time
+between complete frames or the duration of inference.
 Outgoing DATA frames are copied into chunks of at most 64 KiB; response metadata
-is bounded separately. These are transport bounds, not an exact process RSS
+is bounded separately. HTTP/2 holds a 1 MiB queued-metadata budget per connection,
+including overhead, response trailers and overload responses. It releases each
+reservation after END_HEADERS is actually written, or after a processed reset
+discards the metadata and the encoder flushes; exhausting that budget
+closes the connection rather than accumulating more encoded response heads.
+Response fields and trailers are never indexed into the HPACK dynamic table,
+preventing a peer's large table setting from retaining arbitrary metadata.
+These are transport bounds, not an exact process RSS
 budget or a guarantee that the peer received a completed response.
 
 Routing and policy authority is published separately from these process-local
@@ -175,6 +203,21 @@ and the entire handler to `gateway_state.request_timeout_ms`. The backend also
 checks its encoded actor-plus-mutation size, so passing the wire byte limit alone
 does not guarantee acceptance. Content encodings are unsupported. Header and
 write-stall limits remain the shared transport limits.
+
+With `http2`, the operator listener detects HTTP/2 prior knowledge on its own
+existing port, while HTTP/1 still closes after each request. It permits at most
+`min(128, operator.max_connections)` streams per connection and
+`operator.max_connections` transport streams across all operator connections
+in the process. The connection cap still applies separately. Stream ownership,
+body-ingress and flow-control deadlines follow the shared transport above.
+
+The SDK enables its `http2` feature by default, but cleartext HTTP/2 requires
+explicit `HttpVersion::Http2PriorKnowledge` from `bitrouter_sdk::gateway`: set
+`TransportOptions::http_version` for `GatewayClient` or
+`OperatorOptions::http_version` for `OperatorClient`. The default `Auto` uses
+HTTP/1.1 for cleartext URLs. Prior knowledge requires an HTTP/2-enabled server
+and does not retry failed requests over HTTP/1.1. SDK consumers disabling
+default features must enable `http2` explicitly to use this option.
 
 Operator requests do not depend on the loaded inference generation's readiness
 during operation. Normal startup still requires valid initialized authority and

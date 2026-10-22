@@ -64,6 +64,8 @@ struct State {
 struct Connections {
     state: Mutex<State>,
     slots: Arc<Semaphore>,
+    #[cfg(feature = "http2")]
+    streams: Arc<Semaphore>,
     stopping: CancellationToken,
 }
 
@@ -83,8 +85,13 @@ impl Connections {
             return;
         };
         let stopping = self.stopping.clone();
+        #[cfg(feature = "http2")]
+        let streams = self.streams.clone();
         state.tasks.spawn(async move {
             let _permit = permit;
+            #[cfg(feature = "http2")]
+            http2::accept(socket, router, limits, stopping, streams).await;
+            #[cfg(not(feature = "http2"))]
             connection(socket, router, limits, stopping).await;
         });
         state.report.started += 1;
@@ -196,6 +203,8 @@ impl Transport {
                 report: ConnectionsReport::default(),
             }),
             slots: Arc::new(Semaphore::new(limits.connections)),
+            #[cfg(feature = "http2")]
+            streams: Arc::new(Semaphore::new(limits.requests)),
             stopping: CancellationToken::new(),
         });
         // No await occurs before both roots are retained in this owner. The

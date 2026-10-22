@@ -9,7 +9,7 @@ use url::{Host, Url};
 
 use crate::{
     error::{Error, Result},
-    gateway::TransportOptions,
+    gateway::{HttpVersion, TransportOptions},
     transport,
 };
 
@@ -18,6 +18,8 @@ const MAX_INPUT_BYTES: usize = 2 * 1024 * 1024;
 /// Bounded operator transport. No mutation or read is retried automatically.
 #[derive(Clone, Debug)]
 pub struct OperatorOptions {
+    /// HTTP version policy; defaults to [`HttpVersion::Auto`].
+    pub http_version: HttpVersion,
     /// Opt into environment/system proxy discovery; disabled by default.
     pub system_proxy: bool,
     /// Positive connection deadline, at most 300 seconds; default five seconds.
@@ -31,6 +33,7 @@ pub struct OperatorOptions {
 impl Default for OperatorOptions {
     fn default() -> Self {
         Self {
+            http_version: HttpVersion::default(),
             system_proxy: false,
             connect_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(15),
@@ -91,6 +94,7 @@ impl OperatorClient {
         credential.set_sensitive(true);
         headers.insert(header::AUTHORIZATION, credential);
         let transport_options = TransportOptions {
+            http_version: options.http_version,
             system_proxy: options.system_proxy,
             connect_timeout: options.connect_timeout,
             read_timeout: Some(options.request_timeout),
