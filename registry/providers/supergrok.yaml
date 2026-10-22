@@ -30,16 +30,6 @@ models:
     capabilities:
       - reasoning
       - tools
-  - id: x-ai/grok-4.20-multi-agent
-    provider_model_id: grok-4.20-multi-agent
-    capabilities:
-      - reasoning
-      - tools
-  - id: x-ai/grok-4.20
-    provider_model_id: grok-4.20
-    capabilities:
-      - reasoning
-      - tools
   - id: x-ai/grok-4.3
     provider_model_id: grok-4.3
     capabilities:
