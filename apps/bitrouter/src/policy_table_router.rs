@@ -889,8 +889,8 @@ impl PolicyTableRouter {
         input_effort: Option<ReasoningEffort>,
         decision: PolicyDecision,
         headers: &HeaderMap,
-    ) -> Option<PolicyModelTarget> {
-        self.record_decision(
+    ) -> (Option<PolicyModelTarget>, Option<PendingEvalDecision>) {
+        self.record_decision_capture(
             input_model,
             input_effort,
             decision,
@@ -900,6 +900,7 @@ impl PolicyTableRouter {
         )
     }
 
+    #[cfg(test)]
     fn record_decision(
         &self,
         input_model: String,
@@ -909,6 +910,26 @@ impl PolicyTableRouter {
         request_id_override: Option<(&str, &str)>,
         invocation: Option<&EvalInvocation>,
     ) -> Option<PolicyModelTarget> {
+        self.record_decision_capture(
+            input_model,
+            input_effort,
+            decision,
+            headers,
+            request_id_override,
+            invocation,
+        )
+        .0
+    }
+
+    fn record_decision_capture(
+        &self,
+        input_model: String,
+        input_effort: Option<ReasoningEffort>,
+        decision: PolicyDecision,
+        headers: &HeaderMap,
+        request_id_override: Option<(&str, &str)>,
+        invocation: Option<&EvalInvocation>,
+    ) -> (Option<PolicyModelTarget>, Option<PendingEvalDecision>) {
         let baseline_tier = self.eval_baseline_tier(&decision);
         let baseline_effort = baseline_tier
             .as_deref()
@@ -964,55 +985,61 @@ impl PolicyTableRouter {
             trialed = decision.trialed,
             "policy routing decision"
         );
-        if let (Some(observer), Some(invocation), Some(request_id), Some(selected_tier)) = (
+        let pending_decision = if let (Some(observer), Some(request_id), Some(selected_tier)) = (
             &self.eval_observer,
-            invocation,
             request_id,
             decision.selected_tier.as_deref(),
-        ) && let Some(pending) = &observer.pending
-        {
-            pending.insert(
-                invocation,
-                PendingEvalDecision {
-                    request_id: request_id.to_string(),
-                    decision_id: format!("{request_id}:{}", observer.policy),
-                    policy: observer.policy.clone(),
-                    policy_digest: observer.policy_digest.clone(),
-                    route_projection: decision.route_projection.clone(),
-                    request_key: decision.request_key.clone(),
-                    selected_tier: selected_tier.to_string(),
-                    selected_effort: decision.selected_effort,
-                    baseline_tier: baseline_tier.clone(),
-                    baseline_effort,
-                    experiment: decision.experiment.clone(),
-                    route_measurement: decision.route_measurement.clone(),
-                    preset: Some(observer.policy.clone()),
-                    holdout: false,
-                    continuation_proposed_tier: bounded_continuation_label(
-                        decision.continuation_proposed_tier.as_deref(),
-                        128,
-                    ),
-                    continuation_proposed_model: bounded_continuation_label(
-                        decision.continuation_proposed_model.as_deref(),
-                        512,
-                    ),
-                    continuation_proposed_effort: decision.continuation_proposed_effort,
-                    continuation_adjustment: bounded_continuation_label(
-                        decision.continuation_adjustment.as_deref(),
-                        32,
-                    ),
-                    predicted_role: decision.predicted_role.clone(),
-                    predicted_task_family: decision.predicted_task_family.clone(),
-                    predicted_action: decision.predicted_action.clone(),
-                    prediction_confidence_ppm: decision.prediction_confidence_ppm,
-                    task_family_confidence_ppm: decision.task_family_confidence_ppm,
-                    task_family_reason_codes: decision.task_family_reason_codes.clone(),
-                    predictor_contract_digest: decision.predictor_contract_digest.clone(),
-                    prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
-                    observation: None,
-                    observed_at: chrono::Utc::now().to_rfc3339(),
-                },
-            );
+        ) {
+            Some(PendingEvalDecision {
+                request_id: request_id.to_string(),
+                decision_id: format!("{request_id}:{}", observer.policy),
+                policy: observer.policy.clone(),
+                policy_digest: observer.policy_digest.clone(),
+                route_projection: decision.route_projection.clone(),
+                request_key: decision.request_key.clone(),
+                selected_tier: selected_tier.to_string(),
+                selected_effort: decision.selected_effort,
+                baseline_tier: baseline_tier.clone(),
+                baseline_effort,
+                experiment: decision.experiment.clone(),
+                route_measurement: decision.route_measurement.clone(),
+                preset: Some(observer.policy.clone()),
+                holdout: false,
+                continuation_proposed_tier: bounded_continuation_label(
+                    decision.continuation_proposed_tier.as_deref(),
+                    128,
+                ),
+                continuation_proposed_model: bounded_continuation_label(
+                    decision.continuation_proposed_model.as_deref(),
+                    512,
+                ),
+                continuation_proposed_effort: decision.continuation_proposed_effort,
+                continuation_adjustment: bounded_continuation_label(
+                    decision.continuation_adjustment.as_deref(),
+                    32,
+                ),
+                predicted_role: decision.predicted_role.clone(),
+                predicted_task_family: decision.predicted_task_family.clone(),
+                predicted_action: decision.predicted_action.clone(),
+                prediction_confidence_ppm: decision.prediction_confidence_ppm,
+                task_family_confidence_ppm: decision.task_family_confidence_ppm,
+                task_family_reason_codes: decision.task_family_reason_codes.clone(),
+                predictor_contract_digest: decision.predictor_contract_digest.clone(),
+                prediction_confidence_kind: decision.prediction_confidence_kind.clone(),
+                observation: None,
+                observed_at: chrono::Utc::now().to_rfc3339(),
+            })
+        } else {
+            None
+        };
+        if let (Some(pending), Some(invocation), Some(captured)) = (
+            self.eval_observer
+                .as_ref()
+                .and_then(|observer| observer.pending.as_ref()),
+            invocation,
+            pending_decision.as_ref(),
+        ) {
+            pending.insert(invocation, captured.clone());
         }
         if let Some(recorder) = &self.decision_recorder {
             let record = PolicyDecisionRecord {
@@ -1088,24 +1115,27 @@ impl PolicyTableRouter {
                 tracing::warn!(%error, "policy decision recorder failed");
             }
         }
-        let selected_model = decision.selected_model.as_deref()?;
-        let selected_tier = decision.selected_tier.as_deref()?;
-        let configured = decision
-            .policy_snapshot
-            .target_of_tier(selected_tier)
-            .filter(|target| target.model() == selected_model)
-            .cloned()?;
-        if decision.continuation_adjustment.as_deref() == Some("pin")
-            && configured.effort().is_none()
-            && let Some(effort) = decision.selected_effort
-        {
-            return Some(PolicyModelTarget {
-                context: configured.context,
-                model: selected_model.to_owned(),
-                effort: Some(effort),
-            });
-        }
-        Some(configured)
+        let selected = (|| {
+            let selected_model = decision.selected_model.as_deref()?;
+            let selected_tier = decision.selected_tier.as_deref()?;
+            let configured = decision
+                .policy_snapshot
+                .target_of_tier(selected_tier)
+                .filter(|target| target.model() == selected_model)
+                .cloned()?;
+            if decision.continuation_adjustment.as_deref() == Some("pin")
+                && configured.effort().is_none()
+                && let Some(effort) = decision.selected_effort
+            {
+                return Some(PolicyModelTarget {
+                    context: configured.context,
+                    model: selected_model.to_owned(),
+                    effort: Some(effort),
+                });
+            }
+            Some(configured)
+        })();
+        (selected, pending_decision)
     }
 }
 
@@ -2172,7 +2202,7 @@ mod tests {
         let invocation = EvalInvocation::new("local");
         let decision = router.decision_for_bound_policy(&routed, &headers, &assessment);
 
-        let selected = router.record_bound_policy_decision(
+        let (selected, captured) = router.record_bound_policy_decision(
             ("request-1", "request-1"),
             &invocation,
             routed.model.clone(),
@@ -2188,6 +2218,7 @@ mod tests {
         let decision = pending
             .get(&invocation, "local")
             .expect("pending eval decision");
+        assert_eq!(captured.as_ref(), Some(&decision));
         assert_eq!(decision.policy, "auto:cost");
         assert_eq!(decision.selected_tier, "economy");
         assert_eq!(
@@ -2242,7 +2273,7 @@ mod tests {
         let invocation = EvalInvocation::new("local");
         let decision = router.decision_for_bound_policy(&routed, &headers, &assessment);
 
-        let selected = router.record_bound_policy_decision(
+        let (selected, captured) = router.record_bound_policy_decision(
             ("trajectory-request-opaque", "request-2"),
             &invocation,
             routed.model.clone(),
@@ -2250,6 +2281,7 @@ mod tests {
             decision,
             &headers,
         );
+        assert!(captured.is_some());
         assert_eq!(
             selected.as_ref().map(PolicyModelTarget::model),
             Some("vendor/economy")

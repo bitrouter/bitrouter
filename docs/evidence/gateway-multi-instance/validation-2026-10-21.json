@@ -1,0 +1,214 @@
+{
+  "runtime_source": "2495bf8db118de399a11fc11f82ba18bd6a6455d",
+  "p0_source": "9cbe512d101e777470d113b0086ab9e331b3a638",
+  "compiler": "1.97.0",
+  "test_threads": 2,
+  "automatic_retries": 0,
+  "environment": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "shared_aggregate": {
+    "status": "passed",
+    "tests_run": 203,
+    "passed": 203,
+    "skipped": 3615,
+    "duration_seconds": 93.149,
+    "name": "bitrouter-p1-shared-v9-final-aggregate.log",
+    "sha256": "1b0de30fa0dc9658b61173fe8f9eb9139161339517daf9d36a9572c8b19aa864",
+    "source": "2495bf8db118de399a11fc11f82ba18bd6a6455d",
+    "command": "cargo +1.97.0 nextest run --locked -p bitrouter --all-features --lib --run-ignored all -E 'test(gateway::shared::) | test(continuation::shared::) | test(assemble::writers_tests::shared::) | test(gateway::model::protocol::tests::responses_stream_error_preserves_provider_status)' --test-threads 2 --retries 0 --no-fail-fast",
+    "external_prerequisites": "dedicated PostgreSQL 17 fixture and immutable v9 gateway-shared executable"
+  },
+  "stability": {
+    "source": "e0cf0e621f89466506736e7a7282d3d6a6547d9c",
+    "description": "Eight predeclared sets of five stock admission/idempotency/outbox/history-and-cost guard cases; before final maintenance-only source repair.",
+    "runs": [
+      {
+        "status": "passed",
+        "tests_run": 5,
+        "passed": 5,
+        "skipped": 3813,
+        "duration_seconds": 11.75,
+        "name": "bitrouter-p1-v8-stability-1.log",
+        "sha256": "aba96dd8be341becd6315ab80dffdb694515ab3c0ab2d5ac69c16a4be84e0e97"
+      },
+      {
+        "status": "passed",
+        "tests_run": 5,
+        "passed": 5,
+        "skipped": 3813,
+        "duration_seconds": 11.557,
+        "name": "bitrouter-p1-v8-stability-2.log",
+        "sha256": "d53905b6173244af8af404972dec44748a7b2fae708e5b90654daaf7bbec22df"
+      },
+      {
+        "status": "passed",
+        "tests_run": 5,
+        "passed": 5,
+        "skipped": 3813,
+        "duration_seconds": 11.557,
+        "name": "bitrouter-p1-v8-stability-3.log",
+        "sha256": "44a807d4995495d175a5b203d96308a54f56ee2b4aee7946bea60e5b50c86705"
+      },
+      {
+        "status": "passed",
+        "tests_run": 5,
+        "passed": 5,
+        "skipped": 3813,
+        "duration_seconds": 11.804,
+        "name": "bitrouter-p1-v8-stability-4.log",
+        "sha256": "9920092fa075229af6d7c5b2991ed5b8960222c3215decce3164ac0649ee9ba7"
+      },
+      {
+        "status": "passed",
+        "tests_run": 5,
+        "passed": 5,
+        "skipped": 3813,
+        "duration_seconds": 11.475,
+        "name": "bitrouter-p1-v8-stability-5.log",
+        "sha256": "ffff8236b0f228f17cc8acb40f3a37aeb3855a6f13e5e9a1cb12e1a1020ad086"
+      },
+      {
+        "status": "passed",
+        "tests_run": 5,
+        "passed": 5,
+        "skipped": 3813,
+        "duration_seconds": 11.65,
+        "name": "bitrouter-p1-v8-stability-6.log",
+        "sha256": "eb4d50d41ea0beb21915b31fa98d19f3c629e1fc7ee8360a9dd2d33df1781daf"
+      },
+      {
+        "status": "passed",
+        "tests_run": 5,
+        "passed": 5,
+        "skipped": 3813,
+        "duration_seconds": 11.592,
+        "name": "bitrouter-p1-v8-stability-7.log",
+        "sha256": "c6b9d3028c141ffe195d23982128a8efbd882587118dfe0a8fce16e9f8b3ea02"
+      },
+      {
+        "status": "passed",
+        "tests_run": 5,
+        "passed": 5,
+        "skipped": 3813,
+        "duration_seconds": 11.748,
+        "name": "bitrouter-p1-v8-stability-8.log",
+        "sha256": "4a82b63d687401edaeb4441018fee7a305d902f579869f17c2e19734a78c2799"
+      }
+    ]
+  },
+  "maintenance_confirmation": {
+    "source": "2495bf8db118de399a11fc11f82ba18bd6a6455d",
+    "runs": [
+      {
+        "status": "passed",
+        "tests_run": 1,
+        "passed": 1,
+        "skipped": 3817,
+        "duration_seconds": 3.65,
+        "name": "bitrouter-p1-v9-maintenance-stability-1.log",
+        "sha256": "22f4796b451a6996d59f5e2037b70d23e46537bdaeab56460c4e41ede71fe9f5"
+      },
+      {
+        "status": "passed",
+        "tests_run": 1,
+        "passed": 1,
+        "skipped": 3817,
+        "duration_seconds": 3.614,
+        "name": "bitrouter-p1-v9-maintenance-stability-2.log",
+        "sha256": "e9a35192fc4b31fd4d8485fec71a1d5063c23d64c412d18b1b370ea6d88d397b"
+      },
+      {
+        "status": "passed",
+        "tests_run": 1,
+        "passed": 1,
+        "skipped": 3817,
+        "duration_seconds": 3.638,
+        "name": "bitrouter-p1-v9-maintenance-stability-3.log",
+        "sha256": "5340ee4dd6555af4d166acf0237866f8ea8826e701ff78c7c208bbeadb57ccad"
+      }
+    ]
+  },
+  "workspace": {
+    "status": "passed",
+    "tests_run": 4939,
+    "passed": 4939,
+    "skipped": 147,
+    "duration_seconds": 677.839,
+    "name": "bitrouter-p1-final-candidate-workspace.log",
+    "sha256": "dc7f764ebc93540228846ae0a9dc23ece1302dff3ec6d38202adc679a9b0dcb9",
+    "source": "2495bf8db118de399a11fc11f82ba18bd6a6455d",
+    "command": "cargo +1.97.0 nextest run --locked --workspace --all-features --test-threads 2 --retries 0 --no-fail-fast",
+    "examples": "harness_mcp_fixture and pty_acp_fixture prebuilt; BITROUTER_TEST_EXAMPLES_DIR set",
+    "external_database_variables": "unset; explicit shared aggregate recorded separately",
+    "slow_tests": 5,
+    "leaky_tests": 1,
+    "leak_notice": {
+      "test": "gateway::http::tests::graceful_shutdown_waits_for_required_drain_recovery_after_server_stops",
+      "duration_seconds": 0.213,
+      "interpretation": "Captured output remained open after successful test exit; this is not a heap-leak measurement.",
+      "official_reference": "https://www.nexte.st/docs/features/leaky-tests/",
+      "source_review": "The exact test and shutdown helper are byte-identical to P0; no child process or detached successful-path task was identified. The original notice remains unexplained.",
+      "bounded_check": {
+        "source": "2495bf8db118de399a11fc11f82ba18bd6a6455d",
+        "command": "cargo +1.97.0 nextest run --locked -p bitrouter --all-features --lib -E 'test(=gateway::http::tests::graceful_shutdown_waits_for_required_drain_recovery_after_server_stops)' --test-threads 1 --retries 0",
+        "passed": 1,
+        "leaky_tests": 0,
+        "duration_seconds": 0.033,
+        "log": "bitrouter-p1-final-drain-notice-check.log",
+        "sha256": "ea7e266c7c1fe618287a20f2727ec873e76459e67d9e9cecccc2db4140283bdc"
+      },
+      "disposition": "Non-reproduced notice retained for follow-up; no source change or timeout override justified by the bounded evidence."
+    }
+  },
+  "doctests": {
+    "status": "passed",
+    "passed": 11,
+    "ignored": 1,
+    "command": "cargo +1.97.0 test --locked --doc --workspace --all-features",
+    "name": "bitrouter-p1-final-candidate-doctests.log",
+    "sha256": "56b076b7fd957a00370e15523d6f84f06ce559e1ed8bd8b444097de5d9b493f4"
+  },
+  "other_checks": [
+    {
+      "name": "bitrouter-p1-maintenance-clippy.log",
+      "status": "passed",
+      "sha256": "59b4bce9ca2092f5b2b9a14087bc375d12eac28fa4abe5a7ecbc405969f7b940",
+      "scope": "Strict workspace Clippy with all features; warnings denied. Exact invocation is not embedded in the retained log."
+    },
+    {
+      "name": "bitrouter-p1-final-candidate-rustdoc.log",
+      "status": "passed",
+      "command": "RUSTDOCFLAGS='-D warnings' cargo +1.97.0 doc --locked --workspace --all-features --no-deps",
+      "sha256": "b56e8c09b73ce094f748772b644c64b90a567576920d12b02a28331f83dd3442"
+    },
+    {
+      "name": "bitrouter-p1-final-candidate-registry.log",
+      "status": "passed",
+      "command": "cargo +1.97.0 run --locked -p dist-helper -- registry validate",
+      "sha256": "468ba69cc19fa99abb62b5bb37c0a768d162265db1bd42ca4071745a440c7aca"
+    },
+    {
+      "name": "bitrouter-p1-final-candidate-dist.log",
+      "status": "passed",
+      "command": "cargo +1.97.0 run --locked -p dist-helper -- check",
+      "sha256": "fe46b25f7a1772022c7d2de17621de436baf785903ca442b986b46e488974c27"
+    },
+    {
+      "name": "bitrouter-p1-final-candidate-fmt.log",
+      "status": "passed",
+      "command": "cargo fmt --all -- --check (installed Rust 1.99 formatter)",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "non_blocking_diagnostics": [
+    "Inherited Darwin __eh_frame linker warning during large development test links.",
+    "Dependency proc-macro-error2 2.0.1 future-incompatibility notice; no newly suppressed project warning.",
+    "Registry validation retains existing unpinned/missing-conformance catalog advisories; generated distribution is current."
+  ],
+  "hosted_checks": "Tracked separately on PR #990 at the final pushed head; local passes do not imply hosted execution.",
+  "recorded_at": "2026-10-21T07:55:47.002Z"
+}

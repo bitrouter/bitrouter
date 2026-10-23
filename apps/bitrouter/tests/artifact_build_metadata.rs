@@ -125,6 +125,45 @@ fn metadata(features: &[&str]) -> Result<BuildMetadata, Box<dyn Error>> {
 }
 
 #[test]
+fn shared_gateway_has_exact_capabilities_and_a_distinct_wire_identity() -> Result<(), Box<dyn Error>>
+{
+    use bitrouter_ai::artifact::{ArtifactIdentity, DistributionProfile};
+
+    for roots in [
+        vec!["multi-instance"],
+        vec!["db-postgres", "multi-instance"],
+    ] {
+        let selected = selection(MANIFEST, &roots)?;
+        assert_eq!(selected.features, ["db-postgres", "multi-instance"]);
+        assert_eq!(selected.profile, "GatewayShared");
+        assert_eq!(selected.wire_profile, "gateway-shared");
+        let built = metadata(&roots)?;
+        let identity: ArtifactIdentity = serde_json::from_value(built.artifact_json("fixture"))?;
+        assert_eq!(identity.profile, DistributionProfile::GatewayShared);
+        assert_eq!(identity.features, selected.features);
+        assert!(
+            built
+                .render("fixture")
+                .contains("DistributionProfile::GatewayShared")
+        );
+        assert_ne!(
+            fingerprint(&built, b"same sources")?,
+            fingerprint(&metadata(&[])?, b"same sources")?
+        );
+    }
+    for roots in [
+        vec!["db-postgres"],
+        vec!["multi-instance", "core"],
+        vec!["multi-instance", "otel"],
+        vec!["multi-instance", "db-mysql"],
+        vec!["multi-instance", "default"],
+    ] {
+        assert_eq!(selection(MANIFEST, &roots)?.profile, "Custom");
+    }
+    Ok(())
+}
+
+#[test]
 fn dependency_edges_preserve_implicit_features_without_inventing_local_capabilities()
 -> Result<(), Box<dyn Error>> {
     let fixture = r#"
@@ -201,6 +240,7 @@ fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
         ("guardrails", cfg!(feature = "guardrails")),
         ("otel-http", cfg!(feature = "otel-http")),
         ("otel-grpc", cfg!(feature = "otel-grpc")),
+        ("multi-instance", cfg!(feature = "multi-instance")),
         ("db-postgres", cfg!(feature = "db-postgres")),
         ("db-mysql", cfg!(feature = "db-mysql")),
     ] {
@@ -217,10 +257,7 @@ fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
         .collect::<Vec<_>>();
     let replay = selection(MANIFEST, &names)?;
     assert_eq!(replay.features, identity.features);
-    assert_eq!(
-        replay.profile.to_ascii_lowercase(),
-        identity.profile.as_str()
-    );
+    assert_eq!(replay.wire_profile, identity.profile.as_str());
     let metadata = BuildMetadata {
         version: identity.version.clone(),
         source_revision: identity.source_revision.clone(),

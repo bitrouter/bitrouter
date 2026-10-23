@@ -2112,6 +2112,7 @@ pub async fn start_and_wait(
     socket: Option<&Path>,
     timeout: std::time::Duration,
 ) -> Result<DaemonStartOutcome> {
+    crate::host::validate_local_daemon_source(source).await?;
     crate::paths::ensure_home_directory(source.home())?;
     // Serialize local launchers across processes. Without this, two clients
     // can both observe no socket, start two daemons, and race the same SQLite

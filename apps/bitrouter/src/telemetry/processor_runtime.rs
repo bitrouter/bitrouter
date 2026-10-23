@@ -22,6 +22,8 @@ use opentelemetry_sdk::runtime::{Runtime, RuntimeChannel, TokioCurrentThread};
 pub(super) struct ProcessorRuntime {
     inner: TokioCurrentThread,
     initial_delay: Arc<AtomicBool>,
+    #[cfg(feature = "multi-instance")]
+    owner: Option<std::sync::Weak<super::owned::Workers>>,
 }
 
 /// Prevents an already-queued export message from reaching the worker before
@@ -48,6 +50,16 @@ impl ProcessorRuntime {
         Self {
             inner: TokioCurrentThread,
             initial_delay: Arc::new(AtomicBool::new(true)),
+            #[cfg(feature = "multi-instance")]
+            owner: None,
+        }
+    }
+
+    #[cfg(feature = "multi-instance")]
+    pub(super) fn owned(owner: Arc<super::owned::Workers>) -> Self {
+        Self {
+            owner: Some(Arc::downgrade(&owner)),
+            ..Self::new()
         }
     }
 }
@@ -57,6 +69,17 @@ impl Runtime for ProcessorRuntime {
     where
         F: Future<Output = ()> + Send + 'static,
     {
+        #[cfg(feature = "multi-instance")]
+        if let Some(owner) = &self.owner {
+            match owner.upgrade() {
+                Some(owner) => owner.spawn(future),
+                None => {
+                    drop(future);
+                    tracing::error!("Exporter processor registration outlived its process owner");
+                }
+            }
+            return;
+        }
         self.inner.spawn(future);
     }
 

@@ -2656,6 +2656,11 @@ struct PolicySnapshot {
 pub(crate) struct PolicyRoutingSnapshot(Arc<PolicySnapshot>);
 
 impl PolicyRoutingSnapshot {
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn digest(&self) -> Option<&str> {
+        self.0.digest.as_deref()
+    }
+
     pub(crate) fn document(&self) -> Option<&PolicyLock> {
         self.0.document.as_ref()
     }
@@ -2674,6 +2679,8 @@ pub struct PolicyRuntime {
     continuation_config: crate::config::ContinuationConfig,
     trajectory_config: TrajectoryConfig,
     trajectory: Option<Arc<TrajectoryRuntime>>,
+    #[cfg(feature = "multi-instance")]
+    published: bool,
 }
 
 #[derive(Debug)]
@@ -2728,8 +2735,57 @@ impl PolicyRuntime {
             continuation_config: config.continuation.clone(),
             trajectory_config: config.trajectory.clone(),
             trajectory,
+            #[cfg(feature = "multi-instance")]
+            published: false,
         });
         runtime.reload_for_config(config, config_path).await?;
+        Ok(runtime)
+    }
+
+    /// Build one immutable shared routing generation without consulting local
+    /// policy paths or bundled defaults. Replacement swaps the entire runtime.
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn from_document(
+        config: &Config,
+        document: Option<PolicyLock>,
+        eval_decisions: PendingEvalDecisionStore,
+        trajectory: Option<Arc<TrajectoryRuntime>>,
+    ) -> Result<Arc<Self>> {
+        anyhow::ensure!(
+            config.policy.path.is_none() && !config.inherit_defaults,
+            "published policy runtime requires explicit in-memory authority"
+        );
+        anyhow::ensure!(
+            config.trajectory.enabled == trajectory.is_some(),
+            "published policy trajectory configuration does not match runtime"
+        );
+        let loaded = match document {
+            Some(document) => {
+                validate_for_config(config, &document)?;
+                Some(LoadedPolicyLock {
+                    path: None,
+                    digest: semantic_digest(&document)?,
+                    document,
+                })
+            }
+            None => {
+                anyhow::ensure!(
+                    bound_policy_names(config).is_empty(),
+                    "published policy bindings require a document"
+                );
+                None
+            }
+        };
+        let runtime = Arc::new(Self {
+            snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
+            decision_recorder: None,
+            eval_decisions,
+            continuation_config: config.continuation.clone(),
+            trajectory_config: config.trajectory.clone(),
+            trajectory,
+            published: true,
+        });
+        runtime.commit(runtime.prepare_loaded(config, loaded)?);
         Ok(runtime)
     }
 
@@ -2753,6 +2809,11 @@ impl PolicyRuntime {
         config: &Config,
         config_path: Option<&Path>,
     ) -> Result<PreparedPolicySnapshot> {
+        #[cfg(feature = "multi-instance")]
+        anyhow::ensure!(
+            !self.published,
+            "published policy runtime must be replaced as a complete configuration"
+        );
         if config.continuation != self.continuation_config {
             anyhow::bail!(
                 "changing any continuation setting requires a daemon restart; live continuation state was not changed"
@@ -2769,6 +2830,14 @@ impl PolicyRuntime {
             )
         }
         let loaded = load_for_config(config, config_path).await?;
+        self.prepare_loaded(config, loaded)
+    }
+
+    fn prepare_loaded(
+        &self,
+        config: &Config,
+        loaded: Option<LoadedPolicyLock>,
+    ) -> Result<PreparedPolicySnapshot> {
         let mut routers = BTreeMap::new();
         if let Some(loaded) = &loaded {
             for (name, definition) in &loaded.document.policies {
@@ -2919,6 +2988,14 @@ impl ModelSelector for PolicyRuntime {
         variant: Option<&str>,
         ctx: &mut PipelineContext,
     ) -> crate::gateway::error::Result<()> {
+        #[cfg(feature = "multi-instance")]
+        if ctx
+            .extension::<crate::gateway::shared::admitted::SharedAdmission>()
+            .is_some()
+            && ctx.extension::<PolicyRoutingSnapshot>().is_none()
+        {
+            return Err(crate::gateway::error::BitrouterError::UpstreamUnavailable);
+        }
         let snapshot = ctx
             .extension::<PolicyRoutingSnapshot>()
             .map(|snapshot| snapshot.0.clone())
@@ -2993,17 +3070,11 @@ impl ModelSelector for PolicyRuntime {
                 .as_deref()
                 .and_then(|tier| decision.effort_of_tier(tier))
                 .or(input_effort);
-            let owner = ctx.caller().user_id();
-            let trajectory_request_id = trajectory
-                .request_identity(owner, ctx.request_id())
-                .map_err(|error| {
-                    crate::gateway::error::BitrouterError::internal(format!(
-                        "trajectory request identity failed: {error}"
-                    ))
-                })?;
             let guarded_input = GuardedRouteInput {
-                route_event_id: stable_id("route-intent", owner, &trajectory_request_id),
-                guard_event_id: stable_id("guard-activation", owner, &trajectory_request_id),
+                // Identities are derived after the shared episode chooses its
+                // retained key epoch, or by the original local canonicalizer.
+                route_event_id: String::new(),
+                guard_event_id: String::new(),
                 policy_name: policy_name.to_owned(),
                 route_projection: decision.route_projection.clone(),
                 request_key,
@@ -3021,29 +3092,14 @@ impl ModelSelector for PolicyRuntime {
                 tool_use_tier: decision.tool_use_tier(),
                 tool_safe_tiers: decision.tool_safe_tiers(),
             };
-            let (correlated, guarded) = trajectory
-                .begin_guarded_request(
-                    ctx.caller().user_id(),
-                    ctx.request_id(),
-                    inbound_protocol,
-                    ctx.require_generation_prompt()?,
-                    &captured_at,
-                    guarded_input,
-                )
-                .await
-                .map_err(|error| {
-                    if error
-                        .downcast_ref::<crate::trajectory::correlation::InvalidCorrelationEvidence>(
-                        )
-                        .is_some()
-                    {
-                        crate::gateway::error::BitrouterError::bad_request(error.to_string())
-                    } else {
-                        crate::gateway::error::BitrouterError::internal(format!(
-                            "trajectory correlation failed: {error}"
-                        ))
-                    }
-                })?;
+            let (correlated, guarded) = begin_guarded_trajectory(
+                trajectory,
+                ctx,
+                inbound_protocol,
+                &captured_at,
+                guarded_input,
+            )
+            .await?;
             let guard_applied = guarded.intent.clauses.iter().any(|clause| {
                 clause.clause_id.starts_with("progress_guard.")
                     && clause.disposition == RouteIntentClauseDisposition::Applied
@@ -3069,10 +3125,16 @@ impl ModelSelector for PolicyRuntime {
             if let Some(plan) = ctx.extension::<ContinuationRequestPlan>()
                 && let Some(adjustment) = plan.adjustment.as_ref()
             {
-                router.apply_continuation_adjustment(&mut decision, adjustment)?;
+                #[cfg(feature = "multi-instance")]
+                let shared = ctx
+                    .extension::<crate::gateway::shared::admitted::SharedAdmission>()
+                    .is_some();
+                #[cfg(not(feature = "multi-instance"))]
+                let shared = false;
+                apply_guarded_continuation(router, &mut decision, adjustment, shared)?;
             }
             let route_projection = decision.route_projection.clone();
-            let selected = router.record_bound_policy_decision(
+            let (selected, captured) = router.record_bound_policy_decision(
                 (&correlated.request_id, ctx.request_id()),
                 invocation.as_ref(),
                 input_model,
@@ -3080,6 +3142,22 @@ impl ModelSelector for PolicyRuntime {
                 decision,
                 ctx.headers(),
             );
+            #[cfg(feature = "multi-instance")]
+            if let Some(admission) =
+                ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+            {
+                let name = router
+                    .eval_policy_name()
+                    .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
+                admission.retain_policy(
+                    name,
+                    true,
+                    captured.as_ref(),
+                    &PolicyRoutingSnapshot(snapshot.clone()),
+                )?;
+            }
+            #[cfg(not(feature = "multi-instance"))]
+            drop(captured);
             if let Some(target) = selected {
                 ctx.insert_extension(Arc::new(target.context));
                 ctx.set_model(target.model());
@@ -3108,7 +3186,7 @@ impl ModelSelector for PolicyRuntime {
             router.apply_continuation_adjustment(&mut decision, adjustment)?;
         }
         let route_projection = decision.route_projection.clone();
-        let selected = router.record_bound_policy_decision(
+        let (selected, captured) = router.record_bound_policy_decision(
             (ctx.request_id(), ctx.request_id()),
             invocation.as_ref(),
             input_model,
@@ -3116,6 +3194,22 @@ impl ModelSelector for PolicyRuntime {
             decision,
             ctx.headers(),
         );
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) =
+            ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+        {
+            let name = router
+                .eval_policy_name()
+                .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
+            admission.retain_policy(
+                name,
+                false,
+                captured.as_ref(),
+                &PolicyRoutingSnapshot(snapshot.clone()),
+            )?;
+        }
+        #[cfg(not(feature = "multi-instance"))]
+        drop(captured);
         if let Some(target) = selected {
             ctx.insert_extension(Arc::new(target.context));
             ctx.set_model(target.model());
@@ -3129,6 +3223,89 @@ impl ModelSelector for PolicyRuntime {
         }
         Ok(())
     }
+}
+
+async fn begin_guarded_trajectory(
+    trajectory: &TrajectoryRuntime,
+    ctx: &PipelineContext,
+    protocol: bitrouter_ai::types::ApiProtocol,
+    captured_at: &str,
+    mut input: GuardedRouteInput,
+) -> crate::gateway::error::Result<(
+    crate::trajectory::correlation::CorrelatedRequest,
+    crate::trajectory::store::GuardedRouteResult,
+)> {
+    #[cfg(feature = "multi-instance")]
+    if let Some(admission) = ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>() {
+        return admission
+            .begin_guarded(
+                &protocol,
+                ctx.require_generation_prompt()?,
+                captured_at,
+                input,
+            )
+            .await;
+    }
+    let owner = ctx.caller().user_id();
+    let request_id = trajectory
+        .request_identity(owner, ctx.request_id())
+        .map_err(|error| {
+            crate::gateway::error::BitrouterError::internal(format!(
+                "trajectory request identity failed: {error}"
+            ))
+        })?;
+    input.route_event_id = stable_id("route-intent", owner, &request_id);
+    input.guard_event_id = stable_id("guard-activation", owner, &request_id);
+    trajectory
+        .begin_guarded_request(
+            owner,
+            ctx.request_id(),
+            protocol,
+            ctx.require_generation_prompt()?,
+            captured_at,
+            input,
+        )
+        .await
+        .map_err(|error| {
+            if error
+                .downcast_ref::<crate::trajectory::correlation::InvalidCorrelationEvidence>()
+                .is_some()
+            {
+                crate::gateway::error::BitrouterError::bad_request(error.to_string())
+            } else {
+                crate::gateway::error::BitrouterError::internal(format!(
+                    "trajectory correlation failed: {error}"
+                ))
+            }
+        })
+}
+
+fn apply_guarded_continuation(
+    router: &PolicyTableRouter,
+    decision: &mut crate::policy_table_router::PolicyDecision,
+    adjustment: &ContinuationAdjustment,
+    shared: bool,
+) -> crate::gateway::error::Result<()> {
+    let original = shared.then(|| {
+        (
+            decision.selected_tier.clone(),
+            decision.selected_model.clone(),
+            decision.selected_effort,
+        )
+    });
+    router.apply_continuation_adjustment(decision, adjustment)?;
+    if let Some((tier, model, effort)) = original
+        && (decision.selected_tier != tier
+            || decision.selected_model != model
+            || decision.selected_effort != effort)
+    {
+        // The durable route intent already owns the guard decision. A native
+        // continuation must not silently dispatch a different treatment.
+        return Err(crate::gateway::error::BitrouterError::bad_request(
+            "provider continuation conflicts with the shared trajectory guard",
+        ));
+    }
+    Ok(())
 }
 
 fn pinned_continuation_effort(
@@ -3174,6 +3351,154 @@ pub struct PolicyRuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_guard_continuation_preserves_committed_treatment() -> Result<()> {
+        use bitrouter_ai::types::{GenerationParams, Message, Prompt, Role};
+
+        let mut policy = definition();
+        policy.tiers.insert(
+            "strong-high".into(),
+            PolicyModelTarget {
+                model: "vendor:strong".into(),
+                effort: Some(ReasoningEffort::High),
+                context: Default::default(),
+            },
+        );
+        let router =
+            PolicyTableRouter::from_config(&policy.as_table_config(PolicyRuntimeMode::Frozen))
+                .context("guard continuation fixture is inert")?;
+        let prompt = Prompt {
+            model: "vendor:strong".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "solve this")],
+            tools: Vec::new(),
+            params: GenerationParams::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let original = router.decision_for_routing(&prompt, &http::HeaderMap::new(), None, true);
+        assert_eq!(original.selected_tier.as_deref(), Some("strong"));
+        assert_eq!(original.selected_effort, None);
+        for adjustment in [
+            ContinuationAdjustment::Detach,
+            ContinuationAdjustment::Pin {
+                effective_model: "vendor:strong".into(),
+                effective_effort: None,
+                effort_authoritative: true,
+            },
+        ] {
+            let mut decision = original.clone();
+            apply_guarded_continuation(&router, &mut decision, &adjustment, true)?;
+            assert_eq!(decision.selected_tier, original.selected_tier);
+            assert_eq!(decision.selected_model, original.selected_model);
+            assert_eq!(decision.selected_effort, original.selected_effort);
+        }
+        for (model, effort) in [
+            ("vendor:economy", None),
+            ("vendor:strong", Some(ReasoningEffort::High)),
+        ] {
+            let adjustment = ContinuationAdjustment::Pin {
+                effective_model: model.into(),
+                effective_effort: effort,
+                effort_authoritative: true,
+            };
+            let error =
+                apply_guarded_continuation(&router, &mut original.clone(), &adjustment, true)
+                    .err()
+                    .context("shared continuation changed the guarded treatment")?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("conflicts with the shared trajectory guard")
+            );
+            let mut local = original.clone();
+            apply_guarded_continuation(&router, &mut local, &adjustment, false)?;
+            assert_eq!(local.selected_model.as_deref(), Some(model));
+            assert_eq!(local.selected_effort, effort);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "multi-instance")]
+    #[tokio::test]
+    async fn published_runtime_keeps_its_document_and_rejects_file_reload() -> Result<()> {
+        let config = crate::config::parse(
+            "inherit_defaults: false\npresets:\n  coding:\n    model: fixture:strong\n    policy: auto\n",
+        )?;
+        let document: PolicyLock = serde_saphyr::from_str(BUNDLED_POLICY)?;
+        let runtime = PolicyRuntime::from_document(
+            &config,
+            Some(document.clone()),
+            PendingEvalDecisionStore::default(),
+            None,
+        )?;
+        let first_digest = runtime.status(config.policy.mode).digest;
+        anyhow::ensure!(first_digest.as_deref() == Some(semantic_digest(&document)?.as_str()));
+        let retained = runtime.routing_snapshot();
+
+        let mut replacement = document.clone();
+        replacement
+            .policies
+            .get_mut("auto")
+            .context("missing auto policy")?
+            .tiers
+            .get_mut("strong")
+            .context("missing strong tier")?
+            .model = "fixture:replacement".into();
+        let directory = tempfile::tempdir()?;
+        let config_path = directory.path().join("bitrouter.yaml");
+        tokio::fs::write(
+            directory.path().join(DEFAULT_POLICY_LOCK_FILENAME),
+            deterministic_yaml(&replacement)?,
+        )
+        .await?;
+        let error = runtime
+            .reload_for_config(&config, Some(&config_path))
+            .await
+            .err()
+            .context("published runtime accepted file reload")?;
+        anyhow::ensure!(error.to_string().contains("complete configuration"));
+        anyhow::ensure!(runtime.status(config.policy.mode).digest == first_digest);
+        let next = PolicyRuntime::from_document(
+            &config,
+            Some(replacement.clone()),
+            PendingEvalDecisionStore::default(),
+            None,
+        )?;
+        anyhow::ensure!(next.status(config.policy.mode).digest != first_digest);
+        anyhow::ensure!(retained.document() == Some(&document));
+        anyhow::ensure!(next.routing_snapshot().document() == Some(&replacement));
+        anyhow::ensure!(
+            PolicyRuntime::from_document(&config, None, PendingEvalDecisionStore::default(), None,)
+                .is_err()
+        );
+        let mut invalid = config.clone();
+        invalid.trajectory.enabled = true;
+        anyhow::ensure!(
+            PolicyRuntime::from_document(
+                &invalid,
+                Some(document.clone()),
+                PendingEvalDecisionStore::default(),
+                None,
+            )
+            .is_err()
+        );
+        invalid = config;
+        invalid.policy.path = Some(directory.path().join(DEFAULT_POLICY_LOCK_FILENAME));
+        anyhow::ensure!(
+            PolicyRuntime::from_document(
+                &invalid,
+                Some(document),
+                PendingEvalDecisionStore::default(),
+                None,
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn native_defaults_load_without_configuration_and_preserve_overrides() -> Result<()> {

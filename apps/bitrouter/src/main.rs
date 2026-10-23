@@ -22,6 +22,11 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
 
+#[path = "main/shared_operator.rs"]
+mod shared_operator;
+#[cfg(test)]
+#[path = "main/shared_tests.rs"]
+mod shared_tests;
 mod tracing_filter;
 use tracing_filter::resolve_env_filter;
 
@@ -233,9 +238,38 @@ enum TaskAction {
 }
 
 #[derive(Subcommand)]
+enum SharedAction {
+    #[command(flatten)]
+    Operator(shared_operator::Action),
+    /// Atomically seed a new shared namespace; requires multi-instance.
+    Init {
+        /// Explicit shared process configuration; no discovery fallback.
+        #[arg(long)]
+        config: PathBuf,
+        /// Bounded JSON seed plan, or '-' to read stdin.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Stable audit identity for this explicitly privileged local operation.
+        #[arg(long)]
+        operator_id: String,
+        /// Caller-owned ID; retain this and the identical plan after uncertainty.
+        #[arg(long)]
+        operation_id: String,
+        /// Permit creating database-wide virtual principals from the seed plan.
+        #[arg(long)]
+        global_principals: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Report this executable's compiled features, profile and source identity.
     BuildInfo,
+    /// Explicit shared-gateway initialization and administration.
+    Shared {
+        #[command(subcommand)]
+        action: SharedAction,
+    },
     /// Run a BRO-owned native coding task through the Thread server.
     Task {
         #[command(subcommand)]
@@ -1979,6 +2013,16 @@ fn validate_harness_availability(command: Option<&Command>) -> Result<()> {
 }
 
 async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
+    #[cfg(not(feature = "multi-instance"))]
+    if matches!(&cli.command, Some(Command::Shared { .. })) {
+        anyhow::bail!("shared administration requires the multi-instance feature");
+    }
+    if matches!(&cli.command, Some(Command::Shared { .. })) {
+        anyhow::ensure!(
+            cli.context.is_none(),
+            "shared administration requires explicit targets and does not use named contexts"
+        );
+    }
     #[cfg(not(feature = "tui"))]
     {
         use std::io::IsTerminal as _;
@@ -2126,7 +2170,9 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         )
         .into());
     }
-    let remote_context = if matches!(&command, Command::Context { .. }) {
+    let remote_context = if matches!(&command, Command::Shared { .. }) {
+        None
+    } else if matches!(&command, Command::Context { .. }) {
         if cli.context.as_deref().is_some_and(|name| name != "local") {
             return Err(
                 bitrouter::gateway::error::BitrouterError::bad_request(format!(
@@ -2147,6 +2193,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
     validate_remote_invocation(&command, remote_context.is_some())?;
 
     match command {
+        Command::Shared { action } => run_shared(action, output).await,
         Command::BuildInfo => {
             output.emit(&bitrouter::artifact::current())?;
             Ok(())
@@ -2210,6 +2257,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
             log,
         } => {
             let source = bitrouter::paths::resolve_config(config.as_deref())?;
+            bitrouter::host::validate_local_daemon_source(&source).await?;
             let socket = resolve_client_socket_from(&source, socket.as_deref()).await?;
             let log_path = resolve_log_path(source.home(), log.as_deref());
             output.emit(&restart(&source, &socket, &log_path).await?)?;
@@ -3874,6 +3922,36 @@ fn reject_remote_local_target_flags(config: Option<&Path>, socket: Option<&Path>
     bitrouter::administration_target::reject_remote_local_flags(config, socket)
 }
 
+async fn run_shared(action: SharedAction, output: &Output) -> Result<()> {
+    #[cfg(not(feature = "multi-instance"))]
+    {
+        let _ = (action, output);
+        anyhow::bail!("shared administration requires the multi-instance feature");
+    }
+    #[cfg(feature = "multi-instance")]
+    match action {
+        SharedAction::Operator(action) => shared_operator::run(action, output).await,
+        SharedAction::Init {
+            config,
+            plan,
+            operator_id,
+            operation_id,
+            global_principals,
+        } => {
+            let receipt = bitrouter::host::initialize_shared(
+                &config,
+                &plan,
+                &operator_id,
+                &operation_id,
+                global_principals,
+            )
+            .await?;
+            output.emit(&receipt)?;
+            Ok(())
+        }
+    }
+}
+
 fn emit_operation_result(output: &Output, report: &OperationReport) -> Result<()> {
     output.emit(report)?;
     if report.succeeded() {
@@ -4022,6 +4100,7 @@ async fn start(
     log_path: &Path,
     action: &'static str,
 ) -> Result<DaemonActionReport> {
+    bitrouter::host::validate_local_daemon_source(source).await?;
     bitrouter::host::validate_startup_features()?;
     // Make sure the bitrouter home exists *before* we open the log
     // file inside it. (Zero-config first-run lands here with the home

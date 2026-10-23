@@ -22,7 +22,7 @@ use super::types::{
 use crate::gateway::routing::workflow::ir::RouteProjection;
 use {bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::RouteDecisionMeasurement};
 
-mod episode_entity {
+pub(super) mod episode_entity {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -47,7 +47,7 @@ mod episode_entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-mod event_entity {
+pub(super) mod event_entity {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -70,7 +70,7 @@ mod event_entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-mod request_entity {
+pub(super) mod request_entity {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -113,7 +113,7 @@ mod prefix_entity {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-mod outbox_entity {
+pub(super) mod outbox_entity {
     use sea_orm::entity::prelude::*;
 
     #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
@@ -228,10 +228,10 @@ pub(crate) struct GuardedRouteResult {
     pub causal_completeness: HistoryCompleteness,
 }
 
-struct GuardedRouteBatch {
-    route_event: TrajectoryEvent,
-    guard_event: Option<TrajectoryEvent>,
-    result: GuardedRouteResult,
+pub(super) struct GuardedRouteBatch {
+    pub(super) route_event: TrajectoryEvent,
+    pub(super) guard_event: Option<TrajectoryEvent>,
+    pub(super) result: GuardedRouteResult,
 }
 
 enum CorrelateAttempt {
@@ -285,28 +285,7 @@ impl TrajectoryStore {
         owner_user_id: &str,
         input: CorrelateAndBegin,
     ) -> Result<CorrelateAndBeginResult> {
-        validate_owner(owner_user_id)?;
-        validate_keyed_component(&input.correlation_key_id, "correlation_key_id")?;
-        if input.correlation_key_id != input.full_input_digest.key_id() {
-            anyhow::bail!("correlation key id must match the full input digest")
-        }
-        if input
-            .ancestor_prefix_digests
-            .iter()
-            .any(|digest| digest.key_id() != input.correlation_key_id)
-        {
-            anyhow::bail!("ancestor prefix digest uses a different correlation key")
-        }
-        if input.native_parent_id.is_some() != input.native_parent_digest.is_some() {
-            anyhow::bail!("native parent id and digest must be present together")
-        }
-        if input
-            .native_parent_digest
-            .as_ref()
-            .is_some_and(|digest| digest.key_id() != input.correlation_key_id)
-        {
-            anyhow::bail!("native parent digest uses a different correlation key")
-        }
+        validate_correlation_input(owner_user_id, &input)?;
 
         for attempt in 0..MAX_SEQUENCE_RESERVATION_ATTEMPTS {
             match self.correlate_and_begin_once(owner_user_id, &input).await {
@@ -460,70 +439,19 @@ impl TrajectoryStore {
                 (episode_id, episode_start, 1)
             }
         };
-        let mut event = TrajectoryEvent {
-            schema_version: TRAJECTORY_SCHEMA_VERSION,
-            event_id: input.event_id.clone(),
-            owner_user_id: owner_user_id.to_owned(),
-            episode_id: episode_id.clone(),
-            request_id: Some(input.request_id.clone()),
+        let event = build_start_event(
+            owner_user_id,
+            input,
+            &episode_id,
             sequence,
-            kind: TrajectoryEventKind::RequestStarted,
-            evidence: TrajectoryEvidence {
-                routing_evidence: Vec::new(),
-                structural: std::collections::BTreeMap::from([
-                    (
-                        "correlation.ancestor_prefix_count".to_owned(),
-                        u64::try_from(input.ancestor_prefix_digests.len())
-                            .context("too many ancestor prefix digests")?,
-                    ),
-                    (
-                        "correlation.starts_with_prior_turns".to_owned(),
-                        u64::from(input.starts_with_prior_turns),
-                    ),
-                    (
-                        "correlation.ancestor_prefixes_truncated".to_owned(),
-                        u64::from(input.ancestor_prefixes_truncated),
-                    ),
-                    (
-                        "correlation.prefix_conflict".to_owned(),
-                        u64::from(prefix_conflict),
-                    ),
-                    (
-                        "correlation.native_parent_present".to_owned(),
-                        u64::from(input.native_parent_digest.is_some()),
-                    ),
-                    (
-                        "correlation.key_epoch_conflict".to_owned(),
-                        u64::from(key_epoch_conflict),
-                    ),
-                    (
-                        "request.canonical_input_bytes".to_owned(),
-                        input.canonical_input_bytes,
-                    ),
-                ]),
-                categorical: std::collections::BTreeMap::from([
-                    ("correlation.source".to_owned(), source.as_str().to_owned()),
-                    (
-                        "history.completeness".to_owned(),
-                        completeness_name(completeness).to_owned(),
-                    ),
-                ]),
-                digests: input
-                    .native_parent_digest
-                    .as_ref()
-                    .map(|digest| {
-                        std::collections::BTreeMap::from([(
-                            "correlation.native_parent".to_owned(),
-                            digest.as_str().to_owned(),
-                        )])
-                    })
-                    .unwrap_or_default(),
-                route_measurement: None,
+            &captured_at,
+            StartFacts {
+                source,
+                completeness,
+                prefix_conflict,
+                key_epoch_conflict,
             },
-            captured_at: captured_at.clone(),
-            content_digest: String::new(),
-        };
-        event.content_digest = event.semantic_digest()?;
+        )?;
         let start_event = event.clone();
         let begin = BeginRequest {
             episode: episode_start,
@@ -1937,6 +1865,125 @@ async fn native_parent_request(
         .map_err(Into::into)
 }
 
+/// Pure identity consistency shared by local and shared correlation adapters.
+pub(super) fn validate_correlation_input(
+    owner_user_id: &str,
+    input: &CorrelateAndBegin,
+) -> Result<()> {
+    validate_owner(owner_user_id)?;
+    validate_keyed_component(&input.correlation_key_id, "correlation_key_id")?;
+    if input.correlation_key_id != input.full_input_digest.key_id() {
+        anyhow::bail!("correlation key id must match the full input digest")
+    }
+    if input
+        .ancestor_prefix_digests
+        .iter()
+        .any(|digest| digest.key_id() != input.correlation_key_id)
+    {
+        anyhow::bail!("ancestor prefix digest uses a different correlation key")
+    }
+    if input.native_parent_id.is_some() != input.native_parent_digest.is_some() {
+        anyhow::bail!("native parent id and digest must be present together")
+    }
+    if input
+        .native_parent_digest
+        .as_ref()
+        .is_some_and(|digest| digest.key_id() != input.correlation_key_id)
+    {
+        anyhow::bail!("native parent digest uses a different correlation key")
+    }
+    Ok(())
+}
+
+pub(super) struct StartFacts {
+    pub(super) source: CorrelationSource,
+    pub(super) completeness: HistoryCompleteness,
+    pub(super) prefix_conflict: bool,
+    pub(super) key_epoch_conflict: bool,
+}
+
+/// Construct the same immutable start evidence for both storage adapters.
+pub(super) fn build_start_event(
+    owner_user_id: &str,
+    input: &CorrelateAndBegin,
+    episode_id: &str,
+    sequence: u64,
+    captured_at: &str,
+    facts: StartFacts,
+) -> Result<TrajectoryEvent> {
+    let StartFacts {
+        source,
+        completeness,
+        prefix_conflict,
+        key_epoch_conflict,
+    } = facts;
+    let mut event = TrajectoryEvent {
+        schema_version: TRAJECTORY_SCHEMA_VERSION,
+        event_id: input.event_id.clone(),
+        owner_user_id: owner_user_id.to_owned(),
+        episode_id: episode_id.to_owned(),
+        request_id: Some(input.request_id.clone()),
+        sequence,
+        kind: TrajectoryEventKind::RequestStarted,
+        evidence: TrajectoryEvidence {
+            routing_evidence: Vec::new(),
+            structural: std::collections::BTreeMap::from([
+                (
+                    "correlation.ancestor_prefix_count".to_owned(),
+                    u64::try_from(input.ancestor_prefix_digests.len())
+                        .context("too many ancestor prefix digests")?,
+                ),
+                (
+                    "correlation.starts_with_prior_turns".to_owned(),
+                    u64::from(input.starts_with_prior_turns),
+                ),
+                (
+                    "correlation.ancestor_prefixes_truncated".to_owned(),
+                    u64::from(input.ancestor_prefixes_truncated),
+                ),
+                (
+                    "correlation.prefix_conflict".to_owned(),
+                    u64::from(prefix_conflict),
+                ),
+                (
+                    "correlation.native_parent_present".to_owned(),
+                    u64::from(input.native_parent_digest.is_some()),
+                ),
+                (
+                    "correlation.key_epoch_conflict".to_owned(),
+                    u64::from(key_epoch_conflict),
+                ),
+                (
+                    "request.canonical_input_bytes".to_owned(),
+                    input.canonical_input_bytes,
+                ),
+            ]),
+            categorical: std::collections::BTreeMap::from([
+                ("correlation.source".to_owned(), source.as_str().to_owned()),
+                (
+                    "history.completeness".to_owned(),
+                    completeness_name(completeness).to_owned(),
+                ),
+            ]),
+            digests: input
+                .native_parent_digest
+                .as_ref()
+                .map(|digest| {
+                    std::collections::BTreeMap::from([(
+                        "correlation.native_parent".to_owned(),
+                        digest.as_str().to_owned(),
+                    )])
+                })
+                .unwrap_or_default(),
+            route_measurement: None,
+        },
+        captured_at: captured_at.to_owned(),
+        content_digest: String::new(),
+    };
+    event.content_digest = event.semantic_digest()?;
+    Ok(event)
+}
+
 async fn exact_retry_result(
     txn: &DatabaseTransaction,
     owner_user_id: &str,
@@ -1951,6 +1998,18 @@ async fn exact_retry_result(
         .find(|event| event.event_id == existing.start_event_id)
         .ok_or_else(|| anyhow::anyhow!("trajectory retry is missing its original start event"))?;
     validate_stored_native_parent(txn, owner_user_id, existing.native_parent_id.as_deref()).await?;
+    exact_retry_from_history(owner_user_id, existing, input, &events, start)
+}
+
+/// The caller validates the owner-scoped episode/head and stored native parent.
+/// Only the immutable prefix before `start` determines the retried guard.
+pub(super) fn exact_retry_from_history(
+    owner_user_id: &str,
+    existing: &request_entity::Model,
+    input: &CorrelateAndBegin,
+    events: &[TrajectoryEvent],
+    start: &TrajectoryEvent,
+) -> Result<CorrelateAndBeginResult> {
     let ancestor_count = start
         .evidence
         .structural
@@ -2023,7 +2082,7 @@ async fn exact_retry_result(
         .collect::<Vec<_>>();
     let guarded_route = match &input.guarded_route {
         Some(route) => {
-            reduce(&events, &route.policy.protected_tiers)?;
+            reduce(events, &route.policy.protected_tiers)?;
             let expected = build_guarded_route_batch(&prior_events, start, completeness, route)?;
             let persisted_route = events
                 .iter()
@@ -2133,7 +2192,7 @@ async fn append_guarded_route_in_tx(
     Ok(batch.result)
 }
 
-fn build_guarded_route_batch(
+pub(super) fn build_guarded_route_batch(
     prior_events: &[TrajectoryEvent],
     start: &TrajectoryEvent,
     completeness: HistoryCompleteness,
@@ -2410,7 +2469,7 @@ async fn validate_stored_native_parent(
     Ok(())
 }
 
-fn validate_episode_head(
+pub(super) fn validate_episode_head(
     episode: &episode_entity::Model,
     events: &[TrajectoryEvent],
 ) -> Result<()> {
@@ -2565,7 +2624,7 @@ async fn events_for_episode_in_tx(
     decode_event_history(rows)
 }
 
-fn decode_event_history(rows: Vec<event_entity::Model>) -> Result<Vec<TrajectoryEvent>> {
+pub(super) fn decode_event_history(rows: Vec<event_entity::Model>) -> Result<Vec<TrajectoryEvent>> {
     let mut events = Vec::with_capacity(rows.len());
     for (index, row) in rows.into_iter().enumerate() {
         let event = stored_event(row)?;
@@ -2670,7 +2729,7 @@ async fn event_matches_existing(
 /// regression. Settlement already pins itself to the last event for the same
 /// reason; do the same here rather than let a sub-millisecond turnaround fail
 /// the request.
-fn episode_monotonic_captured_at(
+pub(super) fn episode_monotonic_captured_at(
     prior_events: &[TrajectoryEvent],
     captured_at: &str,
 ) -> Result<String> {
@@ -2789,7 +2848,7 @@ async fn update_episode_head(
     Ok(())
 }
 
-fn validate_begin(owner_user_id: &str, input: &BeginRequest) -> Result<()> {
+pub(super) fn validate_begin(owner_user_id: &str, input: &BeginRequest) -> Result<()> {
     validate_event(&input.event)?;
     if input.event.owner_user_id != owner_user_id
         || input.event.episode_id != input.episode.episode_id
@@ -2808,7 +2867,7 @@ fn validate_begin(owner_user_id: &str, input: &BeginRequest) -> Result<()> {
     Ok(())
 }
 
-fn validate_settlement(owner_user_id: &str, settlement: &Settlement) -> Result<()> {
+pub(super) fn validate_settlement(owner_user_id: &str, settlement: &Settlement) -> Result<()> {
     validate_event(&settlement.event)?;
     if settlement.event.owner_user_id != owner_user_id
         || settlement.event.kind != TrajectoryEventKind::RequestSettled
@@ -2823,7 +2882,7 @@ fn validate_settlement(owner_user_id: &str, settlement: &Settlement) -> Result<(
     Ok(())
 }
 
-fn validate_existing_episode(
+pub(super) fn validate_existing_episode(
     existing: &episode_entity::Model,
     episode: &EpisodeStart,
     event: &TrajectoryEvent,
@@ -2846,7 +2905,7 @@ fn validate_episode_start(episode: &EpisodeStart) -> Result<()> {
     validate_opaque(&episode.correlation_source, "correlation_source")
 }
 
-fn validate_new_episode_start(input: &BeginRequest) -> Result<()> {
+pub(super) fn validate_new_episode_start(input: &BeginRequest) -> Result<()> {
     let event_completeness = match input
         .event
         .evidence
@@ -2892,7 +2951,7 @@ fn validate_new_episode_start(input: &BeginRequest) -> Result<()> {
     Ok(())
 }
 
-fn validate_outbox(outbox: &OutboxWrite) -> Result<()> {
+pub(super) fn validate_outbox(outbox: &OutboxWrite) -> Result<()> {
     validate_opaque(&outbox.outbox_id, "outbox_id")?;
     validate_opaque(&outbox.topic, "outbox.topic")?;
     validate_timestamp(&outbox.created_at, "outbox.created_at")?;
@@ -2923,7 +2982,7 @@ async fn insert_outbox(
     Ok(())
 }
 
-fn begin_matches(
+pub(super) fn begin_matches(
     existing: &request_entity::Model,
     episode: &episode_entity::Model,
     start_event: &TrajectoryEvent,
@@ -3006,7 +3065,7 @@ async fn settlement_outbox_matches(
     }
 }
 
-fn stored_request(row: request_entity::Model) -> Result<StoredRequest> {
+pub(super) fn stored_request(row: request_entity::Model) -> Result<StoredRequest> {
     Ok(StoredRequest {
         request_id: row.request_id,
         episode_id: row.episode_id,
@@ -3020,7 +3079,7 @@ fn stored_request(row: request_entity::Model) -> Result<StoredRequest> {
     })
 }
 
-fn stored_episode(row: episode_entity::Model) -> Result<StoredEpisode> {
+pub(super) fn stored_episode(row: episode_entity::Model) -> Result<StoredEpisode> {
     Ok(StoredEpisode {
         episode_id: row.episode_id,
         owner_user_id: row.owner_user_id,
@@ -3053,7 +3112,7 @@ fn first_reducer_failure(events: &[TrajectoryEvent]) -> Option<(Option<String>, 
     None
 }
 
-fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> {
+pub(super) fn stored_outbox(row: outbox_entity::Model) -> Result<PendingOutbox> {
     let payload = serde_json::from_str::<super::types::OutboxPayload>(&row.payload_json)
         .context("stored trajectory outbox payload is invalid")?;
     validate_outbox_payload(&payload)?;
@@ -3088,11 +3147,11 @@ fn stored_outbox_batch_item(row: outbox_entity::Model) -> OutboxBatchItem {
     }
 }
 
-fn validate_owner(owner_user_id: &str) -> Result<()> {
+pub(super) fn validate_owner(owner_user_id: &str) -> Result<()> {
     validate_opaque(owner_user_id, "owner_user_id")
 }
 
-fn validate_opaque(value: &str, field: &str) -> Result<()> {
+pub(super) fn validate_opaque(value: &str, field: &str) -> Result<()> {
     if value.trim().is_empty() || value.len() > 512 || value.chars().any(char::is_control) {
         anyhow::bail!("{field} must be a non-empty bounded value")
     }
@@ -3105,7 +3164,7 @@ fn validate_timestamp(value: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
-fn event_kind_name(kind: TrajectoryEventKind) -> &'static str {
+pub(super) fn event_kind_name(kind: TrajectoryEventKind) -> &'static str {
     match kind {
         TrajectoryEventKind::RequestStarted => "request_started",
         TrajectoryEventKind::RouteIntentRecorded => "route_intent_recorded",
@@ -3115,7 +3174,7 @@ fn event_kind_name(kind: TrajectoryEventKind) -> &'static str {
     }
 }
 
-fn completeness_name(completeness: HistoryCompleteness) -> &'static str {
+pub(super) fn completeness_name(completeness: HistoryCompleteness) -> &'static str {
     match completeness {
         HistoryCompleteness::Complete => "complete",
         HistoryCompleteness::Incomplete => "incomplete",
@@ -3132,7 +3191,7 @@ fn parse_completeness(value: &str) -> Result<HistoryCompleteness> {
     }
 }
 
-fn request_status_name(status: RequestStatus) -> &'static str {
+pub(super) fn request_status_name(status: RequestStatus) -> &'static str {
     match status {
         RequestStatus::Started => "started",
         RequestStatus::Settled => "settled",

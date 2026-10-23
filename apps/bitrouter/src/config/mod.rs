@@ -40,12 +40,14 @@ use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
 pub mod agent;
 pub mod checker;
 pub mod decision;
+pub mod gateway_state;
 pub mod mcp;
 pub mod pattern;
 pub mod presets;
 pub mod router;
 pub mod routing_table;
 pub mod server_tools;
+pub(crate) mod shared_process;
 pub(crate) mod yaml;
 
 #[cfg(test)]
@@ -108,6 +110,8 @@ pub struct Config {
     pub upstream: UpstreamConfig,
     /// Database connection settings.
     pub database: DatabaseConfig,
+    /// Explicit local or shared gateway authority. A database URL does not opt in.
+    pub gateway_state: gateway_state::GatewayStateConfig,
     /// Generic evaluation exchange authorities and admission scopes.
     pub eval: EvalConfig,
     /// Durable trajectory progress-control and local operations settings.
@@ -169,6 +173,7 @@ impl Default for Config {
             chat: ChatConfig::default(),
             upstream: UpstreamConfig::default(),
             database: DatabaseConfig::default(),
+            gateway_state: gateway_state::GatewayStateConfig::default(),
             eval: EvalConfig::default(),
             trajectory: TrajectoryConfig::default(),
             acp_recording: AcpRecordingConfig::default(),
@@ -1785,9 +1790,18 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let substituted = substitute_with(yaml, lookup)?;
-    let mut config: Config = serde_saphyr::from_str(&substituted)
+    parse_resolved(&substituted)
+}
+
+/// Validate an already resolved document without interpreting environment references
+/// again. Shared publications must not depend on a joining worker's environment.
+pub(crate) fn parse_resolved(document: &str) -> Result<Config> {
+    let mut config: Config = serde_saphyr::from_str(document)
         .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
     resolve_derivations(&mut config)?;
+    config
+        .gateway_state
+        .validate(&config.database.url, config.server.skip_auth)?;
     config.validate_router_config()?;
     validate_trajectory_config(&config.trajectory)?;
     validate_continuation_config(&config.continuation)?;

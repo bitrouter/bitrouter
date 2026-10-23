@@ -7,6 +7,9 @@ use reqwest::header::HeaderMap;
 ///
 /// Callers may inspect authentication challenges and retry hints, but the SDK
 /// never retries a request automatically. Debug output excludes headers/body.
+/// Shared gateway calls also retain a successful HTTP status here when response
+/// validation or reading fails. Inspect `body_error`; execution may have started,
+/// and the headers can still contain its durable or candidate identity.
 pub struct ServiceFailure<Body = GatewayErrorEnvelope> {
     pub status: u16,
     pub headers: HeaderMap,
@@ -47,6 +50,15 @@ pub enum Error {
     Harness(Box<ServiceFailure<bitrouter_ai::harness::api::ErrorResponse>>),
     #[error("harness observation failed; execution may still be running")]
     HarnessObservation(Box<ServiceFailure<bitrouter_ai::harness::api::ObservationError>>),
+    #[error("shared operator request rejected ({0:?})")]
+    OperatorRejected(bitrouter_ai::gateway::operator::ErrorCode),
+    #[error("operator outcome is unknown; query operation {operation_id} before retrying")]
+    OperatorUnknown {
+        /// The only retained mutation input; secret-bearing commands are never stored here.
+        operation_id: String,
+        #[source]
+        source: Box<Error>,
+    },
     #[cfg(feature = "core")]
     #[error("core channel failed: {0}; execution may still be running")]
     CoreChannel(&'static str),

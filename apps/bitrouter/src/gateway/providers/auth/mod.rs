@@ -278,6 +278,11 @@ pub struct AppliedAuth {
     // Transient commitment to this exact authentication, separate from stable
     // principal identity so an OAuth refresh can retain the same principal.
     wire_authentication: Option<[u8; 32]>,
+    #[cfg(feature = "multi-instance")]
+    shared_credential: Option<(
+        crate::gateway::shared::credentials::CredentialStamp,
+        [u8; 32],
+    )>,
 }
 
 impl AppliedAuth {
@@ -286,6 +291,8 @@ impl AppliedAuth {
         let continuation_authority = request_effective_auth_scheme(&request)
             .map(|scheme| ContinuationAuthority::new(authority, scheme));
         Self {
+            #[cfg(feature = "multi-instance")]
+            shared_credential: None,
             wire_authentication: continuation_authority
                 .as_ref()
                 .map(|_| wire_authentication_digest(&request)),
@@ -304,6 +311,8 @@ impl AppliedAuth {
             == Some(effective_scheme))
         .then(|| ContinuationAuthority::new(authority, effective_scheme));
         Self {
+            #[cfg(feature = "multi-instance")]
+            shared_credential: None,
             wire_authentication: continuation_authority
                 .as_ref()
                 .map(|_| wire_authentication_digest(&request)),
@@ -319,7 +328,39 @@ impl AppliedAuth {
             request,
             continuation_authority: None,
             wire_authentication: None,
+            #[cfg(feature = "multi-instance")]
+            shared_credential: None,
         }
+    }
+
+    /// Attach the exact shared credential after its transaction has released.
+    /// This is independent of whether the provider proves continuation identity.
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn bind_shared_credential(
+        mut self,
+        stamp: crate::gateway::shared::credentials::CredentialStamp,
+    ) -> Self {
+        self.shared_credential = Some((stamp, wire_authentication_digest(&self.request)));
+        self
+    }
+
+    /// A changed destination, credential or account scope must fail before send,
+    /// rather than silently losing the shared resource reservation binding.
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn shared_credential(
+        &self,
+    ) -> Result<Option<crate::gateway::shared::credentials::CredentialStamp>> {
+        self.shared_credential
+            .as_ref()
+            .map(|(stamp, digest)| {
+                if *digest != wire_authentication_digest(&self.request) {
+                    return Err(ModelError::CredentialStorage {
+                        failure: store::StoreError::Conflict,
+                    });
+                }
+                Ok(stamp.clone())
+            })
+            .transpose()
     }
 
     /// Discard continuation proof metadata and recover the authenticated request.
@@ -397,6 +438,12 @@ impl std::fmt::Debug for AppliedAuth {
 /// exchanges) — the executor awaits the result before sending.
 #[async_trait]
 pub trait AuthApplier: Send + Sync {
+    /// Whether this provider requires an upstream SSE request even when the
+    /// downstream caller requested one JSON result.
+    fn requires_streaming(&self, _target: &ModelTarget) -> bool {
+        false
+    }
+
     /// Whether provider body/auth shaping preserves a requested output-token
     /// limit. Unknown remains `None`; managed execution also checks the final
     /// wire body before sending it.

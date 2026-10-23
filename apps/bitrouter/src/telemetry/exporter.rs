@@ -35,7 +35,7 @@
 //! `Mutex<HashMap>`. The previous draft held a process-wide mutex across every
 //! stream part on the hot path.
 
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -148,12 +148,33 @@ pub struct OtelExporter {
     /// Maximum time to keep a span before automatic cleanup.
     span_timeout: Duration,
 
-    /// Idempotency guard for [`shutdown`](Self::shutdown). The OTel SDK's
-    /// `TracerProvider`/`SdkMeterProvider` panic on a double `shutdown()`,
-    /// and the implicit Drop after an explicit shutdown would do exactly
-    /// that. `Once` makes the call cheap and safe to invoke from both the
-    /// graceful path and any belt-and-braces Drop hook later.
-    shutdown_once: Once,
+    /// Cache the original shutdown result; repeated calls never turn an earlier
+    /// failure into a successful teardown or start another SDK shutdown.
+    shutdown_once: OnceLock<ShutdownReport>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ProviderShutdown {
+    pub flush_failed: bool,
+    pub shutdown_failed: bool,
+}
+
+impl ProviderShutdown {
+    fn is_clean(self) -> bool {
+        !self.flush_failed && !self.shutdown_failed
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ShutdownReport {
+    traces: ProviderShutdown,
+    metrics: Option<ProviderShutdown>,
+}
+
+impl ShutdownReport {
+    pub(crate) fn is_clean(self) -> bool {
+        self.traces.is_clean() && self.metrics.is_none_or(ProviderShutdown::is_clean)
+    }
 }
 
 impl OtelExporter {
@@ -169,27 +190,71 @@ impl OtelExporter {
     /// The bearer is HTTP-only — under the gRPC transport it is ignored (see
     /// `crate::telemetry::transport`).
     pub fn new(
-        mut config: OtelConfig,
+        config: OtelConfig,
         bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        config = config.with_env_overrides();
+        let config = config.with_env_overrides();
 
         // Install the W3C TraceContext propagator so inbound `traceparent`
         // can actually be extracted. Without this, `get_text_map_propagator`
         // returns a no-op and propagation is silently dropped.
         global::set_text_map_propagator(TraceContextPropagator::new());
 
+        Self::build(config, bearer, ProcessorRuntime::new)
+    }
+
+    #[cfg(feature = "multi-instance")]
+    pub(super) fn new_owned(
+        config: OtelConfig,
+        workers: Arc<super::owned::Workers>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::build(config, None, || ProcessorRuntime::owned(workers.clone()))
+    }
+
+    fn build(
+        config: OtelConfig,
+        bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>>,
+        runtime: impl Fn() -> ProcessorRuntime,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        // Tokio's bounded channel panics outside this range. Validate before
+        // either SDK processor starts: unwinding a partially built provider
+        // can synchronously wait on its worker on the same runtime thread.
+        // https://docs.rs/tokio/latest/tokio/sync/mpsc/fn.channel.html#panics
+        if !(1..=tokio::sync::Semaphore::MAX_PERMITS).contains(&config.traces.batch.max_queue_size)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "OpenTelemetry trace queue capacity is outside the supported range",
+            )
+            .into());
+        }
         let resource = build_resource(&config);
 
         // Transport (OTLP/HTTP vs OTLP/gRPC) is chosen at compile time by the
         // crate's feature flags — see `crate::telemetry::transport`.
         let span_exporter = crate::telemetry::transport::span_exporter(&config, bearer)?;
 
+        // All fallible transport construction precedes the trace processor.
+        // Metrics construction has no fallible steps after its reader starts.
+        // An invalid metrics transport must not orphan a running trace worker.
+        let api_key_limiter = Arc::new(CardinalityLimiter::new(config.metrics.api_key_id_cap));
+        let user_id_limiter = Arc::new(CardinalityLimiter::new(config.metrics.user_id_cap));
+        let metrics = if config.metrics.enabled {
+            Some(crate::telemetry::metrics::OtelMetrics::new(
+                &config,
+                resource.clone(),
+                Arc::clone(&api_key_limiter),
+                Arc::clone(&user_id_limiter),
+                runtime(),
+            )?)
+        } else {
+            None
+        };
         let batch_config = BatchConfigBuilder::default()
             .with_max_queue_size(config.traces.batch.max_queue_size)
             .with_scheduled_delay(Duration::from_millis(config.traces.batch.flush_ms))
             .build();
-        let processor = BatchSpanProcessor::builder(span_exporter, ProcessorRuntime::new())
+        let processor = BatchSpanProcessor::builder(span_exporter, runtime())
             .with_batch_config(batch_config)
             .build();
 
@@ -215,20 +280,6 @@ impl OtelExporter {
             .build();
         let tracer = provider.tracer_with_scope(scope);
 
-        let api_key_limiter = Arc::new(CardinalityLimiter::new(config.metrics.api_key_id_cap));
-        let user_id_limiter = Arc::new(CardinalityLimiter::new(config.metrics.user_id_cap));
-
-        let metrics = if config.metrics.enabled {
-            Some(crate::telemetry::metrics::OtelMetrics::new(
-                &config,
-                resource,
-                Arc::clone(&api_key_limiter),
-                Arc::clone(&user_id_limiter),
-            )?)
-        } else {
-            None
-        };
-
         Ok(Self {
             tracer,
             provider,
@@ -238,7 +289,7 @@ impl OtelExporter {
             user_id_limiter,
             active_spans: Arc::new(DashMap::new()),
             span_timeout: Duration::from_secs(300),
-            shutdown_once: Once::new(),
+            shutdown_once: OnceLock::new(),
         })
     }
 
@@ -281,17 +332,26 @@ impl OtelExporter {
     /// flush and shutdown messages, so the `OtelObserveHook` adapter wraps this
     /// method in `spawn_blocking` for the async path.
     ///
-    /// Idempotent: subsequent calls are no‑ops. The SDK itself panics
-    /// on double-shutdown; the `Once` guard makes "shutdown then Drop"
-    /// safe.
+    /// Idempotent: subsequent calls reuse the original outcome and do not start
+    /// another SDK shutdown. Failures are logged and remain recorded.
     pub fn shutdown(&self) {
-        self.shutdown_once.call_once(|| {
-            let _ = self.provider.force_flush();
-            let _ = self.provider.shutdown();
-            if let Some(m) = &self.metrics {
-                m.shutdown();
-            }
-        });
+        let report = self.shutdown_recorded(true);
+        if !report.is_clean() {
+            tracing::warn!(?report, "OpenTelemetry shutdown reported a failure");
+        }
+    }
+
+    pub(crate) fn shutdown_recorded(&self, flush: bool) -> ShutdownReport {
+        *self.shutdown_once.get_or_init(|| {
+            // Always request shutdown, even when an explicit flush failed.
+            // https://docs.rs/opentelemetry_sdk/0.32.1/opentelemetry_sdk/trace/struct.SdkTracerProvider.html
+            let traces = ProviderShutdown {
+                flush_failed: flush && self.provider.force_flush().is_err(),
+                shutdown_failed: self.provider.shutdown().is_err(),
+            };
+            let metrics = self.metrics.as_ref().map(|metrics| metrics.shutdown(flush));
+            ShutdownReport { traces, metrics }
+        })
     }
 
     fn gc_expired_spans(&self) {
@@ -1509,7 +1569,7 @@ mod hop_tests {
             user_id_limiter: Arc::new(CardinalityLimiter::new(100)),
             active_spans: Arc::new(DashMap::new()),
             span_timeout: Duration::from_secs(300),
-            shutdown_once: Once::new(),
+            shutdown_once: OnceLock::new(),
         };
         (exporter, captured)
     }

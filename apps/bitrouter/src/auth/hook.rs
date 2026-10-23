@@ -160,6 +160,13 @@ fn embedding_caller(ctx: &PipelineContext) -> bool {
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn revalidate_context(&self, ctx: &PipelineContext) -> Result<HookDecision> {
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) =
+            ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+        {
+            admission.revalidate(ctx).await?;
+            return Ok(HookDecision::Allow);
+        }
         if embedding_caller(ctx) {
             // Managed callers remain under their embedding controller's live
             // authorization gate; content removal cannot establish a new caller.
@@ -197,6 +204,13 @@ impl PreRequestHook for AuthHook {
     }
 
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        #[cfg(feature = "multi-instance")]
+        if let Some(admission) =
+            ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+        {
+            admission.establish(ctx).await?;
+            return Ok(HookDecision::Allow);
+        }
         // The native App entry has only optional trace headers and receives a caller only
         // after the embedding task adapter established its own authority.
         // HTTP ingress instead starts anonymous or local, and ordinary MCP

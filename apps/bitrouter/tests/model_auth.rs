@@ -357,3 +357,260 @@ async fn fallback_is_used_only_for_absent_slot_and_never_hides_stored_auth_failu
     }
     Ok(())
 }
+
+// Models a durable lease: dropping a transaction does not release shared state.
+struct ReadLeaseStore {
+    credential: Option<Credential>,
+    leased: Arc<AtomicBool>,
+    releases: Arc<AtomicUsize>,
+    fail_release: bool,
+}
+
+impl ReadLeaseStore {
+    fn new(credential: Option<Credential>, fail_release: bool) -> Arc<Self> {
+        Arc::new(Self {
+            credential,
+            leased: Arc::new(AtomicBool::new(false)),
+            releases: Arc::new(AtomicUsize::new(0)),
+            fail_release,
+        })
+    }
+}
+
+struct ReadLease {
+    credential: Option<Credential>,
+    pending: Option<Credential>,
+    leased: Arc<AtomicBool>,
+    releases: Arc<AtomicUsize>,
+    fail_release: bool,
+}
+
+#[async_trait]
+impl CredentialStore for ReadLeaseStore {
+    async fn begin(
+        &self,
+        _key: &CredentialKey,
+    ) -> Result<Box<dyn CredentialTransaction>, StoreError> {
+        self.leased
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| StoreError::Conflict)?;
+        Ok(Box::new(ReadLease {
+            credential: self.credential.clone(),
+            pending: None,
+            leased: self.leased.clone(),
+            releases: self.releases.clone(),
+            fail_release: self.fail_release,
+        }))
+    }
+}
+
+#[async_trait]
+impl CredentialTransaction for ReadLease {
+    fn credential(&self) -> Option<&Credential> {
+        self.credential.as_ref()
+    }
+    fn pending(&self) -> Option<&Credential> {
+        self.pending.as_ref()
+    }
+    fn stage(&mut self, credential: Credential) {
+        self.pending = Some(credential);
+    }
+    async fn commit(&mut self) -> Result<Durability, StoreError> {
+        Err(StoreError::Conflict)
+    }
+    async fn release(&mut self) -> Result<(), StoreError> {
+        if self.fail_release {
+            return Err(StoreError::Unavailable);
+        }
+        self.leased.store(false, Ordering::SeqCst);
+        self.releases.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+fn read_lease_target(provider: &str) -> bitrouter::gateway::model::target::ModelTarget {
+    bitrouter::gateway::model::target::ModelTarget {
+        provider_name: provider.into(),
+        service_id: "fixture-model".into(),
+        api_base: "https://example.invalid".into(),
+        api_key: String::new(),
+        credential_priority: Default::default(),
+        account_label: Some("selected".into()),
+        api_protocol: bitrouter_ai::types::ApiProtocol::ChatCompletions,
+        auth_scheme: Default::default(),
+        compatibility: Default::default(),
+    }
+}
+
+#[tokio::test]
+async fn anthropic_releases_read_leases_on_success_and_invalid_credentials() -> TestResult {
+    use bitrouter::gateway::providers::anthropic::AnthropicApiKeyApplier;
+    use bitrouter::gateway::providers::auth::AuthApplier;
+    for credential in [
+        Some(Credential::ApiKey {
+            value: "selected-api-key".into(),
+        }),
+        Some(Credential::Oauth(replacement())),
+        None,
+    ] {
+        let valid = matches!(credential, Some(Credential::ApiKey { .. }));
+        let store = ReadLeaseStore::new(credential, false);
+        let applier = AnthropicApiKeyApplier::new(store.clone());
+        for _ in 0..2 {
+            let request = reqwest::Request::new(
+                reqwest::Method::POST,
+                "https://example.invalid/messages".parse()?,
+            );
+            let applied = applier
+                .apply(request, &read_lease_target("anthropic"))
+                .await;
+            if valid {
+                assert_eq!(applied?.headers()["x-api-key"], "selected-api-key");
+            } else {
+                assert!(matches!(
+                    applied,
+                    Err(ModelError::Provider { status: 401, .. })
+                ));
+            }
+        }
+        assert_eq!(store.releases.load(Ordering::SeqCst), 2);
+        assert!(!store.leased.load(Ordering::SeqCst));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn anthropic_does_not_expose_auth_when_read_lease_release_fails() -> TestResult {
+    use bitrouter::gateway::providers::anthropic::AnthropicApiKeyApplier;
+    use bitrouter::gateway::providers::auth::AuthApplier;
+    let store = ReadLeaseStore::new(
+        Some(Credential::ApiKey {
+            value: "selected-api-key".into(),
+        }),
+        true,
+    );
+    let applier = AnthropicApiKeyApplier::new(store.clone());
+    let request = reqwest::Request::new(
+        reqwest::Method::POST,
+        "https://example.invalid/messages".parse()?,
+    );
+    assert!(matches!(
+        applier
+            .apply(request, &read_lease_target("anthropic"))
+            .await,
+        Err(ModelError::CredentialStorage {
+            failure: StoreError::Unavailable
+        })
+    ));
+    assert_eq!(store.releases.load(Ordering::SeqCst), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn copilot_releases_read_leases_after_exchange_cache_hit_and_failure() -> TestResult {
+    use bitrouter::gateway::providers::copilot::CopilotAuthApplier;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    for status in [200, 500] {
+        let server = MockServer::start().await;
+        let expires = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs()
+            + 3600;
+        Mock::given(method("GET"))
+            .and(path("/exchange"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(
+                serde_json::json!({"token":"ephemeral-token", "expires_at":expires}),
+            ))
+            .expect(if status == 200 { 1 } else { 2 })
+            .mount(&server)
+            .await;
+        let store = ReadLeaseStore::new(Some(Credential::Oauth(replacement())), false);
+        let applier = CopilotAuthApplier::new(
+            reqwest::Client::builder().timeout(DEADLINE).build()?,
+            format!("{}/exchange", server.uri()),
+            store.clone(),
+        );
+        for _ in 0..2 {
+            let auth = applier
+                .obtain_copilot_token(&read_lease_target("github-copilot"))
+                .await;
+            if status == 200 {
+                assert_eq!(auth?.token, "ephemeral-token");
+            } else {
+                assert!(matches!(
+                    auth,
+                    Err(ModelError::Provider { status: 502, .. })
+                ));
+            }
+        }
+        assert_eq!(store.releases.load(Ordering::SeqCst), 2);
+        assert!(!store.leased.load(Ordering::SeqCst));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn copilot_releases_invalid_credentials_without_attempting_exchange() -> TestResult {
+    use bitrouter::gateway::providers::copilot::CopilotAuthApplier;
+    let store = ReadLeaseStore::new(
+        Some(Credential::ApiKey {
+            value: "wrong-kind".into(),
+        }),
+        false,
+    );
+    let applier = CopilotAuthApplier::new(
+        reqwest::Client::builder().timeout(DEADLINE).build()?,
+        "http://127.0.0.1:1/exchange",
+        store.clone(),
+    );
+    for _ in 0..2 {
+        assert!(matches!(
+            applier
+                .obtain_copilot_token(&read_lease_target("github-copilot"))
+                .await,
+            Err(ModelError::Provider { status: 401, .. })
+        ));
+    }
+    assert_eq!(store.releases.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn copilot_does_not_expose_cached_auth_when_read_lease_release_fails() -> TestResult {
+    use bitrouter::gateway::providers::copilot::CopilotAuthApplier;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    let expires = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs()
+        + 3600;
+    Mock::given(method("GET"))
+        .and(path("/exchange"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"token":"ephemeral-token", "expires_at":expires}),
+            ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let store = ReadLeaseStore::new(Some(Credential::Oauth(replacement())), true);
+    let applier = CopilotAuthApplier::new(
+        reqwest::Client::builder().timeout(DEADLINE).build()?,
+        format!("{}/exchange", server.uri()),
+        store.clone(),
+    );
+    assert!(matches!(
+        applier
+            .obtain_copilot_token(&read_lease_target("github-copilot"))
+            .await,
+        Err(ModelError::CredentialStorage {
+            failure: StoreError::Unavailable
+        })
+    ));
+    assert_eq!(store.releases.load(Ordering::SeqCst), 0);
+    assert!(store.leased.load(Ordering::SeqCst));
+    Ok(())
+}

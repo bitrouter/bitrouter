@@ -32,10 +32,21 @@ pub(crate) async fn inspect(
             "request body exceeds inference limit",
         )
     })?;
-    let managed = serde_json::from_slice::<serde_json::Value>(&bytes).is_ok_and(|body| {
-        body.get("bitrouter").is_some() || body["multi_agent"]["enabled"] == true
-    });
+    let managed =
+        serde_json::from_slice::<serde_json::Value>(&bytes).is_ok_and(|body| is_managed(&body));
     Ok((bytes, managed))
+}
+
+pub(crate) fn is_managed(body: &serde_json::Value) -> bool {
+    body.get("bitrouter").is_some() || body["multi_agent"]["enabled"] == true
+}
+
+#[cfg(any(not(feature = "core"), feature = "multi-instance", test))]
+pub(crate) fn unavailable() -> axum::response::Response {
+    failure(CoreError::rejected(
+        ErrorCode::UnsupportedCapability,
+        "managed Responses execution is unavailable in this gateway",
+    ))
 }
 
 #[cfg(any(not(feature = "core"), test))]
@@ -55,12 +66,6 @@ async fn reject(
     if request.method() != http::Method::POST || request.uri().path() != "/v1/responses" {
         return next.run(request).await;
     }
-    let unavailable = || {
-        failure(CoreError::rejected(
-            ErrorCode::UnsupportedCapability,
-            "managed Responses execution is unavailable in this build",
-        ))
-    };
     if request.headers().contains_key("bitrouter-beta") {
         return unavailable();
     }
@@ -75,7 +80,7 @@ async fn reject(
     }
 }
 
-#[cfg(any(not(feature = "core"), test))]
+#[cfg(any(not(feature = "core"), feature = "multi-instance", test))]
 fn failure(error: CoreError) -> axum::response::Response {
     use axum::response::IntoResponse;
     let status = match error.code {

@@ -644,6 +644,12 @@ cargo test --workspace --all-features
 
 CI additionally runs `doc` (rustdoc under `-D warnings`), `doctest`, `feature-isolation` (the SDK's default tree stays free of axum, the OTel stack never reaches the SDK at any feature combination, and the two OTLP transports stay isolated), `sdk-public-api` (see below), and `msrv` (pinned to Rust 1.93). AI agents should also read [`CLAUDE.md`](../CLAUDE.md).
 
+### Shared gateway distribution
+
+The `gateway-shared` profile has a separate archive identity and runs the
+existing PostgreSQL process campaigns against the unpacked official binary.
+See [build and validation instructions](SHARED_GATEWAY_DISTRIBUTION.md).
+
 ### Database backend regression
 
 `database_backends` exercises migrations and gateway persistence through the

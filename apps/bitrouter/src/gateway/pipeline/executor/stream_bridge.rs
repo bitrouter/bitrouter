@@ -266,11 +266,12 @@ impl HttpExecutor {
         let (client, _) = self.client_for(
             target,
             ctx.extension::<super::super::native::NativeManagedRequest>()
-                .is_some(),
+                .is_some()
+                || super::shared::has_admission(ctx),
         );
 
         let mut attempted_auth_refresh = false;
-        let response = loop {
+        let (response, mut shared_attempt) = loop {
             let mut body =
                 self.render_execution_request(adapter.as_ref(), target, prompt, ctx, true)?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
@@ -306,6 +307,8 @@ impl HttpExecutor {
                 .build_authenticated_request(&request_input)
                 .await
                 .map_err(|error| error_scrubber.scrub_error(error))?;
+            let mut shared_attempt =
+                super::shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
             let (request, authority) = applied.into_parts();
             if let Some(capture) = &capture {
                 capture.authenticated(&request, authority, prompt)?;
@@ -336,8 +339,9 @@ impl HttpExecutor {
                 if let Some(capture) = &capture {
                     capture.source().scrubber = Some(error_scrubber.clone());
                 }
-                break response;
+                break (response, shared_attempt);
             }
+            shared_attempt.rejected(status.as_u16()).await?;
             let text = response_body::read(response, ctx)
                 .await
                 .map_err(|error| error_scrubber.scrub_error(error))?;
@@ -370,6 +374,10 @@ impl HttpExecutor {
         let stream = async_stream::stream! {
             use eventsource_stream::Eventsource;
             let mut terminal = false;
+            // Shared delivery cannot expose a successful terminal before its
+            // accounting fact commits. Retain only this one bounded part while
+            // accepting a provider's trailing usage report and validating EOF.
+            let mut held_terminal = None;
             let events = byte_stream.eventsource();
             futures::pin_mut!(events);
             while let Some(event) = events.next().await {
@@ -381,6 +389,13 @@ impl HttpExecutor {
                         };
                         match decoder.decode(&sse) {
                             Ok(parts) => {
+                                if let Err(error) = shared_attempt.observe_batch(&parts, held_terminal.is_some()) {
+                                    yield Err(error);
+                                    return;
+                                }
+                                if let Some(part) = decoder.pending_terminal() {
+                                    shared_attempt.observe(&part);
+                                }
                                 if let Some(capture) = &capture
                                     && let Err(error) = capture.terminal(&sse) {
                                     yield Err(error_scrubber.scrub_error(error));
@@ -388,17 +403,25 @@ impl HttpExecutor {
                                 }
                                 for p in parts {
                                     terminal |= p.is_terminal();
+                                    if shared_attempt.is_shared() && p.is_terminal() { held_terminal = Some(p); continue; }
                                     yield Ok(p);
                                 }
                             }
                             Err(e) => {
-                                let mut error = classify_stream_decoder_error(e);
-                                // Match direct AI calls: retain independently valid usage
-                                // even when the rest of a Chat event cannot be decoded.
-                                if protocol == ApiProtocol::ChatCompletions
-                                    && let Ok(chunk) = serde_json::from_str::<serde_json::Value>(&sse.data)
-                                    && let Some(reported) = chunk.get("usage").and_then(crate::gateway::model::protocol::chat_completions::parse_usage)
+                                // Retain valid counts from this same event before
+                                // persisting its failure or yielding to a caller.
+                                let reported = error_event_usage(&protocol, &sse, &e);
+                                if let Some(usage) = &reported {
+                                    shared_attempt.observe(&StreamPart::Usage { usage: usage.clone() });
+                                }
+                                if matches!(&e, crate::gateway::model::error::ModelError::Provider { .. } | crate::gateway::model::error::ModelError::PolicyViolation { .. })
+                                    && let Err(error) = shared_attempt.failed_stream().await
                                 {
+                                    yield Err(error);
+                                    return;
+                                }
+                                let mut error = classify_stream_decoder_error(e);
+                                if let Some(reported) = reported {
                                     yield Ok(StreamPart::Usage { usage: reported.clone() });
                                     if let BitrouterError::UpstreamInvalidResponse { usage, .. } = &mut error { *usage = Some(Box::new(reported)); }
                                 }
@@ -422,8 +445,13 @@ impl HttpExecutor {
             }
             match decoder.finish() {
                 Ok(parts) => {
+                    if let Err(error) = shared_attempt.observe_batch(&parts, held_terminal.is_some()) {
+                        yield Err(error);
+                        return;
+                    }
                     for p in parts {
                         terminal |= p.is_terminal();
+                        if shared_attempt.is_shared() && p.is_terminal() { held_terminal = Some(p); continue; }
                         yield Ok(p);
                     }
                 }
@@ -434,12 +462,46 @@ impl HttpExecutor {
             }
             if !terminal {
                 yield Err(BitrouterError::UpstreamInvalidResponse { message: "upstream stream ended without a model terminal part".into(), usage: None });
+                return;
             }
+            if let Err(error) = shared_attempt.finish_stream().await { yield Err(error); return; }
+            if let Some(part) = held_terminal { yield Ok(part); }
         };
 
         Ok(Box::pin(
             crate::gateway::providers::google_chat::bind_stream(stream, target.model_target()),
         ))
+    }
+}
+
+fn error_event_usage(
+    protocol: &ApiProtocol,
+    event: &SseEvent,
+    error: &crate::gateway::model::error::ModelError,
+) -> Option<bitrouter_ai::types::Usage> {
+    use crate::gateway::model::error::ModelError;
+    use crate::gateway::model::protocol::{chat_completions, responses};
+    let body: serde_json::Value = serde_json::from_str(&event.data).ok()?;
+    match protocol {
+        ApiProtocol::ChatCompletions => body.get("usage").and_then(chat_completions::parse_usage),
+        ApiProtocol::Responses
+            if matches!(
+                error,
+                ModelError::Provider { .. } | ModelError::PolicyViolation { .. }
+            ) && body
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .or(event.event.as_deref())
+                == Some("response.failed") =>
+        {
+            // Only this decoder path has validated failure identity and status.
+            // InvalidResponse (including rejected post-terminal data) must not
+            // overwrite usage from the response already observed.
+            body.get("response")?
+                .get("usage")
+                .and_then(responses::parse_usage)
+        }
+        _ => None,
     }
 }
 

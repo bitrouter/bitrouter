@@ -10,8 +10,16 @@ use crate::gateway::error::Result;
 use crate::gateway::pipeline::native::NativeResponseByteLimit;
 
 pub(super) fn limit(ctx: &PipelineContext) -> Option<u64> {
-    ctx.extension::<NativeResponseByteLimit>()
-        .map(|limit| limit.0)
+    let configured = ctx
+        .extension::<NativeResponseByteLimit>()
+        .map(|limit| limit.0);
+    if super::shared::has_admission(ctx) {
+        // A shared execution owns bounded ingress even without a native-core
+        // controller. Any narrower request bound continues to apply.
+        Some(configured.unwrap_or(u64::MAX).min(16 * 1024 * 1024))
+    } else {
+        configured
+    }
 }
 
 fn exceeded() -> BitrouterError {

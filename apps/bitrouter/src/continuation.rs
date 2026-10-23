@@ -1,6 +1,13 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
 pub mod native_context;
+#[cfg(feature = "multi-instance")]
+pub(crate) mod owned;
+#[cfg(all(test, feature = "multi-instance"))]
+#[path = "continuation/tests_owned.rs"]
+mod owned_tests;
+#[cfg(feature = "multi-instance")]
+mod shared;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -263,8 +270,10 @@ pub struct ResolvedContinuation {
     /// provider-default treatment.
     pub effort_authoritative: bool,
     pub causal_prefix_commitment: Option<CausalPrefixCommitment>,
-    target_fingerprint: String,
+    target_fingerprint: Box<str>,
     key: ContinuationKey,
+    #[cfg(feature = "multi-instance")]
+    target_namespace: Option<Box<str>>,
 }
 
 impl std::fmt::Debug for ResolvedContinuation {
@@ -288,7 +297,22 @@ impl ResolvedContinuation {
         target: &RoutingTarget,
         credential_authority: &ContinuationAuthority,
     ) -> Result<bool> {
-        Ok(self.key.target_fingerprint(target, credential_authority)? == self.target_fingerprint)
+        #[cfg(feature = "multi-instance")]
+        if let Some(namespace) = &self.target_namespace {
+            return Ok(shared::target_fingerprint(
+                &self.key,
+                namespace,
+                target,
+                credential_authority,
+            )?
+            .as_str()
+                == self.target_fingerprint.as_ref());
+        }
+        Ok(self
+            .key
+            .target_fingerprint(target, credential_authority)?
+            .as_str()
+            == self.target_fingerprint.as_ref())
     }
 }
 
@@ -306,6 +330,8 @@ pub struct ContinuationRegistry {
 }
 
 struct ContinuationRegistryInner {
+    #[cfg(feature = "multi-instance")]
+    shared: Option<shared::registry::Registry>,
     db: DatabaseConnection,
     keys: ContinuationKeySource,
     retention: TimeDelta,
@@ -335,6 +361,8 @@ struct ReconcilerControl {
     task: Mutex<Option<ReconcilerTask>>,
     pending_cursor: Mutex<Option<u64>>,
     stale_offset: Mutex<u64>,
+    #[cfg(feature = "multi-instance")]
+    owned: Option<owned::Control>,
 }
 
 struct ReconcilerTask {
@@ -490,6 +518,8 @@ impl ContinuationRegistry {
             u64::try_from(prune_batch_size).context("continuation prune_batch_size exceeds u64")?;
         Ok(Self {
             inner: Arc::new(ContinuationRegistryInner {
+                #[cfg(feature = "multi-instance")]
+                shared: None,
                 db,
                 keys,
                 retention,
@@ -503,6 +533,8 @@ impl ContinuationRegistry {
                     task: Mutex::new(None),
                     pending_cursor: Mutex::new(None),
                     stale_offset: Mutex::new(0),
+                    #[cfg(feature = "multi-instance")]
+                    owned: None,
                 },
                 #[cfg(test)]
                 ambiguous_insert_fault: Arc::new(Mutex::new(None)),
@@ -587,6 +619,12 @@ impl ContinuationRegistry {
     }
 
     pub(crate) fn start_reconciler(&self) {
+        #[cfg(feature = "multi-instance")]
+        if let Some(control) = &self.inner.reconciler.owned {
+            control.start(|| self.spawn_reconciler());
+            self.inner.reconciler.notify.notify_one();
+            return;
+        }
         let mut task = match self.inner.reconciler.task.lock() {
             Ok(task) => task,
             Err(poisoned) => poisoned.into_inner(),
@@ -599,6 +637,10 @@ impl ContinuationRegistry {
             return;
         }
         let _ = task.take();
+        *task = Some(self.spawn_reconciler());
+    }
+
+    fn spawn_reconciler(&self) -> ReconcilerTask {
         let cancelled = Arc::new(AtomicBool::new(false));
         let task_cancelled = cancelled.clone();
         let notify = self.inner.reconciler.notify.clone();
@@ -632,10 +674,15 @@ impl ContinuationRegistry {
                 }
             }
         });
-        *task = Some(ReconcilerTask { cancelled, handle });
+        ReconcilerTask { cancelled, handle }
     }
 
     async fn stop_reconciler(&self) -> Result<()> {
+        #[cfg(feature = "multi-instance")]
+        anyhow::ensure!(
+            self.inner.reconciler.owned.is_none(),
+            "shared continuation requires its owned lifecycle drain"
+        );
         let shutdown_deadline = tokio::time::Instant::now() + RECONCILIATION_SHUTDOWN_GRACE;
         let task = {
             let mut task = match self.inner.reconciler.task.lock() {
@@ -696,6 +743,10 @@ impl ContinuationRegistry {
     }
 
     async fn reconcile_pass(&self, now: DateTime<Utc>) -> bool {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_reconcile().await;
+        }
         let mut had_error = self.reconcile_local_publications(now).await;
         if self.reconcile_stale_publications(now).await {
             had_error = true;
@@ -704,6 +755,10 @@ impl ContinuationRegistry {
     }
 
     async fn reconcile_local_publications(&self, now: DateTime<Utc>) -> bool {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_reconcile_pending().await;
+        }
         let pending = {
             let publications = match self.inner.pending_publications.lock() {
                 Ok(publications) => publications,
@@ -798,6 +853,11 @@ impl ContinuationRegistry {
     }
 
     fn mark_pending_for_shutdown_reconciliation(&self) {
+        #[cfg(feature = "multi-instance")]
+        if let Some(shared) = &self.inner.shared {
+            shared.stop_accepting();
+            return;
+        }
         let mut publications = match self.inner.pending_publications.lock() {
             Ok(publications) => publications,
             Err(poisoned) => poisoned.into_inner(),
@@ -974,6 +1034,10 @@ impl ContinuationRegistry {
         delivery_attempt_id: u64,
         receipt: Option<&RequiredFinalizationReceipt>,
     ) -> Result<()> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_rollback(delivery_attempt_id, receipt).await;
+        }
         let publication = self.pending_publication(delivery_attempt_id, receipt);
         let Some(publication) = publication else {
             return Ok(());
@@ -1103,6 +1167,10 @@ impl ContinuationRegistry {
     }
 
     fn has_pending_publications(&self) -> bool {
+        #[cfg(feature = "multi-instance")]
+        if let Some(shared) = &self.inner.shared {
+            return shared.markers().total > 0;
+        }
         let publications = match self.inner.pending_publications.lock() {
             Ok(publications) => publications,
             Err(poisoned) => poisoned.into_inner(),
@@ -1294,6 +1362,12 @@ impl ContinuationRegistry {
         receipt: Option<&RequiredFinalizationReceipt>,
         delivery: &RequiredDeliveryHandshake,
     ) -> Result<bool> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self
+                .shared_activate(delivery_attempt_id, receipt, delivery)
+                .await;
+        }
         let publication = self.pending_publication(delivery_attempt_id, receipt);
         let Some(publication) = publication else {
             // Idempotent preparation against an already-active row owns no
@@ -1491,6 +1565,23 @@ impl ContinuationRegistry {
         now: DateTime<Utc>,
     ) -> Result<()> {
         let effective_model = format!("{}:{}", target.provider_name, target.service_id);
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self
+                .shared_bind(
+                    owner_user_id,
+                    gateway_request_id,
+                    ContinuationBinding {
+                        provider_response_id,
+                        effective_model: &effective_model,
+                        effective_effort: None,
+                        causal_prefix_commitment: None,
+                        target,
+                        credential_authority,
+                    },
+                )
+                .await;
+        }
         let key = self.inner.keys.load()?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
         let identity_lock = self.pending_identity_lock(&continuation_identity);
@@ -1530,6 +1621,12 @@ impl ContinuationRegistry {
         binding: ContinuationBinding<'_>,
         attempt: PendingBindAttempt,
     ) -> Result<bool> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self
+                .shared_bind_pending(owner_user_id, gateway_request_id, binding, attempt)
+                .await;
+        }
         let PendingBindAttempt {
             now,
             delivery_attempt_id,
@@ -1805,6 +1902,10 @@ impl ContinuationRegistry {
         gateway_request_id: &str,
         now: DateTime<Utc>,
     ) -> Result<ContinuationResolution> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_resolve(owner_user_id, gateway_request_id).await;
+        }
         let key = self.inner.keys.load()?;
         self.ensure_key_epoch(&key, now).await?;
         let continuation_identity = key.continuation_identity(owner_user_id, gateway_request_id)?;
@@ -1855,13 +1956,19 @@ impl ContinuationRegistry {
                     .causal_prefix_commitment
                     .as_deref()
                     .and_then(CausalPrefixCommitment::parse),
-                target_fingerprint: row.target_fingerprint,
+                target_fingerprint: row.target_fingerprint.into_boxed_str(),
                 key,
+                #[cfg(feature = "multi-instance")]
+                target_namespace: None,
             }));
         }
     }
 
     pub async fn prune(&self, now: DateTime<Utc>) -> Result<u64> {
+        #[cfg(feature = "multi-instance")]
+        if self.inner.shared.is_some() {
+            return self.shared_prune().await;
+        }
         let now = timestamp(now);
         let expired = continuation_entity::Entity::find()
             .filter(continuation_entity::Column::ExpiresAt.lte(now.clone()))
@@ -2433,6 +2540,17 @@ impl ContinuationRuntime {
         if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
             return delivery.wait_for_delivery().await;
         }
+        #[cfg(feature = "multi-instance")]
+        if self.registry.inner.shared.is_some()
+            && (!ctx.successful_terminal
+                || !ctx.native_response_completed
+                || ctx
+                    .target
+                    .as_ref()
+                    .is_some_and(|target| target.api_protocol != ApiProtocol::Responses))
+        {
+            return delivery.wait_for_delivery().await;
+        }
         match self
             .registry
             .activate_pending(ctx.delivery_attempt_id, receipt, delivery)
@@ -2571,6 +2689,30 @@ fn publication_lease_until_for(now: DateTime<Utc>, seconds: i64) -> Result<Strin
 }
 
 fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Result<Vec<u8>> {
+    decrypt_authenticated(key, row, &row_aad(row))
+}
+
+fn row_aad(row: &continuation_entity::Model) -> Vec<u8> {
+    aead_aad([
+        &row.key_id,
+        &row.owner_identity,
+        &row.continuation_identity,
+        &row.target_fingerprint,
+        &row.created_at,
+        &row.expires_at,
+        &row.purge_after,
+        &row.publication_state,
+        &row.publication_generation,
+        &row.publication_instance_id,
+        &row.publication_lease_until,
+    ])
+}
+
+fn decrypt_authenticated(
+    key: &ContinuationKey,
+    row: &continuation_entity::Model,
+    aad: &[u8],
+) -> Result<Vec<u8>> {
     let ciphertext = row
         .ciphertext
         .as_deref()
@@ -2588,26 +2730,13 @@ fn decrypt_row(key: &ContinuationKey, row: &continuation_entity::Model) -> Resul
     let nonce: [u8; NONCE_BYTES] = nonce
         .try_into()
         .map_err(|_| anyhow::anyhow!("continuation nonce has invalid length"))?;
-    let aad = aead_aad([
-        &row.key_id,
-        &row.owner_identity,
-        &row.continuation_identity,
-        &row.target_fingerprint,
-        &row.created_at,
-        &row.expires_at,
-        &row.purge_after,
-        &row.publication_state,
-        &row.publication_generation,
-        &row.publication_instance_id,
-        &row.publication_lease_until,
-    ]);
     let unbound = UnboundKey::new(&AES_256_GCM, &key.secret)
         .map_err(|_| anyhow::anyhow!("invalid continuation encryption key"))?;
     let key = LessSafeKey::new(unbound);
     let plaintext = key
         .open_in_place(
             Nonce::assume_unique_for_key(nonce),
-            Aad::from(aad.as_slice()),
+            Aad::from(aad),
             &mut ciphertext,
         )
         .map_err(|_| anyhow::anyhow!("continuation authentication failed"))?;
@@ -2618,7 +2747,10 @@ fn decrypt_payload(
     key: &ContinuationKey,
     row: &continuation_entity::Model,
 ) -> Result<ContinuationPayload> {
-    let plaintext = decrypt_row(key, row)?;
+    decode_payload(decrypt_row(key, row)?)
+}
+
+fn decode_payload(plaintext: Vec<u8>) -> Result<ContinuationPayload> {
     let payload = if let Some(serialized) = plaintext.strip_prefix(CONTINUATION_PAYLOAD_V4_MAGIC) {
         let payload: ContinuationPayload =
             serde_json::from_slice(serialized).context("continuation v4 payload is invalid")?;
@@ -2680,7 +2812,10 @@ fn validate_effective_model(effective_model: &str) -> Result<()> {
 mod continuation_entity {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+    #[derive(
+        Clone, Debug, PartialEq, Eq, DeriveEntityModel, serde::Serialize, serde::Deserialize,
+    )]
+    #[serde(deny_unknown_fields)]
     #[sea_orm(table_name = "provider_continuations")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -2796,7 +2931,7 @@ mod tests {
         assert_eq!(legacy.pinned_effort_override(), None);
     }
 
-    fn target(api_key: &str) -> RoutingTarget {
+    pub(super) fn target(api_key: &str) -> RoutingTarget {
         RoutingTarget {
             provider_name: "openai".into(),
             service_id: "gpt-5".into(),
@@ -2817,7 +2952,7 @@ mod tests {
         }
     }
 
-    fn static_authority(api_key: &str) -> ContinuationAuthority {
+    pub(super) fn static_authority(api_key: &str) -> ContinuationAuthority {
         ContinuationAuthority::new(
             CredentialAuthority::derive("static-transport-credential", api_key),
             crate::gateway::model::target::AuthScheme::Bearer,
@@ -2834,6 +2969,8 @@ mod tests {
             causal_prefix_commitment: None,
             target_fingerprint: "fingerprint-debug-private-sentinel".into(),
             key: ContinuationKey::from_bytes([74; 32]).expect("continuation key"),
+            #[cfg(feature = "multi-instance")]
+            target_namespace: None,
         };
         let debug = format!("{resolved:?}");
 
@@ -2849,7 +2986,7 @@ mod tests {
         assert!(debug.contains("<redacted>"));
     }
 
-    async fn registry(secret: u8) -> anyhow::Result<ContinuationRegistry> {
+    pub(super) async fn registry(secret: u8) -> anyhow::Result<ContinuationRegistry> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         ContinuationRegistry::new(
@@ -2956,7 +3093,7 @@ mod tests {
         }
     }
 
-    fn pending_publication_count(registry: &ContinuationRegistry) -> usize {
+    pub(super) fn pending_publication_count(registry: &ContinuationRegistry) -> usize {
         match registry.inner.pending_publications.lock() {
             Ok(publications) => publications.len(),
             Err(poisoned) => poisoned.into_inner().len(),
@@ -3831,6 +3968,7 @@ mod tests {
             serde_json::Value::String(previous_response_id.into()),
         );
         PipelineContext::new(PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: "next-gateway".into(),
             original_model: "openai:gpt-5".into(),
             model: "openai:gpt-5".into(),
@@ -4154,7 +4292,7 @@ mod tests {
         Ok(())
     }
 
-    fn finalization_context(
+    pub(super) fn finalization_context(
         request_id: &str,
         delivery_attempt_id: u64,
         provider_response_id: &str,
@@ -7130,6 +7268,7 @@ mod tests {
             );
         }
         PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: request_id.into(),
             original_model: "gpt-5".into(),
             model: "gpt-5".into(),

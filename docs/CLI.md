@@ -11,6 +11,44 @@ and existing session-attributed spend remain available.
 SQLite needs no feature. PostgreSQL/MySQL configuration requires `db-postgres` /
 `db-mysql`; both are included in the default distribution. Reduced builds report
 an unavailable selected backend before connecting.
+The opt-in `multi-instance` feature enables a separate shared foreground path for
+`serve`: a literal `gateway_state.mode: shared` process document selects it before
+local daemon/home discovery. It requires an initialized, published PostgreSQL
+namespace and rejects managed-child/compiled-extension hosting. See the
+[shared process configuration](../skills/bitrouter/references/shared-gateway.md).
+`start` and `restart` reject shared configurations before creating local daemon
+state or contacting an existing daemon. Shared services use foreground `serve`.
+`bro shared init --config PROCESS.yaml --plan SEED.json --operator-id OPERATOR
+--operation-id ID [--global-principals]` explicitly initializes both database
+schemas and atomically seeds a new namespace. The named PostgreSQL database and
+deployment key must already exist. `--plan -` reads JSON from stdin. A seed is
+limited to 2 MiB and 64 operations including its final publication; it uses the
+configured transaction deadline. Principal creation requires the explicit global
+flag because virtual principals are database-wide. This command does not use
+named contexts, local daemon discovery or a serving incarnation. After an
+uncertain response, retain the same actor, operation ID and identical plan;
+replay returns the original receipt without overwriting later configuration.
+See the [seed contract](../skills/bitrouter/references/shared-gateway.md#explicit-initialization).
+Remote shared administration uses the separate operator listener and SDK:
+`bro shared apply --endpoint URL --token-env ENV --input MUTATION.json` submits
+one literal JSON mutation. `--input -` reads stdin; input is limited to 2 MiB
+and contains its caller-owned `operation_id`. No configuration or environment
+substitution occurs inside the input. Endpoint and token are checked before
+opening it. All remote shared commands require `multi-instance` and reject
+named contexts before discovery or input reads.
+
+`bro shared operation --endpoint URL --token-env ENV --operation-id ID` reads
+one actor-scoped receipt. A successfully read `unresolved` result exits zero;
+it does not prove rollback and triggers no retry. The same target flags are
+required for `revision`, `tenant --id ID`, `resource --id ID`,
+`principal --id ID`, `credential --provider ID --account ID`, and
+`execution --id ID`. These commands read metadata only and never export secrets.
+After an unknown apply outcome, retain the original ID and private mutation and
+query that ID with the same actor. A failed lookup cannot resolve the earlier
+write. An output failure after a confirmed commit does not resubmit it.
+Foreground startup reads a selected file once with a 16 MiB bound. Local
+environment expansion is validated as local before daemon/home effects and the
+same parsed input becomes its configuration baseline.
 Gateway server-side tools require `server-tools` (included by default and enabling
 `mcp`). Selecting MCP tools, advisor, subagent, Fusion, web search or web fetch
 without that feature fails at startup, reload and profile preflight. Saved loop

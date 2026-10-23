@@ -25,7 +25,8 @@ publish-prereleases = true
 install-updater = false
 # Whether dist should create a Github Release or use an existing draft
 create-release = false
-# Keep the full-product installers above; publish gateway archives alongside them.
+# Keep the full-product installers above; package gateway and gateway-shared
+# archives alongside them. Neither archive profile gains an installer receipt.
 # https://axodotdev.github.io/cargo-dist/book/ci/customizing.html#custom-jobs
 local-artifacts-jobs = ["./gateway-artifacts"]
 

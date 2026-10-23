@@ -38,7 +38,11 @@ impl Fixture {
             version: VERSION.to_owned(),
             source_revision: Some("0123456789abcdef".to_owned()),
             target: target.to_owned(),
-            features: Vec::new(),
+            features: if matches!(profile, PackageProfile::GatewayShared) {
+                vec!["db-postgres".into(), "multi-instance".into()]
+            } else {
+                Vec::new()
+            },
             profile: profile.identity(),
             handoff_build_id: "test-build-id".to_owned(),
         };
@@ -153,6 +157,7 @@ fn cargo_build_selects_only_the_requested_binary_and_features() -> Result<()> {
     let mut fixture = Fixture::new("x86_64-unknown-linux-gnu", PackageProfile::Gateway)?;
     for (profile, cargo_profile) in [
         (PackageProfile::Gateway, CargoProfile::Dist),
+        (PackageProfile::GatewayShared, CargoProfile::Dist),
         (PackageProfile::Full, CargoProfile::Dev),
     ] {
         fixture.options.profile = profile;
@@ -178,11 +183,60 @@ fn cargo_build_selects_only_the_requested_binary_and_features() -> Result<()> {
             "--target-dir",
             build_dir.to_str().context("test path must be UTF-8")?,
         ];
-        if matches!(profile, PackageProfile::Gateway) {
-            expected.push("--no-default-features");
+        match profile {
+            PackageProfile::Gateway => expected.push("--no-default-features"),
+            PackageProfile::GatewayShared => {
+                expected.extend(["--no-default-features", "--features", "multi-instance"])
+            }
+            PackageProfile::Full => {}
         }
         ensure!(args == expected);
         ensure!(command.get_current_dir() == Some(fixture.directory.path()));
+    }
+    Ok(())
+}
+
+#[test]
+fn shared_gateway_cli_selects_a_distinct_identity() -> Result<()> {
+    let cli = crate::Cli::try_parse_from([
+        "dist-helper",
+        "package",
+        "--profile",
+        "gateway-shared",
+        "--target",
+        "x86_64-unknown-linux-gnu",
+    ])?;
+    let crate::Command::Package(options) = cli.command else {
+        bail!("wrong command");
+    };
+    ensure!(matches!(options.profile, PackageProfile::GatewayShared));
+    ensure!(options.profile.identity() == DistributionProfile::GatewayShared);
+    Ok(())
+}
+
+#[test]
+fn shared_archive_rejects_missing_extra_or_noncanonical_capabilities() -> Result<()> {
+    let fixture = Fixture::new("x86_64-unknown-linux-gnu", PackageProfile::GatewayShared)?;
+    for features in [
+        json!([]),
+        json!(["db-postgres"]),
+        json!(["multi-instance"]),
+        json!(["core", "db-postgres", "multi-instance"]),
+        json!(["multi-instance", "db-postgres"]),
+        json!(["db-postgres", "multi-instance", "multi-instance"]),
+    ] {
+        let mut identity = serde_json::to_value(&fixture.identity)?;
+        identity["features"] = features;
+        fs::write(
+            fixture.artifacts.out_dir.join("artifact.json"),
+            serde_json::to_vec(&identity)?,
+        )?;
+        ensure!(
+            fixture.package().is_err(),
+            "shared archive accepted mismatched capabilities"
+        );
+        ensure!(!fixture.out().try_exists()?);
+        fixture.check_no_staging()?;
     }
     Ok(())
 }
@@ -341,7 +395,11 @@ fn archive_contents(
 #[test]
 fn profiled_archives_round_trip_contents_modes_identity_and_hashes() -> Result<()> {
     for target in ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"] {
-        for profile in [PackageProfile::Gateway, PackageProfile::Full] {
+        for profile in [
+            PackageProfile::Gateway,
+            PackageProfile::GatewayShared,
+            PackageProfile::Full,
+        ] {
             let fixture = Fixture::new(target, profile)?;
             let windows = target.contains("-windows-");
             let root = format!("bitrouter-{}-{target}", profile.identity().as_str());

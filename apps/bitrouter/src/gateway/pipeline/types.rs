@@ -365,6 +365,9 @@ impl RoutingTarget {
 /// Input to the `language_model` pipeline. Built by an inbound protocol adapter.
 #[derive(Debug, Clone)]
 pub struct PipelineRequest {
+    /// Server-owned request state. Typed `Arc<T>` entries survive detached
+    /// execution and stream context creation; inbound JSON cannot populate them.
+    pub extensions: http::Extensions,
     /// Unique request id (generated if the inbound adapter has none).
     pub request_id: String,
     /// Caller-supplied model selector before ingress transforms. This retains
@@ -392,6 +395,7 @@ impl PipelineRequest {
         let model = model.into();
         Self {
             request_id: uuid::Uuid::new_v4().to_string(),
+            extensions: http::Extensions::new(),
             original_model: model.clone(),
             model,
             caller,
@@ -410,6 +414,7 @@ impl PipelineRequest {
         let model = model.into();
         Self {
             request_id: uuid::Uuid::new_v4().to_string(),
+            extensions: http::Extensions::new(),
             original_model: model.clone(),
             model,
             caller,

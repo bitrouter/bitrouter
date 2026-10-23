@@ -151,6 +151,12 @@ For administration from another computer, use a named `--context`; see
 boundaries. Remote errors never fall back to this machine's configuration.
 
 ## References — read on demand
+
+Shared gateway deployments explicitly select `gateway_state.mode: shared` and
+use the `gateway-shared` distribution (`multi-instance` feature); a PostgreSQL
+URL alone retains local mode.
+See [shared gateway configuration](references/shared-gateway.md).
+
 | File | When to read |
 |---|---|
 | `references/cli.md` | Full subcommand reference — the primary reference |

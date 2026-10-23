@@ -52,7 +52,8 @@ pub enum Durability {
 /// An exclusive selected-account lease spanning read, refresh and commit.
 ///
 /// Implementations must retain `stage`d values beyond a dropped lease and a
-/// failed commit. Commit must compare the original credential with current
+/// failed commit, or durably fence the account as ambiguous until explicit
+/// reconciliation/replacement. Commit must compare the original credential with current
 /// storage, or otherwise exclude login/logout writers. A conflict must never
 /// resurrect an account that was removed/replaced. Operations must be bounded.
 #[async_trait]
@@ -63,8 +64,19 @@ pub trait CredentialTransaction: Send {
     fn pending(&self) -> Option<&Credential>;
     /// Retain a replacement before attempting persistence.
     fn stage(&mut self, credential: Credential);
+    /// Persist permission to consume a refresh token before making network I/O.
+    /// Distributed stores must leave ambiguous intent fenced after cancellation.
+    /// Local stores already serialize access for the lifetime of the lease.
+    async fn prepare_refresh(&mut self) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
     /// Commit the retained replacement; report the backend's actual guarantee.
     async fn commit(&mut self) -> std::result::Result<Durability, StoreError>;
+    /// Release a completed read/refresh. An unresolved refresh intent must remain
+    /// fenced rather than making a possibly consumed refresh token reusable.
+    async fn release(&mut self) -> std::result::Result<(), StoreError> {
+        Ok(())
+    }
 }
 
 /// Caller-injected storage; every transaction names exactly one selected slot.
@@ -159,14 +171,17 @@ pub trait OAuthRefresher: Send + Sync {
 
 /// Account-scoped OAuth resolution using the injected store's transactions.
 ///
-/// After acquiring a lease, an owned Tokio task completes token exchange and
-/// persistence even if the caller drops its future. This guarantee requires a
-/// running Tokio runtime; process/runtime shutdown can still interrupt I/O.
+/// Sessions created by [`Self::new`] complete token exchange and persistence in
+/// a separate Tokio task even if the caller drops its future. This requires a
+/// running runtime. The internal shared variant instead keeps all refresh work
+/// inline under the request owner and relies on durable uncertainty fencing.
 #[derive(Clone)]
 pub struct OAuthSession {
     store: Arc<dyn CredentialStore>,
     refresher: Arc<dyn OAuthRefresher>,
     refresh_window: Duration,
+    #[cfg(feature = "multi-instance")]
+    inline: bool,
 }
 
 impl OAuthSession {
@@ -180,6 +195,22 @@ impl OAuthSession {
             store,
             refresher,
             refresh_window,
+            #[cfg(feature = "multi-instance")]
+            inline: false,
+        }
+    }
+
+    /// Keep refresh, commit and release within the shared request's owned future.
+    /// Its store must durably fence a started or uncertain refresh when dropped.
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn new_inline(
+        store: Arc<dyn CredentialStore>,
+        refresher: Arc<dyn OAuthRefresher>,
+        refresh_window: Duration,
+    ) -> Self {
+        Self {
+            inline: true,
+            ..Self::new(store, refresher, refresh_window)
         }
     }
 
@@ -217,33 +248,84 @@ impl OAuthSession {
     ) -> Result<OAuthToken> {
         let mut transaction = self.store.begin(key).await.map_err(store_error)?;
         let session = self.clone();
-        // Acquiring the lease is cancellable. Once admitted, the owned task is
-        // independent of a dropped caller, including during commit.
-        tokio::spawn(async move {
-            if transaction.pending().is_some() {
-                transaction.commit().await.map_err(store_error)?;
+        let operation = async move {
+            let result = session
+                .run_leased(transaction.as_mut(), rejected_access, fallback)
+                .await;
+            let released = transaction.release().await.map_err(store_error);
+            match result {
+                Ok(token) => {
+                    released?;
+                    Ok(token)
+                }
+                Err(error) => Err(error),
             }
-            if transaction.credential().is_none()
-                && let Some(fallback) = fallback.filter(|token| token.is_valid() && !token.access_token.is_empty()) { return Ok(fallback); }
-            let token = transaction.credential().and_then(Credential::as_oauth).cloned()
-                .ok_or_else(|| ModelError::Provider {
-                    status: 401,
-                    message: "selected account has no OAuth credential; supply or log in to that account explicitly".into(),
-                })?;
-            let fresh = !session.needs_refresh(&token);
-            if fresh && token.access_token.is_empty() { return Err(ModelError::Provider { status: 401, message: "selected OAuth credential is empty".into() }); }
-            let reuse = match rejected_access {
-                None => fresh,
-                Some(Some(rejected)) => fresh && token.access_token != rejected,
-                Some(None) => false,
-            };
-            if reuse { return Ok(token); }
-            let replacement = session.refresher.refresh(&token).await.map_err(|error| normalize_auth_extension_error(error, AuthOperation::Refresh))?;
-            transaction.stage(Credential::Oauth(replacement.clone()));
+        };
+        #[cfg(feature = "multi-instance")]
+        if self.inline {
+            // Dropping the request destroys the refresh future and transaction.
+            // A shared store's started fence remains durable; Drop does no I/O.
+            return operation.await;
+        }
+        // Preserve local completion after a caller drops its future.
+        tokio::spawn(operation)
+            .await
+            .map_err(|_| ModelError::configuration("credential refresh task could not complete"))?
+    }
+
+    async fn run_leased(
+        &self,
+        transaction: &mut dyn CredentialTransaction,
+        rejected_access: Option<Option<String>>,
+        fallback: Option<OAuthToken>,
+    ) -> Result<OAuthToken> {
+        if transaction.pending().is_some() {
             transaction.commit().await.map_err(store_error)?;
-            if replacement.access_token.is_empty() { return Err(ModelError::invalid_credential("OAuth refresh returned an empty access token; replacement refresh state was retained")); }
-            Ok(replacement)
-        }).await.map_err(|_| ModelError::configuration("credential refresh task could not complete"))?
+        }
+        if transaction.credential().is_none()
+            && let Some(fallback) =
+                fallback.filter(|token| token.is_valid() && !token.access_token.is_empty())
+        {
+            return Ok(fallback);
+        }
+        let token = transaction.credential().and_then(Credential::as_oauth).cloned()
+            .ok_or_else(|| ModelError::Provider {
+                status: 401,
+                message: "selected account has no OAuth credential; supply or log in to that account explicitly".into(),
+            })?;
+        let fresh = !self.needs_refresh(&token);
+        if fresh && token.access_token.is_empty() {
+            return Err(ModelError::Provider {
+                status: 401,
+                message: "selected OAuth credential is empty".into(),
+            });
+        }
+        let reuse = match rejected_access {
+            None => fresh,
+            Some(Some(rejected)) => fresh && token.access_token != rejected,
+            Some(None) => false,
+        };
+        if reuse {
+            return Ok(token);
+        }
+        // Rotating refresh tokens can be invalidated on use. Shared stores
+        // durably fence intent before this exchange, never retrying an
+        // ambiguous consumed token merely because a lease expired.
+        // https://www.rfc-editor.org/rfc/rfc6749#section-6
+        transaction.prepare_refresh().await.map_err(store_error)?;
+        let replacement = self
+            .refresher
+            .refresh(&token)
+            .await
+            .map_err(|error| normalize_auth_extension_error(error, AuthOperation::Refresh))?;
+        transaction.stage(Credential::Oauth(replacement.clone()));
+        transaction.commit().await.map_err(store_error)?;
+        if replacement.access_token.is_empty() {
+            return Err(ModelError::invalid_credential(
+                "OAuth refresh returned an empty access token; replacement refresh state was retained",
+            ));
+        }
+        Ok(replacement)
     }
 
     fn needs_refresh(&self, token: &OAuthToken) -> bool {

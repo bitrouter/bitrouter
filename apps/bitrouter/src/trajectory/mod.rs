@@ -6,5 +6,7 @@ pub mod health;
 #[cfg(feature = "core")]
 pub mod replay;
 pub mod settlement;
+#[cfg(feature = "multi-instance")]
+pub(crate) mod shared;
 pub mod store;
 pub mod types;

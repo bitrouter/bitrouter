@@ -672,6 +672,147 @@
       },
       "type": "object"
     },
+    "GatewayStateConfig": {
+      "description": "Local SQLite needs no external service. Shared operation is an explicit opt-in.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Existing single-process authority and lifecycle.",
+          "properties": {
+            "mode": {
+              "const": "local",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "PostgreSQL authority shared by independently launched gateway processes.",
+          "properties": {
+            "deployment_key_env": {
+              "description": "Environment variable containing a base64-encoded 32-byte deployment key.",
+              "type": "string"
+            },
+            "drain_timeout_ms": {
+              "default": 30000,
+              "description": "Graceful drain deadline, in milliseconds (100..300000).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "header_timeout_ms": {
+              "default": 30000,
+              "description": "Request header deadline in milliseconds (100..300000).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "heartbeat_ms": {
+              "default": 5000,
+              "description": "Heartbeat interval; leave room for three intervals plus a transaction.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "local_max_in_flight": {
+              "default": 256,
+              "description": "Nonqueueing admission bound, including slow response consumers (1..65536).",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_connections": {
+              "default": 256,
+              "description": "Maximum live or unreaped HTTP connections (1..65536); no waiting queue.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_request_bytes": {
+              "default": 4194304,
+              "description": "Maximum accepted ingress bytes (1024..16777216).",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "max_retired": {
+              "default": 4,
+              "description": "Maximum retired routing generations still retaining resources (1..64).\nThe current generation and one candidate are additional slots.",
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "const": "shared",
+              "type": "string"
+            },
+            "namespace": {
+              "description": "Explicit initialized cluster identity; 1..64 ASCII letters, digits, '-' or '_'.",
+              "type": "string"
+            },
+            "owner_lease_ms": {
+              "default": 30000,
+              "description": "Owner-incarnation lifetime in database milliseconds (1000..300000).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pool_connections": {
+              "default": 16,
+              "description": "Total database connections (2..128), including one reserved for heartbeat.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "request_timeout_ms": {
+              "default": 30000,
+              "description": "Body ingress deadline in milliseconds (100..300000), excluding inference.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "transaction_timeout_ms": {
+              "default": 3000,
+              "description": "Database acquisition/transaction deadline, in milliseconds (100..30000).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "worker_batch_size": {
+              "default": 64,
+              "description": "Maximum records visited by one background pass (1..256).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "worker_interval_ms": {
+              "default": 1000,
+              "description": "Recovery/publication polling interval, in milliseconds (100..30000).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "write_stall_timeout_ms": {
+              "default": 30000,
+              "description": "Output backpressure deadline in milliseconds (100..300000).",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "mode",
+            "namespace",
+            "deployment_key_env"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "InputTokenCounting": {
       "description": "Explicit provider support, never inferred from a compatible generation API.",
       "oneOf": [
@@ -2538,6 +2679,13 @@
         "authorities": {}
       },
       "description": "Generic evaluation exchange authorities and admission scopes."
+    },
+    "gateway_state": {
+      "$ref": "#/$defs/GatewayStateConfig",
+      "default": {
+        "mode": "local"
+      },
+      "description": "Explicit local or shared gateway authority. A database URL does not opt in."
     },
     "inherit_defaults": {
       "default": true,

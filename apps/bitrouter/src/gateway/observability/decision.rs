@@ -554,8 +554,20 @@ impl PendingEvalDecisionStore {
 /// The same bounded, content-free routing receipts enter request and trajectory
 /// evaluation. Stable receipt IDs deduplicate acknowledged decision reuse.
 pub(crate) fn routing_evidence(context: &SettlementContext) -> anyhow::Result<Vec<EvidenceItem>> {
+    routing_evidence_from(
+        &context.request_id,
+        context.get_event::<crate::gateway::routing::preparation::Receipt>(),
+        context.get_event::<crate::gateway::routing::plan::Selection>(),
+    )
+}
+
+pub(crate) fn routing_evidence_from(
+    request_id: &str,
+    receipt: Option<&crate::gateway::routing::preparation::Receipt>,
+    selection: Option<&crate::gateway::routing::plan::Selection>,
+) -> anyhow::Result<Vec<EvidenceItem>> {
     let mut evidence = Vec::new();
-    if let Some(receipt) = context.get_event::<crate::gateway::routing::preparation::Receipt>() {
+    if let Some(receipt) = receipt {
         let mut attributes = BTreeMap::from([("decision_receipt_id".into(), receipt.id.clone())]);
         if let Some(assessment) = &receipt.assessment {
             attributes.insert("input_digest".into(), assessment.input_digest.clone());
@@ -588,9 +600,9 @@ pub(crate) fn routing_evidence(context: &SettlementContext) -> anyhow::Result<Ve
             attributes,
         });
     }
-    if let Some(selection) = context.get_event::<crate::gateway::routing::plan::Selection>() {
+    if let Some(selection) = selection {
         evidence.push(EvidenceItem {
-            evidence_id: format!("route-plan:{}", canonical_digest(&context.request_id)?),
+            evidence_id: format!("route-plan:{}", canonical_digest(&request_id)?),
             kind: "routing.plan".into(),
             digest: canonical_digest(selection)?,
             redacted: true,

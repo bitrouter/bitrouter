@@ -75,6 +75,32 @@ pub(crate) fn build_http(
     options: &crate::gateway::TransportOptions,
     http1_only: bool,
 ) -> Result<reqwest::Client> {
+    http_builder(headers, options, http1_only)
+        .build()
+        .map_err(Error::transport)
+}
+
+pub(crate) fn build_operator_http(
+    headers: header::HeaderMap,
+    options: &crate::gateway::TransportOptions,
+) -> Result<reqwest::Client> {
+    // Keep encoded-body rejection effective even if another dependency enables
+    // reqwest decompression features through Cargo feature unification.
+    // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.no_gzip
+    http_builder(headers, options, false)
+        .no_gzip()
+        .no_brotli()
+        .no_zstd()
+        .no_deflate()
+        .build()
+        .map_err(Error::transport)
+}
+
+fn http_builder(
+    headers: header::HeaderMap,
+    options: &crate::gateway::TransportOptions,
+    http1_only: bool,
+) -> reqwest::ClientBuilder {
     // Disable both redirect forwarding and reqwest's protocol-level retry
     // policy: a disconnected mutation/inference call has an unknown outcome.
     // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.retry
@@ -99,5 +125,5 @@ pub(crate) fn build_http(
         // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.http1_only
         builder = builder.http1_only();
     }
-    builder.build().map_err(Error::transport)
+    builder
 }

@@ -28,6 +28,8 @@ pub mod pricing;
 pub mod reader;
 pub mod reconciliation;
 pub mod recorder;
+#[cfg(feature = "multi-instance")]
+pub(crate) mod shared;
 pub mod store;
 pub mod tariff;
 

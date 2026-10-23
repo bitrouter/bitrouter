@@ -53,6 +53,70 @@ buckets are not added into `input_tokens`, and Decisions retains its required
 native usage object. Protocol adaptation, conversion admission and provider
 execution remain in the service.
 
+For shared gateways, use `submit_chat_completions`, `submit_messages`,
+`submit_responses`, `submit_decisions`, or the three `submit_stream_*` methods.
+They return `gateway::execution::Submission<T>`: `Response` carries ordinary
+JSON or the existing incremental stream with `ExecutionMetadata`; `Existing`
+carries the prior execution status from HTTP 202. Even a terminal `Existing`
+is not cached model output or a resumed stream.
+
+```rust,no_run
+use bitrouter_ai::protocol::chat_completions::ChatRequest;
+use bitrouter_sdk::gateway::{
+    GatewayClient,
+    execution::{Submission, SubmissionOptions},
+};
+
+async fn submit(
+    client: &GatewayClient,
+    request: &ChatRequest,
+    key: &str,
+) -> bitrouter_sdk::error::Result<()> {
+    let options = SubmissionOptions {
+        idempotency_key: Some(key.to_owned()),
+        ..Default::default()
+    };
+    match client.submit_chat_completions(request, &options).await? {
+        Submission::Response { response, metadata } => {
+            println!("{} choices for {}", response.choices.len(), metadata.execution_id);
+        }
+        Submission::Existing { execution, .. } => {
+            // An explicit query observes state; it never repeats inference.
+            let latest = client.execution(&execution.execution_id).await?;
+            println!("execution revision {}", latest.revision);
+        }
+    }
+    Ok(())
+}
+```
+
+Submission options accept optional caller correlation and idempotency identities,
+each normalized to 1–256 textual bytes, and the fixed gateway v1 semantic header
+set. Credential/profile/framing overrides, managed Responses selectors and an
+extension-map `stream` field are rejected before dispatch. Use the typed `stream`
+field to match the selected method. Duplicate semantic-header values retain their order
+and empty values. New submission methods use the stable `bitrouter-sdk`
+User-Agent by default; caller-supplied values replace it. Explicit retries must
+preserve the serialized request and all effective semantic headers; this is not
+a guarantee of identical serialization across SDK versions.
+
+`execution(id)` queries only the configured service origin and proxy prefix,
+encoding the ID as one path segment. `ExecutionMetadata.status_location` is the
+canonical URL built from that configuration, never an instruction to forward
+credentials to the raw `Location`. A duplicate's response correlation describes
+the current request; its execution DTO retains the original correlation. Both
+identities must independently satisfy the normalized 1–256 ASCII byte contract.
+
+These submission methods require shared response metadata. Calling one against
+a local gateway can execute inference before the SDK detects missing metadata.
+It then returns an error without fallback or replay. Use the original model
+methods for local gateways; those methods reject HTTP 202 explicitly.
+For both that rejection and post-header validation/read failures in the new
+methods, `Error::Service` retains the actual HTTP status and headers, including
+on 200/202, with the cause in `body_error`. A candidate execution ID on 503 does
+not prove acceptance and a later explicit query can return 404. The SDK never
+generates idempotency keys, polls executions or repeats inference automatically.
+
 `control::ControlClient` uses the separately enabled administration listener and
 its scoped control bearer, not an inference API key. Pass an origin or
 `/control/v1` endpoint explicitly. Plain HTTP is allowed only for loopback;
@@ -242,3 +306,25 @@ migration. Server assembly and advanced trusted host adapters have moved to the
 `bitrouter` application. The managed channel preserves the existing WebSocket
 surface; it does not establish complete core HTTP coverage or remote access to
 local-only harness operations.
+
+## Shared gateway operator client
+
+`operator::OperatorClient` addresses a separately authenticated operator listener
+using an explicit endpoint and token. It never discovers a local daemon, named
+context or inference credential. Use HTTPS for remote endpoints or HTTP on
+loopback through a tunnel. An endpoint may include a proxy prefix ending in
+`/operator/v1`; an origin-only endpoint receives that path automatically.
+
+`apply(&Mutation)` submits exactly once with the caller's operation ID. Redirects,
+automatic retries and default proxy discovery are disabled. Request inputs and
+response bodies are bounded; errors and client diagnostics retain no mutation
+body or provider credential. `OperatorOptions` controls finite transport deadlines
+and allows explicit proxy discovery. A cancelled request has an unknown outcome.
+
+On `Error::OperatorUnknown`, retain the original private input and call
+`operation(operation_id)` with the same client identity. A committed receipt is
+durable evidence; `Unresolved` does not prove rejection or rollback. Do not create
+a new ID to retry an uncertain write. Typed `Error::OperatorRejected` represents
+validated service error categories. Revision, tenant/resource policy, principal,
+credential metadata and execution reads use their `bitrouter_ai::gateway`
+contracts. No client method creates a serving instance or executes inference.

@@ -4,7 +4,6 @@
 //! [`crate::gateway::pipeline::settlement`].
 
 use crate::gateway::model::protocol::values::render_tool_result_output;
-use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -45,9 +44,7 @@ static NEXT_DELIVERY_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 /// [`StreamHook`](crate::gateway::pipeline::hooks::StreamHook) reads on the hot path
 /// without re-parsing.
 #[derive(Clone, Default)]
-struct Extensions {
-    map: HashMap<TypeId, Arc<dyn Any + Send + Sync>>,
-}
+struct Extensions(http::Extensions);
 
 /// A request-local native provider continuation resolved by a route hook.
 /// The executor validates the exact target snapshot before substituting the
@@ -147,14 +144,11 @@ impl ProviderContinuation {
 
 impl Extensions {
     fn insert<T: Send + Sync + 'static>(&mut self, value: Arc<T>) {
-        self.map.insert(TypeId::of::<T>(), value);
+        self.0.insert(value);
     }
 
     fn get<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
-        self.map
-            .get(&TypeId::of::<T>())
-            .cloned()
-            .and_then(|v| v.downcast::<T>().ok())
+        self.0.get::<Arc<T>>().cloned()
     }
 }
 
@@ -271,7 +265,7 @@ impl PipelineContext {
             stream_assistant_turn_commitment: None,
             credential_authority: Arc::new(Mutex::new(None)),
             metadata: HashMap::new(),
-            extensions: Extensions::default(),
+            extensions: Extensions(req.extensions),
             events: EventBus::new(),
             outbound_trace_headers: Mutex::new(None),
         }
@@ -1229,6 +1223,7 @@ mod tests {
 
     fn ctx_from_prompt(prompt: Prompt) -> PipelineContext {
         let req = PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: "test".to_string(),
             original_model: prompt.model.clone(),
             model: prompt.model.clone(),

@@ -133,6 +133,7 @@ fn target() -> RoutingTarget {
 
 fn context() -> PipelineContext {
     PipelineContext::new(PipelineRequest {
+        extensions: http::Extensions::new(),
         request_id: "request".into(),
         original_model: "served".into(),
         model: "served".into(),
