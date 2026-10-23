@@ -239,7 +239,7 @@ jobs:
             targets: >-
               --test gateway_anthropic_authority --test gateway_decision_model
               --test gateway_decisions --test gateway_model_boundary
-              --test gateway_routing_assessment --test gateway_routing_plan
+              --test gateway_routing_assessment --test gateway_routing_plan --test http2_ingress
           - shard: models
             retries: "0"
             targets: >-
@@ -348,6 +348,12 @@ jobs:
           cargo metadata --no-deps --format-version 1 | jq -e '
             [.packages[].name] | sort ==
             ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-sdk", "dist-helper"]'
+      - name: verify SDK without HTTP/2
+        run: |
+          # Check production before test dependencies can enable HTTP/2.
+          cargo check --locked -p bitrouter-sdk --no-default-features --lib
+          cargo check --locked -p bitrouter-sdk --no-default-features --features core --lib
+          cargo test --locked -p bitrouter-sdk --no-default-features --test transport_protocol
       - name: contracts and client build independently
         run: |
           cargo test -p bitrouter-ai
@@ -360,7 +366,7 @@ jobs:
         run: |
           # Successful checks above prove package membership. Inspect forward
           # trees: an unknown inverted dependency must not count as evidence.
-          for flags in '' '--all-features'; do
+          for flags in '' '--no-default-features' '--all-features'; do
             cargo tree --locked -p bitrouter-ai $flags -e normal,build --prefix none > ai-tree.txt
             if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
               echo '::error::AI public contracts pulled runtime dependencies'; exit 1
@@ -397,6 +403,7 @@ jobs:
       matrix:
         features:
           - ''
+          - http2
           - core
           - harness
           - tui
@@ -411,6 +418,7 @@ jobs:
           - harness,otel-http
           - db-postgres
           - multi-instance
+          - multi-instance,http2
           - db-mysql
           - mcp,server-tools,otel-http,db-postgres,db-mysql
     steps:
@@ -424,6 +432,14 @@ jobs:
           cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bro
           cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
           cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
+          # Only the minimal gateway distributions promise an h2-free
+          # production closure. Other features (such as otel-grpc) may need h2.
+          case "$PROFILE_FEATURES" in
+            ''|multi-instance)
+              if grep -Eq '^h2 v' profile-tree.txt; then
+                echo '::error::minimal HTTP/1 gateway profile pulled h2'; exit 1
+              fi ;;
+          esac
           case ",$PROFILE_FEATURES," in
             *,tui,*) ;;
             *) if grep -Eq '^(ratatui(-[^ ]*)?|crossterm) v' profile-tree.txt; then
@@ -472,6 +488,22 @@ jobs:
                  echo '::error::profile without MySQL pulled its driver'; exit 1
                fi ;;
           esac
+
+      - name: verify HTTP/2 ingress in lean profiles
+        if: matrix.features == 'http2' || matrix.features == 'multi-instance,http2'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test http2_ingress --jobs 2 -- --test-threads=2
+
+      - name: verify shared transport bounds and connection ownership
+        if: matrix.features == 'multi-instance' || matrix.features == 'multi-instance,http2'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib --jobs 2 gateway::shared::transport:: -- --test-threads=2
 
       - name: verify gateway behavior without learning services
         if: matrix.features == '' || matrix.features == 'harness'
@@ -680,6 +712,16 @@ jobs:
           --lib mysql_tests -- --ignored --test-threads=1
           cargo test -p bitrouter --no-default-features --features db-mysql,core,harness \
           --lib mysql_tests -- --ignored --test-threads=1
+
+      - name: verify HTTP/2 admission across official gateway processes
+        if: matrix.backend == 'postgres'
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+        run: |
+          cargo build --locked -p bitrouter --bin bro --no-default-features --features multi-instance,http2
+          export BITROUTER_TEST_GATEWAY_BINARY="$GITHUB_WORKSPACE/target/debug/bro"
+          cargo test --locked -p bitrouter --no-default-features --features multi-instance,http2 \
+          --lib official_http2_tenant_and_account_concurrency_cross_replicas -- --ignored --test-threads=1
 
   telemetry-transports:
     name: telemetry (${{ matrix.transport }})

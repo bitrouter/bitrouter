@@ -26,9 +26,33 @@ use crate::{
     transport,
 };
 
-/// Transport bounds. No total inference deadline is imposed by default.
+/// HTTP protocol selection for ordinary requests and SSE streams.
+///
+/// Protocol selection never retries a request using another HTTP version.
+/// Core WebSocket upgrades always use a separate HTTP/1.1 client.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HttpVersion {
+    /// Negotiate HTTP/2 or HTTP/1.1 over HTTPS using ALPN when the `http2`
+    /// feature is enabled. Cleartext HTTP uses HTTP/1.1 without an h2c upgrade.
+    /// Without `http2`, use HTTP/1.1 even if another dependency enables it
+    /// on reqwest through Cargo feature unification.
+    #[default]
+    Auto,
+    /// Use HTTP/1.1 for both HTTP and HTTPS endpoints.
+    Http1Only,
+    /// Require HTTP/2, sending the h2c preface directly for cleartext HTTP
+    /// and selecting only HTTP/2 over HTTPS. The endpoint must support HTTP/2;
+    /// a failed request is not retried over HTTP/1.1.
+    #[cfg(feature = "http2")]
+    Http2PriorKnowledge,
+}
+
+/// Transport bounds and protocol choice. No total inference deadline is imposed by default.
 #[derive(Clone, Debug)]
 pub struct TransportOptions {
+    /// HTTP version policy; defaults to [`HttpVersion::Auto`].
+    pub http_version: HttpVersion,
     /// Opt in to reqwest's environment/system proxy discovery.
     pub system_proxy: bool,
     pub connect_timeout: Duration,
@@ -42,6 +66,7 @@ pub struct TransportOptions {
 impl Default for TransportOptions {
     fn default() -> Self {
         Self {
+            http_version: HttpVersion::default(),
             system_proxy: false,
             connect_timeout: Duration::from_secs(10),
             read_timeout: Some(Duration::from_secs(120)),

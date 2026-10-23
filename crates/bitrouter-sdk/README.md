@@ -39,6 +39,45 @@ idle timeout is 120 seconds. Endpoints may include a reverse-proxy prefix and an
 optional trailing `/v1`. `None` credentials are for servers whose configuration
 permits unauthenticated calls; they do not bypass service authorization.
 
+The default-enabled `http2` Cargo feature forwards `reqwest/http2`.
+`TransportOptions::http_version` explicitly selects the transport:
+
+| `gateway::HttpVersion` | Behavior |
+| --- | --- |
+| `Auto` (default) | HTTPS negotiates HTTP/2 or HTTP/1.1 with ALPN; cleartext HTTP uses HTTP/1.1. |
+| `Http1Only` | Always HTTP/1.1, including HTTPS. |
+| `Http2PriorKnowledge` (`http2` feature) | Requires HTTP/2; cleartext HTTP sends the h2c preface directly. HTTPS selects only HTTP/2. |
+
+```rust,no_run
+use bitrouter_sdk::gateway::{GatewayClient, HttpVersion, TransportOptions};
+
+# #[cfg(feature = "http2")]
+# {
+let client = GatewayClient::with_options(
+    "http://127.0.0.1:4356",
+    Some("service-key"),
+    TransportOptions {
+        http_version: HttpVersion::Http2PriorKnowledge,
+        ..Default::default()
+    },
+)?;
+# }
+# Ok::<(), bitrouter_sdk::error::Error>(())
+```
+
+Use prior knowledge only for an endpoint known to support HTTP/2. There is no
+HTTP/1.1 Upgrade probe or retry using a different version on failure. JSON,
+submission and SSE methods share the selected protocol and connection pool;
+cloned clients share that pool. `HarnessClient` also honors `TransportOptions`,
+and `OperatorOptions::http_version` uses the same enum and default. With `core`,
+WebSocket upgrades retain a dedicated HTTP/1.1 client regardless of this setting.
+
+To disable HTTP/2, set `default-features = false` on the `bitrouter-sdk`
+dependency. `Auto` then uses HTTP/1.1 even if another dependency enables
+reqwest's HTTP/2 feature; `Http2PriorKnowledge` is unavailable. Optional `core`
+can still be enabled independently. A dependency that already disables SDK
+defaults must explicitly enable `bitrouter-sdk/http2` to opt in.
+
 The transport disables redirects and automatic retries. An interrupted request
 may already be executing. An SSE connection ending before its terminal marker
 returns `IncompleteStream`; dropping a stream closes local consumption without
