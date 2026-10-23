@@ -240,6 +240,7 @@ jobs:
               --test gateway_anthropic_authority --test gateway_decision_model
               --test gateway_decisions --test gateway_model_boundary
               --test gateway_routing_assessment --test gateway_routing_plan
+              --test registry_lifecycle
           - shard: models
             retries: "0"
             targets: >-
