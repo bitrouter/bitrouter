@@ -81,6 +81,8 @@ models:
     provider_model_id: gpt-6-luna
   - id: anthropic/claude-haiku-5.5
     provider_model_id: claude-haiku-5-5
+  - id: minimax/minimax-m3.1-flash
+    provider_model_id: minimax-m3.1-flash
 status: active
 auto_sync:
   feed: models_dev

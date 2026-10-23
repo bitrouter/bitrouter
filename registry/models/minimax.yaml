@@ -1,4 +1,5 @@
 - id: minimax/minimax-m2.7
+  deprecation_date: 2026-11-22
   name: 'MiniMax: M2.7'
   input_modalities:
   - text
@@ -21,3 +22,14 @@
   release_date: 2026-06-01
   open_weights: true
   family: minimax
+- id: minimax/minimax-m3.1-flash
+  name: 'MiniMax: MiniMax M3.1 Flash'
+  input_modalities:
+  - image
+  - text
+  - video
+  output_modalities:
+  - text
+  max_input_tokens: 1000000
+  max_output_tokens: 524288
+  release_date: 2026-10-19

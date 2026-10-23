@@ -586,201 +586,6 @@
       "release_date": "2026-10-07"
     },
     {
-      "deprecation_date": "2026-10-23",
-      "family": "claude-opus",
-      "id": "anthropic/claude-opus-4.8",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "max_input_tokens": 1000000,
-      "max_output_tokens": 128000,
-      "name": "Anthropic: Claude Opus 4.8",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider": "anthropic",
-          "provider_model_id": "claude-opus-4-8",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider": "aws-bedrock",
-          "provider_model_id": "anthropic.claude-opus-4-8",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider": "azure",
-          "provider_model_id": "claude-opus-4-8",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider": "bitrouter",
-          "provider_model_id": "anthropic/claude-opus-4.8",
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools"
-          ],
-          "provider": "claude-code",
-          "provider_model_id": "claude-opus-4-8",
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "github-copilot",
-          "provider_model_id": "claude-opus-4.8"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider": "gmicloud",
-          "provider_model_id": "anthropic/claude-opus-4.8"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "claude-opus-4-8"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "anthropic/claude-opus-4.8"
-        }
-      ],
-      "release_date": "2026-05-28"
-    },
-    {
       "description": "Anthropic's Claude Opus 5.",
       "family": "claude-opus",
       "id": "anthropic/claude-opus-5",
@@ -2104,6 +1909,7 @@
       "release_date": "2026-10-13"
     },
     {
+      "deprecation_date": "2026-11-22",
       "family": "minimax",
       "id": "minimax/minimax-m2.7",
       "input_modalities": [
@@ -2546,6 +2352,86 @@
         }
       ],
       "release_date": "2026-06-01"
+    },
+    {
+      "id": "minimax/minimax-m3.1-flash",
+      "input_modalities": [
+        "image",
+        "text",
+        "video"
+      ],
+      "max_input_tokens": 1000000,
+      "max_output_tokens": 524288,
+      "name": "MiniMax: MiniMax M3.1 Flash",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "provider": "minimax",
+          "provider_model_id": "MiniMax-M3.1-Flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0149,
+              "no_cache": 0.1494
+            },
+            "output_tokens": {
+              "text": 0.5976
+            }
+          },
+          "provider": "minimax_cn",
+          "provider_model_id": "MiniMax-M3.1-Flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "minimax-m3.1-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "minimax/minimax-m3.1-flash"
+        }
+      ],
+      "release_date": "2026-10-19"
     },
     {
       "family": "kimi-k2",
