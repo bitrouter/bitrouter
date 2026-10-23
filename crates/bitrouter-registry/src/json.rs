@@ -1,9 +1,9 @@
 //! Exact registry JSON is isolated from standard JSON's global Cargo features.
 //! Standard Serde buffered enums cannot consume arbitrary-precision number maps:
-//! https://github.com/serde-rs/serde/issues/1463
+//! <https://github.com/serde-rs/serde/issues/1463>
 //! Only the exact AST/serializer uses the separate package; strict standard
 //! RawValue traversal remains the protocol ingress, never its lenient parser.
-//! https://github.com/google/serde_json_lenient/blob/main/Cargo.toml
+//! <https://github.com/google/serde_json_lenient/blob/main/Cargo.toml>
 
 use crate::document::{RegistryError, integer};
 use registry_json::Value;

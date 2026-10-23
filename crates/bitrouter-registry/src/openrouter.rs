@@ -2,8 +2,8 @@
 //!
 //! The provider's own native ID is the canonical vocabulary's exact ID by
 //! definition. No prefix/suffix, canonical_slug, or other provider is inferred.
-//! https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties
-//! https://openrouter.ai/docs/api/reference/overview
+//! <https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties>
+//! <https://openrouter.ai/docs/api/reference/overview>
 
 use crate::{
     document::{RegistryError, canonical_id, integer},

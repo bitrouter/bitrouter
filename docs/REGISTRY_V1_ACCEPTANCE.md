@@ -33,6 +33,7 @@ export BITROUTER_TEST_EXAMPLES_DIR="${CARGO_TARGET_DIR:-$PWD/target}/debug/examp
 cargo nextest run --workspace --all-features --test-threads 4 --no-fail-fast
 cargo test --workspace --all-features --doc
 cargo clippy --workspace --all-features --all-targets -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 cargo fmt -- --check
 ```
 
@@ -40,24 +41,27 @@ The audit requires a fresh public OpenRouter response. Offline build/check
 success does not constitute identity-audit success. Account-scoped listing
 feeds use their declared environment variables; CI binds repository secrets.
 
-Verified on macOS on 2026-10-23 (local date):
+Verified on macOS on 2026-10-24 (local date):
 
 | Check | Result |
 | --- | --- |
-| Complete workspace nextest, all features | 4,950 passed, 150 existing ignored; 478.811 seconds |
+| Complete workspace nextest, all features | 4,953 passed, 150 existing ignored; 598.097 seconds |
+| Standalone registry crate tests | 44 passed, including TLS credential isolation |
 | Registry/AI ownership regression run | 203 passed |
 | Workspace documentation tests | 11 passed, 1 existing ignored |
+| Workspace rustdoc, all features, `-D warnings` | Passed |
 | Workspace Clippy, all features and targets, `-D warnings` | Passed |
+| Minimal and server-tools production profiles, `-D warnings` | Passed |
 | Rust formatting | Passed |
-| Registry validate/build and generated-artifact check | Passed; 59 recommendations, 45 providers |
+| Registry validate/build and generated-artifact check | Passed; 57 recommendations, 45 providers |
 | Fresh OpenRouter canonical identity audit | 455 references, 63 distinct IDs, 15 native-only offers, zero mismatches |
 | AI normal dependency-tree boundary | Passed; no registry JSON engine or runtime dependency |
 
 The live audit observed the full-list response at
-`2026-10-22T22:03:57.500015Z`, SHA-256
-`c42c3d3e6a83690b2cce4d61d873bc61be4af11fb174f3b44b599d1d41b9581d`.
+`2026-10-23T19:55:30.035426Z`, SHA-256
+`15d53466857439b8d03deb0218f914ce2f9fbc556b3c0e73535e1a592625cade`.
 The admitted public document SHA-256 is
-`dc517414d96ae2850d888118d235bb036e861e025c3a339cc53b8b52055b7ac3`.
+`c6bb2ad2c2e0f9f18b525bbb39f2cf0cba5430050d3ac232930e09db3c183eb6`.
 Full local command logs and structured reports are retained in the gitignored
 `docs/superpowers/evidence/registry-v1/` working directory.
 
@@ -115,6 +119,14 @@ authority, curation/inventory independence, and revision-preserving promotion.
   sensitive. TLS fixtures cover header-only bearer/custom authentication for
   both listing and identity requests; plaintext addresses fail before secret
   lookup or connection, and header debug output redacts credentials.
+- Minimal gateway profiles compile without the Core recommendation selector.
+  Registry admission owns JSON Schema validation in every application profile;
+  the dependency gate still rejects harness result validation in profiles that
+  do not enable the harness.
+- Upstream catalog integration rolls two old Grok recommendations out of the
+  curated list while retaining independent provider inventories. New Azure and
+  Novita offers have reviewed native/canonical bindings and fresh global audit.
+  Fast-forward stack refreshes preserve the dependency on the gateway change.
 - A staged response is not a successful check while waiting behind a reload.
   `checked_at` advances only after successful fenced routing publication.
 - Selection and final validation share content-free request requirements.

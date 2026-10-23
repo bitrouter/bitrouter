@@ -347,9 +347,10 @@ jobs:
         run: |
           cargo metadata --no-deps --format-version 1 | jq -e '
             [.packages[].name] | sort ==
-            ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-sdk", "dist-helper"]'
-      - name: contracts and client build independently
+            ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "dist-helper"]'
+      - name: contracts, registry and client build independently
         run: |
+          cargo test -p bitrouter-registry --all-features
           cargo test -p bitrouter-ai
           cargo test -p bitrouter-ai --all-features
           cargo test -p bitrouter-sdk
@@ -438,8 +439,13 @@ jobs:
           esac
           case ",$PROFILE_FEATURES," in
             *,harness,*|*,tui,*) ;;
-            *) if grep -Eq '^jsonschema v' profile-tree.txt; then
-                 echo '::error::profile without harness pulled result validation'; exit 1
+            *)
+               # Registry admission validates its wire schema in every profile.
+               # The application must still keep harness result validation optional.
+               cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+                 -e normal,build -i jsonschema --depth 1 --prefix none > profile-schema-owners.txt
+               if grep -Ev '^(jsonschema|bitrouter-registry) v' profile-schema-owners.txt; then
+                 echo '::error::profile without harness pulled schema validation outside registry'; exit 1
                fi ;;
           esac
           case ",$PROFILE_FEATURES," in

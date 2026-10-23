@@ -343,6 +343,7 @@ pub(crate) fn select(
 
 /// The default automatic model pool is the current curated/available subset.
 /// Explicit routes use the whole admitted provider inventory instead.
+#[cfg(any(feature = "core", test))]
 pub(crate) fn recommended(config: &crate::config::Config, id: &str) -> bool {
     config.registry_models.as_ref().is_none_or(|models| {
         models.iter().any(|m| {
