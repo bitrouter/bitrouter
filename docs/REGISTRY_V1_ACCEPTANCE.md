@@ -58,8 +58,8 @@ Verified on macOS on 2026-10-24 (local date):
 | AI normal dependency-tree boundary | Passed; no registry JSON engine or runtime dependency |
 
 The live audit observed the full-list response at
-`2026-10-23T19:55:30.035426Z`, SHA-256
-`15d53466857439b8d03deb0218f914ce2f9fbc556b3c0e73535e1a592625cade`.
+`2026-10-23T20:46:24.318129Z`, SHA-256
+`37da406b4b3d7758f692526acf5aeea5d457fb044086861832a9552e1ee60907`.
 The admitted public document SHA-256 is
 `c6bb2ad2c2e0f9f18b525bbb39f2cf0cba5430050d3ac232930e09db3c183eb6`.
 Full local command logs and structured reports are retained in the gitignored
@@ -126,6 +126,8 @@ authority, curation/inventory independence, and revision-preserving promotion.
 - Upstream catalog integration rolls two old Grok recommendations out of the
   curated list while retaining independent provider inventories. New Azure and
   Novita offers have reviewed native/canonical bindings and fresh global audit.
+  Source-only curation tombstones prevent later discovery from recommending
+  retired entries again while their independent provider offers remain active.
   Fast-forward stack refreshes preserve the dependency on the gateway change.
 - A staged response is not a successful check while waiting behind a reload.
   `checked_at` advances only after successful fenced routing publication.

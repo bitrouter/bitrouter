@@ -68,6 +68,18 @@
       "reason": "Repeated provider health failures; reviewed retirement in issue 873",
       "source_url": "https://github.com/bitrouter/bitrouter/issues/873",
       "recorded_at": "2026-10-22T17:30:00Z"
+    },
+    {
+      "id": "x-ai/grok-4.20",
+      "reason": "Retired from reviewed recommendations by the upstream catalog update; provider inventories remain independent",
+      "source_url": "https://github.com/bitrouter/bitrouter/commit/a1dc3a5beaf73c0fd90dbd5d47aa339c5aa524c3",
+      "recorded_at": "2026-10-23T20:45:10Z"
+    },
+    {
+      "id": "x-ai/grok-4.20-multi-agent",
+      "reason": "Retired from reviewed recommendations by the upstream catalog update; provider inventories remain independent",
+      "source_url": "https://github.com/bitrouter/bitrouter/commit/a1dc3a5beaf73c0fd90dbd5d47aa339c5aa524c3",
+      "recorded_at": "2026-10-23T20:45:10Z"
     }
   ],
   "source_url": "https://openrouter.ai/api/v1/models"
