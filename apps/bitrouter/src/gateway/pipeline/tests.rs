@@ -70,6 +70,7 @@ mod unified_routing;
 
 fn target(provider: &str) -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: provider.to_string(),
         service_id: "test-model".to_string(),
         api_base: "https://example.invalid".to_string(),
@@ -4018,6 +4019,7 @@ async fn executor_rejects_response_format_on_unsupported_outbound() -> Result<()
     let executor = HttpExecutor::with_dispatch(Default::default(), dispatch)?;
 
     let target = RoutingTarget {
+        registry: None,
         provider_name: "fake".into(),
         service_id: "m".into(),
         api_base: "https://example.invalid".into(),
@@ -4435,6 +4437,7 @@ fn spawn_auth_retry_server(
 
 fn auth_retry_target(api_base: String) -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: "retry-provider".into(),
         service_id: "test-model".into(),
         api_base,

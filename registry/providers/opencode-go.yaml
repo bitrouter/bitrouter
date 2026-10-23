@@ -1,86 +1,294 @@
-# opencode-go — flat-rate subscription tier from the opencode.ai team. Sister
-# gateway to opencode-zen with a different base URL and catalog; both
-# authenticate with the same `OPENCODE_ZEN_API_KEY` (one opencode account).
-#
-# Official docs:
-# - https://opencode.ai/docs/go/ (catalog, subscription tiers)
-#   Base URL `https://opencode.ai/zen/go/v1/`; per-protocol endpoints appended
-#   by the consumer (openai→/chat/completions default, anthropic→/messages for
-#   MiniMax).
-#
-# The catalog is the gateway's `/models`, pulled at runtime via `auto_sync:
-# v1_models`; protocol globs apply to whatever is discovered.
-name: opencode-go
-display_name: opencode go
-metadata:
-  headquarters: US
-  name: OpenCode
-  privacy_policy_url: https://opencode.ai/legal/privacy-policy
-  slug: opencode
-  terms_of_service_url: https://opencode.ai/legal/terms-of-service
-kind: gateway
-billing: subscription
-api_base: https://opencode.ai/zen/go/v1
-doc_url: https://opencode.ai/docs/go/
-api_protocol:
-  - "opencode-go/minimax-*": anthropic
-  - "*": openai
-auth:
-  kind: bearer
-  env: OPENCODE_ZEN_API_KEY
-models:
-  # Live catalog moved this alias to 0731: https://opencode.ai/zen/go/v1/models
-  - id: qwen/qwen3.7-plus
-    provider_model_id: qwen3.7-plus
-  - id: qwen/qwen3.7-max
-    provider_model_id: qwen3.7-max
-  # Live catalog: https://opencode.ai/zen/go/v1/models
-  - id: qwen/qwen3.8-max
-    provider_model_id: qwen3.8-max
-  - id: moonshotai/kimi-k2.7-code
-    provider_model_id: kimi-k2.7-code
-  - id: z-ai/glm-5.2
-    provider_model_id: glm-5.2
-  - id: minimax/minimax-m3
-    provider_model_id: minimax-m3
-  - id: minimax/minimax-m2.7
-    provider_model_id: minimax-m2.7
-  - id: xiaomi/mimo-v2.5
-    provider_model_id: mimo-v2.5
-  - id: xiaomi/mimo-v2-omni
-    provider_model_id: mimo-v2-omni
-  - id: xiaomi/mimo-v2-pro
-    provider_model_id: mimo-v2-pro
-  - id: xiaomi/mimo-v2.5-pro
-    provider_model_id: mimo-v2.5-pro
-  - id: qwen/qwen3.6-plus
-    provider_model_id: qwen3.6-plus
-  - id: x-ai/grok-4.5
-    provider_model_id: grok-4.5
-  - id: moonshotai/kimi-k3
-    provider_model_id: kimi-k3
-  - id: openai/gpt-5.6-luna
-    provider_model_id: gpt-5.6-luna
-  - id: z-ai/glm-5.3
-    provider_model_id: glm-5.3
-  - id: z-ai/glm-5.3-flash
-    provider_model_id: glm-5.3-flash
-  - id: x-ai/grok-4.6
-    provider_model_id: grok-4.6
-  - id: qwen/qwen3.8-flash
-    provider_model_id: qwen3.8-flash
-  - id: deepseek/deepseek-v4.1-flash
-    provider_model_id: deepseek-v4.1-flash
-  - id: x-ai/grok-4.7
-    provider_model_id: grok-4.7
-  - id: xiaomi/mimo-v2.6-flash
-    provider_model_id: mimo-v2.6-flash
-  - id: xiaomi/mimo-v2.6-pro
-    provider_model_id: mimo-v2.6-pro
-  - id: openai/gpt-6-luna
-    provider_model_id: gpt-6-luna
-  - id: anthropic/claude-haiku-5.5
-    provider_model_id: claude-haiku-5-5
-status: active
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://opencode.ai/zen/go/v1",
+  "status": "active",
+  "auth": {
+    "env": "OPENCODE_ZEN_API_KEY",
+    "kind": "bearer"
+  },
+  "name": "opencode-go",
+  "billing": "subscription",
+  "display_name": "opencode go",
+  "doc_url": "https://opencode.ai/docs/go/",
+  "kind": "aggregator",
+  "metadata": {
+    "headquarters": "US",
+    "name": "OpenCode",
+    "privacy_policy_url": "https://opencode.ai/legal/privacy-policy",
+    "slug": "opencode",
+    "terms_of_service_url": "https://opencode.ai/legal/terms-of-service"
+  },
+  "models": [
+    {
+      "provider_model_id": "qwen3.7-plus",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "qwen/qwen3.7-plus"
+    },
+    {
+      "provider_model_id": "qwen3.7-max",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "qwen/qwen3.7-max"
+    },
+    {
+      "provider_model_id": "qwen3.8-max",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ]
+    },
+    {
+      "provider_model_id": "kimi-k2.7-code",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k2.7-code"
+    },
+    {
+      "provider_model_id": "glm-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    },
+    {
+      "provider_model_id": "minimax-m3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3"
+    },
+    {
+      "provider_model_id": "minimax-m2.7",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "minimax/minimax-m2.7"
+    },
+    {
+      "provider_model_id": "mimo-v2.5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.5"
+    },
+    {
+      "provider_model_id": "mimo-v2-omni",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ]
+    },
+    {
+      "provider_model_id": "mimo-v2-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ]
+    },
+    {
+      "provider_model_id": "mimo-v2.5-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.5-pro"
+    },
+    {
+      "provider_model_id": "qwen3.6-plus",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "qwen/qwen3.6-plus"
+    },
+    {
+      "provider_model_id": "grok-4.5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.5"
+    },
+    {
+      "provider_model_id": "kimi-k3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3"
+    },
+    {
+      "provider_model_id": "gpt-5.6-luna",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "openai/gpt-5.6-luna"
+    },
+    {
+      "provider_model_id": "glm-5.3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.3"
+    },
+    {
+      "provider_model_id": "glm-5.3-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.3-flash"
+    },
+    {
+      "provider_model_id": "grok-4.6",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.6"
+    },
+    {
+      "provider_model_id": "qwen3.8-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-flash"
+    },
+    {
+      "provider_model_id": "deepseek-v4.1-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "deepseek/deepseek-v4.1-flash"
+    },
+    {
+      "provider_model_id": "grok-4.7",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.7"
+    },
+    {
+      "provider_model_id": "mimo-v2.6-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.6-flash"
+    },
+    {
+      "provider_model_id": "mimo-v2.6-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.6-pro"
+    },
+    {
+      "provider_model_id": "gpt-6-luna",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "openai/gpt-6-luna"
+    },
+    {
+      "provider_model_id": "claude-haiku-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "anthropic/claude-haiku-5.5"
+    }
+  ]
+}

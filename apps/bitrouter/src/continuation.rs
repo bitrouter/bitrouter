@@ -2933,6 +2933,7 @@ mod tests {
 
     pub(super) fn target(api_key: &str) -> RoutingTarget {
         RoutingTarget {
+            registry: None,
             provider_name: "openai".into(),
             service_id: "gpt-5".into(),
             api_base: "https://api.openai.example/v1".into(),

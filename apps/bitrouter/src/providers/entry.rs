@@ -124,6 +124,8 @@ fn pattern_matches(pat: &str, model_id: &str) -> bool {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AuthScheme {
+    /// Explicitly no authentication; no credential variable is inferred.
+    None,
     /// `Authorization: Bearer <env(var)>`.
     Bearer {
         /// Env var holding the API key.
@@ -170,7 +172,7 @@ impl AuthScheme {
     pub fn env_var(&self) -> Option<&str> {
         match self {
             AuthScheme::Bearer { env } | AuthScheme::Header { env, .. } => Some(env.as_str()),
-            AuthScheme::Oauth { .. } | AuthScheme::Native { .. } => None,
+            AuthScheme::None | AuthScheme::Oauth { .. } | AuthScheme::Native { .. } => None,
         }
     }
 }

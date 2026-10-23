@@ -1,46 +1,123 @@
-name: minimax_cn
-metadata:
-  headquarters: CN
-  datacenters:
-    - CN
-  name: MiniMax
-  privacy_policy_url: https://platform.minimaxi.com/protocol/privacy-policy
-  slug: minimax
-  status_page_url: https://status.minimaxi.com
-  terms_of_service_url: https://platform.minimaxi.com/protocol/terms-of-service
-api_protocol:
-  - "*": [anthropic, openai]
-protocol_endpoints:
-  openai: https://api.minimaxi.com/v1
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  - id: minimax/minimax-m2.7
-    provider_model_id: MiniMax-M2.7
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-        cache_write: 0.375
-      output_tokens:
-        text: 1.2
-    capabilities:
-      - reasoning
-      - tools
-  - id: minimax/minimax-m3
-    provider_model_id: MiniMax-M3
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-      output_tokens:
-        text: 1.2
-status: active
-weight: 1
-submitted_at: 2026-05-25
-api_base: https://api.minimaxi.com/anthropic/v1
-auth_scheme: x-api-key
-auto_sync:
-  feed: models_dev
-  key: minimax-cn
+{
+  "api_base": "https://api.minimaxi.com/anthropic/v1",
+  "billing": "usage",
+  "status": "active",
+  "weight": 1,
+  "metadata": {
+    "datacenters": [
+      "CN"
+    ],
+    "headquarters": "CN",
+    "name": "MiniMax",
+    "privacy_policy_url": "https://platform.minimaxi.com/protocol/privacy-policy",
+    "slug": "minimax",
+    "status_page_url": "https://status.minimaxi.com",
+    "terms_of_service_url": "https://platform.minimaxi.com/protocol/terms-of-service"
+  },
+  "models": [
+    {
+      "provider_model_id": "MiniMax-M2.7",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.minimaxi.com/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m2.7"
+    },
+    {
+      "provider_model_id": "MiniMax-M3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.minimaxi.com/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3"
+    }
+  ],
+  "name": "minimax_cn",
+  "submitted_at": "2026-05-25T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "MINIMAX_CN_API_KEY"
+  }
+}

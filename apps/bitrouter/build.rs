@@ -104,17 +104,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     if std::env::var_os("CARGO_FEATURE_HARNESS").is_some() {
         write_harness_catalog(&root, &dest)?;
     }
-    let providers_path = root.join("providers.json");
-    let models_path = root.join("models.json");
-    println!("cargo::rerun-if-changed={}", providers_path.display());
-    println!("cargo::rerun-if-changed={}", models_path.display());
-    let providers = read_data(&providers_path)?;
-    let canonical = read_data(&models_path)?;
-    let bundled = serde_json::json!({"providers": providers, "canonical": canonical});
-    std::fs::write(
-        dest.join("provider_registry.json"),
-        serde_json::to_vec(&bundled)?,
-    )?;
+    for name in ["registry.json", "source.json"] {
+        let path = root.join(name);
+        println!("cargo::rerun-if-changed={}", path.display());
+        std::fs::copy(
+            &path,
+            dest.join(if name == "registry.json" {
+                "provider_registry.json"
+            } else {
+                "registry_source.json"
+            }),
+        )?;
+    }
     Ok(())
 }
 

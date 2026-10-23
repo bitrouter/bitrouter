@@ -1,72 +1,251 @@
-name: zai
-metadata:
-  headquarters: CN
-  name: Z.ai
-  privacy_policy_url: https://docs.z.ai/legal-agreement/privacy-policy
-  slug: zai
-  terms_of_service_url: https://docs.z.ai/legal-agreement/terms-of-use
-api_protocol:
-  - "*": [openai, anthropic]
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  # Official model: https://docs.z.ai/guides/llm/glm-5.3
-  # Official pricing: https://docs.z.ai/guides/overview/pricing
-  - id: z-ai/glm-5.3
-    provider_model_id: glm-5.3
-    reasoning_effort:
-      levels: [low, high, max]
-      default: max
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-        cache_read: 0.26
-      output_tokens:
-        text: 4.4
-    capabilities:
-      - reasoning
-      - tools
-  # Official model: https://docs.z.ai/guides/vlm/glm-5.3-flash
-  # The 50% launch pricing expires at 24:00 UTC+8 on 2026-09-09.
-  - id: z-ai/glm-5.3-flash
-    provider_model_id: glm-5.3-flash
-    reasoning_effort:
-      levels: [low, high, max]
-      default: max
-    pricing:
-      input_tokens:
-        no_cache: 0.075
-        cache_read: 0.015
-      output_tokens:
-        text: 0.25
-    capabilities:
-      - reasoning
-      - tools
-  - id: z-ai/glm-5.2
-    provider_model_id: glm-5.2
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-        cache_read: 0.26
-      output_tokens:
-        text: 4.4
-    capabilities:
-      - reasoning
-      - tools
-  - id: z-ai/glm-5.3-flashx
-    provider_model_id: glm-5.3-flashx
-    pricing:
-      input_tokens:
-        no_cache: 0.37
-        cache_read: 0.075
-        cache_write: 0
-      output_tokens:
-        text: 1.25
-status: active
-weight: 1
-submitted_at: 2026-05-25
-api_base: https://api.z.ai/api/paas/v4
-auth_scheme: x-api-key
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://api.z.ai/api/paas/v4",
+  "billing": "usage",
+  "submitted_at": "2026-05-25T00:00:00Z",
+  "status": "active",
+  "metadata": {
+    "headquarters": "CN",
+    "name": "Z.ai",
+    "privacy_policy_url": "https://docs.z.ai/legal-agreement/privacy-policy",
+    "slug": "zai",
+    "terms_of_service_url": "https://docs.z.ai/legal-agreement/terms-of-use"
+  },
+  "models": [
+    {
+      "provider_model_id": "glm-5.3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "max",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "max",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.3"
+    },
+    {
+      "provider_model_id": "glm-5.3-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "max",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "max",
+            "levels": [
+              "low",
+              "high",
+              "max"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.075
+            },
+            "output_tokens": {
+              "text": 0.25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.3-flash"
+    },
+    {
+      "provider_model_id": "glm-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    },
+    {
+      "provider_model_id": "glm-5.3-flashx",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "cache_write": 0,
+              "no_cache": 0.37
+            },
+            "output_tokens": {
+              "text": 1.25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.075,
+              "cache_write": 0,
+              "no_cache": 0.37
+            },
+            "output_tokens": {
+              "text": 1.25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.3-flashx"
+    }
+  ],
+  "name": "zai",
+  "weight": 1,
+  "auth": {
+    "kind": "bearer",
+    "env": "ZAI_API_KEY"
+  }
+}

@@ -1,41 +1,165 @@
-name: xiaomi_token_plan_cn
-display_name: Xiaomi MiMo Token Plan (China)
-metadata:
-  headquarters: CN
-  datacenters:
-    - CN
-  name: Xiaomi
-  privacy_policy_url: https://mimo.mi.com/docs/terms/privacy-policy
-  slug: xiaomi
-  terms_of_service_url: https://mimo.mi.com/docs/terms/user-agreement
-billing: subscription
-api_base: https://token-plan-cn.xiaomimimo.com/v1
-protocol_endpoints:
-  anthropic: https://token-plan-cn.xiaomimimo.com/anthropic
-api_protocol:
-  - "*": [openai, responses, anthropic]
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  - id: xiaomi/mimo-v2.5-pro
-    provider_model_id: mimo-v2.5-pro
-    capabilities:
-      - reasoning
-      - tools
-  - id: xiaomi/mimo-v2.5
-    provider_model_id: mimo-v2.5
-    capabilities:
-      - reasoning
-      - tools
-  - id: xiaomi/mimo-v2.6-flash
-    provider_model_id: mimo-v2.6-flash
-  - id: xiaomi/mimo-v2.6-pro
-    provider_model_id: mimo-v2.6-pro
-status: active
-weight: 1
-submitted_at: 2026-07-06
-auth_scheme: x-api-key
-auto_sync:
-  feed: models_dev
-  key: xiaomi-token-plan-cn
+{
+  "api_base": "https://token-plan-cn.xiaomimimo.com/v1",
+  "weight": 1,
+  "submitted_at": "2026-07-06T00:00:00Z",
+  "status": "active",
+  "billing": "subscription",
+  "display_name": "Xiaomi MiMo Token Plan (China)",
+  "metadata": {
+    "datacenters": [
+      "CN"
+    ],
+    "headquarters": "CN",
+    "name": "Xiaomi",
+    "privacy_policy_url": "https://mimo.mi.com/docs/terms/privacy-policy",
+    "slug": "xiaomi",
+    "terms_of_service_url": "https://mimo.mi.com/docs/terms/user-agreement"
+  },
+  "models": [
+    {
+      "provider_model_id": "mimo-v2.5-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic"
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.5-pro"
+    },
+    {
+      "provider_model_id": "mimo-v2.5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic"
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.5"
+    },
+    {
+      "provider_model_id": "mimo-v2.6-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic"
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.6-flash"
+    },
+    {
+      "provider_model_id": "mimo-v2.6-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic"
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.6-pro"
+    }
+  ],
+  "name": "xiaomi_token_plan_cn",
+  "auth": {
+    "kind": "bearer",
+    "env": "XIAOMI_TOKEN_PLAN_CN_API_KEY"
+  }
+}

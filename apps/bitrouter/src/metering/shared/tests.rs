@@ -19,6 +19,7 @@ pub(crate) fn fixture() -> Result<Record> {
         attribution.provider_id = format!("provider-{index}");
         attribution.model_id = format!("model-{index}");
         attribution.tariff = Some(FrozenTariff {
+            registry_price: None,
             protocol: attribution.protocol.clone(),
             endpoint_profile: "fixture".into(),
             tariff_profile: Some("fixture".into()),

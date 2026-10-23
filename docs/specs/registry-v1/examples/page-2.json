@@ -1,0 +1,12 @@
+{
+  "payload": {
+    "models": [{
+      "model": {"id": "chat-1"},
+      "profile": {"name": "Example Chat 1"},
+      "cost": {"input": "0.000001"},
+      "lifecycle": "active"
+    }],
+    "has_more": false,
+    "next_cursor": null
+  }
+}

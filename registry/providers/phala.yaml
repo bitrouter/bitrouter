@@ -1,47 +1,78 @@
-name: phala
-display_name: Phala
-metadata:
-  headquarters: US
-  name: Phala
-  privacy_policy_url: https://phala.com/privacy
-  slug: phala
-  status_page_url: https://status.phala.network
-  terms_of_service_url: https://phala.network/terms
-api_base: https://inference.phala.com/v1
-api_protocol:
-  - "*": openai
-auth_scheme: bearer
-kind: gateway
-# Phala Cloud confidential (GPU-TEE) inference gateway. Verified 2026-09-05
-# against the public `GET https://inference.phala.com/v1/models` catalog.
-# Distinct from the `redpill` provider, which uses `https://api.redpill.ai/v1`.
-# Prices below are the live catalog's per-token prices converted to USD per 1M.
-models:
-  # Catalog and model page: https://phala.com/models/deepseek/deepseek-v4-flash-0731
-  - id: moonshotai/kimi-k3
-    provider_model_id: moonshotai/kimi-k3
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 1.5
-      output_tokens:
-        text: 15
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-      - image_input
-  - id: z-ai/glm-5.2
-    provider_model_id: z-ai/glm-5.2
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-        cache_read: 0.26
-      output_tokens:
-        text: 4.4
-    capabilities:
-      - reasoning
-      - tools
-status: active
-weight: 1
-submitted_at: 2026-07-07
+{
+  "api_base": "https://inference.phala.com/v1",
+  "billing": "usage",
+  "weight": 1,
+  "display_name": "Phala",
+  "kind": "aggregator",
+  "metadata": {
+    "headquarters": "US",
+    "name": "Phala",
+    "privacy_policy_url": "https://phala.com/privacy",
+    "slug": "phala",
+    "status_page_url": "https://status.phala.network",
+    "terms_of_service_url": "https://phala.network/terms"
+  },
+  "models": [
+    {
+      "provider_model_id": "moonshotai/kimi-k3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.5,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3"
+    },
+    {
+      "provider_model_id": "z-ai/glm-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    }
+  ],
+  "name": "phala",
+  "status": "active",
+  "submitted_at": "2026-07-07T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "PHALA_API_KEY"
+  }
+}

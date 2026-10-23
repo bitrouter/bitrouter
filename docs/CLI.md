@@ -711,9 +711,11 @@ daemon, or exits. Subsequent bare invocations immediately open the saved TUI.
 
 Interactive setup lists every active, public provider from the registry in one
 alphabetical list. BitRouter Cloud (`bitrouter`) is an ordinary provider row.
-The fetched/cached registry is supplemented by the binary's committed snapshot,
-so a fresh installation also has a catalog offline. A custom or disabled registry
-remains authoritative. Configured credentials are marked; select additional
+Startup uses that source's valid cache or the source-bound packaged default as
+whole alternatives, so a fresh installation has a default catalog offline.
+Custom sources never borrow the packaged default. Background refresh starts
+after readiness and updates subsequent routes; disable it with
+`registry.auto_refresh: false`. Configured credentials are marked; select additional
 providers to sign in, then choose **Continue to harness setup** (End jumps there).
 
 Every setup choice uses the same searchable, eight-row scrolling selector:
@@ -1364,9 +1366,10 @@ required; npm obtains the pinned adapter on first use. No `agents:` entry is
 needed for either built-in id.
 
 Codex and Claude subscription login metadata and model defaults also ship in
-the binary. With the default public registry, missing provider/model entries
-are filled from this snapshot; published metadata takes precedence. A custom
-registry URL or `registry.enabled: false` opts out. A stored subscription login
+the binary. With the default public registry, the packaged document is used
+only when no usable source-bound cache exists; remote and packaged inventories
+are never merged. A custom registry URL or `registry.enabled: false` opts out.
+A stored subscription login
 auto-enables its provider, so no manual `providers:` entry is required.
 
 When `openai-codex` is active, Codex ACP can use its native default model

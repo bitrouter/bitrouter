@@ -1,32 +1,68 @@
-name: alibaba_coding_plan
-display_name: Alibaba Cloud Coding Plan (International)
-metadata:
-  headquarters: CN
-  datacenters:
-    - SG
-  name: Alibaba Cloud
-  privacy_policy_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy
-  slug: alibaba-cloud
-  status_page_url: https://status.alibabacloud.com
-  terms_of_service_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use
-billing: subscription
-api_base: https://coding-intl.dashscope.aliyuncs.com/v1
-api_protocol:
-  - "*": openai
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  - id: qwen/qwen3.7-max
-    provider_model_id: qwen3.7-max
-  - id: qwen/qwen3.6-plus
-    provider_model_id: qwen3.6-plus
-  - id: qwen/qwen3.7-plus
-    provider_model_id: qwen3.7-plus
-status: active
-weight: 1
-submitted_at: 2026-06-05
-auth_scheme: x-api-key
-auto_sync:
-  feed: models_dev
-  key: alibaba-coding-plan
+{
+  "api_base": "https://coding-intl.dashscope.aliyuncs.com/v1",
+  "weight": 1,
+  "status": "active",
+  "submitted_at": "2026-06-05T00:00:00Z",
+  "billing": "subscription",
+  "display_name": "Alibaba Cloud Coding Plan (International)",
+  "metadata": {
+    "datacenters": [
+      "SG"
+    ],
+    "headquarters": "CN",
+    "name": "Alibaba Cloud",
+    "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+    "slug": "alibaba-cloud",
+    "status_page_url": "https://status.alibabacloud.com",
+    "terms_of_service_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use"
+  },
+  "models": [
+    {
+      "provider_model_id": "qwen3.7-max",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.7-max"
+    },
+    {
+      "provider_model_id": "qwen3.6-plus",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.6-plus"
+    },
+    {
+      "provider_model_id": "qwen3.7-plus",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.7-plus"
+    }
+  ],
+  "name": "alibaba_coding_plan",
+  "auth": {
+    "kind": "bearer",
+    "env": "ALIBABA_CODING_PLAN_API_KEY"
+  }
+}

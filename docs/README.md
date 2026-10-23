@@ -1,9 +1,17 @@
 # BitRouter docs
 
-This folder holds **internal development docs** — the CLI reference, the
-workspace architecture guide, and design specs. It is *not* published anywhere.
+This folder holds internal development documentation and the version-controlled
+[protocol specifications](specs/README.md). The protocol directory has its own
+authorship and compatibility rules; development plans are not protocol standards.
 
 ## Contents
+
+- [Protocol specifications](specs/README.md) — tracked interoperability contracts.
+  [Registry v1](specs/registry-v1/README.md) is the first protocol, currently
+  `1.0.0-beta.6`, with [conformance requirements](specs/registry-v1/conformance.md).
+  Separates curated automatic-routing models from provider inventories and
+  defines protocol names, extensibility, mapped/authenticated synchronization,
+  and BitRouter's first-party source, cache, and refresh policy.
 
 - [Gateway multi-instance contract](GATEWAY_MULTI_INSTANCE_SPEC.md),
   [progress ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md), and

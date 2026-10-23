@@ -1,90 +1,157 @@
-# Ambient — OpenAI-compatible inference API. Bearer auth on `Authorization`.
-#
-# Official auth + endpoint docs:
-# - https://docs.ambient.xyz/ (developer docs)
-# - https://api.ambient.xyz/docs (OpenAPI reference)
-# - base URL `https://api.ambient.xyz/v1`; Chat Completions wire format
-#   (`POST /v1/chat/completions`); model list at `GET /v1/models`.
-#
-# Catalog source: models.dev (provider key `ambient`). The seed entries below
-# are complemented by the same automatic catalog sync consumers use at runtime.
-# Ambient also serves its own `GET /v1/models`.
-name: ambient
-display_name: Ambient
-metadata:
-  headquarters: US
-  name: Ambient
-  privacy_policy_url: https://ambient.xyz/privacy
-  slug: ambient
-  terms_of_service_url: https://ambient.xyz/terms
-api_base: https://api.ambient.xyz/v1
-doc_url: https://docs.ambient.xyz/
-api_protocol:
-  - "*": openai
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-auth:
-  kind: bearer
-  env: AMBIENT_API_KEY
-# Seed the one model verified production-ready on Ambient's live API:
-# `moonshotai/kimi-k2.7-code` (~1.7s TTFT, ~65 tok/s, standard OpenAI-compatible
-# streaming via `delta.content`). Pricing is from Ambient's live `GET /v1/models`
-# (USD per 1M tokens) — authoritative for billing and currently higher than the
-# models.dev feed. Automatic sync leaves this hand-set entry untouched and
-# attaches other registry models Ambient serves from the same feed at runtime.
-models:
-  - id: moonshotai/kimi-k2.7-code
-    provider_model_id: moonshotai/kimi-k2.7-code
-    pricing:
-      input_tokens:
-        no_cache: 0.73
-        cache_read: 0.15
-      output_tokens:
-        text: 3.5
-    capabilities:
-      - reasoning
-      - tools
-      - structured_outputs
-  - id: z-ai/glm-5.2
-    provider_model_id: z-ai/glm-5.2
-    pricing:
-      input_tokens:
-        no_cache: 1.05
-        cache_read: 0.2
-        cache_write: 0
-      output_tokens:
-        text: 4.4
-  # Dated revision in the live catalog: https://api.ambient.xyz/v1/models
-  - id: xiaomi/mimo-v2.5
-    provider_model_id: xiaomi/mimo-v2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.4
-        cache_read: 0.08
-        cache_write: 0
-      output_tokens:
-        text: 2
-  - id: qwen/qwen3.8-27b
-    provider_model_id: qwen/qwen3.8-27b
-    pricing:
-      input_tokens:
-        no_cache: 0.32
-        cache_read: 0.16
-        cache_write: 0
-      output_tokens:
-        text: 3.2
-  - id: minimax/minimax-m3
-    provider_model_id: minimax/minimax-m3
-    pricing:
-      input_tokens:
-        no_cache: 0.23
-        cache_read: 0.05
-        cache_write: 0.0
-      output_tokens:
-        text: 0.96
-status: active
-weight: 1
-submitted_at: 2026-06-23
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://api.ambient.xyz/v1",
+  "billing": "usage",
+  "auth": {
+    "env": "AMBIENT_API_KEY",
+    "kind": "bearer"
+  },
+  "submitted_at": "2026-06-23T00:00:00Z",
+  "display_name": "Ambient",
+  "doc_url": "https://docs.ambient.xyz/",
+  "metadata": {
+    "headquarters": "US",
+    "name": "Ambient",
+    "privacy_policy_url": "https://ambient.xyz/privacy",
+    "slug": "ambient",
+    "terms_of_service_url": "https://ambient.xyz/terms"
+  },
+  "models": [
+    {
+      "provider_model_id": "moonshotai/kimi-k2.7-code",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools",
+            "structured_outputs"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.15,
+              "no_cache": 0.73
+            },
+            "output_tokens": {
+              "text": 3.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k2.7-code"
+    },
+    {
+      "provider_model_id": "z-ai/glm-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 0,
+              "no_cache": 1.05
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    },
+    {
+      "provider_model_id": "xiaomi/mimo-v2.5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.08,
+              "cache_write": 0,
+              "no_cache": 0.4
+            },
+            "output_tokens": {
+              "text": 2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.5"
+    },
+    {
+      "provider_model_id": "qwen/qwen3.8-27b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.16,
+              "cache_write": 0,
+              "no_cache": 0.32
+            },
+            "output_tokens": {
+              "text": 3.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-27b"
+    },
+    {
+      "provider_model_id": "minimax/minimax-m3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.0,
+              "no_cache": 0.23
+            },
+            "output_tokens": {
+              "text": 0.96
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3"
+    }
+  ],
+  "name": "ambient",
+  "weight": 1,
+  "status": "active"
+}

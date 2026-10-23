@@ -1351,6 +1351,10 @@ async fn load_configuration_baseline_at(
 /// reported together so an unrelated subsystem (e.g. a missing policy dir)
 /// doesn't mask a fixable routing-table reload.
 pub struct AppReloader {
+    /// Last fully applied primary input, before registry/discovery enrichment.
+    registry_baseline: Mutex<Option<crate::config::Config>>,
+    registry_epoch: AtomicU64,
+    registry_changed: tokio::sync::Notify,
     policy_store: Arc<PolicyStore>,
     /// Concrete handle on the routing table. Both reload paths build a
     /// fresh `Config` in the app layer — so product provider
@@ -1403,6 +1407,143 @@ enum ReloadInvocation {
 }
 
 #[cfg(test)]
+mod registry_publication_tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::gateway::catalog::{
+        Catalog,
+        store::{CatalogSnapshot, CatalogStore, Durability, StoreError},
+    };
+    use crate::gateway::model::client::HttpTimeouts;
+    use crate::gateway::pipeline::{executor::HttpExecutor, routing::RoutingPrefs};
+    use registry_json as serde_json;
+    use serde_json::json;
+
+    struct BrokenStore;
+    impl CatalogStore for BrokenStore {
+        fn load(&self, _: &str) -> Result<Option<CatalogSnapshot>, StoreError> {
+            Ok(None)
+        }
+        fn save(&self, _: &str, _: &CatalogSnapshot) -> Result<Durability, StoreError> {
+            Err(StoreError::Unavailable)
+        }
+    }
+    #[tokio::test]
+    async fn registry_publication_waits_for_reload_and_memory_survives_persistence_failure()
+    -> anyhow::Result<()> {
+        let mut initial = Config::default();
+        initial.registry.url = Some(format!("https://fixture.example/{}", uuid::Uuid::new_v4()));
+        let source = initial.registry.source().to_owned();
+        let table =
+            Arc::new(crate::config::routing_table::ConfigRoutingTable::from_config(initial));
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            table.clone(),
+            Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+            ReloadSource::Default,
+        );
+        let raw = crate::gateway::catalog::tests::document("fresh");
+        let snapshot = CatalogSnapshot {
+            fetched_at: 42,
+            data: crate::gateway::catalog::decode::from_slice(&serde_json::to_vec(&raw)?)?,
+        };
+        let mut catalog = Catalog::with_store(&source, Arc::new(BrokenStore));
+        let held = reloader.coordinator.reserve_local()?;
+        assert!(matches!(
+            reloader
+                .publish_registry(0, &source, &snapshot, &mut catalog)
+                .await,
+            Err(RegistryPublishError::Busy)
+        ));
+        assert!(catalog.snapshot().is_none());
+        assert!(matches!(
+            crate::config::routing_table::resolve_route_chain(
+                &table.snapshot_config(),
+                "org/model",
+                &RoutingPrefs::default()
+            ),
+            Err(crate::gateway::error::BitrouterError::NotFound(_))
+        ));
+        drop(held);
+        assert_eq!(
+            reloader
+                .publish_registry(0, &source, &snapshot, &mut catalog)
+                .await?,
+            Durability::Memory
+        );
+        assert!(
+            catalog
+                .snapshot()
+                .is_some_and(|s| s.fetched_at > snapshot.fetched_at)
+        );
+        assert_eq!(
+            crate::config::routing_table::resolve_route_chain(
+                &table.snapshot_config(),
+                "org/model",
+                &RoutingPrefs::default()
+            )?[0]
+                .service_id,
+            "fresh"
+        );
+        let settings = crate::config::RegistryConfig {
+            url: Some(source),
+            ..Default::default()
+        };
+        assert_eq!(
+            crate::gateway::catalog::cache::load(&settings)
+                .await
+                .and_then(|d| d.document),
+            Some(raw)
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn withdrawn_oauth_provider_cannot_resurrect_as_a_manual_route() -> anyhow::Result<()> {
+        let mut initial = Config::default();
+        initial.registry.url = Some(format!("https://fixture.example/{}", uuid::Uuid::new_v4()));
+        let source = initial.registry.source().to_owned();
+        let table = Arc::new(
+            crate::config::routing_table::ConfigRoutingTable::from_config(initial.clone()),
+        );
+        let reloader = AppReloader::new(
+            Arc::new(PolicyStore::new()),
+            table.clone(),
+            Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+            ReloadSource::Default,
+        );
+        let mut live = initial;
+        live.providers.insert(
+            "logged-in".into(),
+            crate::config::ProviderConfig {
+                api_base: "https://old.example/v1".into(),
+                models: vec![serde_json::from_value(json!({"id":"old"}))?],
+                registry: Some(json!({"status":"active","auth":{"kind":"oauth"}})),
+                ..Default::default()
+            },
+        );
+        table.replace_prepared_config(live).await?;
+        let raw = json!({"version":1,"spec_revision":bitrouter_registry::document::SPEC_REVISION,"as_of":"2026-10-22T00:00:00Z","data":{"models":[],"providers":[]}});
+        let snapshot = CatalogSnapshot {
+            fetched_at: 42,
+            data: crate::gateway::catalog::decode::from_slice(&serde_json::to_vec(&raw)?)?,
+        };
+        reloader
+            .publish_registry(0, &source, &snapshot, &mut Catalog::new(&source))
+            .await?;
+        assert!(
+            crate::config::routing_table::resolve_route_chain(
+                &table.snapshot_config(),
+                "logged-in:old",
+                &RoutingPrefs::default()
+            )?
+            .is_empty()
+        );
+        assert!(crate::config::routing_table::list_models_for(&table.snapshot_config()).is_empty());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 struct TestPreparationPause {
     prepared: tokio::sync::Notify,
     resume: tokio::sync::Notify,
@@ -1419,6 +1560,7 @@ impl TestPreparationPause {
 }
 
 struct PreparedReload {
+    source_config: crate::config::Config,
     baseline: ConfigurationBaseline,
     config: crate::config::Config,
     timeout_clients: crate::gateway::pipeline::executor::PreparedProviderTimeouts,
@@ -1453,7 +1595,122 @@ impl PreparationError {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RegistryPublishError {
+    #[error("configuration reload is already running")]
+    Busy,
+    #[error("registry refresh superseded by applied configuration")]
+    Superseded,
+    #[error("registry publication unavailable; retain the prior view until a coherent reload")]
+    Unavailable,
+}
+
 impl AppReloader {
+    pub(crate) fn registry_settings(&self) -> (u64, Option<crate::config::RegistryConfig>) {
+        let baseline = self
+            .registry_baseline
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        (
+            self.registry_epoch.load(Ordering::Acquire),
+            baseline
+                .as_ref()
+                .filter(|c| c.inherit_defaults)
+                .map(|c| c.registry.clone()),
+        )
+    }
+    pub(crate) async fn registry_changed(&self) {
+        self.registry_changed.notified().await;
+    }
+
+    /// A registry-only publication participates in reload serialization but
+    /// never reads source files, reloads policy, or discovers provider models.
+    pub(crate) async fn publish_registry(
+        &self,
+        epoch: u64,
+        source: &str,
+        snapshot: &crate::gateway::catalog::store::CatalogSnapshot,
+        catalog: &mut crate::gateway::catalog::Catalog,
+    ) -> Result<crate::gateway::catalog::store::Durability, RegistryPublishError> {
+        let reservation = self
+            .coordinator
+            .reserve_local()
+            .map_err(|_| RegistryPublishError::Busy)?;
+        if self.coordinator.state().consistency == ReloadConsistency::Mixed {
+            return Err(RegistryPublishError::Unavailable);
+        }
+        let mut fresh = {
+            self.registry_baseline
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+        }
+        .ok_or(RegistryPublishError::Unavailable)?;
+        if epoch != self.registry_epoch.load(Ordering::Acquire)
+            || !fresh.registry.enabled
+            || fresh.registry.source() != source
+        {
+            return Err(RegistryPublishError::Superseded);
+        }
+        let live = self.routing_table.snapshot_config();
+        // Preserve previously applied local login activation and discovery;
+        // registry refresh does not inspect those files or probe endpoints.
+        for (id, provider) in &live.providers {
+            if provider
+                .registry
+                .as_ref()
+                .is_some_and(|p| matches!(p["auth"]["kind"].as_str(), Some("oauth" | "native")))
+                && !fresh.providers.contains_key(id)
+            {
+                let stub = crate::config::ProviderConfig {
+                    api_key: provider.api_key.clone(),
+                    registry: Some(registry_json::json!({"status":"unavailable","models":[]})),
+                    ..Default::default()
+                };
+                fresh.providers.insert(id.clone(), stub);
+            }
+            if let Some(manual) = fresh.providers.get_mut(id)
+                && manual.auto_discover
+                && provider.registry.is_none()
+            {
+                manual.models = provider.models.clone();
+            }
+        }
+        crate::providers::apply::apply_builtin_defaults(&mut fresh);
+        crate::providers::registry::apply::apply_registry(&mut fresh, &snapshot.data);
+        fresh
+            .validate_router_config()
+            .map_err(|_| RegistryPublishError::Unavailable)?;
+        let mut report = ReloadReport::pending(
+            reservation.server_instance_id.clone(),
+            reservation.generation,
+        );
+        reservation.mark_mutation_started();
+        match self.routing_table.replace_prepared_config(fresh).await {
+            Ok(()) => report.participant_applied(ReloadParticipant::RoutingTable),
+            Err(error) => {
+                report.participant_failed(
+                    ReloadParticipant::RoutingTable,
+                    reload_failure("registry_apply_failed", "registry routing update failed"),
+                );
+                report.finish(ReloadOutcome::Failed);
+                self.coordinator.complete(&reservation, report);
+                tracing::warn!(%error,"registry routing publication failed");
+                return Err(RegistryPublishError::Unavailable);
+            }
+        }
+        // A staged candidate waiting behind a reload is not a successful check
+        // until this fenced routing publication has completed.
+        let admitted = crate::gateway::catalog::store::CatalogSnapshot {
+            fetched_at: crate::gateway::catalog::unix_seconds(),
+            data: snapshot.data.clone(),
+        };
+        let durability = catalog.admit(admitted.clone());
+        crate::gateway::catalog::cache::remember(source, &admitted);
+        report.finish(ReloadOutcome::Succeeded);
+        self.coordinator.complete(&reservation, report);
+        Ok(durability)
+    }
     /// Build a reloader over the daemon's reloadable subsystems.
     pub fn new(
         policy_store: Arc<PolicyStore>,
@@ -1463,6 +1720,9 @@ impl AppReloader {
     ) -> Self {
         let startup_config = routing_table.snapshot_config();
         Self {
+            registry_baseline: Mutex::new(Some(startup_config.clone())),
+            registry_epoch: AtomicU64::new(0),
+            registry_changed: tokio::sync::Notify::new(),
             policy_store,
             routing_table,
             startup_config,
@@ -1490,6 +1750,7 @@ impl AppReloader {
     /// enrichment. Production `serve` installs this baseline; embeddings that
     /// omit it report the saved/running relationship as unknown.
     pub fn with_startup_configuration(mut self, baseline: ConfigurationBaseline) -> Self {
+        self.registry_baseline = Mutex::new(Some(baseline.config.clone()));
         self.startup_source_config = Some(baseline.config.clone());
         self.startup_configuration_source = Some(baseline.source.clone());
         self.startup_unclassified_values = baseline.unclassified_values.clone();
@@ -1585,7 +1846,9 @@ impl AppReloader {
             })
     }
 
-    async fn prepare_resolved_candidate(&self) -> Result<ConfigurationBaseline, PreparationError> {
+    async fn prepare_resolved_candidate(
+        &self,
+    ) -> Result<(ConfigurationBaseline, crate::config::Config), PreparationError> {
         let mut baseline = self.prepare_candidate().await?;
         if config_source_kind(&baseline.source) != config_source_kind(&baseline.loaded_source) {
             return Err(PreparationError::restart_required(vec![
@@ -1596,8 +1859,9 @@ impl AppReloader {
         // Discovery is bounded by the SDK and runs here rather than during the
         // live routing-table swap. Every later participant consumes this exact
         // prepared candidate.
+        let source_config = baseline.config.clone();
         resolve_reloadable_config(&mut baseline.config).await;
-        Ok(baseline)
+        Ok((baseline, source_config))
     }
 
     async fn prepare(
@@ -1605,7 +1869,7 @@ impl AppReloader {
         _invocation: ReloadInvocation,
     ) -> Result<PreparedReload, PreparationError> {
         self.wait_during_prepare().await;
-        let baseline = self.prepare_resolved_candidate().await?;
+        let (baseline, source_config) = self.prepare_resolved_candidate().await?;
         let config = baseline.config.clone();
         let changed_unclassified = changed_unclassified_config_paths(
             self.startup_unclassified_values.as_ref(),
@@ -1656,6 +1920,7 @@ impl AppReloader {
             )
         })?;
         Ok(PreparedReload {
+            source_config,
             baseline,
             config,
             timeout_clients,
@@ -1751,6 +2016,7 @@ impl AppReloader {
         // objects even if the source files change after preparation.
         self.wait_after_prepare().await;
         let applied_baseline = prepared.baseline.clone();
+        let applied_source_config = prepared.source_config.clone();
         reservation.mark_mutation_started();
         if self.should_fail_apply(ReloadParticipant::RoutingTable) {
             report.participant_failed(
@@ -1844,6 +2110,18 @@ impl AppReloader {
                 Err(poisoned) => poisoned.into_inner(),
             };
             *running = Some(applied_baseline);
+        }
+        if matches!(
+            outcome,
+            ReloadOutcome::Succeeded | ReloadOutcome::PartiallyApplied
+        ) {
+            *self
+                .registry_baseline
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()) =
+                (outcome == ReloadOutcome::Succeeded).then_some(applied_source_config);
+            self.registry_epoch.fetch_add(1, Ordering::AcqRel);
+            self.registry_changed.notify_one();
         }
         report.finish(outcome);
         reservation.update_progress(&report);
@@ -2382,6 +2660,7 @@ policies:
 
         let api_base = stalled_json_server().await;
         let target = RoutingTarget {
+            registry: None,
             provider_name: "slow".into(),
             service_id: "m".into(),
             api_base,

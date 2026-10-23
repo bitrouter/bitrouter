@@ -74,6 +74,7 @@ fn commit_recorder() -> (
 
 fn target() -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: "fixture".into(),
         service_id: "fixture-model".into(),
         api_base: "https://example.invalid".into(),

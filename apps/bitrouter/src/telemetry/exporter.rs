@@ -1576,6 +1576,7 @@ mod hop_tests {
 
     fn fresh_target(provider: &str) -> RoutingTarget {
         RoutingTarget {
+            registry: None,
             provider_name: provider.to_string(),
             service_id: "test-model".to_string(),
             api_base: "https://api.example.test:8443/v1".to_string(),

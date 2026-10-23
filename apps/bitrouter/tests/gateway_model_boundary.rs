@@ -112,6 +112,7 @@ fn rate_limit_presentation_survives_all_sse_codecs() -> bitrouter::gateway::erro
 fn selected_model_target_uses_overrides_and_redacts_credentials()
 -> bitrouter::gateway::error::Result<()> {
     let mut target = RoutingTarget {
+        registry: None,
         provider_name: "provider".into(),
         service_id: "native-model".into(),
         api_base: "https://original.invalid".into(),
@@ -170,6 +171,7 @@ fn selected_model_target_uses_overrides_and_redacts_credentials()
 #[test]
 fn invocation_failures_retain_sdk_policy_and_cancellation_does_not_fallback() {
     let target = RoutingTarget {
+        registry: None,
         provider_name: "provider".into(),
         service_id: "model".into(),
         api_base: "https://fixture.invalid".into(),

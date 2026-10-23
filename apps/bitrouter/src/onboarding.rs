@@ -791,7 +791,7 @@ async fn run_interactive(
 /// Providers offered by the OSS registry, with no special placement for Cloud.
 #[cfg(feature = "tui")]
 fn provider_choices(
-    data: &bitrouter_ai::catalog::types::RegistryData,
+    data: &crate::gateway::catalog::RegistryData,
 ) -> Vec<&bitrouter_ai::catalog::types::RegistryProvider> {
     let mut providers: Vec<_> = data
         .providers
@@ -1259,7 +1259,7 @@ mod tests {
     #[cfg(feature = "tui")]
     #[test]
     fn provider_menu_contains_every_public_active_entry_in_display_order() -> Result<()> {
-        let data: bitrouter_ai::catalog::types::RegistryData =
+        let data: crate::gateway::catalog::RegistryData =
             serde_json::from_value(serde_json::json!({
                 "providers": [
                     {"name": "zulu", "display_name": "Zulu", "status": "active"},

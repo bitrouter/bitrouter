@@ -287,6 +287,11 @@ impl EvolutionRuntime {
                     let can_match = config.models.contains_key(&model.id)
                         || model.id.starts_with("bitrouter/")
                         || model.id.starts_with('@');
+                    if !can_match
+                        && !crate::gateway::catalog::execution::recommended(&config, &model.id)
+                    {
+                        continue;
+                    }
                     routes.insert(model.id, can_match);
                 }
                 for preset in config.presets.keys() {

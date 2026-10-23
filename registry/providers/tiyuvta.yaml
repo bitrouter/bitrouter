@@ -1,30 +1,28 @@
-# Submitted provider manifest. Both models are live at the same public origin and passed the
-# endpoint-gated public probe battery.
-#
-# Pricing is the owner's 2026-08-12 slightly-under-market list, refreshed from OpenRouter's live
-# shape=v7 effective-pricing feed. Cached prompt tokens retain the deployed 25% input-price ratio.
-name: tiyuvta
-display_name: tiyuvta
-metadata:
-  headquarters: IL
-  # Current live pair inference country.
-  datacenters: [CA]
-  name: tiyuvta
-  privacy_policy_url: https://tiyuvta.ai/privacy/
-  slug: tiyuvta
-  terms_of_service_url: https://tiyuvta.ai/terms/
-kind: first_party
-api_base: https://api.tiyuvta.ai/v1
-doc_url: https://tiyuvta.ai/inference/
-api_protocol:
-  - "*": openai
-auth:
-  kind: bearer
-  env: TIYUVTA_API_KEY
-models: []
-status: suspended
-weight: 1
-submitted_at: 2026-08-12
-community: true
-access: api_key
-billing: usage_token
+{
+  "access": "api_key",
+  "api_base": "https://api.tiyuvta.ai/v1",
+  "weight": 1,
+  "auth": {
+    "env": "TIYUVTA_API_KEY",
+    "kind": "bearer"
+  },
+  "billing": "usage",
+  "community": true,
+  "display_name": "tiyuvta",
+  "doc_url": "https://tiyuvta.ai/inference/",
+  "kind": "first_party",
+  "metadata": {
+    "datacenters": [
+      "CA"
+    ],
+    "headquarters": "IL",
+    "name": "tiyuvta",
+    "privacy_policy_url": "https://tiyuvta.ai/privacy/",
+    "slug": "tiyuvta",
+    "terms_of_service_url": "https://tiyuvta.ai/terms/"
+  },
+  "models": [],
+  "name": "tiyuvta",
+  "status": "suspended",
+  "submitted_at": "2026-08-12T00:00:00Z"
+}

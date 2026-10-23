@@ -60,6 +60,7 @@ fn native_response(valid: bool) -> Value {
 
 fn target(base: &str, provider: &str, protocol: ApiProtocol) -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: provider.into(),
         service_id: "native-test".into(),
         api_base: base.into(),

@@ -56,18 +56,23 @@ Bare Claude models still do not auto-cascade onto a subscription provider.
 
 ## Provider registry (catalog + priority)
 
-BitRouter fetches the public provider registry from
-`https://github.com/bitrouter/bitrouter/tree/main/registry` at startup and on
-reload: a deterministic catalog of public providers (their transport + auth),
-the models, and which providers serve them. It is fetched from the generated
-`dist/registry/` artifacts, disk-cached under
-`$XDG_CACHE_HOME/bitrouter/registry.json` (24h TTL, stale-fallback on a
-network outage), and merged into the routing table. The cache is bound to its
-registry URL; another source's snapshot is never reused. Old cache files without
-source metadata are preserved but require refresh before reuse. Failed refresh
-or persistence keeps the prior complete snapshot. With no usable public cache,
-the application supplies its bundled baseline. Reload credential-variable
-snapshots also use that baseline without network discovery. The merge routes a model id
+BitRouter consumes one complete Registry v1 document. This beta defaults to
+`https://raw.githubusercontent.com/bitrouter/bitrouter/registry-v1/dist/registry/v1/1.0.0-beta.6/registry.json`.
+Startup and ordinary reload use local data immediately: that exact source's
+valid cache, the source-bound packaged default, or an empty registry. Startup
+never waits for HTTP. A host-owned worker downloads compatible updates after
+readiness and every 24 hours after success, retrying failures after one hour.
+Updates atomically change subsequent routes; requests already running retain
+their selected interface and tariff. Pending edits to configuration files are
+applied only by ordinary reload.
+
+The platform user cache uses `bitrouter/registry-v1` (`$XDG_CACHE_HOME` takes
+precedence). Each file is bound to the exact URL and wire major and preserves
+unknown metadata. Failed downloads retain the prior view. A failed cache write
+retains the old file while the newly admitted in-memory view stays active.
+Custom sources never borrow the packaged default or another source's cache.
+Unsupported registry data produces ordinary errors with upgrade guidance.
+The merge routes a model id
 (e.g. `anthropic/claude-sonnet-4.6`) to a provider that serves it, translating
 to that provider's own upstream id. Providers may serve models beyond the
 curated `registry/models` catalog (BYOK / BYO-subscription extras); those route
@@ -76,29 +81,31 @@ gate.
 
 Rules:
 
-- **Public providers only.** Every public registry provider is merged; only
-  `private` ones (invite-only entries, no public registration) are skipped. The
+- **Public providers by default.** Private entries require explicit local
+  provider configuration. The
   registry classifies each provider by how a caller obtains
   access: `api_key` (a portable key), `local_oauth` / `local_pkce` (a local
   interactive login — e.g. `github-copilot`, `openai-codex`), or `private`.
 - **Credential-gated.** An `api_key` provider becomes routable only when its key
-  is present, read from the convention `${NAME}_API_KEY` (uppercased, hyphens →
-  underscores — e.g. `DEEPSEEK_API_KEY`, `ZAI_CODING_PLAN_API_KEY`) or from the
-  provider's declared env var. No key ⇒ not enabled. Declare the provider
+  is present, read only from the registry's explicitly declared env var.
+  No key means not enabled. Declare the provider
   explicitly with `api_key: ${MY_VAR}` to override the env-var name. A
   `local_oauth` / `local_pkce` provider is not env-gated — it activates after
   `bro providers login <provider>`.
 - **Editorial sync stays in build tooling.** Registry sync feeds update the
   published catalog through `dist-helper`; model calls do not interpret an
   `auto_sync` field or implicitly refresh the provider registry.
-- **BitRouter Cloud is a normal public provider.** The public registry entry is
-  still named `bitrouter`, but OSS treats it as BitRouter Cloud and discovers
-  its cloud-owned model list from `/models`.
+- **Local overrides.** A nonempty local `models` list is a complete explicit
+  inventory. Its protocols, constraints and prices remain authoritative. An
+  empty provider stub uses the registry inventory. `registry_endpoint_profile`
+  can explicitly attest a deployment profile required by a registry tariff;
+  a hostname alone never proves project-level pricing eligibility.
 
 ```yaml
 registry:
   enabled: true            # default; set false (or inherit_defaults: false) to disable the merge
-  url: "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry"
+  auto_refresh: true       # false keeps local cache/bundle without HTTP
+  # url: "https://mirror.example/registry.json"  # exact complete document URL
   provider_priority:       # default ladder, highest first
     - first-party-subscription
     - gateway-subscription

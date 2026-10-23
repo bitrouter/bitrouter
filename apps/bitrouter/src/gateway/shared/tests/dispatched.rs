@@ -286,6 +286,7 @@ impl Fixture {
 
     fn target(&self, path: &str) -> RoutingTarget {
         RoutingTarget {
+            registry: None,
             provider_name: "dispatch-fixture".into(),
             service_id: "fixture".into(),
             api_base: format!("{}/{path}", self.base),

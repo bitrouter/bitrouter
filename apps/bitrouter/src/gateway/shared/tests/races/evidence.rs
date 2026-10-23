@@ -16,6 +16,7 @@ pub(super) async fn exercise(first: &Store, second: &Store) -> Result<()> {
     attribution.provider_id = "original-provider".into();
     attribution.model_id = "original-model".into();
     attribution.tariff = Some(FrozenTariff {
+        registry_price: None,
         protocol: attribution.protocol.clone(),
         endpoint_profile: "fixture".into(),
         tariff_profile: Some("fixture".into()),

@@ -1,0 +1,33 @@
+[package]
+name = "bitrouter-registry"
+description = "Registry v1 validation, synchronization, and exact pricing contracts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+registry-json.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
+url.workspace = true
+http.workspace = true
+jsonschema = { version = "0.47.0", default-features = false }
+num-bigint = "0.4"
+num-rational = "0.4"
+num-traits = "0.2"
+semver = "1"
+granit-parser = "0.0.7"
+reqwest.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "io-util"] }
+tokio-rustls = { version = "0.26", features = ["ring"] }
+rcgen = "0.14"
+time = "0.3"

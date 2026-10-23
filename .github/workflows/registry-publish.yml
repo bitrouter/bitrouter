@@ -1,0 +1,106 @@
+name: Registry Publication
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - registry/**
+      - dist/registry/v1/**
+      - apps/bitrouter/registry-dist/**
+      - crates/bitrouter-registry/**
+      - helpers/dist-helper/**
+      - .github/workflows/registry-publish.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: registry-v1-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Load the previous promoted revision
+        id: prior
+        run: |
+          revision="$(jq -er '.spec_revision' dist/registry/v1/registry.json)"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          if git show-ref --verify --quiet refs/remotes/origin/registry-v1; then
+            if git show "origin/registry-v1:dist/registry/v1/$revision/registry.json" > "$RUNNER_TEMP/registry-previous.json"; then
+              echo "available=true" >> "$GITHUB_OUTPUT"
+            fi
+            if [[ "$revision" != *-* ]] && git show origin/registry-v1:dist/registry/v1/registry.json > "$RUNNER_TEMP/registry-previous-default.json"; then
+              echo "default_available=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Audit the exact final candidate afresh
+        env:
+          OPENROUTER_REGISTRY_API_KEY: ${{ secrets.OPENROUTER_REGISTRY_API_KEY }}
+          HAS_PREVIOUS: ${{ steps.prior.outputs.available }}
+          HAS_PREVIOUS_DEFAULT: ${{ steps.prior.outputs.default_available }}
+        run: |
+          args=()
+          if [ "$HAS_PREVIOUS" = true ]; then
+            args+=(--previous "$RUNNER_TEMP/registry-previous.json")
+          fi
+          if [ "$HAS_PREVIOUS_DEFAULT" = true ]; then
+            args+=(--previous "$RUNNER_TEMP/registry-previous-default.json")
+          fi
+          cargo run -p dist-helper -- registry audit --report target/registry-publication.json "${args[@]}"
+          expected="$(jq -er '.audit.output_sha256' target/registry-publication.json)"
+          actual="$(sha256sum dist/registry/v1/registry.json | cut -d' ' -f1)"
+          test "$actual" = "$expected"
+          test -z "$(git status --porcelain -- registry dist/registry apps/bitrouter/registry-dist)"
+
+      - name: Preserve exact public identity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-final-publication-audit
+          path: |
+            target/registry-publication.json
+            target/registry-identity-response.json
+          if-no-files-found: warn
+
+      - name: Promote admitted bytes while preserving older revisions
+        env:
+          REVISION: ${{ steps.prior.outputs.revision }}
+        run: |
+          tree="$RUNNER_TEMP/registry-promoted"
+          if git show-ref --verify --quiet refs/remotes/origin/registry-v1; then
+            git worktree add --detach "$tree" origin/registry-v1
+          else
+            git worktree add --detach "$tree" HEAD
+            git -C "$tree" switch --orphan registry-v1
+          fi
+          mkdir -p "$tree/dist/registry/v1/$REVISION"
+          cp dist/registry/v1/registry.json "$tree/dist/registry/v1/$REVISION/registry.json"
+          publish_unqualified=true
+          if [ -f "$tree/dist/registry/v1/registry.json" ]; then
+            prior="$(jq -er '.spec_revision' "$tree/dist/registry/v1/registry.json")"
+            if [[ "$prior" != *-* && "$REVISION" == *-* ]]; then
+              publish_unqualified=false
+            fi
+          fi
+          if [ "$publish_unqualified" = true ]; then
+            cp dist/registry/v1/registry.json "$tree/dist/registry/v1/registry.json"
+          fi
+          git -C "$tree" add dist/registry/v1
+          if git -C "$tree" diff --cached --quiet; then
+            exit 0
+          fi
+          git -C "$tree" config user.name 'bitrouter-automation[bot]'
+          git -C "$tree" config user.email '267229870+bitrouter-automation[bot]@users.noreply.github.com'
+          git -C "$tree" commit -m "chore: publish registry $REVISION" -m "Source commit: $GITHUB_SHA"
+          git -C "$tree" push origin HEAD:refs/heads/registry-v1
