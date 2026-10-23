@@ -115,22 +115,6 @@ models:
         no_cache: 0.276
       output_tokens:
         text: 1.101
-  - id: x-ai/grok-4.20
-    provider_model_id: x-ai/grok-4.20
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.2
-      output_tokens:
-        text: 2.5
-  - id: x-ai/grok-4.20-multi-agent
-    provider_model_id: x-ai/grok-4.20-multi-agent
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.2
-      output_tokens:
-        text: 2.5
   - id: x-ai/grok-4.3
     provider_model_id: x-ai/grok-4.3
     pricing:

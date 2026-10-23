@@ -2233,6 +2233,26 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "deepseek/deepseek-v4.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "deepseek-v4.1-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "azure",
@@ -2465,34 +2485,6 @@
             }
           },
           "provider_model_id": "qwen/qwen3.7-plus"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "x-ai/grok-4.20",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "x-ai/grok-4.20"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "x-ai/grok-4.20-multi-agent",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "x-ai/grok-4.20-multi-agent"
         },
         {
           "api_protocol": "openai",
@@ -4340,6 +4332,20 @@
             }
           },
           "provider_model_id": "qwen/qwen3.8-max"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "deepseek/deepseek-v4.1-flash-1017",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider_model_id": "deepseek/deepseek-v4.1-flash-1017"
         }
       ],
       "name": "novita",
@@ -5594,24 +5600,6 @@
             "responses",
             "anthropic"
           ],
-          "id": "x-ai/grok-4.20",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "x-ai/grok-4.20"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
           "id": "x-ai/grok-4.3",
           "pricing": {
             "input_tokens": {
@@ -6027,24 +6015,6 @@
             }
           },
           "provider_model_id": "anthropic/claude-fable-5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "x-ai/grok-4.20-multi-agent",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "x-ai/grok-4.20-multi-agent"
         },
         {
           "api_protocol": [
@@ -7197,30 +7167,6 @@
             "reasoning",
             "tools"
           ],
-          "id": "x-ai/grok-4.20-multi-agent",
-          "provider_model_id": "grok-4.20-multi-agent"
-        },
-        {
-          "api_protocol": [
-            "responses",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "x-ai/grok-4.20",
-          "provider_model_id": "grok-4.20"
-        },
-        {
-          "api_protocol": [
-            "responses",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
           "id": "x-ai/grok-4.3",
           "provider_model_id": "grok-4.3"
         },
@@ -7734,29 +7680,6 @@
           "capabilities": [
             "tools"
           ],
-          "id": "x-ai/grok-4.20",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "grok-4.20-0309-non-reasoning",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "responses",
-            "openai"
-          ],
-          "capabilities": [
-            "tools"
-          ],
           "id": "x-ai/grok-build-0.1",
           "pricing": {
             "input_tokens": {
@@ -7768,30 +7691,6 @@
             }
           },
           "provider_model_id": "grok-build-0.1",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "responses",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "id": "x-ai/grok-4.20-multi-agent",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider_model_id": "grok-4.20-multi-agent-0309",
           "rate_limits": {
             "requests_per_minute": 60
           }
