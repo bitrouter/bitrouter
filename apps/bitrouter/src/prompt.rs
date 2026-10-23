@@ -1,11 +1,18 @@
-//! Terminal input driver for the reusable selection surface.
+//! Selection entry point with an optional terminal input driver.
 
+#[cfg(feature = "tui")]
 use std::io::{self, IsTerminal};
 
-use anyhow::{Context, Result};
-use bitrouter_tui::select::{Action, Item, Select, View};
+use crate::presentation::selection::Item;
+#[cfg(feature = "tui")]
+use crate::tui::select::{Action, Select, View};
+#[cfg(feature = "tui")]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(feature = "tui")]
 use futures::StreamExt;
 
+#[cfg(feature = "tui")]
 pub(crate) async fn select(
     title: &str,
     help: &str,
@@ -44,6 +51,19 @@ pub(crate) async fn select(
     }
 }
 
+#[cfg(not(feature = "tui"))]
+pub(crate) async fn select(
+    title: &str,
+    _help: &str,
+    _items: Vec<Item>,
+    _default: usize,
+) -> Result<usize> {
+    anyhow::bail!(
+        "interactive selection for {title} requires the tui feature; use explicit flags or init --yes"
+    );
+}
+
+#[cfg(feature = "tui")]
 async fn interruption() -> io::Result<()> {
     #[cfg(unix)]
     {

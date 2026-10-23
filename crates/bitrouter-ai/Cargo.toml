@@ -1,45 +1,28 @@
 [package]
 name = "bitrouter-ai"
-description = "BitRouter model integration semantics independent of router and application state"
+description = "Lightweight public contracts for BitRouter clients and extensions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+exclude = ["public-api-deps.txt"]
 
 [features]
 default = []
-hosted = ["dep:chrono"]
-pkce = ["dep:rand", "tokio/net", "tokio/io-util"]
-hosted-login = ["hosted", "dep:rand"]
-file-store = []
+# Pure observation-schema helpers for exporter conformance suites.
+testing = []
+# Public contract schemas without a service/runtime dependency.
+schema = ["dep:schemars"]
 
 [dependencies]
-chrono = { workspace = true, optional = true }
-rand = { workspace = true, optional = true }
 serde.workspace = true
-serde_json.workspace = true
-schemars.workspace = true
+# Managed pricing evidence must retain its finite f64 bits in SDK-only builds,
+# independently of the application's feature unification.
+# https://github.com/serde-rs/json/blob/v1.0.150/tests/test.rs
+# Prehashed manifests also require nested JSON object order to survive a public
+# contract round trip without the application's preserve_order feature.
+serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
 thiserror.workspace = true
-async-trait.workspace = true
-base64.workspace = true
-reqwest.workspace = true
-sha2.workspace = true
-tracing.workspace = true
-uuid.workspace = true
-
-futures.workspace = true
-futures-core.workspace = true
-async-stream.workspace = true
-eventsource-stream.workspace = true
-httpdate.workspace = true
-url.workspace = true
-tokio = { workspace = true, features = ["macros", "sync", "rt", "time"] }
-tokio-util = { workspace = true, features = ["rt"] }
-
-
-[dev-dependencies]
-tempfile.workspace = true
-wiremock = "0.6"
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "time"] }
+schemars = { workspace = true, optional = true }

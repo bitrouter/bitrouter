@@ -2,10 +2,13 @@
 //! service. The ACP agent is a fixture; model quality is not evaluated here.
 
 use super::*;
-use bitrouter::acp_trajectory::{CanonicalStore, SessionIdentity};
+use bitrouter::acp_trajectory::CanonicalStore;
 use bitrouter::daemon::{AcpControlPlane, NoopObserveStatus, NoopReloader};
-use bitrouter::evolution::bandit::BanditConfig;
-use bitrouter::evolution::control::{BlockDefinition, BlockRule, BlockStatus, EvolutionMode};
+use bitrouter::gateway::routing::blocks::allocation::BanditConfig;
+use bitrouter::gateway::routing::blocks::control::{
+    BlockDefinition, BlockRule, BlockStatus, EvolutionMode,
+};
+use bitrouter::storage::session_identity::SessionIdentity;
 
 #[path = "evolution/native.rs"]
 mod native;
@@ -20,9 +23,9 @@ impl Drop for ControlServer {
 
 async fn serve_control(
     mock: &MockAcp,
-    config: &bitrouter_sdk::config::Config,
+    config: &bitrouter::config::Config,
 ) -> Result<(
-    bitrouter::evolution::runtime::EvolutionRuntime,
+    bitrouter::core::evolution::runtime::EvolutionRuntime,
     CanonicalStore,
     ControlServer,
 )> {
@@ -48,9 +51,10 @@ async fn serve_control(
             Arc::new(NoopReloader),
             Arc::new(NoopObserveStatus { compiled_in: false }),
             AcpControlPlane {
+                #[cfg(feature = "harness")]
                 runtime: assembled.acp_runtime,
                 metering: bitrouter::metering::MeteringStore::new(assembled.db),
-                inventory: Some(evolution.inventory()),
+                inventory: Some(assembled.gateway_requests.inventory()),
                 evolution: Some(evolution.clone()),
             },
             Some(administration),
@@ -67,79 +71,6 @@ async fn serve_control(
     })
     .await??;
     Ok((evolution, canonical, server))
-}
-
-#[test]
-fn code_fresh_session_preserves_direct_routing_and_timeout_in_the_terminal() -> Result<()> {
-    let mock = MockAcp::new(MockScenario::FreshSessions)?;
-    let child_pid_path = mock._directory.path().join("code-child.pid");
-    let mut command = shell_command(&mock, None)?;
-    for arg in [
-        "code",
-        "stub",
-        "--direct",
-        "--turn-timeout",
-        "1",
-        "--config",
-    ] {
-        command.arg(arg);
-    }
-    command.arg(&mock.config_path);
-    let mut code = CodeFixture {
-        mock,
-        child_pid_path,
-        pty: PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?,
-    };
-    code.wait_for_agent_ready()?;
-    code.pty.send(b"First native session\r")?;
-    code.pty.wait_for_text("FXRP1")?;
-    code.pty.wait_for_text("Turn completed")?;
-    let first = code.mock.wait_for_request("session/prompt")?;
-    code.pty.send(b"/")?;
-    code.pty.wait_for_text("Commands")?;
-    let opening = code.pty.checkpoint();
-    code.pty.send(b"new\r")?;
-    let first_id = first["params"]["sessionId"]
-        .as_str()
-        .context("native id missing")?;
-    code.pty.wait_for_screen_inner(
-        Some(&opening),
-        "a different ready native session",
-        |screen| {
-            screen.contains("FXRD pty-fresh-")
-                && !screen.contains(first_id)
-                && screen.contains("stub · direct · ready")
-        },
-    )?;
-    code.pty.wait_for_text("stub · direct · ready")?;
-    let second = code.pty.checkpoint();
-    code.pty.send(b"wait-for-timeout in the new session\r")?;
-    code.pty.wait_for_text_since(&second, "FXWAIT")?;
-    code.pty.wait_for_text_since(&second, "FXCS")?;
-    let cancel = code.mock.wait_for_request("session/cancel")?;
-    assert_ne!(cancel["params"]["sessionId"], first["params"]["sessionId"]);
-    let captures = std::fs::read_to_string(&code.mock.capture_path)?;
-    let requests = captures
-        .lines()
-        .map(serde_json::from_str::<serde_json::Value>)
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    assert_eq!(
-        requests
-            .iter()
-            .filter(|r| r["method"] == "session/new")
-            .count(),
-        2
-    );
-    assert!(
-        !requests
-            .iter()
-            .any(|r| r["method"] == "session/load" || r["method"] == "session/resume")
-    );
-    assert_eq!(code.mock.captured_prompts()?.len(), 2);
-    // Timeout cancellation finishes cooperatively; closing Code reaps the
-    // replacement child and restores the terminal just as the initial launch.
-    code.pty.send(b"\x04")?;
-    code.assert_terminal_restored()
 }
 
 #[test]
@@ -174,7 +105,7 @@ models:
         .enable_all()
         .build()?;
     let (evolution, _server) = runtime.block_on(async {
-        let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+        let config = bitrouter::config::parse_with(&config_text, |_| None)?;
         let (evolution, _, server) = serve_control(&mock, &config).await?;
         evolution
             .register(
@@ -254,7 +185,7 @@ async fn fixed_history_score(
     score: u32,
 ) -> Result<()> {
     use bitrouter::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-    use bitrouter::evolution::{
+    use bitrouter::core::evolution::{
         evidence::EvidenceKind,
         rubric::{self, Applicability, RubricEvaluation, RubricItem},
         scoring,
@@ -329,7 +260,7 @@ fn code_checkpoint_history_displays_recorded_revisions_without_changing_the_curr
         std::fs::read_to_string(&mock.config_path)?.replace(MOCK_DAEMON_CONFIG, "");
     config_text.push_str(&format!("\nserver:\n  skip_auth: true\n  control_socket: history.sock\ndatabase:\n  url: {}\nregistry:\n  enabled: false\nacp_recording:\n  enabled: true\n", serde_json::to_string(&database)?));
     std::fs::write(&mock.config_path, &config_text)?;
-    let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+    let config = bitrouter::config::parse_with(&config_text, |_| None)?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()

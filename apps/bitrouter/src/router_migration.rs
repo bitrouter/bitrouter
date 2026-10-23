@@ -6,8 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::config;
+use crate::config::Config;
 use anyhow::{Context, Result, bail};
-use bitrouter_sdk::config::{self, Config};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -364,7 +365,7 @@ pub fn candidate_text(raw: &str) -> Result<(String, Vec<String>)> {
 }
 
 fn verify_equivalence(original: &Config, migrated: &Config) -> Result<()> {
-    use bitrouter_sdk::config::router::RouterSelection;
+    use crate::config::router::RouterSelection;
     if !migrated.presets.is_empty()
         || migrated.routers.len() != original.routers.len() + original.presets.len()
     {

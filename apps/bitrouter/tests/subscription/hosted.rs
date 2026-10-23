@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use bitrouter_ai::auth::AuthApplier;
-use bitrouter_ai::error::ModelError;
-use bitrouter_ai::target::ModelTarget;
+use bitrouter::gateway::model::error::ModelError;
+use bitrouter::gateway::model::target::ModelTarget;
+use bitrouter::gateway::providers::auth::AuthApplier;
 use bitrouter_ai::types::ApiProtocol;
 use chrono::{Duration, Utc};
 use reqwest::header::{AUTHORIZATION, HeaderValue};
@@ -10,9 +10,9 @@ use serde_json::json;
 use wiremock::matchers::{body_string_contains, method, path as wm_path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use bitrouter_ai::providers::hosted::PROVIDER_ID;
-use bitrouter_ai::providers::hosted::applier::BitrouterAuthApplier;
-use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
+use bitrouter::gateway::providers::hosted::PROVIDER_ID;
+use bitrouter::gateway::providers::hosted::applier::BitrouterAuthApplier;
+use bitrouter::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
 
 use bitrouter::cloud::account::manager::CredentialManager;
 
@@ -309,7 +309,7 @@ async fn corrupt_store_maps_to_internal_error() -> anyhow::Result<()> {
     assert!(matches!(
         error,
         ModelError::CredentialStorage {
-            failure: bitrouter_ai::auth::store::StoreError::Unavailable
+            failure: bitrouter::gateway::providers::auth::store::StoreError::Unavailable
         }
     ));
     Ok(())
@@ -412,7 +412,7 @@ async fn fallback_never_hides_a_stored_origin_error_and_stored_key_wins() -> any
         .await?;
     let applier = applier(manager);
     let mut target = target_with_api_key("fallback-key");
-    target.credential_priority = bitrouter_ai::target::CredentialPriority::Fallback;
+    target.credential_priority = bitrouter::gateway::model::target::CredentialPriority::Fallback;
     let applied = applier.apply(empty_request()?, &target).await?;
     assert_eq!(
         applied

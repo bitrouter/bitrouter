@@ -3,6 +3,7 @@
 
 #![cfg(unix)]
 
+use bitrouter::harness::agent::AgentConfigExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -404,11 +405,13 @@ async fn local_contract_rejects_mismatched_server_version() -> Result<()> {
             .await?;
         Ok::<_, std::io::Error>(())
     });
-    let error =
-        bitrouter::agent_local::request(&socket, bitrouter::agent_local::Operation::Capabilities)
-            .await
-            .err()
-            .context("version mismatch should fail")?;
+    let error = bitrouter::client::agent_local::request(
+        &socket,
+        bitrouter::client::agent_local::Operation::Capabilities,
+    )
+    .await
+    .err()
+    .context("version mismatch should fail")?;
     ensure!(error.to_string().contains("contract version"));
     server.await??;
     Ok(())
@@ -416,7 +419,7 @@ async fn local_contract_rejects_mismatched_server_version() -> Result<()> {
 
 #[tokio::test]
 async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
-    use bitrouter::agent_local::{Operation, ReplyResult};
+    use bitrouter::client::agent_local::{Operation, ReplyResult};
 
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
@@ -469,11 +472,11 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         &bitrouter::paths::load_config(&bitrouter::paths::ConfigSource::File(config.clone()))
             .await?,
     );
-    let local_socket = bitrouter::agent_local::socket_path(&control);
+    let local_socket = bitrouter::client::agent_local::socket_path(&control);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         if matches!(
-            bitrouter::agent_local::request(&local_socket, Operation::Capabilities).await,
+            bitrouter::client::agent_local::request(&local_socket, Operation::Capabilities).await,
             Ok(ReplyResult::Capabilities { .. })
         ) {
             break;
@@ -554,7 +557,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         .send()
         .await?;
     ensure!(stale.status() == reqwest::StatusCode::CONFLICT);
-    let local_client = bitrouter::agent_local::ThreadClient::connect(&local_socket).await?;
+    let local_client = bitrouter::client::agent_local::ThreadClient::connect(&local_socket).await?;
     ensure!(local_client.server_instance_id == instance);
     let denied = local_client
         .request(Operation::ReadThread {
@@ -565,9 +568,9 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         .context("caller ownership should be checked")?;
     ensure!(
         denied
-            .downcast_ref::<bitrouter_orchestrator::service::ServiceError>()
+            .downcast_ref::<bitrouter::client::agent_local::ReplyError>()
             .is_some_and(
-                |error| error.code == bitrouter_orchestrator::service::ErrorCode::Unauthorized
+                |error| error.code == bitrouter_ai::harness::runtime::ErrorCode::Unauthorized
             )
     );
     loop {
@@ -730,7 +733,7 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
     let (local_thread, _) = local_client
         .create_and_start(
             unlisted.clone(),
-            bitrouter_orchestrator::agent::AgentConfig::fixed("test-model", None).read_only(),
+            bitrouter_ai::harness::agent::AgentConfig::fixed("test-model", None).read_only(),
             None,
             "Local inspection".into(),
         )

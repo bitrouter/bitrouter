@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
-use crate::harness::Harness;
+use crate::harness::catalog::Harness;
 
 /// Suite identity, as written into a runtime entry's `conformance:` block.
 pub const SUITE: &str = "acp_compat_1";
@@ -354,8 +354,8 @@ pub async fn run(harness: &Harness, agent_id: &str, state_dir: &std::path::Path)
 }
 
 async fn run_inner(harness: &Harness, agent_id: &str, state_dir: &std::path::Path) -> Report {
-    use bitrouter_orchestrator::acp::client::{AcpClient, ClientOptions};
-    use bitrouter_orchestrator::acp::up::AgentProcess;
+    use crate::harness::acp::client::{AcpClient, ClientOptions};
+    use crate::harness::acp::up::AgentProcess;
 
     let mut tiers = Vec::new();
     let mut agent_version = None;
@@ -533,11 +533,11 @@ async fn run_inner(harness: &Harness, agent_id: &str, state_dir: &std::path::Pat
 /// Prompt the agent and judge what reached the gateway.
 async fn route_outcome(
     harness: &Harness,
-    client: &bitrouter_orchestrator::acp::client::AcpClient,
+    client: &crate::harness::acp::client::AcpClient,
     gateway: &StubGateway,
     state_dir: &std::path::Path,
 ) -> Outcome {
-    if matches!(harness.routing, crate::harness::Routing::OwnAuth) {
+    if matches!(harness.routing, crate::harness::catalog::Routing::OwnAuth) {
         return Outcome::Skipped {
             reason: "the harness authenticates against its own subscription and is never \
                      routed through BitRouter"
@@ -646,7 +646,7 @@ fn today() -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::harness::Routing;
+    use crate::harness::catalog::Routing;
 
     /// An ACP stub that answers the handshake and, on a prompt, makes exactly
     /// the call a routed harness would: a POST to the gateway carrying the

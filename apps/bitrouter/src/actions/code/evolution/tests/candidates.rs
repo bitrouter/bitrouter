@@ -1,7 +1,9 @@
 use super::*;
-use crate::evolution::bandit::Arm;
-use crate::evolution::runtime::candidates::{CandidateAction, CandidateReport, FeedbackChoice};
-use crate::evolution::service::DecisionContext;
+use crate::core::evolution::runtime::candidates::{
+    CandidateAction, CandidateReport, FeedbackChoice,
+};
+use crate::gateway::routing::blocks::allocation::Arm;
+use crate::storage::execution::DecisionContext;
 
 impl Fixture {
     async fn candidate_step(
@@ -108,7 +110,7 @@ async fn tui_operator_restore_reviews_submits_retries_and_exposes_publication_hi
             .get("cost-trial")
             .context("block missing")?
             .status,
-        crate::evolution::control::BlockStatus::RolledBack
+        crate::gateway::routing::blocks::control::BlockStatus::RolledBack
     );
     fixture.step(&confirm.id, &submit.id, None).await?;
     assert_eq!(
@@ -417,7 +419,7 @@ async fn candidate_creation_registers_reviewed_joint_rules_and_retries_without_m
     let manual = scored(fixture.review().await?)?.submission()?;
     assert_eq!(
         preview.definition.measurement_contract,
-        crate::evolution::scoring::measurement_contract(
+        crate::core::evolution::scoring::measurement_contract(
             manual.source,
             &manual.evaluator_id,
             &manual.evaluator_version
@@ -484,17 +486,20 @@ async fn candidate_creation_registers_reviewed_joint_rules_and_retries_without_m
     ] {
         fixture
             .recorder
-            .record(CaptureEvent {
-                direction: if kind == CaptureKind::Request {
-                    CaptureDirection::Client
-                } else {
-                    CaptureDirection::Agent
+            .append(
+                &identity.native_session_id,
+                CaptureEvent {
+                    direction: if kind == CaptureKind::Request {
+                        CaptureDirection::Client
+                    } else {
+                        CaptureDirection::Agent
+                    },
+                    kind,
+                    call_id: Some(21),
+                    method: "session/new".into(),
+                    payload,
                 },
-                kind,
-                call_id: Some(21),
-                method: "session/new".into(),
-                payload,
-            })
+            )
             .await?;
     }
     let service = fixture.evolution.service("local")?;
@@ -656,10 +661,10 @@ async fn candidate_catalog_refreshes_evaluator_and_rejects_overlap_and_invalid_r
             .context("preview missing")?
             .definition
             .measurement_contract,
-        crate::evolution::scoring::measurement_contract(
+        crate::core::evolution::scoring::measurement_contract(
             crate::acp_trajectory::checkpoint::types::AssessmentSource::Agentic,
             "checkpoint-judge:fixture:judge",
-            crate::evolution::judge::JUDGE_VERSION
+            crate::core::evolution::judge::JUDGE_VERSION
         )?
     );
     fixture
@@ -773,14 +778,14 @@ async fn candidate_preview_lists_balanced_accounts_without_credentials() -> Resu
         .providers
         .get_mut("fixture")
         .context("provider missing")?;
-    provider.account_strategy = bitrouter_sdk::config::AccountStrategy::Balance;
+    provider.account_strategy = crate::config::AccountStrategy::Balance;
     provider.accounts = vec![
-        bitrouter_sdk::config::ProviderAccount {
+        crate::config::ProviderAccount {
             label: "first".into(),
             api_key: "first-account-secret".into(),
             ..Default::default()
         },
-        bitrouter_sdk::config::ProviderAccount {
+        crate::config::ProviderAccount {
             label: "second".into(),
             api_key: "second-account-secret".into(),
             ..Default::default()

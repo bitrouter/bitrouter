@@ -8,7 +8,7 @@ Do not launch the former `bitrouter-regex-checker` service as a migration path.
 `regex-checker` is an extension implementing the request-check capability. Its
 Cargo library remains `bitrouter-guardrails`. It matches supplied regex rules;
 it is not a comprehensive PII detector. The common entry is
-`bitrouter_sdk::extension::ExtensionApi::request_check(id, revision, callback)`.
+`bitrouter::gateway::extensions::registry::ExtensionApi::request_check(id, revision, callback)`.
 The foreground host calls `bitrouter::host::serve_with_extensions`; see the runnable
 `apps/bitrouter/examples/native_regex_checker.rs` example in the source repository.
 No separate extension API or checker-protocol crate is required.
@@ -85,13 +85,15 @@ but BitRouter does not supply a remote extension protocol.
 
 ## Breaking migration
 
-- Replace app-local `bitrouter::extension::ExtensionApi` imports with the SDK entry.
+- Replace former `bitrouter_sdk::extension::ExtensionApi` or
+  `bitrouter::extension::ExtensionApi` imports with
+  `bitrouter::gateway::extensions::registry::ExtensionApi`.
 - Replace Native map assembly with `assemble::build_app_with_extensions`.
 - Replace hand-built foreground HTTP serving with `host::serve_with_extensions`
   when the full BitRouter daemon lifecycle is wanted.
-- Import fragment and coverage author types from SDK `extension::request_check`;
+- Import fragment and coverage author types from AI `extension::request_check`;
   the former `language_model::request_checks` paths have no compatibility aliases.
-- Replace former protocol callback inputs with SDK request-check business inputs.
+- Replace former protocol callback inputs with AI request-check business inputs.
 - Former HTTP `endpoint`, `credential_env` and `contract_version` fields are rejected.
   Link and register an implementation, then explicitly migrate the declaration.
 - No replacement executable is installed or launched automatically.
@@ -100,6 +102,13 @@ Any `plugins.bitrouter-guardrails` key, including null/empty or alongside a new
 check, still blocks default-host activation. Review input fragment ordering,
 all entry points and output requirements before removing it. Old Plugin hooks
 were global and supported stream/output block/redact. They remain available for
-custom hosts through the library's explicit `sdk` feature; request checks do not
+custom hosts in `bitrouter::gateway::extensions::guardrails` through the
+application's explicit `guardrails` feature; request checks do not
 replace that scope. Do not convert redact to block automatically or claim that
 removing an old key proves the protection has migrated.
+
+The matcher package no longer depends on the SDK or exposes its former `sdk`
+feature. Import `plugin::GuardrailsPlugin` and individual `hooks` from the
+application adapter; import `config` and `rules` types from their owning matcher
+modules. Explicit plugin installation is still required to activate global
+protection. A Cargo feature only makes the adapter available.

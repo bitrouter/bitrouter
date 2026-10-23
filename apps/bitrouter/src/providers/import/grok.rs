@@ -22,8 +22,8 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Deserialize;
 
+use crate::gateway::providers::auth::credentials::OAuthToken;
 use crate::providers::import::{ImportError, ImportSource, Imported, home_dir};
-use bitrouter_ai::auth::credentials::OAuthToken;
 
 /// Credential filename inside `$GROK_HOME`.
 const AUTH_FILENAME: &str = "auth.json";

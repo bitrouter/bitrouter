@@ -2,14 +2,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use axum_test::TestServer;
-use bitrouter::eval::EvalService;
-use bitrouter::eval::api;
-use bitrouter::eval::store::EvalStore;
-use bitrouter::eval::types::{
-    EVAL_SCHEMA_VERSION, EvalScope, EvalSubject, EvalVerdict, EvaluationResult, EvaluatorIdentity,
-    EvaluatorKind, MetricUnit, MetricValue, evidence_digest,
+use bitrouter::config::EvalConfig;
+use bitrouter::core::eval::EvalService;
+use bitrouter::core::eval::api;
+use bitrouter::core::eval::store::EvalStore;
+use {
+    bitrouter::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+    bitrouter_ai::eval::EvalScope, bitrouter_ai::eval::EvalSubject,
+    bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
+    bitrouter_ai::eval::EvaluatorIdentity, bitrouter_ai::eval::EvaluatorKind,
+    bitrouter_ai::eval::MetricUnit, bitrouter_ai::eval::MetricValue,
 };
-use bitrouter_sdk::config::EvalConfig;
 
 #[tokio::test]
 async fn cli_and_rest_are_idempotent_semantic_equivalents() -> anyhow::Result<()> {
@@ -105,7 +108,7 @@ async fn cli_and_rest_are_idempotent_semantic_equivalents() -> anyhow::Result<()
         .post("/v1/evals/snapshots")
         .json(&serde_json::json!({ "frozen_at": "2026-07-30T00:02:00Z" }))
         .await
-        .json::<bitrouter::eval::store::EvalSnapshot>();
+        .json::<bitrouter_ai::eval::EvalSnapshot>();
 
     assert_eq!(
         cli_store.list_subjects().await?,
@@ -183,4 +186,119 @@ fn result(subject: &EvalSubject) -> EvaluationResult {
         idempotency_key: "result-equivalence".into(),
         submitted_at: "2026-07-30T00:01:00Z".into(),
     }
+}
+
+struct HttpTask(tokio::task::JoinHandle<std::io::Result<()>>);
+
+impl Drop for HttpTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+async fn serve_http(
+    db: sea_orm::DatabaseConnection,
+    skip_auth: bool,
+) -> anyhow::Result<(String, HttpTask)> {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let service = EvalService::new(EvalStore::new(db.clone()), EvalConfig::default());
+    let router = api::router(service, db, skip_auth);
+    let task = HttpTask(tokio::spawn(
+        async move { axum::serve(listener, router).await },
+    ));
+    Ok((endpoint, task))
+}
+
+#[tokio::test]
+async fn sdk_exchange_preserves_server_receipts_and_snapshot_identity() -> anyhow::Result<()> {
+    use bitrouter_ai::eval::{AdmissionStatus, FreezeRequest, SubjectInsertOutcome};
+    use bitrouter_sdk::gateway::GatewayClient;
+    let db = bitrouter::db::connect("sqlite::memory:").await?;
+    bitrouter::db::run_migrations(&db).await?;
+    let (endpoint, _task) = serve_http(db, true).await?;
+    let client = GatewayClient::new(&endpoint, None)?;
+    let mut subject = subject()?;
+    subject.eval_id = "eval/with ?#%雪".into();
+    let inserted = client.put_eval_subject(&subject).await?;
+    assert_eq!(inserted.eval_id, subject.eval_id);
+    assert_eq!(inserted.outcome, SubjectInsertOutcome::Inserted);
+    assert_eq!(
+        client.put_eval_subject(&subject).await?.outcome,
+        SubjectInsertOutcome::Duplicate
+    );
+    assert_eq!(
+        client.eval_subjects().await?.as_slice(),
+        std::slice::from_ref(&subject)
+    );
+    assert_eq!(client.eval_subject(&subject.eval_id).await?, subject);
+    let result = result(&subject);
+    let admitted = client.submit_eval_result(&result).await?;
+    assert_eq!(admitted.status, AdmissionStatus::Admitted);
+    assert!(!admitted.duplicate);
+    let duplicate = client.submit_eval_result(&result).await?;
+    assert!(duplicate.duplicate);
+    assert_eq!(duplicate.result_id, admitted.result_id);
+    let status = client.eval_status().await?;
+    assert_eq!(status.subjects, 1);
+    assert_eq!(status.results, 1);
+    assert_eq!(status.admission.get("admitted"), Some(&1));
+    let snapshot = client
+        .freeze_eval_snapshot(&FreezeRequest {
+            frozen_at: Some("2026-07-30T00:02:00Z".into()),
+        })
+        .await?;
+    assert_eq!(snapshot.entries.len(), 1);
+    assert_eq!(snapshot.entries[0].result_id, admitted.result_id);
+    assert_eq!(
+        client.eval_snapshot(&snapshot.evidence_root).await?,
+        snapshot
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sdk_evaluation_calls_preserve_virtual_key_and_tenant_boundaries() -> anyhow::Result<()> {
+    use bitrouter::auth::{db as auth_db, keys};
+    use bitrouter_sdk::{error::Error, gateway::GatewayClient};
+    let db = bitrouter::db::connect("sqlite::memory:").await?;
+    bitrouter::db::run_migrations(&db).await?;
+    let mut credentials = Vec::new();
+    for user in ["sdk-user-a", "sdk-user-b"] {
+        auth_db::upsert_user(&db, user).await?;
+        let key = keys::generate();
+        auth_db::insert_api_key(
+            &db,
+            &auth_db::NewApiKey {
+                id: user.into(),
+                key_hash: key.hash,
+                user_id: user.into(),
+                spend_limit_micro_usd: None,
+                rpm_limit: None,
+                policy_id: None,
+            },
+        )
+        .await?;
+        credentials.push(key.secret);
+    }
+    let (endpoint, _task) = serve_http(db, false).await?;
+    let caller_a = GatewayClient::new(&endpoint, Some(&credentials[0]))?;
+    let caller_b = GatewayClient::new(&endpoint, Some(&credentials[1]))?;
+    let subject = subject()?;
+    caller_a.put_eval_subject(&subject).await?;
+    assert_eq!(
+        caller_a.eval_subjects().await?.as_slice(),
+        std::slice::from_ref(&subject)
+    );
+    assert!(caller_b.eval_subjects().await?.is_empty());
+    assert!(
+        matches!(caller_b.eval_subject(&subject.eval_id).await, Err(Error::Evaluation(error)) if error.status == 404)
+    );
+    for credential in [None, Some("control-bearer-is-not-an-inference-virtual-key")] {
+        let client = GatewayClient::new(&endpoint, credential)?;
+        assert!(
+            matches!(client.eval_status().await, Err(Error::Evaluation(error)) if error.status == 401)
+        );
+    }
+    Ok(())
 }

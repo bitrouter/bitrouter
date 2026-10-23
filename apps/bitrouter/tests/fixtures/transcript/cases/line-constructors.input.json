@@ -1,0 +1,77 @@
+[
+  {
+    "id": "line-raw-mixed",
+    "constructor": "line_raw",
+    "text": "first\nsecond\r\n\n中文\t👩‍💻 next end\rsolo\n"
+  },
+  {
+    "id": "line-raw-empty",
+    "constructor": "line_raw",
+    "text": ""
+  },
+  {
+    "id": "line-raw-newlines",
+    "constructor": "line_raw",
+    "text": "\n\r\n\n"
+  },
+  {
+    "id": "line-from-string-mixed",
+    "constructor": "line_from_string",
+    "text": "first\nsecond\r\n\n中文\t👩‍💻 next end\rsolo\n"
+  },
+  {
+    "id": "line-from-string-empty",
+    "constructor": "line_from_string",
+    "text": ""
+  },
+  {
+    "id": "line-from-string-newlines",
+    "constructor": "line_from_string",
+    "text": "\n\r\n\n"
+  },
+  {
+    "id": "line-from-str-mixed",
+    "constructor": "line_from_str",
+    "text": "first\nsecond\r\n\n中文\t👩‍💻 next end\rsolo\n"
+  },
+  {
+    "id": "line-from-str-empty",
+    "constructor": "line_from_str",
+    "text": ""
+  },
+  {
+    "id": "line-from-str-newlines",
+    "constructor": "line_from_str",
+    "text": "\n\r\n\n"
+  },
+  {
+    "id": "span-raw-mixed",
+    "constructor": "span_raw",
+    "text": "first\nsecond\r\n\n中文\t👩‍💻 next end\rsolo\n"
+  },
+  {
+    "id": "span-raw-empty",
+    "constructor": "span_raw",
+    "text": ""
+  },
+  {
+    "id": "span-raw-newlines",
+    "constructor": "span_raw",
+    "text": "\n\r\n\n"
+  },
+  {
+    "id": "span-styled-mixed",
+    "constructor": "span_styled",
+    "text": "first\nsecond\r\n\n中文\t👩‍💻 next end\rsolo\n"
+  },
+  {
+    "id": "span-styled-empty",
+    "constructor": "span_styled",
+    "text": ""
+  },
+  {
+    "id": "span-styled-newlines",
+    "constructor": "span_styled",
+    "text": "\n\r\n\n"
+  }
+]

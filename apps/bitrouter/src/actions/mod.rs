@@ -7,6 +7,7 @@
 //! while the independent upstream MCP gateway remains in `bitrouter-sdk`.
 
 pub mod administration;
+#[cfg(feature = "tui")]
 pub(crate) mod code;
 pub mod commands;
 pub mod models;
@@ -15,6 +16,7 @@ pub mod route;
 pub mod session;
 pub mod skills;
 pub mod status;
+#[cfg(feature = "harness")]
 pub(crate) mod supervised;
 
 /// A typed action failed.

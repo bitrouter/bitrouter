@@ -4,11 +4,9 @@
 //! high-level ORM abstraction — never a concrete driver. That buys two
 //! things:
 //!
-//! 1. **Every backend from one build.** `database.url` may be any URL
-//!    sea-orm understands — `sqlite://…`, `postgres://…`, `mysql://…`.
-//!    The default stays `sqlite://./bitrouter.db` for the local-first
-//!    story, but a multi-tenant deployment can point at Postgres without
-//!    a recompile.
+//! 1. **Selectable backends.** SQLite is always available. The default product
+//!    also enables PostgreSQL and MySQL; reduced builds select `db-postgres`
+//!    and `db-mysql` explicitly. The default URL remains `sqlite://./bitrouter.db`.
 //! 2. **Schema as Rust, not SQL.** The schema lives in [`migration`] as
 //!    `sea-orm-migration` code, so the same table definitions apply
 //!    verbatim on whichever backend is configured.
@@ -18,10 +16,10 @@ pub mod migration;
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
 
-use bitrouter_sdk::{BitrouterError, Result};
+use crate::gateway::error::BitrouterError;
+use crate::gateway::error::Result;
 
-/// Open a pooled connection to `url`. Accepts any backend sea-orm supports
-/// (`sqlite` / `postgres` / `mysql`).
+/// Open a pooled connection to `url` using a compiled database backend.
 ///
 /// Two backend-specific conveniences are applied so first-run "just works":
 ///
@@ -32,6 +30,7 @@ use bitrouter_sdk::{BitrouterError, Result};
 ///   otherwise each connection in the pool would see its own empty
 ///   database.
 pub async fn connect(url: &str) -> Result<DatabaseConnection> {
+    validate_backend_availability(url)?;
     let mut opts = ConnectOptions::new(normalize_url(url));
     opts.sqlx_logging(false);
     if is_sqlite_memory(url) {
@@ -44,6 +43,27 @@ pub async fn connect(url: &str) -> Result<DatabaseConnection> {
         enable_wal(&db).await;
     }
     Ok(db)
+}
+
+/// Reject unavailable drivers without connecting or exposing URL credentials.
+pub(crate) fn validate_backend_availability(connection_url: &str) -> Result<()> {
+    // Match SeaORM's parsed scheme selection, including the PostgreSQL alias.
+    // https://docs.rs/sea-orm/1.1.20/src/sea_orm/database/db_connection.rs.html
+    let Ok(parsed) = url::Url::parse(connection_url) else {
+        // Leave malformed URL diagnostics with the existing connector.
+        return Ok(());
+    };
+    let missing = match parsed.scheme() {
+        "postgres" | "postgresql" if !cfg!(feature = "db-postgres") => Some("db-postgres"),
+        "mysql" if !cfg!(feature = "db-mysql") => Some("db-mysql"),
+        _ => None,
+    };
+    if let Some(feature) = missing {
+        return Err(BitrouterError::bad_request(format!(
+            "database.url selects a backend that requires the {feature} feature"
+        )));
+    }
+    Ok(())
 }
 
 /// Whether this URL names a writable SQLite **file** — the only kind of

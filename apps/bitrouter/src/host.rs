@@ -1,6 +1,8 @@
 //! Complete foreground daemon lifecycle for compiled extension hosts.
 
 use crate::daemon;
+#[cfg(feature = "harness")]
+use crate::harness::agent::AgentConfigExt;
 use crate::tracing_filter::resolve_env_filter;
 use anyhow::{Context, Result};
 use std::sync::Arc;
@@ -59,20 +61,29 @@ where
     match trigger {
         Trigger::Http(http_result) => {
             let _ = control_shutdown.send(());
-            control.await?;
-            http_result
+            combine_shutdown_results(http_result, control.await)
         }
         Trigger::Control(control_result) => {
             let _ = shutdown.send(());
-            http.await?;
-            control_result
+            combine_shutdown_results(control_result, http.await)
         }
         Trigger::Term => {
             let _ = control_shutdown.send(());
-            control.await?;
+            let control_result = control.await;
             let _ = shutdown.send(());
-            http.await
+            combine_shutdown_results(control_result, http.await)
         }
+    }
+}
+
+/// Combine results only after every shutdown future has been driven to completion.
+fn combine_shutdown_results(primary: Result<()>, secondary: Result<()>) -> Result<()> {
+    match (primary, secondary) {
+        (Err(primary), Err(secondary)) => {
+            Err(primary.context(format!("additional shutdown failure: {secondary:#}")))
+        }
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
     }
 }
 
@@ -95,7 +106,7 @@ async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::Dae
 /// spans into OTel via the supplied exporter's SDK tracer.
 ///
 /// `tracing-opentelemetry`'s bridge layer captures its tracer eagerly,
-/// so this MUST be called after [`bitrouter_telemetry::otel::OtelExporter::new`]
+/// so this MUST be called after `OtelExporter::new`
 /// has built the real exporter; passing `None` (OTel disabled in config)
 /// installs the fmt-only registry.
 ///
@@ -104,7 +115,9 @@ async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::Dae
 /// `bro reload` re-reads the config but cannot re-install the
 /// subscriber, so a changed `log_level` needs a restart.
 fn init_serve_tracing_subscriber(
-    exporter: Option<&bitrouter_telemetry::otel::OtelExporter>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))] exporter: Option<
+        &crate::telemetry::exporter::OtelExporter,
+    >,
     config_log_level: &str,
 ) -> Result<()> {
     use tracing_subscriber::layer::SubscriberExt;
@@ -113,13 +126,16 @@ fn init_serve_tracing_subscriber(
     let registry = tracing_subscriber::registry()
         .with(env_filter)
         .with(tracing_subscriber::fmt::layer());
-    match exporter {
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    let initialized = match exporter {
         Some(exp) => registry
-            .with(bitrouter_telemetry::otel::subscriber::tracing_subscriber_layer(exp))
+            .with(crate::telemetry::subscriber::tracing_subscriber_layer(exp))
             .try_init(),
         None => registry.try_init(),
-    }
-    .map_err(|error| anyhow::anyhow!("installing host tracing subscriber: {error}"))?;
+    };
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    let initialized = registry.try_init();
+    initialized.map_err(|error| anyhow::anyhow!("installing host tracing subscriber: {error}"))?;
     if let Some(warning) = warning {
         tracing::warn!("{warning}");
     }
@@ -134,7 +150,7 @@ fn init_serve_tracing_subscriber(
 /// the same path as `bro serve`. Detached launch/restart is the caller's job.
 pub async fn serve_with_extensions(
     source: &crate::paths::ConfigSource,
-    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
     serve_with_options(source, false, register).await
 }
@@ -145,11 +161,24 @@ pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool)
     serve_with_options(source, managed_child, |_| Ok(())).await
 }
 
+/// Reject unavailable environment-driven startup work before a launcher changes
+/// local files or stops a resident daemon. Foreground hosts use the same check.
+pub fn validate_startup_features() -> Result<()> {
+    #[cfg(not(feature = "core"))]
+    if std::env::var_os(crate::config::WORKFLOW_TRACE_JSONL_ENV)
+        .is_some_and(|value| !value.is_empty())
+    {
+        anyhow::bail!("BITROUTER_WORKFLOW_TRACE_JSONL requires the core feature");
+    }
+    Ok(())
+}
+
 async fn serve_with_options(
     source: &crate::paths::ConfigSource,
     cli_owned: bool,
-    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
+    validate_startup_features()?;
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {
         anyhow::bail!(
             "bitrouter is already running (pid {}); stop it before launching this executable again",
@@ -200,6 +229,7 @@ async fn serve_with_options(
     let assembled =
         crate::assemble::build_app_with_extensions(&cfg, config_path_for_reload, register).await?;
     let observe_for_shutdown = assembled.observe.clone();
+    #[cfg(feature = "core")]
     let trajectory_outbox_for_shutdown = assembled.trajectory_outbox_publisher.clone();
     // Every failure after assembly follows the same flush/drain path, including
     // listener conflicts and locator/PID publication failures.
@@ -209,7 +239,11 @@ async fn serve_with_options(
         // Hand its SDK tracer to the `tracing-opentelemetry` bridge layer now
         // — the bridge captures its tracer at construction, so this can only
         // happen after the exporter exists.
-        init_serve_tracing_subscriber(assembled.otel_exporter.as_deref(), &cfg.server.log_level)?;
+        init_serve_tracing_subscriber(
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+            assembled.otel_exporter.as_deref(),
+            &cfg.server.log_level,
+        )?;
         // Surface any deferred OTel-init failure now that the subscriber is up.
         if let Some(msg) = &assembled.otel_init_error {
             tracing::error!("{msg}");
@@ -220,16 +254,19 @@ async fn serve_with_options(
         for msg in &assembled.ignored_config {
             tracing::warn!("{msg}");
         }
+        #[cfg(feature = "core")]
         let workflow_trace_capture =
-            crate::workflow_state::real_trace::capture_from_env().map_err(anyhow::Error::from)?;
+            crate::core::workflow_state::real_trace::capture_from_env().map_err(anyhow::Error::from)?;
+        #[cfg(feature = "core")]
         if workflow_trace_capture.is_some() {
             tracing::info!(
-                env = crate::workflow_state::real_trace::WORKFLOW_TRACE_JSONL_ENV,
+                env = crate::config::WORKFLOW_TRACE_JSONL_ENV,
                 "workflow trace capture enabled"
             );
         }
         let app = Arc::new(assembled.app);
-        let eval_router = crate::eval::api::router(
+        #[cfg(feature = "core")]
+        let eval_router = crate::core::eval::api::router(
             assembled.eval_service.clone(),
             assembled.db.clone(),
             cfg.server.skip_auth,
@@ -251,6 +288,7 @@ async fn serve_with_options(
             policy: assembled.policy_runtime.clone(),
             observe: observe_provider.clone(),
         };
+        #[cfg(feature = "harness")]
         let acp_runtime_for_control = assembled.acp_runtime.clone();
         let reloader = crate::reload::AppReloader::new(
             policy_store.clone(),
@@ -263,6 +301,7 @@ async fn serve_with_options(
         let server_instance_id = daemon::DaemonReloader::reload_state(&reloader)
             .ok_or_else(|| anyhow::anyhow!("daemon reload state is unavailable at startup"))?
             .server_instance_id;
+        #[cfg(feature = "core")]
         let managed_core = crate::orchestrator_api::ManagedCoreApi::new(
             app.clone(), assembled.db.clone(), server_instance_id.clone(),
         );
@@ -272,10 +311,14 @@ async fn serve_with_options(
             .await
             .with_context(|| format!("bind inference listener {listen}"))?;
         let control_listener = daemon::bind_control_socket(&socket_path).await?;
-        let task_socket = crate::agent_local::socket_path(&socket_path);
+        #[cfg(feature = "harness")]
+        let task_socket = crate::client::agent_local::socket_path(&socket_path);
+        #[cfg(feature = "harness")]
         let task_listener = daemon::transport::bind(&task_socket).await?;
+        #[cfg(feature = "harness")]
         let acp_listener = daemon::transport::bind(&crate::native_acp::socket_path(&socket_path)).await?;
-        let task_service = bitrouter_orchestrator::service::ThreadService::with_store(
+        #[cfg(feature = "harness")]
+        let task_service = crate::harness::service::ThreadService::with_store(
             app.clone(),
             &cfg.agent_api.workspaces,
             Arc::new(crate::agent_store::DatabaseExecutionStore::new(assembled.db.clone())),
@@ -283,11 +326,12 @@ async fn serve_with_options(
         .map_err(anyhow::Error::msg)?
         .with_resources(native_harness_config(&cfg, home))
         .map_err(anyhow::Error::msg)?;
-        let native_acp = bitrouter_orchestrator::acp::native::NativeAcpServer::new(
-            task_service.clone(), bitrouter_sdk::caller::CallerContext::local(),
-            bitrouter_orchestrator::acp::native::NativeSessionConfig {
-                agent: bitrouter_orchestrator::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
-                permission_profile: bitrouter_orchestrator::thread::PermissionProfile::Ask,
+        #[cfg(feature = "harness")]
+        let native_acp = crate::harness::acp::native::NativeAcpServer::new(
+            task_service.clone(), crate::gateway::caller::CallerContext::local(),
+            crate::harness::acp::native::NativeSessionConfig {
+                agent: bitrouter_ai::harness::agent::AgentConfig::fixed(cfg.chat.model.clone().unwrap_or_default(), None),
+                permission_profile: bitrouter_ai::harness::thread::PermissionProfile::Ask,
                 servers: native_harness_config(&cfg, home).servers,
                 register_local_workspaces: true,
             },
@@ -297,6 +341,7 @@ async fn serve_with_options(
                 || cfg.control.credentials.iter().all(|credential| credential.token_env != cfg.agent_api.token_env),
             "agent API and control API must use distinct credential environment variables"
         );
+        #[cfg(feature = "harness")]
         let agent_api = crate::agent_api::BoundAgentApi::bind(&cfg.agent_api, task_service.clone()).await?;
         let remote_control = match remote_control {
             Some(server) => Some(
@@ -316,21 +361,28 @@ async fn serve_with_options(
         let http_app = app.clone();
         let handoff_gate = crate::daemon_handoff::HandoffGate::default();
         let http_handoff_gate = handoff_gate.clone();
-        // Native requests and queue workers do not yet participate in an atomic
-        // handoff gate. Hold admission for the endpoint's whole lifetime so an
-        // idle ACP/inference projection cannot authorize stopping BRO work.
-        let native_admission = handoff_gate.admit().ok_or_else(|| anyhow::anyhow!("native runtime admission is closed"))?;
+        // Managed channels, pending checkpoint ACKs and native queue workers can
+        // outlive HTTP response bodies. Until their ownership participates in
+        // atomic handoff admission, retain the existing conservative lifetime
+        // guard in every core profile, including externally executed sessions.
+        #[cfg(feature = "core")]
+        let managed_admission = handoff_gate.admit()
+            .ok_or_else(|| anyhow::anyhow!("managed runtime admission is closed"))?;
         // The ingress SERVER span is created from the exporter's own tracer — the
         // SDK installs no global `TracerProvider`, so there is nothing to reach
         // for implicitly. With OTel disabled there is no ingress span at all,
         // which is the honest behaviour: the previous `TraceLayer` ran regardless
         // and built `tracing` spans that went nowhere.
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         let otel_router_wrapper = assembled
             .otel_exporter
             .as_deref()
-            .map(bitrouter_telemetry::otel::http_layer::router_wrapper);
+            .map(crate::telemetry::http_layer::router_wrapper);
         let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
         let http = async move {
+            #[cfg(feature = "core")]
+            let _managed_admission = managed_admission;
+            #[cfg(feature = "core")]
             let managed_shutdown = managed_core.clone();
             let (inference_shutdown_tx, inference_shutdown_rx) = tokio::sync::oneshot::channel();
             let (remote_shutdown_tx, remote_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -339,6 +391,7 @@ async fn serve_with_options(
             // Open an OTel SERVER span per inbound request and publish it on the
             // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
             let otel_wrapper = move |router: axum::Router| {
+                #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
                 let router = match &otel_router_wrapper {
                     Some(wrapper) => wrapper(router),
                     None => router,
@@ -352,33 +405,34 @@ async fn serve_with_options(
                 let _ = inference_shutdown_rx.await;
             };
             let inference = async move {
-                match workflow_trace_capture {
-                    Some(capture) => {
-                        let workflow_wrapper = capture.router_wrapper();
-                        let eval_router = eval_router.clone();
-                        http_app
-                            .serve_listener_with_router_wrapper_and_shutdown(
-                                inference_listener,
-                                move |router| {
-                                    workflow_wrapper(otel_wrapper(
-                                        managed_core.wrap(router.merge(eval_router.clone())),
-                                    ))
-                                },
-                                inference_shutdown,
-                            )
-                            .await
-                    }
-                    None => {
-                        http_app
-                            .serve_listener_with_router_wrapper_and_shutdown(
-                                inference_listener,
-                                move |router| otel_wrapper(managed_core.wrap(router.merge(eval_router.clone()))),
-                                inference_shutdown,
-                            )
-                            .await
-                    }
+                let managed_wrapper = move |router: axum::Router| {
+                    #[cfg(feature = "core")]
+                    let router = router.merge(eval_router.clone());
+                    #[cfg(feature = "core")]
+                    { managed_core.wrap(router) }
+                    #[cfg(not(feature = "core"))]
+                    { router }
+                };
+                #[cfg(feature = "core")]
+                if let Some(capture) = workflow_trace_capture {
+                    let workflow_wrapper = capture.router_wrapper();
+                    return http_app
+                        .serve_listener_with_router_wrapper_and_shutdown(
+                            inference_listener,
+                            move |router| workflow_wrapper(otel_wrapper(managed_wrapper(router))),
+                            inference_shutdown,
+                        )
+                        .await
+                        .map_err(anyhow::Error::from);
                 }
-                .map_err(anyhow::Error::from)
+                http_app
+                    .serve_listener_with_router_wrapper_and_shutdown(
+                        inference_listener,
+                        move |router| otel_wrapper(managed_wrapper(router)),
+                        inference_shutdown,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from)
             };
             let remote = async move {
                 match remote_control {
@@ -396,39 +450,46 @@ async fn serve_with_options(
                 }
             };
             let task = async move {
-                let _native_admission = native_admission;
-                if let Err(error) = task_service.initialize_execution().await {
-                    tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
-                }
-                let runtime = task_service.clone();
-                let acp_cleanup = native_acp.clone();
-                let runtime_shutdown = task_shutdown_for_server.clone();
-                let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; acp_cleanup.shutdown().await; };
-                let acp = crate::native_acp::serve(acp_listener, native_acp, task_shutdown_for_server.clone());
-                let local = crate::agent_local::serve(
-                    task_listener,
-                    task_service,
-                    task_shutdown_for_server.clone(),
-                );
-                let task_shutdown_for_cleanup = task_shutdown_for_server.clone();
-                let http = async move {
-                    match agent_api {
-                        Some(api) => api.serve(async move {
-                            task_shutdown_for_server.cancelled().await;
-                        }).await,
-                        None => {
-                            task_shutdown_for_server.cancelled().await;
-                            Ok(())
-                        }
+                #[cfg(feature = "harness")]
+                {
+                    if cfg!(feature = "core") && let Err(error) = task_service.initialize_execution().await {
+                        tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
                     }
-                };
-                let serving = async {
-                    let result = tokio::try_join!(local, http, acp).map(|_| ());
-                    task_shutdown_for_cleanup.cancel();
+                    let runtime = task_service.clone();
+                    let acp_cleanup = native_acp.clone();
+                    let runtime_shutdown = task_shutdown_for_server.clone();
+                    let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; acp_cleanup.shutdown().await; };
+                    let acp = crate::native_acp::serve(acp_listener, native_acp, task_shutdown_for_server.clone());
+                    let local = crate::harness::local::serve(
+                        task_listener,
+                        task_service,
+                        task_shutdown_for_server.clone(),
+                    );
+                    let task_shutdown_for_cleanup = task_shutdown_for_server.clone();
+                    let http = async move {
+                        match agent_api {
+                            Some(api) => api.serve(async move {
+                                task_shutdown_for_server.cancelled().await;
+                            }).await,
+                            None => {
+                                task_shutdown_for_server.cancelled().await;
+                                Ok(())
+                            }
+                        }
+                    };
+                    let serving = async {
+                        let result = tokio::try_join!(local, http, acp).map(|_| ());
+                        task_shutdown_for_cleanup.cancel();
+                        result
+                    };
+                    let (result, ()) = tokio::join!(serving, cleanup);
                     result
-                };
-                let (result, ()) = tokio::join!(serving, cleanup);
-                result
+                }
+                #[cfg(not(feature = "harness"))]
+                {
+                    task_shutdown_for_server.cancelled().await;
+                    Ok::<(), anyhow::Error>(())
+                }
             };
             let mut inference = Box::pin(inference);
             let mut remote = Box::pin(remote);
@@ -439,39 +500,37 @@ async fn serve_with_options(
 
             tokio::select! {
                 result = &mut inference => {
+                    #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = remote_shutdown_tx.send(());
                     task_shutdown.cancel();
-                    remote.await?;
-                    task.await?;
-                    result
+                    let (remote_result, task_result) = tokio::join!(remote, task);
+                    combine_shutdown_results(result, combine_shutdown_results(remote_result, task_result))
                 }
                 result = &mut remote => {
+                    #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     task_shutdown.cancel();
-                    inference.await?;
-                    task.await?;
-                    result
+                    let (inference_result, task_result) = tokio::join!(inference, task);
+                    combine_shutdown_results(result, combine_shutdown_results(inference_result, task_result))
                 }
                 result = &mut task => {
+                    #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());
                     let (inference_result, remote_result) = tokio::join!(inference, remote);
-                    inference_result?;
-                    remote_result?;
-                    result
+                    combine_shutdown_results(result, combine_shutdown_results(inference_result, remote_result))
                 }
                 _ = &mut shutdown => {
+                    #[cfg(feature = "core")]
                     managed_shutdown.shutdown().await;
                     let _ = inference_shutdown_tx.send(());
                     let _ = remote_shutdown_tx.send(());
                     task_shutdown.cancel();
                     let (inference_result, remote_result, task_result) = tokio::join!(inference, remote, task);
-                    inference_result?;
-                    remote_result?;
-                    task_result
+                    combine_shutdown_results(inference_result, combine_shutdown_results(remote_result, task_result))
                 }
             }
         };
@@ -487,9 +546,11 @@ async fn serve_with_options(
             reloader.clone(),
             observe_provider,
             daemon::AcpControlPlane {
+                #[cfg(feature = "harness")]
                 runtime: acp_runtime_for_control,
                 metering: crate::metering::MeteringStore::new(assembled.db.clone()),
-                inventory: Some(assembled.evolution.inventory()),
+                inventory: Some(assembled.gateway_requests.inventory()),
+                #[cfg(feature = "core")]
                 evolution: Some(assembled.evolution.clone()),
             },
             daemon::LocalControlOptions {
@@ -635,19 +696,23 @@ async fn serve_with_options(
         // that same future until axum and every required finalizer finish. An HTTP
         // failure still returns directly; a HUP listener failure only disables
         // reload signaling and leaves the server running.
+        #[cfg(feature = "core")]
         let evolution_stop = tokio_util::sync::CancellationToken::new();
+        #[cfg(feature = "core")]
         let evolution_worker = app.language_model().cloned().map(|pipeline| {
             let worker =
-                crate::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
+                crate::core::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
                     .with_handoff_gate(handoff_gate.clone());
             let stop = evolution_stop.clone();
             tokio::spawn(async move { worker.run(pipeline, stop).await })
         });
+        #[cfg(feature = "core")]
         let control = async {
             let result = control.await;
             evolution_stop.cancel();
             result
         };
+        #[cfg(feature = "core")]
         let term = async {
             let result = term.await;
             evolution_stop.cancel();
@@ -662,7 +727,9 @@ async fn serve_with_options(
             control_shutdown_tx,
         )
         .await;
+        #[cfg(feature = "core")]
         evolution_stop.cancel();
+        #[cfg(feature = "core")]
         if let Some(worker) = evolution_worker
             && worker.await.is_err()
         {
@@ -673,6 +740,7 @@ async fn serve_with_options(
     }
     .await;
 
+    #[cfg(feature = "core")]
     if let Some(publisher) = trajectory_outbox_for_shutdown {
         match publisher.drain_after_active_worker().await {
             Ok(summary) if summary.failed > 0 => tracing::warn!(
@@ -797,7 +865,7 @@ impl Drop for PidFile {
     }
 }
 
-fn announce_zero_config(source: &crate::paths::ConfigSource, cfg: &bitrouter_sdk::config::Config) {
+fn announce_zero_config(source: &crate::paths::ConfigSource, cfg: &crate::config::Config) {
     if !source.is_default() {
         return;
     }
@@ -862,7 +930,7 @@ fn maybe_announce_telemetry(home: &std::path::Path) {
 
 fn print_onboarding_hint() {
     let p = crate::style::Palette::for_stderr();
-    let cli = bitrouter_sdk::invocation::name();
+    let cli = crate::commands::invocation::name();
     eprintln!(
         "{cyan}{bold}info:{reset} no providers are configured yet. Choose one:",
         cyan = p.cyan,
@@ -898,7 +966,7 @@ fn print_onboarding_hint() {
 /// `BITROUTER_API_KEY` (rendered separately as step 2). Used by the
 /// onboarding hint.
 fn other_provider_env_var_hints() -> Vec<String> {
-    let mut vars: Vec<String> = crate::catalog::credential_env_var_providers()
+    let mut vars: Vec<String> = crate::gateway::catalog::cache::credential_env_var_providers()
         .into_iter()
         .map(|(_, env)| env)
         .filter(|v| v != "BITROUTER_API_KEY")
@@ -909,10 +977,11 @@ fn other_provider_env_var_hints() -> Vec<String> {
 }
 
 /// Static daemon-owned resources; opening or browsing a Thread never connects.
+#[cfg(feature = "harness")]
 pub(crate) fn native_harness_config(
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     home: &std::path::Path,
-) -> bitrouter_orchestrator::harness::HarnessConfig {
+) -> crate::harness::resources::HarnessConfig {
     let mut servers: Vec<_> = cfg
         .mcp_servers
         .iter()
@@ -935,11 +1004,11 @@ pub(crate) fn native_harness_config(
     if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
         skill_roots.push(std::path::PathBuf::from(codex_home).join("skills"));
     }
-    bitrouter_orchestrator::harness::HarnessConfig {
+    crate::harness::resources::HarnessConfig {
         servers,
-        protocol: bitrouter_sdk::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
+        protocol: crate::gateway::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
         skill_roots,
-        instructions: bitrouter_orchestrator::harness::instructions::InstructionConfig {
+        instructions: crate::harness::resources::instructions::InstructionConfig {
             global_root: Some(home.to_path_buf()),
             ..Default::default()
         },
@@ -1093,6 +1162,83 @@ mod tests {
             tokio::task::yield_now().await;
             assert_eq!(drain_attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
             supervision.await??;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn control_failure_keeps_http_drain_alive_before_returning_errors() -> anyhow::Result<()>
+    {
+        for control_trigger in [false, true] {
+            for http_failure in [false, true] {
+                let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+                let (control_shutdown_tx, control_shutdown_rx) = tokio::sync::oneshot::channel();
+                let (control_tx, control_rx) = tokio::sync::oneshot::channel();
+                let (term_tx, term_rx) = tokio::sync::oneshot::channel();
+                let (draining_tx, draining_rx) = tokio::sync::oneshot::channel();
+                let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+                let http = async move {
+                    shutdown_rx.await.context("HTTP shutdown was abandoned")?;
+                    draining_tx
+                        .send(())
+                        .map_err(|_| anyhow::anyhow!("drain observer disappeared"))?;
+                    finish_rx.await.context("HTTP finalizer was abandoned")?;
+                    if http_failure {
+                        anyhow::bail!("test HTTP finalization failure");
+                    }
+                    Ok(())
+                };
+                let control = async move {
+                    tokio::select! {
+                        result = control_rx => result.context("control trigger disappeared")?,
+                        result = control_shutdown_rx => result.context("control shutdown disappeared")?,
+                    }
+                    anyhow::bail!("test control shutdown failure")
+                };
+                let term = async move {
+                    term_rx.await.context("termination trigger disappeared")?;
+                    Ok(())
+                };
+                let supervision = tokio::spawn(supervise_http_shutdown(
+                    http,
+                    control,
+                    std::future::pending::<anyhow::Result<()>>(),
+                    term,
+                    shutdown_tx,
+                    control_shutdown_tx,
+                ));
+                if control_trigger {
+                    control_tx
+                        .send(())
+                        .map_err(|_| anyhow::anyhow!("control receiver disappeared"))?;
+                } else {
+                    term_tx
+                        .send(())
+                        .map_err(|_| anyhow::anyhow!("termination receiver disappeared"))?;
+                }
+                tokio::time::timeout(std::time::Duration::from_secs(2), draining_rx)
+                    .await
+                    .context("HTTP drain did not start after control failure")?
+                    .context("HTTP drain was dropped after control failure")?;
+                assert!(
+                    !supervision.is_finished(),
+                    "control failure returned before HTTP finalization"
+                );
+                finish_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("HTTP finalization receiver disappeared"))?;
+                let error = tokio::time::timeout(std::time::Duration::from_secs(2), supervision)
+                    .await
+                    .context("shutdown did not finish after HTTP drain")??
+                    .err()
+                    .context("control failure was lost")?;
+                let chain = format!("{error:#}");
+                assert!(chain.contains("test control shutdown failure"), "{chain}");
+                assert_eq!(
+                    chain.contains("test HTTP finalization failure"),
+                    http_failure
+                );
+            }
         }
         Ok(())
     }

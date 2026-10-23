@@ -1,10 +1,11 @@
+use bitrouter_ai::eval::RouteDecisionMeasurement;
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::eval::types::{RouteDecisionMeasurement, validate_route_measurement};
+use crate::storage::evaluation::validate_route_measurement;
 
 pub const TRAJECTORY_SCHEMA_VERSION: u32 = 1;
 
@@ -44,7 +45,7 @@ pub struct TrajectoryEvidence {
     pub route_measurement: Option<RouteDecisionMeasurement>,
     /// Shared classification and exact plan receipts, only on settlement.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub routing_evidence: Vec<crate::eval::types::EvidenceItem>,
+    pub routing_evidence: Vec<bitrouter_ai::eval::EvidenceItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -536,7 +537,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::eval::types::{RouteActionCandidate, RouteDecisionMeasurement};
+    use bitrouter_ai::eval::RouteActionCandidate;
 
     #[test]
     fn event_validation_rejects_invalid_wire_values_and_tampering() {
@@ -693,7 +694,7 @@ mod tests {
     fn route_measurement_is_rejected_outside_route_intent_events() {
         let mut event = event_fixture();
         event.evidence.route_measurement = Some(
-            RouteDecisionMeasurement::new(
+            crate::storage::evaluation::route_decision_measurement(
                 "economy",
                 "vendor/economy",
                 None,

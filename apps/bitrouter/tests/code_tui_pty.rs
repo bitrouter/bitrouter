@@ -26,6 +26,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+use bitrouter::client::sessions::{self, wire};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 const PTY_TIMEOUT: Duration = Duration::from_secs(15);
@@ -41,6 +42,7 @@ const END_SYNCHRONIZED_UPDATE: &[u8] = b"\x1b[?2026l";
 const MOCK_DAEMON_CONFIG: &str =
     "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  enabled: false\n";
 
+#[cfg(feature = "core")]
 #[path = "code_tui_pty/evolution.rs"]
 mod evolution;
 
@@ -50,7 +52,7 @@ mod background;
 /// A deliberately small ACP agent. Its responses are protocol-shaped JSON, not
 /// terminal snapshots, so test failures describe lifecycle behavior instead of
 /// an incidental escape-sequence layout.
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 
 /// The mode an isolated mock agent should exercise.
@@ -109,7 +111,7 @@ impl Drop for MockAcp {
         let Ok(text) = std::fs::read_to_string(&self.config_path) else {
             return;
         };
-        let Ok(config) = bitrouter_sdk::config::parse_with(&text, |_| None) else {
+        let Ok(config) = bitrouter::config::parse_with(&text, |_| None) else {
             return;
         };
         let source = bitrouter::paths::ConfigSource::File(self.config_path.clone());
@@ -152,24 +154,16 @@ impl MockAcp {
         Ok(bitrouter::daemon::socket_path_for(&source, &config))
     }
 
-    async fn supervised_runs(&self) -> Result<Vec<bitrouter::supervisor::RunSnapshot>> {
+    async fn supervised_runs(&self) -> Result<Vec<wire::RunSnapshot>> {
         let socket = self.supervisor_socket().await?;
-        let grant = bitrouter::supervisor::authorize(
+        let grant = sessions::authorize(
             &socket,
             "pty-observer",
-            [bitrouter::supervisor::SessionScope::Peek]
-                .into_iter()
-                .collect(),
+            [wire::SessionScope::Peek].into_iter().collect(),
         )
         .await?;
-        match bitrouter::supervisor::request(
-            &socket,
-            &grant,
-            bitrouter::supervisor::SessionCommand::PeekAll,
-        )
-        .await?
-        {
-            bitrouter::supervisor::SessionResponse::Runs { runs } => Ok(runs),
+        match sessions::request(&socket, &grant, wire::SessionCommand::PeekAll).await? {
+            wire::SessionResponse::Runs { runs } => Ok(runs),
             _ => bail!("supervisor omitted its run inventory"),
         }
     }
@@ -398,13 +392,18 @@ impl MockAcp {
         Ok(())
     }
 
-    fn visual_editor(&self, text: &str) -> Result<VisualEditor> {
+    fn visual_editor(&self, text: &str, interactive: bool) -> Result<VisualEditor> {
         let content_path = self._directory.path().join("external-editor-content");
         let script_path = self._directory.path().join("external-editor.sh");
         std::fs::write(&content_path, text).context("writing external editor fixture text")?;
+        let input = if interactive {
+            "printf 'FXEDITORREADY\\n'\nIFS= read -r reply || exit 41\n[ \"$reply\" = 'editor-owned-input' ] || exit 42\n"
+        } else {
+            ""
+        };
         std::fs::write(
             &script_path,
-            "#!/bin/sh\ncat \"$BITROUTER_PTY_VISUAL_CONTENT\" > \"$1\"\n",
+            format!("#!/bin/sh\n{input}cat \"$BITROUTER_PTY_VISUAL_CONTENT\" > \"$1\"\n"),
         )
         .context("writing external editor fixture")?;
         let mut permissions = std::fs::metadata(&script_path)
@@ -843,6 +842,7 @@ impl Drop for MockProcess {
 /// condition is observed. It never uses a fixed sleep to make progress.
 struct PtyRunner {
     master: Box<dyn MasterPty + Send>,
+    original_terminal_mode: String,
     writer: Box<dyn Write + Send>,
     output: Vec<u8>,
     screen: vt100::Parser,
@@ -871,6 +871,12 @@ impl PtyRunner {
                 pixel_height: 0,
             })
             .context("opening test PTY")?;
+        let original_terminal_mode = format!(
+            "{:?}",
+            pty.master
+                .get_termios()
+                .context("reading initial PTY terminal mode")?
+        );
         let reader = pty
             .master
             .try_clone_reader()
@@ -916,6 +922,7 @@ impl PtyRunner {
 
         Ok(Self {
             master: pty.master,
+            original_terminal_mode,
             writer,
             output: Vec::new(),
             screen: vt100::Parser::new(rows, columns, 0),
@@ -954,6 +961,21 @@ impl PtyRunner {
             output_len: self.output.len(),
             screen: self.screen.screen().contents(),
         }
+    }
+
+    fn assert_terminal_mode_restored(&self) -> Result<()> {
+        let current = format!(
+            "{:?}",
+            self.master
+                .get_termios()
+                .context("reading suspended PTY terminal mode")?
+        );
+        ensure!(
+            current == self.original_terminal_mode,
+            "suspended process retained terminal modes: before={:?}, after={current:?}",
+            self.original_terminal_mode
+        );
+        Ok(())
     }
 
     fn wait_for_text(&mut self, text: &str) -> Result<String> {
@@ -1086,10 +1108,14 @@ impl PtyRunner {
                     bail!("PTY reader failed while waiting for raw {text:?}: {error}")
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    bail!("timed out waiting for raw PTY text {text:?} after checkpoint")
+                    bail!(
+                        "timed out waiting for raw PTY text {text:?} after checkpoint; output was {transcript:?}"
+                    )
                 }
                 Err(RecvTimeoutError::Disconnected) => {
-                    bail!("PTY closed while waiting for raw {text:?} after checkpoint")
+                    bail!(
+                        "PTY closed while waiting for raw {text:?} after checkpoint; output was {transcript:?}"
+                    )
                 }
             }
         }
@@ -1787,14 +1813,23 @@ fn code_detached_backlog_catches_up_once_after_resizes() -> Result<()> {
     code.pty.send(b"/open transcript\r")?;
     let _ = code.pty.wait_for_text("Full transcript")?;
 
-    let narrow = code.pty.checkpoint();
-    code.pty.resize(40, 16)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code.pty.wait_for_text_since(&narrow, "Full transcript")?;
-    let wide = code.pty.checkpoint();
-    code.pty.resize(CODE_COLUMNS, CODE_ROWS)?;
-    code.pty.send(b"\x0c")?;
-    let _ = code.pty.wait_for_text_since(&wide, "Full transcript")?;
+    for (columns, rows) in [(40, 16), (CODE_COLUMNS, CODE_ROWS)] {
+        let resizing = code.pty.checkpoint();
+        code.pty.resize(columns, rows)?;
+        code.pty.send(b"\x0c")?;
+        // Resizing the parser can leave the old title visible before the child
+        // redraws. Wait for the frame's bottom border at its new height so the
+        // child renders each requested size before issuing the next resize.
+        let _ = code
+            .pty
+            .wait_for_screen_inner(Some(&resizing), "Full transcript", |screen| {
+                screen.contains("Full transcript")
+                    && screen
+                        .lines()
+                        .nth(usize::from(rows - 1))
+                        .is_some_and(|line| line.starts_with('└') && line.ends_with('┘'))
+            })?;
+    }
 
     code.mock.release_backlog()?;
     let _ = code.pty.wait_for_text("BG010")?;
@@ -1969,31 +2004,55 @@ fn code_minimum_and_below_minimum_permission_paths_are_safe() -> Result<()> {
 
 #[test]
 fn code_external_editor_preserves_multiline_prompt_and_terminal() -> Result<()> {
+    external_editor_round_trips(false)
+}
+
+#[test]
+fn code_external_editor_exclusively_owns_input_until_return() -> Result<()> {
+    external_editor_round_trips(true)
+}
+
+fn external_editor_round_trips(interactive: bool) -> Result<()> {
     let mock = MockAcp::new(MockScenario::Minimal)?;
     let edited = "external-replacement 中文 👩‍💻\nsecond edited line  ";
-    let visual_editor = mock.visual_editor(edited)?;
+    let visual_editor = mock.visual_editor(edited, interactive)?;
     let mut code = CodeFixture::agent_with_mock(mock, Some(&visual_editor))?;
     code.wait_for_agent_ready()?;
-    code.pty.paste("draft that the editor replaces")?;
-    let editor_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\x1b[1;5H/open external editor\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&editor_checkpoint, "external-replacement")?;
-    let submission_checkpoint = code.pty.checkpoint();
-    code.pty.send(b"\r")?;
-    let _ = code
-        .pty
-        .wait_for_text_since(&submission_checkpoint, "FXRP1")?;
-    let output = code
-        .pty
-        .wait_for_text_since(&submission_checkpoint, "Turn completed")?;
+    for turn in 1..=3 {
+        code.pty.paste("draft that the editor replaces")?;
+        let editor_checkpoint = code.pty.checkpoint();
+        code.pty.send(b"\x1b[1;5H/open external editor\r")?;
+        if interactive {
+            code.pty
+                .wait_for_raw_text_since(&editor_checkpoint, "FXEDITORREADY")?;
+            if turn == 2 {
+                code.signal_child("TSTP")?;
+                code.pty.assert_terminal_mode_restored()?;
+                code.signal_child("CONT")?;
+            }
+            code.pty.send(b"editor-owned-input\r")?;
+        }
+        // A prior submitted turn contains the same text. Only the composer
+        // below its Message heading proves this editor handoff completed.
+        code.pty.wait_for_screen_inner(
+            Some(&editor_checkpoint),
+            "external-replacement in composer",
+            |screen| {
+                screen
+                    .rsplit_once("┃ Message")
+                    .is_some_and(|(_, composer)| composer.contains("┃ external-replacement"))
+            },
+        )?;
+        let submission_checkpoint = code.pty.checkpoint();
+        code.pty.send(b"\r")?;
+        let reply = format!("FXRP{turn}");
+        code.pty
+            .wait_for_text_since(&submission_checkpoint, &reply)?;
+        code.pty
+            .wait_for_text_since(&submission_checkpoint, "Turn completed")?;
+    }
     ensure!(
-        output.contains("FXRP1"),
-        "external-editor prompt did not reach the minimal agent"
-    );
-    ensure!(
-        code.mock.captured_prompts()? == vec![edited.to_string()],
+        code.mock.captured_prompts()? == vec![edited.to_string(); 3],
         "external editor changed the submitted prompt bytes"
     );
     code.pty.send(b"\x04")?;
@@ -2066,7 +2125,7 @@ fn code_sigterm_detaches_without_answering_pending_permissions() -> Result<()> {
         .first()
         .context("foreground run disappeared after terminal loss")?;
     assert_eq!(run.pending_permissions.len(), 2);
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
+    assert_eq!(run.process, wire::ProcessState::Running);
     assert!(run.lease.is_none());
     assert!(code.mock.captured_permission_outcomes()?.is_empty());
     Ok(())
@@ -2086,19 +2145,17 @@ async fn terminal_loss_during_session_creation_does_not_wait_for_adapter() -> Re
     let runs = code.mock.supervised_runs().await?;
     let starting = runs
         .iter()
-        .find(|run| run.process == bitrouter::supervisor::ProcessState::Starting)
+        .find(|run| run.process == wire::ProcessState::Starting)
         .context("accepted startup was not retained by its daemon owner after client loss")?;
-    use bitrouter::supervisor::{ControlFence, LeaseMode, SessionCommand, SessionResponse};
+    use wire::{ControlFence, LeaseMode, SessionCommand, SessionResponse};
     let socket = code.mock.supervisor_socket().await?;
-    let grant = bitrouter::supervisor::authorize(
+    let grant = sessions::authorize(
         &socket,
         "recovery-fixture",
-        [bitrouter::supervisor::SessionScope::Stop]
-            .into_iter()
-            .collect(),
+        [wire::SessionScope::Stop].into_iter().collect(),
     )
     .await?;
-    let lease = match bitrouter::supervisor::request(
+    let lease = match sessions::request(
         &socket,
         &grant,
         SessionCommand::AcquireLease {
@@ -2116,7 +2173,7 @@ async fn terminal_loss_during_session_creation_does_not_wait_for_adapter() -> Re
     };
     let _ = tokio::time::timeout(
         PTY_TIMEOUT,
-        bitrouter::supervisor::request(
+        sessions::request(
             &socket,
             &grant,
             SessionCommand::Stop {
@@ -2133,8 +2190,9 @@ async fn terminal_loss_during_session_creation_does_not_wait_for_adapter() -> Re
     .await??;
     let stopped_runs = code.mock.supervised_runs().await?;
     ensure!(
-        stopped_runs.iter().any(|run| run.run_id == starting.run_id
-            && run.process == bitrouter::supervisor::ProcessState::Stopped),
+        stopped_runs
+            .iter()
+            .any(|run| run.run_id == starting.run_id && run.process == wire::ProcessState::Stopped),
         "initializing run was not conclusively stopped"
     );
     ensure!(
@@ -2159,8 +2217,8 @@ async fn code_explicit_detach_keeps_accepted_foreground_turn_running() -> Result
     let run = runs
         .first()
         .context("detached foreground run disappeared")?;
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
-    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
+    assert_eq!(run.process, wire::ProcessState::Running);
+    assert_eq!(run.turn, wire::TurnState::Working);
     assert!(run.lease.is_none());
     code.mock.release()?;
     tokio::time::timeout(PTY_TIMEOUT, async {
@@ -2168,8 +2226,8 @@ async fn code_explicit_detach_keeps_accepted_foreground_turn_running() -> Result
             let runs = code.mock.supervised_runs().await?;
             if runs.iter().any(|candidate| {
                 candidate.run_id == run.run_id
-                    && candidate.review == bitrouter::supervisor::ReviewState::Unread
-                    && candidate.turn == bitrouter::supervisor::TurnState::Idle
+                    && candidate.review == wire::ReviewState::Unread
+                    && candidate.turn == wire::TurnState::Idle
             }) {
                 return Ok::<_, anyhow::Error>(());
             }
@@ -2212,8 +2270,8 @@ async fn background_cli_returns_before_settlement_and_run_survives_client_exit()
         .iter()
         .find(|run| run.run_id == run_id)
         .context("accepted run missing after CLI exited")?;
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
-    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
+    assert_eq!(run.process, wire::ProcessState::Running);
+    assert_eq!(run.turn, wire::TurnState::Working);
     assert!(run.lease.is_none());
     mock.wait_for_request("session/prompt")?;
     mock.release()?;
@@ -2222,8 +2280,8 @@ async fn background_cli_returns_before_settlement_and_run_survives_client_exit()
             let runs = mock.supervised_runs().await?;
             if runs.iter().any(|run| {
                 run.run_id == run_id
-                    && run.review == bitrouter::supervisor::ReviewState::Unread
-                    && run.turn == bitrouter::supervisor::TurnState::Idle
+                    && run.review == wire::ReviewState::Unread
+                    && run.turn == wire::TurnState::Idle
             }) {
                 break;
             }
@@ -2347,13 +2405,13 @@ async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<(
     code.assert_terminal_restored()?;
     let runs = code.mock.supervised_runs().await?;
     ensure!(
-        runs.iter().any(|run| run.run_id == foreground_id
-            && run.process == bitrouter::supervisor::ProcessState::Stopped),
+        runs.iter()
+            .any(|run| run.run_id == foreground_id && run.process == wire::ProcessState::Stopped),
         "clean Code exit did not stop its foreground controller"
     );
     ensure!(
         runs.iter().any(|run| run.run_id == background_id
-            && run.process == bitrouter::supervisor::ProcessState::Running
+            && run.process == wire::ProcessState::Running
             && run.lease.is_none()),
         "clean foreground exit affected the detached background controller"
     );
@@ -2364,20 +2422,23 @@ async fn background_history_is_only_rendered_in_explicit_inspector() -> Result<(
 fn code_sigtstp_restores_then_sigcont_reacquires_terminal() -> Result<()> {
     let mut code = CodeFixture::agent(MockScenario::Minimal)?;
     code.wait_for_agent_ready()?;
-    let suspended = code.pty.checkpoint();
-    code.signal_child("TSTP")?;
-    let _ = code
-        .pty
-        .wait_for_raw_text_since(&suspended, "\x1b[?2004l")?;
+    for _ in 0..3 {
+        let suspended = code.pty.checkpoint();
+        code.signal_child("TSTP")?;
+        code.pty.assert_terminal_mode_restored()?;
+        let _ = code
+            .pty
+            .wait_for_raw_text_since(&suspended, "\x1b[?2004l")?;
 
-    let resumed = code.pty.checkpoint();
-    code.signal_child("CONT")?;
-    let _ = code.pty.wait_for_raw_text_since(&resumed, "\x1b[?2004h")?;
-    let screen = code.pty.wait_for_text_since(&resumed, "Message")?;
-    ensure!(
-        screen.contains("FXRD"),
-        "SIGCONT did not redraw the authoritative conversation"
-    );
+        let resumed = code.pty.checkpoint();
+        code.signal_child("CONT")?;
+        let _ = code.pty.wait_for_raw_text_since(&resumed, "\x1b[?2004h")?;
+        let screen = code.pty.wait_for_text_since(&resumed, "Message")?;
+        ensure!(
+            screen.contains("FXRD"),
+            "SIGCONT did not redraw the authoritative conversation"
+        );
+    }
     code.pty.send(b"\x04")?;
     code.assert_terminal_restored()
 }
@@ -2428,22 +2489,26 @@ async fn standalone_agents_and_attach_restore_terminal_without_stopping_runs() -
         let _ = manager
             .pty
             .wait_for_text(if attach { "FXRP1" } else { "Agents ·" })?;
-        let suspended = manager.pty.checkpoint();
-        manager.signal_child("TSTP")?;
-        let _ = manager
-            .pty
-            .wait_for_raw_text_since(&suspended, LEAVE_ALTERNATE_SCREEN)?;
-        let resumed = manager.pty.checkpoint();
-        manager.signal_child("CONT")?;
-        let _ = manager
-            .pty
-            .wait_for_raw_text_since(&resumed, ENTER_ALTERNATE_SCREEN)?;
+        for _ in 0..3 {
+            let suspended = manager.pty.checkpoint();
+            manager.signal_child("TSTP")?;
+            manager.pty.assert_terminal_mode_restored()?;
+            let _ = manager
+                .pty
+                .wait_for_raw_text_since(&suspended, LEAVE_ALTERNATE_SCREEN)?;
+            let resumed = manager.pty.checkpoint();
+            manager.signal_child("CONT")?;
+            let _ = manager
+                .pty
+                .wait_for_raw_text_since(&resumed, ENTER_ALTERNATE_SCREEN)
+                .with_context(|| format!("resuming standalone agent manager (attach={attach})"))?;
+        }
         manager.signal_child("TERM")?;
         manager.assert_terminal_restored()?;
         let runs = manager.mock.supervised_runs().await?;
         ensure!(
             runs.iter().any(|run| run.run_id == run_id
-                && run.process == bitrouter::supervisor::ProcessState::Running
+                && run.process == wire::ProcessState::Running
                 && run.lease.is_none()),
             "manager exit stopped or retained control of the background run"
         );
@@ -3127,6 +3192,79 @@ fn code_late_adapter_disconnect_preserves_terminal_cleanup() -> Result<()> {
         disconnected.contains("FXRP1"),
         "late adapter disconnect discarded the completed transcript: {disconnected:?}"
     );
+    code.pty.send(b"\x04")?;
+    code.assert_terminal_restored()
+}
+
+#[test]
+fn code_fresh_session_preserves_direct_routing_and_timeout_in_the_terminal() -> Result<()> {
+    let mock = MockAcp::new(MockScenario::FreshSessions)?;
+    let child_pid_path = mock._directory.path().join("code-child.pid");
+    let mut command = shell_command(&mock, None)?;
+    for arg in [
+        "code",
+        "stub",
+        "--direct",
+        "--turn-timeout",
+        "1",
+        "--config",
+    ] {
+        command.arg(arg);
+    }
+    command.arg(&mock.config_path);
+    let mut code = CodeFixture {
+        mock,
+        child_pid_path,
+        pty: PtyRunner::spawn(command, CODE_COLUMNS, CODE_ROWS)?,
+    };
+    code.wait_for_agent_ready()?;
+    code.pty.send(b"First native session\r")?;
+    code.pty.wait_for_text("FXRP1")?;
+    code.pty.wait_for_text("Turn completed")?;
+    let first = code.mock.wait_for_request("session/prompt")?;
+    code.pty.send(b"/")?;
+    code.pty.wait_for_text("Commands")?;
+    let opening = code.pty.checkpoint();
+    code.pty.send(b"new\r")?;
+    let first_id = first["params"]["sessionId"]
+        .as_str()
+        .context("native id missing")?;
+    code.pty.wait_for_screen_inner(
+        Some(&opening),
+        "a different ready native session",
+        |screen| {
+            screen.contains("FXRD pty-fresh-")
+                && !screen.contains(first_id)
+                && screen.contains("stub · direct · ready")
+        },
+    )?;
+    code.pty.wait_for_text("stub · direct · ready")?;
+    let second = code.pty.checkpoint();
+    code.pty.send(b"wait-for-timeout in the new session\r")?;
+    code.pty.wait_for_text_since(&second, "FXWAIT")?;
+    code.pty.wait_for_text_since(&second, "FXCS")?;
+    let cancel = code.mock.wait_for_request("session/cancel")?;
+    assert_ne!(cancel["params"]["sessionId"], first["params"]["sessionId"]);
+    let captures = std::fs::read_to_string(&code.mock.capture_path)?;
+    let requests = captures
+        .lines()
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|r| r["method"] == "session/new")
+            .count(),
+        2
+    );
+    assert!(
+        !requests
+            .iter()
+            .any(|r| r["method"] == "session/load" || r["method"] == "session/resume")
+    );
+    assert_eq!(code.mock.captured_prompts()?.len(), 2);
+    // Timeout cancellation finishes cooperatively; closing Code reaps the
+    // replacement child and restores the terminal just as the initial launch.
     code.pty.send(b"\x04")?;
     code.assert_terminal_restored()
 }

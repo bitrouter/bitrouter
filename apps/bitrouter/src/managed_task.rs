@@ -1,16 +1,24 @@
 //! Headless managed mode for BRO's native workspace harness.
 
+use bitrouter_ai::types::ReasoningEffort;
 use std::path::PathBuf;
+#[cfg(all(feature = "core", feature = "harness"))]
 use std::sync::Arc;
 
+#[cfg(all(feature = "core", feature = "harness"))]
 use anyhow::Context;
 
-use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_orchestrator::agent::ToolMode;
-use bitrouter_orchestrator::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
-use bitrouter_orchestrator::core::session::RunStatus;
-use bitrouter_orchestrator::harness::managed::session::{NativeApproval, NativeSession};
-use bitrouter_sdk::caller::CallerContext;
+#[cfg(all(feature = "core", feature = "harness"))]
+use crate::gateway::caller::CallerContext;
+#[cfg(all(feature = "core", feature = "harness"))]
+use crate::harness::resources::managed::session::{NativeApproval, NativeSession};
+#[cfg(all(feature = "core", feature = "harness"))]
+use crate::storage::checkpoint::snapshot::RunStatus;
+#[cfg(all(feature = "core", feature = "harness"))]
+use bitrouter_ai::core::protocol::{CoreError, TaskInput, ToolExecute, Verification};
+#[cfg(all(feature = "core", feature = "harness"))]
+use bitrouter_ai::harness::agent::ToolMode;
+#[cfg(all(feature = "core", feature = "harness"))]
 use tokio_util::sync::CancellationToken;
 
 pub struct Options {
@@ -25,8 +33,10 @@ pub struct Options {
     pub max_output_tokens: Option<u32>,
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 struct HeadlessApproval;
 
+#[cfg(all(feature = "core", feature = "harness"))]
 #[async_trait::async_trait]
 impl NativeApproval for HeadlessApproval {
     async fn approve(&self, _: &ToolExecute) -> Result<bool, CoreError> {
@@ -36,6 +46,7 @@ impl NativeApproval for HeadlessApproval {
     }
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 pub async fn run(options: Options) -> anyhow::Result<()> {
     anyhow::ensure!(
         options.max_output_tokens != Some(0),
@@ -99,7 +110,7 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         effort: options.effort.map(|effort| effort.to_string()),
         max_output_tokens: options.max_output_tokens,
         context_limit_bytes: None,
-        routing: bitrouter_orchestrator::core::protocol::RoutingSettings {
+        routing: bitrouter_ai::core::protocol::RoutingSettings {
             model: model_mode,
             ..Default::default()
         },
@@ -140,4 +151,9 @@ pub async fn run(options: Options) -> anyhow::Result<()> {
         "managed task did not complete; inspect its retained native session"
     );
     Ok(())
+}
+
+#[cfg(not(all(feature = "core", feature = "harness")))]
+pub async fn run(_options: Options) -> anyhow::Result<()> {
+    anyhow::bail!("native managed execution requires the core feature and harness feature")
 }

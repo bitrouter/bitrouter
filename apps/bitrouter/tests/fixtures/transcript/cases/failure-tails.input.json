@@ -1,0 +1,20 @@
+[
+  {
+    "id": "long",
+    "path": "/transcript-fixture/logs/session.log",
+    "log": "trace 01: checking configuration\r\ntrace 02: checking configuration\r\ntrace 03: checking configuration\r\ntrace 04: checking configuration\r\ntrace 05: checking configuration\r\ntrace 06: checking configuration\r\ntrace 07: checking configuration\r\ntrace 08: checking configuration\r\ntrace 09: checking configuration\r\ntrace 10: checking configuration\r\ntrace 11: checking configuration\r\ntrace 12: checking configuration\r\ntrace 13: checking configuration\r\ntrace 14: checking configuration\r\ntrace 15: checking configuration\r\ntrace 16: checking configuration\r\ntrace 17: checking configuration\r\ntrace 18: checking configuration\r\ntrace 19: checking configuration\r\ntrace 20: checking configuration\r\ntrace 21: checking configuration\r\ntrace 22: checking configuration\r\ntrace 23: checking configuration\r\ntrace 24: checking configuration\r\nagent failed: invalid setting 中文\r\n",
+    "max_lines": 20
+  },
+  {
+    "id": "short",
+    "path": "/transcript-fixture/logs/short.log",
+    "log": "connecting\nagent failed: missing config",
+    "max_lines": 20
+  },
+  {
+    "id": "empty",
+    "path": "/transcript-fixture/logs/empty.log",
+    "log": "",
+    "max_lines": 20
+  }
+]

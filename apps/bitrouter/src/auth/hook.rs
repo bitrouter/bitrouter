@@ -29,10 +29,15 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sea_orm::DatabaseConnection;
 
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::{DenyReason, HookDecision, PipelineContext, PreRequestHook};
-use bitrouter_sdk::mcp::{McpContext, PreRequestHook as McpPreRequestHook};
-use bitrouter_sdk::{PluginId, Result};
+use crate::gateway::caller::CallerContext;
+use crate::gateway::error::Result;
+use crate::gateway::extensions::legacy::PluginId;
+use crate::gateway::mcp::McpContext;
+use crate::gateway::mcp::PreRequestHook as McpPreRequestHook;
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::DenyReason;
+use crate::gateway::pipeline::hooks::HookDecision;
+use crate::gateway::pipeline::hooks::PreRequestHook;
 use http::HeaderMap;
 
 use crate::auth::db::{self, ApiKeyRecord};

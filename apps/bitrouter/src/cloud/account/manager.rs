@@ -2,9 +2,9 @@
 
 use super::credentials::CredentialsStore;
 use super::transaction::{AccountTransaction, FileHostedStore};
-use bitrouter_ai::auth::store::{CredentialKey, DEFAULT_ACCOUNT, StoreError};
-use bitrouter_ai::providers::hosted::credentials::StoredCredential;
-use bitrouter_ai::providers::hosted::session::{CredentialError, HostedSession};
+use crate::gateway::providers::auth::store::{CredentialKey, DEFAULT_ACCOUNT, StoreError};
+use crate::gateway::providers::hosted::credentials::StoredCredential;
+use crate::gateway::providers::hosted::session::{CredentialError, HostedSession};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ impl CredentialManager {
     pub fn with_client(path: impl Into<PathBuf>, client: reqwest::Client) -> Self {
         let path = path.into();
         let key = CredentialKey {
-            provider: bitrouter_ai::providers::hosted::PROVIDER_ID.into(),
+            provider: crate::gateway::providers::hosted::PROVIDER_ID.into(),
             account: DEFAULT_ACCOUNT.into(),
         };
         let session = HostedSession::new(key, Arc::new(FileHostedStore::new(path.clone())), client);
@@ -81,8 +81,8 @@ mod transaction_tests;
 #[cfg(test)]
 mod tests {
     use super::CredentialManager;
-    use bitrouter_ai::providers::hosted::credentials::{Credentials, StoredCredential};
-    use bitrouter_ai::providers::hosted::session::{CredentialError, CredentialSource};
+    use crate::gateway::providers::hosted::credentials::{Credentials, StoredCredential};
+    use crate::gateway::providers::hosted::session::{CredentialError, CredentialSource};
 
     #[tokio::test]
     async fn explicit_api_key_bypasses_malformed_store() -> anyhow::Result<()> {

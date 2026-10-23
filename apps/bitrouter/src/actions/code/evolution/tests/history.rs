@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore, RevisionInput};
-use crate::evolution::scoring::{self, RubricSubmission};
+use crate::core::evolution::scoring::{self, RubricSubmission};
 
 async fn append_turn(fixture: &Fixture) -> Result<()> {
     for (direction, kind, payload) in [
@@ -19,13 +19,16 @@ async fn append_turn(fixture: &Fixture) -> Result<()> {
     ] {
         fixture
             .recorder
-            .record(CaptureEvent {
-                direction,
-                kind,
-                call_id: Some(3),
-                method: "session/prompt".into(),
-                payload,
-            })
+            .append(
+                "session",
+                CaptureEvent {
+                    direction,
+                    kind,
+                    call_id: Some(3),
+                    method: "session/prompt".into(),
+                    payload,
+                },
+            )
             .await?;
     }
     Ok(())

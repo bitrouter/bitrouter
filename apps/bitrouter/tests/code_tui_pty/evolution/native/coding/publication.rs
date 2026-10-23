@@ -2,8 +2,8 @@
 //! production terminal or scheduler, never through planted learner/store rows.
 
 use super::*;
-use bitrouter::evolution::bandit::Arm;
-use bitrouter::evolution::learning::LearningReport;
+use bitrouter::core::evolution::learning::LearningReport;
+use bitrouter::gateway::routing::blocks::allocation::Arm;
 use std::collections::BTreeSet;
 
 const BLOCK: &str = "native-terminal-trial";

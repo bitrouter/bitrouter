@@ -32,7 +32,7 @@
 //! # The scope the rollup can finally state
 //!
 //! [`RequestRow`] is a display read and deliberately not the export artifact,
-//! so this module declares its own [`RequestView`] rather than serializing it —
+//! so the shared [`RequestView`] contract selects its fields explicitly —
 //! otherwise the store's field names would become a JSON contract by accident.
 //!
 //! The spend figures cover **every caller**, and now say so. They always did,
@@ -42,12 +42,21 @@
 //! surface keep the rule `tui <agent>`'s cost line keeps: a currency figure states
 //! whose spend it is.
 
+#[cfg(test)]
 use chrono::Datelike;
-use serde::{Deserialize, Serialize};
+use {
+    bitrouter_ai::control::requests::DaemonView,
+    bitrouter_ai::control::requests::MeteringAvailability,
+    bitrouter_ai::control::requests::MeteringComponentAvailability,
+    bitrouter_ai::control::requests::Mode, bitrouter_ai::control::requests::RequestFilterView,
+    bitrouter_ai::control::requests::RequestView, bitrouter_ai::control::requests::RequestsReport,
+};
 
 use crate::metering::fmt_usd;
 use crate::metering::pricing::ChargeStatus;
-use crate::metering::store::{RateMetrics, RequestRow, SpendSummary, TimeWindow};
+#[cfg(test)]
+use crate::metering::store::TimeWindow;
+use crate::metering::store::{RateMetrics, RequestRow, SpendSummary};
 use crate::output::CliReport;
 use crate::output::human::{Health, Human, Table};
 
@@ -56,84 +65,6 @@ use crate::output::human::{Health, Human, Table};
 const HEADERS: [&str; 9] = [
     "time", "router", "model", "provider", "in", "out", "cost", "latency", "status",
 ];
-
-/// What the report is looking at.
-///
-/// Derived from the data rather than stored, so it can never disagree with the
-/// rows beside it: an empty list because nothing ran and an empty list because
-/// the daemon is gone are different facts and must read differently.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    /// A daemon is answering, and history is readable.
-    Live,
-    /// No daemon, but the store has rows — history is still worth showing.
-    HistoryOnly,
-    /// No daemon and nothing recorded (or no store at all).
-    Empty,
-}
-
-/// The running daemon, as its control socket describes it.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct DaemonView {
-    /// Process id.
-    pub pid: u32,
-    /// HTTP listen address.
-    pub listen: String,
-    /// Count of routable models.
-    pub models: usize,
-}
-
-/// One settled request, in this report's own vocabulary.
-///
-/// Not [`RequestRow`] itself: that type is the metering store's display read,
-/// and serializing it here would make its field names a public JSON contract
-/// that could not then be changed without a break.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RequestView {
-    /// Request id — also the join key into the trajectory store.
-    pub request_id: String,
-    /// RFC3339 settle timestamp.
-    pub created_at: String,
-    /// Named router selected during Stage 0, or `null` for direct and legacy rows.
-    #[serde(default)]
-    pub router_id: Option<String>,
-    /// Versioned digest of the non-secret router binding, or `null` when unknown.
-    #[serde(default)]
-    pub binding_digest: Option<String>,
-    /// Caller selector captured before ingress transforms, or `null` when unknown.
-    #[serde(default)]
-    pub original_selector: Option<String>,
-    /// Model the router resolved to.
-    pub model: String,
-    /// Provider that actually served the request.
-    pub provider: String,
-    /// Prompt tokens consumed.
-    pub prompt_tokens: i64,
-    /// Completion tokens produced.
-    pub completion_tokens: i64,
-    /// Cache-read prompt tokens.
-    pub cache_read_tokens: i64,
-    /// Cache-write prompt tokens.
-    pub cache_write_tokens: i64,
-    /// Estimated charge in micro-USD. Meaningless without `charge_status`:
-    /// a request whose pricing evidence was incomplete also stores `0`.
-    pub charge_micro_usd: i64,
-    /// How `charge_micro_usd` was arrived at — `computed`, `not_charged`,
-    /// `unknown`, or `legacy_unknown`. Only the first two are evidence.
-    pub charge_status: String,
-    /// End-to-end latency in milliseconds.
-    pub latency_ms: i64,
-    /// Error string when the request failed, else `None`.
-    pub error: Option<String>,
-    /// The trajectory episode this request belongs to, or `null`.
-    ///
-    /// This is the thread onward: `bro trajectory inspect <episode_id>`
-    /// reads the structural record. `null` is the common case — capture
-    /// defaults to off — and it means "there is nothing further to read",
-    /// which is exactly what a caller needs to know before trying.
-    pub episode_id: Option<String>,
-}
 
 impl From<RequestRow> for RequestView {
     fn from(row: RequestRow) -> Self {
@@ -158,9 +89,15 @@ impl From<RequestRow> for RequestView {
     }
 }
 
-impl RequestView {
+pub(crate) trait RequestViewPresentation: Sized {
+    fn display_cells(&self) -> [String; 9];
+    #[cfg(test)]
+    fn cells(&self) -> [String; 9];
+}
+
+impl RequestViewPresentation for RequestView {
     /// The row as the human table's cells, in `HEADERS` order.
-    pub fn display_cells(&self) -> [String; 9] {
+    fn display_cells(&self) -> [String; 9] {
         [
             clock(&self.created_at),
             self.router_id.clone().unwrap_or_else(|| "—".to_string()),
@@ -180,86 +117,6 @@ impl RequestView {
     }
 }
 
-/// The server-resolved request selection used to produce this report.
-///
-/// The input accepts optional timestamps so an ordinary request can mean
-/// "today". A report must not leave that relative choice implicit: it returns
-/// the absolute interval the host actually read.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RequestFilterView {
-    /// Inclusive RFC3339 lower bound chosen by the server.
-    pub since: String,
-    /// Exclusive RFC3339 upper bound chosen by the server.
-    pub until: String,
-    /// Resolved-model filter, when requested.
-    pub model: Option<String>,
-    /// Serving-provider filter, when requested.
-    pub provider: Option<String>,
-}
-
-impl RequestFilterView {
-    /// Construct the public view from already validated, absolute values.
-    pub fn new(
-        since: String,
-        until: String,
-        model: Option<String>,
-        provider: Option<String>,
-    ) -> Self {
-        Self {
-            since,
-            until,
-            model,
-            provider,
-        }
-    }
-}
-
-/// Whether one independently queried metering component was observed.
-///
-/// Numeric fields stay additive-compatible with the original report. This
-/// flag tells a reader whether their zero is an observed zero or a placeholder
-/// retained while another component was unavailable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MeteringComponentAvailability {
-    /// The store query completed successfully.
-    Available,
-    /// The store could not be opened or this component's query failed.
-    Unavailable,
-}
-
-/// Availability is per component because summary, rate, and rows are separate
-/// reads. A successful component remains useful when a sibling fails.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct MeteringAvailability {
-    /// Aggregate spend and request count over the selected filters.
-    pub summary: MeteringComponentAvailability,
-    /// Host-wide trailing-minute rate.
-    pub rate: MeteringComponentAvailability,
-    /// The newest-first request page and its truncation flag.
-    pub rows: MeteringComponentAvailability,
-}
-
-impl MeteringAvailability {
-    /// A fully observed snapshot.
-    pub const fn available() -> Self {
-        Self {
-            summary: MeteringComponentAvailability::Available,
-            rate: MeteringComponentAvailability::Available,
-            rows: MeteringComponentAvailability::Available,
-        }
-    }
-
-    /// No metering data was available, such as when the database cannot open.
-    pub const fn unavailable() -> Self {
-        Self {
-            summary: MeteringComponentAvailability::Unavailable,
-            rate: MeteringComponentAvailability::Unavailable,
-            rows: MeteringComponentAvailability::Unavailable,
-        }
-    }
-}
-
 /// Inputs assembled by the action after the independently queried metering
 /// components have settled. This stays separate from the serialized report so
 /// a store row does not accidentally become a public JSON contract.
@@ -274,62 +131,34 @@ pub struct RequestReportData {
     pub truncated: bool,
 }
 
-/// Result of `bro status --requests`.
-///
-/// Deliberately not `Default`: `scope` would come back `""`, a report
-/// claiming no scope at all, which is the one thing this surface must never
-/// emit. The constructors keep that invariant centralized.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct RequestsReport {
-    /// Which of the three states this report represents.
-    pub mode: Mode,
-    /// `None` when nothing is listening on the control socket.
-    pub daemon: Option<DaemonView>,
-    /// The window the rollup and rows cover, as a label.
-    pub window: String,
-    /// Whose spend the rollup describes. Always every caller — stated rather
-    /// than left to be guessed, which is the rule `tui <agent>`'s cost line keeps.
-    pub scope: String,
-    /// Total estimated spend over the window, in micro-USD, counting only
-    /// requests that carry charge evidence.
-    ///
-    /// `null` when **no** request in the window has any — a zero there would
-    /// claim a free window that was merely unmeasured, and an agent reading
-    /// `spend_micro_usd` without checking `unpriced_requests` would believe
-    /// it. `null` forces the question.
-    pub spend_micro_usd: Option<u64>,
-    /// Requests observed over the window, success and failure alike.
-    pub requests: u64,
-    /// How many of `requests` have no charge evidence and are therefore
-    /// absent from `spend_micro_usd`.
-    pub unpriced_requests: u64,
-    /// Requests observed in the trailing minute.
-    pub requests_per_minute: f64,
-    /// Tokens observed in the trailing minute.
-    pub tokens_per_minute: f64,
-    /// Newest-first settled requests.
-    pub rows: Vec<RequestView>,
-    /// The absolute time bounds and optional filters the host applied.
-    pub filters: RequestFilterView,
-    /// Whether another matching row existed after the returned page.
-    pub truncated: bool,
-    /// Which independently queried metering components were observed.
-    pub metering: MeteringAvailability,
-    /// Scope of the rate fields, which are intentionally not narrowed by the
-    /// report's time/model/provider filters.
-    pub rate_scope: String,
-}
-
 /// The one scope these figures have ever had.
 const SCOPE: &str = "all callers";
 const RATE_SCOPE: &str = "all callers, trailing minute";
 
-impl RequestsReport {
+pub(crate) trait RequestsReportRuntime: Sized {
+    #[cfg(test)]
+    fn new(
+        daemon: Option<DaemonView>,
+        window: TimeWindow,
+        summary: SpendSummary,
+        rate: RateMetrics,
+        rows: Vec<RequestRow>,
+    ) -> Self;
+    fn new_filtered(daemon: Option<DaemonView>, data: RequestReportData) -> Self;
+    fn sanitize_for_remote(&mut self);
+    fn health(&self) -> Health;
+    fn headline(&self) -> String;
+    fn rollup(&self) -> String;
+    fn caveat(&self) -> Option<String>;
+}
+
+impl RequestsReportRuntime for RequestsReport {
     /// Assemble from one poll of the store and the control socket.
     ///
     /// `mode` is computed here from the two, so no caller can set it to
     /// something the data does not support.
-    pub fn new(
+    #[cfg(test)]
+    fn new(
         daemon: Option<DaemonView>,
         window: TimeWindow,
         summary: SpendSummary,
@@ -362,7 +191,7 @@ impl RequestsReport {
     }
 
     /// Assemble a report for one validated, potentially filtered page.
-    pub fn new_filtered(daemon: Option<DaemonView>, data: RequestReportData) -> Self {
+    fn new_filtered(daemon: Option<DaemonView>, data: RequestReportData) -> Self {
         let mode = match (daemon.is_some(), data.rows.is_empty()) {
             (true, _) => Mode::Live,
             (false, false) => Mode::HistoryOnly,
@@ -394,7 +223,7 @@ impl RequestsReport {
     /// Local reports retain their stored diagnostic because the host owner may
     /// use it to investigate a failed request. Remote reports must never carry
     /// a provider URL, bearer token, prompt fragment, or upstream response.
-    pub fn sanitize_for_remote(&mut self) {
+    fn sanitize_for_remote(&mut self) {
         for row in &mut self.rows {
             if let Some(error) = row.error.as_deref() {
                 row.error = Some(remote_error_summary(error).to_string());
@@ -421,7 +250,7 @@ impl RequestsReport {
             (None, Mode::HistoryOnly) => "history only — daemon not running".to_string(),
             (None, _) => format!(
                 "nothing recorded yet — try {} serve",
-                bitrouter_sdk::invocation::name()
+                crate::commands::invocation::name()
             ),
         }
     }
@@ -538,6 +367,7 @@ impl CliReport for RequestsReport {
 }
 
 /// The window as the rollup names it.
+#[cfg(test)]
 fn window_label(window: TimeWindow) -> &'static str {
     match window {
         TimeWindow::LastMinute => "last minute",
@@ -552,6 +382,7 @@ fn window_label(window: TimeWindow) -> &'static str {
 /// The legacy constructor only receives a named window. Its report still
 /// returns absolute bounds, although filtered callers use their already
 /// resolved bounds through [`RequestsReport::new_filtered`].
+#[cfg(test)]
 fn window_start(
     window: TimeWindow,
     now: chrono::DateTime<chrono::Utc>,

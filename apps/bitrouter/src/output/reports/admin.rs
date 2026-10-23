@@ -45,7 +45,7 @@ impl CliReport for PolicyCreateReport {
         h.line("  edit, then bind to a key with:")?;
         h.line(&format!(
             "    {} key sign --user <id> --policy {}",
-            bitrouter_sdk::invocation::name(),
+            crate::commands::invocation::name(),
             self.id
         ))
     }

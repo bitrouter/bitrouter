@@ -7,7 +7,7 @@ use super::types::{
     HistoryCompleteness, TrajectoryEvent, TrajectoryEventKind, TrajectoryHealth,
     TrajectorySnapshot, validate_event,
 };
-use crate::workflow_state::ir::{RouteProjection, WorkflowStateKind};
+use crate::gateway::routing::workflow::ir::{RouteProjection, WorkflowStateKind};
 
 const PPM_SCALE: u64 = 1_000_000;
 const MAX_HOLD_REQUESTS: u64 = u32::MAX as u64;

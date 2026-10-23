@@ -1,8 +1,8 @@
 //! Reports for `models` and `providers list`.
 
-use crate::actions::models::{ModelsReport, ModelsSource};
-use bitrouter_sdk::invocation;
+use crate::commands::invocation;
 use serde::Serialize;
+use {bitrouter_ai::control::models::ModelsReport, bitrouter_ai::control::models::ModelsSource};
 
 use crate::output::CliReport;
 use crate::output::human::{Human, Table};
@@ -10,7 +10,7 @@ use crate::output::human::{Human, Table};
 /// The human view of `bro models`.
 ///
 /// The report type itself is
-/// [`crate::actions::models::ModelsReport`]: the
+/// [`bitrouter_ai::control::models::ModelsReport`]: the
 /// `list_models` tool returns the same type, so `bro models --json` and
 /// the tool's structured content are the same bytes. Rendering stays here — a
 /// local trait on a foreign type is legal, and it keeps [`Human`] out of the
@@ -93,8 +93,8 @@ mod tests {
     use super::*;
     use crate::output::{Format, Output};
 
-    fn model(id: &str, providers: &[&str]) -> bitrouter_sdk::language_model::routing::ModelInfo {
-        bitrouter_sdk::language_model::routing::ModelInfo {
+    fn model(id: &str, providers: &[&str]) -> bitrouter_ai::routing::ModelInfo {
+        bitrouter_ai::routing::ModelInfo {
             id: id.into(),
             providers: providers.iter().map(|p| (*p).into()).collect(),
         }

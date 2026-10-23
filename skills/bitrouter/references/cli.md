@@ -1,6 +1,80 @@
 # CLI reference
 
+`bro build-info` reports the installed executable's compiled profile, effective
+features, source revision, target and handoff fingerprint without opening config
+or service state. `full` means the default capability set, `gateway` means no
+optional features, and other combinations are `custom`. Compare it with
+`bro status`'s `daemon_artifact`; an absent artifact is unknown. Common inspection
+works across profiles, but execution never automatically replaces a daemon with
+a different feature set. An explicit cross-profile restart requires candidate
+preflight, launcher ownership and proven idleness; a native core+harness daemon
+retains its lifetime handoff blocker. Finish its work before a planned stop and
+start with the other profile. See the updating reference for profile-preserving
+installation instructions.
+
+BitRouter's terminal views require `tui`, which includes `harness` but does not
+enable `core`. Without TUI, `code`, the `tui` alias, interactive `chat`, the
+agent deck/attach view and the onboarding wizard report the missing feature.
+Explicit `init --after launch` is rejected before resetting credentials or
+saving configuration. Use `init --yes --after exit` or `--after serve` for
+noninteractive setup. Headless `run`, redirected `chat`, session commands and
+their existing permission policies remain available with harness. Provider
+login and the vendor CLI's own authentication do not require BitRouter's TUI.
+
+MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
+Without `harness`, the daemon opens no local task or native ACP listener, and
+`agent_api.enabled` and `acp serve` report the missing capability before startup.
+Empty MCP configuration and disabled agent API settings remain readable.
+Agent execution commands (`run`, `spawn`, `launch`, native launch aliases,
+`chat`, ACP execution and live session operations) require `harness` before
+reading prompt/policy files or stdin, loading configuration, or creating logs.
+Gateway-only builds retain `agents list` configuration/control inspection and
+historical `acp recordings`/checkpoint reads; they do not load the bundled agent
+execution catalog. Bare noninteractive setup remains inert; a saved default
+agent reports unavailable harness without creating session logs. Provider login
+and offline skill inspection remain usable without ACP runtime dependencies.
+The updater's daemon handoff is independent of agent/session commands.
+Local native headless execution requires both `core` and `harness`.
+Supervised sessions and ACP route-lease control also require `harness`; a
+gateway-only daemon leaves the supervisor ledger untouched. Request identity
+and existing session-attributed spend remain available.
+Without `harness`, each local control request is limited to 4 MiB including its
+newline; oversized input is rejected before decoding or dispatch. This applies
+to all commands on that local transport. HTTP request limits are separate, and
+harness builds retain their existing prompt/history transport behavior.
+SQLite needs no feature. PostgreSQL/MySQL configuration requires `db-postgres` /
+`db-mysql`; both are included in the default distribution. Reduced builds report
+an unavailable selected backend before connecting.
+Gateway server-side tools require `server-tools` (included by default and enabling
+`mcp`). Selecting MCP tools, advisor, subagent, Fusion, web search or web fetch
+without that feature fails at startup, reload and profile preflight. Saved loop
+tuning with no selected tool remains readable and does not activate execution.
+
+Evidence and learning commands require the application's `core` feature:
+`eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`
+and `evolve`, plus `acp evolution` and checkpoint `judge`, `judge-job` and
+`rubric` operations. Without core they report the requirement before opening
+inputs or stores. The TUI evolution panel also requires core. Nonempty `BITROUTER_WORKFLOW_TRACE_JSONL` also requires core.
+`serve`, `start` and `restart` reject it before creating runtime files or stopping
+a resident daemon. Published-policy loading/enforcement, ordinary
+policy inspection/reload/rollback, request metering and trajectory inspection,
+replay and pruning remain available without the learning runtime.
+
+Telemetry export requires the build's `otel-http` or `otel-grpc` capability.
+Without either, an enabled `plugins.bitrouter-telemetry.telemetry` block, nested
+`otel` block or `OTEL_EXPORTER_OTLP_ENDPOINT` opt-in fails before export-related
+initialization. Startup, reload, handoff preflight and standalone ACP preparation
+apply this check. Dormant settings, basic logs, request metering and local ACP
+records remain available; the default distribution includes `otel-http`.
+
 ## Native tasks through the managed core
+
+Local native execution requires the application's `core` and `harness` features
+(enabled in the default distribution). A harness build without core can inspect stored sessions
+and validate their checkpoints, but cannot create or resume native work. Check
+the runtime's `native_execution` capability before submission; unavailable work
+is rejected before execution ownership or workspace resources are acquired.
+This does not disable the separate external ACP harness path.
 
 `bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 connects native tools, AGENTS.md, skills and MCP resources to an in-process
@@ -274,8 +348,11 @@ BitRouter fails closed if a signed lock contains any `progress_guard` while
 reload rejects changes to `enabled`, `retention_days`, or `outbox_batch_size`
 and preserves the live last-known-good state. Restart the daemon to apply any
 of them. When enabled, capture uses the existing local correlation-key
-lifecycle and starts durable outbox publication and startup retention. When
-disabled, it creates no correlation key and writes no trajectory ledger rows.
+lifecycle and startup retention. With `core` enabled, it also publishes the durable
+evaluation outbox. Without core, gateway terminal facts and outbox envelopes stay
+durable; publication attempts remain pending until a core-enabled daemon opens
+the same state. Retention does not discard undelivered evidence. When trajectory
+is disabled, it creates no correlation key and writes no trajectory ledger rows.
 
 Provider-native Responses continuation remains always active even when
 trajectory is disabled. Its independent lifecycle settings are:
@@ -354,7 +431,7 @@ edit or publish `policy-lock.yaml`.
 | `bro eval snapshot get <SHA256> [--config PATH]` | Read an immutable snapshot manifest. |
 | `bro eval status [--config PATH]` | Count subjects and latest admission states. |
 
-Authenticated daemon endpoints mirror the exchange at
+With the application `core` feature, authenticated daemon endpoints mirror the exchange at
 `/v1/evals/subjects`, `/v1/evals/results`, `/v1/evals/snapshots`, and
 `/v1/evals/status`. External evaluators submit scores; BitRouter owns schema,
 identity/metric authority, conflict/holdout admission, and snapshots.

@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result};
-use bitrouter_sdk::error::BitrouterError;
 use serde::{Deserialize, Serialize};
 
 use crate::output::CliReport;
@@ -33,15 +33,15 @@ impl RemoteContext {
             .into());
         }
         Ok(Self {
-            endpoint: crate::remote_control::normalize_endpoint(endpoint)
+            endpoint: crate::client::control::normalize_endpoint(endpoint)
                 .map_err(BitrouterError::bad_request)?
                 .to_string(),
             token_env: token_env.to_string(),
         })
     }
 
-    pub fn client(&self) -> Result<crate::remote_control::HttpControlClient> {
-        crate::remote_control::HttpControlClient::new(&self.endpoint, &self.token_env)
+    pub fn client(&self) -> Result<crate::client::control::HttpControlClient> {
+        crate::client::control::HttpControlClient::new(&self.endpoint, &self.token_env)
     }
 }
 

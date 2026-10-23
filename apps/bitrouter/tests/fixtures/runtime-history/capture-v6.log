@@ -1,0 +1,11 @@
+   Compiling hex v0.4.3
+   Compiling bitrouter-sdk v1.0.0-alpha.33 (<historical-worktree>/crates/bitrouter-sdk)
+   Compiling bitrouter-orchestrator v1.0.0-alpha.33 (<historical-worktree>/crates/bitrouter-orchestrator)
+    Finished `test` profile [unoptimized] target(s) in 24.14s
+     Running unittests src/lib.rs (<capture-target>/debug/deps/bitrouter_orchestrator-53712ada5f1a9fe3)
+
+running 1 test
+test service::tests::support::write_p0_historical_runtime_fixture ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 178 filtered out; finished in 0.78s
+

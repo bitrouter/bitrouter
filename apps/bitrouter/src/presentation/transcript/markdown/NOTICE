@@ -1,0 +1,24 @@
+This directory adapts ratatui-markdown 0.3.6 by langyo
+(langyo <langyo.china@gmail.com>).
+Authoritative upstream: https://github.com/celestia-island/ratatui-markdown
+
+Source: the crates.io ratatui-markdown 0.3.6 package locked by BitRouter.
+Package checksum: e44e5c1fcb6b71a3e639b5218ea181ef42b8b05ae87ba4afdc962b48548079ab
+The package's .cargo_vcs_info.json records revision
+2609d035c42bb0c7c9b8ebf816c6717d496fb97a with dirty: true; the released
+package, rather than a later repository revision, is the source of this copy.
+Its Cargo.toml declares MIT OR Apache-2.0 and its LICENSE contains the
+Apache License 2.0, reproduced verbatim here. This adaptation uses Apache-2.0.
+
+Adapted files: src/markdown/{parser,types,inline,text,render}.rs and the used
+wrapping/rendering tests. Box-drawing values originate in
+src/constants/list_prefix.rs; semantic tones use BitRouter's existing theme.
+
+Modifications: replaced terminal types and theme parameters with transcript
+Row/Run/Format/Tone, retained only the formatted Markdown path used by
+BitRouter, and integrated BitRouter's table fallback and codeframe override.
+Runtime hooks, image loading, syntax highlighting, tree and widget machinery,
+unused block variants and override fields are omitted. Image text placeholders
+remain to preserve the existing no-image-feature output. Quote depth saturates
+at u8::MAX instead of overflowing. Source-preserving journal formatting is not
+part of this module.

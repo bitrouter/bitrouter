@@ -7,26 +7,32 @@ use std::fmt;
 use std::sync::Arc;
 
 use bitrouter_ai::types::{Content, Prompt, ReasoningEffort, Role, Tool};
-use bitrouter_sdk::HeaderMap;
-use bitrouter_sdk::config::{PolicyKeyStrategy, PolicyModelTarget, PolicyTableConfig};
+use http::HeaderMap;
+use {
+    crate::config::PolicyKeyStrategy, crate::config::PolicyTableConfig,
+    bitrouter_ai::routing::PolicyModelTarget,
+};
 
 use crate::continuation::ContinuationAdjustment;
-use crate::eval::settlement::{
+use crate::gateway::observability::decision::{
     EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore, bounded_continuation_label,
 };
-use crate::eval::types::{
-    EvalExperimentRef, ExperimentArm, RouteActionCandidate, RouteDecisionMeasurement,
+use crate::gateway::routing::exploration::RouteExploration;
+use crate::gateway::routing::workflow::decision::{
+    PolicyDecisionJsonlRecorder, PolicyDecisionRecord,
 };
-use crate::optimization::exploration::RouteExploration;
-use crate::trajectory::guard::ProgressGuardPolicy;
-use crate::trajectory::types::HistoryCompleteness;
-use crate::workflow_state::decision::{PolicyDecisionJsonlRecorder, PolicyDecisionRecord};
-use crate::workflow_state::ir::{HarnessId, WorkflowIdentity};
-use crate::workflow_state::online::OnlineWorkflowState;
-use crate::workflow_state::predictive::{
+use crate::gateway::routing::workflow::ir::{HarnessId, WorkflowIdentity};
+use crate::gateway::routing::workflow::online::OnlineWorkflowState;
+use crate::gateway::routing::workflow::predictive::{
     NextActionClass, PredictiveEvidence, is_predictive_reason_code, is_task_family_reason_code,
 };
-use bitrouter_sdk::routing::signals::NextStepRole;
+use crate::trajectory::guard::ProgressGuardPolicy;
+use crate::trajectory::types::HistoryCompleteness;
+use bitrouter_ai::harness::inspection::NextStepRole;
+use {
+    bitrouter_ai::eval::EvalExperimentRef, bitrouter_ai::eval::ExperimentArm,
+    bitrouter_ai::eval::RouteActionCandidate, bitrouter_ai::eval::RouteDecisionMeasurement,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyDecisionReason {
@@ -275,7 +281,7 @@ impl PolicyTable {
         &self,
         model: &str,
         effort: Option<ReasoningEffort>,
-        context: bitrouter_sdk::routing::ContextStrategy,
+        context: bitrouter_ai::routing::ContextStrategy,
     ) -> Option<&str> {
         self.tiers
             .iter()
@@ -334,7 +340,7 @@ impl PolicyTable {
         let target = self.target_of_tier(logging_action_tier).ok_or_else(|| {
             anyhow::anyhow!("logging action tier is absent from the policy snapshot")
         })?;
-        RouteDecisionMeasurement::new(
+        crate::storage::evaluation::route_decision_measurement(
             logging_action_tier,
             target.model(),
             target.effort().or(input_effort),
@@ -572,7 +578,7 @@ impl PolicyTableRouter {
     pub fn apply(
         &self,
         prompt: &mut Prompt,
-        assessment: &bitrouter_sdk::routing::assessment::Assessment,
+        assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> bool {
         self.route_prompt(prompt, &HeaderMap::new(), assessment)
     }
@@ -583,7 +589,7 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         respect_explicit_route: bool,
         apply_tool_floor: bool,
-        assessment: Option<&bitrouter_sdk::routing::assessment::Assessment>,
+        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
     ) -> PolicyDecision {
         // Keep this exact immutable table alive through guards, recording, and
         // final target materialization, even if a concurrent reload swaps the
@@ -740,7 +746,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &mut Prompt,
         headers: &HeaderMap,
-        assessment: &bitrouter_sdk::routing::assessment::Assessment,
+        assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> bool {
         let input_model = prompt.model.clone();
         let input_effort = prompt.params.reasoning_effort;
@@ -769,7 +775,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: &bitrouter_sdk::routing::assessment::Assessment,
+        assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, true, Some(assessment))
     }
@@ -779,7 +785,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: &bitrouter_sdk::routing::assessment::Assessment,
+        assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, false, Some(assessment))
     }
@@ -788,7 +794,7 @@ impl PolicyTableRouter {
         &self,
         prompt: &Prompt,
         headers: &HeaderMap,
-        assessment: Option<&bitrouter_sdk::routing::assessment::Assessment>,
+        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
         guarded: bool,
     ) -> PolicyDecision {
         self.decision_for_inner(prompt, headers, false, !guarded, assessment)
@@ -824,7 +830,7 @@ impl PolicyTableRouter {
         &self,
         decision: &mut PolicyDecision,
         adjustment: &ContinuationAdjustment,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         decision.continuation_proposed_tier = decision.selected_tier.clone();
         decision.continuation_proposed_model = decision.selected_model.clone();
         decision.continuation_proposed_effort = decision.selected_effort;
@@ -853,7 +859,7 @@ impl PolicyTableRouter {
                             .unwrap_or_default(),
                     )
                     .ok_or_else(|| {
-                        bitrouter_sdk::BitrouterError::bad_request(
+                        crate::gateway::error::BitrouterError::bad_request(
                             "provider continuation model is unavailable in the active policy",
                         )
                     })?;
@@ -1013,7 +1019,7 @@ impl PolicyTableRouter {
                 captured_at: None,
                 request_id: request_id.map(ToString::to_string),
                 ingress_request_id_sha256: ingress_request_id
-                    .map(crate::workflow_state::decision::ingress_request_id_sha256),
+                    .map(crate::gateway::routing::workflow::decision::ingress_request_id_sha256),
                 input_model,
                 input_effort,
                 key_strategy: key_strategy_name().to_string(),
@@ -1178,9 +1184,7 @@ fn task_family_reason_codes(evidence: &[PredictiveEvidence]) -> Vec<String> {
 /// rewritten by the legacy inline policy table instead of reaching the signed
 /// policy its slug addresses.
 fn is_explicitly_routed(model: &str) -> bool {
-    model.starts_with('@')
-        || model.contains(':')
-        || bitrouter_sdk::config::presets::is_reserved(model)
+    model.starts_with('@') || model.contains(':') || crate::config::presets::is_reserved(model)
 }
 
 /// Whether the request carries a bitrouter server-tool declaration — a
@@ -1210,46 +1214,57 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
-    use crate::eval::settlement::EvalSettlementRecorder;
-    use crate::eval::store::EvalStore;
-    use crate::eval::types::{
-        EVAL_SCHEMA_VERSION, EvalVerdict, EvaluationResult, EvaluatorIdentity, EvaluatorKind,
-        ExperimentAssignmentUnit,
-    };
-    use crate::optimization::exploration::{OptimizationGate, RouteExploration};
-    use crate::policy_compile::{CompileInput, compile_candidate};
+    use crate::config::PolicyKeyStrategy;
+    #[cfg(feature = "core")]
+    use crate::core::eval::compiler::{EvalEvidenceRecord, EvalEvidenceSnapshot};
+    #[cfg(feature = "core")]
+    use crate::core::eval::settlement::EvalSettlementRecorder;
+    #[cfg(feature = "core")]
+    use crate::core::eval::store::EvalStore;
+    #[cfg(feature = "core")]
+    use crate::core::policy::{CompileInput, compile_candidate};
+    #[cfg(feature = "core")]
+    use crate::gateway::caller::CallerContext;
+    #[cfg(feature = "core")]
+    use crate::gateway::observability::event::EventBus;
+    #[cfg(feature = "core")]
+    use crate::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+    use crate::gateway::routing::exploration::{OptimizationGate, RouteExploration};
+    use crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder;
+    use crate::gateway::routing::workflow::ir::{AgentRole, HarnessId, ProtocolKind};
+    use crate::gateway::routing::workflow::online::OnlineWorkflowState;
     use crate::policy_lock::{PolicyLock, semantic_digest};
     use crate::trajectory::canonical::CorrelationKey;
-    use crate::workflow_state::decision::PolicyDecisionJsonlRecorder;
-    use crate::workflow_state::ir::{AgentRole, HarnessId, ProtocolKind};
-    use crate::workflow_state::online::OnlineWorkflowState;
+    use bitrouter_ai::eval::ExperimentAssignmentUnit;
+    #[cfg(feature = "core")]
     use bitrouter_ai::types::UsageOrigin;
     use bitrouter_ai::types::{
         GenerationParams, Message, ProviderMetadata, Tool, ToolResultOutput,
     };
-    use bitrouter_sdk::HeaderMap;
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::config::PolicyKeyStrategy;
-    use bitrouter_sdk::event::EventBus;
-    use bitrouter_sdk::language_model::{SettlementContext, SettlementRecorder};
+    use http::HeaderMap;
     use http::HeaderValue;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
-
-    use bitrouter_sdk::routing::{
-        assessment::{Assessment, Judgment},
-        signals::{NextStepRole, ProgressState, TaskFamily},
+    #[cfg(feature = "core")]
+    use {
+        bitrouter_ai::eval::EVAL_SCHEMA_VERSION, bitrouter_ai::eval::EvalVerdict,
+        bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+        bitrouter_ai::eval::EvaluatorKind,
     };
+
+    use crate::gateway::routing::assessment::{Assessment, Judgment};
+    use bitrouter_ai::harness::inspection::NextStepRole;
+    use bitrouter_ai::harness::inspection::ProgressState;
+    use bitrouter_ai::harness::inspection::TaskFamily;
 
     fn semantic_fixture(task_family: TaskFamily, next_step_role: NextStepRole) -> Assessment {
         let labels = [
-            (bitrouter_sdk::routing::assessment::TASK, task_family.key()),
+            (crate::gateway::routing::assessment::TASK, task_family.key()),
             (
-                bitrouter_sdk::routing::assessment::ROLE,
+                crate::gateway::routing::assessment::ROLE,
                 next_step_role.key(),
             ),
-            (bitrouter_sdk::routing::assessment::PROGRESS, "progressing"),
+            (crate::gateway::routing::assessment::PROGRESS, "progressing"),
         ];
         Assessment {
             model: "semantic-fixture-v1".into(),
@@ -1257,7 +1272,7 @@ mod tests {
             confidence_threshold: 0.85,
             classifier_digest: format!("sha256:{}", "a".repeat(64)),
             input_digest: format!("sha256:{}", "b".repeat(64)),
-            contract_digest: bitrouter_sdk::routing::assessment::contract_digest(),
+            contract_digest: crate::gateway::routing::assessment::contract_digest(),
             history_complete: false,
             history_truncated: false,
             task_family,
@@ -1531,8 +1546,8 @@ mod tests {
     fn guarded_decision_log_uses_only_opaque_trajectory_request_identity() -> anyhow::Result<()> {
         let assessment = semantic_fixture(TaskFamily::Unknown, NextStepRole::Unknown);
         let raw_request_id = "SECRET-task-labeled-request-header-SENTINEL";
-        let opaque_request_id =
-            CorrelationKey::from_bytes([35; 32])?.request_identity("owner-a", raw_request_id)?;
+        let opaque_request_id = CorrelationKey::from_bytes(rand::random())?
+            .request_identity("owner-a", raw_request_id)?;
         let router = router();
         let mut request_prompt = prompt("inbound");
         request_prompt.messages = vec![user("generic request")];
@@ -1711,7 +1726,7 @@ mod tests {
             let measurement =
                 table.route_measurement(tier, None, Some(&exploration), Some(&assignment))?;
             assert_eq!(measurement.logging_action_probability_ppm, expected);
-            crate::eval::types::validate_route_measurement_for_experiment(
+            crate::storage::evaluation::validate_route_measurement_for_experiment(
                 &measurement,
                 Some(&assignment),
             )?;
@@ -1981,7 +1996,8 @@ mod tests {
         assert_eq!(p.model, "vendor/cheap");
 
         let records =
-            crate::workflow_state::decision::PolicyDecisionRecord::load_jsonl(&path).unwrap();
+            crate::gateway::routing::workflow::decision::PolicyDecisionRecord::load_jsonl(&path)
+                .unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].request_id.as_deref(), Some("req-001"));
         assert_eq!(records[0].input_model, "inbound");
@@ -1996,7 +2012,7 @@ mod tests {
         assert_eq!(records[0].prediction_confidence_ppm, Some(990_000));
         assert_eq!(
             records[0].predictor_contract_digest.as_deref(),
-            Some(bitrouter_sdk::routing::assessment::contract_digest().as_str())
+            Some(crate::gateway::routing::assessment::contract_digest().as_str())
         );
         assert_eq!(
             records[0].prediction_confidence_kind.as_deref(),
@@ -2138,7 +2154,7 @@ mod tests {
             "economy".to_string(),
         );
         let table = PolicyTable::from_config(&config).expect("configured");
-        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let pending = crate::gateway::observability::decision::PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
             pending.clone(),
             "auto:cost",
@@ -2201,7 +2217,7 @@ mod tests {
             PolicyModelTarget::from("vendor/reference"),
         );
         let table = PolicyTable::from_config(&table_config).expect("configured");
-        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let pending = crate::gateway::observability::decision::PendingEvalDecisionStore::default();
         let path = temp_path("certificate-baseline-decisions.jsonl");
         let recorder = PolicyDecisionJsonlRecorder::new(path.clone()).expect("recorder");
         let router = PolicyTableRouter::new(table)
@@ -2252,7 +2268,10 @@ mod tests {
         );
         assert_eq!(
             records[0].ingress_request_id_sha256.as_deref(),
-            Some(crate::workflow_state::decision::ingress_request_id_sha256("request-2").as_str())
+            Some(
+                crate::gateway::routing::workflow::decision::ingress_request_id_sha256("request-2")
+                    .as_str()
+            )
         );
         assert!(
             !serde_json::to_string(&records[0])
@@ -2889,7 +2908,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("auto missing"))?;
         configured.adequacy.min_semantic_successes_for_lock = 1;
         configured.predictor =
-            Some(crate::workflow_state::predictive::compiled_predictor_contract());
+            Some(crate::gateway::routing::workflow::predictive::compiled_predictor_contract());
         let key = "semantic_route/v1|unknown|implement|normal";
         configured.routes.insert(key.into(), "balanced".into());
         let digest = format!("sha256:{}", "a".repeat(64));
@@ -2922,7 +2941,7 @@ mod tests {
             .get("auto")
             .ok_or_else(|| anyhow::anyhow!("template auto policy missing"))?;
         let table = PolicyTable::from_config(
-            &policy.as_table_config(bitrouter_sdk::config::PolicyRuntimeMode::Frozen),
+            &policy.as_table_config(crate::config::PolicyRuntimeMode::Frozen),
         )
         .ok_or_else(|| anyhow::anyhow!("template policy table missing"))?;
         let route_baselines = active.certificates["auto"]
@@ -2995,133 +3014,137 @@ mod tests {
         assert_eq!(correlated.baseline_tier.as_deref(), Some("balanced"));
         assert_eq!(correlated.task_family_reason_codes, Vec::<String>::new());
 
-        let db = crate::db::connect("sqlite::memory:").await?;
-        crate::db::run_migrations(&db).await?;
-        let store = EvalStore::new(db);
-        let recorder = EvalSettlementRecorder::new(store.clone(), pending);
-        let mut settlement = SettlementContext {
-            operation: bitrouter_ai::types::ModelOperation::Generation,
-            request_id: "request-unified-v1".into(),
-            caller: CallerContext::local(),
-            target: None,
-            model_id: "gpt-5.6-sol".into(),
-            reasoning_effort: None,
-            provider_id: "openai-codex".into(),
-            account_label: None,
-            prompt_tokens: 10,
-            completion_tokens: 5,
-            reasoning_tokens: 0,
-            cache_read_tokens: 0,
-            cache_write_tokens: 0,
-            usage_origin: UsageOrigin::ProviderReported,
-            raw_usage: None,
-            web_search_count: 0,
-            media_input_count: 0,
-            media_output_count: 0,
-            server_tool_calls: Vec::new(),
-            streamed: false,
-            request_duration_ms: 100,
-            upstream_duration_ms: Some(90),
-            ttft_ms: None,
-            generation_duration_ms: None,
-            first_token_kind: None,
-            finish_reason: None,
-            error: None,
-            events: EventBus::default(),
-        };
-        settlement.emit(invocation);
-        recorder.record(&mut settlement).await?;
-        let subject = store
-            .subject("request:request-unified-v1")
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("settled unified-v1 subject missing"))?;
-        let settled = subject
-            .decisions
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("settled unified-v1 decision missing"))?;
-        assert_eq!(
-            settled.route_projection,
-            "semantic_route/v1|code:generation|implement|normal"
-        );
-        assert_eq!(
-            settled.request_key,
-            "semantic_route/v1|unknown|implement|normal"
-        );
-        assert_eq!(settled.baseline_tier.as_deref(), Some("balanced"));
-        assert_eq!(
-            subject
-                .evidence
+        #[cfg(feature = "core")]
+        {
+            let db = crate::db::connect("sqlite::memory:").await?;
+            crate::db::run_migrations(&db).await?;
+            let store = EvalStore::new(db);
+            let recorder = EvalSettlementRecorder::new(store.clone(), pending);
+            let mut settlement = SettlementContext {
+                operation: bitrouter_ai::types::ModelOperation::Generation,
+                request_id: "request-unified-v1".into(),
+                caller: CallerContext::local(),
+                target: None,
+                model_id: "gpt-5.6-sol".into(),
+                reasoning_effort: None,
+                provider_id: "openai-codex".into(),
+                account_label: None,
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                reasoning_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                usage_origin: UsageOrigin::ProviderReported,
+                raw_usage: None,
+                web_search_count: 0,
+                media_input_count: 0,
+                media_output_count: 0,
+                server_tool_calls: Vec::new(),
+                streamed: false,
+                request_duration_ms: 100,
+                upstream_duration_ms: Some(90),
+                ttft_ms: None,
+                generation_duration_ms: None,
+                first_token_kind: None,
+                finish_reason: None,
+                error: None,
+                events: EventBus::default(),
+            };
+            settlement.emit(invocation);
+            recorder.record(&mut settlement).await?;
+            let subject = store
+                .subject("request:request-unified-v1")
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("settled unified-v1 subject missing"))?;
+            let settled = subject
+                .decisions
                 .first()
-                .ok_or_else(|| anyhow::anyhow!("settlement evidence missing"))?
-                .attributes
-                .get("task_family_reason_codes")
-                .map(String::as_str),
-            None
-        );
+                .ok_or_else(|| anyhow::anyhow!("settled unified-v1 decision missing"))?;
+            assert_eq!(
+                settled.route_projection,
+                "semantic_route/v1|code:generation|implement|normal"
+            );
+            assert_eq!(
+                settled.request_key,
+                "semantic_route/v1|unknown|implement|normal"
+            );
+            assert_eq!(settled.baseline_tier.as_deref(), Some("balanced"));
+            assert_eq!(
+                subject
+                    .evidence
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("settlement evidence missing"))?
+                    .attributes
+                    .get("task_family_reason_codes")
+                    .map(String::as_str),
+                None
+            );
 
-        assert_eq!(subject.scope, crate::eval::types::EvalScope::Request);
-        // A task evaluator explicitly attributes its task result to this
-        // decision. Request completion alone cannot provide this quality.
-        let mut subject = subject;
-        subject.scope = crate::eval::types::EvalScope::Task;
-        subject.subject_id = "independently-evaluated-task".into();
-        subject.eval_id = "task:independently-evaluated-task".into();
-        let result = EvaluationResult {
-            schema_version: EVAL_SCHEMA_VERSION,
-            eval_id: subject.eval_id.clone(),
-            evidence_digest: subject.evidence_digest.clone(),
-            evaluator: EvaluatorIdentity {
-                authority_id: "task-native".into(),
-                evaluator_id: "unified-v1-regression".into(),
-                kind: EvaluatorKind::TaskNative,
-                version: "1".into(),
-                config_digest: policy_digest,
-            },
-            verdict: EvalVerdict::Pass,
-            metrics: BTreeMap::new(),
-            hard_violations: Vec::new(),
-            confidence_ppm: Some(1_000_000),
-            evidence_refs: Vec::new(),
-            decision_credit: BTreeMap::new(),
-            idempotency_key: "unified-v1-regression".into(),
-            submitted_at: "2026-08-15T00:00:01Z".into(),
-        };
-        let eval = EvalEvidenceSnapshot {
-            evidence_root:
-                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-            frozen_at: "2026-08-15T00:00:02Z".into(),
-            records: vec![EvalEvidenceRecord {
-                result_id: "unified-v1-result".into(),
-                content_digest:
-                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
-                subject,
-                result,
-            }],
-        };
-        let routes = eval.route_evidence()?;
-        let attributed = routes
-            .get(&(
-                "auto".to_owned(),
-                "semantic_route/v1|code:generation|implement|normal".to_owned(),
-            ))
-            .ok_or_else(|| anyhow::anyhow!("unified-v1 compiler attribution missing"))?;
-        assert_eq!(attributed.baseline_tier.as_deref(), Some("balanced"));
-        assert_eq!(
-            attributed.matched_request_keys,
-            BTreeSet::from(["semantic_route/v1|unknown|implement|normal".to_owned()])
-        );
-        let compiled = compile_candidate(CompileInput {
-            current: &active,
-            parent_digest: None,
-            snapshot_time_unix_ms: 0,
-            eval: Some(&eval),
-            proposed_progress_guards: None,
-        })?
-        .document;
-        let certificate = compiled
-            .certificate("auto", "semantic_route/v1|code:generation|implement|normal")
-            .ok_or_else(|| anyhow::anyhow!("compiled unified-v1 certificate missing"))?;
-        assert_eq!(certificate.baseline_tier.as_deref(), Some("balanced"));
+            assert_eq!(subject.scope, bitrouter_ai::eval::EvalScope::Request);
+            // A task evaluator explicitly attributes its task result to this
+            // decision. Request completion alone cannot provide this quality.
+            let mut subject = subject;
+            subject.scope = bitrouter_ai::eval::EvalScope::Task;
+            subject.subject_id = "independently-evaluated-task".into();
+            subject.eval_id = "task:independently-evaluated-task".into();
+            let result = EvaluationResult {
+                schema_version: EVAL_SCHEMA_VERSION,
+                eval_id: subject.eval_id.clone(),
+                evidence_digest: subject.evidence_digest.clone(),
+                evaluator: EvaluatorIdentity {
+                    authority_id: "task-native".into(),
+                    evaluator_id: "unified-v1-regression".into(),
+                    kind: EvaluatorKind::TaskNative,
+                    version: "1".into(),
+                    config_digest: policy_digest,
+                },
+                verdict: EvalVerdict::Pass,
+                metrics: BTreeMap::new(),
+                hard_violations: Vec::new(),
+                confidence_ppm: Some(1_000_000),
+                evidence_refs: Vec::new(),
+                decision_credit: BTreeMap::new(),
+                idempotency_key: "unified-v1-regression".into(),
+                submitted_at: "2026-08-15T00:00:01Z".into(),
+            };
+            let eval = EvalEvidenceSnapshot {
+                evidence_root:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                frozen_at: "2026-08-15T00:00:02Z".into(),
+                records: vec![EvalEvidenceRecord {
+                    result_id: "unified-v1-result".into(),
+                    content_digest:
+                        "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                            .into(),
+                    subject,
+                    result,
+                }],
+            };
+            let routes = eval.route_evidence()?;
+            let attributed = routes
+                .get(&(
+                    "auto".to_owned(),
+                    "semantic_route/v1|code:generation|implement|normal".to_owned(),
+                ))
+                .ok_or_else(|| anyhow::anyhow!("unified-v1 compiler attribution missing"))?;
+            assert_eq!(attributed.baseline_tier.as_deref(), Some("balanced"));
+            assert_eq!(
+                attributed.matched_request_keys,
+                BTreeSet::from(["semantic_route/v1|unknown|implement|normal".to_owned()])
+            );
+            let compiled = compile_candidate(CompileInput {
+                current: &active,
+                parent_digest: None,
+                snapshot_time_unix_ms: 0,
+                eval: Some(&eval),
+                proposed_progress_guards: None,
+            })?
+            .document;
+            let certificate = compiled
+                .certificate("auto", "semantic_route/v1|code:generation|implement|normal")
+                .ok_or_else(|| anyhow::anyhow!("compiled unified-v1 certificate missing"))?;
+            assert_eq!(certificate.baseline_tier.as_deref(), Some("balanced"));
+        }
         Ok(())
     }
 
@@ -3347,7 +3370,7 @@ mod tests {
     fn legacy_rejection_preserves_proposal_in_pending_eval_audit() {
         let assessment = semantic_fixture(TaskFamily::CodeDebugging, NextStepRole::Implement);
         let table = PolicyTable::from_config(&config()).expect("configured");
-        let pending = crate::eval::settlement::PendingEvalDecisionStore::default();
+        let pending = crate::gateway::observability::decision::PendingEvalDecisionStore::default();
         let router = PolicyTableRouter::new(table).with_eval_observer(
             pending.clone(),
             "auto:cost",
@@ -3452,7 +3475,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            Err(bitrouter_sdk::BitrouterError::BadRequest { ref message })
+            Err(crate::gateway::error::BitrouterError::BadRequest { ref message })
                 if message.contains("unavailable in the active policy")
         ));
         assert_eq!(decision.selected_model, original_selected);
@@ -3543,7 +3566,7 @@ mod tests {
     // fingerprinting proxy would.
 
     fn fingerprint_of(body: serde_json::Value) -> String {
-        use bitrouter_ai::protocol::inbound_adapter_for;
+        use crate::gateway::model::protocol::inbound_adapter_for;
         use bitrouter_ai::types::ApiProtocol;
         let adapter =
             inbound_adapter_for(&ApiProtocol::ChatCompletions).expect("chat completions adapter");

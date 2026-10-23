@@ -1,0 +1,579 @@
+{
+  "schema": "bitrouter.p0-handoff-follow-up.v1",
+  "date": "2026-10-20",
+  "source_revision": "6c66b9b99a5758421315d02a014443bbd08ab0a3",
+  "previous_pr_head": "e7ff1e560cf5cbdbca4a6b09863cc9cf70282ff7",
+  "baseline_revision": "e972d5ebb8215a51dbe88d404616087b940250ca",
+  "scope": "Retain required-finalizer compensation until receipt consumption; prebuild process fixtures before macOS and selected Linux nextest deadlines.",
+  "previous_hosted": {
+    "ci_url": "https://github.com/bitrouter/bitrouter/actions/runs/39410028824",
+    "ci_successful_jobs": 56,
+    "ci_failed_jobs": 1,
+    "failed_job_url": "https://github.com/bitrouter/bitrouter/actions/runs/39410028824/job/118585234685",
+    "macos_passed": 4695,
+    "macos_timed_out": 2,
+    "macos_skipped": 47,
+    "failed_tests": [
+      "harness::service::tests::harness::cancelled_handshake_joins_process_before_stopped_owner",
+      "harness::service::tests::harness::changed_mcp_catalog_rejects_old_dispatch_without_retry"
+    ],
+    "interpretation": "Logs establish the 300-second timeouts, not the exact await. Prebuilding removes identified unbounded nested Cargo waits; fresh hosted results remain required.",
+    "codeql_url": "https://github.com/bitrouter/bitrouter/runs/118585360244",
+    "codeql_conclusion": "success"
+  },
+  "validation": {
+    "environment": {
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_BUILD_JOBS": "2"
+    },
+    "before_fix_regression": {
+      "name": "bitrouter-p0-preparation-handoff-before.log",
+      "sha256": "6e82e6e93578f2ba461b9f7169a8c4317dc6c4bd064568bb4bb881973ca8c5f7",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 1m 29s",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 3531 filtered out; finished in 2.04s",
+        "Summary [   2.074s] 1 test run: 0 passed, 1 failed, 3531 skipped"
+      ],
+      "interpretation": "Expected failure before the ownership fix. The first direct-response case timed out waiting for rollback; the fixed run exercises both direct and streaming cases.",
+      "selected_test": "continuation::tests::queued_preparation_receipt_retains_compensation_until_consumed",
+      "exit_code": 100
+    },
+    "fixed_finalizer_selection": {
+      "name": "bitrouter-p0-preparation-handoff-tests.log",
+      "sha256": "668f46dd6a6be52d460235d17e6e01be9b31ec7a491abbb1da7240e7b34eadc2",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 1m 25s",
+        "Summary [   3.876s] 115 tests run: 115 passed, 3417 skipped"
+      ],
+      "command": "cargo +1.99.0 nextest run --locked -p bitrouter --all-features --lib -E 'test(continuation::) | test(gateway::pipeline::execution)' --test-threads 2 --retries 0 --no-fail-fast",
+      "exit_code": 0
+    },
+    "fixture_build": {
+      "name": "bitrouter-p0-prebuilt-fixtures-build.log",
+      "sha256": "4f60d5bbf980c1f499658c621ab432f38ec80fc01e93537df5aa39a932d972f1",
+      "summary": [
+        "Finished `dev` profile [unoptimized] target(s) in 54.42s"
+      ],
+      "command": "cargo +1.99.0 build --locked -p bitrouter --all-features --jobs 2 --example harness_mcp_fixture --example pty_acp_fixture",
+      "exit_code": 0
+    },
+    "prebuilt_process_suite": {
+      "name": "bitrouter-p0-prebuilt-fixtures-tests.log",
+      "sha256": "17138415f18ac806c7cc575f0a041d3dd2752811e98551b368bbb7ac511eebac",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 5.81s",
+        "Summary [  58.387s] 66 tests run: 66 passed, 3528 skipped"
+      ],
+      "command": "cargo +1.99.0 nextest run --locked -p bitrouter --all-features --lib --test harness_mcp_check --test code_tui_pty -E 'test(harness::service::tests::harness::) | binary(harness_mcp_check) | binary(code_tui_pty)' --test-threads 2 --retries 0 --no-fail-fast",
+      "BITROUTER_TEST_EXAMPLES_DIR": "<target-dir>/debug/examples",
+      "exit_code": 0
+    },
+    "missing_fixture_negative": {
+      "name": "bitrouter-p0-prebuilt-missing-path.log",
+      "sha256": "856b7cfd18463fab5d0469969d58a5964d9f428b5cf366a22de3e5b7d147b812",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 0.16s",
+        "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s",
+        "Summary [   0.007s] 1 test run: 0 passed, 1 failed, 7 skipped"
+      ],
+      "expected_exit": 100,
+      "disposition": "Expected immediate missing-prebuilt-fixture failure, without Cargo fallback.",
+      "command": "cargo +1.99.0 nextest run --locked -p bitrouter --all-features --test harness_mcp_check -E 'test(mcp_process::shared_stdio_shutdown_confirms_child_and_descendant_exit)' --test-threads 1 --retries 0",
+      "BITROUTER_TEST_EXAMPLES_DIR": "/tmp/bitrouter-deliberately-missing-fixtures",
+      "exit_code": 100
+    },
+    "full_workspace_suite": {
+      "name": "bitrouter-p0-handoff-full-tests.log",
+      "sha256": "86b7135ee73e4b60799f4dc25ecded45c2582c8785491c176413e90b649facf1",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 2m 54s",
+        "Summary [ 636.138s] 4698 tests run: 4698 passed (4 slow), 47 skipped"
+      ],
+      "command": "cargo +1.99.0 nextest run --locked --workspace --all-features --test-threads 2 --retries 0 --no-fail-fast",
+      "BITROUTER_TEST_EXAMPLES_DIR": "<target-dir>/debug/examples",
+      "source_note": "Runtime and test sources match the committed candidate; only gateway/http.rs and telemetry/subscriber.rs comments were corrected after this suite and before minimal/lint/build validation.",
+      "exit_code": 0
+    },
+    "minimal_gateway_selection": {
+      "name": "bitrouter-p0-handoff-minimal-tests.log",
+      "sha256": "d20eb6b741ff6a1c7a422b72130ad7e4471dbd115812931f7588edcb9dd5ad99",
+      "summary": [
+        "Finished `test` profile [unoptimized] target(s) in 48.58s",
+        "Summary [   3.848s] 109 tests run: 109 passed, 2143 skipped"
+      ],
+      "command": "cargo +1.99.0 nextest run --locked -p bitrouter --no-default-features --lib -E 'test(continuation::) | test(gateway::pipeline::execution)' --test-threads 2 --retries 0 --no-fail-fast",
+      "exit_code": 0
+    },
+    "strict_clippy": {
+      "name": "bitrouter-p0-handoff-clippy.log",
+      "sha256": "285e05c9d2e9331b93f9db0b0e6d4925d3cf342c65c7a9d32597b3535b8c4ee2",
+      "summary": [
+        "Finished `dev` profile [unoptimized] target(s) in 1m 07s"
+      ],
+      "command": "cargo +1.97.0 clippy --locked -p bitrouter --all-features --lib --tests -- -D warnings",
+      "exit_code": 0
+    },
+    "format_and_diff": {
+      "name": "bitrouter-p0-handoff-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": [
+
+      ],
+      "command": "cargo +1.99.0 fmt --all -- --check; git diff --check",
+      "exit_code": 0
+    },
+    "workflow_yaml": {
+      "command": "Ruby YAML.parse_file(.github/workflows/ci.yml)",
+      "exit_code": 0,
+      "limitation": "YAML parse only; actionlint unavailable. Hosted execution remains required."
+    },
+    "notices": [
+      "Existing macOS debug linker unwind-section size warning during all-feature builds.",
+      "Existing proc-macro-error2 v2.0.1 future-incompatibility notice."
+    ]
+  },
+  "implementation_review": {
+    "decision": "APPROVED",
+    "report_sha256": "7cda32fd63bab1b85852c0c4be976926ad73a95d3bf88a2bdd7164c56b33c566",
+    "source_sha256": {
+      ".github/workflows/ci.yml": "985e139da653d3a9c117686ca9d89f978cd93a100be5e882976b49f5bba7e1af",
+      "apps/bitrouter/src/continuation.rs": "6953a6799af4c78e27437f27b46979232077b4a6d7208e431245e4f90797411e",
+      "apps/bitrouter/src/gateway/pipeline/execution.rs": "807c8436d056c7698a908b584336558c2d66c763bc26b90c765d9eed46cc9aa8",
+      "apps/bitrouter/tests/harness_resources/mcp_process.rs": "dab0bd5dfd7e5ed2891db59a83352d46c5c569a1a5c3e76946e4e34c9742992c",
+      "apps/bitrouter/tests/support/example_binary.rs": "efea1a6d7ac717f2d77e361f050809606d4722e620c835660526237c3ee3610f",
+      "apps/bitrouter/tests/support/prebuilt_example.rs": "a32b97bfd0c1c0a67aa953085196fc672b07263e59593a410e55162a6491e871",
+      "apps/bitrouter/src/gateway/http.rs": "91673fb209cb1b908eb9f319beeea87ef89fdcf12b8c3276ac7db27d132aba8b",
+      "apps/bitrouter/src/telemetry/subscriber.rs": "f69c5d420fd56a6465b959a95795a41adfcd155b283632a2ebba4c4cce1c5722"
+    },
+    "blocking_findings": [
+
+    ],
+    "major_findings": [
+
+    ],
+    "nonblocking_style_disposition": "Retain descriptive test names consistent with neighboring repository tests; optional skill-specific UT naming is not adopted."
+  },
+  "builds": {
+    "full": {
+      "identity": {
+        "version": "1.0.0-alpha.33",
+        "source_revision": "6c66b9b99a5758421315d02a014443bbd08ab0a3",
+        "target": "aarch64-apple-darwin",
+        "features": [
+          "core",
+          "db-mysql",
+          "db-postgres",
+          "harness",
+          "mcp",
+          "otel-http",
+          "server-tools",
+          "tui"
+        ],
+        "profile": "full",
+        "handoff_build_id": "aafe905ac5183290fdd5063bcd7b09140fbeb5440fea84fe5c1fc2d30ff47d9a"
+      },
+      "log": {
+        "name": "build-full.log",
+        "sha256": "c9f8fd45a89c8bdb51fcd653f99f9823b21d264dd0e1034722f2b4683caf2646",
+        "summary": [
+          "Finished `dev` profile [unoptimized] target(s) in 1m 03s"
+        ]
+      },
+      "command": "cargo +1.99.0 build --offline --locked -p bitrouter --bin bro"
+    },
+    "gateway": {
+      "identity": {
+        "version": "1.0.0-alpha.33",
+        "source_revision": "6c66b9b99a5758421315d02a014443bbd08ab0a3",
+        "target": "aarch64-apple-darwin",
+        "features": [
+
+        ],
+        "profile": "gateway",
+        "handoff_build_id": "f4fa3dc75eea8763911c2ff07b33e31b49e0d49c4cb72fb0a0f98b0348c8b3e7"
+      },
+      "log": {
+        "name": "build-gateway.log",
+        "sha256": "6b54d3c85546b3161a2204ad3395b8298d3801c96f28f25676f05d488c81ccdc",
+        "summary": [
+          "Finished `dev` profile [unoptimized] target(s) in 28.96s"
+        ]
+      },
+      "command": "cargo +1.99.0 build --offline --locked -p bitrouter --no-default-features --bin bro"
+    }
+  },
+  "compiler": "cargo 1.99.0 (5f94df478 2026-08-27)\nrustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: aarch64-apple-darwin\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+  "performance": {
+    "raw_file": "gateway-handoff-fix-2026-10-20.json",
+    "raw_sha256": "29a4407dbc947049f6d40b4d4b2bb4c6a3d6a52356bef09dd79f1d8bd6b93b3c",
+    "artifacts": [
+      {
+        "bytes": 317131456,
+        "label": "baseline",
+        "path": "/private/tmp/bitrouter-p0-postrevert-final-20261020/baseline/bro",
+        "sha256": "f1e5381cfcfa07e3624a29f3d5d9505561afea2b0142e1704b1688fbb1a6bbe7"
+      },
+      {
+        "bytes": 317129744,
+        "label": "full",
+        "path": "/private/tmp/bitrouter-p0-handoff-final-20261020/full/bro",
+        "sha256": "49f22a8a63d98541f0c32a2bb196e4219f56890a79705771449d368cc18c8570"
+      },
+      {
+        "bytes": 116048496,
+        "label": "gateway",
+        "path": "/private/tmp/bitrouter-p0-handoff-final-20261020/gateway/bro",
+        "sha256": "01c60b238bd17cdd0d23bd2ccb538d7b958d17b252c1c6fee3df6525a0bff93a"
+      }
+    ],
+    "sample_count": 9,
+    "metrics": {
+      "baseline": {
+        "startup_ms": {
+          "median": 67.72725,
+          "range": [
+            59.164375,
+            92.51912499999999
+          ]
+        },
+        "idle_rss_mib": {
+          "median": 61.25,
+          "range": [
+            61.203125,
+            61.28125
+          ]
+        },
+        "after_load_rss_mib": {
+          "median": 210.75,
+          "range": [
+            204.015625,
+            217.09375
+          ]
+        },
+        "ordinary_requests_per_second": {
+          "median": 3697.1168336749083,
+          "range": [
+            3582.633021292295,
+            4157.252965189096
+          ]
+        },
+        "streaming_requests_per_second": {
+          "median": 4594.297074813296,
+          "range": [
+            4482.529446541389,
+            4847.441730436719
+          ]
+        },
+        "ordinary_p95_ms": {
+          "median": 3.267375,
+          "range": [
+            2.931209,
+            3.3955830000000002
+          ]
+        },
+        "streaming_p95_ms": {
+          "median": 2.368125,
+          "range": [
+            2.2775,
+            2.4910829999999997
+          ]
+        }
+      },
+      "full": {
+        "startup_ms": {
+          "median": 63.78075,
+          "range": [
+            61.599875,
+            76.478083
+          ]
+        },
+        "idle_rss_mib": {
+          "median": 64.03125,
+          "range": [
+            63.65625,
+            64.046875
+          ]
+        },
+        "after_load_rss_mib": {
+          "median": 201.53125,
+          "range": [
+            194.703125,
+            210.8125
+          ]
+        },
+        "ordinary_requests_per_second": {
+          "median": 3495.4826369943203,
+          "range": [
+            3137.5110335006766,
+            3707.4088665090685
+          ]
+        },
+        "streaming_requests_per_second": {
+          "median": 4296.722089986299,
+          "range": [
+            3213.929327892671,
+            4418.94774885575
+          ]
+        },
+        "ordinary_p95_ms": {
+          "median": 3.416042,
+          "range": [
+            3.284875,
+            5.461209
+          ]
+        },
+        "streaming_p95_ms": {
+          "median": 2.623125,
+          "range": [
+            2.5016249999999998,
+            5.301791
+          ]
+        }
+      },
+      "gateway": {
+        "startup_ms": {
+          "median": 62.78875000000001,
+          "range": [
+            56.705791999999995,
+            64.273708
+          ]
+        },
+        "idle_rss_mib": {
+          "median": 41.875,
+          "range": [
+            41.75,
+            41.984375
+          ]
+        },
+        "after_load_rss_mib": {
+          "median": 175.5,
+          "range": [
+            175.34375,
+            189.09375
+          ]
+        },
+        "ordinary_requests_per_second": {
+          "median": 3454.6129584309983,
+          "range": [
+            1884.6761622538265,
+            3608.1866901868293
+          ]
+        },
+        "streaming_requests_per_second": {
+          "median": 4381.914439804173,
+          "range": [
+            4200.795493443206,
+            4603.996533811071
+          ]
+        },
+        "ordinary_p95_ms": {
+          "median": 3.97575,
+          "range": [
+            3.413125,
+            9.176209
+          ]
+        },
+        "streaming_p95_ms": {
+          "median": 2.5945840000000002,
+          "range": [
+            2.3427919999999998,
+            2.697208
+          ]
+        }
+      }
+    },
+    "full_vs_baseline_percent": {
+      "startup_ms": -5.827048935251322,
+      "idle_rss_mib": 4.540816326530606,
+      "after_load_rss_mib": -4.374258600237246,
+      "ordinary_requests_per_second": -5.453822688101662,
+      "streaming_requests_per_second": -6.477051439671866,
+      "ordinary_p95_ms": 4.550043995562181,
+      "streaming_p95_ms": 10.768012668250204
+    },
+    "limitations": "Unoptimized local development builds, three rotating samples per profile, fresh SQLite and counted mock provider. No build, tests or lint overlap the campaign. All samples retained; not a production performance claim."
+  },
+  "hosted_status": "Fresh CI and CodeQL for the eventual PR head are separate required gates.",
+  "performance_repeat": {
+    "reason": "Initial ordinary/SSE throughput medians were lower by 5.45%/6.48%, with wide sample variation; repeat the identical immutable artifacts once and retain both campaigns.",
+    "raw_file": "gateway-handoff-repeat-2026-10-20.json",
+    "raw_sha256": "08820b00964932760740ecbf4daeb0ff8b904129f1284a73965038fd73662748",
+    "sample_count": 9,
+    "metrics": {
+      "baseline": {
+        "startup_ms": {
+          "median": 57.326958,
+          "range": [
+            55.937542,
+            58.369084
+          ]
+        },
+        "idle_rss_mib": {
+          "median": 61.328125,
+          "range": [
+            61.203125,
+            61.328125
+          ]
+        },
+        "after_load_rss_mib": {
+          "median": 195.65625,
+          "range": [
+            191.4375,
+            213.234375
+          ]
+        },
+        "ordinary_requests_per_second": {
+          "median": 3767.125110709424,
+          "range": [
+            3705.662354943053,
+            4049.1499822888245
+          ]
+        },
+        "ordinary_p95_ms": {
+          "median": 3.157791,
+          "range": [
+            3.012709,
+            3.230917
+          ]
+        },
+        "streaming_requests_per_second": {
+          "median": 4932.72795947739,
+          "range": [
+            4766.558678937649,
+            5158.222973849638
+          ]
+        },
+        "streaming_p95_ms": {
+          "median": 2.2339170000000004,
+          "range": [
+            2.1081670000000003,
+            2.358542
+          ]
+        }
+      },
+      "full": {
+        "startup_ms": {
+          "median": 58.3675,
+          "range": [
+            57.175291,
+            58.977333
+          ]
+        },
+        "idle_rss_mib": {
+          "median": 64.234375,
+          "range": [
+            64.171875,
+            64.46875
+          ]
+        },
+        "after_load_rss_mib": {
+          "median": 210.265625,
+          "range": [
+            194.75,
+            225.125
+          ]
+        },
+        "ordinary_requests_per_second": {
+          "median": 4028.5158137809717,
+          "range": [
+            3782.5048902081226,
+            4043.037055524339
+          ]
+        },
+        "ordinary_p95_ms": {
+          "median": 3.012542,
+          "range": [
+            3.00025,
+            3.2116670000000003
+          ]
+        },
+        "streaming_requests_per_second": {
+          "median": 4993.429056978244,
+          "range": [
+            4671.440275690248,
+            5075.236414821276
+          ]
+        },
+        "streaming_p95_ms": {
+          "median": 2.169083,
+          "range": [
+            2.1541249999999996,
+            2.439666
+          ]
+        }
+      },
+      "gateway": {
+        "startup_ms": {
+          "median": 55.25925,
+          "range": [
+            54.683833,
+            55.391792
+          ]
+        },
+        "idle_rss_mib": {
+          "median": 42.015625,
+          "range": [
+            41.890625,
+            42.03125
+          ]
+        },
+        "after_load_rss_mib": {
+          "median": 179.71875,
+          "range": [
+            179.703125,
+            195.6875
+          ]
+        },
+        "ordinary_requests_per_second": {
+          "median": 4056.277884744172,
+          "range": [
+            3888.463163140725,
+            4089.9478995955737
+          ]
+        },
+        "ordinary_p95_ms": {
+          "median": 2.966167,
+          "range": [
+            2.932166,
+            3.179625
+          ]
+        },
+        "streaming_requests_per_second": {
+          "median": 5070.034543397999,
+          "range": [
+            4992.337864421514,
+            5149.886775665595
+          ]
+        },
+        "streaming_p95_ms": {
+          "median": 2.13875,
+          "range": [
+            2.0946670000000003,
+            2.150458
+          ]
+        }
+      }
+    },
+    "full_vs_baseline_percent": {
+      "startup_ms": 1.81510067218289,
+      "idle_rss_mib": 4.738853503184703,
+      "after_load_rss_mib": 7.466858329340353,
+      "ordinary_requests_per_second": 6.9387316691035705,
+      "ordinary_p95_ms": -4.599702766902569,
+      "streaming_requests_per_second": 1.2305786574795308,
+      "streaming_p95_ms": -2.902256440145279
+    },
+    "interpretation": "The repeat ordinary/SSE median differences reverse sign to +6.94%/+1.23%. All 18 samples are retained. These local measurements do not establish a stable throughput change. Full idle increases of 4.54% and 4.74% remain visible alongside the accepted small overhead and memory optimization follow-up.",
+    "isolated_from_build_test_lint": true
+  },
+  "documentation_follow_up": {
+    "file": "apps/bitrouter/src/telemetry/subscriber.rs",
+    "artifact_source_sha256": "f69c5d420fd56a6465b959a95795a41adfcd155b283632a2ebba4c4cce1c5722",
+    "corrected_source_sha256": "67e1c6c5a1d6730b04e6eccfa0fe1297e007d4ab5fb2ed83c03bb0aa26b63525",
+    "change": "Remove an accidentally retained negation in the module comment: the application host composes the tracing bridge.",
+    "runtime_change": false,
+    "validation": "Independent acceptance reviewer identified N2; parent corrected the prose after immutable measurement. Runtime artifacts retain source6c66b9b and are not relabeled as a later documentation commit."
+  }
+}

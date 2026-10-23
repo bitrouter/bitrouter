@@ -2,11 +2,12 @@
 
 use serde::Serialize;
 
-use crate::output::CliReport;
-use crate::output::human::{Human, Table};
-use crate::supervisor::{
+#[cfg(feature = "harness")]
+use crate::client::sessions::wire::{
     AttentionState, ProcessState, ReviewState, RunSnapshot, RunSummary, TurnState,
 };
+use crate::output::CliReport;
+use crate::output::human::{Human, Table};
 
 fn yesno(b: bool) -> String {
     if b { "yes".into() } else { "no".into() }
@@ -69,7 +70,7 @@ impl CliReport for AgentsListReport {
             h.line("")?;
             h.line(&format!(
                 "  install a stub with: {} agents install <id>",
-                bitrouter_sdk::invocation::name()
+                crate::commands::invocation::name()
             ))?;
         }
         Ok(())
@@ -111,10 +112,12 @@ impl CliReport for AgentsCheckReport {
 
 /// Scriptable inventory returned by `agents sessions`.
 #[derive(Serialize)]
+#[cfg(feature = "harness")]
 pub struct AgentSessionsReport {
     pub runs: Vec<RunSummary>,
 }
 
+#[cfg(feature = "harness")]
 impl CliReport for AgentSessionsReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         let mut table = Table::new(["RUN", "LABEL", "AGENT", "STATE", "DIRECTORY", "ACTIVITY"]);
@@ -141,6 +144,7 @@ pub struct BackgroundRunReport {
     pub state: String,
 }
 
+#[cfg(feature = "harness")]
 impl BackgroundRunReport {
     pub fn from_snapshot(snapshot: &RunSnapshot) -> Self {
         Self {
@@ -156,7 +160,7 @@ impl CliReport for BackgroundRunReport {
         h.line(&format!("agent run {} · {}", self.agent_run_id, self.state))?;
         h.line(&format!(
             "attach: {} agents attach {}",
-            bitrouter_sdk::invocation::name(),
+            crate::commands::invocation::name(),
             self.agent_run_id
         ))
     }
@@ -179,6 +183,7 @@ impl CliReport for AgentSessionMutationReport {
     }
 }
 
+#[cfg(feature = "harness")]
 fn run_group(run: &RunSnapshot) -> &'static str {
     match (run.attention, run.review, run.turn, run.process) {
         (
@@ -197,6 +202,7 @@ fn run_group(run: &RunSnapshot) -> &'static str {
     }
 }
 
+#[cfg(feature = "harness")]
 fn summary_group(run: &RunSummary) -> &'static str {
     match (run.attention, run.review, run.turn, run.process) {
         (

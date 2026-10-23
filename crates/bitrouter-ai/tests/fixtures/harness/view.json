@@ -1,0 +1,313 @@
+{
+  "version": 2,
+  "view": {
+    "thread": {
+      "server_instance_id": "current",
+      "thread_id": "thread-1",
+      "status": "recovery_required",
+      "workspace": "/fixture",
+      "model": "fixture",
+      "permission_profile": "ask",
+      "context_version": 2,
+      "cursor": 9,
+      "active_turn_id": "turn-1",
+      "queued": [],
+      "pause_reason": "harness-contract-sensitive-content",
+      "waiting_for_capacity": false
+    },
+    "config": {
+      "model": "fixture",
+      "effort": null,
+      "instructions": "harness-contract-sensitive-content",
+      "max_steps": 32,
+      "max_tool_calls": 128,
+      "max_duration": {
+        "secs": 600,
+        "nanos": 0
+      },
+      "max_context_bytes": 524288,
+      "max_spend_microusd": null,
+      "estimate_rates": {
+        "prompt": 2,
+        "completion": 3
+      },
+      "tool_mode": "coding"
+    },
+    "verification_command": "harness-contract-sensitive-content",
+    "latest_turn": {
+      "context_routing": {
+        "run_id": "run-1",
+        "tasks": [
+          {
+            "task_id": "task-1",
+            "agent_id": "agent-1",
+            "parent_task_id": null,
+            "text_preview": "harness-contract-sensitive-content",
+            "status": "waiting_tool",
+            "view_id": "view-1",
+            "prompt_bytes": 123,
+            "selected_model": "fixture",
+            "routing_reason": "harness-contract-sensitive-content",
+            "source_groups": 1,
+            "omitted_groups": 0,
+            "result_references": 0,
+            "routing": {
+              "phase": "tools",
+              "workflow": {
+                "task_family": "code_debugging",
+                "next_step_role": "verify",
+                "progress_state": "progressing"
+              },
+              "model": "fixture"
+            }
+          }
+        ],
+        "tasks_truncated": false,
+        "evidence_blocks": 1,
+        "retained_evidence_bytes": 123,
+        "decisions": {
+          "attempts": 1,
+          "pending": 0,
+          "failures": 0,
+          "input_tokens": 2,
+          "output_tokens": 1,
+          "estimated_micro_usd": 3
+        }
+      },
+      "resources": {
+        "binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "tools": [
+          {
+            "name": "fixture_tool",
+            "description": "harness-contract-sensitive-content",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string",
+                  "description": "harness-contract-sensitive-content"
+                }
+              }
+            },
+            "effect": "unknown",
+            "approval_required": true
+          }
+        ],
+        "instructions": [
+          {
+            "material_id": "instruction-1",
+            "version": "v1",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "media_type": "text/markdown",
+            "provenance": "harness-contract-sensitive-content"
+          }
+        ],
+        "skills": [
+          {
+            "name": "fixture",
+            "description": "harness-contract-sensitive-content",
+            "material": {
+              "material_id": "instruction-1",
+              "version": "v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "media_type": "text/markdown",
+              "provenance": "harness-contract-sensitive-content"
+            }
+          }
+        ],
+        "skill_problems": [
+          "harness-contract-sensitive-content"
+        ]
+      },
+      "steering": [
+        {
+          "input_id": "steer-1",
+          "turn_id": "turn-1",
+          "order": 1,
+          "status": "received",
+          "context_version": null,
+          "next_step_id": null,
+          "reason": "harness-contract-sensitive-content"
+        }
+      ],
+      "thread_id": "thread-1",
+      "server_instance_id": "current",
+      "model": "fixture",
+      "turn_id": "turn-1",
+      "status": "recovery_required",
+      "cursor": 9,
+      "workspace": "/fixture",
+      "tool_mode": "coding",
+      "final_answer": null,
+      "detail": "harness-contract-sensitive-content",
+      "unknown_effect": true,
+      "verification": "unavailable",
+      "verification_evidence": {
+        "command": "harness-contract-sensitive-content",
+        "interpreter": {
+          "program": "sh",
+          "arguments": [
+            "-c",
+            "harness-contract-sensitive-content"
+          ]
+        },
+        "exit_status": null,
+        "stdout": "harness-contract-sensitive-content",
+        "stderr": "",
+        "stdout_truncated": false,
+        "stderr_truncated": false,
+        "timed_out": false,
+        "error": null
+      },
+      "pending_input_id": "input-1",
+      "pending_input": {
+        "request_id": "input-1",
+        "tool_id": "call-1",
+        "tool_name": "shell",
+        "arguments": "harness-contract-sensitive-content"
+      },
+      "live": {
+        "item_id": "call-1",
+        "truncated": true,
+        "kind": "shell",
+        "text": "harness-contract-sensitive-content"
+      }
+    },
+    "recovery": {
+      "source_server_instance_id": "previous",
+      "source_execution_owner": {
+        "server_instance_id": "previous",
+        "generation": 1,
+        "stopped_at_ms": null
+      },
+      "source_cursor": 8,
+      "stored_status": "busy",
+      "stored_pause_reason": null,
+      "context_valid": true,
+      "terminal_checkpoint": false,
+      "turn": {
+        "resources": {
+          "binding_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "tools": [
+            {
+              "name": "fixture_tool",
+              "description": "harness-contract-sensitive-content",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "harness-contract-sensitive-content"
+                  }
+                }
+              },
+              "effect": "unknown",
+              "approval_required": true
+            }
+          ],
+          "instructions": [
+            {
+              "material_id": "instruction-1",
+              "version": "v1",
+              "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "media_type": "text/markdown",
+              "provenance": "harness-contract-sensitive-content"
+            }
+          ],
+          "skills": [
+            {
+              "name": "fixture",
+              "description": "harness-contract-sensitive-content",
+              "material": {
+                "material_id": "instruction-1",
+                "version": "v1",
+                "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "media_type": "text/markdown",
+                "provenance": "harness-contract-sensitive-content"
+              }
+            }
+          ],
+          "skill_problems": [
+            "harness-contract-sensitive-content"
+          ]
+        },
+        "turn_id": "turn-1",
+        "user_item_id": "user-1",
+        "cancel_requested": false,
+        "budget": {
+          "model_steps": 1,
+          "tool_calls_known": 1,
+          "tool_calls_unknown": false,
+          "estimated_spend_microusd": 3,
+          "estimated_spend_available": true,
+          "usage_unknown_steps": [],
+          "active_duration_ms": 10,
+          "active_duration_unknown": false
+        },
+        "steering": [
+          {
+            "receipt": {
+              "input_id": "steer-1",
+              "turn_id": "turn-1",
+              "order": 1,
+              "status": "received",
+              "context_version": null,
+              "next_step_id": null,
+              "reason": "harness-contract-sensitive-content"
+            },
+            "text": "harness-contract-sensitive-content"
+          }
+        ],
+        "unresolved_calls": [
+          {
+            "origin": "verification",
+            "item_id": "call-1",
+            "provider_call_id": "provider-call-1",
+            "name": "shell",
+            "arguments": "harness-contract-sensitive-content"
+          }
+        ],
+        "continuation_checkpoint": true,
+        "outcome": {
+          "status": "failed",
+          "final_answer": null,
+          "detail": "harness-contract-sensitive-content"
+        },
+        "confirmed_verification": [
+          "unavailable",
+          {
+            "command": "harness-contract-sensitive-content",
+            "interpreter": {
+              "program": "sh",
+              "arguments": [
+                "-c",
+                "harness-contract-sensitive-content"
+              ]
+            },
+            "exit_status": null,
+            "stdout": "harness-contract-sensitive-content",
+            "stderr": "",
+            "stdout_truncated": false,
+            "stderr_truncated": false,
+            "timed_out": false,
+            "error": null
+          }
+        ]
+      },
+      "blockers": [
+        {
+          "kind": "ownership_unconfirmed"
+        },
+        {
+          "kind": "effect_unconfirmed",
+          "item_id": "call-1",
+          "tool_name": "shell"
+        },
+        {
+          "kind": "invalid_record",
+          "detail": "harness-contract-sensitive-content"
+        }
+      ]
+    }
+  }
+}

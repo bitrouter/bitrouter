@@ -2,7 +2,7 @@
 //! permissions when this terminal disappears.
 
 use crate::actions::supervised::SupervisedHandle;
-use crate::supervisor::{
+use crate::client::sessions::wire::{
     PendingPermissionSnapshot, ProcessState, ReplayBatch, SessionAction, SessionEventKind,
 };
 use agent_client_protocol::schema::v1::{PromptResponse, RequestPermissionOutcome, SessionUpdate};
@@ -304,7 +304,7 @@ async fn pending_poll(task: &mut Option<PollTask>) -> Result<ReplayBatch> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::supervisor::SessionEvent;
+    use crate::client::sessions::wire::SessionEvent;
     fn batch(sequences: &[u64]) -> ReplayBatch {
         ReplayBatch {
             first_retained_seq: 1,
@@ -354,7 +354,7 @@ mod tests {
             automatic: false,
         };
         replay.events[2].kind = SessionEventKind::TurnSettled {
-            result: crate::supervisor::TurnResult {
+            result: crate::client::sessions::wire::TurnResult {
                 stop_reason: "end_turn".into(),
                 result: None,
                 schema_ok: None,

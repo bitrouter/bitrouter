@@ -17,7 +17,7 @@
 //! hermes, openclaw) are routed by *synthesizing* a throwaway config under the
 //! repo's `.bitrouter/launch/` and pointing the harness at it with an env var
 //! — still never touching the user's own config
-//! ([`crate::harness::Harness::launch_overlay`]).
+//! ([`crate::harness::catalog::Harness::launch_overlay`]).
 //! Own-auth harnesses (`grok`, `agy`) are subscription clients the daemon
 //! borrows as providers, so `launch` does not redirect or meter them.
 //!
@@ -46,65 +46,22 @@
 //!   the BitRouter provider uses `wire_api = "responses"` and a `/v1` base URL.
 //!   See <https://developers.openai.com/codex/config-advanced#custom-model-providers>.
 
-use std::ffi::OsString;
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::client::local_gateway::{
+    derive_base_url, ensure_local_daemon, listen_from_base_url, listen_is_local, nonempty_env,
+    warn_if_daemon_unreachable,
+};
+use crate::commands::invocation;
+use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result};
-use bitrouter_sdk::error::BitrouterError;
-use bitrouter_sdk::invocation;
-use clap::ValueEnum;
 use serde::Serialize;
 
 use crate::output::CliReport;
 use crate::output::human::Human;
+use crate::providers::cli_install::{ensure_binary_installed, resolve_binary};
 use crate::style::Palette;
-
-/// The two harnesses BitRouter ships a native installer for. `bitrouter
-/// launch --agent` accepts the *whole* catalog (see [`resolve_launch_agent`]);
-/// this enum survives only where a bundled installer is implied — the
-/// onboarding wizard's `--harness`, `providers login claude-code`, and the
-/// deprecated `spawn --agent` alias.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum SpawnAgent {
-    /// Anthropic's Claude Code CLI (`claude`).
-    Claude,
-    /// OpenAI's Codex CLI (`codex`).
-    Codex,
-}
-
-impl SpawnAgent {
-    /// Static metadata describing how to find this agent.
-    pub fn spec(self) -> AgentSpec {
-        match self {
-            // The gateway env/args this agent needs (ANTHROPIC_BASE_URL /
-            // ANTHROPIC_AUTH_TOKEN for Claude, `-c` provider overrides for
-            // Codex) live once in the shared `harness` catalog, keyed by the
-            // interactive binary — see `run`.
-            SpawnAgent::Claude => AgentSpec {
-                // The display id matches the `--agent` value.
-                id: "claude",
-                // The executable name looked up on `PATH`.
-                binary: "claude",
-            },
-            SpawnAgent::Codex => AgentSpec {
-                id: "codex",
-                binary: "codex",
-            },
-        }
-    }
-}
-
-/// Resolved, per-agent static facts used by the spawn machinery.
-#[derive(Debug, Clone, Copy)]
-pub struct AgentSpec {
-    /// Catalog id / `--agent` value.
-    pub id: &'static str,
-    /// Executable name searched for on `PATH`. Also the key into the shared
-    /// [`crate::harness`] catalog for this agent's routing knowledge.
-    pub binary: &'static str,
-}
 
 /// Resolve a `bro launch --agent` value to its catalog harness. Accepts
 /// the interactive binary name (`claude`, `codex`, `opencode`, `pi`) and the
@@ -112,9 +69,9 @@ pub struct AgentSpec {
 /// mistake, so the error is a [`BitrouterError::BadRequest`] — the CLI's error
 /// envelope reports it as `kind: "bad_request"`, not `internal` — and lists
 /// what is available.
-pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness> {
-    let known = crate::harness::by_interactive_binary(id)
-        .or_else(|| crate::harness::by_id(id).filter(|h| h.interactive_binary.is_some()));
+pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::catalog::Harness> {
+    let known = crate::harness::catalog::by_interactive_binary(id)
+        .or_else(|| crate::harness::catalog::by_id(id).filter(|h| h.interactive_binary.is_some()));
     known.ok_or_else(|| {
         anyhow::Error::new(BitrouterError::bad_request(format!(
             "'{id}' is not a launchable harness — available: {}",
@@ -125,7 +82,7 @@ pub fn resolve_launch_agent(id: &str) -> Result<&'static crate::harness::Harness
 
 /// The interactive binaries `launch` supports, sorted for a stable message.
 fn launchable() -> Vec<&'static str> {
-    let mut names: Vec<&str> = crate::harness::CATALOG
+    let mut names: Vec<&str> = crate::harness::catalog::CATALOG
         .iter()
         .filter(|h| h.launch_supported())
         .filter_map(|h| h.interactive_binary)
@@ -137,12 +94,12 @@ fn launchable() -> Vec<&'static str> {
 /// The `--agent` value a harness is displayed as: its interactive binary
 /// (falling back to the catalog id, which cannot happen for a resolved
 /// launch target).
-fn harness_id(h: &crate::harness::Harness) -> &'static str {
+fn harness_id(h: &crate::harness::catalog::Harness) -> &'static str {
     h.interactive_binary.unwrap_or(h.id)
 }
 
 /// What `bro launch` injects into the child process. The env/args come
-/// from the shared [`crate::harness`] catalog's [`RoutingOverlay`](crate::harness::RoutingOverlay), so the
+/// from the shared [`crate::harness`] catalog's [`RoutingOverlay`](crate::harness::catalog::RoutingOverlay), so the
 /// interactive and ACP facets of a harness route identically.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildLaunch {
@@ -183,7 +140,7 @@ pub(crate) fn resolve_launch_token(
 fn mint_launch_token() -> String {
     format!(
         "{}{}",
-        bitrouter_sdk::caller::LAUNCH_TOKEN_PREFIX,
+        crate::gateway::caller::LAUNCH_TOKEN_PREFIX,
         uuid::Uuid::new_v4().simple()
     )
 }
@@ -191,14 +148,14 @@ fn mint_launch_token() -> String {
 /// Whether a resolved credential is one we minted — i.e. whether this launch's
 /// requests will carry its own attribution, or fall back to the window.
 pub(crate) fn is_launch_token(token: &str) -> bool {
-    bitrouter_sdk::caller::launch_tag(Some(&format!("Bearer {token}"))).is_some()
+    crate::gateway::caller::launch_tag(Some(&format!("Bearer {token}"))).is_some()
 }
 
 /// Options gathered from the CLI for one `launch` invocation.
 pub struct SpawnOptions {
     /// Which harness to launch, already resolved against the shared catalog
     /// (see [`resolve_launch_agent`]).
-    pub agent: &'static crate::harness::Harness,
+    pub agent: &'static crate::harness::catalog::Harness,
     /// Pin the harness's model. Applied through the harness's own mechanism —
     /// a model env var, a `-c model=` override, the synthesized config's
     /// default, or the harness's native flag for own-auth clients.
@@ -308,7 +265,7 @@ pub struct Prepared<'a> {
     /// Args forwarded verbatim, appended after [`ChildLaunch::args_prefix`].
     pub agent_args: Vec<String>,
     /// The catalog harness being launched.
-    pub harness: &'static crate::harness::Harness,
+    pub harness: &'static crate::harness::catalog::Harness,
     /// Config source, for the exit summary's metering read.
     pub source: &'a crate::paths::ConfigSource,
     /// The attribution token this launch minted, when it owns the credential
@@ -326,7 +283,7 @@ pub struct Prepared<'a> {
 /// `git <subcommand>` propagates its child's status.
 pub async fn run(
     source: &crate::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     opts: SpawnOptions,
 ) -> Result<()> {
     let prepared = prepare(source, cfg, opts).await?;
@@ -340,7 +297,7 @@ pub async fn run(
 /// up to, but not including, the child process.
 pub async fn prepare<'a>(
     source: &'a crate::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     opts: SpawnOptions,
 ) -> Result<Prepared<'a>> {
     let harness = opts.agent;
@@ -350,7 +307,7 @@ pub async fn prepare<'a>(
         None => derive_base_url(&cfg.server.listen),
     };
 
-    if matches!(harness.routing, crate::harness::Routing::CodexArgs) {
+    if matches!(harness.routing, crate::harness::catalog::Routing::CodexArgs) {
         let conflicts = codex_forwarded_config_args(&opts.agent_args);
         if !conflicts.is_empty() {
             anyhow::bail!(
@@ -387,12 +344,12 @@ pub async fn prepare<'a>(
     // for this harness → the BitRouter API key → a local placeholder. Only
     // env-routed harnesses (Claude) have such a var; Codex reads none.
     let parent_auth = match harness.routing {
-        crate::harness::Routing::Env { auth_env, .. } => nonempty_env(auth_env),
+        crate::harness::catalog::Routing::Env { auth_env, .. } => nonempty_env(auth_env),
         _ => None,
     };
     let token = resolve_launch_token(
         parent_auth,
-        nonempty_env(crate::harness::BITROUTER_API_KEY_ENV),
+        nonempty_env(crate::client::local_gateway::BITROUTER_API_KEY_ENV),
     );
     // The daemon's advertised model ids fill the synthesized providers' model
     // lists — only the config-synthesis harnesses need them, so nothing else
@@ -449,9 +406,9 @@ pub async fn prepare<'a>(
 /// and a user should learn that here rather than by noticing the tools are
 /// missing later.
 fn startup_line(
-    harness: &crate::harness::Harness,
+    harness: &crate::harness::catalog::Harness,
     base_url: &str,
-    gateways: &[crate::harness::McpServer],
+    gateways: &[crate::harness::catalog::McpServer],
     p: &Palette,
 ) -> String {
     let agent_id = harness_id(harness);
@@ -466,7 +423,7 @@ fn startup_line(
     // itself borrows as providers — routing them through BitRouter would loop
     // back to the same backend on the same credential. Their traffic never
     // reaches the daemon, so there is nothing to meter.
-    if matches!(harness.routing, crate::harness::Routing::OwnAuth) {
+    if matches!(harness.routing, crate::harness::catalog::Routing::OwnAuth) {
         return format!("{head} · own-auth · not routed · not metered");
     }
 
@@ -482,8 +439,8 @@ fn startup_line(
 /// both built from this one function, so the two cannot drift into disagreeing
 /// about what the harness actually got.
 pub(crate) fn capability_summary(
-    harness: &crate::harness::Harness,
-    gateways: &[crate::harness::McpServer],
+    harness: &crate::harness::catalog::Harness,
+    gateways: &[crate::harness::catalog::McpServer],
     p: &Palette,
 ) -> String {
     let named = |name: &str| gateways.iter().any(|s| s.name == name);
@@ -631,15 +588,15 @@ async fn print_exit_summary(
 /// no injectable MCP surface and ignore these servers; that ceiling is the
 /// harnesses', not BitRouter's.
 fn launch_gateways(
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
     base_url: &str,
     owns_local_daemon: bool,
-) -> Vec<crate::harness::McpServer> {
-    let auth = crate::harness::resolve_gateway_auth(
-        std::env::var(crate::harness::BITROUTER_API_KEY_ENV).ok(),
+) -> Vec<crate::harness::catalog::McpServer> {
+    let auth = crate::harness::catalog::resolve_gateway_auth(
+        std::env::var(crate::client::local_gateway::BITROUTER_API_KEY_ENV).ok(),
         false,
     )
-    .unwrap_or_else(|| crate::harness::PLACEHOLDER_API_KEY.to_string());
+    .unwrap_or_else(|| crate::client::local_gateway::PLACEHOLDER_API_KEY.to_string());
     // Local assembly mounts MCP only when upstreams are configured. External
     // targets own their upstream inventory; preserve their configured route.
     let aggregate_route = (cfg.mcp.aggregate.enabled
@@ -652,8 +609,8 @@ fn launch_gateways(
 /// true exactly for the config-synthesis harnesses, whose synthesized provider
 /// carries an explicit model list. Env/args and own-auth harnesses ignore it,
 /// so they never pay for the `/v1/models` probe.
-fn needs_model_catalog(h: &crate::harness::Harness) -> bool {
-    matches!(h.routing, crate::harness::Routing::ConfigFile(_))
+fn needs_model_catalog(h: &crate::harness::catalog::Harness) -> bool {
+    matches!(h.routing, crate::harness::catalog::Routing::ConfigFile(_))
 }
 
 /// Where `launch` writes the throwaway configs it synthesizes for the harnesses
@@ -718,14 +675,11 @@ async fn fetch_daemon_models(base_url: &str) -> Vec<String> {
 }
 
 /// Check a launch invocation without launching the child process.
-pub async fn check(
-    cfg: &bitrouter_sdk::config::Config,
-    opts: &SpawnOptions,
-) -> Result<SpawnCheckReport> {
+pub async fn check(cfg: &crate::config::Config, opts: &SpawnOptions) -> Result<SpawnCheckReport> {
     let harness = opts.agent;
     let agent_id = harness_id(harness);
     let binary = harness.interactive_binary.unwrap_or(harness.id);
-    let is_codex = matches!(harness.routing, crate::harness::Routing::CodexArgs);
+    let is_codex = matches!(harness.routing, crate::harness::catalog::Routing::CodexArgs);
     let base_url = opts
         .base_url
         .clone()
@@ -755,13 +709,13 @@ pub async fn check(
     // file, or (own-auth) not at all.
     checks.push(SpawnCheckRow {
         name: "routing".to_string(),
-        status: if matches!(harness.routing, crate::harness::Routing::OwnAuth) {
+        status: if matches!(harness.routing, crate::harness::catalog::Routing::OwnAuth) {
             SpawnCheckStatus::Warn
         } else {
             SpawnCheckStatus::Pass
         },
         message: match harness.routing {
-            crate::harness::Routing::OwnAuth => format!(
+            crate::harness::catalog::Routing::OwnAuth => format!(
                 "'{}' is a subscription client the daemon borrows sessions from — it launches \
                  with its own auth, never routed through BitRouter",
                 harness.id
@@ -954,496 +908,24 @@ fn codex_route_check(model: &str, route: Result<Vec<crate::daemon::RouteHop>>) -
     }
 }
 
-/// Read an environment variable, treating an unset *or empty* value as absent.
-pub(crate) fn nonempty_env(name: &str) -> Option<String> {
-    std::env::var(name).ok().filter(|v| !v.is_empty())
-}
-
-/// Derive the client-facing base URL from the daemon's `server.listen`
-/// (`host:port`). Wildcard bind addresses are rewritten to loopback because a
-/// client cannot *connect* to `0.0.0.0` / `::` — those mean "bind every
-/// interface", not "reach me here".
-pub(crate) fn derive_base_url(listen: &str) -> String {
-    let (host, port) = split_listen(listen);
-    format!("http://{}:{}", rewrite_host(host), port)
-}
-
-/// The default daemon port (mirrors `ServerConfig::default().listen`). Used
-/// when `server.listen` carries a bare host with no `:port`.
-const DEFAULT_PORT: &str = "4356";
-
-/// Split a `server.listen` value into `(host, port)`, defaulting the port when
-/// absent. Handles bracketed IPv6 (`[::1]:4356`, `[::1]`) so the `rsplit_once`
-/// does not mistake a colon *inside* the brackets for the port separator.
-fn split_listen(listen: &str) -> (&str, &str) {
-    // Bracketed IPv6: the port (if any) follows the closing bracket.
-    if listen.starts_with('[') {
-        return match listen.rsplit_once("]:") {
-            Some((host, port)) => (&listen[..host.len() + 1], port),
-            // `[::1]` with no port.
-            None => (listen, DEFAULT_PORT),
-        };
-    }
-    match listen.rsplit_once(':') {
-        Some((host, port)) => (host, port),
-        None => (listen, DEFAULT_PORT),
-    }
-}
-
-/// Rewrite a wildcard bind host to its loopback equivalent for a *client*
-/// connection. `0.0.0.0` / empty → `127.0.0.1`; `::` / `[::]` → `[::1]`.
-fn rewrite_host(host: &str) -> &str {
-    match host {
-        "0.0.0.0" | "" => "127.0.0.1",
-        "::" | "[::]" => "[::1]",
-        other => other,
-    }
-}
-
-/// True when `listen` binds a loopback / wildcard address — i.e. a daemon on
-/// *this* host that `bro spawn` may auto-start. A remote or LAN host is
-/// someone else's daemon, which we can only warn about. Exact-match only:
-/// `127.0.0.0/8` aliases (e.g. `127.0.0.2`) and IPv4-mapped IPv6 fall through to
-/// the warn path — the fail-safe direction (never a wrong auto-start).
-pub(crate) fn listen_is_local(listen: &str) -> bool {
-    let (host, _port) = split_listen(listen);
-    matches!(
-        host,
-        "127.0.0.1" | "0.0.0.0" | "" | "::1" | "[::1]" | "::" | "[::]" | "localhost"
-    )
-}
-
-/// Extract the `host[:port]` authority from a base URL for a best-effort
-/// reachability note. Returns `None` when there is no authority to probe.
-pub(crate) fn listen_from_base_url(url: &str) -> Option<String> {
-    let rest = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap_or(url);
-    let authority = rest.split('/').next().unwrap_or(rest);
-    (!authority.is_empty()).then(|| authority.to_string())
-}
-
-/// Ensure the local BitRouter daemon is up before launching the agent. Probes
-/// the control socket; when nothing is listening (and `--no-start` was not
-/// given) it prints a hint and auto-starts a detached `serve`, waiting for
-/// readiness. Best-effort throughout: on any failure it warns and returns so
-/// the agent still launches (and surfaces its own connection error) — matching
-/// spawn's "never block the launch" stance.
-pub(crate) async fn ensure_local_daemon(
-    source: &crate::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
-    no_start: bool,
-) {
-    let socket = crate::daemon::socket_path_for(source, cfg);
-    match crate::daemon::probe_status(&socket).await {
-        // Already running — nothing to do.
-        Ok(Some(_)) => {}
-        // Definitively not reachable — auto-start unless opted out.
-        Ok(None) => {
-            let p = Palette::for_stderr();
-            if no_start {
-                warn_if_daemon_unreachable(&cfg.server.listen);
-                return;
-            }
-            eprintln!(
-                "{cyan}note:{reset} no BitRouter daemon is running — starting one…",
-                cyan = p.cyan,
-                reset = p.reset,
-            );
-            let log_path = source.home().join("bitrouter.log");
-            match crate::daemon::start_and_wait(
-                source,
-                &log_path,
-                Some(&socket),
-                crate::daemon::DAEMON_READY_TIMEOUT,
-            )
-            .await
-            {
-                Ok(crate::daemon::DaemonStartOutcome::Ready(info)) => {
-                    eprintln!(
-                        "{cyan}note:{reset} BitRouter daemon ready (pid {})",
-                        info.pid,
-                        cyan = p.cyan,
-                        reset = p.reset,
-                    );
-                }
-                Ok(crate::daemon::DaemonStartOutcome::NotReadyInTime { pid }) => {
-                    eprintln!(
-                        "{cyan}note:{reset} daemon started (pid {pid}) but is not ready yet — \
-                         the agent may need a moment; logs at {}",
-                        log_path.display(),
-                        cyan = p.cyan,
-                        reset = p.reset,
-                    );
-                }
-                Ok(crate::daemon::DaemonStartOutcome::Exited { status, log_tail }) => {
-                    eprintln!(
-                        "{cyan}note:{reset} daemon exited during startup ({status}) — \
-                         launching the agent anyway",
-                        cyan = p.cyan,
-                        reset = p.reset,
-                    );
-                    crate::daemon::eprint_failure_log(&log_path, &log_tail);
-                }
-                Err(e) => {
-                    eprintln!(
-                        "{cyan}note:{reset} could not start the daemon ({e:#}) — \
-                         launching the agent anyway",
-                        cyan = p.cyan,
-                        reset = p.reset,
-                    );
-                }
-            }
-        }
-        // Reachable but the exchange errored — assume it's up; don't double-start.
-        Err(e) => {
-            tracing::debug!(error = %e, "daemon status probe errored; assuming up");
-        }
-    }
-}
-
-/// Locate an executable on `PATH`. Pure-`std` (no `which` crate) so the
-/// `#![forbid(unsafe_code)]` lib stays dependency-light: split `$PATH` and
-/// probe each entry. Returns the first match.
-pub(crate) fn resolve_binary(name: &str) -> Option<PathBuf> {
-    find_on_path(name, std::env::var_os("PATH"), &extra_search_dirs())
-}
-
-/// Core of [`resolve_binary`], factored out for testing. Searches `path` (an
-/// `OsString` of `PATH`-separated dirs) followed by `extra` directories —
-/// the latter covers the native installer's target (`~/.local/bin`), which is
-/// often not yet on `PATH` in the shell that just ran the install.
-fn find_on_path(name: &str, path: Option<OsString>, extra: &[PathBuf]) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(path) = path {
-        dirs.extend(std::env::split_paths(&path));
-    }
-    dirs.extend(extra.iter().cloned());
-    for dir in dirs {
-        let candidate = dir.join(name);
-        if is_executable_file(&candidate) {
-            return Some(candidate);
-        }
-        // On Windows, executables carry an extension. We probe the common
-        // launcher extensions rather than parsing the full `%PATHEXT%` set —
-        // agent CLIs ship as `.exe` or an npm `.cmd`/`.bat` shim, which these
-        // cover; an exotic `%PATHEXT%` entry (`.com`, `.ps1`) would be missed.
-        #[cfg(windows)]
-        {
-            for ext in ["exe", "cmd", "bat"] {
-                let with_ext = dir.join(format!("{name}.{ext}"));
-                if is_executable_file(&with_ext) {
-                    return Some(with_ext);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Directories to probe in addition to `PATH`. The Claude Code native
-/// installer drops the binary in `~/.local/bin`, which a freshly-installed
-/// shell session may not have on `PATH` yet.
-fn extra_search_dirs() -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Some(home) = home_dir() {
-        dirs.push(home.join(".local").join("bin"));
-    }
-    dirs
-}
-
-/// True when `path` is a regular file we can plausibly execute. On Unix this
-/// checks the executable permission bit; on other platforms, file existence.
-fn is_executable_file(path: &std::path::Path) -> bool {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return false;
-    };
-    if !meta.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        meta.permissions().mode() & 0o111 != 0
-    }
-    #[cfg(not(unix))]
-    {
-        true
-    }
-}
-
-/// Resolve the user's home directory without pulling in a crate: `$HOME` on
-/// Unix, `%USERPROFILE%` on Windows.
-fn home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE").map(PathBuf::from)
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
-}
-
-/// Ensure `agent`'s binary is installed — locating it on `PATH` (+
-/// `~/.local/bin`) and offering the official native installer when permitted —
-/// and return its path. Shared by `bro spawn` and
-/// `bro providers login claude-code` (which needs the `claude` CLI to
-/// sign the user in) so both go through one detect-and-install path.
-pub(crate) async fn ensure_agent_installed(agent: SpawnAgent, no_install: bool) -> Result<PathBuf> {
-    let spec = agent.spec();
-    let harness = crate::harness::by_interactive_binary(spec.binary).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no catalog harness for interactive binary '{}'",
-            spec.binary
-        )
-    })?;
-    ensure_harness_installed(harness, no_install).await
-}
-
 /// Locate a catalog harness's interactive binary, offering the official native
 /// installer when BitRouter bundles one for it (claude, codex) and the caller
 /// permits prompting. Harnesses with no bundled installer get an actionable
 /// error pointing at their upstream project.
 pub(crate) async fn ensure_harness_installed(
-    harness: &'static crate::harness::Harness,
+    harness: &'static crate::harness::catalog::Harness,
     no_install: bool,
 ) -> Result<PathBuf> {
     let binary = harness
         .interactive_binary
         .ok_or_else(|| anyhow::anyhow!("harness '{}' has no interactive binary", harness.id))?;
-    match resolve_binary(binary) {
-        Some(path) => Ok(path),
-        None => ensure_installed(harness, binary, no_install).await,
-    }
-}
-
-/// The agent binary is missing. Offer to install it via the official native
-/// installer when stdin is interactive and `--no-install` was not set;
-/// otherwise return an actionable error listing the install command.
-async fn ensure_installed(
-    harness: &'static crate::harness::Harness,
-    binary: &'static str,
-    no_install: bool,
-) -> Result<PathBuf> {
-    let Some(install) = InstallCommand::for_binary(binary) else {
-        anyhow::bail!(
-            "agent '{binary}' is not installed (no `{binary}` on PATH).\n  \
-             BitRouter bundles no installer for it — install it from {}",
-            harness.project_url,
-        );
-    };
-
-    let may_prompt = !no_install && std::io::stdin().is_terminal();
-    if !may_prompt {
-        anyhow::bail!(
-            "agent '{binary}' is not installed (no `{binary}` on PATH).\n  Install it with:\n    {}",
-            install.display(),
-        );
-    }
-
-    if !confirm_install(binary, &install)? {
-        anyhow::bail!("aborted — '{binary}' was not installed");
-    }
-
-    install.run().await?;
-
-    // Re-resolve after install. The installer may have landed the binary in
-    // `~/.local/bin` (covered by `extra_search_dirs`) even when that dir is
-    // not on the current shell's `PATH`.
-    resolve_binary(binary).ok_or_else(|| {
-        anyhow::anyhow!(
-            "installed '{binary}' but still cannot find `{binary}` on PATH or in ~/.local/bin — \
-             open a new shell (or add the install dir to PATH) and re-run",
-        )
-    })
-}
-
-/// Print the install prompt and read a Y/n answer. Defaults to yes on a bare
-/// <enter>. A closed stdin (EOF) is treated as "no" so we never hang.
-fn confirm_install(binary: &str, install: &InstallCommand) -> Result<bool> {
-    use std::io::{BufRead, Write};
-    let p = Palette::for_stderr();
-    eprintln!(
-        "{cyan}{bold}info:{reset} agent `{binary}` is not installed on this machine.",
-        cyan = p.cyan,
-        bold = p.bold,
-        reset = p.reset,
-    );
-    eprintln!("  Installer: {}", install.display());
-    eprint!("Proceed to install? [Y/n]: ");
-    std::io::stderr().flush().ok();
-
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    let n = stdin
-        .lock()
-        .read_line(&mut line)
-        .context("reading install confirmation from stdin")?;
-    if n == 0 {
-        // EOF — non-interactive; decline rather than block.
-        eprintln!();
-        return Ok(false);
-    }
-    let answer = line.trim().to_ascii_lowercase();
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
-}
-
-/// Best-effort TCP reachability probe against the daemon's listen address.
-/// Prints a one-line warning when nothing is listening; never errors.
-fn warn_if_daemon_unreachable(listen: &str) {
-    use std::net::{TcpStream, ToSocketAddrs};
-    use std::time::Duration;
-
-    // Map the wildcard bind host to loopback for the *connect* attempt, same
-    // as the base-URL derivation.
-    let (host, port) = split_listen(listen);
-    let probe = format!("{}:{}", rewrite_host(host), port);
-
-    let reachable = probe
-        .to_socket_addrs()
-        .ok()
-        .and_then(|mut addrs| addrs.next())
-        .map(|addr| TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok())
-        .unwrap_or(false);
-
-    if !reachable {
-        let p = Palette::for_stderr();
-        eprintln!(
-            "{cyan}note:{reset} no BitRouter daemon appears to be listening on {probe} — \
-             start one with `{cli} start` (the agent will fail to reach it otherwise).",
-            cyan = p.cyan,
-            reset = p.reset,
-            cli = invocation::name(),
-        );
-    }
-}
-
-/// A platform-specific install command for an agent. Conditional compilation
-/// makes exactly one variant visible per platform, so the help text and the
-/// executed command never disagree with the host.
-#[derive(Debug, Clone)]
-pub struct InstallCommand {
-    /// Program to run (`bash` / `powershell`).
-    program: &'static str,
-    /// Arguments to that program.
-    args: Vec<String>,
-    /// Human-readable one-liner, e.g. `curl -fsSL … | bash`.
-    human: String,
-}
-
-impl InstallCommand {
-    /// The official native installer for `binary` on the *current* platform,
-    /// or `None` when BitRouter bundles no installer for that harness (the
-    /// catalog's other interactive binaries — opencode, pi, hermes, openclaw,
-    /// grok, agy — which the user installs from upstream).
-    ///
-    /// Sources:
-    /// - Claude Code quickstart, "Native Install":
-    ///   <https://code.claude.com/docs/en/quickstart>
-    /// - macOS / Linux: `curl -fsSL https://claude.ai/install.sh | bash`
-    /// - Windows:       `irm https://claude.ai/install.ps1 | iex`
-    /// - Codex quickstart:
-    ///   <https://developers.openai.com/codex/quickstart>
-    /// - macOS / Linux: `curl -fsSL https://chatgpt.com/codex/install.sh | sh`
-    /// - Windows:       `irm https://chatgpt.com/codex/install.ps1 | iex`
-    pub fn for_binary(binary: &str) -> Option<Self> {
-        match binary {
-            "claude" => Some(Self::claude()),
-            "codex" => Some(Self::codex()),
-            _ => None,
-        }
-    }
-
-    #[cfg(not(windows))]
-    fn claude() -> Self {
-        let human = "curl -fsSL https://claude.ai/install.sh | bash".to_string();
-        Self {
-            program: "bash",
-            args: vec![
-                "-c".to_string(),
-                "curl -fsSL https://claude.ai/install.sh | bash".to_string(),
-            ],
-            human,
-        }
-    }
-
-    #[cfg(windows)]
-    fn claude() -> Self {
-        let human = "irm https://claude.ai/install.ps1 | iex".to_string();
-        Self {
-            program: "powershell",
-            args: vec![
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "irm https://claude.ai/install.ps1 | iex".to_string(),
-            ],
-            human,
-        }
-    }
-
-    #[cfg(not(windows))]
-    fn codex() -> Self {
-        let human = "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string();
-        Self {
-            program: "sh",
-            args: vec![
-                "-c".to_string(),
-                "curl -fsSL https://chatgpt.com/codex/install.sh | sh".to_string(),
-            ],
-            human,
-        }
-    }
-
-    #[cfg(windows)]
-    fn codex() -> Self {
-        let human =
-            r#"powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex""#
-                .to_string();
-        Self {
-            program: "powershell",
-            args: vec![
-                "-ExecutionPolicy".to_string(),
-                "ByPass".to_string(),
-                "-c".to_string(),
-                "irm https://chatgpt.com/codex/install.ps1 | iex".to_string(),
-            ],
-            human,
-        }
-    }
-
-    /// The human-readable one-liner shown in prompts and error messages.
-    pub fn display(&self) -> &str {
-        &self.human
-    }
-
-    /// Execute the installer, inheriting stdio so the user sees its progress.
-    /// Errors when the installer exits non-zero.
-    async fn run(&self) -> Result<()> {
-        let p = Palette::for_stderr();
-        eprintln!(
-            "{cyan}{bold}info:{reset} installing — {}",
-            self.human,
-            cyan = p.cyan,
-            bold = p.bold,
-            reset = p.reset,
-        );
-        let status = tokio::process::Command::new(self.program)
-            .args(&self.args)
-            .status()
-            .await
-            .with_context(|| format!("running installer: {}", self.human))?;
-        if !status.success() {
-            anyhow::bail!("installer exited with {status}: {}", self.human);
-        }
-        Ok(())
-    }
+    ensure_binary_installed(binary, Some(harness.project_url), no_install).await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::cli_install::SpawnAgent;
 
     #[test]
     fn dot_dir_is_created_self_ignoring() {
@@ -1516,7 +998,7 @@ mod tests {
         let gateways = launch_gateways(&cfg, "http://127.0.0.1:4356", true);
         let line = |id: &str| {
             startup_line(
-                crate::harness::by_id(id).expect("catalog"),
+                crate::harness::catalog::by_id(id).expect("catalog"),
                 "http://127.0.0.1:4356",
                 &gateways,
                 &p,
@@ -1545,7 +1027,7 @@ mod tests {
         // line must say so rather than claiming tools the harness never got.
         let p = Palette::none();
         let line = startup_line(
-            crate::harness::by_id("claude-acp").expect("catalog"),
+            crate::harness::catalog::by_id("claude-acp").expect("catalog"),
             "http://127.0.0.1:4356",
             &[],
             &p,
@@ -1553,8 +1035,8 @@ mod tests {
         assert!(line.contains("tools ✗"), "{line}");
     }
 
-    fn config_with_mcp_upstream() -> anyhow::Result<bitrouter_sdk::config::Config> {
-        let mut cfg = bitrouter_sdk::config::Config::default();
+    fn config_with_mcp_upstream() -> anyhow::Result<crate::config::Config> {
+        let mut cfg = crate::config::Config::default();
         cfg.mcp_servers.insert(
             "fixture".into(),
             serde_json::from_value(serde_json::json!({
@@ -1578,7 +1060,7 @@ mod tests {
         // openclaw, grok, antigravity) have no mechanism and are excluded by
         // design.
         for id in ["claude-acp", "codex-acp", "opencode", "hermes-acp"] {
-            let h = crate::harness::by_id(id).expect("catalog entry");
+            let h = crate::harness::catalog::by_id(id).expect("catalog entry");
             let dir = tempfile::tempdir().expect("tempdir");
             let overlay = h
                 .launch_overlay(
@@ -1617,7 +1099,7 @@ mod tests {
 
     #[test]
     fn launch_gateways_drops_tools_when_the_aggregate_is_disabled() {
-        let mut cfg = bitrouter_sdk::config::Config::default();
+        let mut cfg = crate::config::Config::default();
         cfg.mcp.aggregate.enabled = false;
         let servers = launch_gateways(&cfg, "http://127.0.0.1:4356", true);
         let names: Vec<&str> = servers.iter().map(|s| s.name.as_str()).collect();
@@ -1626,84 +1108,20 @@ mod tests {
 
     #[test]
     fn launch_without_mcp_upstreams_does_not_advertise_an_unmounted_gateway() {
-        let cfg = bitrouter_sdk::config::Config::default();
+        let cfg = crate::config::Config::default();
         assert!(cfg.mcp_servers.is_empty());
         assert!(launch_gateways(&cfg, "http://127.0.0.1:4356", true).is_empty());
     }
 
     #[test]
     fn external_launch_keeps_mcp_gateway_without_local_upstreams() {
-        let mut cfg = bitrouter_sdk::config::Config::default();
+        let mut cfg = crate::config::Config::default();
         assert!(cfg.mcp_servers.is_empty());
         let servers = launch_gateways(&cfg, "https://router.example", false);
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0].name, "bitrouter_tools");
         cfg.mcp.aggregate.enabled = false;
         assert!(launch_gateways(&cfg, "https://router.example", false).is_empty());
-    }
-
-    #[test]
-    fn listen_is_local_classifies_loopback_and_wildcard() {
-        for local in [
-            "127.0.0.1:4356",
-            "0.0.0.0:4356",
-            "[::1]:4356",
-            "[::]:4356",
-            "localhost:4356",
-            "127.0.0.1",
-        ] {
-            assert!(listen_is_local(local), "{local} should be local");
-        }
-        for remote in [
-            "router.internal:8080",
-            "192.168.1.5:4356",
-            "10.0.0.3:4356",
-            "example.com:443",
-        ] {
-            assert!(!listen_is_local(remote), "{remote} should be remote");
-        }
-    }
-
-    #[test]
-    fn listen_from_base_url_extracts_authority() {
-        assert_eq!(
-            listen_from_base_url("http://127.0.0.1:4356").as_deref(),
-            Some("127.0.0.1:4356")
-        );
-        assert_eq!(
-            listen_from_base_url("https://router.example.com/v1").as_deref(),
-            Some("router.example.com")
-        );
-        // No scheme → treated as a bare authority.
-        assert_eq!(
-            listen_from_base_url("127.0.0.1:4356").as_deref(),
-            Some("127.0.0.1:4356")
-        );
-        assert_eq!(listen_from_base_url(""), None);
-    }
-
-    #[test]
-    fn base_url_rewrites_wildcard_bind_to_loopback() {
-        assert_eq!(derive_base_url("0.0.0.0:4356"), "http://127.0.0.1:4356");
-        assert_eq!(derive_base_url("[::]:4356"), "http://[::1]:4356");
-    }
-
-    #[test]
-    fn base_url_preserves_explicit_host() {
-        assert_eq!(derive_base_url("127.0.0.1:4356"), "http://127.0.0.1:4356");
-        assert_eq!(
-            derive_base_url("router.internal:8080"),
-            "http://router.internal:8080"
-        );
-        // A bracketed IPv6 literal keeps its brackets and port.
-        assert_eq!(derive_base_url("[::1]:9000"), "http://[::1]:9000");
-    }
-
-    #[test]
-    fn base_url_defaults_port_when_missing() {
-        assert_eq!(derive_base_url("127.0.0.1"), "http://127.0.0.1:4356");
-        // Bracketed IPv6 without a port must not split inside the brackets.
-        assert_eq!(derive_base_url("[::1]"), "http://[::1]:4356");
     }
 
     #[test]
@@ -1731,7 +1149,9 @@ mod tests {
         // false` and attribute someone else's traffic to this launch.
         assert!(!is_launch_token("user-token"));
         assert!(!is_launch_token("brk_key"));
-        assert!(!is_launch_token(crate::harness::PLACEHOLDER_API_KEY));
+        assert!(!is_launch_token(
+            crate::client::local_gateway::PLACEHOLDER_API_KEY
+        ));
         assert!(is_launch_token(&mint_launch_token()));
     }
 
@@ -1745,31 +1165,36 @@ mod tests {
     }
 
     #[test]
-    fn launch_agents_map_to_catalog_harnesses() {
+    fn launch_agents_map_to_catalog_harnesses() -> Result<()> {
         // The interactive binary is the key into the shared routing catalog;
         // the overlay content itself is covered by `harness` tests.
-        let claude = crate::harness::by_interactive_binary(SpawnAgent::Claude.spec().binary)
-            .expect("claude maps to a catalog harness");
+        let claude =
+            crate::harness::catalog::by_interactive_binary(SpawnAgent::Claude.spec().binary)
+                .context("claude maps to a catalog harness")?;
         assert_eq!(claude.id, "claude-acp");
         assert!(matches!(
             claude.routing,
-            crate::harness::Routing::Env {
+            crate::harness::catalog::Routing::Env {
                 base_url_env: "ANTHROPIC_BASE_URL",
                 auth_env: "ANTHROPIC_AUTH_TOKEN",
                 ..
             }
         ));
 
-        let codex = crate::harness::by_interactive_binary(SpawnAgent::Codex.spec().binary)
-            .expect("codex maps to a catalog harness");
+        let codex = crate::harness::catalog::by_interactive_binary(SpawnAgent::Codex.spec().binary)
+            .context("codex maps to a catalog harness")?;
         assert_eq!(codex.id, "codex-acp");
-        assert!(matches!(codex.routing, crate::harness::Routing::CodexArgs));
+        assert!(matches!(
+            codex.routing,
+            crate::harness::catalog::Routing::CodexArgs
+        ));
+        Ok(())
     }
 
     #[test]
     fn resolve_launch_agent_accepts_every_supported_harness() {
         // `launch --agent` takes every *supported* harness, by binary name…
-        for h in crate::harness::CATALOG
+        for h in crate::harness::catalog::CATALOG
             .iter()
             .filter(|h| h.launch_supported())
         {
@@ -1810,7 +1235,7 @@ mod tests {
             let err = resolve_launch_agent(bad).expect_err("rejected");
             assert_eq!(
                 crate::output::error::envelope_from_anyhow(&err).error.kind,
-                bitrouter_sdk::error::ErrorKind::BadRequest,
+                crate::gateway::error::ErrorKind::BadRequest,
                 "{bad}"
             );
         }
@@ -1819,20 +1244,13 @@ mod tests {
     #[test]
     fn needs_model_catalog_only_for_config_synthesis_harnesses() {
         for id in ["opencode", "pi-acp", "hermes-acp", "openclaw"] {
-            let h = crate::harness::by_id(id).expect("catalog harness");
+            let h = crate::harness::catalog::by_id(id).expect("catalog harness");
             assert!(needs_model_catalog(h), "{id} synthesizes a model list");
         }
         for id in ["claude-acp", "codex-acp"] {
-            let h = crate::harness::by_id(id).expect("catalog harness");
+            let h = crate::harness::catalog::by_id(id).expect("catalog harness");
             assert!(!needs_model_catalog(h), "{id} needs no /v1/models probe");
         }
-    }
-
-    #[test]
-    fn codex_spec_uses_codex_binary() {
-        let spec = SpawnAgent::Codex.spec();
-        assert_eq!(spec.binary, "codex");
-        assert_eq!(spec.id, "codex");
     }
 
     #[test]
@@ -1901,7 +1319,7 @@ mod tests {
 
     #[tokio::test]
     async fn codex_preflight_resolves_native_subscription_model() -> anyhow::Result<()> {
-        let cfg = bitrouter_sdk::config::parse_with(
+        let cfg = crate::config::parse_with(
             r#"
 inherit_defaults: false
 providers:
@@ -1917,7 +1335,8 @@ providers:
         let report = check(
             &cfg,
             &SpawnOptions {
-                agent: crate::harness::by_id("codex-acp").context("Codex harness missing")?,
+                agent: crate::harness::catalog::by_id("codex-acp")
+                    .context("Codex harness missing")?,
                 model: Some("gpt-native".into()),
                 agent_args: Vec::new(),
                 base_url: Some("http://127.0.0.1:0".into()),
@@ -1947,78 +1366,5 @@ providers:
         let check = codex_route_check("claude-sonnet", Ok(route));
         assert_eq!(check.status, SpawnCheckStatus::Fail);
         assert!(check.message.contains("responses"));
-    }
-
-    #[test]
-    fn install_command_is_the_official_native_installer() {
-        let cmd = InstallCommand::for_binary("claude").expect("claude has a bundled installer");
-        // Same canonical URL on every platform; the transport differs.
-        assert!(cmd.display().contains("claude.ai/install"));
-        #[cfg(not(windows))]
-        {
-            assert!(cmd.display().contains("install.sh"));
-            assert!(cmd.display().contains("| bash"));
-        }
-        #[cfg(windows)]
-        {
-            assert!(cmd.display().contains("install.ps1"));
-        }
-
-        let codex = InstallCommand::for_binary("codex").expect("codex has a bundled installer");
-        assert!(codex.display().contains("chatgpt.com/codex/install"));
-        // The rest of the catalog is installed from upstream, not by us.
-        assert!(InstallCommand::for_binary("opencode").is_none());
-        #[cfg(not(windows))]
-        {
-            assert!(codex.display().contains("install.sh"));
-            assert!(codex.display().contains("| sh"));
-        }
-        #[cfg(windows)]
-        {
-            assert!(codex.display().contains("install.ps1"));
-        }
-    }
-
-    #[test]
-    fn find_on_path_locates_executable_in_listed_dir() {
-        let dir = std::env::temp_dir().join(format!("bitrouter-spawn-path-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("fake-agent");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        let path = std::env::join_paths([dir.as_os_str()]).unwrap();
-        let found = find_on_path("fake-agent", Some(path), &[]);
-        assert_eq!(found.as_deref(), Some(bin.as_path()));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn find_on_path_returns_none_when_absent() {
-        let path = std::env::join_paths([std::env::temp_dir().as_os_str()]).unwrap();
-        assert!(find_on_path("definitely-not-a-real-binary-xyz", Some(path), &[]).is_none());
-    }
-
-    #[test]
-    fn find_on_path_falls_back_to_extra_dirs() {
-        // The post-install re-resolution relies on `extra` (e.g. ~/.local/bin)
-        // even when PATH is empty — exercise that path explicitly.
-        let dir =
-            std::env::temp_dir().join(format!("bitrouter-spawn-extra-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bin = dir.join("fake-agent");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        // PATH is None entirely; the binary is only reachable via `extra`.
-        let found = find_on_path("fake-agent", None, std::slice::from_ref(&dir));
-        assert_eq!(found.as_deref(), Some(bin.as_path()));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

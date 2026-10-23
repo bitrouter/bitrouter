@@ -1,8 +1,8 @@
 //! Resource snapshots can advance without mutating an immutable content prefix.
 
 use super::*;
-use crate::evolution::inventory::{coverage_matches, lock_connection};
-use crate::evolution::store::EvolutionStore;
+use crate::gateway::observability::inventory::{coverage_matches_locked, lock_connection};
+use crate::storage::evolution::EvolutionStore;
 
 mod coverage;
 
@@ -131,22 +131,26 @@ impl CanonicalStore {
             );
         }
         let store = EvolutionStore::new(self.db.clone(), &identity.owner)?;
-        ensure!(
-            coverage_matches(&store, &tx, &coverage.revisions).await?,
-            "gateway requests changed during resource observation; retry"
-        );
         let keys: BTreeSet<_> = cp
             .segments
             .iter()
             .map(|s| s.identity.key())
             .collect::<Result<_>>()?;
+        let mut locked_sessions = BTreeMap::new();
         for key in keys {
-            lock_session(&tx, &key).await?;
+            let row = lock_session(&tx, &key).await?;
+            locked_sessions.insert(key, row);
         }
-        manifest(&tx, identity, id).await?;
+        // Connection and session locks precede dependent record locks.
+        ensure!(
+            coverage_matches_locked(&store, &tx, &coverage.revisions).await?,
+            "gateway requests changed during resource observation; retry"
+        );
+        locked_manifest(&tx, identity, id, &locked_sessions).await?;
         if let Some(existing) = resources::Entity::find()
             .filter(resources::Column::CheckpointId.eq(id))
             .order_by_desc(resources::Column::Revision)
+            .lock_exclusive()
             .one(&tx)
             .await?
         {

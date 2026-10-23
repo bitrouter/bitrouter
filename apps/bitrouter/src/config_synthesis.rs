@@ -38,7 +38,7 @@ use std::path::Path;
 use anyhow::Context;
 use serde_json::{Map, Value};
 
-use crate::harness::{McpServer, McpTransport, RoutingOverlay, headers_map, v1_base_url};
+use crate::harness::catalog::{McpServer, McpTransport, RoutingOverlay, headers_map, v1_base_url};
 
 /// One harness's config-file routing, as data.
 #[derive(Debug, Clone, Copy)]
@@ -372,7 +372,7 @@ fn render_mcp(entry: McpEntryShape, servers: &[McpServer]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::{self, McpServer, McpTransport};
+    use crate::harness::catalog::{self as harness, McpServer, McpTransport};
 
     /// The four harnesses whose routing this module took over.
     const SYNTHESIZED: &[&str] = &["opencode", "pi-acp", "hermes-acp", "openclaw"];

@@ -1,46 +1,45 @@
+#[path = "support/workflow.rs"]
+mod workflow;
+use workflow::{benchmark_decision, temp_path};
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use axum::Json;
 use axum::routing::post;
 use axum_test::TestServer;
-use bitrouter::adequacy::reliability::{ReliabilityEvent, ReliabilityKey, ReliabilityObservation};
-use bitrouter::adequacy::store::AdequacyStore;
-use bitrouter::eval::store::EvalStore;
-use bitrouter::eval::types::AdmissionStatus;
-use bitrouter::metering::{
-    ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
+use bitrouter::core::adequacy::reliability::{
+    ReliabilityEvent, ReliabilityKey, ReliabilityObservation,
 };
-use bitrouter::policy_lock;
-use bitrouter::workflow_state::archive::{
+use bitrouter::core::adequacy::store::AdequacyStore;
+use bitrouter::core::eval::store::EvalStore;
+use bitrouter::core::workflow_state::archive::{
     CloudUsageRecord, RequestTransportOutcome, SemanticSettlementOutcome, TraceArchive,
     WorkflowRunArtifact,
 };
-use bitrouter::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
-use bitrouter::workflow_state::classifier_baseline::ClassifierBaselineManifest;
-use bitrouter::workflow_state::decision::{
-    PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
-};
-use bitrouter::workflow_state::fixture::WorkflowTraceFixture;
-use bitrouter::workflow_state::ir::{HarnessId, ProtocolKind};
-use bitrouter::workflow_state::online::OnlineWorkflowState;
-use bitrouter::workflow_state::predictive::NextActionClass;
-use bitrouter::workflow_state::real_trace::{
+use bitrouter::core::workflow_state::classifier_bakeoff::ClassifierBakeoffArtifact;
+use bitrouter::core::workflow_state::classifier_baseline::ClassifierBaselineManifest;
+use bitrouter::core::workflow_state::fixture::WorkflowTraceFixture;
+use bitrouter::core::workflow_state::real_trace::{
     CapturedIngressTrace, RealTraceCapture, RealTraceOutcome, TraceCaptureOptions, TraceSanitizer,
 };
-use bitrouter::workflow_state::replay::ReplayEvaluator;
-use bitrouter::workflow_state::reward::BenchmarkOutcomeRecord;
-use bitrouter::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
-use bitrouter_ai::protocol::inbound_adapter_for;
-use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_ai::types::{ApiProtocol, NormalizedUsage, UsageOrigin};
-use bitrouter_sdk::HeaderMap;
-use bitrouter_sdk::config;
-use bitrouter_sdk::routing::signals::NextStepRole;
+use bitrouter::core::workflow_state::replay::ReplayEvaluator;
+use bitrouter::core::workflow_state::reward::BenchmarkOutcomeRecord;
+use bitrouter::core::workflow_state::shadow_policy::{ShadowPolicyEvaluator, TierName};
+use bitrouter::gateway::routing::workflow::decision::{
+    PolicyDecisionRecord, PolicyDecisionSummary, ingress_request_id_sha256,
+};
+use bitrouter::gateway::routing::workflow::ir::{HarnessId, ProtocolKind};
+use bitrouter::gateway::routing::workflow::predictive::NextActionClass;
+use bitrouter::metering::{
+    ChargeEvidence, ChargeStatus, EffectivePricingRates, PricingSource, ReconciliationStatus,
+};
+use bitrouter_ai::eval::AdmissionStatus;
+use bitrouter_ai::harness::inspection::NextStepRole;
+use bitrouter_ai::types::{NormalizedUsage, ReasoningEffort, UsageOrigin};
 use http::HeaderValue;
-use serde::Deserialize;
 use serde_json::json;
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -198,72 +197,6 @@ fn loads_runtime_fixture_with_canonical_prompt_fallback() {
 
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/workflow_state")
-}
-
-fn temp_path(name: &str) -> PathBuf {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time after epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "bitrouter-workflow-state-{name}-{}-{unique}",
-        std::process::id()
-    ))
-}
-
-#[derive(Deserialize)]
-struct ProgressFixtureRequest {
-    stage: String,
-    body: serde_json::Value,
-}
-
-#[test]
-fn general_progress_fixture_replays_without_routing_headers() -> anyhow::Result<()> {
-    let adapter = inbound_adapter_for(&ApiProtocol::ChatCompletions)
-        .ok_or_else(|| anyhow::anyhow!("chat completions adapter is unavailable"))?;
-    let requests = include_str!("fixtures/trajectory/recovery_then_repeat.jsonl")
-        .lines()
-        .map(serde_json::from_str::<ProgressFixtureRequest>)
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let stages = requests
-        .iter()
-        .map(|request| request.stage.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        stages,
-        [
-            "opening", "recovery", "review_1", "review_2", "review_3", "review_4", "review_5",
-        ]
-    );
-
-    let projections = requests
-        .into_iter()
-        .map(|request| {
-            let prompt = adapter.parse_request(request.body)?;
-            Ok(OnlineWorkflowState::from_prompt(
-                &HeaderMap::new(),
-                &prompt,
-                None,
-                ProtocolKind::ChatCompletions,
-            )
-            .routing_key()
-            .to_owned())
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-    assert_eq!(
-        projections,
-        [
-            "semantic_route/v1|unknown|unknown|normal",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|guarded",
-            "semantic_route/v1|unknown|implement|normal",
-            "semantic_route/v1|unknown|implement|normal",
-            "semantic_route/v1|unknown|implement|normal",
-        ]
-    );
-    Ok(())
 }
 
 #[tokio::test]
@@ -522,63 +455,6 @@ fn benchmark_trace(request_id: &str) -> CapturedIngressTrace {
             http_status: 200,
             status: "completed".to_string(),
         },
-    }
-}
-
-fn benchmark_decision(request_id: &str) -> PolicyDecisionRecord {
-    PolicyDecisionRecord {
-        captured_at: None,
-        request_id: Some(request_id.to_string()),
-        ingress_request_id_sha256: None,
-        input_model: "inbound".to_string(),
-        input_effort: None,
-        key_strategy: "workflow_state".to_string(),
-        route_projection: None,
-        request_key: "agent_trace/v1|opening|normal".to_string(),
-        ledger_key: None,
-        policy: None,
-        policy_digest: None,
-        preset_variant: None,
-        baseline_tier: Some("strong".to_string()),
-        baseline_effort: None,
-        legacy_fingerprint: "opening".to_string(),
-        workflow_state: "opening".to_string(),
-        workflow_identity: Default::default(),
-        static_tier: Some("strong".to_string()),
-        static_model: Some("vendor/strong".to_string()),
-        static_effort: None,
-        selected_tier: Some("strong".to_string()),
-        selected_model: Some("vendor/strong".to_string()),
-        selected_effort: None,
-        continuation_proposed_tier: None,
-        continuation_proposed_model: None,
-        continuation_proposed_effort: None,
-        continuation_adjustment: None,
-        predicted_role: None,
-        predicted_task_family: None,
-        predicted_action: None,
-        prediction_confidence_ppm: None,
-        task_family_confidence_ppm: None,
-        predictor_contract_digest: None,
-        prediction_confidence_kind: None,
-        prediction_reason_codes: Vec::new(),
-        task_family_reason_codes: Vec::new(),
-        experiment: None,
-        route_measurement: None,
-        observed_route_projection: None,
-        trajectory_episode_id: None,
-        trajectory_sequence: None,
-        trajectory_completeness: None,
-        trajectory_health_digest: None,
-        candidate_tier: None,
-        progress_clause_ids: Vec::new(),
-        reason: "static_table".to_string(),
-        pinned: false,
-        request_qualified: false,
-        semantic_successes: 0,
-        semantic_success_threshold: 0,
-        locked: false,
-        trialed: false,
     }
 }
 
@@ -2288,113 +2164,6 @@ fn run_artifact_bundle_includes_policy_decision_summary() {
     );
 
     let _ = std::fs::remove_dir_all(&output_dir);
-}
-
-#[test]
-fn policy_decision_summary_counts_static_to_selected_replacements() {
-    let path = temp_path("policy-decision-transitions.jsonl");
-    std::fs::write(
-        &path,
-        r#"{"captured_at":null,"request_id":"req-001","input_model":"gpt-5.5","key_strategy":"workflow_state","request_key":"codex|responses|tool_followup","legacy_fingerprint":"after_bash","workflow_state":"tool_followup","static_tier":"capable","static_model":"openai-codex:gpt-5.5","selected_tier":"cheap","selected_model":"bitrouter:moonshotai/kimi-k2.7-code","reason":"exploration_locked","pinned":false,"locked":true,"trialed":false}
-"#,
-    )
-    .unwrap();
-    let records = PolicyDecisionRecord::load_jsonl(&path).unwrap();
-
-    let summary = PolicyDecisionSummary::from_records(&records);
-    let value = serde_json::to_value(&summary).unwrap();
-
-    assert_eq!(value["static_tier_replaced_count"], 1);
-    assert_eq!(value["by_tier_transition"]["capable -> cheap"], 1);
-    assert_eq!(value["static_model_replaced_count"], 1);
-    assert_eq!(
-        value["by_model_transition"]["openai-codex:gpt-5.5 -> bitrouter:moonshotai/kimi-k2.7-code"],
-        1
-    );
-
-    let _ = std::fs::remove_file(&path);
-}
-
-#[test]
-fn legacy_source_specific_decisions_remain_legacy_while_new_agent_trace_decisions_are_canonical() {
-    let old_path = temp_path("legacy-source-specific-policy-decision.jsonl");
-    std::fs::write(
-        &old_path,
-        r#"{"captured_at":null,"request_id":"legacy-001","input_model":"gpt-5.5","key_strategy":"workflow_state","request_key":"codex|responses|tool_followup","legacy_fingerprint":"after_bash","workflow_state":"tool_followup","static_tier":"strong","static_model":"openai-codex:gpt-5.5","selected_tier":"economy","selected_model":"bitrouter:deepseek/deepseek-v4-pro","reason":"static_table","pinned":false,"locked":false,"trialed":false}
-"#,
-    )
-    .unwrap();
-    let legacy = PolicyDecisionRecord::load_jsonl(&old_path).unwrap();
-    assert_eq!(legacy.len(), 1);
-    assert_eq!(legacy[0].key_strategy, "workflow_state");
-    assert_eq!(legacy[0].request_key, "codex|responses|tool_followup");
-    assert_eq!(legacy[0].workflow_state, "tool_followup");
-
-    let new_path = temp_path("canonical-agent-trace-policy-decision.jsonl");
-    let mut canonical = benchmark_decision("agent-trace-001");
-    canonical.key_strategy = "agent_trace".to_string();
-    canonical.request_key = "agent_trace/v1|tool_followup|normal".to_string();
-    PolicyDecisionRecord::write_jsonl(&new_path, &[canonical]).unwrap();
-    let rendered = std::fs::read_to_string(&new_path).unwrap();
-    let new_value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
-    assert_eq!(new_value["key_strategy"], "agent_trace");
-    assert_eq!(
-        new_value["request_key"],
-        "agent_trace/v1|tool_followup|normal"
-    );
-    assert_eq!(new_value["trace_state"], "opening");
-    assert!(new_value.get("workflow_state").is_none());
-
-    let _ = std::fs::remove_file(old_path);
-    let _ = std::fs::remove_file(new_path);
-}
-
-#[tokio::test]
-async fn legacy_workflow_state_lock_is_rejected_before_replay() {
-    let root = temp_path("legacy-workflow-state-replay");
-    std::fs::create_dir_all(&root).unwrap();
-    let config_path = root.join("bitrouter.yaml");
-    let lock_path = root.join("policy-lock.yaml");
-    std::fs::write(
-        &config_path,
-        r#"
-policy:
-  path: "./policy-lock.yaml"
-presets:
-  legacy:
-    model: "vendor/strong"
-    policy: legacy
-"#,
-    )
-    .unwrap();
-    std::fs::write(
-        &lock_path,
-        r#"
-lockfileVersion: 1
-policies:
-  legacy:
-    key_strategy: workflow_state
-    tiers:
-      economy: "vendor/economy"
-      strong: "vendor/strong"
-    routes:
-      "codex|responses|tool_followup": economy
-    default_tier: strong
-    tool_use_tier: strong
-    tool_safe_tiers:
-      - strong
-      - economy
-"#,
-    )
-    .unwrap();
-    let config =
-        config::parse_with(&std::fs::read_to_string(&config_path).unwrap(), |_| None).unwrap();
-    let error = policy_lock::load_for_config(&config, Some(&config_path))
-        .await
-        .expect_err("retired workflow_state strategy must be rejected");
-    assert!(format!("{error:#}").contains("no longer supported"));
-
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

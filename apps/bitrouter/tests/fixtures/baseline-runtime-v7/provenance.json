@@ -1,0 +1,72 @@
+{
+  "source_revision": "9956a427bd5d4316b3bf2359f88e293b158781d5",
+  "runtime_format": 7,
+  "writer_binary_sha256": "7336ae5ab9e36fd4af5e4fc78766ac0ad914f04b6d639ee3c6b9ec913cfccf6b",
+  "generator_source_sha256": "ae0536681d378a76083cfbab0369eadfce3154597c08675f6b8c6f36ce6885f6",
+  "generator_lock_sha256": "db189abf302b762b65b348a30813c053f3d00e210813d85d5675fd28977c8ca9",
+  "capture_platform": "macOS aarch64",
+  "toolchain": "rustc 1.99.0; std-only Cargo generator",
+  "provider_calls": 2,
+  "workspace_tool": "read evidence.txt",
+  "terminal_status": "completed",
+  "execution_records": 284,
+  "migration_rows": 26,
+  "database_integrity": "ok",
+  "files": {
+    "bitrouter.db": {
+      "sha256": "bf9f11c52a04eb7f654acac728b7ca432d760de4fbd07c12d0011e35a7e1f9fc",
+      "bytes": 1200128
+    },
+    "bitrouter.yaml": {
+      "sha256": "9bcd77f74813469cfc15c18e1a3b9b0f51bfa0b1fb464e8f1756d7c3c9045d58",
+      "bytes": 328
+    },
+    "task.jsonl": {
+      "sha256": "f1e43561ce362f511477094a43a2e35b55fcfdacc447a9b2ab356d5f5bacbc9b",
+      "bytes": 23251
+    },
+    "provider-request-0.json": {
+      "sha256": "88c9543b07c3230bba62457a7e90096f9b3020bc46cb7202f70a8de259cf5126",
+      "bytes": 8699
+    },
+    "provider-request-1.json": {
+      "sha256": "f5f5de8558635fa871e6141bc4a6120422a6faab135da7cea775d0e2e6efb729",
+      "bytes": 8986
+    }
+  },
+  "limits": "Baseline-written format-7 payloads only. Candidate decoding and profile-transition evidence are recorded separately in the P0 progress ledger; this fixture does not establish formats 2–6.",
+  "extracted_record_kinds": {
+    "thread_created": 1,
+    "accepted_key": 2,
+    "thread_event": 136,
+    "turn_queued": 1,
+    "turn_activated": 1,
+    "turn_record": 142,
+    "thread_checkpoint": 1
+  },
+  "journal": {
+    "sha256": "c460809ed7218760ba88faf4a7fb56a1da03422555a66faecd4315bce99b450f",
+    "bytes": 6452521,
+    "compressed_sha256": "2a491c20ef5c737c18bff9887852a7a7efec9cdb45bfa9263845a0081be8535f",
+    "note": "Storage envelope decompression verified every recorded size/digest; original per-record JSON and nested payload bytes retained, no runtime format mutation."
+  },
+  "capture_date": "2026-10-16",
+  "database_snapshot": {
+    "method": "Read-only SQLite .backup of the original main file plus committed WAL. Ordered execution payload extraction is byte-identical to raw-rows.json; snapshot read with immutable=1 passes integrity_check independently.",
+    "source_main_sha256": "bf9f11c52a04eb7f654acac728b7ca432d760de4fbd07c12d0011e35a7e1f9fc",
+    "source_wal_sha256": "fc7c19b510425654658e23dea790d650fe7b4b4f3ffb5a50fbd5d7997d311f28",
+    "sha256": "28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9",
+    "bytes": 1388544,
+    "compressed_sha256": "93541e0bf521e70500e55d39e7af44342cd80869a6ef665989f5218040208f47"
+  },
+  "original_generator_files": {
+    "source": "provenance/generator-original.rs",
+    "manifest": "provenance/generator-original.Cargo.toml",
+    "lockfile": "provenance/generator-original.Cargo.lock"
+  },
+  "runnable_generator": {
+    "source_sha256": "8cd0d2dce9ea2ba365e10a89471066e6da0a13eebbd2cb5ff8476271f8759455",
+    "lock_sha256": "b2388b8e68abced94b6f2f3b84fc577a0b996c0a961b6cacb6adfc8e29ac00db",
+    "change": "Wait for bounded foreground readiness and validate its PID before invoking the task CLI; original capture bytes and source preserved separately."
+  }
+}

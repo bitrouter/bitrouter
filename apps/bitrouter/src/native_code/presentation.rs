@@ -1,7 +1,8 @@
 //! Human-readable projection of native tool facts; no execution authority.
+use crate::presentation::native_agent::{NativeEntryKind, ToolStatus};
+use crate::tui::native_agent::NativeState;
+use bitrouter_ai::harness::runtime::EffectStatus;
 use bitrouter_ai::types::{Content, Message, ToolResultOutput};
-use bitrouter_orchestrator::store::EffectStatus;
-use bitrouter_tui::native_agent::{NativeEntryKind, NativeState, ToolStatus};
 
 pub(super) fn tool_title(name: &str, arguments: &str) -> String {
     let value = serde_json::from_str::<serde_json::Value>(arguments).ok();

@@ -84,7 +84,7 @@ impl CliReport for McpRegistryReport {
         h.line("")?;
         h.line(&format!(
             "  add a server with: {} mcp add <name>",
-            bitrouter_sdk::invocation::name()
+            crate::commands::invocation::name()
         ))?;
         Ok(())
     }

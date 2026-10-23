@@ -10,7 +10,7 @@ mod private_context;
 mod protocol_matrix;
 
 fn generation(
-    output: &bitrouter_sdk::language_model::types::PipelineOutput,
+    output: &bitrouter::gateway::pipeline::types::PipelineOutput,
 ) -> anyhow::Result<bitrouter_ai::types::GenerateResult> {
     output
         .generation()
@@ -18,30 +18,30 @@ fn generation(
         .ok_or_else(|| anyhow::anyhow!("generation fixture returned another operation"))
 }
 
+use bitrouter::storage::checkpoint::validation::HarnessManifestExt;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use axum_test::TestServer;
+use bitrouter::core::session::CoreSession;
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::http::{AppState, build_router};
+use bitrouter::gateway::pipeline::native::{
+    NativeExecutionControl, NativePlan, NativePlanAdmission,
+};
 use bitrouter::metering::entities::requests;
 use bitrouter::metering::pricing::ChargeEvidence;
+use bitrouter::storage::checkpoint::snapshot::RunStatus;
+use bitrouter_ai::core::checkpoint::DurableHead;
+use bitrouter_ai::core::evidence::NativeTokenCost;
+use bitrouter_ai::core::evidence::{NativeAttemptReport, NativeProtocolValidation};
+use bitrouter_ai::core::protocol::{Bind, Capabilities, HarnessManifest, Limits, OwnershipGrant};
+use bitrouter_ai::extension::request_check::{Decision, Input};
 use bitrouter_ai::types::{
     GenerationParams, Message, Prompt, ReasoningEffort, ReasoningEffortSource, ResponseFormat,
     Role, Tool, ToolChoice,
 };
-use bitrouter_orchestrator::core::checkpoint::DurableHead;
-use bitrouter_orchestrator::core::protocol::{
-    Bind, Capabilities, HarnessManifest, Limits, OwnershipGrant,
-};
-use bitrouter_orchestrator::core::session::{CoreSession, RunStatus};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::extension::request_check::{Decision, Input};
-use bitrouter_sdk::language_model::native::{
-    NativeAttemptReport, NativeExecutionControl, NativePlan, NativePlanAdmission,
-    NativeProtocolValidation,
-};
-use bitrouter_sdk::language_model::native_accounting::NativeTokenCost;
-use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::EntityTrait;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -57,17 +57,20 @@ struct Capture {
 
 #[async_trait]
 impl NativeExecutionControl for Capture {
-    async fn plan(&self, plan: NativePlan) -> bitrouter_sdk::error::Result<NativePlanAdmission> {
+    async fn plan(
+        &self,
+        plan: NativePlan,
+    ) -> bitrouter::gateway::error::Result<NativePlanAdmission> {
         let route_indices = plan
             .routes
             .iter()
             .enumerate()
             .map(|(index, _)| {
                 u32::try_from(index).map_err(|_| {
-                    bitrouter_sdk::error::BitrouterError::internal("fixture route overflow")
+                    bitrouter::gateway::error::BitrouterError::internal("fixture route overflow")
                 })
             })
-            .collect::<bitrouter_sdk::error::Result<Vec<_>>>()?;
+            .collect::<bitrouter::gateway::error::Result<Vec<_>>>()?;
         self.plans.lock().await.push(plan);
         Ok(NativePlanAdmission { route_indices })
     }
@@ -76,7 +79,7 @@ impl NativeExecutionControl for Capture {
         &self,
         request_id: &str,
         attempt_index: u32,
-    ) -> bitrouter_sdk::error::Result<()> {
+    ) -> bitrouter::gateway::error::Result<()> {
         self.admissions
             .lock()
             .await
@@ -246,7 +249,7 @@ routers:
             failing.uri(),
             healthy.uri()
         );
-        let config = bitrouter_sdk::config::parse_with(&source, |_| None)?;
+        let config = bitrouter::config::parse_with(&source, |_| None)?;
         let runtime_home = tempfile::tempdir()?;
         let config_path = runtime_home.path().join("bitrouter.yaml");
         std::fs::write(&config_path, source)?;
@@ -547,7 +550,7 @@ async fn native_and_http_share_bound_denial_before_any_dispatch() -> Result<()> 
     let error = native.err().context("denied native request succeeded")?;
     assert_eq!(error.error_code(), "permission_denied");
     assert!(
-        matches!(&error, bitrouter_sdk::error::BitrouterError::Forbidden(message)
+        matches!(&error, bitrouter::gateway::error::BitrouterError::Forbidden(message)
         if message == "request denied by configured checker")
     );
     let response = fixture

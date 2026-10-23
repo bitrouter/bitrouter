@@ -1,10 +1,10 @@
 //! Application-side Claude Code credential capture and live-store adoption.
-//! Request authentication/shaping lives in `bitrouter_ai::providers::claude_code`.
+//! Request authentication/shaping lives in `crate::gateway::providers::claude_code`.
 //! This module supplies explicit environment and file/Keychain policy above AI.
 
 pub mod store;
 
-use bitrouter_ai::auth::credentials::OAuthToken;
+use crate::gateway::providers::auth::credentials::OAuthToken;
 
 /// Claude Code's official long-lived OAuth token environment variable.
 ///

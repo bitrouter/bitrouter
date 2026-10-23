@@ -1,8 +1,10 @@
 //! Post-terminal transport failure and final retry identity regressions.
 
 use super::*;
-use bitrouter_ai::auth::{AppliedAuth, AuthApplier, AuthAppliers, CredentialAuthority};
-use bitrouter_ai::client::HttpTimeouts;
+use bitrouter::gateway::model::client::HttpTimeouts;
+use bitrouter::gateway::providers::auth::{
+    AppliedAuth, AuthApplier, AuthAppliers, CredentialAuthority,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use wiremock::matchers::header;
@@ -94,15 +96,18 @@ struct RefreshIdentity {
 
 #[async_trait]
 impl AuthApplier for RefreshIdentity {
-    fn output_token_limit_support(&self, _: &bitrouter_ai::target::ModelTarget) -> Option<bool> {
+    fn output_token_limit_support(
+        &self,
+        _: &bitrouter::gateway::model::target::ModelTarget,
+    ) -> Option<bool> {
         Some(true)
     }
 
     async fn apply(
         &self,
         request: reqwest::Request,
-        target: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<reqwest::Request> {
+        target: &bitrouter::gateway::model::target::ModelTarget,
+    ) -> bitrouter::gateway::model::error::Result<reqwest::Request> {
         Ok(self
             .apply_with_authority(request, target)
             .await?
@@ -112,8 +117,8 @@ impl AuthApplier for RefreshIdentity {
     async fn apply_with_authority(
         &self,
         mut request: reqwest::Request,
-        _: &bitrouter_ai::target::ModelTarget,
-    ) -> bitrouter_ai::error::Result<AppliedAuth> {
+        _: &bitrouter::gateway::model::target::ModelTarget,
+    ) -> bitrouter::gateway::model::error::Result<AppliedAuth> {
         let refreshed = self.refreshed.load(Ordering::SeqCst);
         let token = if refreshed {
             "Bearer refreshed-fixture"
@@ -139,9 +144,9 @@ impl AuthApplier for RefreshIdentity {
 
     async fn refresh_after_unauthorized(
         &self,
-        _: &bitrouter_ai::target::ModelTarget,
+        _: &bitrouter::gateway::model::target::ModelTarget,
         _: Option<&reqwest::header::HeaderValue>,
-    ) -> bitrouter_ai::error::Result<bool> {
+    ) -> bitrouter::gateway::model::error::Result<bool> {
         self.refreshed.store(true, Ordering::SeqCst);
         Ok(true)
     }

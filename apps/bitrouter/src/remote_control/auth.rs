@@ -2,13 +2,12 @@
 
 use std::collections::BTreeSet;
 
+use crate::config::ControlConfig;
+use crate::config::ControlCredentialConfig;
 use anyhow::{Result, ensure};
-use bitrouter_sdk::config::{ControlConfig, ControlCredentialConfig, ControlScope};
+use bitrouter_ai::control::{ControlScope, MIN_TOKEN_BYTES};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
-
-const COMPARE_KEY: &[u8] = b"bitrouter-control-token-compare-v1";
-pub const MIN_TOKEN_BYTES: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct ControlCaller {
@@ -37,6 +36,7 @@ struct Credential {
 #[derive(Clone)]
 pub struct ControlAuth {
     credentials: Vec<Credential>,
+    comparison_key: [u8; 32],
 }
 
 impl ControlAuth {
@@ -61,6 +61,9 @@ impl ControlAuth {
         let mut ids = BTreeSet::new();
         let mut digests = BTreeSet::new();
         let mut credentials = Vec::with_capacity(entries.len());
+        // Private to this immutable auth snapshot. Rebuilding from configuration
+        // preserves token semantics without a shared, fixed HMAC comparison key.
+        let comparison_key = rand::random();
         for entry in entries {
             ensure!(valid_name(&entry.id, true), "invalid control credential ID");
             ensure!(
@@ -87,7 +90,7 @@ impl ControlAuth {
                 token.len() >= MIN_TOKEN_BYTES,
                 "control token must contain at least 32 bytes"
             );
-            let digest = token_digest(token.as_bytes())?;
+            let digest = token_digest(&comparison_key, token.as_bytes())?;
             ensure!(
                 digests.insert(digest.clone()),
                 "control credentials must have distinct tokens"
@@ -100,17 +103,21 @@ impl ControlAuth {
                 digest,
             });
         }
-        Ok(Self { credentials })
+        Ok(Self {
+            credentials,
+            comparison_key,
+        })
     }
 
     /// Visit every configured credential, including after a successful match.
     pub fn authenticate(&self, token: &[u8]) -> Option<ControlCaller> {
         let mut selected = None;
         for credential in &self.credentials {
-            let verified = Hmac::<Sha256>::new_from_slice(COMPARE_KEY).is_ok_and(|mut verifier| {
-                verifier.update(token);
-                verifier.verify_slice(&credential.digest).is_ok()
-            });
+            let verified =
+                Hmac::<Sha256>::new_from_slice(&self.comparison_key).is_ok_and(|mut verifier| {
+                    verifier.update(token);
+                    verifier.verify_slice(&credential.digest).is_ok()
+                });
             if verified {
                 selected = Some(credential.caller.clone());
             }
@@ -119,8 +126,8 @@ impl ControlAuth {
     }
 }
 
-fn token_digest(token: &[u8]) -> Result<Vec<u8>> {
-    let mut digest = Hmac::<Sha256>::new_from_slice(COMPARE_KEY)
+fn token_digest(key: &[u8; 32], token: &[u8]) -> Result<Vec<u8>> {
+    let mut digest = Hmac::<Sha256>::new_from_slice(key)
         .map_err(|_| anyhow::anyhow!("initialize control credential verification"))?;
     digest.update(token);
     Ok(digest.finalize().into_bytes().to_vec())
@@ -175,6 +182,24 @@ mod tests {
             .authenticate("a".repeat(32).as_bytes())
             .ok_or_else(|| anyhow::anyhow!("admin rejected"))?;
         assert!(admin.permits(ControlScope::Reload));
+        Ok(())
+    }
+
+    #[test]
+    fn private_comparison_keys_preserve_clone_and_reload_authentication() -> Result<()> {
+        let token = "operator-fixture".repeat(4);
+        let first = ControlAuth::from_lookup(&config(), |_| Some(token.clone()))?;
+        let clone = first.clone();
+        let reloaded = ControlAuth::from_lookup(&config(), |_| Some(token.clone()))?;
+        assert_ne!(first.comparison_key, reloaded.comparison_key);
+        for auth in [&first, &clone, &reloaded] {
+            let caller = auth
+                .authenticate(token.as_bytes())
+                .ok_or_else(|| anyhow::anyhow!("operator rejected"))?;
+            assert_eq!(caller.id(), "admin");
+            assert!(caller.permits(ControlScope::Reload));
+            assert!(auth.authenticate(b"unrecognized-token").is_none());
+        }
         Ok(())
     }
 

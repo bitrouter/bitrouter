@@ -1,13 +1,13 @@
 //! Explicit candidate draft; persistence and live route validation stay in the service.
 
+use crate::tui::code::{Inspector, Selector, SelectorRow};
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter_tui::code::{Inspector, Selector, SelectorRow};
 
 use super::{Panel, SessionRef, mode_name};
-use crate::evolution::control::BlockRule;
-use crate::evolution::runtime::candidates::{
+use crate::core::evolution::runtime::candidates::{
     CandidateCatalog, CandidatePreview, CandidateSpec, FeedbackChoice,
 };
+use crate::gateway::routing::blocks::control::BlockRule;
 
 #[derive(Clone)]
 pub(crate) struct CandidateDraft {
@@ -21,16 +21,17 @@ pub(crate) struct CandidateDraft {
 
 impl CandidateDraft {
     pub fn new(session: SessionRef, catalog: CandidateCatalog) -> Self {
-        let feedback = if catalog.mode == crate::evolution::control::EvolutionMode::Automatic {
-            catalog
-                .judge_model
-                .clone()
-                .map_or(FeedbackChoice::Manual, |model| FeedbackChoice::Judge {
-                    model,
-                })
-        } else {
-            FeedbackChoice::Manual
-        };
+        let feedback =
+            if catalog.mode == crate::gateway::routing::blocks::control::EvolutionMode::Automatic {
+                catalog
+                    .judge_model
+                    .clone()
+                    .map_or(FeedbackChoice::Manual, |model| FeedbackChoice::Judge {
+                        model,
+                    })
+            } else {
+                FeedbackChoice::Manual
+            };
         Self {
             spec: CandidateSpec {
                 block_id: format!("coding-{}", uuid::Uuid::new_v4().simple()),

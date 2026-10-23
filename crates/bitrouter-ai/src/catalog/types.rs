@@ -35,77 +35,9 @@ pub struct Envelope<T> {
 #[derive(Debug, Clone, serde::Serialize, Deserialize)]
 pub struct RegistryData {
     /// Every provider entry from `providers.json`.
-    #[serde(deserialize_with = "deserialize_providers")]
     pub providers: Vec<RegistryProvider>,
     /// Every canonical model id from `models.json`.
     pub canonical: Vec<CanonicalModel>,
-}
-
-fn retired_protocol_value(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::String(name) => {
-            crate::providers::retired::protocol_message(name).is_some()
-        }
-        serde_json::Value::Array(values) => values.iter().any(retired_protocol_value),
-        serde_json::Value::Object(fields) => fields.values().any(retired_protocol_value),
-        _ => false,
-    }
-}
-
-fn deserialize_providers<'de, D>(deserializer: D) -> Result<Vec<RegistryProvider>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    providers_from_values(Vec::<serde_json::Value>::deserialize(deserializer)?)
-        .map_err(serde::de::Error::custom)
-}
-
-/// Filter retired entries before decoding the current protocol vocabulary.
-/// Diagnostics contain counts only; the caller's snapshot bytes are untouched.
-pub(crate) fn providers_from_values(
-    values: Vec<serde_json::Value>,
-) -> Result<Vec<RegistryProvider>, serde_json::Error> {
-    let mut providers = Vec::new();
-    let mut retired_providers = 0usize;
-    let mut retired_models = 0usize;
-    for mut value in values {
-        let retired = value
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|name| crate::providers::retired::provider_message(name).is_some())
-            || value
-                .get("api_protocol")
-                .is_some_and(retired_protocol_value);
-        if retired {
-            retired_providers += 1;
-            continue;
-        }
-        if let Some(models) = value
-            .get_mut("models")
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            let before = models.len();
-            models.retain(|model| {
-                !model
-                    .get("api_protocol")
-                    .is_some_and(retired_protocol_value)
-            });
-            retired_models += before - models.len();
-            if before > 0 && models.is_empty() {
-                retired_providers += 1;
-                continue;
-            }
-        }
-        providers.push(serde_json::from_value(value)?);
-    }
-    if retired_providers > 0 || retired_models > 0 {
-        tracing::warn!(
-            retired_providers,
-            retired_models,
-            "retired native-protocol catalog entries quarantined"
-        );
-    }
-    Ok(providers)
 }
 
 /// The wire protocol a provider serves, in the registry's vocabulary. Maps onto
@@ -439,9 +371,8 @@ pub struct RegistryPricing {
 
 /// Published processing-profile provenance; application pricing validates the
 /// effective endpoint rather than inferring premiums from this declaration.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PricingEndpointProfile {
     /// OpenAI global processing.
@@ -453,24 +384,6 @@ pub enum PricingEndpointProfile {
 }
 
 impl PricingEndpointProfile {
-    /// Whether a configured endpoint matches these published rates. This is
-    /// applicability only: it never applies a regional price multiplier.
-    pub fn matches_api_base(self, api_base: &str) -> bool {
-        let Ok(url) = reqwest::Url::parse(api_base) else {
-            return false;
-        };
-        let host = match self {
-            Self::OpenaiGlobal => "api.openai.com",
-            Self::OpenaiUs => "us.api.openai.com",
-            Self::OpenaiEurope => "eu.api.openai.com",
-        };
-        url.scheme() == "https"
-            && url.host_str() == Some(host)
-            && url.port().is_none_or(|port| port == 443)
-            && url.path().trim_end_matches('/') == "/v1"
-            && url.query().is_none()
-    }
-
     /// Stable source/config vocabulary for frozen applicability evidence.
     pub fn as_str(self) -> &'static str {
         match self {

@@ -1,6 +1,6 @@
 //! The one exit that is this process's rather than the terminal's.
 //!
-//! Entering and restoring the terminal live in [`bitrouter_tui::lifecycle`],
+//! Entering and restoring the terminal live in the internal TUI lifecycle,
 //! because they are properties of a terminal and that crate is what draws to
 //! one. Signals are not: which of them exist, and what a process wants to do
 //! about them, is a fact about *this* binary. So the registration stays here,
@@ -60,18 +60,26 @@ impl ShutdownSignals {
 
 /// Stop this process after terminal custody has been released.
 ///
-/// `SIGSTOP` cannot be intercepted, so execution resumes immediately after
-/// this call only when the shell or supervisor delivers `SIGCONT`.
+/// A process-directed `SIGSTOP` can reach another runtime worker first. Await
+/// an explicit `SIGCONT` before the caller reacquires terminal modes; returning
+/// from `kill` alone does not prove that this thread has stopped and resumed.
+/// See <https://man7.org/linux/man-pages/man7/signal.7.html>.
 #[cfg(unix)]
-pub fn suspend_current_process() -> std::io::Result<()> {
-    Ok(rustix::process::kill_process(
-        rustix::process::getpid(),
-        rustix::process::Signal::STOP,
-    )?)
+pub async fn suspend_current_process() -> std::io::Result<()> {
+    let mut continued = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(
+        rustix::process::Signal::CONT.as_raw(),
+    ))?;
+    rustix::process::kill_process(rustix::process::getpid(), rustix::process::Signal::STOP)?;
+    continued.recv().await.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "terminal continuation listener closed",
+        )
+    })
 }
 
 #[cfg(not(unix))]
-pub fn suspend_current_process() -> std::io::Result<()> {
+pub async fn suspend_current_process() -> std::io::Result<()> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "process suspension is unavailable on this platform",
@@ -81,7 +89,7 @@ pub fn suspend_current_process() -> std::io::Result<()> {
 /// The third exit, as a `select!` arm.
 ///
 /// Normal teardown and a panic both run Rust code that can reach
-/// [`bitrouter_tui::lifecycle::restore`]. A signal runs none: `kill`, a
+/// the internal TUI lifecycle's restore function. A signal runs none: `kill`, a
 /// supervisor stopping the process, or a closed terminal window sending SIGHUP
 /// would otherwise end it with the terminal still in raw mode.
 ///

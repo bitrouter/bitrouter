@@ -1,8 +1,10 @@
 use async_trait::async_trait;
-use bitrouter_ai::auth::file::backend::FileCredentialStore;
-use bitrouter_ai::auth::oauth::{REFRESH_WINDOW, RefreshGrant};
-use bitrouter_ai::auth::store::{CredentialStore as AccountStore, OAuthRefresher, OAuthSession};
-use bitrouter_ai::providers::codex::{OpenAiCodexAuthApplier, PROVIDER_ID, headers};
+use bitrouter::gateway::providers::auth::file::backend::FileCredentialStore;
+use bitrouter::gateway::providers::auth::oauth::{REFRESH_WINDOW, RefreshGrant};
+use bitrouter::gateway::providers::auth::store::{
+    CredentialStore as AccountStore, OAuthRefresher, OAuthSession,
+};
+use bitrouter::gateway::providers::codex::{OpenAiCodexAuthApplier, PROVIDER_ID, headers};
 use reqwest::header::HeaderValue;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,12 +42,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bitrouter_ai::types::ApiProtocol;
 use wiremock::MockServer;
 
-use bitrouter_ai::auth::AuthApplier;
-use bitrouter_ai::auth::credentials::{Credential, OAuthToken};
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
-use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
-use bitrouter_ai::error::ModelError;
-use bitrouter_ai::target::ModelTarget;
+use bitrouter::gateway::model::error::ModelError;
+use bitrouter::gateway::model::target::ModelTarget;
+use bitrouter::gateway::providers::auth::AuthApplier;
+use bitrouter::gateway::providers::auth::credentials::{Credential, OAuthToken};
+use bitrouter::gateway::providers::auth::file::snapshot::CredentialStore;
+use bitrouter::gateway::providers::auth::store::DEFAULT_ACCOUNT;
 
 fn tmp_store_path() -> TestResult<PathBuf> {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -539,7 +541,10 @@ struct HeldCodexRefresh {
 
 #[async_trait]
 impl OAuthRefresher for HeldCodexRefresh {
-    async fn refresh(&self, _current: &OAuthToken) -> bitrouter_ai::error::Result<OAuthToken> {
+    async fn refresh(
+        &self,
+        _current: &OAuthToken,
+    ) -> bitrouter::gateway::model::error::Result<OAuthToken> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.entered.notify_one();
         self.release.notified().await;
@@ -603,10 +608,11 @@ async fn dropped_applier_call_commits_rotation_for_another_instance() -> AuthTes
 
 #[tokio::test]
 async fn ai_client_uses_injected_codex_account_and_shapes_stream_request() -> AuthTestResult {
-    use bitrouter_ai::auth::AuthAppliers;
-    use bitrouter_ai::auth::store::MemoryCredentialStore;
-    use bitrouter_ai::client::{HttpTimeouts, ModelClient};
-    use bitrouter_ai::protocol::{InboundAdapter, responses::ResponsesAdapter};
+    use bitrouter::gateway::model::client::{HttpTimeouts, ModelClient};
+    use bitrouter::gateway::model::protocol::InboundAdapter;
+    use bitrouter::gateway::model::protocol::responses::ResponsesAdapter;
+    use bitrouter::gateway::providers::auth::AuthAppliers;
+    use bitrouter::gateway::providers::auth::store::MemoryCredentialStore;
     use futures::StreamExt;
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, ResponseTemplate};
@@ -622,7 +628,7 @@ async fn ai_client_uses_injected_codex_account_and_shapes_stream_request() -> Au
     let mut target = codex_target(Some("selected"));
     target.api_base = server.uri();
     let store = MemoryCredentialStore::new([(
-        bitrouter_ai::auth::store::CredentialKey {
+        bitrouter::gateway::providers::auth::store::CredentialKey {
             provider: PROVIDER_ID.into(),
             account: target
                 .account_label

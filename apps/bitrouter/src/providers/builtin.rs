@@ -13,8 +13,8 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+use crate::config::ProviderClass;
 use bitrouter_ai::types::{ApiProtocol, ProtocolList};
-use bitrouter_sdk::config::ProviderClass;
 
 use super::entry::{AuthScheme, ProtocolMapping, ProviderEntry};
 use bitrouter_ai::catalog::types::{
@@ -93,7 +93,7 @@ pub fn entry_from_registry(p: &RegistryProvider) -> Result<ProviderEntry, LoadEr
 /// Only public config travels (names/handlers); OAuth/native handler *impls*
 /// stay in the OSS, keyed by the handler name. OAuth `params` ARE carried onto
 /// the entry: PKCE providers (anthropic, openai-codex) ignore them (the OSS
-/// `bitrouter_ai::providers::login` holds their client config), but device-code providers
+/// `crate::gateway::providers::login` holds their client config), but device-code providers
 /// (github-copilot) keep their `client_id` / `device_authorization_endpoint` /
 /// `token_endpoint` / `scope` ONLY here, so dropping them breaks
 /// `bro providers login github-copilot`. JSON values that TOML cannot represent

@@ -11,25 +11,37 @@
 //! on Windows. Both are encapsulated by a private `transport` module so the
 //! rest of this file — and every caller — is platform-agnostic.
 
+use crate::reload::ReloadReportRuntime;
+use bitrouter_ai::control::status::HandoffActivity;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(not(feature = "harness"))]
+use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 
-use bitrouter_sdk::App;
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::language_model::RoutingPrefs;
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
+#[cfg(feature = "harness")]
+use crate::gateway::pipeline::routing::RoutingPrefs;
 
 use chrono::{DateTime, Utc};
 
-use crate::acp_runtime::AcpRuntime;
-use crate::actions::administration::{
-    Administration, AgentsReport, ObserveReport, PolicyInput, PolicyReport, ProvidersReport,
-};
+#[cfg(feature = "harness")]
+use crate::harness::acp::runtime::AcpRuntime;
 use crate::metering::{MeteringStore, TimeWindow};
-use crate::reload::{ReloadAdmissionError, ReloadReport, ReloadReservation, ReloadState};
+use crate::reload::{ReloadAdmissionError, ReloadReservation};
+use bitrouter_ai::control::reload::{ReloadReport, ReloadState};
+use {
+    crate::actions::administration::Administration,
+    bitrouter_ai::control::administration::AgentsReport,
+    bitrouter_ai::control::administration::ObserveReport,
+    bitrouter_ai::control::administration::PolicyInput,
+    bitrouter_ai::control::administration::PolicyReport,
+    bitrouter_ai::control::administration::ProvidersReport,
+};
 
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
@@ -64,7 +76,9 @@ pub trait DaemonReloader: Send + Sync {
     /// Redaction-safe saved/running configuration state. The read is async
     /// because the server must inspect its own source files; callers must not
     /// substitute a client-local config.
-    async fn configuration_state(&self) -> Option<crate::reload::ConfigurationState> {
+    async fn configuration_state(
+        &self,
+    ) -> Option<bitrouter_ai::control::reload::ConfigurationState> {
         None
     }
 
@@ -97,6 +111,25 @@ impl DaemonReloader for NoopReloader {
         Ok(())
     }
 }
+
+/// Local session data retained only for compatibility in builds without harness.
+/// Its wire shape is unchanged, but debug output cannot expose grants or prompts.
+#[cfg(not(feature = "harness"))]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct OpaqueSessionPayload(serde_json::Value);
+
+#[cfg(not(feature = "harness"))]
+impl std::fmt::Debug for OpaqueSessionPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OpaqueSessionPayload([redacted])")
+    }
+}
+
+// Applies to every local control request without harness, including its newline.
+// Harness builds retain their existing large prompt/history transport behavior.
+#[cfg(not(feature = "harness"))]
+const MAX_GATEWAY_CONTROL_REQUEST_BYTES: usize = 4 * 1024 * 1024;
 
 /// A command sent from the CLI to a running daemon.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -156,7 +189,11 @@ pub enum DaemonCommand {
     Inspect { inspection: DaemonInspection },
     /// Local, owner-scoped checkpoint evolution control.
     Evolution {
-        operation: crate::evolution::operator::EvolutionOperation,
+        #[cfg(feature = "core")]
+        operation: crate::core::evolution::operator::EvolutionOperation,
+        // Decode only to reject the unavailable operation on reduced builds.
+        #[cfg(not(feature = "core"))]
+        operation: serde_json::Value,
     },
     /// Acknowledge request inventory for a recorder before capture starts.
     AcpRecordingRegister {
@@ -213,7 +250,11 @@ pub enum DaemonCommand {
     /// only on the owner-scoped local transport; the remote control server has
     /// no corresponding operation.
     Sessions {
-        request: crate::supervisor::SessionRequest,
+        #[cfg(feature = "harness")]
+        request: crate::client::sessions::wire::SessionRequest,
+        // Decode only to reject the unavailable operation on reduced builds.
+        #[cfg(not(feature = "harness"))]
+        request: OpaqueSessionPayload,
     },
 }
 
@@ -248,17 +289,6 @@ pub struct RouteHop {
     pub api_protocol: String,
 }
 
-/// Point-in-time activity observed by the local daemon. Missing counts mean
-/// that subsystem could not prove idleness.
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct HandoffActivity {
-    pub operations: usize,
-    pub supervised_runs: Option<usize>,
-    pub route_leases: usize,
-    pub acp_recordings: Option<u64>,
-    pub drain_in_progress: bool,
-}
-
 /// The daemon's reply to a [`DaemonCommand`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "snake_case")]
@@ -271,6 +301,8 @@ pub enum DaemonResponse {
         instance_id: String,
         build_id: String,
         cli_owned: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
     },
     HandoffReady {
         token: String,
@@ -285,6 +317,9 @@ pub enum DaemonResponse {
         /// Binary version. Missing on legacy daemons.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         daemon_version: Option<String>,
+        /// Compiled artifact evidence; absent for legacy daemons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        artifact: Option<bitrouter_ai::artifact::ArtifactIdentity>,
         /// Handoff protocol; missing means idle cannot be proven.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handoff_protocol: Option<u32>,
@@ -311,11 +346,11 @@ pub enum DaemonResponse {
         /// Router inventory from the configuration source owned by this
         /// daemon. A caller-local `--config` is never mixed into a live reply.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        saved_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        saved_routers: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
         /// Router inventory from the same running config. `None` means the
         /// daemon predates this field or has no inspectable app routing config.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        running_routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        running_routers: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
         /// Whether the saved canonical router map differs from the full map
         /// held by this daemon. Computed host-side so secret default values do
         /// not cross the control boundary.
@@ -323,15 +358,15 @@ pub enum DaemonResponse {
         router_restart_required: Option<bool>,
         /// Whole saved/running configuration state computed by the daemon.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        config_state: Option<Box<crate::reload::ConfigurationState>>,
+        config_state: Option<Box<bitrouter_ai::control::reload::ConfigurationState>>,
     },
     /// The live routing table's catalog.
     Models {
         /// Every routable model, each with all the providers declaring it.
-        models: Vec<bitrouter_sdk::language_model::routing::ModelInfo>,
+        models: Vec<bitrouter_ai::routing::ModelInfo>,
         /// Routers from the same live routing snapshot.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        routers: Option<Vec<crate::actions::models::RouterStatus>>,
+        routers: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
     },
     /// A resolved route chain.
     Route {
@@ -342,10 +377,10 @@ pub enum DaemonResponse {
         resolved_model: Option<String>,
         /// Stable named-router identity, when the selector resolved one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        router: Option<bitrouter_sdk::language_model::routing::RouterRequestIdentity>,
+        router: Option<bitrouter_ai::routing::RouterRequestIdentity>,
         /// Canonical or legacy source of the named-router definition.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        router_source: Option<crate::actions::models::RouterSource>,
+        router_source: Option<bitrouter_ai::control::models::RouterSource>,
         /// Dynamic policy bound to the router. The control verb does not run
         /// that policy and therefore never reports a selected candidate.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -368,11 +403,14 @@ pub enum DaemonResponse {
         report: DaemonInspectionReport,
     },
     Evolution {
-        report: Box<crate::evolution::operator::EvolutionReport>,
+        #[cfg(feature = "core")]
+        report: Box<crate::core::evolution::operator::EvolutionReport>,
+        #[cfg(not(feature = "core"))]
+        report: Box<serde_json::Value>,
     },
     /// This daemon shares the recorder's database and records gateway requests.
     AcpRecordingRegistered {
-        registration: crate::evolution::inventory::CoverageRegistration,
+        registration: crate::gateway::observability::inventory::CoverageRegistration,
     },
     /// Daemon-confirmed route state for one native ACP session.
     AcpRouteState {
@@ -396,7 +434,10 @@ pub enum DaemonResponse {
     },
     /// Versioned daemon-owned ACP session response.
     Sessions {
-        response: crate::supervisor::SessionResponse,
+        #[cfg(feature = "harness")]
+        response: crate::client::sessions::wire::SessionResponse,
+        #[cfg(not(feature = "harness"))]
+        response: OpaqueSessionPayload,
     },
     /// The command failed.
     Error {
@@ -406,7 +447,7 @@ pub enum DaemonResponse {
 }
 
 /// Serializable snapshot of the OTel exporter's state, transported over
-/// the daemon control socket. Fields mirror `bitrouter_telemetry::otel::OtelStatus`
+/// the daemon control socket. Fields mirror `crate::telemetry::exporter::OtelStatus`
 /// — but this module deliberately re-states the wire format rather than
 /// serializing the SDK type directly, so the JSON shape on the control
 /// socket stays stable even if `OtelStatus` gains, drops, or renames a
@@ -581,7 +622,7 @@ pub struct ReadyInfo {
 /// `start`, and `spawn`.
 pub fn socket_path_for(
     source: &crate::paths::ConfigSource,
-    cfg: &bitrouter_sdk::config::Config,
+    cfg: &crate::config::Config,
 ) -> PathBuf {
     match source {
         crate::paths::ConfigSource::File(path) => {
@@ -637,9 +678,11 @@ pub async fn run_control_socket(
         reloader,
         observe,
         AcpControlPlane {
+            #[cfg(feature = "harness")]
             runtime: Arc::new(AcpRuntime::new()),
             metering,
             inventory: None,
+            #[cfg(feature = "core")]
             evolution: None,
         },
     )
@@ -657,13 +700,15 @@ pub async fn run_control_socket(
 #[derive(Clone)]
 pub struct AcpControlPlane {
     /// In-memory route leases, keyed by principal and controller.
+    #[cfg(feature = "harness")]
     pub runtime: Arc<AcpRuntime>,
     /// Settled-request store behind session-attributed spend.
     pub metering: MeteringStore,
     /// The inventory installed in this daemon's model request pipeline.
-    pub inventory: Option<crate::evolution::inventory::GatewayInventory>,
+    pub inventory: Option<crate::gateway::observability::inventory::GatewayInventory>,
     /// Live route validation and checkpoint worker status, when installed.
-    pub evolution: Option<crate::evolution::runtime::EvolutionRuntime>,
+    #[cfg(feature = "core")]
+    pub evolution: Option<crate::core::evolution::runtime::EvolutionRuntime>,
 }
 
 pub async fn run_control_socket_with_acp_runtime(
@@ -744,9 +789,10 @@ pub(crate) async fn run_bound_control_socket(
     acp: AcpControlPlane,
     options: LocalControlOptions,
 ) -> Result<()> {
+    #[cfg(feature = "harness")]
     let supervisor = match &options.administration {
         Some(administration) => Some(
-            crate::supervisor::Supervisor::open(
+            crate::harness::supervisor::Supervisor::open(
                 administration.source.clone(),
                 administration.routing.clone(),
             )
@@ -756,6 +802,7 @@ pub(crate) async fn run_bound_control_socket(
     };
     let services = LocalControlServices {
         administration: options.administration,
+        #[cfg(feature = "harness")]
         supervisor,
         gate: options.gate,
         cli_owned: options.cli_owned,
@@ -775,6 +822,7 @@ pub(crate) async fn run_bound_control_socket(
         &services,
     )
     .await;
+    #[cfg(feature = "harness")]
     if let Some(supervisor) = &services.supervisor {
         supervisor.shutdown().await;
     }
@@ -785,10 +833,32 @@ pub(crate) async fn run_bound_control_socket(
 #[derive(Clone)]
 struct LocalControlServices {
     administration: Option<Administration>,
-    supervisor: Option<crate::supervisor::Supervisor>,
+    #[cfg(feature = "harness")]
+    supervisor: Option<crate::harness::supervisor::Supervisor>,
     gate: crate::daemon_handoff::HandoffGate,
     cli_owned: bool,
     handoff_instance_id: String,
+}
+
+impl LocalControlServices {
+    async fn supervised_run_count(&self) -> Option<usize> {
+        #[cfg(feature = "harness")]
+        return match &self.supervisor {
+            Some(supervisor) => Some(supervisor.active_run_count().await),
+            None => None,
+        };
+        #[cfg(not(feature = "harness"))]
+        Some(0)
+    }
+}
+
+impl AcpControlPlane {
+    fn active_lease_count(&self) -> usize {
+        #[cfg(feature = "harness")]
+        return self.runtime.active_lease_count();
+        #[cfg(not(feature = "harness"))]
+        0
+    }
 }
 
 async fn active_recording_count(acp: &AcpControlPlane) -> Result<Option<u64>> {
@@ -797,8 +867,8 @@ async fn active_recording_count(acp: &AcpControlPlane) -> Result<Option<u64>> {
     let Some(inventory) = &acp.inventory else {
         return Ok(None);
     };
-    let count = crate::acp_trajectory::entities::connections::Entity::find()
-        .filter(crate::acp_trajectory::entities::connections::Column::State.eq("recording"))
+    let count = crate::storage::capture::connections::Entity::find()
+        .filter(crate::storage::capture::connections::Column::State.eq("recording"))
         .count(&inventory.db)
         .await?;
     Ok(Some(count))
@@ -873,8 +943,30 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let mut reader = BufReader::new(stream);
+    #[cfg(feature = "harness")]
     let mut line = String::new();
-    if reader.read_line(&mut line).await? == 0 {
+    #[cfg(feature = "harness")]
+    let read = reader.read_line(&mut line).await?;
+    #[cfg(not(feature = "harness"))]
+    let (read, line) = {
+        let mut bytes = Vec::new();
+        let read = (&mut reader)
+            .take(MAX_GATEWAY_CONTROL_REQUEST_BYTES as u64 + 1)
+            .read_until(b'\n', &mut bytes)
+            .await?;
+        if read > MAX_GATEWAY_CONTROL_REQUEST_BYTES {
+            write_response(
+                reader.get_mut(),
+                &DaemonResponse::Error {
+                    message: "local control command exceeds 4 MiB".to_string(),
+                },
+            )
+            .await?;
+            return Ok(false);
+        }
+        (read, String::from_utf8(bytes)?)
+    };
+    if read == 0 {
         return Ok(false); // client hung up without sending anything
     }
     let command: DaemonCommand = match serde_json::from_str(line.trim()) {
@@ -936,13 +1028,23 @@ async fn dispatch(
     services: &LocalControlServices,
 ) -> DaemonResponse {
     match command {
+        #[cfg(not(feature = "harness"))]
+        DaemonCommand::AcpControllerCleanup { .. }
+        | DaemonCommand::AcpRouteList { .. }
+        | DaemonCommand::AcpRouteSet { .. }
+        | DaemonCommand::AcpRouteReset { .. }
+        | DaemonCommand::Sessions { .. } => DaemonResponse::Error {
+            message: "ACP route leases and supervised sessions require the harness feature"
+                .to_string(),
+        },
         DaemonCommand::Stop => DaemonResponse::Ok,
         DaemonCommand::HandoffHello => DaemonResponse::HandoffHello {
             version: crate::VERSION.to_string(),
-            protocol: 1,
+            protocol: crate::upgrade::HANDOFF_PROTOCOL,
             instance_id: services.handoff_instance_id.clone(),
             build_id: crate::HANDOFF_BUILD_ID.to_string(),
             cli_owned: services.cli_owned,
+            artifact: Some(crate::artifact::current()),
         },
         DaemonCommand::HandoffPrepare => {
             if !services.cli_owned {
@@ -958,8 +1060,8 @@ async fn dispatch(
                     };
                 }
             };
-            let active_runs = match &services.supervisor {
-                Some(supervisor) => supervisor.active_run_count().await,
+            let active_runs = match services.supervised_run_count().await {
+                Some(count) => count,
                 None => {
                     services.gate.abort(&token);
                     return DaemonResponse::HandoffBusy {
@@ -967,7 +1069,7 @@ async fn dispatch(
                     };
                 }
             };
-            let leases = acp.runtime.active_lease_count();
+            let leases = acp.active_lease_count();
             let active_recordings = match active_recording_count(acp).await {
                 Ok(Some(count)) => count,
                 Ok(None) => {
@@ -1014,6 +1116,11 @@ async fn dispatch(
                 }
             }
         }
+        #[cfg(not(feature = "core"))]
+        DaemonCommand::Evolution { .. } => DaemonResponse::Error {
+            message: "checkpoint evolution requires the core feature".into(),
+        },
+        #[cfg(feature = "core")]
         DaemonCommand::Evolution { operation } => {
             let Some(runtime) = &acp.evolution else {
                 return DaemonResponse::Error {
@@ -1083,18 +1190,16 @@ async fn dispatch(
             let (operations, drain_in_progress) = services.gate.observed_activity();
             let handoff_activity = HandoffActivity {
                 operations,
-                supervised_runs: match &services.supervisor {
-                    Some(supervisor) => Some(supervisor.active_run_count().await),
-                    None => None,
-                },
-                route_leases: acp.runtime.active_lease_count(),
+                supervised_runs: services.supervised_run_count().await,
+                route_leases: acp.active_lease_count(),
                 acp_recordings: active_recording_count(acp).await.ok().flatten(),
                 drain_in_progress,
             };
             DaemonResponse::Status {
                 pid: std::process::id(),
                 daemon_version: Some(crate::VERSION.to_string()),
-                handoff_protocol: Some(1),
+                artifact: Some(crate::artifact::current()),
+                handoff_protocol: Some(crate::upgrade::HANDOFF_PROTOCOL),
                 handoff_build_id: Some(crate::HANDOFF_BUILD_ID.to_string()),
                 handoff_activity: Some(handoff_activity),
                 cli_owned: Some(services.cli_owned),
@@ -1167,6 +1272,7 @@ async fn dispatch(
                 },
             }
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::AcpControllerCleanup {
             api_principal,
             controller_instance_id,
@@ -1175,6 +1281,7 @@ async fn dispatch(
                 .remove_controller(&api_principal, &controller_instance_id);
             DaemonResponse::Ok
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::AcpRouteList {
             api_principal,
             controller_instance_id,
@@ -1205,6 +1312,7 @@ async fn dispatch(
                 }
             }
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::AcpRouteSet {
             api_principal,
             controller_instance_id,
@@ -1250,6 +1358,7 @@ async fn dispatch(
                 Err(message) => DaemonResponse::Error { message },
             }
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::AcpRouteReset {
             api_principal,
             controller_instance_id,
@@ -1349,6 +1458,7 @@ async fn dispatch(
         DaemonCommand::Inspect { inspection } => {
             inspection_response(inspection, &services.administration).await
         }
+        #[cfg(feature = "harness")]
         DaemonCommand::Sessions { request } => {
             let Some(supervisor) = &services.supervisor else {
                 return DaemonResponse::Error {
@@ -1366,14 +1476,14 @@ async fn dispatch(
 }
 
 struct RouterState {
-    saved: Option<Vec<crate::actions::models::RouterStatus>>,
-    running: Option<Vec<crate::actions::models::RouterStatus>>,
+    saved: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
+    running: Option<Vec<bitrouter_ai::control::models::RouterStatus>>,
     restart_required: Option<bool>,
 }
 
 fn router_configuration_restart_required(
-    saved: &bitrouter_sdk::config::Config,
-    running: &bitrouter_sdk::config::Config,
+    saved: &crate::config::Config,
+    running: &crate::config::Config,
 ) -> bool {
     saved.routers != running.routers
 }
@@ -1441,6 +1551,7 @@ async fn inspection_response(
     }
 }
 
+#[cfg(feature = "harness")]
 fn route_suggestions(app: &Arc<App>) -> Vec<String> {
     app.language_model()
         .map(|pipeline| {
@@ -1618,7 +1729,7 @@ pub(crate) mod transport {
             format!(
                 "connecting to {} — is the daemon running? (`{cli} start`)",
                 path.display(),
-                cli = bitrouter_sdk::invocation::name()
+                cli = crate::commands::invocation::name()
             )
         })
     }
@@ -1732,7 +1843,7 @@ pub(crate) mod transport {
                     return Err(e).with_context(|| {
                         format!(
                             "connecting to {name} — is the daemon running? (`{cli} start`)",
-                            cli = bitrouter_sdk::invocation::name()
+                            cli = crate::commands::invocation::name()
                         )
                     });
                 }
@@ -1947,7 +2058,7 @@ fn spawn_detached_serve(
     let child = cmd.spawn().with_context(|| {
         format!(
             "spawning detached `{} serve`",
-            bitrouter_sdk::invocation::name()
+            crate::commands::invocation::name()
         )
     })?;
     Ok((child, log_size_before))
@@ -2054,6 +2165,38 @@ pub async fn start_and_wait(
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(feature = "harness"))]
+    #[test]
+    fn opaque_session_envelopes_preserve_wire_data_and_redact_debug() -> anyhow::Result<()> {
+        let request = serde_json::json!({
+            "cmd": "sessions",
+            "request": {
+                "version": 1,
+                "authorization": {"proof": "private-request-proof"},
+                "command": {"op": "list"}
+            }
+        });
+        let command: super::DaemonCommand = serde_json::from_value(request.clone())?;
+        assert_eq!(serde_json::to_value(&command)?, request);
+        let debug = format!("{command:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("private-request-proof"));
+
+        let response = serde_json::json!({
+            "resp": "sessions",
+            "response": {
+                "status": "authorized",
+                "grant": {"authorization": {"proof": "private-response-proof"}}
+            }
+        });
+        let reply: super::DaemonResponse = serde_json::from_value(response.clone())?;
+        assert_eq!(serde_json::to_value(&reply)?, response);
+        let debug = format!("{reply:?}");
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("private-response-proof"));
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn process_liveness_checks_one_representable_positive_pid() {
@@ -2232,7 +2375,8 @@ mod tests {
         let resp = DaemonResponse::Status {
             pid: 42,
             daemon_version: Some(crate::VERSION.to_string()),
-            handoff_protocol: Some(1),
+            artifact: Some(crate::artifact::current()),
+            handoff_protocol: Some(crate::upgrade::HANDOFF_PROTOCOL),
             handoff_build_id: Some(crate::HANDOFF_BUILD_ID.to_string()),
             handoff_activity: None,
             cli_owned: Some(true),
@@ -2291,10 +2435,10 @@ mod tests {
 
     #[test]
     fn router_restart_detection_uses_secret_defaults_without_exposing_them() -> anyhow::Result<()> {
-        let saved = bitrouter_sdk::config::parse(
+        let saved = crate::config::parse(
             "routers:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: saved secret\n      params:\n        temperature: 0.2\n",
         )?;
-        let running = bitrouter_sdk::config::parse(
+        let running = crate::config::parse(
             "routers:\n  coding:\n    selection:\n      kind: model\n      model: demo/model\n    defaults:\n      system_prompt: prior secret\n      params:\n        temperature: 0.8\n",
         )?;
 

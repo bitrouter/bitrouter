@@ -4,34 +4,54 @@
 //! events. This module only resolves the local endpoint, sends the versioned
 //! typed protocol, and adapts replies for CLI and TUI callers.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+#[cfg(feature = "tui")]
+use std::collections::VecDeque;
+use std::collections::{BTreeSet, HashMap};
+#[cfg(feature = "tui")]
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::commands::agents::AgentAcknowledgement;
+use crate::commands::agents::AgentEffect;
+use crate::commands::agents::AgentLeaseIntent;
+use crate::presentation::agents::AgentAttention;
+use crate::presentation::agents::AgentDeckSnapshot;
+use crate::presentation::agents::AgentHistoryEvent;
+use crate::presentation::agents::AgentHistoryKind;
+use crate::presentation::agents::AgentHistorySnapshot;
+use crate::presentation::agents::AgentLeaseView;
+use crate::presentation::agents::AgentPermissionOption;
+use crate::presentation::agents::AgentPermissionView;
+use crate::presentation::agents::AgentProcessState;
+use crate::presentation::agents::AgentReviewState;
+use crate::presentation::agents::AgentRunView;
+use crate::presentation::agents::AgentTurnState;
+use crate::presentation::agents::NewAgentRunTarget;
+#[cfg(feature = "tui")]
+use crate::tui::agents::{AgentAction, AgentDeckMode, AgentDeckState, AgentDeckView};
+#[cfg(feature = "tui")]
+use crate::tui::code::{CodeEffect, CodeState};
+#[cfg(feature = "tui")]
+use crate::tui::input::TerminalInput;
 use anyhow::{Context, Result, bail};
-use bitrouter_tui::agents::{
-    AgentAction, AgentAttention, AgentDeckMode, AgentDeckSnapshot, AgentDeckState, AgentDeckView,
-    AgentEffect, AgentHistoryEvent, AgentHistoryKind, AgentHistorySnapshot, AgentLeaseIntent,
-    AgentLeaseView, AgentPermissionOption, AgentPermissionView, AgentProcessState,
-    AgentReviewState, AgentRunView, AgentTurnState, NewAgentRunTarget,
-};
-use bitrouter_tui::code::{CodeEffect, CodeState};
-use crossterm::event::EventStream;
-use futures::{FutureExt as _, StreamExt as _};
+#[cfg(feature = "tui")]
+use futures::FutureExt as _;
 use tokio::sync::Mutex;
+#[cfg(feature = "tui")]
 use tokio::time::MissedTickBehavior;
 
-use crate::acp_cli::{RoutingOptions, SessionSelection};
-use crate::paths::ConfigSource;
-use crate::supervisor::{
+use crate::client::sessions;
+use crate::client::sessions::wire::{
     ActionAcknowledgement, AttentionState, ControlFence, LeaseMode, ProcessState, ReviewState,
     RunAttachment, RunSnapshot, RunSummary, SessionAction, SessionCommand, SessionEvent,
     SessionEventKind, SessionGrant, SessionMutation, SessionResponse, SessionScope,
     StartRunRequest, TurnState,
 };
-use bitrouter_orchestrator::acp::translate::SessionUpdateKind;
+use crate::commands::agent_options::{RoutingOptions, SessionSelection};
+use crate::harness::acp::translate::SessionUpdateKind;
+use crate::paths::ConfigSource;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -52,7 +72,7 @@ pub enum AgentResult {
         run_id: String,
         event: AgentHistoryEvent,
     },
-    Action(AgentAction),
+    Acknowledgement(AgentAcknowledgement),
     Diagnostics(Vec<String>),
     Batch(Vec<AgentResult>),
     Exit,
@@ -124,6 +144,7 @@ impl BackgroundClient {
         Self::with_scopes(socket, [SessionScope::Remove])
     }
 
+    #[cfg(any(feature = "tui", test))]
     fn attach_interactive(socket: PathBuf) -> Self {
         Self::with_scopes(
             socket,
@@ -416,10 +437,12 @@ impl BackgroundClient {
                     if let Some(run_id) = error_run_id {
                         self.release_transient_after_error(&run_id).await;
                     }
-                    Ok(AgentResult::Action(AgentAction::EffectFailed {
-                        action_request_id,
-                        message: format!("{error:#}"),
-                    }))
+                    Ok(AgentResult::Acknowledgement(
+                        AgentAcknowledgement::EffectFailed {
+                            action_request_id,
+                            message: format!("{error:#}"),
+                        },
+                    ))
                 }
                 None => Err(error),
             },
@@ -440,10 +463,12 @@ impl BackgroundClient {
             self.release_transient_after_error(&run_id).await;
         }
         match effect.action_request_id() {
-            Some(action_request_id) => AgentResult::Action(AgentAction::EffectFailed {
-                action_request_id: action_request_id.to_string(),
-                message: message.into(),
-            }),
+            Some(action_request_id) => {
+                AgentResult::Acknowledgement(AgentAcknowledgement::EffectFailed {
+                    action_request_id: action_request_id.to_string(),
+                    message: message.into(),
+                })
+            }
             None => AgentResult::Diagnostics(vec![message.into()]),
         }
     }
@@ -513,12 +538,14 @@ impl BackgroundClient {
                         heartbeat_at: Instant::now(),
                     },
                 );
-                Ok(AgentResult::Action(AgentAction::LeaseAcquired {
-                    run_id,
-                    intent,
-                    generation: lease.generation,
-                    action_request_id,
-                }))
+                Ok(AgentResult::Acknowledgement(
+                    AgentAcknowledgement::LeaseAcquired {
+                        run_id,
+                        intent,
+                        generation: lease.generation,
+                        action_request_id,
+                    },
+                ))
             }
             AgentEffect::ReleaseLease {
                 run_id,
@@ -587,10 +614,11 @@ impl BackgroundClient {
                         },
                         launch: crate::acp_cli::launch_options(None),
                         session: SessionSelection::New,
-                        presentation: crate::supervisor::Presentation::Background,
+                        presentation: crate::client::sessions::wire::Presentation::Background,
                         parent_run_id: None,
                         allow_shared_directory: false,
-                        permission_policy: crate::supervisor::PermissionPolicy::default(),
+                        permission_policy: crate::client::sessions::wire::PermissionPolicy::default(
+                        ),
                         result_schema: None,
                     })
                     .await?;
@@ -854,16 +882,14 @@ impl BackgroundClient {
 
     async fn request(&self, command: SessionCommand) -> Result<SessionResponse> {
         let grant = self.grant().await?;
-        crate::supervisor::request(&self.socket, &grant, command).await
+        sessions::request(&self.socket, &grant, command).await
     }
 
     async fn grant(&self) -> Result<SessionGrant> {
         if let Some(grant) = self.grant.lock().await.clone() {
             return Ok(grant);
         }
-        let grant =
-            crate::supervisor::authorize(&self.socket, &self.client_id, self.scopes.clone())
-                .await?;
+        let grant = sessions::authorize(&self.socket, &self.client_id, self.scopes.clone()).await?;
         anyhow::ensure!(
             grant.client_id == self.client_id && grant.scopes == self.scopes,
             "daemon returned a session grant with a different identity or scope"
@@ -886,7 +912,7 @@ impl BackgroundClient {
 /// Ensure the selected daemon owns the supervisor before accepting a run.
 pub async fn start_background(
     source: &ConfigSource,
-    config: &bitrouter_sdk::config::Config,
+    config: &crate::config::Config,
     no_start: bool,
     request: StartRunRequest,
 ) -> Result<RunSnapshot> {
@@ -899,6 +925,7 @@ pub async fn start_background(
 }
 
 /// Open the local standalone control deck using the normal resolved config.
+#[cfg(feature = "tui")]
 pub async fn run_standalone() -> Result<()> {
     ensure_interactive(
         std::io::stdin().is_terminal(),
@@ -934,7 +961,14 @@ pub async fn run_standalone() -> Result<()> {
     run_deck(client, state, target).await
 }
 
+/// Reject interactive launch before resolving config or starting a service.
+#[cfg(not(feature = "tui"))]
+pub async fn run_standalone() -> Result<()> {
+    bail!("bro agents requires the tui feature; use bro agents sessions --json")
+}
+
 /// Attach the standalone inspector to one daemon-owned run.
+#[cfg(feature = "tui")]
 pub async fn run_attached(socket: PathBuf, run_id: &str) -> Result<()> {
     ensure_interactive(
         std::io::stdin().is_terminal(),
@@ -956,13 +990,20 @@ pub async fn run_attached(socket: PathBuf, run_id: &str) -> Result<()> {
     run_deck(client, state, None).await
 }
 
+/// Reject interactive attach before requesting a grant or acquiring a lease.
+#[cfg(not(feature = "tui"))]
+pub async fn run_attached(_socket: PathBuf, _run_id: &str) -> Result<()> {
+    bail!("bro agents attach requires the tui feature; use bro agents sessions --json")
+}
+
+#[cfg(feature = "tui")]
 async fn run_deck(
     client: BackgroundClient,
     mut state: AgentDeckState,
     new_run_target: Option<NewAgentRunTarget>,
 ) -> Result<()> {
     let mut view = AgentDeckView::open().context("opening the agent manager")?;
-    let mut events = Some(EventStream::new());
+    let mut events = Some(TerminalInput::new()?);
     let mut shutdown = crate::chat::signals::Shutdown::install();
     let mut refresh = tokio::time::interval(Duration::from_millis(500));
     refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -1024,11 +1065,11 @@ async fn run_deck(
                 signal = shutdown.recv() => match signal {
                     crate::chat::signals::TerminalSignal::Shutdown => break,
                     crate::chat::signals::TerminalSignal::Suspend => {
-                        drop(events.take());
+                        TerminalInput::stop(&mut events).await?;
                         view.finish()?;
-                        crate::chat::signals::suspend_current_process()?;
+                        crate::chat::signals::suspend_current_process().await?;
                         view = AgentDeckView::open().context("resuming the agent manager")?;
-                        events = Some(EventStream::new());
+                        events = Some(TerminalInput::new()?);
                     }
                 },
             }
@@ -1036,11 +1077,13 @@ async fn run_deck(
         Ok(())
     }
     .await;
+    let stopped = TerminalInput::stop(&mut events).await;
     let finish = view.finish().context("restoring the terminal");
     client.release_all().await;
-    result.and(finish)
+    result.and(stopped.map_err(Into::into)).and(finish)
 }
 
+#[cfg(feature = "tui")]
 fn show_deck_error(state: &mut AgentDeckState, error: anyhow::Error) {
     let _ = state.step(
         AgentAction::EffectFailed {
@@ -1051,8 +1094,10 @@ fn show_deck_error(state: &mut AgentDeckState, error: anyhow::Error) {
     );
 }
 
+#[cfg(feature = "tui")]
 type DeckJob = futures::future::LocalBoxFuture<'static, Result<AgentResult>>;
 
+#[cfg(feature = "tui")]
 async fn next_deck_job(job: &mut Option<DeckJob>) -> Result<AgentResult> {
     match job {
         Some(job) => job.await,
@@ -1060,8 +1105,9 @@ async fn next_deck_job(job: &mut Option<DeckJob>) -> Result<AgentResult> {
     }
 }
 
+#[cfg(feature = "tui")]
 async fn next_deck_input(
-    events: &mut Option<EventStream>,
+    events: &mut Option<TerminalInput>,
 ) -> Option<std::io::Result<crossterm::event::Event>> {
     match events {
         Some(events) => events.next().await,
@@ -1116,6 +1162,7 @@ fn sanitize_file_component(value: &str) -> String {
     }
 }
 
+#[cfg(any(feature = "tui", test))]
 fn ensure_interactive(stdin: bool, stdout: bool) -> Result<()> {
     if stdin && stdout {
         Ok(())
@@ -1125,6 +1172,7 @@ fn ensure_interactive(stdin: bool, stdout: bool) -> Result<()> {
 }
 
 /// Apply one presentation-neutral result to the standalone reducer.
+#[cfg(feature = "tui")]
 pub fn apply_result(state: &mut AgentDeckState, result: AgentResult) -> Vec<AgentEffect> {
     match result {
         AgentResult::Snapshot(snapshot) => {
@@ -1144,7 +1192,9 @@ pub fn apply_result(state: &mut AgentDeckState, result: AgentResult) -> Vec<Agen
                 Vec::new()
             }
         }
-        AgentResult::Action(action) => state.step(action, false),
+        AgentResult::Acknowledgement(acknowledgement) => {
+            state.step(acknowledgement_action(acknowledgement), false)
+        }
         AgentResult::Diagnostics(diagnostics) => diagnostics
             .into_iter()
             .flat_map(|message| {
@@ -1168,6 +1218,7 @@ pub fn apply_result(state: &mut AgentDeckState, result: AgentResult) -> Vec<Agen
 /// Apply one result to Code without holding its state across daemon I/O. The
 /// repaint bit observes collapsed-strip semantics while still repainting
 /// expanded list, inspector, and acknowledgement changes.
+#[cfg(feature = "tui")]
 pub fn apply_code_result(state: &mut CodeState, result: AgentResult) -> (Vec<CodeEffect>, bool) {
     match result {
         AgentResult::Snapshot(snapshot) => {
@@ -1195,7 +1246,10 @@ pub fn apply_code_result(state: &mut CodeState, result: AgentResult) -> (Vec<Cod
                 (Vec::new(), false)
             }
         }
-        AgentResult::Action(action) => (state.step_agent(action), true),
+        AgentResult::Acknowledgement(acknowledgement) => (
+            state.step_agent(acknowledgement_action(acknowledgement)),
+            true,
+        ),
         AgentResult::Diagnostics(diagnostics) => {
             let mut effects = Vec::new();
             for message in diagnostics {
@@ -1220,6 +1274,34 @@ pub fn apply_code_result(state: &mut CodeState, result: AgentResult) -> (Vec<Cod
     }
 }
 
+#[cfg(feature = "tui")]
+fn acknowledgement_action(acknowledgement: AgentAcknowledgement) -> AgentAction {
+    match acknowledgement {
+        AgentAcknowledgement::LeaseAcquired {
+            run_id,
+            intent,
+            generation,
+            action_request_id,
+        } => AgentAction::LeaseAcquired {
+            run_id,
+            intent,
+            generation,
+            action_request_id,
+        },
+        AgentAcknowledgement::MutationAccepted { action_request_id } => {
+            AgentAction::MutationAccepted { action_request_id }
+        }
+        AgentAcknowledgement::EffectFailed {
+            action_request_id,
+            message,
+        } => AgentAction::EffectFailed {
+            action_request_id,
+            message,
+        },
+    }
+}
+
+#[cfg(feature = "tui")]
 fn result_requests_exit(result: &AgentResult) -> bool {
     match result {
         AgentResult::Exit => true,
@@ -1501,7 +1583,7 @@ fn map_update(
         }
         _ => {}
     }
-    match bitrouter_orchestrator::acp::translate::translate(update.clone()) {
+    match crate::harness::acp::translate::translate(update.clone()) {
         Some(SessionUpdateKind::MessageChunk { text, .. }) => (AgentHistoryKind::Assistant, text),
         Some(SessionUpdateKind::ThoughtChunk { text, .. }) => (AgentHistoryKind::Thought, text),
         Some(SessionUpdateKind::ToolCall {
@@ -1582,7 +1664,7 @@ fn turn_label(turn: TurnState) -> &'static str {
 }
 
 fn accepted(action_request_id: String) -> AgentResult {
-    AgentResult::Action(AgentAction::MutationAccepted { action_request_id })
+    AgentResult::Acknowledgement(AgentAcknowledgement::MutationAccepted { action_request_id })
 }
 
 fn diagnostics_result(diagnostics: Vec<String>) -> AgentResult {
@@ -1615,25 +1697,33 @@ fn unexpected<T>(operation: &str, _: SessionResponse) -> Result<T> {
 
 #[cfg(test)]
 mod tests {
+    use crate::commands::agents::{AgentAcknowledgement, AgentEffect};
+    #[cfg(feature = "tui")]
+    use crate::harness::permission::Prompt;
+    #[cfg(feature = "tui")]
+    use crate::presentation::agents::{
+        AgentDeckSnapshot, AgentHistorySnapshot, AgentLeaseView, AgentRunView,
+    };
+    #[cfg(feature = "tui")]
+    use crate::tui::agents::{AgentAction, AgentDeckMode, AgentDeckState};
+    #[cfg(feature = "tui")]
+    use crate::tui::code::{CodeAction, CodeEffect, CodeState};
     use agent_client_protocol::schema::v1::{
         ContentBlock, SessionUpdate, TextContent, ToolCallContent, ToolCallUpdate,
         ToolCallUpdateFields,
     };
     use anyhow::Context as _;
-    use bitrouter_tui::agents::{
-        AgentAction, AgentDeckMode, AgentDeckSnapshot, AgentDeckState, AgentEffect,
-        AgentHistorySnapshot, AgentLeaseView, AgentRunView,
-    };
-    use bitrouter_tui::code::{CodeAction, CodeEffect, CodeState};
-    use bitrouter_tui::permission::Prompt;
+    #[cfg(feature = "tui")]
     use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
-    use crate::supervisor::SessionScope;
+    use crate::client::sessions::wire::SessionScope;
 
     use super::{
-        AgentResult, BackgroundClient, apply_code_result, apply_result, effect_action_request_id,
-        map_update, permission_context_detail,
+        AgentResult, BackgroundClient, effect_action_request_id, map_update,
+        permission_context_detail,
     };
+    #[cfg(feature = "tui")]
+    use super::{apply_code_result, apply_result};
 
     #[test]
     fn permission_detail_preserves_context_without_terminal_controls() {
@@ -1669,6 +1759,7 @@ mod tests {
         assert!(text.contains("exitCode"));
     }
 
+    #[cfg(feature = "tui")]
     #[test]
     fn foreground_permission_declines_in_flight_attach_history() -> anyhow::Result<()> {
         let mut state = CodeState::default();
@@ -1735,7 +1826,7 @@ mod tests {
             &mut state,
             AgentResult::Batch(vec![
                 AgentResult::History(Box::new(history)),
-                AgentResult::Action(AgentAction::MutationAccepted {
+                AgentResult::Acknowledgement(AgentAcknowledgement::MutationAccepted {
                     action_request_id: attach_request_id.clone(),
                 }),
             ]),
@@ -1817,6 +1908,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "tui")]
     #[test]
     fn older_in_flight_snapshot_cannot_replace_newer_state() {
         let mut state = AgentDeckState::new(AgentDeckMode::Standalone, "client");
@@ -1847,6 +1939,55 @@ mod tests {
             effect_action_request_id(&effect).as_deref(),
             Some("takeover-1")
         );
+    }
+
+    #[tokio::test]
+    async fn queued_rejection_preserves_request_id_without_authorizing() -> anyhow::Result<()> {
+        let client = BackgroundClient::new("unavailable-bitrouter.sock".into());
+        let result = client
+            .reject_queued_effect(
+                &AgentEffect::Reply {
+                    run_id: "run-1".to_string(),
+                    prompt: "retained draft".to_string(),
+                    lease_generation: 7,
+                    action_request_id: "reply-1".to_string(),
+                },
+                "Foreground permission pending",
+            )
+            .await;
+        let AgentResult::Acknowledgement(AgentAcknowledgement::EffectFailed {
+            action_request_id,
+            message,
+        }) = result
+        else {
+            anyhow::bail!("queued rejection did not return a failure acknowledgement");
+        };
+        assert_eq!(action_request_id, "reply-1");
+        assert_eq!(message, "Foreground permission pending");
+        assert!(client.grant.lock().await.is_none());
+        Ok(())
+    }
+
+    #[cfg(not(feature = "tui"))]
+    #[tokio::test]
+    async fn interactive_launches_require_tui_before_service_access() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let socket = directory.path().join("absent.sock");
+        for result in [
+            super::run_standalone().await,
+            super::run_attached(socket.clone(), "run-1").await,
+        ] {
+            let error = result
+                .err()
+                .context("interactive launch succeeded without TUI")?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("requires the tui feature; use bro agents sessions --json")
+            );
+        }
+        assert!(!socket.exists());
+        Ok(())
     }
 
     #[test]

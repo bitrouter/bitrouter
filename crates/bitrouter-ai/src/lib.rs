@@ -1,23 +1,36 @@
-//! Model integration contracts independent of router and application state.
+//! Lightweight public contracts shared by BitRouter clients and extensions.
 //!
-//! Model semantics, wire codecs, selected-target transport and SSE framing.
-//! Routing, account selection, application state and gateway policy live above
-//! this crate. Selected-model HTTP calls use explicit effective credentials;
-//! registered authentication and injected account transactions are explicit.
-//! Catalog schema, explicit loading/refresh and injected persistence also live
-//! here. The application supplies offline baselines, paths and activation policy.
+//! Model/protocol data, capability definitions and observation vocabulary live
+//! here. Service execution, conversion, authentication and transport live in the
+//! application. This crate performs no I/O or runtime initialization.
 
 #![forbid(unsafe_code)]
 
-pub mod auth;
+// Wire payloads may contain opaque replay proofs or provider diagnostics. Keep
+// their default diagnostics as bounded as the existing model content types.
+macro_rules! redacted_contract_debug {
+    ($($name:ty),+ $(,)?) => {$(
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.debug_struct(stringify!($name)).finish_non_exhaustive()
+            }
+        }
+    )+};
+}
+
+pub mod artifact;
 pub mod catalog;
-pub mod client;
+pub mod control;
 pub mod conversion;
+pub mod core;
 pub mod decisions;
-pub mod diagnostics;
 pub mod error;
+pub mod eval;
+pub mod event;
+pub mod extension;
+pub mod gateway;
+pub mod harness;
+pub mod observe;
 pub mod protocol;
-pub mod providers;
-pub mod stream;
-pub mod target;
+pub mod routing;
 pub mod types;

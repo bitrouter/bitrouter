@@ -8,7 +8,7 @@ stay in `apps/`.
 
 | Extension | Packages | Delivery |
 | --- | --- | --- |
-| [Regex checker](regex-checker/README.md) | `bitrouter-guardrails` | Compiled request-check callback; legacy SDK hooks remain optional |
+| [Regex checker](regex-checker/README.md) | `bitrouter-guardrails` | Compiled request-check callback; legacy host adapters are optional application modules |
 
 Beta extensions are linked explicitly into a trusted custom Rust host. Adding
 or updating extension code requires rebuilding that host. There is no remote
@@ -18,7 +18,7 @@ Directory placement does not provide runtime isolation or automatic installation
 ## Author entry point
 
 For a compiled request-check extension, write an ordinary registration function
-that accepts `bitrouter_sdk::extension::ExtensionApi` and calls
+that accepts `bitrouter::gateway::extensions::registry::ExtensionApi` and calls
 `request_check(id, revision, callback)`. A custom host invokes it with
 `host::serve_with_extensions` to run the shared foreground daemon, or
 `assemble::build_app_with_extensions` for low-level embedding. The API collects implementations; router
@@ -33,17 +33,17 @@ instances require matching registrations even when no router binds them.
 This is one typed author entry point, currently exposing only request-check.
 It is not a generic event handler, dynamic loader or permission sandbox, and
 it does not expose the host builder, global hooks, credentials or migrations.
-Capability inputs and decisions live alongside this entry point in
-`bitrouter_sdk::extension::request_check`; they contain no HTTP envelope.
+Capability inputs and decisions live separately in
+`bitrouter_ai::extension::request_check`; they contain no HTTP envelope.
 Extensions may call external services internally, without a host-managed remote
 extension transport.
 
-`Plugin`, `AppBuilder::plugin`, and the matcher's optional `GuardrailsPlugin`
-remain legacy custom-host assembly APIs. They retain their global/output and
-migration semantics during the current alpha SDK compatibility window. Removal
-requires an explicitly announced breaking SDK release with migration notes;
-there is no scheduled removal date. They are not an alternative recommended
-entry point for new request-check extensions. `PluginId` metadata ownership,
+`gateway::assembly::{Plugin, AppBuilder}` and the optional application
+`gateway::extensions::guardrails::plugin::GuardrailsPlugin` retain legacy
+custom-host global/output and migration semantics. Their old SDK/matcher import
+paths are retired by this alpha breaking migration; the new HTTP SDK does not
+assemble a server. New request-check implementations use the bounded AI contract
+and the application registrar. `PluginId` metadata ownership,
 `Config::plugins`, typed Context `extensions`, and external agent-plugin manifest
 formats keep their existing purposes and names.
 

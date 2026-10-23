@@ -1,0 +1,34 @@
+//! Shared semantic routing. Input origin is diagnostic; validated signals,
+//! admitted capabilities and policy determine the available actions.
+
+pub mod assessment;
+pub(crate) mod experiment_identity;
+pub mod exploration;
+pub mod input;
+pub mod plan;
+pub mod workflow;
+
+use bitrouter_ai::routing::ContextStrategy;
+use serde::{Deserialize, Serialize};
+
+/// Operations granted by the context owner, independent of transport or harness.
+/// Merely recognizing a workflow does not grant authority to rewrite its history.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextCapability {
+    /// Leave optional source evidence out of one materialized view.
+    OmitEvidence,
+    /// Substitute exact source spans committed by the context owner.
+    UseExtract,
+    /// Substitute a source-bound historical summary.
+    UseSummary,
+    /// Retrieve admitted evidence outside the active view.
+    RecallEvidence,
+    /// Project authenticated Responses reasoning into a portable execution view.
+    /// Public text and tool semantics must survive; immutable source is retained.
+    OmitPrivateReasoning,
+}
+
+pub mod preparation;
+
+pub mod blocks;

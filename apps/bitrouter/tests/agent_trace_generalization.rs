@@ -5,9 +5,10 @@ mod decision;
 
 use anyhow::{Context, Result};
 use axum_test::TestServer;
+use bitrouter::config;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
-use bitrouter_sdk::config;
-use bitrouter_sdk::server::{AppState, build_router};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use wiremock::matchers::{method, path};

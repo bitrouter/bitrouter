@@ -1,5 +1,5 @@
+use crate::gateway::model::protocol::responses::decode_gateway_continuation_id;
 use anyhow::Result;
-use bitrouter_ai::protocol::responses::decode_gateway_continuation_id;
 use bitrouter_ai::types::{ApiProtocol, Prompt};
 use sha2::{Digest, Sha256};
 
@@ -283,7 +283,7 @@ mod tests {
     async fn runtime() -> anyhow::Result<(TrajectoryRuntime, sea_orm::DatabaseConnection)> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([21; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         Ok((
             TrajectoryRuntime::new(TrajectoryStore::new(db.clone()), canonicalizer),
             db,
@@ -309,7 +309,7 @@ mod tests {
         );
         let db = crate::db::connect(&url).await?;
         crate::db::run_migrations(&db).await?;
-        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes([21; 32])?);
+        let canonicalizer = Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?);
         Ok((
             Arc::new(TrajectoryRuntime::new(
                 TrajectoryStore::new(db.clone()),
@@ -623,10 +623,7 @@ mod tests {
                 .get("correlation.native_parent")
                 .ok_or_else(|| anyhow::anyhow!("missing native parent digest"))?;
             let digest = KeyedDigest::parse(digest.clone())?;
-            assert_eq!(
-                digest.key_id(),
-                CorrelationKey::from_bytes([21; 32])?.key_id()
-            );
+            assert_eq!(digest.key_id(), runtime.canonicalizer.key_id());
         }
         let rejected_json = serde_json::to_string(&rejected_event)?;
         let unknown_json = serde_json::to_string(&unknown_event)?;
@@ -646,8 +643,8 @@ mod tests {
     async fn native_parent_does_not_cross_correlation_key_epochs() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let key_a = CorrelationKey::from_bytes([21; 32])?;
-        let key_b = CorrelationKey::from_bytes([22; 32])?;
+        let key_a = CorrelationKey::from_bytes(rand::random())?;
+        let key_b = CorrelationKey::from_bytes(rand::random())?;
         let key_b_id = key_b.key_id().to_owned();
         let runtime_a = runtime_with_key(&db, key_a);
         let runtime_b = runtime_with_key(&db, key_b);
@@ -711,10 +708,12 @@ mod tests {
     async fn gateway_continuation_decodes_to_primary_request_identity() -> anyhow::Result<()> {
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
-        let runtime_a = runtime_with_key(&db, CorrelationKey::from_bytes([21; 32])?);
-        let runtime_b = runtime_with_key(&db, CorrelationKey::from_bytes([22; 32])?);
+        let runtime_a = runtime_with_key(&db, CorrelationKey::from_bytes(rand::random())?);
+        let runtime_b = runtime_with_key(&db, CorrelationKey::from_bytes(rand::random())?);
         let public_continuation_id =
-            bitrouter_ai::protocol::responses::encode_gateway_continuation_id("request-root")?;
+            crate::gateway::model::protocol::responses::encode_gateway_continuation_id(
+                "request-root",
+            )?;
 
         let root = runtime_a
             .begin_request(

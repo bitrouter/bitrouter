@@ -1,14 +1,15 @@
 //! Fail-closed runtime for compiled request-check extensions.
 
-use async_trait::async_trait;
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::config::checker::CheckerConfig;
-use bitrouter_sdk::config::router::MAX_CHECKER_TIMEOUT_MS;
-use bitrouter_sdk::extension::request_check::{
-    Decision, Input, Registration, RequestCheckCoverageStatus, validate_revision,
-};
-use bitrouter_sdk::language_model::request_checks::{
+use crate::config::Config;
+use crate::config::checker::CheckerConfig;
+use crate::config::router::MAX_CHECKER_TIMEOUT_MS;
+use crate::gateway::extensions::registry::registration::Registration;
+use crate::gateway::pipeline::request_checks::{
     CheckerFailure, CheckerFailureKind, CheckerResult, RequestCheckBinding, RequestCheckerRunner,
+};
+use async_trait::async_trait;
+use bitrouter_ai::extension::request_check::{
+    Decision, Input, RequestCheckCoverageStatus, validate_revision,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -231,15 +232,15 @@ impl RequestCheckerRunner for RequestCheckRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_sdk::config::RoutingConfig;
-    use bitrouter_sdk::config::router::{
+    use crate::config::router::{
         DEFAULT_CHECKER_MAX_INPUT_BYTES, RouterChecks, RouterConfig, RouterDefaults,
         RouterRequestCheck, RouterSelection,
     };
-    use bitrouter_sdk::extension::request_check::{
+    use bitrouter_ai::extension::request_check::{
         Callback as CheckCallback, ContentFragment, ContentFragmentKind, ContentRole, Decision,
         RequestCheckCoverage, RequestCheckCoverageScope,
     };
+    use bitrouter_ai::routing::RoutingConfig;
     use std::sync::Mutex;
     use std::sync::atomic::Ordering;
     fn binding(config: &Config) -> anyhow::Result<RequestCheckBinding> {
@@ -301,7 +302,7 @@ mod tests {
         config.checkers.insert(
             "safety".to_owned(),
             CheckerConfig::Native {
-                native: bitrouter_sdk::config::checker::NativeCheckerConfig {
+                native: crate::config::checker::NativeCheckerConfig {
                     revision: "rules-v1".to_owned(),
                 },
             },
@@ -312,7 +313,7 @@ mod tests {
     #[tokio::test]
     async fn native_timeout_and_cancellation_hold_admission_until_cpu_work_finishes()
     -> anyhow::Result<()> {
-        use bitrouter_sdk::extension::request_check::Decision as CheckDecision;
+        use bitrouter_ai::extension::request_check::Decision as CheckDecision;
         use std::sync::atomic::AtomicUsize;
         for cancel in [false, true] {
             let config = native_config();
@@ -416,7 +417,7 @@ mod tests {
     #[test]
     fn native_activation_rejects_missing_mismatched_and_invalid_registrations() -> anyhow::Result<()>
     {
-        use bitrouter_sdk::extension::request_check::Decision as CheckDecision;
+        use bitrouter_ai::extension::request_check::Decision as CheckDecision;
         let config = native_config();
         assert!(RequestCheckRuntime::activate(&config).is_err());
         let register =

@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use bitrouter_sdk::config::agent::AcpTransport;
+use crate::config::agent::AcpTransport;
 use semver::Version;
 
 /// Follow the adapters' explicit executable override contracts:
@@ -24,7 +24,7 @@ fn worker(id: &str) -> Option<(&'static str, &'static str, Version)> {
 /// unresponsive local CLIs leave the adapter's bundled worker in control.
 pub(crate) async fn apply(transport: &mut AcpTransport) {
     let AcpTransport::Stdio { command, args, env } = transport;
-    let Some(harness) = crate::harness::match_invocation(command, args) else {
+    let Some(harness) = crate::harness::catalog::match_invocation(command, args) else {
         return;
     };
     if !harness.uses_maintained_adapter(command, args) {
@@ -36,7 +36,7 @@ pub(crate) async fn apply(transport: &mut AcpTransport) {
     if env.contains_key(variable) || std::env::var_os(variable).is_some() {
         return;
     }
-    let Some(path) = crate::spawn::resolve_binary(binary) else {
+    let Some(path) = crate::providers::cli_install::resolve_binary(binary) else {
         return;
     };
     let Ok(path) = std::path::absolute(path) else {

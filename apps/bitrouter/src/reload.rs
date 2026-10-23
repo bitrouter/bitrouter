@@ -13,6 +13,12 @@
 //! provider with an empty `api_base`, and an `auto_discover` provider
 //! would then silently drop every model.
 
+use crate::actions::administration::PolicyReportRuntime;
+use bitrouter_ai::control::reload::{
+    AuxiliaryConfigState, ConfigSourceKind, ConfigurationState, ReloadConsistency, ReloadFailure,
+    ReloadOutcome, ReloadParticipant, ReloadParticipantOutcome, ReloadParticipantReport,
+    ReloadReport, ReloadState, RunningConfigState, SavedConfigState,
+};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 use std::path::PathBuf;
@@ -32,173 +38,37 @@ const MAX_MIXED_STATE_HISTORY: usize = 32;
 /// inputs before it changes any live participant.
 pub const PREPARATION_TIMEOUT_SECONDS: u64 = 60;
 
-/// Where the daemon's primary configuration comes from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfigSourceKind {
-    File,
-    Default,
-}
-
-/// Whether the currently saved primary configuration can be inspected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum SavedConfigState {
-    Available,
-    Generated,
-    Missing,
-    Invalid,
-    Unavailable,
-}
-
-/// Relationship between inspected configuration inputs and the running daemon.
-/// Startup-owned settings and separate policy sources participate; external
-/// OAuth, registry, and discovery services are not probed by this comparison.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum RunningConfigState {
-    InSync,
-    ReloadRequired,
-    RestartRequired,
-    Mixed,
-    Unknown,
-}
-
-/// State of a configuration source loaded separately from `bitrouter.yaml`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AuxiliaryConfigState {
-    InSync,
-    ReloadRequired,
-    NotConfigured,
-    Missing,
-    Invalid,
-    Unavailable,
-    Unknown,
-}
-
-/// Redaction-safe saved/running configuration contract.
-///
-/// Field names are fixed schema categories. Configuration values, source
-/// bytes, credentials, and value-derived hashes never leave the process.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ConfigurationState {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_instance_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub generation: Option<u64>,
-    pub source: ConfigSourceKind,
-    pub saved: SavedConfigState,
-    pub running: RunningConfigState,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub reload_required_fields: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub restart_required_fields: Vec<String>,
-    pub named_policy: AuxiliaryConfigState,
-    pub access_policies: AuxiliaryConfigState,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_reload: Option<ReloadReport>,
-    /// Bounded mixed/unknown outcomes retained for this daemon boot, oldest
-    /// first. A later preparation failure cannot erase the report that made
-    /// the running configuration mixed.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_state_history: Vec<ReloadReport>,
-}
-
-/// Consistency of the runtime configuration after the last completed reload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReloadConsistency {
-    /// Every participant in the last completed reload reached its intended
-    /// state, or a failed candidate made no live change.
-    Consistent,
-    /// A reload may have changed some live participants before it failed or
-    /// was interrupted. Operators must inspect the participant report.
-    Mixed,
-}
-
-/// A terminal reload outcome. `Unknown` is reserved for an interrupted
-/// in-process attempt after mutation began; it is never evidence of failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReloadOutcome {
-    Succeeded,
-    Failed,
-    PartiallyApplied,
-    Unknown,
-}
-
-/// A live subsystem participating in a daemon reload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReloadParticipant {
-    RoutingTable,
-    UpstreamTimeoutClients,
-    NamedPolicyRuntime,
-    AccessPolicyStore,
-}
-
-/// What one reload participant actually did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ReloadParticipantOutcome {
-    Applied,
-    Unchanged,
-    Failed,
-    NotAttempted,
-}
-
-/// A safe, structured participant failure. Raw configuration and upstream
-/// errors may carry credentials, so the externally visible message is fixed
-/// and the detailed error remains in process logs only.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReloadFailure {
-    pub code: String,
-    pub message: String,
-}
-
-impl ReloadFailure {
-    fn new(code: &str, message: &str) -> Self {
-        Self {
-            code: code.to_string(),
-            message: message.to_string(),
-        }
+fn reload_failure(code: &str, message: &str) -> ReloadFailure {
+    ReloadFailure {
+        code: code.to_string(),
+        message: message.to_string(),
     }
 }
 
-/// The actual result for one reload participant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReloadParticipantReport {
-    pub participant: ReloadParticipant,
-    pub outcome: ReloadParticipantOutcome,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<ReloadFailure>,
+pub(crate) trait ReloadReportRuntime: Sized {
+    fn pending(instance: String, generation: u64) -> Self;
+    #[cfg(test)]
+    fn succeeded(instance: String, generation: u64) -> Self;
+    fn unsupported() -> Self;
+    fn participant_mut(
+        &mut self,
+        participant: ReloadParticipant,
+    ) -> Option<&mut ReloadParticipantReport>;
+    fn participant_applied(&mut self, participant: ReloadParticipant);
+    fn participant_unchanged(&mut self, participant: ReloadParticipant);
+    fn participant_failed(&mut self, participant: ReloadParticipant, error: ReloadFailure);
+    fn finish(&mut self, outcome: ReloadOutcome);
+    fn safe_summary(&self) -> &'static str;
+    fn any_applied(&self) -> bool;
 }
 
-/// A completed reload attempt. The report deliberately does not claim a
-/// cross-subsystem transaction: a partial outcome identifies every participant
-/// that changed before a later failure.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReloadReport {
-    pub server_instance_id: String,
-    pub generation: u64,
-    pub outcome: ReloadOutcome,
-    pub participants: Vec<ReloadParticipantReport>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub restart_required_fields: Vec<String>,
-    /// RFC 3339 UTC timestamp captured when execution started.
-    pub started_at: String,
-    /// RFC 3339 UTC timestamp captured when this terminal report was recorded.
-    pub completed_at: String,
-}
-
-impl ReloadReport {
+impl ReloadReportRuntime for ReloadReport {
     fn pending(instance: String, generation: u64) -> Self {
         Self {
             server_instance_id: instance,
             generation,
             outcome: ReloadOutcome::Failed,
-            participants: ReloadParticipant::all()
+            participants: reload_participants()
                 .into_iter()
                 .map(|participant| ReloadParticipantReport {
                     participant,
@@ -214,7 +84,7 @@ impl ReloadReport {
 
     /// Build a successful report for coordinator-backed fakes in crate tests.
     #[cfg(test)]
-    pub(crate) fn succeeded(instance: String, generation: u64) -> Self {
+    fn succeeded(instance: String, generation: u64) -> Self {
         let mut report = Self::pending(instance, generation);
         for participant in &mut report.participants {
             participant.outcome = ReloadParticipantOutcome::Unchanged;
@@ -224,11 +94,11 @@ impl ReloadReport {
         report
     }
 
-    pub(crate) fn unsupported() -> Self {
+    fn unsupported() -> Self {
         let mut report = Self::pending("unsupported".to_string(), 0);
         report.participant_failed(
             ReloadParticipant::RoutingTable,
-            ReloadFailure::new(
+            reload_failure(
                 "unsupported_reload",
                 "this daemon does not support coordinated reload",
             ),
@@ -293,32 +163,13 @@ impl ReloadReport {
     }
 }
 
-impl ReloadParticipant {
-    fn all() -> [Self; 4] {
-        [
-            Self::RoutingTable,
-            Self::UpstreamTimeoutClients,
-            Self::NamedPolicyRuntime,
-            Self::AccessPolicyStore,
-        ]
-    }
-}
-
-/// State exposed by the coordinator. A generation marks a terminal attempt
-/// boundary; it is not an atomic snapshot of every request path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReloadState {
-    pub server_instance_id: String,
-    pub generation: u64,
-    pub running: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub running_generation: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_outcome: Option<ReloadReport>,
-    pub consistency: ReloadConsistency,
-    /// Bounded reports for prior mixed/unknown states in this process boot.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mixed_state_history: Vec<ReloadReport>,
+fn reload_participants() -> [ReloadParticipant; 4] {
+    [
+        ReloadParticipant::RoutingTable,
+        ReloadParticipant::UpstreamTimeoutClients,
+        ReloadParticipant::NamedPolicyRuntime,
+        ReloadParticipant::AccessPolicyStore,
+    ]
 }
 
 /// Rejection before a reload operation is admitted. These conditions leave the
@@ -583,8 +434,8 @@ fn now_rfc3339() -> String {
 /// when its current runtime consumer can observe a replacement without
 /// rebuilding the daemon pipeline.
 fn restart_required_fields(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
+    current: &crate::config::Config,
+    candidate: &crate::config::Config,
     unclassified_fields: Option<&BTreeSet<String>>,
 ) -> Vec<String> {
     let mut fields = BTreeSet::new();
@@ -713,7 +564,7 @@ struct UnclassifiedConfigValue {
 type UnclassifiedConfigValues = BTreeMap<String, UnclassifiedConfigValue>;
 
 fn unclassified_config(value: &serde_json::Value) -> (BTreeSet<String>, UnclassifiedConfigValues) {
-    let schema = schemars::schema_for!(bitrouter_sdk::config::Config);
+    let schema = schemars::schema_for!(crate::config::Config);
     let root = schema.as_value();
     let mut fields = BTreeSet::new();
     let mut values = BTreeMap::new();
@@ -1008,10 +859,7 @@ fn serialized_values_differ<T: Serialize>(current: &T, candidate: &T) -> bool {
     }
 }
 
-fn mcp_config_changed(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
-) -> bool {
+fn mcp_config_changed(current: &crate::config::Config, candidate: &crate::config::Config) -> bool {
     let current = &current.mcp;
     let candidate = &candidate.mcp;
     current.aggregate.enabled != candidate.aggregate.enabled
@@ -1026,10 +874,7 @@ fn mcp_config_changed(
         || current.upstream_protocol != candidate.upstream_protocol
 }
 
-fn mcp_servers_changed(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
-) -> bool {
+fn mcp_servers_changed(current: &crate::config::Config, candidate: &crate::config::Config) -> bool {
     current.mcp_servers.len() != candidate.mcp_servers.len()
         || current.mcp_servers.iter().any(|(id, current_server)| {
             candidate
@@ -1044,10 +889,7 @@ fn mcp_servers_changed(
         })
 }
 
-fn agents_changed(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
-) -> bool {
+fn agents_changed(current: &crate::config::Config, candidate: &crate::config::Config) -> bool {
     current.agents.len() != candidate.agents.len()
         || current.agents.iter().any(|(id, current_agent)| {
             candidate.agents.get(id).is_none_or(|candidate_agent| {
@@ -1058,8 +900,8 @@ fn agents_changed(
 }
 
 fn server_tools_changed(
-    current: &bitrouter_sdk::config::Config,
-    candidate: &bitrouter_sdk::config::Config,
+    current: &crate::config::Config,
+    candidate: &crate::config::Config,
 ) -> bool {
     // This comparison never leaves the process. Several tool settings contain
     // credential-bearing values but do not implement `Serialize`; `Debug` is
@@ -1067,7 +909,7 @@ fn server_tools_changed(
     format!("{:?}", current.server_tools) != format!("{:?}", candidate.server_tools)
 }
 
-fn pricing_signature(config: &bitrouter_sdk::config::Config) -> Vec<String> {
+fn pricing_signature(config: &crate::config::Config) -> Vec<String> {
     let mut entries = Vec::new();
     for (provider_id, provider) in &config.providers {
         if provider
@@ -1111,7 +953,7 @@ fn pricing_signature(config: &bitrouter_sdk::config::Config) -> Vec<String> {
 /// default store. Best-effort: an unreadable store is a no-op. Mirrors the
 /// startup pass in `assemble.rs` so a subscription / Claude Code session
 /// provider survives a hot-reload instead of dropping out of routing.
-fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Config) {
+fn activate_stored_credential_providers(config: &mut crate::config::Config) {
     if let Ok(store) = crate::provider_credentials::load_default() {
         crate::providers::apply::activate_stored_credential_providers(config, &store);
     }
@@ -1120,13 +962,13 @@ fn activate_stored_credential_providers(config: &mut bitrouter_sdk::config::Conf
 /// Apply the same non-mutating configuration enrichment used when the daemon
 /// constructs a replacement routing snapshot. Keeping this in one helper makes
 /// the current and candidate shapes comparable before remote classification.
-async fn resolve_reloadable_config(config: &mut bitrouter_sdk::config::Config) {
+async fn resolve_reloadable_config(config: &mut crate::config::Config) {
     crate::providers::apply::apply_builtin_defaults(config);
     crate::claude_code::enable_if_logged_in(config);
     crate::assemble::merge_registry_into(config).await;
     activate_stored_credential_providers(config);
     // Discovery is bounded by the SDK and completes before any live swap.
-    bitrouter_sdk::config::discover_models(config).await;
+    crate::config::discover_models(config).await;
 }
 
 /// Whether the daemon is running against a `bitrouter.yaml` on disk
@@ -1160,14 +1002,14 @@ pub struct ConfigurationBaseline {
     /// Source actually read. A Default source can observe a newly created
     /// `<home>/bitrouter.yaml` without treating it as applied to the daemon.
     loaded_source: crate::paths::ConfigSource,
-    config: bitrouter_sdk::config::Config,
+    config: crate::config::Config,
     revision: ConfigurationRevision,
     unclassified_fields: Option<BTreeSet<String>>,
     unclassified_values: Option<UnclassifiedConfigValues>,
 }
 
 impl ConfigurationBaseline {
-    pub fn config(&self) -> &bitrouter_sdk::config::Config {
+    pub fn config(&self) -> &crate::config::Config {
         &self.config
     }
 }
@@ -1398,12 +1240,13 @@ async fn load_configuration_baseline_at(
                 }
             })?;
             let mut config =
-                bitrouter_sdk::config::parse_with(&raw, bitrouter_sdk::config::env_lookup)
-                    .map_err(|error| ConfigurationLoadError {
+                crate::config::parse_with(&raw, crate::config::env_lookup).map_err(|error| {
+                    ConfigurationLoadError {
                         saved: SavedConfigState::Invalid,
                         error: anyhow::Error::new(error),
                         guardrails_migration_required: false,
-                    })?;
+                    }
+                })?;
             crate::policy_lock::apply_defaults(&mut config, Some(path));
             let guardrails_migration_required = config.plugins.contains_key("bitrouter-guardrails");
             crate::assemble::validate_host_configuration(&config).map_err(|error| {
@@ -1413,13 +1256,12 @@ async fn load_configuration_baseline_at(
                     guardrails_migration_required,
                 }
             })?;
-            let substituted = bitrouter_sdk::config::substitute_env(&raw).map_err(|error| {
-                ConfigurationLoadError {
+            let substituted =
+                crate::config::substitute_env(&raw).map_err(|error| ConfigurationLoadError {
                     saved: SavedConfigState::Invalid,
                     error: anyhow::Error::new(error),
                     guardrails_migration_required: false,
-                }
-            })?;
+                })?;
             let document =
                 serde_saphyr::from_str::<serde_json::Value>(&substituted).map_err(|error| {
                     ConfigurationLoadError {
@@ -1447,6 +1289,13 @@ async fn load_configuration_baseline_at(
         }
         crate::paths::ConfigSource::Default { .. } => {
             let mut config = crate::providers::apply::zero_config();
+            crate::assemble::validate_host_configuration(&config).map_err(|error| {
+                ConfigurationLoadError {
+                    saved: SavedConfigState::Invalid,
+                    error,
+                    guardrails_migration_required: false,
+                }
+            })?;
             crate::cloud::enable_in_zero_config(&mut config);
             crate::policy_lock::apply_defaults(&mut config, None);
             Ok(ConfigurationBaseline {
@@ -1471,13 +1320,13 @@ pub struct AppReloader {
     /// fresh `Config` in the app layer — so product provider
     /// defaults can be applied above the SDK — and swap it in
     /// via `ConfigRoutingTable::replace_config`.
-    routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
+    routing_table: Arc<crate::config::routing_table::ConfigRoutingTable>,
     /// The fully assembled configuration at daemon startup. Every reload
     /// entrypoint compares startup-owned fields to this immutable baseline and
     /// rejects drift before any live participant changes.
-    startup_config: bitrouter_sdk::config::Config,
+    startup_config: crate::config::Config,
     /// Primary source parsed before registry/default/discovery enrichment.
-    startup_source_config: Option<bitrouter_sdk::config::Config>,
+    startup_source_config: Option<crate::config::Config>,
     /// Exact source selected when the daemon started, including the home for a
     /// zero-config process that may later gain `bitrouter.yaml`.
     startup_configuration_source: Option<crate::paths::ConfigSource>,
@@ -1491,7 +1340,7 @@ pub struct AppReloader {
     environment_revision: AtomicU64,
     /// Concrete upstream HTTP executor. Timeout knobs are client-level, so a
     /// config reload must rebuild the live executor's client set too.
-    upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
+    upstream_executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
     policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>>,
     /// Owns admission for local IPC, SIGHUP, and guarded remote reloads. The
     /// routing table's own lock is narrower and cannot protect preparation or
@@ -1535,8 +1384,8 @@ impl TestPreparationPause {
 
 struct PreparedReload {
     baseline: ConfigurationBaseline,
-    config: bitrouter_sdk::config::Config,
-    timeout_clients: bitrouter_sdk::language_model::executor::PreparedProviderTimeouts,
+    config: crate::config::Config,
+    timeout_clients: crate::gateway::pipeline::executor::PreparedProviderTimeouts,
     named_policy_runtime: Option<crate::policy_lock::PreparedPolicySnapshot>,
     access_policy_store: Option<crate::policy::store::PreparedPolicyStore>,
 }
@@ -1551,7 +1400,7 @@ impl PreparationError {
     fn failed(participant: ReloadParticipant, code: &str, message: &str) -> Self {
         Self {
             participant,
-            failure: ReloadFailure::new(code, message),
+            failure: reload_failure(code, message),
             restart_required_fields: Vec::new(),
         }
     }
@@ -1559,7 +1408,7 @@ impl PreparationError {
     fn restart_required(fields: Vec<String>) -> Self {
         Self {
             participant: ReloadParticipant::RoutingTable,
-            failure: ReloadFailure::new(
+            failure: reload_failure(
                 "restart_required",
                 "candidate changes a field that is only applied at daemon startup",
             ),
@@ -1572,8 +1421,8 @@ impl AppReloader {
     /// Build a reloader over the daemon's reloadable subsystems.
     pub fn new(
         policy_store: Arc<PolicyStore>,
-        routing_table: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
-        upstream_executor: Arc<bitrouter_sdk::language_model::HttpExecutor>,
+        routing_table: Arc<crate::config::routing_table::ConfigRoutingTable>,
+        upstream_executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
         source: ReloadSource,
     ) -> Self {
         let startup_config = routing_table.snapshot_config();
@@ -1798,7 +1647,7 @@ impl AppReloader {
         if !reservation.belongs_to(&self.coordinator) {
             report.participant_failed(
                 ReloadParticipant::RoutingTable,
-                ReloadFailure::new(
+                reload_failure(
                     "invalid_reservation",
                     "reload reservation does not belong to this daemon",
                 ),
@@ -1813,7 +1662,7 @@ impl AppReloader {
         // that same critical section; remote requests never pass an override.
         if matches!(invocation, ReloadInvocation::Local) && !env.is_empty() {
             let overrides = env.into_iter().collect();
-            bitrouter_sdk::config::set_env_overrides(overrides);
+            crate::config::set_env_overrides(overrides);
             // Keep the saturating update and publication ordering on our MSRV;
             // `try_update` is newer and `fetch_update` is deprecated in Rust 1.99.
             let mut revision = self.environment_revision.load(Ordering::Acquire);
@@ -1850,7 +1699,7 @@ impl AppReloader {
             Err(_) => {
                 report.participant_failed(
                     ReloadParticipant::RoutingTable,
-                    ReloadFailure::new(
+                    reload_failure(
                         "preparation_timed_out",
                         "reload preparation exceeded its time limit",
                     ),
@@ -1870,7 +1719,7 @@ impl AppReloader {
         if self.should_fail_apply(ReloadParticipant::RoutingTable) {
             report.participant_failed(
                 ReloadParticipant::RoutingTable,
-                ReloadFailure::new("fault_injected", "routing table update failed"),
+                reload_failure("fault_injected", "routing table update failed"),
             );
         } else {
             match self
@@ -1883,7 +1732,7 @@ impl AppReloader {
                     tracing::warn!(error = %error, "reload routing table swap failed");
                     report.participant_failed(
                         ReloadParticipant::RoutingTable,
-                        ReloadFailure::new("routing_apply_failed", "routing table update failed"),
+                        reload_failure("routing_apply_failed", "routing table update failed"),
                     );
                 }
             }
@@ -1893,7 +1742,7 @@ impl AppReloader {
         if self.should_fail_apply(ReloadParticipant::UpstreamTimeoutClients) {
             report.participant_failed(
                 ReloadParticipant::UpstreamTimeoutClients,
-                ReloadFailure::new("fault_injected", "upstream timeout client update failed"),
+                reload_failure("fault_injected", "upstream timeout client update failed"),
             );
         } else {
             self.upstream_executor
@@ -1905,7 +1754,7 @@ impl AppReloader {
         if self.should_fail_apply(ReloadParticipant::NamedPolicyRuntime) {
             report.participant_failed(
                 ReloadParticipant::NamedPolicyRuntime,
-                ReloadFailure::new("fault_injected", "named policy runtime update failed"),
+                reload_failure("fault_injected", "named policy runtime update failed"),
             );
         } else {
             match (self.policy_runtime.as_ref(), prepared.named_policy_runtime) {
@@ -1921,7 +1770,7 @@ impl AppReloader {
         if self.should_fail_apply(ReloadParticipant::AccessPolicyStore) {
             report.participant_failed(
                 ReloadParticipant::AccessPolicyStore,
-                ReloadFailure::new("fault_injected", "access-policy store update failed"),
+                reload_failure("fault_injected", "access-policy store update failed"),
             );
         } else {
             match prepared.access_policy_store {
@@ -1931,7 +1780,7 @@ impl AppReloader {
                         tracing::warn!(error = %error, "reload access-policy store swap failed");
                         report.participant_failed(
                             ReloadParticipant::AccessPolicyStore,
-                            ReloadFailure::new(
+                            reload_failure(
                                 "access_policy_apply_failed",
                                 "access-policy store update failed",
                             ),
@@ -2005,10 +1854,10 @@ impl AppReloader {
             }
         };
         let active = runtime.administration_snapshot();
-        let disk = crate::actions::administration::PolicyReport::from_loaded(
+        let disk = bitrouter_ai::control::administration::PolicyReport::from_loaded(
             &baseline.config,
             loaded.as_ref(),
-            crate::actions::administration::PolicyView::Disk,
+            bitrouter_ai::control::administration::PolicyView::Disk,
         );
         if active.availability == "not_configured" && disk.availability == "not_configured" {
             AuxiliaryConfigState::NotConfigured
@@ -2243,12 +2092,13 @@ impl DaemonReloader for AppReloader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitrouter_ai::client::HttpTimeouts;
+    use crate::config;
+    use crate::config::routing_table::ConfigRoutingTable;
+    use crate::gateway::model::client::HttpTimeouts;
+    use crate::gateway::pipeline::context::PipelineContext;
+    use crate::gateway::pipeline::executor::{Executor, HttpExecutor};
+    use crate::gateway::pipeline::types::{PipelineRequest, RoutingTarget};
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-    use bitrouter_sdk::config::{self, ConfigRoutingTable};
-    use bitrouter_sdk::language_model::{
-        Executor, HttpExecutor, PipelineContext, PipelineRequest, RoutingTarget,
-    };
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -2417,7 +2267,7 @@ policies:
             &initial,
             Some(&config_path),
             None,
-            crate::eval::settlement::PendingEvalDecisionStore::default(),
+            crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
             None,
         )
         .await?;
@@ -2516,7 +2366,7 @@ policies:
         let prompt = prompt();
         let ctx = PipelineContext::new(PipelineRequest::new(
             "m",
-            bitrouter_sdk::caller::CallerContext::local(),
+            crate::gateway::caller::CallerContext::local(),
             prompt.clone(),
         ));
 
@@ -2528,7 +2378,7 @@ policies:
         std::fs::remove_dir_all(dir).ok();
 
         match result {
-            Err(bitrouter_sdk::BitrouterError::UpstreamTimeout) => Ok(()),
+            Err(crate::gateway::error::BitrouterError::UpstreamTimeout) => Ok(()),
             Err(other) => Err(anyhow::anyhow!("expected UpstreamTimeout, got {other:?}")),
             Ok(_) => Err(anyhow::anyhow!("stalled body unexpectedly completed")),
         }
@@ -2540,8 +2390,8 @@ policies:
     /// cannot be re-registered, so nothing swapped its spec.
     #[tokio::test]
     async fn invalid_policy_candidate_does_not_swap_routing_or_policy() {
+        use crate::config::PolicyRuntimeMode;
         use crate::policy_lock::PolicyRuntime;
-        use bitrouter_sdk::config::PolicyRuntimeMode;
 
         let (path, dir) = temp_config_path();
         let config_yaml = |model: &str| {
@@ -2586,7 +2436,7 @@ policies:
             &initial,
             Some(&path),
             None,
-            crate::eval::settlement::PendingEvalDecisionStore::default(),
+            crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
             None,
         )
         .await
@@ -2625,7 +2475,7 @@ policies:
     #[tokio::test]
     async fn fault_boundaries_report_each_participant_and_preserve_active_policy_truth()
     -> anyhow::Result<()> {
-        for failed_participant in ReloadParticipant::all() {
+        for failed_participant in reload_participants() {
             let fixture = fault_fixture(failed_participant).await?;
             let initial_state = fixture
                 .reloader
@@ -2862,7 +2712,7 @@ policies:
             "BITROUTER_RELOAD_CONCURRENCY_{}",
             uuid::Uuid::new_v4().simple()
         );
-        assert!(bitrouter_sdk::config::env_lookup(&override_name).is_none());
+        assert!(crate::config::env_lookup(&override_name).is_none());
         let local = tokio::time::timeout(
             Duration::from_secs(1),
             fixture.reloader.reload_with_env(vec![(
@@ -2876,7 +2726,7 @@ policies:
             Err(error) => error,
         };
         assert!(local_error.to_string().contains("reload_in_progress"));
-        assert!(bitrouter_sdk::config::env_lookup(&override_name).is_none());
+        assert!(crate::config::env_lookup(&override_name).is_none());
 
         // `main.rs` invokes `reload()` from SIGHUP. It must take the exact
         // same admission path rather than starting a second reload.
@@ -3117,7 +2967,7 @@ presets:
         partial.participant_applied(ReloadParticipant::RoutingTable);
         partial.participant_failed(
             ReloadParticipant::NamedPolicyRuntime,
-            ReloadFailure::new("fault_injected", "policy table update failed"),
+            reload_failure("fault_injected", "policy table update failed"),
         );
         partial.finish(ReloadOutcome::PartiallyApplied);
         coordinator.complete(&partial_reservation, partial);
@@ -3131,7 +2981,7 @@ presets:
         );
         failed.participant_failed(
             ReloadParticipant::RoutingTable,
-            ReloadFailure::new("config_prepare_failed", "reload configuration is invalid"),
+            reload_failure("config_prepare_failed", "reload configuration is invalid"),
         );
         failed.finish(ReloadOutcome::Failed);
         coordinator.complete(&failed_reservation, failed);
@@ -3326,7 +3176,7 @@ presets:
     fn protocol_tariffs_endpoint_profiles_and_known_price_policy_require_restart()
     -> anyhow::Result<()> {
         use bitrouter_ai::types::ApiProtocol;
-        let current: bitrouter_sdk::config::Config = serde_json::from_value(serde_json::json!({
+        let current: crate::config::Config = serde_json::from_value(serde_json::json!({
             "providers":{"fixture":{"api_base":"https://api.openai.com/v1", "models":[{
                 "id":"test", "pricing_by_protocol":{"decisions":{"input_micro_usd_per_token":0.1,"output_micro_usd_per_token":0}}
             }]}}
@@ -3433,7 +3283,7 @@ presets:
                 .checkers
                 .get("company")
                 .map(|checker| match checker {
-                    bitrouter_sdk::config::checker::CheckerConfig::Native { native } =>
+                    crate::config::checker::CheckerConfig::Native { native } =>
                         native.revision.as_str(),
                 }),
             Some("rules-18081")

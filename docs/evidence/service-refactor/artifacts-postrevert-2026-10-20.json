@@ -1,0 +1,94 @@
+[
+  {
+    "profile": "baseline",
+    "path": "/tmp/bitrouter-p0-postrevert-final-20261020/baseline/bro",
+    "source_revision": "e972d5ebb8215a51dbe88d404616087b940250ca",
+    "bytes": 317131456,
+    "sha256": "f1e5381cfcfa07e3624a29f3d5d9505561afea2b0142e1704b1688fbb1a6bbe7",
+    "identity": null,
+    "normal_build_dependency_pairs": 435,
+    "rendered_dependency_entries": 1353
+  },
+  {
+    "profile": "full",
+    "path": "/tmp/bitrouter-p0-postrevert-final-20261020/full/bro",
+    "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+    "bytes": 316986944,
+    "sha256": "2b6dbfe5367ef8d588c54a6fc9de9015f6b424d46edf8da47c2b414f58eda513",
+    "identity": {
+      "version": "1.0.0-alpha.33",
+      "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+      "target": "aarch64-apple-darwin",
+      "features": [
+        "core",
+        "db-mysql",
+        "db-postgres",
+        "harness",
+        "mcp",
+        "otel-http",
+        "server-tools",
+        "tui"
+      ],
+      "profile": "full",
+      "handoff_build_id": "6a15bbda48b782a6aaadca77ac4323643129d09e62143bf7f3282a48d000aa21"
+    },
+    "normal_build_dependency_pairs": 431,
+    "rendered_dependency_entries": 1286
+  },
+  {
+    "profile": "gateway",
+    "path": "/tmp/bitrouter-p0-postrevert-final-20261020/gateway/bro",
+    "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+    "bytes": 116019360,
+    "sha256": "4bd7cf3f19f410d6f52ff420482e6bfacdfe76bbe064e6a65aa4019f7f20ecd1",
+    "identity": {
+      "version": "1.0.0-alpha.33",
+      "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+      "target": "aarch64-apple-darwin",
+      "features": [],
+      "profile": "gateway",
+      "handoff_build_id": "20f656dd07b628112102eadf624a0d3fd610baa20dcdac33eeb3a3a54bae41ce"
+    },
+    "normal_build_dependency_pairs": 304,
+    "rendered_dependency_entries": 799
+  },
+  {
+    "profile": "harness",
+    "path": "/tmp/bitrouter-p0-postrevert-final-20261020/harness/bro",
+    "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+    "bytes": 239621552,
+    "sha256": "c6a17095b753daa6085ad851e1331140951d42770a07d1508696591cbb4815a6",
+    "identity": {
+      "version": "1.0.0-alpha.33",
+      "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+      "target": "aarch64-apple-darwin",
+      "features": [
+        "harness",
+        "mcp"
+      ],
+      "profile": "custom",
+      "handoff_build_id": "b1041382edcef07a9a56f228db2ddb144cfb67706b6552410c0fd095744740cc"
+    },
+    "normal_build_dependency_pairs": 370,
+    "rendered_dependency_entries": 1043
+  },
+  {
+    "profile": "core",
+    "path": "/tmp/bitrouter-p0-postrevert-final-20261020/core/bro",
+    "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+    "bytes": 173956480,
+    "sha256": "fc2c126bca52660709a7c733fa791fb9953dd49b8008a079a396e561b9369579",
+    "identity": {
+      "version": "1.0.0-alpha.33",
+      "source_revision": "a51effdc114bee5d0500d2231dc6b105f0fcee36",
+      "target": "aarch64-apple-darwin",
+      "features": [
+        "core"
+      ],
+      "profile": "custom",
+      "handoff_build_id": "b60fe7f3a4aa4e842ef877644e00dd6d457f195f6b33350f4f5a63d91c3d0b21"
+    },
+    "normal_build_dependency_pairs": 306,
+    "rendered_dependency_entries": 803
+  }
+]

@@ -4,7 +4,7 @@
 //! Codex login instead of a fresh browser sign-in.
 //!
 //! Each importer reads the vendor CLI's own on-disk / Keychain credential,
-//! maps it onto [`bitrouter_ai::auth::credentials::OAuthToken`], and hands it
+//! maps it onto [`crate::gateway::providers::auth::credentials::OAuthToken`], and hands it
 //! back for the caller to persist under the matching bitrouter provider id
 //! (`claude-code` for Claude Code, `openai-codex` for Codex). Refresh then works
 //! exactly as it does for a credential obtained through the browser flow.
@@ -26,7 +26,7 @@ mod keychain;
 
 use std::path::PathBuf;
 
-use bitrouter_ai::auth::credentials::OAuthToken;
+use crate::gateway::providers::auth::credentials::OAuthToken;
 
 /// Where an imported credential was read from. Surfaced to the CLI so it can
 /// tell the user which source was adopted.

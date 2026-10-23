@@ -5591,7 +5591,7 @@ api_base: https://api.acme.test/v1
 
     #[test]
     fn model_discovery_matchers_cover_supported_id_shapes() -> Result<()> {
-        let discovery = load_model_discovery(&crate::workspace_root())?;
+        let discovery = load_model_discovery(&crate::workspace_root()?)?;
         let cases = [
             ("anthropic/claude-fable-5", "anthropic/claude/fable", "5"),
             ("anthropic/claude-opus-4.8", "anthropic/claude/opus", "4.8"),

@@ -155,9 +155,8 @@ impl<'de> Deserialize<'de> for ApiProtocol {
 }
 
 /// The two supported model-call operations, independent of caller wire format.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ModelOperation {
     /// Generative text/tool/media invocation.
@@ -167,10 +166,37 @@ pub enum ModelOperation {
     Decisions,
 }
 
+/// Operations explicitly supported by a host, hook, or native checker.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum OperationScope {
+    /// Generative calls only; the default for existing registrations.
+    #[default]
+    Generation,
+    /// Native decision calls only.
+    Decisions,
+    /// Both implemented model operations.
+    Both,
+}
+
+impl OperationScope {
+    /// Whether this scope includes one operation.
+    pub fn contains(self, operation: ModelOperation) -> bool {
+        matches!(self, Self::Both)
+            || matches!(
+                (self, operation),
+                (Self::Generation, ModelOperation::Generation)
+                    | (Self::Decisions, ModelOperation::Decisions)
+            )
+    }
+}
+
 /// A wire protocol always (de)serializes as a string: one of the known
 /// values, or any other string for an externally-registered `Custom` protocol.
 /// Hand-written because the `Custom(String)` variant means the value is an
 /// open string set, not a closed enum.
+#[cfg(feature = "schema")]
 impl schemars::JsonSchema for ApiProtocol {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed("ApiProtocol")
@@ -240,6 +266,7 @@ impl Serialize for ProtocolList {
 
 /// A `ProtocolList` deserializes from **either** a bare protocol string or an
 /// array of them (see the type docs), so its schema is the union of the two.
+#[cfg(feature = "schema")]
 impl schemars::JsonSchema for ProtocolList {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed("ProtocolList")
@@ -313,7 +340,7 @@ pub enum NativeReasoning {
 impl NativeReasoning {
     /// All visible text in the retained item, excluding encrypted content.
     /// Used to prevent terminal snapshots from undoing stream/result hooks.
-    pub(crate) fn visible_text(&self) -> String {
+    pub fn visible_text(&self) -> String {
         let Self::Responses(item) = self;
         ["summary", "content"]
             .into_iter()
@@ -613,8 +640,7 @@ pub enum Content {
 /// on render — the `mcp_approval_response` already conveyed it — and an unpaired
 /// denial degrades to a `function_call_output.output` string
 /// (`reason ?? 'Tool call execution denied.'`) that re-parses as a [`Self::Text`].
-/// On the other three wires it likewise degrades to that string via
-/// [`Self::to_provider_string`].
+/// Other gateway codecs may likewise project the denial onto a string-only wire.
 /// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -651,7 +677,7 @@ pub enum ToolResultOutput {
     /// `"Tool call execution denied."` (matching the AI SDK). On OpenAI Responses
     /// a denial paired with its approval is skipped on render (the
     /// `mcp_approval_response` conveys it); elsewhere it degrades to the reason
-    /// string via [`Self::to_provider_string`].
+    /// string in the gateway codec.
     /// <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
     ExecutionDenied {
         /// Optional human-readable denial reason. `None` falls back to the
@@ -662,54 +688,9 @@ pub enum ToolResultOutput {
 }
 
 impl ToolResultOutput {
-    /// Parse a provider tool-result body that carries no error flag and no
-    /// typed shape (OpenAI Chat Completions `tool` content / Responses
-    /// `function_call_output.output`). A JSON string maps to [`Self::Text`];
-    /// any other JSON value (object, array, number, …) maps to [`Self::Json`],
-    /// preserving structure the flat-string IR used to lose.
-    pub fn from_untyped_value(value: &serde_json::Value) -> Self {
-        match value {
-            serde_json::Value::String(s) => Self::Text { value: s.clone() },
-            other => Self::Json {
-                value: other.clone(),
-            },
-        }
-    }
-
-    /// Whether this output represents an error (the V3 `error-text` /
-    /// `error-json` outputs). Lets an adapter set a provider's native error flag
-    /// (e.g. Anthropic's `tool_result.is_error`).
+    /// Whether this value is an error-text or error-json result.
     pub fn is_error(&self) -> bool {
         matches!(self, Self::ErrorText { .. } | Self::ErrorJson { .. })
-    }
-
-    /// Collapse this output to a single string for providers whose tool-result
-    /// field is string-only (OpenAI Chat Completions / Responses). `Text` /
-    /// `ErrorText` pass through verbatim; `Json` / `ErrorJson` stringify their
-    /// value; `Content` concatenates its text parts (media parts have no string
-    /// form on these wires and are dropped).
-    pub fn to_provider_string(&self) -> String {
-        match self {
-            Self::Text { value } | Self::ErrorText { value } => value.clone(),
-            Self::Json { value } | Self::ErrorJson { value } => value.to_string(),
-            Self::Content { value } => value
-                .iter()
-                .filter_map(|p| match p {
-                    ToolResultContentPart::Text { text } => Some(text.as_str()),
-                    // Media bytes and provider file references have no string form
-                    // on a string-only tool wire; both drop out of the collapse.
-                    ToolResultContentPart::Media { .. } | ToolResultContentPart::FileId { .. } => {
-                        None
-                    }
-                })
-                .collect(),
-            // A denied execution collapses to its reason, or the AI SDK's default
-            // denial sentinel when none was given.
-            // <https://github.com/vercel/ai/blob/8e650ab809ac47de5d16f26bf544a9a73b0d39a3/packages/openai/src/responses/convert-to-openai-responses-input.ts>
-            Self::ExecutionDenied { reason } => reason
-                .clone()
-                .unwrap_or_else(|| "Tool call execution denied.".to_string()),
-        }
     }
 }
 
@@ -783,46 +764,6 @@ pub enum DataContent {
     },
 }
 
-impl DataContent {
-    /// Render as a single URL string: inline base64 bytes become a `data:` URI;
-    /// a URL passes through unchanged. For wire forms that carry media in one
-    /// URL field (e.g. OpenAI `image_url.url`).
-    pub fn to_url(&self, media_type: &str) -> String {
-        match self {
-            DataContent::Base64 { data } => format!("data:{media_type};base64,{data}"),
-            DataContent::Url { url } => url.clone(),
-        }
-    }
-
-    /// Parse a URL-or-`data:`-URI into an optional embedded media type and the
-    /// payload. `data:<mt>;base64,<payload>` yields `(Some(mt), Base64)`; any
-    /// other string becomes `(None, Url)`.
-    pub fn from_url(value: &str) -> (Option<String>, DataContent) {
-        if let Some(rest) = value.strip_prefix("data:")
-            && let Some((meta, payload)) = rest.split_once(',')
-            && meta.contains(";base64")
-        {
-            let media_type = meta
-                .split(';')
-                .next()
-                .filter(|m| !m.is_empty())
-                .map(str::to_string);
-            return (
-                media_type,
-                DataContent::Base64 {
-                    data: payload.to_string(),
-                },
-            );
-        }
-        (
-            None,
-            DataContent::Url {
-                url: value.to_string(),
-            },
-        )
-    }
-}
-
 /// A citation / grounding source attached to the model's reply — a faithful
 /// port of the Vercel AI SDK `LanguageModelV3Source` tagged union. A source is
 /// **response-side metadata**: unlike text or media it is never a free-standing
@@ -883,17 +824,6 @@ pub enum Source {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filename: Option<String>,
     },
-}
-
-impl Source {
-    /// Synthesize a stable [`Source`] id from a citation's URL and its index in
-    /// the response. V3 requires an `id`, but the OpenAI / Anthropic web-search
-    /// / Gemini grounding wires rarely carry one; this derives a deterministic,
-    /// collision-resistant id (`url#<index>`) so a same-protocol round-trip
-    /// reproduces a stable identity without fabricating provider-side identity.
-    pub fn synthesize_id(url: &str, index: usize) -> String {
-        format!("{url}#{index}")
-    }
 }
 
 /// A single message in the conversation.
@@ -1126,10 +1056,10 @@ pub enum ToolChoice {
 /// representation (e.g. `structured_outputs`) is the stable token used to match
 /// a request's needs against a provider's advertised capabilities.
 ///
-/// A capability-aware `RoutingTable`
-/// can read the set a request requires ([`Prompt::required_capabilities`]) and
-/// restrict the chain to providers advertising all of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+/// Application routing derives a request's required capabilities and can
+/// restrict its provider chain to those advertising all of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     /// JSON-Schema-constrained output — [`ResponseFormat::JsonSchema`].
@@ -1165,19 +1095,8 @@ pub enum Capability {
 /// every value. Exact provider/model routes advertise their supported subset
 /// separately and policy-owned effort targets are validated against it before
 /// dispatch.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Deserialize,
-    Serialize,
-    schemars::JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     /// Disable reasoning where the selected model supports doing so.
@@ -1256,7 +1175,8 @@ impl std::str::FromStr for ReasoningEffort {
 /// Absence means unknown rather than unsupported. Policy-owned effort targets
 /// require this positive declaration; ordinary caller-authored parameters keep
 /// their existing pass-through behavior when support is unknown.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ReasoningEffortConfig {
     /// Effort values accepted by this exact provider/model route.
@@ -1268,16 +1188,16 @@ pub struct ReasoningEffortConfig {
 
 impl ReasoningEffortConfig {
     /// Validate the internal capability declaration.
-    pub fn validate(&self) -> crate::error::Result<()> {
+    pub fn validate(&self) -> Result<(), crate::error::ValidationError> {
         if self.levels.is_empty() {
-            return Err(crate::error::ModelError::invalid_request(
+            return Err(crate::error::ValidationError::new(
                 "reasoning_effort.levels must not be empty",
             ));
         }
         let mut unique = std::collections::BTreeSet::new();
         for level in &self.levels {
             if !unique.insert(*level) {
-                return Err(crate::error::ModelError::invalid_request(format!(
+                return Err(crate::error::ValidationError::new(format!(
                     "reasoning_effort.levels contains duplicate '{level}'"
                 )));
             }
@@ -1285,7 +1205,7 @@ impl ReasoningEffortConfig {
         if let Some(default) = self.default
             && !self.levels.contains(&default)
         {
-            return Err(crate::error::ModelError::invalid_request(format!(
+            return Err(crate::error::ValidationError::new(format!(
                 "reasoning_effort.default '{default}' must be listed in levels"
             )));
         }
@@ -1311,27 +1231,6 @@ impl Capability {
             Self::AudioOutput => "audio_output",
         }
     }
-
-    /// The input-modality capability implied by a file part's IANA media type;
-    /// everything that is not image/audio/video is treated as a document.
-    fn from_input_media_type(media_type: &str) -> Capability {
-        match media_type.split('/').next() {
-            Some("image") => Capability::ImageInput,
-            Some("audio") => Capability::AudioInput,
-            Some("video") => Capability::VideoInput,
-            _ => Capability::FileInput,
-        }
-    }
-
-    /// The output-modality capability implied by a requested response modality;
-    /// `Text` implies no extra capability.
-    fn from_output_modality(modality: Modality) -> Option<Capability> {
-        match modality {
-            Modality::Image => Some(Capability::ImageOutput),
-            Modality::Audio => Some(Capability::AudioOutput),
-            Modality::Text => None,
-        }
-    }
 }
 
 /// A content modality. Used for the requested output modalities
@@ -1354,7 +1253,8 @@ pub enum Modality {
 /// prompt keeps one semantic token budget; this enum only records which wire
 /// spelling should be used when the prompt is rendered back to Chat
 /// Completions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ChatTokenLimitField {
     /// Legacy Chat Completions field.
@@ -1364,7 +1264,8 @@ pub enum ChatTokenLimitField {
 }
 
 /// Provider/model request-shape compatibility settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct ModelCompatibility {
     /// Chat Completions-specific request settings.
@@ -1372,7 +1273,8 @@ pub struct ModelCompatibility {
 }
 
 /// Chat Completions request-shape compatibility settings.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default)]
 pub struct ChatCompletionsCompatibility {
     /// Enable the demonstrated Google Chat extensions for this selected model.
@@ -1396,7 +1298,8 @@ pub struct ChatCompletionsCompatibility {
 /// protocol-neutral streaming response. Keeping them typed prevents a Chat
 /// client's top-level object from leaking into Messages, Responses, or Gemini
 /// requests while preserving same-protocol extensions through [`Self::extra`].
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatStreamOptions {
     /// Ask the upstream to emit a final usage-only streaming chunk.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1406,7 +1309,7 @@ pub struct ChatStreamOptions {
     pub include_obfuscation: Option<bool>,
     /// Provider extensions preserved on native Chat Completions routes.
     #[serde(flatten)]
-    #[schemars(skip)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
     pub extra: HashMap<String, serde_json::Value>,
 }
 
@@ -1501,40 +1404,6 @@ pub struct GenerationParams {
     pub extra: HashMap<String, serde_json::Value>,
 }
 
-impl GenerationParams {
-    /// Iterate extras applicable to `protocol`: source-owned fields only on a
-    /// matching wire, followed by server-supplied defaults on every wire.
-    pub fn extras_for_protocol<'a>(
-        &'a self,
-        protocol: &'a ApiProtocol,
-    ) -> impl Iterator<Item = (&'a String, &'a serde_json::Value)> + 'a {
-        let source_matches = self
-            .extra_protocol
-            .as_ref()
-            .is_none_or(|source| source == protocol);
-        self.extra
-            .iter()
-            .filter(move |_| source_matches)
-            .chain(self.supplemental_extra.iter())
-    }
-
-    /// Read one applicable extra, preferring an explicit source-wire value over
-    /// a server-supplied default with the same name.
-    pub fn extra_value_for_protocol(
-        &self,
-        protocol: &ApiProtocol,
-        key: &str,
-    ) -> Option<&serde_json::Value> {
-        let source_value = self
-            .extra_protocol
-            .as_ref()
-            .is_none_or(|source| source == protocol)
-            .then(|| self.extra.get(key))
-            .flatten();
-        source_value.or_else(|| self.supplemental_extra.get(key))
-    }
-}
-
 /// The canonical internal request representation. Inbound protocol adapters
 /// parse into this; outbound adapters render from it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1580,72 +1449,6 @@ pub struct Prompt {
     pub tool_choice: Option<ToolChoice>,
     /// Whether the caller requested a streaming response.
     pub stream: bool,
-}
-
-impl Prompt {
-    /// The [`Capability`]s this request requires, derived from which optional
-    /// features it actually uses. A capability-aware routing table can use this
-    /// to restrict the fallback chain to providers that advertise all of these,
-    /// instead of silently degrading the request.
-    ///
-    /// Detected from the canonical [`Prompt`]: `structured_outputs` (a
-    /// `response_format`), `tools` (a non-empty tool list), `reasoning` (a
-    /// reasoning-effort hint), the input modalities of any [`Content::File`]
-    /// parts (`image_input` / `audio_input` / `video_input` / `file_input`), and
-    /// the requested output modalities (`image_output` / `audio_output`).
-    /// `web_search` and `logprobs` ride [`GenerationParams::extra`] and are not
-    /// expressible here, so they stay catalog-only and never gate routing.
-    pub fn required_capabilities(&self) -> Vec<Capability> {
-        let mut caps = Vec::new();
-        if self.response_format.is_some() {
-            caps.push(Capability::StructuredOutputs);
-        }
-        if !self.tools.is_empty() {
-            caps.push(Capability::Tools);
-        }
-        if self.params.reasoning_effort.is_some() {
-            caps.push(Capability::Reasoning);
-        }
-        // Input modalities: each file part contributes the capability implied by
-        // its media type, deduplicated (one `image_input` for several images).
-        for content in self.messages.iter().flat_map(|m| &m.content) {
-            let mut add_media = |media_type: &str| {
-                let cap = Capability::from_input_media_type(media_type);
-                if !caps.contains(&cap) {
-                    caps.push(cap);
-                }
-            };
-            match content {
-                Content::File { media_type, .. } => add_media(media_type),
-                Content::ToolResult {
-                    output: ToolResultOutput::Content { value },
-                    ..
-                } => {
-                    for part in value {
-                        match part {
-                            ToolResultContentPart::Media { media_type, .. } => {
-                                add_media(media_type)
-                            }
-                            ToolResultContentPart::FileId { media_type, .. } => add_media(
-                                media_type.as_deref().unwrap_or("application/octet-stream"),
-                            ),
-                            ToolResultContentPart::Text { .. } => {}
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-        // Output modalities: from the requested response modalities.
-        for modality in &self.params.response_modalities {
-            if let Some(cap) = Capability::from_output_modality(*modality)
-                && !caps.contains(&cap)
-            {
-                caps.push(cap);
-            }
-        }
-        caps
-    }
 }
 
 /// Mutually exclusive token buckets used by settlement and cost evidence.
@@ -2236,28 +2039,6 @@ impl StreamPart {
     }
 }
 
-/// How an upstream's credential is presented on the wire.
-///
-/// Consulted by transports that support more than one credential scheme.
-/// Today that is only the Messages transport, which sends the key as either
-/// `x-api-key` (Anthropic's native scheme) or `Authorization: Bearer`. The
-/// Chat Completions transport (always `Authorization: Bearer`) and Generate
-/// Content transport (always `x-goog-api-key`) have a single fixed scheme and
-/// ignore this.
-///
-/// Exactly one scheme is ever sent — never both: the Anthropic API rejects a
-/// request that carries `x-api-key` and `Authorization` together.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-pub enum AuthScheme {
-    /// `x-api-key: <key>` — Anthropic's native scheme; the default.
-    #[default]
-    #[serde(rename = "x-api-key")]
-    XApiKey,
-    /// `Authorization: Bearer <key>`.
-    #[serde(rename = "bearer")]
-    Bearer,
-}
-
 fn fmt_model_value<T: Serialize>(value: &T, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     fn redact(value: &mut serde_json::Value) {
         match value {
@@ -2327,161 +2108,6 @@ mod tests {
         Ok(())
     }
 
-    fn bare_prompt() -> Prompt {
-        Prompt {
-            model: "m".into(),
-            system: None,
-            system_provider_metadata: Default::default(),
-            messages: vec![],
-            tools: vec![],
-            params: GenerationParams::default(),
-            response_format: None,
-            tool_choice: None,
-            stream: false,
-        }
-    }
-
-    #[test]
-    fn plain_request_requires_no_capabilities() {
-        assert!(bare_prompt().required_capabilities().is_empty());
-    }
-
-    #[test]
-    fn response_format_requires_structured_outputs() {
-        let mut p = bare_prompt();
-        p.response_format = Some(ResponseFormat::JsonSchema {
-            name: None,
-            description: None,
-            strict: None,
-            schema: serde_json::json!({ "type": "object" }),
-        });
-        assert_eq!(
-            p.required_capabilities(),
-            vec![Capability::StructuredOutputs]
-        );
-    }
-
-    #[test]
-    fn tools_require_tools_capability() {
-        let mut p = bare_prompt();
-        p.tools = vec![Tool::Function {
-            name: "get_weather".into(),
-            description: None,
-            parameters: serde_json::json!({ "type": "object" }),
-            strict: None,
-            provider_metadata: Default::default(),
-        }];
-        assert_eq!(p.required_capabilities(), vec![Capability::Tools]);
-    }
-
-    #[test]
-    fn reasoning_effort_requires_reasoning_capability() {
-        let mut p = bare_prompt();
-        p.params.reasoning_effort = Some(ReasoningEffort::High);
-        assert_eq!(p.required_capabilities(), vec![Capability::Reasoning]);
-    }
-
-    #[test]
-    fn multiple_features_require_all_their_capabilities() {
-        let mut p = bare_prompt();
-        p.response_format = Some(ResponseFormat::JsonSchema {
-            name: None,
-            description: None,
-            strict: None,
-            schema: serde_json::json!({ "type": "object" }),
-        });
-        p.tools = vec![Tool::Function {
-            name: "t".into(),
-            description: None,
-            parameters: serde_json::json!({}),
-            strict: None,
-            provider_metadata: Default::default(),
-        }];
-        p.params.reasoning_effort = Some(ReasoningEffort::Low);
-        let caps = p.required_capabilities();
-        assert!(caps.contains(&Capability::StructuredOutputs));
-        assert!(caps.contains(&Capability::Tools));
-        assert!(caps.contains(&Capability::Reasoning));
-        assert_eq!(caps.len(), 3);
-    }
-
-    fn user_file_prompt(media_type: &str) -> Prompt {
-        let mut p = bare_prompt();
-        p.messages = vec![Message {
-            role: Role::User,
-            content: vec![Content::File {
-                media_type: media_type.to_string(),
-                data: DataContent::Base64 {
-                    data: "AAAA".to_string(),
-                },
-                filename: None,
-                provider_metadata: Default::default(),
-            }],
-        }];
-        p
-    }
-
-    #[test]
-    fn image_file_requires_image_input() {
-        assert_eq!(
-            user_file_prompt("image/png").required_capabilities(),
-            vec![Capability::ImageInput]
-        );
-    }
-
-    #[test]
-    fn audio_file_requires_audio_input() {
-        assert_eq!(
-            user_file_prompt("audio/mpeg").required_capabilities(),
-            vec![Capability::AudioInput]
-        );
-    }
-
-    #[test]
-    fn video_file_requires_video_input() {
-        assert_eq!(
-            user_file_prompt("video/mp4").required_capabilities(),
-            vec![Capability::VideoInput]
-        );
-    }
-
-    #[test]
-    fn document_file_requires_file_input() {
-        assert_eq!(
-            user_file_prompt("application/pdf").required_capabilities(),
-            vec![Capability::FileInput]
-        );
-    }
-
-    #[test]
-    fn repeated_image_parts_dedupe_to_one_image_input() {
-        let img = || Content::File {
-            media_type: "image/png".to_string(),
-            data: DataContent::Url {
-                url: "https://example.invalid/a.png".to_string(),
-            },
-            filename: None,
-            provider_metadata: Default::default(),
-        };
-        let mut p = bare_prompt();
-        p.messages = vec![Message {
-            role: Role::User,
-            content: vec![img(), img()],
-        }];
-        assert_eq!(p.required_capabilities(), vec![Capability::ImageInput]);
-    }
-
-    #[test]
-    fn response_modalities_require_output_capabilities() {
-        let mut p = bare_prompt();
-        p.params.response_modalities = vec![Modality::Text, Modality::Image, Modality::Audio];
-        // Text implies no capability; image / audio each map to an output cap.
-        assert_eq!(
-            p.required_capabilities(),
-            vec![Capability::ImageOutput, Capability::AudioOutput]
-        );
-    }
-
     #[test]
     fn file_content_serde_round_trips() -> std::result::Result<(), serde_json::Error> {
         let original = Content::File {
@@ -2517,20 +2143,6 @@ mod tests {
         assert_eq!(Capability::FileInput.as_str(), "file_input");
         assert_eq!(Capability::ImageOutput.as_str(), "image_output");
         assert_eq!(Capability::AudioOutput.as_str(), "audio_output");
-    }
-
-    #[test]
-    fn extra_only_features_are_not_auto_detected() {
-        // web_search / logprobs ride `params.extra` and are advertise-only (not
-        // gated) — a request carrying them must still require no capabilities.
-        let mut p = bare_prompt();
-        p.params
-            .extra
-            .insert("logprobs".into(), serde_json::json!(true));
-        p.params
-            .extra
-            .insert("web_search_options".into(), serde_json::json!({}));
-        assert!(p.required_capabilities().is_empty());
     }
 
     #[test]

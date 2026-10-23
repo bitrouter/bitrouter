@@ -1,18 +1,19 @@
-//! Internal helper for committed `dist/` artifacts.
+//! Internal helper for committed `dist/` artifacts and profiled packages.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
 mod chart;
+mod distribution;
 mod registry;
 mod schema;
 
 #[derive(Debug, Parser)]
 #[command(name = "dist-helper")]
-#[command(about = "Generate and check committed dist artifacts")]
+#[command(about = "Generate and check dist artifacts and build profiled packages")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -20,6 +21,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Build and package a distinct gateway or full artifact for manual use.
+    Package(distribution::PackageOptions),
     /// Generate the config JSON Schema.
     GenerateSchema {
         /// Fail if the committed schema is stale instead of writing it.
@@ -79,8 +82,9 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<()> {
-    let root = workspace_root();
+    let root = workspace_root()?;
     match cli.command {
+        Command::Package(options) => distribution::run(&root, &options),
         Command::GenerateSchema { check } => schema::generate(&root, check),
         Command::Registry { command } => match command {
             RegistryCommand::Validate => registry::validate(&root),
@@ -102,10 +106,10 @@ async fn run(cli: Cli) -> Result<()> {
     }
 }
 
-fn workspace_root() -> PathBuf {
+fn workspace_root() -> Result<PathBuf> {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
-        .expect("helpers/dist-helper lives two levels below the workspace root")
-        .to_path_buf()
+        .map(Path::to_path_buf)
+        .context("helpers/dist-helper must live two levels below the workspace root")
 }

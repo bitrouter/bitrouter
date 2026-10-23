@@ -1,10 +1,10 @@
 //! Deterministic semantic provider fixtures. Labels are test inputs, never a
 //! classifier quality claim or an alternative production routing algorithm.
+use bitrouter::config::Config;
+use bitrouter::config::decision::DecisionModelConfig;
 use bitrouter::policy_lock::{
     CertificateSource, PolicyCertificate, PolicyLock, PromotionVerdict, RouteOwner,
 };
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::config::decision::DecisionModelConfig;
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -12,8 +12,9 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 pub fn certify_routes(lock: &mut PolicyLock) {
     for (name, policy) in &mut lock.policies {
         if !policy.routes.is_empty() {
-            policy.predictor =
-                Some(bitrouter::workflow_state::predictive::compiled_predictor_contract());
+            policy.predictor = Some(
+                bitrouter::gateway::routing::workflow::predictive::compiled_predictor_contract(),
+            );
         }
         for (key, tier) in &policy.routes {
             lock.certificates.entry(name.clone()).or_default().insert(

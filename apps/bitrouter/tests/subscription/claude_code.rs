@@ -1,21 +1,21 @@
-use bitrouter_ai::auth::AuthApplier;
-use bitrouter_ai::auth::store::DEFAULT_ACCOUNT;
-use bitrouter_ai::error::{ModelError, Result};
-use bitrouter_ai::target::ModelTarget;
+use bitrouter::gateway::model::error::{ModelError, Result};
+use bitrouter::gateway::model::target::ModelTarget;
+use bitrouter::gateway::providers::auth::AuthApplier;
+use bitrouter::gateway::providers::auth::store::DEFAULT_ACCOUNT;
 use reqwest::header::HeaderValue;
 use std::sync::Arc;
 type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 use async_trait::async_trait;
+use bitrouter::gateway::providers::anthropic::headers;
+use bitrouter::gateway::providers::auth::oauth::{REFRESH_WINDOW, RefreshGrant};
+use bitrouter::gateway::providers::auth::store::{CredentialStore as AccountStore, OAuthSession};
+use bitrouter::gateway::providers::claude_code::{ClaudeCodeAuthApplier, PROVIDER_ID};
 use bitrouter::providers::claude_code::store::ClaudeStore;
 use bitrouter::providers::import::claude_code::ClaudeCodeStore;
-use bitrouter_ai::auth::oauth::{REFRESH_WINDOW, RefreshGrant};
-use bitrouter_ai::auth::store::{CredentialStore as AccountStore, OAuthSession};
-use bitrouter_ai::providers::anthropic::headers;
-use bitrouter_ai::providers::claude_code::{ClaudeCodeAuthApplier, PROVIDER_ID};
 use std::time::Duration;
 fn claude_with_store(store: Arc<dyn AccountStore>) -> TestResult<ClaudeCodeAuthApplier> {
-    let registration =
-        bitrouter_ai::providers::login::find("anthropic").ok_or("missing Claude registration")?;
+    let registration = bitrouter::gateway::providers::login::find("anthropic")
+        .ok_or("missing Claude registration")?;
     Ok(ClaudeCodeAuthApplier::new(OAuthSession::new(
         store,
         Arc::new(RefreshGrant::new(
@@ -48,9 +48,8 @@ use std::path::PathBuf;
 use bitrouter_ai::types::ApiProtocol;
 use wiremock::MockServer;
 
-use bitrouter_ai::auth::credentials::Credential;
-use bitrouter_ai::auth::credentials::OAuthToken;
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
+use bitrouter::gateway::providers::auth::credentials::{Credential, OAuthToken};
+use bitrouter::gateway::providers::auth::file::snapshot::CredentialStore;
 
 fn tmp_store_path() -> TestResult<PathBuf> {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -559,7 +558,7 @@ async fn claude_code_cli_marker_non_expiring_is_reread_live_each_request() -> Te
 #[tokio::test]
 async fn stored_claude_oauth_wins_over_allowed_environment_and_invalid_slot_fails()
 -> std::result::Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use bitrouter_ai::auth::store::{CredentialKey, MemoryCredentialStore};
+    use bitrouter::gateway::providers::auth::store::{CredentialKey, MemoryCredentialStore};
     let store = MemoryCredentialStore::new([
         (
             CredentialKey {
@@ -620,7 +619,7 @@ struct HeldRefresh {
     release: tokio::sync::Notify,
 }
 #[async_trait]
-impl bitrouter_ai::auth::store::OAuthRefresher for HeldRefresh {
+impl bitrouter::gateway::providers::auth::store::OAuthRefresher for HeldRefresh {
     async fn refresh(&self, _current: &OAuthToken) -> Result<OAuthToken> {
         self.entered.notify_one();
         self.release.notified().await;
@@ -645,7 +644,7 @@ async fn cancelled_claude_call_commits_to_live_cli_source_for_another_applier()
         release: tokio::sync::Notify::new(),
     });
     let make =
-        || -> std::result::Result<ClaudeCodeAuthApplier, bitrouter_ai::auth::store::StoreError> {
+        || -> std::result::Result<ClaudeCodeAuthApplier, bitrouter::gateway::providers::auth::store::StoreError> {
             let backend = ClaudeStore::new(path.clone(), Some(ClaudeCodeStore::file_only(&cli)))?;
             Ok(ClaudeCodeAuthApplier::new(OAuthSession::new(
                 Arc::new(backend),

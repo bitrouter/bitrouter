@@ -5,24 +5,24 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use bitrouter_orchestrator::acp::capture::{
-    CaptureDirection, CaptureEvent, CaptureKind, CapturePort,
-};
+use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use serde_json::json;
 
-use crate::acp_trajectory::{CanonicalStore, Recorder, RecordingScope, SessionIdentity};
+use crate::acp_trajectory::CanonicalStore;
+use crate::acp_trajectory::fixtures::{FixtureScope, PersistedHistory};
 use crate::administration_target::InspectionTarget;
+use crate::core::evolution::evidence::EvidenceKind;
 use crate::daemon::{AcpControlPlane, NoopObserveStatus, NoopReloader};
-use crate::evolution::evidence::EvidenceKind;
 use crate::paths::ConfigSource;
+use crate::storage::session_identity::SessionIdentity;
 
 struct Fixture {
     services: CodeServices,
     canonical: CanonicalStore,
-    recorder: Arc<Recorder>,
+    recorder: Arc<PersistedHistory>,
     session: SessionRef,
-    evolution: crate::evolution::runtime::EvolutionRuntime,
-    routing: Arc<bitrouter_sdk::config::ConfigRoutingTable>,
+    evolution: crate::core::evolution::runtime::EvolutionRuntime,
+    routing: Arc<crate::config::routing_table::ConfigRoutingTable>,
     server: tokio::task::JoinHandle<Result<()>>,
     _home: tempfile::TempDir,
 }
@@ -63,11 +63,11 @@ presets:
     params: {temperature: 0.1}
 "#;
     tokio::fs::write(&config_path, config_text).await?;
-    let config = bitrouter_sdk::config::parse_with(config_text, |_| None)?;
+    let config = crate::config::parse_with(config_text, |_| None)?;
     let assembled = crate::assemble::build_app_with_path(&config, Some(&config_path)).await?;
     let canonical = CanonicalStore::new(assembled.db.clone());
     let recorder = canonical
-        .recorder(RecordingScope {
+        .fixture_history(FixtureScope {
             owner: "local".into(),
             source: "fixture".into(),
             controller_instance_id: None,
@@ -119,13 +119,16 @@ presets:
         ),
     ] {
         recorder
-            .record(CaptureEvent {
-                direction,
-                kind,
-                call_id,
-                method: method.into(),
-                payload,
-            })
+            .append(
+                "session",
+                CaptureEvent {
+                    direction,
+                    kind,
+                    call_id,
+                    method: method.into(),
+                    payload,
+                },
+            )
             .await?;
     }
     let socket = home.path().join("evolution.sock");
@@ -138,9 +141,10 @@ presets:
         Arc::new(NoopReloader),
         Arc::new(NoopObserveStatus { compiled_in: false }),
         AcpControlPlane {
+            #[cfg(feature = "harness")]
             runtime: assembled.acp_runtime,
             metering: crate::metering::MeteringStore::new(assembled.db),
-            inventory: Some(assembled.evolution.inventory()),
+            inventory: Some(assembled.gateway_requests.inventory()),
             evolution: Some(assembled.evolution),
         },
     ));
@@ -183,7 +187,7 @@ mod history;
 
 #[tokio::test]
 async fn judge_cost_status_over_local_ipc_keeps_missing_fees_unknown() -> Result<()> {
-    use crate::evolution::jobs::{JudgeJob, JudgeJobs};
+    use crate::core::evolution::jobs::{JudgeJob, JudgeJobs};
     let fixture = fixture().await?;
     let draft = fixture.review().await?;
     let store = fixture.evolution.service("local")?.store;
@@ -413,7 +417,7 @@ async fn manual_ui_preserves_unknowns_and_requires_original_verification_evidenc
 async fn continued_prefix_is_saved_with_explicit_stale_status() -> Result<()> {
     let fixture = fixture().await?;
     let draft = scored(fixture.review().await?)?;
-    fixture.recorder.record(CaptureEvent { direction: CaptureDirection::Client, kind: CaptureKind::Request, call_id: Some(3), method: "session/prompt".into(), payload: json!({"sessionId":"session","prompt":[{"type":"text","text":"Continue with another change."}]}) }).await?;
+    fixture.recorder.append("session", CaptureEvent { direction: CaptureDirection::Client, kind: CaptureKind::Request, call_id: Some(3), method: "session/prompt".into(), payload: json!({"sessionId":"session","prompt":[{"type":"text","text":"Continue with another change."}]}) }).await?;
     let result = fixture
         .step("evolution:submit", "save", Some(draft))
         .await?;

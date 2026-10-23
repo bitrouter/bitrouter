@@ -38,7 +38,7 @@ mod tests {
         crate::db::run_migrations(&db).await?;
         let runtime = TrajectoryRuntime::new(
             TrajectoryStore::new(db),
-            Canonicalizer::new(CorrelationKey::from_bytes([31; 32])?),
+            Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?),
         );
         let correlated = runtime
             .begin_request(
@@ -110,9 +110,10 @@ mod tests {
         let protected_tiers = BTreeSet::from(["protected".to_owned()]);
         let db = crate::db::connect(&database_url).await?;
         crate::db::run_migrations(&db).await?;
+        let correlation_key = CorrelationKey::from_bytes(rand::random())?;
         let runtime = TrajectoryRuntime::new(
             TrajectoryStore::new(db.clone()),
-            Canonicalizer::new(CorrelationKey::from_bytes([32; 32])?),
+            Canonicalizer::new(correlation_key.clone()),
         );
 
         let first = runtime
@@ -223,7 +224,7 @@ mod tests {
         crate::db::run_migrations(&restarted_db).await?;
         let restarted_runtime = TrajectoryRuntime::new(
             TrajectoryStore::new(restarted_db),
-            Canonicalizer::new(CorrelationKey::from_bytes([32; 32])?),
+            Canonicalizer::new(correlation_key),
         );
         let restarted = replay_episode(
             restarted_runtime.store(),
@@ -264,9 +265,10 @@ mod tests {
         let protected_tiers = BTreeSet::from(["protected".to_owned()]);
         let db = crate::db::connect(&database_url).await?;
         crate::db::run_migrations(&db).await?;
+        let correlation_key = CorrelationKey::from_bytes(rand::random())?;
         let runtime = TrajectoryRuntime::new(
             TrajectoryStore::new(db.clone()),
-            Canonicalizer::new(CorrelationKey::from_bytes([33; 32])?),
+            Canonicalizer::new(correlation_key.clone()),
         );
         let native_root = runtime
             .begin_request(
@@ -345,7 +347,7 @@ mod tests {
         crate::db::run_migrations(&restarted_db).await?;
         let restarted = TrajectoryRuntime::new(
             TrajectoryStore::new(restarted_db),
-            Canonicalizer::new(CorrelationKey::from_bytes([33; 32])?),
+            Canonicalizer::new(correlation_key),
         );
         let replayed = replay_episode(
             restarted.store(),
