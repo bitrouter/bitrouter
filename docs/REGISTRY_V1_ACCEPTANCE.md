@@ -110,6 +110,11 @@ authority, curation/inventory independence, and revision-preserving promotion.
   dependency boundary; its existing gate was preserved and passed.
 - TLS fixtures use an ephemeral private CA, a short-lived leaf, and an explicit
   Rustls crypto provider. Certificate verification remains enabled.
+- Feed URL/pagination parsing is separate from secret resolution. The transport
+  enforces HTTPS, disables redirects, and marks configured header values as
+  sensitive. TLS fixtures cover header-only bearer/custom authentication for
+  both listing and identity requests; plaintext addresses fail before secret
+  lookup or connection, and header debug output redacts credentials.
 - A staged response is not a successful check while waiting behind a reload.
   `checked_at` advances only after successful fenced routing publication.
 - Selection and final validation share content-free request requirements.

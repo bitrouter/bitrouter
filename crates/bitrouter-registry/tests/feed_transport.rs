@@ -2,6 +2,7 @@
 use bitrouter_registry::feed::Transport;
 use registry_json as serde_json;
 use serde_json::{Value, json};
+use std::cell::Cell;
 use std::sync::{Arc, Mutex};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -183,5 +184,67 @@ async fn missing_secret_and_invalid_inventory_do_not_send_any_request() -> TestR
             .map_err(|_| "requests lock")?
             .is_empty()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn plaintext_addresses_are_rejected_before_secret_lookup_or_connection() -> TestResult {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://127.0.0.1:{}/models", listener.local_addr()?.port());
+    let config = feed(&url);
+    let lookups = Cell::new(0);
+    let secret = |_: &str| {
+        lookups.set(lookups.get() + 1);
+        Some("fixture-token".into())
+    };
+    let transport = Transport::new([])?;
+    let observed = transport
+        .observe(&config, secret)
+        .await
+        .err()
+        .ok_or("plaintext feed accepted")?;
+    let identity = transport
+        .identity(&config["request"], secret)
+        .await
+        .err()
+        .ok_or("plaintext identity source accepted")?;
+    for error in [observed, identity] {
+        assert_eq!(error.code, "registry.invalid_data");
+        assert!(!error.to_string().contains("fixture-token"));
+    }
+    assert_eq!(lookups.get(), 0);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn identity_bearer_credentials_only_appear_in_the_header() -> TestResult {
+    let fixture = fixture(vec![(200, json!({"data":[]}).to_string())]).await?;
+    let request = json!({
+        "url":fixture.url,
+        "query":{"scope":"public"},
+        "auth":{"kind":"bearer","env":"FIXTURE_KEY"}
+    });
+    let fetched = transport(&fixture.root)?
+        .identity(&request, |name| {
+            (name == "FIXTURE_KEY").then(|| "fixture-token".into())
+        })
+        .await?;
+    assert_eq!(fetched.value, json!({"data":[]}));
+    fixture.job.await??;
+    let requests = fixture.requests.lock().map_err(|_| "requests lock")?;
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(
+        request.lines().next(),
+        Some("GET /models?scope=public HTTP/1.1")
+    );
+    assert!(request.contains("authorization: Bearer fixture-token\r\n"));
+    assert!(!request.contains("x-api-key:"));
+    assert!(!request.contains("cookie:"));
     Ok(())
 }
