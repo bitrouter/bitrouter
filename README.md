@@ -141,6 +141,10 @@ See [`docs/CLI.md`](docs/CLI.md) for the complete command reference, session
 controls, flags, and config resolution.
 
 
+## One-click deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/BitRouter/)
+
 ## Workflow recipes
 
 Ready-made **policy specs** for common agentic workflows start in [`templates/auto-router/`](templates/auto-router/): a predictive `bitrouter/auto` / `bitrouter/auto:cost` ladder using GPT-5.6 as the strong tier, Kimi K3 as balanced, and DeepSeek V4 Pro as economy. Treat it as a starting point and evaluate it against your own loop before publishing a live policy.
