@@ -1,45 +1,5 @@
 [
   {
-    "output_modalities": [
-      "text"
-    ],
-    "family": "grok",
-    "id": "x-ai/grok-4.20-multi-agent",
-    "input_modalities": [
-      "text",
-      "image"
-    ],
-    "max_input_tokens": 1000000,
-    "name": "xAI: Grok 4.20 Multi-Agent",
-    "open_weights": false,
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
-  },
-  {
-    "release_date": "2026-03-12",
-    "family": "grok",
-    "id": "x-ai/grok-4.20",
-    "input_modalities": [
-      "text",
-      "image"
-    ],
-    "max_input_tokens": 131072,
-    "max_output_tokens": 4096,
-    "name": "xAI: Grok 4.20",
-    "open_weights": false,
-    "output_modalities": [
-      "text"
-    ],
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
-  },
-  {
     "family": "grok",
     "id": "x-ai/grok-4.5",
     "input_modalities": [

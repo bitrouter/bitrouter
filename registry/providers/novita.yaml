@@ -11,6 +11,28 @@
   },
   "models": [
     {
+      "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "deepseek/deepseek-v4.1-flash-1017"
+    },
+    {
       "provider_model_id": "qwen/qwen3.7-max",
       "status": "active",
       "interfaces": [

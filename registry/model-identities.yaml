@@ -620,7 +620,7 @@
   {
     "canonical_id": "deepseek/deepseek-v4.1-flash",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-22T17:30:00Z",
+    "observed_at": "2026-10-23T19:52:32Z",
     "bindings": [
       {
         "provider": "opencode-zen",
@@ -663,19 +663,31 @@
         "provider_model_id": "deepseek/deepseek-v4.1-flash",
         "source_url": "https://docs.bitrouter.ai",
         "verified_at": "2026-10-22T17:30:00Z"
+      },
+      {
+        "provider": "azure",
+        "provider_model_id": "deepseek-v4.1-flash",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/a1dc3a5beaf73c0fd90dbd5d47aa339c5aa524c3/registry/providers/azure.yaml",
+        "verified_at": "2026-10-23T19:52:32Z"
       }
     ]
   },
   {
     "canonical_id": "deepseek/deepseek-v4.1-flash-1017",
     "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-    "observed_at": "2026-10-22T17:30:00Z",
+    "observed_at": "2026-10-23T19:52:32Z",
     "bindings": [
       {
         "provider": "openrouter",
         "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
         "source_url": "https://openrouter.ai/docs/api-reference/overview",
         "verified_at": "2026-10-22T17:30:00Z"
+      },
+      {
+        "provider": "novita",
+        "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/a1dc3a5beaf73c0fd90dbd5d47aa339c5aa524c3/registry/providers/novita.yaml",
+        "verified_at": "2026-10-23T19:52:32Z"
       }
     ]
   },
