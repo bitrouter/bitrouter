@@ -292,7 +292,13 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
         } else if kind.is_file() {
             let destination = to.join(entry.file_name());
             fs::copy(entry.path(), &destination)?;
-            fs::File::open(destination)?.sync_all()?;
+            // Windows FlushFileBuffers requires GENERIC_WRITE on the handle.
+            // https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers
+            fs::OpenOptions::new()
+                .read(true)
+                .write(cfg!(windows))
+                .open(&destination)?
+                .sync_all()?;
         }
     }
     sync_directory(to)

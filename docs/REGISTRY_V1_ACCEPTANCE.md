@@ -123,6 +123,12 @@ authority, curation/inventory independence, and revision-preserving promotion.
   Registry admission owns JSON Schema validation in every application profile;
   the dependency gate still rejects harness result validation in profiles that
   do not enable the harness.
+- Windows source publication opens copied files with write access before
+  flushing, as required by `FlushFileBuffers`; other platforms retain read-only
+  handles. The rollback regression proves it reaches the injected late output
+  failure, so an earlier preparation error cannot make the test pass. Windows CI
+  allows 60 minutes for the observed 43-minute cold build/full suite plus cache
+  upload and cleanup; existing per-test deadlines remain in force.
 - Upstream catalog integration rolls two old Grok recommendations out of the
   curated list while retaining independent provider inventories. New Azure and
   Novita offers have reviewed native/canonical bindings and fresh global audit.

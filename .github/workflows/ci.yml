@@ -143,7 +143,9 @@ jobs:
           - os: windows-latest
             # Windows also exposes the trajectory timestamp race under load.
             retries: "2"
-            timeout: 45
+            # A cold build and full suite took 43 minutes before cache upload.
+            # Leave time for post-job cleanup; per-test deadlines still apply.
+            timeout: 60
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
     steps:

@@ -152,8 +152,10 @@ fn late_output_failure_and_concurrent_unrelated_edits_preserve_prior_tree() -> R
     next.files.get_mut(&next.manifest).context("manifest")?["as_of"] =
         json!("2026-10-22T01:00:00Z");
     let outputs = build_outputs(root.path(), &next)?;
+    let mut visited_outputs = Vec::new();
     assert!(
         next.publish_with(&original, &outputs, |index| {
+            visited_outputs.push(index);
             if index == 2 {
                 bail!("injected late write failure")
             }
@@ -161,6 +163,7 @@ fn late_output_failure_and_concurrent_unrelated_edits_preserve_prior_tree() -> R
         })
         .is_err()
     );
+    assert_eq!(visited_outputs, [0, 1, 2]);
     assert_eq!(
         Sources::load(root.path())?.tree_digest,
         original.tree_digest
