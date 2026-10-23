@@ -109,6 +109,14 @@ models:
         cache_read: 0.25
       output_tokens:
         text: 6.0
+  - id: deepseek/deepseek-v4.1-flash-1017
+    provider_model_id: deepseek/deepseek-v4.1-flash-1017
+    pricing:
+      input_tokens:
+        no_cache: 0.3
+        cache_read: 0.006
+      output_tokens:
+        text: 1.2
 status: active
 weight: 1
 submitted_at: 2026-07-07

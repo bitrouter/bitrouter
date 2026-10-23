@@ -51,19 +51,6 @@ models:
     capabilities:
       - reasoning
       - tools
-  - id: x-ai/grok-4.20
-    provider_model_id: grok-4.20-0309-non-reasoning
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.2
-      output_tokens:
-        text: 2.5
-    # `reasoning` dropped: the provider_model_id is the non-reasoning grok-4.20
-    # variant. The model-level models.dev baseline over-claimed it (the canonical
-    # id `grok-4.20` matches the reasoning family); corrected by hand.
-    capabilities:
-      - tools
   - id: x-ai/grok-build-0.1
     provider_model_id: grok-build-0.1
     # Pricing from the xAI catalog ($1.00 in / $0.20 cached / $2.00 out per 1M).
@@ -74,18 +61,6 @@ models:
       output_tokens:
         text: 2
     capabilities:
-      - tools
-  - id: x-ai/grok-4.20-multi-agent
-    provider_model_id: grok-4.20-multi-agent-0309
-    # Pricing from the xAI catalog ($1.25 in / $0.20 cached / $2.50 out per 1M).
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.2
-      output_tokens:
-        text: 2.5
-    capabilities:
-      - reasoning
       - tools
   - id: x-ai/grok-4.7
     provider_model_id: grok-4.7

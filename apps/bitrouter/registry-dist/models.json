@@ -1659,6 +1659,26 @@
           }
         },
         {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "azure",
+          "provider_model_id": "deepseek-v4.1-flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
           "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
@@ -1756,6 +1776,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "deepseek/deepseek-v4.1-flash-1017"
+        },
         {
           "api_protocol": [
             "openai",
@@ -5654,177 +5688,6 @@
         }
       ],
       "release_date": "2026-09-21"
-    },
-    {
-      "deprecation_date": "2026-10-22",
-      "family": "grok",
-      "id": "x-ai/grok-4.20",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "max_input_tokens": 131072,
-      "max_output_tokens": 4096,
-      "name": "xAI: Grok 4.20",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider": "bitrouter",
-          "provider_model_id": "x-ai/grok-4.20"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "x-ai/grok-4.20"
-        },
-        {
-          "api_protocol": [
-            "responses",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "provider": "supergrok",
-          "provider_model_id": "grok-4.20"
-        },
-        {
-          "api_protocol": [
-            "responses",
-            "openai"
-          ],
-          "capabilities": [
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider": "xai",
-          "provider_model_id": "grok-4.20-0309-non-reasoning",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "release_date": "2026-03-12"
-    },
-    {
-      "deprecation_date": "2026-10-22",
-      "family": "grok",
-      "id": "x-ai/grok-4.20-multi-agent",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "max_input_tokens": 1000000,
-      "name": "xAI: Grok 4.20 Multi-Agent",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider": "bitrouter",
-          "provider_model_id": "x-ai/grok-4.20-multi-agent"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "x-ai/grok-4.20-multi-agent"
-        },
-        {
-          "api_protocol": [
-            "responses",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "provider": "supergrok",
-          "provider_model_id": "grok-4.20-multi-agent"
-        },
-        {
-          "api_protocol": [
-            "responses",
-            "openai"
-          ],
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.2,
-              "no_cache": 1.25
-            },
-            "output_tokens": {
-              "text": 2.5
-            }
-          },
-          "provider": "xai",
-          "provider_model_id": "grok-4.20-multi-agent-0309",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ]
     },
     {
       "family": "grok",
