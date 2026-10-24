@@ -180,6 +180,12 @@ jobs:
               --test managed_native --test onboarding --test smithers_reward_loop
               --test terminus_2_workflow_state
               --test trajectory_progress_control
+          - shard: cli-orchestration
+            retries: "0"
+            build_jobs: "1"
+            targets: >-
+              --test managed_daemon --test management_cli --test mcp_config_pty
+              --test onboarding_pty --test orchestrator_core --test skills_lifecycle
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -195,9 +201,11 @@ jobs:
         env:
           TEST_RETRIES: ${{ matrix.retries }}
           TEST_TARGETS: ${{ matrix.targets }}
+          TEST_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
+          CARGO_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
         run: |
           read -r -a test_targets <<< "$TEST_TARGETS"
-          cargo nextest run -p bitrouter --all-features --build-jobs 2 \
+          cargo nextest run -p bitrouter --all-features --build-jobs "$TEST_BUILD_JOBS" \
             --retries "$TEST_RETRIES" \
             "${test_targets[@]}"
 

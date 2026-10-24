@@ -19,6 +19,7 @@ pub const COLLABORATION_TOOLS: &[&str] = &[
     "wait_agent",
     "interrupt_agent",
     "list_agents",
+    "skill_read",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -243,6 +244,8 @@ pub struct RoutingSettings {
     pub model: ModelMode,
     #[serde(default)]
     pub context: ContextMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<super::skills::SkillConstraints>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -854,6 +857,8 @@ pub enum ServerMessage {
         material_id: String,
         version: String,
     },
+    #[serde(rename = "skill.consent.request")]
+    SkillConsentRequest(Box<super::skills::SkillConsentRequest>),
     #[serde(rename = "artifact.put")]
     ArtifactPut {
         reference: ArtifactRef,

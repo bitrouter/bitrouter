@@ -10,6 +10,10 @@ use std::process::{Command, Output, Stdio};
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[cfg(unix)]
+#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+mod example_binary;
+
 /// The BYOK env vars the probe reads — removed so the test's own environment
 /// can't make an "unconfigured" case look configured.
 const PROBE_VARS: &[&str] = &[
@@ -20,6 +24,327 @@ const PROBE_VARS: &[&str] = &[
     "OPENCODE_ZEN_API_KEY",
     "BITROUTER_API_KEY",
 ];
+
+fn startup_home() -> std::io::Result<TempDir> {
+    #[cfg(unix)]
+    {
+        tempfile::tempdir_in("/tmp")
+    }
+    #[cfg(not(unix))]
+    {
+        tempfile::tempdir()
+    }
+}
+
+fn isolated_command(home: &Path) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
+    command
+        .current_dir(home)
+        .env("HOME", home)
+        .env("XDG_DATA_HOME", home.join("data"))
+        .env("XDG_CACHE_HOME", home.join("cache"))
+        .env_remove("BITROUTER_HOME")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for var in PROBE_VARS {
+        command.env_remove(var);
+    }
+    command
+}
+
+async fn invoke(home: &Path, args: &[&str]) -> anyhow::Result<Output> {
+    eprintln!("invoking CLI {args:?} in {}", home.display());
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        isolated_command(home).args(args).output(),
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("CLI {args:?} in {}: {error}", home.display()))??;
+    eprintln!("CLI {args:?} exited with {}", output.status);
+    Ok(output)
+}
+
+struct TestDaemon {
+    pid: u32,
+}
+impl Drop for TestDaemon {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Ok(pid) = i32::try_from(self.pid)
+            && let Some(pid) = rustix::process::Pid::from_raw(pid)
+        {
+            let _ = rustix::process::kill_process(pid, rustix::process::Signal::TERM);
+        }
+        #[cfg(windows)]
+        {
+            eprintln!("stopping test daemon {}", self.pid);
+            let Ok(mut child) = Command::new("taskkill")
+                .args(["/PID", &self.pid.to_string(), "/T", "/F"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            else {
+                return;
+            };
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                match child.try_wait() {
+                    Ok(None) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    Ok(Some(_)) => break,
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
+            eprintln!("test daemon {} cleanup finished", self.pid);
+        }
+    }
+}
+
+fn isolated_config(home: &Path, listen: &str) -> anyhow::Result<()> {
+    std::fs::write(
+        home.join("bitrouter.yaml"),
+        format!(
+            "inherit_defaults: false\nregistry: {{ enabled: false }}\nserver: {{ listen: '{listen}', skip_auth: true }}\ndatabase: {{ url: 'sqlite::memory:' }}\n"
+        ),
+    )?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn init_rejects_unpaired_keys_and_handles_a_closed_stdout_pipe() -> anyhow::Result<()> {
+    let home = startup_home()?;
+    let invalid = invoke(
+        home.path(),
+        &["init", "--yes", "--provider-api-key", "fixture-secret"],
+    )
+    .await?;
+    assert!(!invalid.status.success());
+    assert!(!String::from_utf8_lossy(&invalid.stdout).contains("fixture-secret"));
+    assert!(!home.path().join(".bitrouter/bitrouter.yaml").exists());
+    let mut child = isolated_command(home.path())
+        .args(["init", "--yes"])
+        .spawn()?;
+    drop(child.stdout.take());
+    let status = tokio::time::timeout(std::time::Duration::from_secs(30), child.wait()).await??;
+    assert!(!status.success());
+    assert!(home.path().join(".bitrouter/bitrouter.yaml").is_file());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn init_after_launch_explicitly_runs_the_native_harness() -> anyhow::Result<()> {
+    let home = startup_home()?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let listen = listener.local_addr()?.to_string();
+    drop(listener);
+    isolated_config(home.path(), &listen)?;
+    let startup = invoke(home.path(), &[]).await?;
+    let ready: Value = serde_json::from_slice(&startup.stdout)?;
+    let pid = ready["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or_else(|| anyhow::anyhow!("daemon not ready: {ready}"))?;
+    let _daemon = TestDaemon { pid };
+    let fixture =
+        example_binary::build("bitrouter", "onboarding_fixture").map_err(anyhow::Error::msg)?;
+    std::os::unix::fs::symlink(&fixture, home.path().join("codex"))?;
+    let marker = home.path().join("native.marker");
+    let path = std::env::join_paths(std::iter::once(home.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))?;
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        isolated_command(home.path())
+            .args(["init", "--yes", "--harness", "codex", "--after", "launch"])
+            .env("PATH", path)
+            .env("ONBOARDING_NATIVE_MARKER", &marker)
+            .output(),
+    )
+    .await??;
+    assert!(
+        output.status.success(),
+        "{}; {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(marker)?, "native codex launched");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout)?["after"],
+        "launch"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bare_and_init_ensure_one_ready_background_daemon_and_preserve_running_settings()
+-> anyhow::Result<()> {
+    let home = startup_home()?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let listen = listener.local_addr()?.to_string();
+    drop(listener);
+    isolated_config(home.path(), &listen)?;
+    let (first, second) = tokio::join!(invoke(home.path(), &[]), invoke(home.path(), &[]));
+    let first = first?;
+    let second = second?;
+    let a: Value = serde_json::from_slice(&first.stdout)?;
+    let b: Value = serde_json::from_slice(&second.stdout)?;
+    let pid = a["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "startup failed: {a}; {}",
+                String::from_utf8_lossy(&first.stderr)
+            )
+        })?;
+    let _daemon = TestDaemon { pid };
+    assert!(first.status.success(), "{a}");
+    assert!(second.status.success(), "{b}");
+    assert_eq!(a["status"], "ready");
+    assert_eq!(a["pid"], b["pid"]);
+    assert_eq!(a["listen"], listen);
+    assert_eq!(a["config_state"]["running"], "in_sync");
+    let status = invoke(home.path(), &["status"]).await?;
+    assert_eq!(serde_json::from_slice::<Value>(&status.stdout)?["pid"], pid);
+    let human = invoke(home.path(), &["--human"]).await?;
+    assert!(human.status.success());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("daemon ready"));
+    let other = home.path().join("other");
+    std::fs::create_dir_all(&other)?;
+    std::fs::write(
+        other.join("bitrouter.yaml"),
+        serde_json::to_vec(&serde_json::json!({
+            "inherit_defaults": false, "registry": {"enabled": false},
+            "server": {"listen": listen, "skip_auth": true, "control_socket": home.path().join("bitrouter.sock")},
+            "database": {"url": "sqlite::memory:"}
+        }))?,
+    )?;
+    let foreign = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        isolated_command(home.path()).current_dir(&other).output(),
+    )
+    .await??;
+    let report: Value = serde_json::from_slice(&foreign.stdout)?;
+    assert!(!foreign.status.success());
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("cannot verify")),
+        "{report}"
+    );
+
+    // Saving a different socket cannot make ensure-start lose the old daemon.
+    std::fs::write(
+        home.path().join("bitrouter.yaml"),
+        format!(
+            "inherit_defaults: false\nregistry: {{ enabled: false }}\nserver: {{ listen: '{listen}', control_socket: 'new.sock', skip_auth: true }}\ndatabase: {{ url: 'sqlite::memory:' }}\n"
+        ),
+    )?;
+    let out = invoke(home.path(), &["init", "--yes", "--after", "serve"]).await?;
+    let report: Value = serde_json::from_slice(&out.stdout)?;
+    assert!(out.status.success(), "{report}");
+    assert_eq!(report["config_activation"], "saved_only");
+    assert_eq!(report["daemon"]["pid"], pid);
+    assert_eq!(
+        report["daemon"]["config_state"]["running"],
+        "restart_required"
+    );
+    assert!(!home.path().join("new.sock").exists());
+    std::fs::write(home.path().join("bitrouter.yaml"), "server: [invalid]\n")?;
+    let out = invoke(home.path(), &[]).await?;
+    let report: Value = serde_json::from_slice(&out.stdout)?;
+    assert!(out.status.success(), "{report}");
+    assert_eq!(report["pid"], pid);
+    assert_eq!(report["config_state"]["saved"], "invalid");
+    Ok(())
+}
+
+#[tokio::test]
+async fn bare_errors_on_child_exit_invalid_config_and_remote_context_without_fallback()
+-> anyhow::Result<()> {
+    let home = startup_home()?;
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0")?;
+    isolated_config(home.path(), &occupied.local_addr()?.to_string())?;
+    let out = invoke(home.path(), &[]).await?;
+    assert!(!out.status.success());
+    let report: Value = serde_json::from_slice(&out.stdout)?;
+    assert!(
+        report["error"]["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("exited during startup")),
+        "{report}"
+    );
+    std::fs::write(home.path().join("bitrouter.yaml"), "server: [invalid]\n")?;
+    let out = invoke(home.path(), &[]).await?;
+    assert!(!out.status.success());
+    assert!(serde_json::from_slice::<Value>(&out.stdout)?["error"].is_object());
+    let out = invoke(home.path(), &["--context", "explicit-remote"]).await?;
+    assert!(!out.status.success());
+    assert!(
+        serde_json::from_slice::<Value>(&out.stdout)?["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("remote context"))
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.path().join("bitrouter.yaml"))?,
+        "server: [invalid]\n"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn configured_runtime_is_reused_without_a_file_chat_agent_or_client_credentials()
+-> anyhow::Result<()> {
+    let home = startup_home()?;
+    let runtime = home.path().join(".bitrouter");
+    std::fs::create_dir_all(&runtime)?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?.to_string();
+    drop(listener);
+    isolated_config(&runtime, &address)?;
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        isolated_command(home.path()).current_dir(&runtime).output(),
+    )
+    .await??;
+    let ready: Value = serde_json::from_slice(&out.stdout)?;
+    let pid = ready["pid"]
+        .as_u64()
+        .and_then(|pid| u32::try_from(pid).ok())
+        .ok_or_else(|| anyhow::anyhow!("daemon not ready: {ready}"))?;
+    let _daemon = TestDaemon { pid };
+    std::fs::rename(runtime.join("bitrouter.yaml"), runtime.join("saved.yaml"))?;
+    let out = invoke(home.path(), &[]).await?;
+    let report: Value = serde_json::from_slice(&out.stdout)?;
+    assert!(out.status.success(), "{report}");
+    assert_eq!(report["pid"], pid);
+    assert_eq!(report["status"], "ready");
+    assert_eq!(report["config_state"]["saved"], "missing");
+    let out = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        isolated_command(home.path())
+            .env("OPENAI_API_KEY", "fixture-detected-secret")
+            .output(),
+    )
+    .await??;
+    let report: Value = serde_json::from_slice(&out.stdout)?;
+    assert!(out.status.success(), "{report}");
+    assert_eq!(report["pid"], pid);
+    assert_eq!(report["status"], "ready");
+    assert_eq!(report["config_state"]["saved"], "missing");
+    assert!(!runtime.join("bitrouter.yaml").exists());
+    assert!(!report.to_string().contains("fixture-detected-secret"));
+    Ok(())
+}
 
 /// Run the compiled binary with an isolated home/data dir and a null (non-TTY)
 /// stdin. `extra_env` layers provider-key or `BITROUTER_HOME` overrides on top.
@@ -49,64 +374,45 @@ fn stdout_json(output: &Output) -> Value {
 }
 
 #[test]
-fn bare_unconfigured_emits_inert_envelope_and_exits_zero() {
-    let home = TempDir::new().unwrap();
-    let data = TempDir::new().unwrap();
-    // Nothing configured + no TTY: the wizard can't run, so onboarding prints
-    // the hint to stderr and emits an inert envelope — never hangs, exit 0.
+fn bare_unconfigured_errors_without_writing_configuration() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
     let out = run_cli(home.path(), data.path(), &[], &[]);
-    assert!(out.status.success(), "bare bitrouter must exit 0");
-    let v = stdout_json(&out);
-    assert_eq!(v["action"], "onboarding");
-    assert_eq!(v["providers_configured"], serde_json::json!([]));
-    assert_eq!(v["after"], "exit");
-    assert!(v.get("config_activation").is_none());
+    assert!(!out.status.success());
+    assert!(
+        stdout_json(&out)["error"]["message"]
+            .as_str()
+            .is_some_and(|text| text.contains("init --yes"))
+    );
+    assert!(!home.path().join(".bitrouter/bitrouter.yaml").exists());
+    Ok(())
 }
 
 #[test]
-fn credentials_alone_do_not_complete_onboarding() {
-    let home = TempDir::new().unwrap();
-    let data = TempDir::new().unwrap();
-    // Provider credentials do not substitute for a saved default ACP harness.
-    let out = run_cli(
-        home.path(),
-        data.path(),
-        &[],
-        &[("OPENAI_API_KEY", "sk-detected")],
-    );
-    assert!(out.status.success());
-    let v = stdout_json(&out);
-    assert_eq!(v["action"], "onboarding");
-    // Non-interactive bare invocation does not silently save onboarding.
-    assert!(!home.path().join("bitrouter.yaml").exists());
-}
-
-#[test]
-fn bitrouter_home_set_but_missing_offers_onboarding_not_a_hard_error() {
-    let home = TempDir::new().unwrap();
-    let data = TempDir::new().unwrap();
-    // BITROUTER_HOME points at a directory with no bitrouter.yaml — which
-    // `resolve_config` treats as a hard error. The probe-based onboarding entry
-    // must sidestep that: exit 0, emit the envelope, and never surface the
-    // "BITROUTER_HOME is set … but … is missing" error.
-    let br_home = TempDir::new().unwrap();
-    let out = run_cli(
-        home.path(),
-        data.path(),
-        &[],
-        &[("BITROUTER_HOME", br_home.path().to_str().unwrap())],
-    );
-    assert!(
-        out.status.success(),
-        "BITROUTER_HOME-missing must not hard-error bare bitrouter"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        !stderr.contains("BITROUTER_HOME is set"),
-        "must not surface the resolve_config hard error: {stderr}"
-    );
-    let v = stdout_json(&out);
-    assert_eq!(v["action"], "onboarding");
+fn missing_explicit_bitrouter_home_requires_setup_without_falling_back() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    let selected = TempDir::new()?;
+    let selected_path = selected
+        .path()
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("temporary home is not UTF-8"))?;
+    for credentials in [false, true] {
+        let mut env = vec![("BITROUTER_HOME", selected_path)];
+        if credentials {
+            env.push(("OPENAI_API_KEY", "fixture-detected-key"));
+        }
+        let out = run_cli(home.path(), data.path(), &[], &env);
+        assert!(!out.status.success());
+        assert!(
+            stdout_json(&out)["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("init --yes"))
+        );
+        assert!(!selected.path().join("bitrouter.yaml").exists());
+        assert!(!home.path().join(".bitrouter/bitrouter.yaml").exists());
+    }
+    Ok(())
 }
 
 #[test]
@@ -127,7 +433,8 @@ fn init_yes_no_creds_reports_zero_providers_and_scaffolds() {
     let v = stdout_json(&out);
     assert_eq!(v["action"], "onboarding");
     assert_eq!(v["providers_configured"], serde_json::json!([]));
-    assert_eq!(v["harnesses_installed"], serde_json::json!(["codex-acp"]));
+    assert_eq!(v["harnesses_installed"], serde_json::json!([]));
+    assert_eq!(v["agents_selected"], serde_json::json!([]));
     assert_eq!(v["after"], "exit");
     assert!(v["snippet"].is_null());
     assert!(cfg.exists(), "init --yes scaffolds the starter config");
@@ -337,61 +644,72 @@ fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 #[tokio::test]
-async fn onboarding_launch_and_next_bare_invocation_both_speak_acp() -> anyhow::Result<()> {
-    let home = TempDir::new()?;
-    let data = TempDir::new()?;
-    let config_path = home.path().join("bitrouter.yaml");
-    let marker = home.path().join("acp-wire");
-    let script = r#"
-while IFS= read -r line; do
-  printf '%s\n' "$line" >> "$ACP_MARKER"
-  id=$(printf '%s' "$line" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
-  case "$line" in
-    *initialize*) printf '{"jsonrpc":"2.0","id":"%s","result":{"protocolVersion":1}}\n' "$id";;
-    *session/new*) printf '{"jsonrpc":"2.0","id":"%s","result":{"sessionId":"onboarding-acp"}}\n' "$id";;
-  esac
-done
-"#;
+async fn onboarding_saves_mcp_without_installing_skills_or_starting_the_resource()
+-> anyhow::Result<()> {
+    let home = startup_home()?;
+    isolated_config(home.path(), "127.0.0.1:0")?;
+    let entry = home.path().join("mcp.yaml");
     std::fs::write(
-        &config_path,
-        serde_json::to_string(&serde_json::json!({
-            "inherit_defaults": false,
-            "agents": { "codex-acp": { "name": "codex-acp", "transport": {
-                "type": "stdio", "command": "/bin/sh", "args": ["-c", script],
-                "env": {"ACP_MARKER": marker}
-            } } }
-        }))?,
+        &entry,
+        "name: review-peer\ntransport:\n  type: stdio\n  command: must-not-start\n",
     )?;
-    for args in [
-        vec!["init", "--yes", "--harness", "codex", "--after", "launch"],
-        vec![],
-    ] {
-        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"));
-        command
-            .args(&args)
-            .current_dir(home.path())
-            .env("HOME", home.path())
-            .env("XDG_DATA_HOME", data.path())
-            .env_remove("BITROUTER_HOME")
-            .stdin(Stdio::null())
-            .kill_on_drop(true);
-        for var in PROBE_VARS {
-            command.env_remove(var);
-        }
-        let out =
-            tokio::time::timeout(std::time::Duration::from_secs(15), command.output()).await??;
-        assert!(
-            out.status.success(),
-            "args={args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        let wire = std::fs::read_to_string(&marker)?;
-        assert!(wire.contains("initialize"), "{wire}");
-        assert!(wire.contains("session/new"), "{wire}");
-        std::fs::remove_file(&marker)?;
-        assert!(!String::from_utf8_lossy(&out.stdout).contains("\"action\":\"status\""));
-    }
+    let output = invoke(
+        home.path(),
+        &[
+            "init",
+            "--yes",
+            "--mcp-name",
+            "review-peer",
+            "--mcp-from",
+            entry
+                .to_str()
+                .ok_or_else(|| anyhow::anyhow!("entry path"))?,
+            "--after",
+            "exit",
+        ],
+    )
+    .await?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(report["resources"][0]["status"], "saved");
+    assert_eq!(report["resources"].as_array().map(Vec::len), Some(1));
+    assert!(!home.path().join(".bitrouter/skills").exists());
+    Ok(())
+}
+#[tokio::test]
+async fn onboarding_rejects_removed_installer_flags_and_keeps_mcp_failure_progress()
+-> anyhow::Result<()> {
+    let home = startup_home()?;
+    let removed = invoke(
+        home.path(),
+        &["init", "--yes", "--install-skill", "anything"],
+    )
+    .await?;
+    assert!(!removed.status.success());
+    assert!(!home.path().join(".bitrouter/bitrouter.yaml").exists());
+    isolated_config(home.path(), "127.0.0.1:0")?;
+    let failed = invoke(
+        home.path(),
+        &[
+            "init",
+            "--yes",
+            "--mcp-name",
+            "review-peer",
+            "--mcp-from",
+            "missing-entry.yaml",
+            "--after",
+            "serve",
+        ],
+    )
+    .await?;
+    assert!(!failed.status.success());
+    let report: Value = serde_json::from_slice(&failed.stdout)?;
+    assert_eq!(report["resources"][0]["status"], "failed");
+    assert!(home.path().join("bitrouter.yaml").exists());
     Ok(())
 }

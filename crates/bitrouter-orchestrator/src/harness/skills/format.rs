@@ -24,6 +24,19 @@ pub struct SkillFrontmatter {
     pub raw: serde_json::Map<String, serde_json::Value>,
 }
 
+impl SkillFrontmatter {
+    /// Shared content validation, independent of a content-addressed storage path.
+    pub fn validate(&self) -> Result<()> {
+        super::validate_skill_name(&self.name)?;
+        if !super::is_valid_skill_description(&self.description) {
+            return Err(Error::Frontmatter(
+                "description must be 1-1024 characters".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Extract the YAML frontmatter block (the text between the first pair of `---`
 /// fence lines) from `SKILL.md` content. Returns `None` when there is no
 /// opening fence or no closing fence.
@@ -201,13 +214,10 @@ impl DiscoveredSkill {
                 fm.name
             ));
         }
-        if !super::is_valid_skill_name(&fm.name) {
-            return Some(super::Error::InvalidSkillName(fm.name.clone()).to_string());
-        }
-        if !super::is_valid_skill_description(&fm.description) {
-            return Some("description must be 1-1024 characters".to_string());
-        }
-        None
+        fm.validate().err().map(|error| match error {
+            Error::Frontmatter(message) => message,
+            other => other.to_string(),
+        })
     }
 }
 
@@ -226,7 +236,7 @@ pub fn discover_all_skills(root: &Path) -> Vec<DiscoveredSkill> {
     discover(root, usize::MAX, usize::MAX).unwrap_or_default()
 }
 
-pub(super) fn discover_bounded(root: &Path) -> Result<Vec<DiscoveredSkill>> {
+pub fn discover_bounded(root: &Path) -> Result<Vec<DiscoveredSkill>> {
     discover(root, 4096, super::MAX_SKILLS)
 }
 

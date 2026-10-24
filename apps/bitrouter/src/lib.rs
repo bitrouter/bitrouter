@@ -32,19 +32,19 @@ pub mod assemble;
 pub mod auth;
 mod bundled_registry;
 pub mod catalog;
-pub mod chat;
 pub mod claude_code;
 pub mod cloud;
 mod codex_router;
 pub mod commands;
 pub mod config_synthesis;
 pub mod conformance;
+pub mod connected_agents;
 pub mod contexts;
 pub mod continuation;
+pub mod control_output;
 pub mod daemon;
 pub mod daemon_handoff;
 pub mod daemon_locator;
-pub mod dashboard;
 pub mod db;
 pub mod error_report;
 pub mod eval;
@@ -55,10 +55,10 @@ pub mod host;
 mod local_cli;
 pub mod managed_store;
 pub mod managed_task;
+pub mod mcp_config;
 pub mod mcp_registry;
 pub mod metering;
 pub mod native_acp;
-pub mod native_code;
 pub mod onboarding;
 pub mod optimization;
 pub mod orchestrator_api;
@@ -76,11 +76,13 @@ pub mod remote_control;
 pub mod request_checks;
 pub mod result_contract;
 pub mod router_migration;
+pub mod session_diagnostics;
 pub mod session_identity;
 pub mod skills;
 pub mod spawn;
 pub mod style;
 pub mod supervisor;
+pub mod thread_cli;
 pub mod tools;
 mod tracing_filter;
 pub mod trajectory;
@@ -95,3 +97,28 @@ pub use assemble::{Assembled, build_app, build_app_with_path, merge_registry_int
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Build fingerprint of the local handoff and migration contract.
 pub const HANDOFF_BUILD_ID: &str = env!("BITROUTER_HANDOFF_BUILD_ID");
+
+#[cfg(test)]
+mod session_boundary_tests {
+    #[test]
+    fn retained_headless_services_do_not_use_terminal_business_types() {
+        for (name, source) in [
+            ("acp_cli", include_str!("acp_cli.rs")),
+            ("supervisor", include_str!("supervisor.rs")),
+            ("agent_sessions", include_str!("agent_sessions.rs")),
+            ("session actions", include_str!("actions/session.rs")),
+            ("command reports", include_str!("actions/commands.rs")),
+            (
+                "session diagnostics",
+                include_str!("session_diagnostics.rs"),
+            ),
+        ] {
+            for dependency in ["bitrouter_tui::", "ratatui::", "crossterm::"] {
+                assert!(
+                    !source.contains(dependency),
+                    "{name} depends on terminal presentation through {dependency}"
+                );
+            }
+        }
+    }
+}

@@ -35,6 +35,8 @@ pub struct Work {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name", content = "arguments", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "skill_read")]
+    SkillRead { skill_id: String, reference: String },
     #[serde(rename = "context")]
     Context(super::context_router::tools::ContextAction),
     #[serde(rename = "spawn_agent")]
@@ -78,6 +80,7 @@ impl Action {
 
     pub fn name(&self) -> &'static str {
         match self {
+            Self::SkillRead { .. } => "skill_read",
             Self::Context(super::context_router::tools::ContextAction::Extract { .. }) => {
                 "context_extract"
             }
@@ -218,6 +221,12 @@ pub fn apply(
         ));
     }
     let result = match action {
+        Action::SkillRead { .. } => {
+            return Err(reject(
+                ErrorCode::UnsupportedCapability,
+                "bound skill file reads require the native resource boundary",
+            ));
+        }
         Action::Context(action) => super::context_router::tools::apply(state, actor_id, action)?,
         Action::Spawn { task } => {
             return allocate(state, actor_id, task, Intent::Spawn, state_revision);

@@ -1,5 +1,13 @@
 # Spec: the ACP TUI — BitRouter owns the agent UX
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 
 > **Historical note (2026-08-16):** `status --watch` was later removed in favor
@@ -15,7 +23,7 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 
 Supersedes the `launch --tui` half of
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) (#782) and retires
-[`TUI_FIDELITY_MATRIX.md`](TUI_FIDELITY_MATRIX.md) with it. Leaves
+[`TUI_FIDELITY_MATRIX.md`](https://github.com/bitrouter/bitrouter/blob/808a25ab4931603c5d85951a528525ef4def71e4/docs/TUI_FIDELITY_MATRIX.md) with it. Leaves
 `bro status --watch` (#797) untouched. Builds on #613 (per-session ACP
 substrate) and the ACP rightsizing of #745–#749.
 
@@ -57,7 +65,7 @@ to have both and gets neither.
 
 **The justifying premise was already false at merge.** The emulator rests on
 one sentence — *"Uniformity across all eight catalog harnesses is the product
-requirement"* ([`host.rs:11`](../apps/bitrouter/src/tui/host.rs:11),
+requirement"* ([`host.rs:11`](https://github.com/bitrouter/bitrouter/blob/808a25ab4931603c5d85951a528525ef4def71e4/apps/bitrouter/src/tui/host.rs#L11),
 `OBSERVABILITY_TUI_SPEC.md:439`, decision 8 at :810). The same commit that
 shipped the spec (`25f69b71`) cut `launch` to four. Nobody re-derived the
 decision at n=4, and the stale text is still in source in two places.
@@ -118,7 +126,7 @@ they establish that the code was not load-bearing:
 
 - The binary currently links **three** VT parsers: `vte` (under
   `alacritty_terminal`), `vtparse` (under `termwiz`), and a hand-written
-  84-line `Osc52Scanner` ([`term.rs:560`](../apps/bitrouter/src/tui/term.rs:560))
+  84-line `Osc52Scanner` ([`term.rs:560`](https://github.com/bitrouter/bitrouter/blob/808a25ab4931603c5d85951a528525ef4def71e4/apps/bitrouter/src/tui/term.rs#L560))
   that re-scans every byte immediately before feeding the identical bytes to
   alacritty — which already decodes OSC 52 and dispatches it to the very
   listener `term.rs` installs.
@@ -172,10 +180,10 @@ not — an asymmetry that favors this design.
 **What this corrects.** Slash commands (`AvailableCommandsUpdate`), modes
 (`ConfigOptionUpdate` + `session/set_config_option`), and plans (`PlanUpdate`)
 are all in the protocol. What lacks them is BitRouter's
-[`down.rs`](../crates/bitrouter-sdk/src/acp/down.rs), which answers
+[`down.rs`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/crates/bitrouter-sdk/src/acp/down.rs), which answers
 `method_not_found` to everything outside `initialize` / `session/new` /
 `session/prompt` / `session/cancel`
-([`down.rs:319`](../crates/bitrouter-sdk/src/acp/down.rs:319)), and
+([`down.rs:319`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/crates/bitrouter-sdk/src/acp/down.rs#L319)), and
 [`translate.rs`](../crates/bitrouter-orchestrator/src/acp/translate.rs), whose `_ =>
 None` arm drops `Plan` and every variant above.
 
@@ -186,7 +194,7 @@ This is the central architectural claim of the spec.
 BitRouter already terminates **both** ACP roles: `up.rs` speaks the Client role
 to the spawned agent, `down.rs` re-exposes the session as a vanilla Agent over
 stdio for *"a manager (GUI / CLI / orchestrating agent)"*
-([`down.rs:4`](../crates/bitrouter-sdk/src/acp/down.rs:4)). A working
+([`down.rs:4`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/crates/bitrouter-sdk/src/acp/down.rs#L4)). A working
 end-to-end ACP client already exists in the test suite —
 [`tests/acp.rs`](../apps/bitrouter/tests/acp.rs) drives `initialize` →
 `session/new` → `session/prompt` → `session/update` over raw JSON-RPC.
@@ -204,7 +212,7 @@ Work items, in dependency order:
    via the existing raw stream (`subscribe_raw_updates`) so no reverse-mapping
    loss is introduced.
 2. **Unmask what the session can honor.** `relayed_caps.load_session = false`
-   ([`down.rs:201`](../crates/bitrouter-sdk/src/acp/down.rs:201)) and the
+   ([`down.rs:201`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/crates/bitrouter-sdk/src/acp/down.rs#L201)) and the
    `method_not_found` catch-all are correct *today* because the session cannot
    serve those methods. Each one unmasked is a separate, testable change —
    `session/list`, `session/resume`, `session/set_config_option`.
@@ -304,7 +312,7 @@ session cost"*). Today `translate.rs` forwards only what the **upstream**
 reports, and upstream reporting is optional — which is exactly why the previous
 TUI's status bar *"presented the daemon's spend as the session's"* and why a
 native harness rendered an empty left zone
-([`TUI_FIDELITY_MATRIX.md:103`](TUI_FIDELITY_MATRIX.md)).
+([`TUI_FIDELITY_MATRIX.md:103`](https://github.com/bitrouter/bitrouter/blob/808a25ab4931603c5d85951a528525ef4def71e4/docs/TUI_FIDELITY_MATRIX.md)).
 
 That is not a protocol limitation. **BitRouter sits in the agent seat.** It
 synthesizes `UsageUpdate` from its own metering store on every settled turn,
@@ -470,14 +478,14 @@ the wire per session; the TUI never needs `status --watch` to answer "what is
 this costing me."
 
 **Do not build a second data layer — the scope seam already exists.**
-[`snapshot.rs:54`](../apps/bitrouter/src/tui/snapshot.rs:54) defines
+[`snapshot.rs:54`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/apps/bitrouter/src/tui/snapshot.rs#L54) defines
 `Scope::{DaemonWide, Launch}`, with `spend_summary_for_launch` and
 `recent_requests(…, Some(launch))`; `launch_id` is plumbed end to end from
 `caller.launch_id()` to the metering column
 ([`recorder.rs:190`](../apps/bitrouter/src/metering/recorder.rs:190)).
 
 The honesty problem is solved there too
-([`snapshot.rs:117`](../apps/bitrouter/src/tui/snapshot.rs:117)):
+([`snapshot.rs:117`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/apps/bitrouter/src/tui/snapshot.rs#L117)):
 
 > *Prefer launch scope, but only once it has something to show. Minting a token
 > is a request, not a guarantee: the harness has to send it back, and some do
@@ -534,7 +542,7 @@ in this work.
   reads the metering store directly (§7) rather than waiting on the wire.
 
 **The one real pro-crate argument, and its trigger.**
-[`tui/mod.rs:4`](../apps/bitrouter/src/tui/mod.rs:4) encodes the lesson from the
+[`tui/mod.rs:4`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/apps/bitrouter/src/tui/mod.rs#L4) encodes the lesson from the
 last TUI's death — *"if there is no CLI subcommand for it, there is no
 keystroke for it"* — as **prose**. The previous TUI accreted verbs precisely
 because a module can silently reach anywhere in the crate. A crate cannot.
@@ -697,7 +705,7 @@ land with:
   `launch_supported` doc comment, which currently justifies the four-harness
   cut partly by *"(under `--tui`) a hosted terminal."*
 - Independently and immediately: the stale *"all eight catalog harnesses"*
-  claim at [`host.rs:11`](../apps/bitrouter/src/tui/host.rs:11) and
+  claim at [`host.rs:11`](https://github.com/bitrouter/bitrouter/blob/808a25ab4931603c5d85951a528525ef4def71e4/apps/bitrouter/src/tui/host.rs#L11) and
   `OBSERVABILITY_TUI_SPEC.md:439` is false today and should not survive this
   spec's review regardless of which way §3 is decided.
 

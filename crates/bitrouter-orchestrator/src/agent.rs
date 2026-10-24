@@ -35,6 +35,9 @@ pub struct AgentConfig {
     /// Per-step output reservation, retained with the Thread configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    /// Explicit scoped constraints retained with this native Thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<crate::core::skills::SkillConstraints>,
     pub instructions: String,
     pub max_steps: u32,
     pub max_tool_calls: u32,
@@ -64,6 +67,7 @@ impl AgentConfig {
             model_mode: crate::core::protocol::ModelMode::Fixed,
             effort,
             max_output_tokens: None,
+            skills: None,
             instructions: DEFAULT_INSTRUCTIONS.into(),
             max_steps: 32,
             max_tool_calls: 128,
@@ -88,6 +92,14 @@ impl AgentConfig {
 
     pub fn with_output_reservation(mut self, tokens: Option<u32>) -> Self {
         self.max_output_tokens = tokens;
+        self
+    }
+
+    pub fn with_skill_constraints(
+        mut self,
+        skills: Option<crate::core::skills::SkillConstraints>,
+    ) -> Self {
+        self.skills = skills;
         self
     }
 
@@ -208,6 +220,7 @@ pub(crate) struct RunInput {
 pub(crate) struct RunChannels {
     pub events: Option<mpsc::Sender<RunEvent>>,
     pub approvals: Option<mpsc::Sender<ApprovalRequest>>,
+    pub skill_approvals: Option<mpsc::Sender<ApprovalRequest>>,
     pub commits: Option<mpsc::Sender<CommitRequest>>,
     pub control: Option<TurnControl>,
 }
@@ -313,6 +326,9 @@ impl Agent {
         workspace: &Path,
         config: AgentConfig,
     ) -> Result<Self, String> {
+        if let Some(skills) = &config.skills {
+            skills.validate().map_err(|error| error.to_string())?;
+        }
         if config.model.trim().is_empty()
             || config.max_steps == 0
             || config.max_tool_calls == 0
@@ -380,6 +396,7 @@ impl Agent {
             cancel,
             RunChannels {
                 events,
+                skill_approvals: approvals.clone(),
                 approvals,
                 commits,
                 control: None,
@@ -423,6 +440,7 @@ impl Agent {
         let RunChannels {
             events,
             approvals,
+            skill_approvals,
             commits,
             control,
         } = channels;
@@ -487,6 +505,7 @@ impl Agent {
                 Ok(snapshot) => crate::harness::HarnessResources::discover(
                     self.tools.root(),
                     &self.resource_config,
+                    &self.caller,
                     self.config.tool_mode,
                     &cancel,
                     self.config.max_duration.saturating_sub(started.elapsed()),
@@ -500,7 +519,7 @@ impl Agent {
                 let error = if report
                     .resources
                     .as_ref()
-                    .is_some_and(|old| old != &resources.inventory)
+                    .is_some_and(|old| !old.same_execution_resources(&resources.inventory))
                 {
                     Some(
                         "harness resources changed; refuse continuation with a different inventory"
@@ -608,6 +627,7 @@ impl Agent {
                                 RunChannels {
                                     events: events.clone(),
                                     approvals,
+                                    skill_approvals,
                                     commits: commits.clone(),
                                     control,
                                 },

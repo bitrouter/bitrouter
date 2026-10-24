@@ -943,3 +943,41 @@ async fn stalled_replay_disconnects_observer_without_cancelling_native_history()
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn connected_attachments_exclude_cold_sessions_close_and_eof()
+-> Result<(), Box<dyn std::error::Error>> {
+    for version in [1, 2] {
+        let workspace = TempDir::new()?;
+        let service = ThreadService::new(app(Vec::new())?, &[workspace.path().into()])?;
+        let server = server(&service, true);
+        let mut first = Peer::connect(server.clone(), version).await?;
+        assert!(server.connected_attachments().await.is_empty());
+        let session = first.request(2, "session/new", setup(&workspace)).await?["sessionId"]
+            .as_str()
+            .ok_or("session missing")?
+            .to_string();
+        let mut second = Peer::connect(server.clone(), version).await?;
+        let another = second.request(2, "session/new", setup(&workspace)).await?["sessionId"]
+            .as_str()
+            .ok_or("session missing")?
+            .to_string();
+        let live = server.connected_attachments().await;
+        assert_eq!(live.len(), 2);
+        assert_ne!(live[0].0, live[1].0);
+        assert!(live.iter().any(|(_, id)| id == &session));
+        assert!(live.iter().any(|(_, id)| id == &another));
+        assert!(service.active_workers().is_empty());
+        first.disconnect().await?;
+        assert_eq!(server.connected_attachments().await.len(), 1);
+        second
+            .request(3, "session/close", json!({"sessionId":another}))
+            .await?;
+        assert!(server.connected_attachments().await.is_empty());
+        second.disconnect().await?;
+        assert!(server.connected_attachments().await.is_empty());
+        service.shutdown().await;
+        server.shutdown().await;
+    }
+    Ok(())
+}

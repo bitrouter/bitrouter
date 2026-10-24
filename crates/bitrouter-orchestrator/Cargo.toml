@@ -27,11 +27,13 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 similar.workspace = true
+shell-words.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "macros", "sync", "time"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tracing.workspace = true
 uuid.workspace = true
+url.workspace = true
 
 # External-agent ACP controller, client and process transport. Native runtime
 # consumers do not need the conductor's trace viewer and HTTP server.
@@ -60,3 +62,6 @@ wiremock = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }

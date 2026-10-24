@@ -1,5 +1,5 @@
-//! Reports for the `mcp search` / `mcp list` / `mcp add` commands (MCP
-//! registry discovery — distinct from the runtime upstream MCP gateway
+//! Reports for `mcp check` and legacy `mcp search` registry discovery,
+//! distinct from the runtime upstream MCP gateway
 //! verbs, which emit no report envelope).
 
 use serde::Serialize;
@@ -48,7 +48,7 @@ impl CliReport for McpCheckReport {
     }
 }
 
-/// One server in the MCP registry (`mcp list` / `mcp search`).
+/// One server in the MCP registry (`mcp search`).
 #[derive(Serialize)]
 pub struct McpRegistryRow {
     /// Reverse-DNS registry name (the `mcp add` argument).
@@ -60,7 +60,7 @@ pub struct McpRegistryRow {
     pub description: String,
 }
 
-/// Result of `bro mcp list` / `bro mcp search <query>`.
+/// Result of legacy `bro mcp search <query>`.
 #[derive(Serialize)]
 pub struct McpRegistryReport {
     pub servers: Vec<McpRegistryRow>,
@@ -83,29 +83,9 @@ impl CliReport for McpRegistryReport {
         h.table(&t)?;
         h.line("")?;
         h.line(&format!(
-            "  add a server with: {} mcp add <name>",
+            "  save a server with: {} mcp add <local-name> --url <url> (or --command <program>)",
             bitrouter_sdk::invocation::name()
         ))?;
-        Ok(())
-    }
-}
-
-/// Result of `bro mcp add <name>` — the paste-able YAML stub plus the
-/// derived `mcp_servers:` key.
-#[derive(Serialize)]
-pub struct McpAddReport {
-    /// Registry name the stub was generated from.
-    pub name: String,
-    /// The derived `mcp_servers:` key.
-    pub id: String,
-    pub yaml: String,
-}
-
-impl CliReport for McpAddReport {
-    fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
-        for line in self.yaml.lines() {
-            h.line(line)?;
-        }
         Ok(())
     }
 }

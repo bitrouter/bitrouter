@@ -47,30 +47,9 @@ process-wrap = { version = "10", default-features = false }
 # v2; the external-agent controller continues to speak v1.
 agent-client-protocol = { version = "=3.0.0", features = ["process", "stdio", "unstable_session_fork", "unstable_protocol_v2"] }
 agent-client-protocol-conductor = "=3.0.0"
-# Shared by `bro status --watch` (in the app) and `bitrouter-tui` (the
-# ACP session renderer), so the version lives here rather than in either.
-ratatui = { version = "0.29", features = [
-    # Paragraph::line_count — wrap-aware tail-follow needs the rendered
-    # height, not the logical line count.
-    "unstable-rendered-line-info",
-] }
-crossterm = { version = "0.28", features = ["event-stream"] }
-# Transcript Markdown only; do not bring a second scroll/viewer implementation.
-ratatui-markdown = { version = "0.3.6", default-features = false, features = ["markdown"] }
-# The line diff behind `bitrouter-tui`'s hunked diff rendering. A dependency
-# rather than a hand-rolled diff because subtly wrong diff output is worse than
-# a dependency, and hunk grouping with context is exactly where the subtle
-# wrongness would live — see TUI_RENDERER_PLAN §C.1 (§19.2).
+# Diffs are also consumed by the orchestrator workspace harness.
 similar = "3.1"
 shell-words = "1"
-# The display width of a grapheme cluster, for `bitrouter-tui`'s own wrap.
-# Ratatui's `reflow` is private, so the wrap is ours — but the widths must be
-# the same ones ratatui measures with, which is why this tracks the version
-# ratatui itself depends on. Adds no crate to the build graph.
-unicode-width = "0.2"
-# Cursor movement and deletion in the composer must operate on user-perceived
-# characters rather than UTF-8 bytes or scalar values.
-unicode-segmentation = "1.13"
 # Controller endpoint setup and lifecycle fixtures retain their extensions.
 # Wire v2 is separately enabled for the native agent implementation.
 agent-client-protocol-schema = { version = "=1.10.2", features = [
@@ -115,6 +94,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "rustls",
 ] }
 eventsource-stream = "0.2"
+fluent-uri = "0.4"
 url = "2"
 
 # OpenTelemetry stack for OTLP export (traces + metrics).

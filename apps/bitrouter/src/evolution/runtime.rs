@@ -562,10 +562,19 @@ impl EvolutionRuntime {
                     && self.policies.matches_routing_snapshot(&fence.policies),
                 "routing reloaded after canonical admission"
             );
+            tracing::debug!(
+                request_id = ctx.request_id(),
+                "revalidating canonical route session"
+            );
             let session = sessions::Entity::find_by_id(fence.identity.key()?)
                 .one(&self.db)
                 .await?
                 .context("canonical session disappeared")?;
+            tracing::debug!(
+                request_id = ctx.request_id(),
+                control = fence.control.is_some(),
+                "canonical route session read"
+            );
             ensure!(
                 !session.deleted,
                 "canonical session was deleted before dispatch"

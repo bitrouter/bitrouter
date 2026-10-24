@@ -1,5 +1,12 @@
 # ACP controller and native sessions
 
+Terminal-free control uses `bro agents show/events/pending/answer` and its
+mode/config/route/session subcommands; see [CLI controls](cli.md#single-operation-native-and-acp-controls).
+Reads hold no control lease. Mutations retain an exact transient fence and
+boot-local ACK. Supervisor control v2 retains v1 operations and is separate
+from ACP wire versions. Native `bro threads resume` only resumes the queue;
+it never bypasses execution recovery or unknown-effect blockers.
+
 How BitRouter's ACP surfaces divide ownership. For CLI flags see
 `references/cli.md` §ACP sessions; for adapter config see
 `references/providers.md` §ACP agents.
@@ -38,6 +45,16 @@ paused-queue state; clients must consume that latest state.
 
 ## External controller and supervisor ownership
 
+Supervisor protocol v3 adds scoped background skill constraints; ordinary v1/v2
+operations remain accepted. This differs from the external ACP wire version.
+`run --background` on supported Codex/Claude profiles can deliver verified local
+prompt instructions; `agents show RUN` retains negotiated capability plus each
+input's original decision and delivery facts. Recovered facts cannot replay an
+input or authorize an interrupted owner. Required MCP-origin delivery is
+unsupported. Vendor history retention, compaction and token admission remain
+external-agent responsibilities; earlier instructions may persist in that
+history after a later input excludes them. See the versioned-skills CLI reference.
+
 `bro acp serve <agent>` is a connection-level external ACP controller:
 
 ```text
@@ -61,7 +78,7 @@ top of the controller is client-side: `--turn-timeout` (cooperative
 `session/cancel` plus a three-second grace), headless permission denial, OTel
 turn spans re-derived from the prompt round-trip, and the NDJSON presentation.
 
-`bro run --background` and target-state `bro code <agent>` instead ask the
+`bro run --background` asks the
 resident local daemon supervisor to own the controller from creation. The
 client receives a BitRouter **agent run ID** only after the controller and a
 harness-native session exist. The run ID identifies that controller lifetime;
@@ -72,7 +89,7 @@ run as Interrupted and never silently relaunches or resumes it.
 
 Supervisor-owned controllers declare the same route namespace over the local
 daemon (so traffic meters by controller instance and `usage_update` can carry
-attributed cost). Code's `/route` picker remains capability-gated on
+attributed cost). Session route control remains capability-gated on
 `_bitrouter/route/list|set`. There is no `record_id` or controller-owned FIFO
 turn queue. Code may keep an explicit client draft/follow-up queue; unresolved
 permissions/questions and unread terminal results belong to the supervisor's
@@ -255,24 +272,31 @@ one worktree. Use a separate worktree, or the explicitly warned
 ## Supervised-run commands
 
 ```bash
-bro agents                         # standalone alternate-screen manager
+bro agents                         # read-only connected instances, JSON/human
 bro agents sessions --json        # scriptable snapshots
-bro agents attach AGENT_RUN_ID     # lease + retained inspector
+bro agents show AGENT_RUN_ID       # retained snapshot
+bro agents events AGENT_RUN_ID     # append retained/live events
+bro agents pending AGENT_RUN_ID    # exact pending approval requests
 bro agents stop AGENT_RUN_ID       # end/reap, keep native session
 bro agents remove AGENT_RUN_ID     # remove settled BitRouter state
 ```
 
-Bare `agents` and `attach` require TTY stdin/stdout and emit no terminal
-control sequences to a pipe. Exactly one generation-fenced interactive lease
-may mutate a run. Stop may acquire a transient lease; stale generations are
+Bare `agents` reads owner-local live worker/session/channel bindings without
+starting anything or acquiring a control lease. `coverage` lists observations
+and limits; catalog/config remains `agents list`, retained runs remain
+`agents sessions`. Use `--limit N` (1–16) and the boot-scoped `--after` cursor.
+Unknown model/resources stay null; a requested native selector is separate
+from confirmed routing. See `references/cli.md` for unavailable/error semantics.
+The first-party `agents attach` UI is retired. Protocol attachments retain
+explicit generation-fenced leases; observers do not acquire one. Exactly one
+controller lease may mutate a run. Stop may acquire a transient lease; stale generations are
 rejected. Remove is allowed only after stopped/failed/interrupted reaping has
 settled and never deletes a native harness session.
 
 The local owner-only socket grants start, metadata list, peek, transcript,
 attach, respond, stop, and remove separately. `agents sessions --json` uses
 only the metadata-list grant, so it cannot retrieve prompts, results, exact
-failure text, raw tool/permission context, or mutate a run. Interactive clients
-request only the scopes needed by their visible controls.
+failure text, raw tool/permission context, or mutate a run. CLI clients request only the scopes needed by the selected operation.
 
 ## Local ACP recording
 

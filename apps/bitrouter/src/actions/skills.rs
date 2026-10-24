@@ -1,4 +1,4 @@
-//! Installed Agent Skills inspection for `bro skills list`.
+//! Shared unmanaged Agent Skills inspection and CLI row fields.
 //!
 //! ## Why the row carries `valid` / `problem`
 //!
@@ -11,8 +11,9 @@
 //!
 //! A [`SkillRow`] is emitted for every `SKILL.md` on disk, and one that cannot
 //! be loaded carries `valid: false` plus the `problem` that stops it. Native
-//! agent hosts own installation and activation; BitRouter only inspects and
-//! validates the conventional local layouts.
+//! agent hosts retain ownership of conventional local layouts. BitRouter's
+//! private managed library uses the same row fields with separate receipts;
+//! discovery itself does not install or activate a skill.
 //!
 //! ## Why `dir` *and* `skill_md`
 //!

@@ -14,6 +14,7 @@ use crate::service::state::{Inner, State};
 use crate::store::{ExecutionStore, MemoryExecutionStore};
 use crate::thread::PermissionProfile;
 
+pub mod activity;
 mod admission;
 mod approval;
 mod checkpoint_pages;
@@ -24,6 +25,7 @@ mod ownership;
 mod queue;
 mod recovery;
 mod runner;
+pub mod skills;
 pub mod startup;
 mod state;
 mod steering;
@@ -41,6 +43,8 @@ pub struct RuntimeCapabilities {
     pub limits: RuntimeLimits,
     #[serde(default)]
     pub execution_ownership: Option<crate::store::OwnerClaim>,
+    #[serde(default)]
+    pub skill_constraints: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -315,6 +319,7 @@ impl ThreadService {
             server_instance_id: self.inner.instance_id.clone(),
             limits: self.inner.limits.clone(),
             execution_ownership: state.execution_ownership.clone(),
+            skill_constraints: true,
         }
     }
 

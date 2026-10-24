@@ -90,6 +90,7 @@ impl StepControl {
             )
             .await
             .map_err(sdk_error)?;
+        tracing::debug!(agent_id = %self.agent_id, work_index = work.work_index, "preparation checkpoint committed");
         self.session
             .ensure_dispatch_with_budget(
                 &self.agent_id,
@@ -98,7 +99,9 @@ impl StepControl {
                 true,
             )
             .await
-            .map_err(sdk_error)
+            .map_err(sdk_error)?;
+        tracing::debug!(agent_id = %self.agent_id, work_index = work.work_index, "preparation dispatch admitted");
+        Ok(())
     }
 
     pub(super) async fn record_preparation_work(

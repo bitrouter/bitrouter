@@ -38,6 +38,7 @@ pin-project-lite.workspace = true
 async-stream.workspace = true
 reqwest.workspace = true
 eventsource-stream.workspace = true
+fluent-uri.workspace = true
 url.workspace = true
 uuid.workspace = true
 schemars.workspace = true

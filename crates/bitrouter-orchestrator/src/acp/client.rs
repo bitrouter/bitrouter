@@ -954,6 +954,11 @@ pub struct AcpClient {
 }
 
 impl AcpClient {
+    /// Inspect the existing transport command loop without sending a request.
+    pub fn is_connected(&self) -> bool {
+        !self.cmd_tx.is_closed()
+    }
+
     /// Connect over `transport` and run `initialize`, driving the connection as
     /// a task on the **caller's** runtime. Returns once the handshake
     /// completes, or an error if the transport or handshake failed.

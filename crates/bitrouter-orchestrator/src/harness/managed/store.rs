@@ -141,6 +141,7 @@ pub(super) struct DurableState {
 }
 
 pub(super) struct NativePort {
+    pub resources: Arc<super::NativeResources>,
     pub state: Mutex<DurableState>,
     pub store: Arc<dyn NativeStore>,
     pub commands: mpsc::Sender<ServerMessage>,
@@ -155,8 +156,10 @@ impl NativePort {
         journal: Journal,
         store: Arc<dyn NativeStore>,
         commands: mpsc::Sender<ServerMessage>,
+        resources: Arc<super::NativeResources>,
     ) -> Self {
         Self {
+            resources,
             state: Mutex::new(DurableState { revision, journal }),
             store,
             commands,
@@ -285,6 +288,73 @@ impl NativePort {
 
 #[async_trait]
 impl HarnessPort for NativePort {
+    async fn skill_catalog(&self) -> Result<Option<crate::core::skills::SkillCatalog>, CoreError> {
+        self.authorize_dispatch().await?;
+        Ok(Some(crate::core::skills::SkillCatalog {
+            local: self.resources.local_skill_catalog().clone(),
+            mcp: self.resources.mcp_skill_catalog().clone(),
+        }))
+    }
+
+    async fn resolve_mcp_skill(
+        &self,
+        server: &str,
+        uri: &str,
+        cancel: &CancellationToken,
+    ) -> Result<crate::harness::skills::mcp::HeldMcpSkill, CoreError> {
+        self.authorize_dispatch().await?;
+        self.resources
+            .mcp_skill(server, uri, cancel)
+            .await
+            .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
+    }
+
+    async fn skill_instructions(
+        &self,
+        source: &crate::core::skills::SkillSource,
+        max_bytes: u64,
+        cached_bytes: Option<&[u8]>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.authorize_dispatch().await?;
+        match source {
+            crate::core::skills::SkillSource::Local(binding) => self
+                .resources
+                .managed_skill_file(binding, "SKILL.md", max_bytes)
+                .await
+                .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),
+            crate::core::skills::SkillSource::Mcp(held) => self
+                .resources
+                .mcp_skill_file(
+                    held,
+                    crate::harness::skills::mcp::SkillRead {
+                        reference: &held.entry.uri,
+                        max_bytes,
+                        cached_bytes,
+                    },
+                    cancel,
+                )
+                .await
+                .map(|file| file.bytes)
+                .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),
+        }
+    }
+
+    async fn skill_file(
+        &self,
+        source: &crate::core::skills::SkillSource,
+        reference: &str,
+        max_bytes: u64,
+        cached_bytes: Option<&[u8]>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.authorize_dispatch().await?;
+        self.resources
+            .skill_file(source, reference, max_bytes, cached_bytes, cancel)
+            .await
+            .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
+    }
+
     async fn authorize_dispatch(&self) -> Result<(), CoreError> {
         if self.failed.load(Ordering::SeqCst) {
             Err(error("native durable authority requires reconciliation"))
@@ -371,7 +441,9 @@ impl HarnessPort for NativePort {
                 }
                 Ok(())
             }
-            ServerMessage::ToolExecute(_) | ServerMessage::MaterialRequest { .. } => self
+            ServerMessage::ToolExecute(_)
+            | ServerMessage::MaterialRequest { .. }
+            | ServerMessage::SkillConsentRequest(_) => self
                 .commands
                 .send(message)
                 .await

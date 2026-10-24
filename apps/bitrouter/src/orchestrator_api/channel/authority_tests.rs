@@ -171,3 +171,48 @@ async fn disconnect_interrupts_delivery_while_authority_database_is_busy() -> Te
     db.close().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn connected_projection_isolates_principals_and_ignores_retained_closed_channels()
+-> TestResult {
+    let (principal, db) = principal().await?;
+    let api = ManagedCoreApi::new(
+        Arc::new(bitrouter_sdk::App::builder().build()?),
+        db.clone(),
+        "core".into(),
+    );
+    let mut receivers = Vec::new();
+    let mut connections = Vec::new();
+    for owner in ["principal-a", "principal-b"] {
+        let port = Arc::new(port(principal.clone())?);
+        let (sender, receiver) = mpsc::channel(1);
+        connections.push(port.attach(sender).await?);
+        receivers.push(receiver);
+        api.shared.sessions.lock().await.insert(
+            (owner.into(), "harness".into(), "session".into()),
+            Entry {
+                session: None,
+                grant: port.grant.clone(),
+                limits: Limits::default(),
+                port,
+                connected: true,
+                ready: true,
+                job: None,
+                recovery_evidence: Vec::new(),
+            },
+        );
+    }
+    let rows = api.connected_sessions().await?;
+    assert_eq!(rows.len(), 2);
+    assert_ne!(rows[0].id, rows[1].id);
+    assert_eq!(rows[0].session_id, rows[1].session_id);
+    assert!(rows.iter().all(|row| row.execution_epoch == Some(1)));
+    for connection in connections {
+        connection.closed.cancel();
+    }
+    assert!(api.connected_sessions().await?.is_empty());
+    assert_eq!(api.shared.sessions.lock().await.len(), 2);
+    drop(receivers);
+    db.close().await?;
+    Ok(())
+}

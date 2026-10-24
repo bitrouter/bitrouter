@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::decision_model::policy::{DecisionPolicy, DecisionPricing};
 use crate::error::{BitrouterError, Result};
 
-/// An optional `decision_model:` block enables native context decisions.
+/// An optional `decision_model:` block enables SDK routing assessment.
+/// Native orchestrator context and skill selection do not invoke this backend.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DecisionModelConfig {

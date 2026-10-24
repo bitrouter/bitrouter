@@ -6,13 +6,20 @@
 > upstream Skills-over-MCP relay, aggregation, namespacing, cache, and lifecycle
 > requirements remain current.
 
+> **CLI-only v0.5 review (2026-10-19).** The current upstream relay lacks an
+> extension-capability check before sending Skills methods. Its correction and
+> new acceptance are tracked in [A27/M01–M03](CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md).
+> Historical completion labels below do not close that gap. The separately
+> planned daemon/native host role is covered by A28/M04–M10; this does not
+> restore a local origin server. No new protocol or host tests ran in this review.
+
 Adopting [SEP-2640](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2640)
 (`io.modelcontextprotocol/skills`) so BitRouter serves skills it holds and
 proxies skills held by upstream MCP servers — over stdio and Streamable HTTP
 alike.
 
-Status: **native-conformance implementation complete; external host acceptance
-pending** · Author: Claude (with Spikel) · Updated: 2026-09-14
+Historical status (2026-09-14): **native-conformance implementation complete;
+external host acceptance pending** · Author: Claude (with Spikel)
 
 **2026-09-14 conformance update.** The follow-up
 [`2026-09-13-skills-mcp-native-conformance-plan.md`](2026-09-13-skills-mcp-native-conformance-plan.md)
@@ -22,8 +29,9 @@ implemented the stateless MCP `2026-07-28` downstream HTTP lifecycle. The
 default upstream setting is now `auto` (modern discovery with classified
 legacy fallback); `latest` explicitly forces rmcp's legacy `2025-11-25`
 lifecycle. This document remains the architectural record; the follow-up plan
-is the dated acceptance ledger. BitRouter remains a server/gateway, never the
-host that approves or activates a skill.
+is the dated acceptance ledger. The gateway component does not approve or
+activate skills. The future daemon/native host role is defined separately by
+the [CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md); it is not yet implemented.
 
 **2026-09-14 reviewer hardening.** The daemon now applies its virtual-key auth
 hook to MCP as well as model inference; aggregate resource and template lists

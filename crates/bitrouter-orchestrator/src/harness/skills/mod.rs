@@ -11,6 +11,8 @@ use super::MaterialRef;
 use super::sha256;
 
 pub mod format;
+pub mod library;
+pub mod mcp;
 
 const MAX_SKILL_BYTES: u64 = 256 * 1024;
 const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
@@ -30,28 +32,19 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-fn is_valid_skill_name(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && name
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && !name.contains("--")
-}
-
 fn is_valid_skill_description(description: &str) -> bool {
     !description.trim().is_empty() && description.chars().count() <= 1024
 }
 
 pub fn validate_skill_name(name: &str) -> Result<()> {
-    if !is_valid_skill_name(name) {
+    if !bitrouter_sdk::mcp::skills::valid_agent_skill_name(name) {
         return Err(Error::InvalidSkillName(name.into()));
     }
     Ok(())
 }
 
-fn read_skill(path: &Path) -> std::io::Result<String> {
+/// Read a regular UTF-8 SKILL.md with the shared 256 KiB content bound.
+pub fn read_skill(path: &Path) -> std::io::Result<String> {
     let mut bytes = Vec::new();
     let file = File::open(path)?;
     if !file.metadata()?.is_file() {

@@ -45,17 +45,17 @@ pub use pattern::{Pattern, PatternMap};
 pub use presets::{PresetResolution, PromptOverrides, resolve_presets};
 pub use routing_table::ConfigRoutingTable;
 
-/// `bro chat`'s own configuration.
+/// Retained native-model, onboarding-launch and headless prompt defaults.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ChatConfig {
-    /// Default ACP harness for bare `bitrouter` (catalog id or configured agent).
+    /// Saved harness for an explicit onboarding native launch; bare `bro` starts the daemon.
     pub agent: Option<String>,
-    /// Default daemon-routable model for the chat session.
+    /// Default daemon-routable model for native tasks and Threads.
     pub model: Option<String>,
     /// Prompt-expansion commands.
     ///
-    /// `/name args` in `bro chat`, or `bro acp prompt "/name args"`,
+    /// `/name args` in a `bro run` or `bro acp prompt` input
     /// sends `prompt` with `$ARGUMENTS` replaced by everything typed after the
     /// name.
     ///
@@ -129,6 +129,8 @@ pub struct Config {
     /// `POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.
     /// Empty by default — when empty, the binary does not mount the MCP route.
     pub mcp_servers: HashMap<String, crate::mcp::transport::McpServerConfig>,
+    /// Explicit native MCP skill source grants. Empty grants no MCP skill sources.
+    pub skills: crate::skills::SkillsConfig,
     /// Server-side tool loop: MCP server ids whose tools BitRouter injects into
     /// LLM requests and executes itself. Empty by default — the pipeline stays
     /// single-shot.
@@ -173,6 +175,7 @@ impl Default for Config {
             plugins: HashMap::new(),
             mcp: McpConfig::default(),
             mcp_servers: HashMap::new(),
+            skills: crate::skills::SkillsConfig::default(),
             server_tools: Default::default(),
             agents: HashMap::new(),
             inherit_defaults: true,
@@ -189,6 +192,9 @@ impl Config {
     /// before activation. Config-backed routing also runs it at first
     /// resolution so infallible table constructors cannot bypass validation.
     pub fn validate_router_config(&self) -> Result<()> {
+        for grant in self.skills.mcp_sources.values() {
+            grant.validate().map_err(BitrouterError::bad_request)?;
+        }
         if let Some(decision) = &self.decision_model {
             decision.validate()?;
         }
