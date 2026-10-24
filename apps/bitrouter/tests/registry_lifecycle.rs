@@ -24,6 +24,9 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[path = "registry_lifecycle/live_sync.rs"]
+mod live_sync;
+
 struct Fixture {
     registry: RwLock<String>,
     requests: AtomicUsize,
@@ -70,9 +73,10 @@ struct Host {
     address: SocketAddr,
     log: PathBuf,
     client: reqwest::Client,
+    provider: &'static str,
 }
 impl Host {
-    fn new(home: PathBuf) -> Result<Self> {
+    fn new(home: PathBuf, provider: &'static str) -> Result<Self> {
         for dir in ["home", "runtime", "config", "cache", "data", "tmp"] {
             fs::create_dir_all(home.join(dir))?;
         }
@@ -85,6 +89,7 @@ impl Host {
                 .no_proxy()
                 .timeout(Duration::from_secs(2))
                 .build()?,
+            provider,
         })
     }
     fn configure(
@@ -98,8 +103,8 @@ impl Host {
         fs::write(
             self.home.join("bitrouter.yaml"),
             format!(
-                "server:\n  listen: '{}'\n  control_socket: control.sock\n  skip_auth: true\ndatabase:\n  url: 'sqlite://host.db?mode=rwc'\nregistry:\n  enabled: {enabled}\n  url: '{source}'\n  auto_refresh: {auto}\nproviders:\n  fixture:\n    api_base: '{upstream}/v1'\n    api_key: 'explicit-but-unused-by-none-auth'\n  manual:\n    api_base: '{upstream}/v1'\n    models: [{{id: '{marker}'}}]\n",
-                self.address
+                "server:\n  listen: '{}'\n  control_socket: control.sock\n  skip_auth: true\ndatabase:\n  url: 'sqlite://host.db?mode=rwc'\nregistry:\n  enabled: {enabled}\n  url: '{source}'\n  auto_refresh: {auto}\nproviders:\n  {}:\n    api_base: '{upstream}/v1'\n    api_key: 'fixture-inference-key'\n  manual:\n    api_base: '{upstream}/v1'\n    models: [{{id: '{marker}'}}]\n",
+                self.address, self.provider
             ),
         )?;
         Ok(())
@@ -267,7 +272,7 @@ async fn official_host_registry_download_hot_routes_cache_restart_failure_and_so
         let directory = tempfile::Builder::new()
             .prefix("bro-reg-")
             .tempdir_in("/tmp")?;
-        let mut host = Host::new(directory.path().to_path_buf())?;
+        let mut host = Host::new(directory.path().to_path_buf(), "fixture")?;
         let a = format!("{origin}/registry-a");
         let b = format!("{origin}/registry-b");
         let c = format!("{origin}/registry-c");

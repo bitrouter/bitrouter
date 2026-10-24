@@ -838,6 +838,38 @@ jobs:
             fi
           done
 
+  registry-live-lifecycle:
+    name: live registry sync and host consumption
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      BITROUTER_TEST_DIST_HELPER_BINARY: ${{ github.workspace }}/target/debug/dist-helper
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: build the production registry producer
+        run: cargo build --locked -p dist-helper --jobs 2
+      - name: sync the public provider and route through its exact artifact
+        # Public model listing only; inference, credentials and host state are
+        # test-owned. No account secret or paid provider request is needed.
+        env:
+          BITROUTER_TEST_REGISTRY_EVIDENCE_DIR: ${{ runner.temp }}/registry-closed-loop
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --jobs 2
+          --test registry_lifecycle
+          live_sync::provider_sync_artifact_is_consumed_by_official_host_and_routes_requests
+          -- --ignored --exact --nocapture
+      - name: preserve sync, byte identity and routing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-provider-closed-loop
+          path: ${{ runner.temp }}/registry-closed-loop
+          if-no-files-found: warn
+
   msrv:
     name: msrv
     runs-on: ubuntu-latest

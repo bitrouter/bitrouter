@@ -148,9 +148,82 @@ authority, curation/inventory independence, and revision-preserving promotion.
   diagnostic rerun and final full run use CI's prebuilt-fixture mechanism and
   four test threads; no product behavior or test assertion was weakened.
 
+## Live sync and host routing
+
+On 2026-10-25 (Asia/Shanghai), the explicit live experiment in
+`apps/bitrouter/tests/registry_lifecycle/live_sync.rs` passed the complete chain:
+
+1. Create an isolated source tree with an empty OpenRouter provider inventory,
+   an empty identity ledger, and no curated recommendations.
+2. Execute the production `dist-helper --root DIRECTORY registry sync --write`
+   process. It fetches the real public OpenRouter identity and provider lists,
+   verifies every binding, writes the provider source and ledger, and generates
+   the three registry artifacts through the ordinary publication transaction.
+3. Compare the written provider inventory with the generated artifact and verify
+   all three artifacts against the sync report's exact SHA-256. Serve the
+   generated file directly, without constructing or rewriting a registry body.
+4. Start the official `bro` binary with an isolated home, cache, database, and
+   control socket. While the first registry download is blocked, the selected
+   canonical route returns 404. Release those exact artifact bytes, then send
+   actual HTTP chat-completions requests using both the canonical ID and the
+   reserved encoded native selector. The test-owned inference server verifies
+   the exact native model ID and fixture bearer credential.
+5. Wait for cache publication and compare its complete exact document with the
+   producer document, including unknown data. Cache JSON whitespace is private
+   storage encoding, so its byte digest is recorded separately. Restart with
+   automatic refresh disabled and route again from cache without another fetch.
+
+The model is selected from the generated inventory at run time; the test does
+not freeze a catalog ID or count. It also proves that an offer absent from the
+curated recommendation list remains explicitly routable.
+
+The all-features local run recorded:
+
+| Evidence | Result |
+| --- | --- |
+| Live provider inventory and global identity audit | 693 offers, 693 verified IDs, zero mismatches |
+| Selected canonical/native ID | `aion-labs/aion-2.0` |
+| Explicit native selector | `openrouter:~native/aion-labs%2Faion-2.0` |
+| Published artifact and HTTP-served SHA-256 | `d4ed2ed0e4fc8ff1362c8c03b2802b1d5bfb32ad0358178564542b289aac86df` |
+| Cache complete-document equality | Passed |
+| Cache payload SHA-256 (private encoding) | `daba9d80bbbd2c40043aaadb2fb3d962d25cfd5ddbe2a5e53c3b09b7b679211a` |
+| Inference receipts | Three requests with the exact native ID and fixture credential |
+| Offline cache restart | Passed; no additional registry download |
+| All-features live experiment | Passed in 11.42 seconds |
+| Minimum gateway live experiment (CI command) | Passed in 9.75 seconds |
+
+The identity response was fetched at `2026-10-24T17:38:25.594Z`, SHA-256
+`dff6e65a8250f785ca7ceb35b4032c3c96249c2ba617e5d0b05c974159eb42f0`.
+These are experiment results, not required future catalog contents. The experiment
+uses a separate source tree rather than updating the committed catalog.
+
+Reproduce from the repository root (use an absolute helper path if overriding
+`CARGO_TARGET_DIR`):
+
+```sh
+cargo build --locked -p dist-helper --jobs 2
+BITROUTER_TEST_DIST_HELPER_BINARY="$PWD/target/debug/dist-helper" \
+BITROUTER_TEST_REGISTRY_EVIDENCE_DIR="$PWD/target/registry-closed-loop" \
+cargo test --locked -p bitrouter --no-default-features --jobs 2 \
+  --test registry_lifecycle \
+  live_sync::provider_sync_artifact_is_consumed_by_official_host_and_routes_requests \
+  -- --ignored --exact --nocapture
+```
+
+The test is excluded from the ordinary offline suite because it requires the
+public OpenRouter API. The separate CI job `live registry sync and host
+consumption` explicitly runs it with the minimum gateway build and preserves
+`registry-provider-closed-loop` evidence on success or failure. Evidence includes
+the sync report, public identity response, written provider source, generated
+artifact, structured byte/document comparisons, inference receipts, and host
+diagnostics. Local run evidence is retained under the gitignored
+`docs/superpowers/evidence/registry-v1/closed-loop/` directory.
+
 ## External execution boundary
 
-The public OpenRouter audit is exercised live. Paid inference and live
+The public OpenRouter identity audit and provider catalog sync are exercised live.
+Registry consumption and inference routing use the actual host process and
+HTTP client, with test-owned artifact and inference servers. Paid inference and live
 account-scoped provider feeds are not claimed: their transport, credential,
 mapping and failure behavior is covered by isolated real HTTP/TLS fixtures.
 Repository ignored tests retain their existing opt-in status. The publication

@@ -15,6 +15,9 @@ mod schema;
 #[command(name = "dist-helper")]
 #[command(about = "Generate and check dist artifacts and build profiled packages")]
 struct Cli {
+    /// Repository root for source data and generated artifacts (defaults to this workspace).
+    #[arg(long, global = true, value_name = "DIRECTORY")]
+    root: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -87,7 +90,12 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<()> {
-    let root = workspace_root()?;
+    let root = match cli.root {
+        Some(root) => root
+            .canonicalize()
+            .with_context(|| format!("opening repository root {}", root.display()))?,
+        None => workspace_root()?,
+    };
     match cli.command {
         Command::Package(options) => distribution::run(&root, &options),
         Command::GenerateSchema { check } => schema::generate(&root, check),
