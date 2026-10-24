@@ -15,18 +15,11 @@ api_protocol:
   - "*": anthropic
 rate_limits: []
 models:
-  - id: anthropic/claude-opus-4.8
-    provider_model_id: claude-opus-4-8
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: claude-sonnet-5
     reasoning_effort: &claude_full_effort
       levels: [low, medium, high, xhigh, max]
       default: high
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: anthropic/claude-sonnet-5
-    provider_model_id: claude-sonnet-5
-    reasoning_effort: *claude_full_effort
     capabilities:
       - reasoning
       - structured_outputs

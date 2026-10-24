@@ -921,39 +921,6 @@
           "capabilities": [
             "reasoning",
             "structured_outputs",
-            "tools"
-          ],
-          "id": "anthropic/claude-opus-4.8",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider_model_id": "claude-opus-4-8",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
             "tools",
             "image_input"
           ],
@@ -1417,27 +1384,6 @@
             "openai",
             "responses"
           ],
-          "id": "anthropic/claude-opus-4.8",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider_model_id": "anthropic.claude-opus-4-8",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
           "id": "anthropic/claude-sonnet-4.6",
           "pricing": {
             "input_tokens": {
@@ -1857,27 +1803,6 @@
             }
           },
           "provider_model_id": "claude-haiku-4-5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "id": "anthropic/claude-opus-4.8",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider_model_id": "claude-opus-4-8",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -2331,34 +2256,6 @@
             }
           },
           "provider_model_id": "anthropic/claude-haiku-4.5"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning"
-          ],
-          "id": "anthropic/claude-opus-4.8",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider_model_id": "anthropic/claude-opus-4.8",
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
         },
         {
           "api_protocol": "openai",
@@ -3267,26 +3164,6 @@
           "capabilities": [
             "reasoning",
             "structured_outputs",
-            "tools"
-          ],
-          "id": "anthropic/claude-opus-4.8",
-          "provider_model_id": "claude-opus-4-8",
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
             "tools",
             "image_input"
           ],
@@ -3484,11 +3361,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "anthropic/claude-opus-4.8",
-          "provider_model_id": "claude-opus-4.8"
-        },
-        {
-          "api_protocol": "openai",
           "id": "anthropic/claude-fable-5",
           "provider_model_id": "claude-fable-5"
         },
@@ -3669,20 +3541,6 @@
             }
           },
           "provider_model_id": "zai-org/GLM-5.2-FP8"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "anthropic/claude-opus-4.8",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider_model_id": "anthropic/claude-opus-4.8"
         },
         {
           "api_protocol": "openai",
@@ -3943,6 +3801,26 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "id": "minimax/minimax-m3.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "provider_model_id": "MiniMax-M3.1-Flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "minimax",
@@ -4020,6 +3898,26 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "anthropic",
+            "openai"
+          ],
+          "id": "minimax/minimax-m3.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0149,
+              "no_cache": 0.1494
+            },
+            "output_tokens": {
+              "text": 0.5976
+            }
+          },
+          "provider_model_id": "MiniMax-M3.1-Flash",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "minimax_cn",
@@ -4093,6 +3991,27 @@
             }
           },
           "provider_model_id": "kimi-k2.7-code",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "anthropic"
+          ],
+          "id": "moonshotai/kimi-k3.1-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.0,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "kimi-k3.1-pro",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -4346,6 +4265,20 @@
             }
           },
           "provider_model_id": "deepseek/deepseek-v4.1-flash-1017"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m3.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "provider_model_id": "minimax/minimax-m3.1-flash"
         }
       ],
       "name": "novita",
@@ -4968,6 +4901,16 @@
           "api_protocol": "openai",
           "id": "anthropic/claude-haiku-5.5",
           "provider_model_id": "claude-haiku-5-5"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "moonshotai/kimi-k3.1-pro",
+          "provider_model_id": "kimi-k3.1-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "minimax/minimax-m3.1-flash",
+          "provider_model_id": "minimax-m3.1-flash"
         }
       ],
       "name": "opencode-go",
@@ -5014,21 +4957,6 @@
             }
           },
           "provider_model_id": "claude-sonnet-4-5"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "anthropic/claude-opus-4.8",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider_model_id": "claude-opus-4-8"
         },
         {
           "api_protocol": "openai",
@@ -5783,25 +5711,6 @@
             }
           },
           "provider_model_id": "anthropic/claude-haiku-4.5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "anthropic/claude-opus-4.8",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.5,
-              "cache_write": 6.25,
-              "no_cache": 5.0
-            },
-            "output_tokens": {
-              "text": 25.0
-            }
-          },
-          "provider_model_id": "anthropic/claude-opus-4.8"
         },
         {
           "api_protocol": [
@@ -6761,6 +6670,42 @@
             }
           },
           "provider_model_id": "deepseek/deepseek-v4.1-flash-1017"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "minimax/minimax-m3.1-flash",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "provider_model_id": "minimax/minimax-m3.1-flash"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "id": "moonshotai/kimi-k3.1-pro",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider_model_id": "moonshotai/kimi-k3.1-pro"
         }
       ],
       "name": "openrouter",
