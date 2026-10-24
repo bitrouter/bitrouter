@@ -23,6 +23,8 @@ serde.workspace = true
 # https://github.com/serde-rs/json/blob/v1.0.150/tests/test.rs
 # Prehashed manifests also require nested JSON object order to survive a public
 # contract round trip without the application's preserve_order feature.
-serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
+# Raw numeric tokens let tenancy integers accept exact 1.0/1e0 without rounding
+# a fractional or out-of-range token into an authority revision.
+serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order", "raw_value"] }
 thiserror.workspace = true
 schemars = { workspace = true, optional = true }

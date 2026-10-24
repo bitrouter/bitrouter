@@ -162,6 +162,30 @@ its scoped control bearer, not an inference API key. Pass an origin or
 remote endpoints require HTTPS or a local tunnel. The application remains
 responsible for saved profiles, environment variables and local daemon discovery.
 
+`tenancy::TenancyClient` supplies the resource-tenancy contracts on that protected
+listener, with tenant credentials or explicitly provisioned installation-operator
+authority. It uses the same endpoint rules and supports optional h2c through
+`TenancyOptions::http_version`. Defaults are a three-second connection deadline,
+five-second total deadline and 2 MiB response bound. No response cache, redirect,
+automatic retry, filesystem access or daemon discovery is involved.
+
+Tenant/principal/binding commands, one-time credential issuance and revocation,
+configuration draft/read/activation, management-result recovery and paginated
+execution lookup use `bitrouter_ai::tenancy` values. Validate values with
+`tenancy::validation::Validate`; the SDK also validates requests before sending
+and checks response shape, bounds and requested identity. Nullable CAS fields
+must be explicitly present. Credentials and free-form error messages are redacted
+from diagnostics. Management failures after a lost or untrustworthy response
+return `Error::TenancyUnknown` with only the original operation ID; query that
+operation using the original installation and current authority, without creating
+a new command ID. Correlation queries never deduplicate or re-execute inference.
+
+Tenancy discovery is fresh for every call. `TenantCapabilities::bind` creates
+strict dispatch metadata only when all required guarantees are advertised;
+binding still requires a live server-side check. An older gateway's missing
+endpoint is not evidence of support. These client contracts do not themselves
+enable or advertise tenancy endpoints in a service.
+
 ```rust,no_run
 use bitrouter_ai::control::action::Action;
 use bitrouter_sdk::control::ControlClient;

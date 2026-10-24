@@ -3,6 +3,8 @@
 Status: M0 design/fixture delivery, 2026-10-25. Proposed tenant endpoints below
 are **not implemented or advertised by the gateway yet**. M1 implements local
 authority; M2 implements owned configuration/state; M3 implements strict receipts.
+Current stage status and runtime qualification gates are tracked in
+[Resource tenancy implementation](RESOURCE_TENANCY_IMPLEMENTATION.md).
 
 Baseline: `38ddfd231f053beae9b52a61443a3706688628e0`, stacked on the existing
 shared-concurrency change. The service/crate refactor, HTTP SDK, embedded telemetry,

@@ -33,4 +33,5 @@ pub mod harness;
 pub mod observe;
 pub mod protocol;
 pub mod routing;
+pub mod tenancy;
 pub mod types;

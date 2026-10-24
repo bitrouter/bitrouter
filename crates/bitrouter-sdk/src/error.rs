@@ -40,6 +40,18 @@ pub enum Error {
     Service(Box<ServiceFailure>),
     #[error("control service returned HTTP status {}", .0.status)]
     Control(Box<ServiceFailure<bitrouter_ai::control::error::ErrorEnvelope>>),
+    #[error("tenancy service returned HTTP status {}", .0.status)]
+    Tenancy(Box<ServiceFailure<bitrouter_ai::tenancy::operation::Error>>),
+    /// A management response was lost or could not be trusted. Query this exact
+    /// operation using the original installation and current read authority.
+    #[error("tenancy outcome is unknown; query operation {operation_id} before retrying")]
+    TenancyUnknown {
+        /// Nonsecret original command identity; request payloads are not retained.
+        operation_id: bitrouter_ai::tenancy::identity::OperationId,
+        /// Transport or response validation failure, without request contents.
+        #[source]
+        source: Box<Error>,
+    },
     #[error("evaluation service returned HTTP status {}", .0.status)]
     Evaluation(Box<ServiceFailure<bitrouter_ai::eval::ErrorEnvelope>>),
     #[error("core service returned HTTP status {}", .0.status)]

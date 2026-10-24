@@ -1,0 +1,1465 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "Time": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "AuthorityRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "ResourceRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "Mutation": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_revision",
+        "installation_id"
+      ],
+      "additionalProperties": false
+    },
+    "TenantPut": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "enum": [
+            "active",
+            "suspended",
+            "deleting"
+          ]
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_revision",
+        "state",
+        "installation_id"
+      ],
+      "additionalProperties": false
+    },
+    "PrincipalPut": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "subject": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_revision",
+        "issuer",
+        "subject",
+        "installation_id"
+      ],
+      "additionalProperties": false
+    },
+    "BindingPut": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "principal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "role": {
+          "$ref": "#/$defs/TenantRole"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Time"
+        },
+        "expected_management_owner": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/GrantScope"
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_revision",
+        "principal_id",
+        "role",
+        "scope",
+        "expires_at",
+        "expected_management_owner",
+        "installation_id"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "expected_revision": {
+                "type": "null"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "expected_management_owner": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "CredentialCreate": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Permission"
+          },
+          "minItems": 1,
+          "maxItems": 10,
+          "uniqueItems": true
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Time"
+        },
+        "rotate_credential_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/GrantScope"
+        },
+        "binding_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_authority_revision",
+        "principal_id",
+        "permissions",
+        "scope",
+        "expires_at",
+        "rotate_credential_id",
+        "binding_id",
+        "installation_id"
+      ],
+      "additionalProperties": false
+    },
+    "CredentialIssued": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "credential_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        },
+        "secret": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Time"
+        },
+        "credential_revision": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "credential_id",
+        "principal_id",
+        "tenant_id",
+        "authority_revision",
+        "secret",
+        "expires_at",
+        "credential_revision"
+      ],
+      "additionalProperties": false
+    },
+    "Configuration": {
+      "type": "object",
+      "properties": {
+        "routes": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/ResourceRef"
+              },
+              {
+                "properties": {
+                  "resource_kind": {
+                    "const": "route"
+                  }
+                }
+              }
+            ]
+          },
+          "maxItems": 256,
+          "uniqueItems": true
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/ResourceRef"
+                },
+                {
+                  "properties": {
+                    "resource_kind": {
+                      "const": "policy"
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation_defaults": {
+          "type": "object",
+          "properties": {
+            "max_output_tokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            },
+            "temperature": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2
+            }
+          },
+          "required": [
+            "max_output_tokens",
+            "temperature"
+          ],
+          "additionalProperties": false
+        },
+        "learning": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "off",
+                "observe",
+                "explore"
+              ]
+            },
+            "max_evaluations": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            }
+          },
+          "required": [
+            "mode",
+            "max_evaluations"
+          ],
+          "additionalProperties": false
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "active_executions": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 128
+            },
+            "queued_work": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 256
+            },
+            "learning_jobs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 8
+            }
+          },
+          "required": [
+            "active_executions",
+            "queued_work",
+            "learning_jobs"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "routes",
+        "policy",
+        "generation_defaults",
+        "learning",
+        "limits"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "policy": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "routes": {
+                "maxItems": 255
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ConfigurationPut": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        },
+        "document": {
+          "$ref": "#/$defs/Configuration"
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_authority_revision",
+        "document",
+        "installation_id"
+      ],
+      "additionalProperties": false
+    },
+    "ConfigurationRevision": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "compiler_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "content_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "document": {
+          "$ref": "#/$defs/Configuration"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "revision_id",
+        "schema_version",
+        "compiler_version",
+        "content_digest",
+        "document"
+      ],
+      "additionalProperties": false
+    },
+    "Activation": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_active_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_active_revision",
+        "revision_id",
+        "expected_authority_revision",
+        "installation_id"
+      ],
+      "additionalProperties": false
+    },
+    "ActiveRevision": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        }
+      },
+      "required": [
+        "tenant_id",
+        "revision_id",
+        "authority_revision"
+      ],
+      "additionalProperties": false
+    },
+    "Error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "enum": [
+            "invalid_request",
+            "unauthorized",
+            "forbidden",
+            "tenant_inactive",
+            "not_found",
+            "revision_conflict",
+            "operation_conflict",
+            "operation_expired",
+            "payload_too_large",
+            "capacity_exceeded",
+            "authority_unavailable",
+            "storage_unavailable",
+            "capability_mismatch"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "dispatch_state": {
+          "enum": [
+            "not_started",
+            "started",
+            "unknown"
+          ]
+        },
+        "operation_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "execution_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "dispatch_state",
+        "operation_id",
+        "execution_id"
+      ],
+      "additionalProperties": false
+    },
+    "OperationResult": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "status": {
+          "enum": [
+            "pending",
+            "applied",
+            "rejected",
+            "unknown"
+          ]
+        },
+        "authority_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuthorityRevision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_revision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resource_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "operation_id",
+        "status",
+        "authority_revision",
+        "resource_revision",
+        "error",
+        "resource_id"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "applied"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "authority_revision": {
+                "$ref": "#/$defs/AuthorityRevision"
+              },
+              "error": {
+                "type": "null"
+              },
+              "resource_id": {
+                "$ref": "#/$defs/Id"
+              },
+              "resource_revision": {
+                "$ref": "#/$defs/Id"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "rejected"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "error": {
+                "$ref": "#/$defs/Error"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_read_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_write_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "provenance": {
+          "enum": [
+            "provider",
+            "estimated",
+            "unknown"
+          ]
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "provenance",
+        "complete"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "provenance": {
+                "const": "unknown"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_tokens": {
+                "type": "null"
+              },
+              "output_tokens": {
+                "type": "null"
+              },
+              "cache_read_tokens": {
+                "type": "null"
+              },
+              "cache_write_tokens": {
+                "type": "null"
+              },
+              "reasoning_tokens": {
+                "type": "null"
+              },
+              "complete": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "complete": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "output_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cache_read_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "cache_write_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "reasoning_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "provenance": {
+                "const": "estimated"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "complete": {
+                "const": false
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Target": {
+      "type": "object",
+      "properties": {
+        "provider_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "account_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "credential_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "credential_version": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "provider_id",
+        "model_id",
+        "account_id",
+        "credential_id",
+        "credential_version"
+      ],
+      "additionalProperties": false
+    },
+    "NumericUsage": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "enum": [
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+            "reasoning_tokens"
+          ]
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "Attempt": {
+      "type": "object",
+      "properties": {
+        "attempt_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Target"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "native_usage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NumericUsage"
+          },
+          "maxItems": 32
+        }
+      },
+      "required": [
+        "attempt_id",
+        "target",
+        "outcome",
+        "usage",
+        "native_usage"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "target": {
+                "$ref": "#/$defs/Target"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExecutionReceipt": {
+      "type": "object",
+      "properties": {
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "tenant_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "execution_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "execution_revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "state": {
+          "enum": [
+            "committed",
+            "incomplete",
+            "unknown"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "attempts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Attempt"
+          },
+          "maxItems": 8
+        },
+        "usage": {
+          "$ref": "#/$defs/Usage"
+        },
+        "recorded_at": {
+          "$ref": "#/$defs/Time"
+        }
+      },
+      "required": [
+        "installation_id",
+        "tenant_id",
+        "principal_id",
+        "execution_id",
+        "correlation_id",
+        "execution_revision",
+        "state",
+        "outcome",
+        "attempts",
+        "usage",
+        "recorded_at"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "attempts": {
+                "minItems": 1,
+                "contains": {
+                  "properties": {
+                    "outcome": {
+                      "const": "completed"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ExecutionPage": {
+      "type": "object",
+      "properties": {
+        "execution_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id"
+          },
+          "maxItems": 100,
+          "uniqueItems": true
+        },
+        "multiple_executions": {
+          "type": "boolean"
+        },
+        "next_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "execution_ids",
+        "multiple_executions",
+        "next_after",
+        "installation_id",
+        "correlation_id"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "execution_ids": {
+                "minItems": 2
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "multiple_executions": {
+                "const": true
+              }
+            }
+          }
+        }
+      ]
+    },
+    "AuditReaderCreate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "principal_id",
+        "expected_authority_revision",
+        "expires_at",
+        "installation_id"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "principal_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Time"
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      }
+    },
+    "ResourceKey": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id"
+      ],
+      "additionalProperties": false
+    },
+    "GrantScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "tenant"
+            },
+            "operator_pools": {
+              "type": "array",
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "allOf": [
+                  {
+                    "$ref": "#/$defs/ResourceKey"
+                  },
+                  {
+                    "properties": {
+                      "owner_kind": {
+                        "const": "operator_pool"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "resources"
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ResourceKey"
+              },
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "kind",
+            "resources"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "TenantRole": {
+      "enum": [
+        "viewer",
+        "editor",
+        "tenant_operator",
+        "tenant_admin"
+      ]
+    },
+    "Permission": {
+      "enum": [
+        "resource.read",
+        "resource.draft",
+        "execution.submit",
+        "evaluation.submit",
+        "policy.activate",
+        "credential.use",
+        "credential.manage",
+        "binding.manage",
+        "credential.issue",
+        "receipt.read"
+      ]
+    },
+    "CredentialStatus": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "credential_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "credential_revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "authority_revision": {
+          "$ref": "#/$defs/AuthorityRevision"
+        },
+        "state": {
+          "enum": [
+            "active",
+            "revoked",
+            "expired"
+          ]
+        }
+      },
+      "required": [
+        "tenant_id",
+        "credential_id",
+        "credential_revision",
+        "authority_revision",
+        "state"
+      ],
+      "additionalProperties": false
+    },
+    "CredentialRevoke": {
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "expected_revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        }
+      },
+      "required": [
+        "operation_id",
+        "expected_revision",
+        "installation_id"
+      ],
+      "additionalProperties": false
+    },
+    "TenantCapabilities": {
+      "type": "object",
+      "properties": {
+        "contract_version": {
+          "const": 1
+        },
+        "installation_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "instance_id": {
+          "$ref": "#/$defs/Id"
+        },
+        "capability_revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "revision_bound_dispatch": {
+          "type": "boolean"
+        },
+        "strict_receipts": {
+          "type": "boolean"
+        },
+        "dispatch_enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "contract_version",
+        "installation_id",
+        "instance_id",
+        "capability_revision",
+        "revision_bound_dispatch",
+        "strict_receipts",
+        "dispatch_enabled"
+      ],
+      "additionalProperties": false
+    },
+    "DispatchBinding": {
+      "type": "object",
+      "properties": {
+        "Bitrouter-Tenancy-Version": {
+          "const": "1"
+        },
+        "Bitrouter-Installation-Id": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Instance-Id": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Capability-Revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Execution-Revision": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Correlation-Id": {
+          "$ref": "#/$defs/Id"
+        },
+        "Bitrouter-Receipt-Mode": {
+          "const": "strict"
+        }
+      },
+      "required": [
+        "Bitrouter-Tenancy-Version",
+        "Bitrouter-Installation-Id",
+        "Bitrouter-Instance-Id",
+        "Bitrouter-Capability-Revision",
+        "Bitrouter-Execution-Revision",
+        "Bitrouter-Correlation-Id",
+        "Bitrouter-Receipt-Mode"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

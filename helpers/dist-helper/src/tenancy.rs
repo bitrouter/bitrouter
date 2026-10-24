@@ -1,4 +1,4 @@
-//! Validate M0 specification inputs without pretending to run a tenant server.
+//! Validate frozen inputs and public contracts without claiming runtime authorization.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -6,6 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use serde_json::Value;
+
+mod contracts;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -448,6 +450,7 @@ fn validate_operations(operations: &Value, covered: &HashSet<&str>) -> Result<Ha
 
 pub(crate) fn validate(root: &Path) -> Result<()> {
     let schema = read(root, "schema.json")?;
+    contracts::check_packaged(root, &schema)?;
     let profile = read(root, "benchmark-profile.json")?;
     ensure!(
         shape_valid(&schema, "CapacityProfile", &profile)?,
@@ -478,6 +481,7 @@ pub(crate) fn validate(root: &Path) -> Result<()> {
             fixture.name,
             fixture.valid
         );
+        contracts::check(fixture, &schema)?;
         if fixture.valid {
             let semantic = validate_semantics(&fixture.schema, &fixture.value, &schema, &profile);
             let expected = fixture.semantic_valid.unwrap_or(true);
@@ -574,6 +578,34 @@ mod tests {
     fn ut_operation_without_response_is_rejected() {
         let operations = json!([{"name":"lookup", "method":"GET", "path":"/control/v1/tenancy/operations/{operation_id}", "request":null}]);
         assert!(validate_operations(&operations, &HashSet::new()).is_err());
+    }
+
+    #[test]
+    fn ut_integral_json_number_spellings_match_frozen_and_public_schemas() -> Result<()> {
+        let root = crate::workspace_root()?;
+        let schema = read(&root, "schema.json")?;
+        let fixtures: Vec<Fixture> = serde_json::from_value(read(&root, "fixtures.json")?)?;
+        let original = fixtures
+            .into_iter()
+            .find(|f| f.name == "scoped-credential")
+            .context("missing issuance fixture")?;
+        for spelling in ["1.0", "1e0", "125e-2", "9007199254740992"] {
+            let value: Value = serde_json::from_str(spelling)?;
+            let mut fixture = Fixture {
+                name: format!("integral-number-{spelling}"),
+                schema: original.schema.clone(),
+                valid: matches!(spelling, "1.0" | "1e0"),
+                semantic_valid: None,
+                value: original.value.clone(),
+            };
+            fixture.value["expected_authority_revision"] = value;
+            assert_eq!(
+                shape_valid(&schema, &fixture.schema, &fixture.value)?,
+                fixture.valid
+            );
+            contracts::check(&fixture, &schema)?;
+        }
+        Ok(())
     }
 
     /// UT for conflict detection even when both mappings are individually valid.
