@@ -1,0 +1,247 @@
+[
+  {
+    "name": "cross-tenant-body",
+    "operation": "configuration.put",
+    "given": "A request from tenant-a references tenant-b/route-a.",
+    "expected": "403 forbidden; no compile publication or upstream call",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "restricted-delegation",
+    "operation": "binding.put",
+    "given": "A resource-restricted admin tries granting tenant-wide admin to itself.",
+    "expected": "403 forbidden; authority revision unchanged",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "expired-delegation",
+    "operation": "credential.create",
+    "given": "Requested expiry exceeds the issuer credential/binding ceiling.",
+    "expected": "403 forbidden; no credential issued",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "revocation-cache-race",
+    "operation": "credential.revoke",
+    "given": "A new dispatch authorizes after the revoke applied acknowledgement.",
+    "expected": "Deny dispatch; prior work may only finalize facts",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "activation-cas-race",
+    "operation": "configuration.activate",
+    "given": "Two commands expect the same active revision.",
+    "expected": "One applied, one 409 revision_conflict",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "r1-r2-race",
+    "operation": "configuration.activate",
+    "given": "R1 is approved, R2 activates before an inference request with R1 arrives.",
+    "expected": "Authorized retained R1 or pre-dispatch rejection, never R2 substitution",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operation-payload-conflict",
+    "operation": "tenant.put",
+    "given": "Same scoped operation ID is replayed with different state.",
+    "expected": "409 operation_conflict; never replay second mutation",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "late-commit-query",
+    "operation": "operation.read",
+    "given": "Management reply is lost after commit.",
+    "expected": "Lookup returns the one durable applied result",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "suspended-audit",
+    "operation": "receipt.read",
+    "given": "Work completes after suspension; audit worker reads retained receipt.",
+    "expected": "Explicit audit grant reads; ordinary grants cannot dispatch or bypass lifecycle",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "duplicate-correlation",
+    "operation": "receipt.query",
+    "given": "Two executions share correlation, second finishes after first query.",
+    "expected": "200 ExecutionPage; both recoverable through pagination/restarted scan, multiplicity is query-wide; no inference initiated",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "default-local-isolation",
+    "operation": "principal.put",
+    "given": "Authenticated hosted request omits tenant credentials.",
+    "expected": "401 unauthorized; never implicit local owner",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "unknown-owner",
+    "operation": "configuration.read",
+    "given": "A migrated artifact has ambiguous ownership.",
+    "expected": "Quarantine; no default-tenant fallback",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "wrong-backend-continuation",
+    "operation": "receipt.read",
+    "given": "Client presents continuation from another backend/owner.",
+    "expected": "Reject before provider work; receipt lookup cannot replay it",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "tenant-operator-not-installation-operator",
+    "operation": "tenant.put",
+    "given": "A tenant_operator credential requests tenant lifecycle or principal changes.",
+    "expected": "403 forbidden; no installation authority inherited from a tenant role.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "recipient-binding-reduction",
+    "operation": "credential.create",
+    "given": "An issued credential remains unexpired but its bound role/scope is reduced.",
+    "expected": "Effective permissions are intersected with the current recipient binding at every attempt; no stale grant survives.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "pool-grant-required",
+    "operation": "configuration.put",
+    "given": "Tenant-wide permission references an operator_pool resource without an installation-operator pool grant.",
+    "expected": "403 forbidden before compilation/publication; tenant-wide does not include pools.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "lost-issuance-recovery",
+    "operation": "credential.read",
+    "given": "Initial secret response was lost; same principal replays or looks up the operation.",
+    "expected": "Replay has secret:null; lookup has credential ID/revision only. Read current revision, then CAS revoke or rotate without secret recovery.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "credential-rotation-atomic",
+    "operation": "credential.create",
+    "given": "A rotation commits while the predecessor credential is used for a new attempt.",
+    "expected": "Success atomically revokes predecessor and issues the same-principal replacement; acknowledgement follows authority publication.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "concurrent-issuance-replay",
+    "operation": "credential.create",
+    "given": "Two authenticated requests concurrently submit the identical issuance command.",
+    "expected": "Only the winning initial response may contain the secret; every replay/lookup omits it, including after restart.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operation-cross-kind-conflict",
+    "operation": "binding.put",
+    "given": "Same installation/principal/operation ID is reused for another method, target or operation kind.",
+    "expected": "409 operation_conflict; exactly one stored nonsecret result.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operator-operation-lookup",
+    "operation": "operation.read",
+    "given": "Installation operator loses a principal.put response.",
+    "expected": "Original principal resolves it through the same installation-scoped lookup; another principal cannot read it.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "capability-changed-before-dispatch",
+    "operation": "tenancy.capabilities",
+    "given": "Controller cached eligible capabilities, then instance restarts or strict mode is disabled.",
+    "expected": "Mismatched binding or disabled strict dispatch rejects before provider work; never silently downgrades or retries inference.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operation-capacity-latch",
+    "operation": "tenant.put",
+    "given": "Ordinary operation IDs reach total minus safety reserve.",
+    "expected": "Persistently latch off all new inference, attempts/wakes and ordinary mutations; installation operator may spend reserved IDs only on revoke or inactive lifecycle transitions.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "safety-reserve-exhausted",
+    "operation": "credential.revoke",
+    "given": "Safety operation reserve is exhausted or authority storage fails.",
+    "expected": "Inference stays fenced; no ID eviction/reuse. Read/finalization/host stop remain available when storage permits; use offline recovery.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "retired-installation-replay",
+    "operation": "tenant.put",
+    "given": "An old command or credential is sent to the fresh installation after fenced offline recovery.",
+    "expected": "Reject old installation binding and credentials before any mutation or provider call; retained old facts remain separate.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "shared-credential-store-cutover",
+    "operation": "configuration.put",
+    "given": "Two state directories select the same credential file while a refresh replacement is pending.",
+    "expected": "Fence every selected-path writer, settle or quarantine pending refresh and assign pool/slot ownership before activation.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "restricted-scope-cannot-empty-active-snapshot",
+    "operation": "configuration.activate",
+    "given": "A route-a-only credential knows the current activation CAS revision and submits empty routes/null policy.",
+    "expected": "403 forbidden; tenant-wide policy.activate is required in both credential and current binding, no active snapshot change.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "restricted-scope-cannot-change-tenant-limits",
+    "operation": "configuration.activate",
+    "given": "A resource-scoped operator attempts to activate zero concurrency or changed learning settings while keeping its permitted route.",
+    "expected": "403 forbidden; resource coverage and CAS never confer tenant-wide activation authority.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "tenant-wide-activation-explicit-pool-intersection",
+    "operation": "configuration.activate",
+    "given": "Tenant-wide credential includes pool-a but the current binding omits it (or vice versa).",
+    "expected": "403 forbidden; both scopes need the exact pool key and a live installation-operator-managed binding.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operation-read-same-principal-other-tenant",
+    "operation": "operation.read",
+    "given": "Principal P uses a valid tenant-b credential to query its earlier tenant-a operation.",
+    "expected": "Generic forbidden/not-found; no result, revision, target IDs or existence metadata from the tenant-a operation.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operation-read-narrowed-resource-scope",
+    "operation": "operation.read",
+    "given": "Principal P retains resource.read but no longer covers a saved affected resource of an earlier command.",
+    "expected": "Generic forbidden/not-found; original principal equality and knowledge of operation ID do not authorize history access.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operation-read-installation-downgrade",
+    "operation": "operation.read",
+    "given": "The original installation operator principal later presents only a tenant credential.",
+    "expected": "Generic forbidden/not-found; installation-class results require current installation authority.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operation-read-after-valid-rotation",
+    "operation": "operation.read",
+    "given": "The original credential rotates; the same principal still has the saved tenant, affected scope and required result-read permission.",
+    "expected": "Return the retained nonsecret result; do not require the old credential secret or reapply the mutation.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "operation-replay-current-read-authority",
+    "operation": "configuration.put",
+    "given": "A committed command is identically replayed after the same principal loses access to an affected resource.",
+    "expected": "Generic forbidden/not-found before result or conflict disclosure; never reapply the committed command or regain read access.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  },
+  {
+    "name": "receipt-provenance-no-upgrade",
+    "operation": "receipt.read",
+    "given": "One attempt carries estimated or incomplete usage while the aggregate numeric sum is known.",
+    "expected": "Preserve conservative estimated/unknown provenance and complete:false; no provider/complete upgrade from numeric equality.",
+    "verification": "required-in-M1-M3-runtime-tests"
+  }
+]
