@@ -117,6 +117,14 @@ models:
         cache_read: 0.006
       output_tokens:
         text: 1.2
+  - id: minimax/minimax-m3.1-flash
+    provider_model_id: minimax/minimax-m3.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.015
+      output_tokens:
+        text: 0.6
 status: active
 weight: 1
 submitted_at: 2026-07-07

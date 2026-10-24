@@ -39,17 +39,6 @@ models:
       output_tokens:
         text: 5
     capabilities: [tools]
-  - id: anthropic/claude-opus-4.8
-    provider_model_id: anthropic/claude-opus-4.8
-    reasoning_effort: *claude_full_effort
-    capabilities: [reasoning]
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: anthropic/claude-sonnet-4.6
     reasoning_effort: &claude_max_effort
