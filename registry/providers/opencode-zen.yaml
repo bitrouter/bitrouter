@@ -26,15 +26,6 @@ models:
         cache_write: 3.75
       output_tokens:
         text: 15
-  - id: anthropic/claude-opus-4.8
-    provider_model_id: claude-opus-4-8
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
   - id: minimax/minimax-m2.7
     provider_model_id: minimax-m2.7
     pricing:

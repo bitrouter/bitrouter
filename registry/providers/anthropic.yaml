@@ -14,25 +14,11 @@ rate_limits:
   - "*":
       requests_per_minute: 60
 models:
-  - id: anthropic/claude-opus-4.8
-    provider_model_id: claude-opus-4-8
+  - id: anthropic/claude-sonnet-5
+    provider_model_id: claude-sonnet-5
     reasoning_effort: &claude_full_effort
       levels: [low, medium, high, xhigh, max]
       default: high
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: anthropic/claude-sonnet-5
-    provider_model_id: claude-sonnet-5
-    reasoning_effort: *claude_full_effort
     # Introductory pricing through 2026-08-31; rises to $3/$15 after.
     pricing:
       input_tokens:

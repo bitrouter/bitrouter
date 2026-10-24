@@ -40,15 +40,6 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
-  - id: anthropic/claude-opus-4.8
-    provider_model_id: anthropic.claude-opus-4-8
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: anthropic.claude-sonnet-4-6
     pricing:
