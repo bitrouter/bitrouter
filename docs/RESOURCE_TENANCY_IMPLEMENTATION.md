@@ -49,6 +49,19 @@ fidelity, integer representation, mutation-result identity and issued credential
 were corrected and re-reviewed. This establishes client/value conformance only;
 live authority, dispatch and receipt guarantees remain pending below.
 
+The M1b storage foundation adds empty installation, tenant, principal, binding,
+credential and operation tables without assigning legacy owners. Identities and
+issuer/subject pairs use exact comparison semantics on SQLite, PostgreSQL 17 and
+MySQL 8.4; large valid grant scopes survive storage and interrupted migration
+reruns. Real PostgreSQL/MySQL regressions and the frozen v7 database read test
+passed. The latter permits new migration registrations while preserving every
+historical timestamp and all 284 original record payloads across reads/reopening.
+Independent review covered the migration and compatibility-test adjustment.
+The serialized all-feature workspace run passed all 4,996 selected tests
+(160 opt-in tests skipped), followed by strict all-target workspace Clippy,
+12 passing doctests (one ignored), formatting and whitespace checks. This
+foundation does not yet expose a live tenant authority service.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

@@ -4,7 +4,7 @@
 //! an explicit BITROUTER_TEST_DATABASE_URL pointing to a DEDICATED TEST DATABASE.
 //! It applies all pending migrations and writes fixtures: never use a production
 //! database. Existing migrated test databases and the known partially applied
-//! migration-12 state are supported; other interrupted migrations are not covered.
+//! migration-12/28 states are supported; other interrupted migrations are not covered.
 //! No database is dropped, no table is truncated, and existing fixtures are not
 //! deleted. Each invocation uses UUID-scoped identities and leaves server fixtures
 //! intact, so repeated runs do not depend on an empty database.
@@ -42,6 +42,9 @@ use chrono::Utc;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
 use uuid::Uuid;
+
+#[path = "database_backends/tenancy.rs"]
+mod tenancy;
 
 #[tokio::test]
 async fn sqlite_database_behaviors() -> Result<()> {
@@ -121,6 +124,7 @@ async fn exercise(database_url: &str) -> Result<()> {
         check_metering(&connection, &fixture).await?;
         let trajectory = read_trajectory(&connection, &fixture).await?;
         check_trajectory(&trajectory, &fixture)?;
+        tenancy::exercise(&connection).await?;
 
         // Invoke the migration itself: the ledger would otherwise skip its index
         // existence checks. In particular, MySQL cannot rely on CREATE INDEX
