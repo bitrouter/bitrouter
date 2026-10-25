@@ -21,6 +21,7 @@ mod http_continuation;
 mod ingress;
 mod lifecycle_http;
 mod native;
+mod receipts;
 mod rejections;
 mod secrets;
 

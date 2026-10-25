@@ -114,9 +114,7 @@ async fn managed_history_rejection_after_real_entry_has_no_observation_obligatio
                     key.secret.as_deref().context("secret")?,
                     &revision,
                 )?;
-                let execution = admitted(&fixture, &headers).await?;
-                let store = execution.eval_store();
-                drop(execution);
+                let store = scoped_eval_store(&fixture, &headers).await?;
                 let control = Arc::new(Control::default());
                 // No callback injects this failure: the public App path installs
                 // managed native history validation after successful tenant Entry.

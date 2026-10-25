@@ -36,6 +36,7 @@ use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 use tokio_util::sync::CancellationToken;
 
 mod input_count;
+mod receipt;
 mod response_body;
 mod shared;
 mod stream_bridge;
@@ -1230,6 +1231,7 @@ impl HttpExecutor {
         input: &RequestBuildInput<'_>,
     ) -> Result<tenancy::AuthenticatedRequest> {
         input.ctx.record_credential_authority(None);
+        let reservation = tenancy::reserve(input.target, input.ctx)?;
         let mut request = input.client.build_request(input.url, input.body)?;
         forward_inbound_anthropic_beta(&mut request, input.target, input.ctx);
         apply_provider_headers(&mut request, input.target, input.ctx, true);
@@ -1237,7 +1239,16 @@ impl HttpExecutor {
             .ok_or_else(|| BitrouterError::internal("request account scope unavailable"))?;
         let mut applied = match tenancy::execution(input.ctx) {
             Some(execution) => {
-                tenancy::authenticate(request, input.target, input.transport, &execution).await?
+                tenancy::authenticate(
+                    request,
+                    input.target,
+                    input.transport,
+                    &execution,
+                    reservation.as_ref().ok_or_else(|| {
+                        execution.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
+                    })?,
+                )
+                .await?
             }
             None => {
                 self.apply_auth(request, input.target, input.transport)
@@ -1385,7 +1396,13 @@ impl HttpExecutor {
             Some(stamp) => applied.bind_shared_credential(stamp),
             None => applied,
         };
-        tenancy::AuthenticatedRequest::new(applied, input.target, input.ctx, input.url)
+        tenancy::AuthenticatedRequest::new_reserved(
+            applied,
+            input.target,
+            input.ctx,
+            input.url,
+            reservation,
+        )
     }
 
     async fn refresh_auth_after_unauthorized(
@@ -1458,7 +1475,13 @@ impl HttpExecutor {
         request: &DecisionRequest,
         transport: &Arc<dyn crate::gateway::model::protocol::Transport>,
         ctx: &PipelineContext,
-    ) -> Result<(String, UpstreamErrorScrubber, u64, shared::Attempt)> {
+    ) -> Result<(
+        String,
+        UpstreamErrorScrubber,
+        u64,
+        shared::Attempt,
+        Option<crate::tenancy::receipts::journal::AttemptPermit>,
+    )> {
         let (client, _) = self.client_for(
             target,
             shared::has_admission(ctx) || tenancy::has_execution(ctx),
@@ -1493,14 +1516,19 @@ impl HttpExecutor {
             let mut attempt =
                 shared::Attempt::begin(self.shared_authority, &request, target, ctx).await?;
             let tenant_binding = request.tenant_binding();
-            let (mut request, _) = request.into_parts();
+            let (mut request, _, mut tenant_attempt) = request.into_parts();
             scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
-            let _tenant_attempt =
-                tenancy::admit_send(tenant_binding.as_ref(), &mut request, target, ctx)?;
+            let _tenant_attempt = tenancy::admit_send(
+                tenant_binding.as_ref(),
+                &mut tenant_attempt,
+                &mut request,
+                target,
+                ctx,
+            )?;
             if let Some(attempts) =
                 ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>()
             {
@@ -1511,6 +1539,7 @@ impl HttpExecutor {
                 .await
                 .map_err(|error| scrubber.scrub_error(error.into()))?;
             let status = response.status();
+            receipt::status(&mut tenant_attempt, status.as_u16())?;
             if !status.is_success() {
                 attempt.rejected(status.as_u16()).await?;
             }
@@ -1525,6 +1554,7 @@ impl HttpExecutor {
                     scrubber,
                     started.elapsed().as_millis() as u64,
                     attempt,
+                    tenant_attempt,
                 ));
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
@@ -1537,6 +1567,7 @@ impl HttpExecutor {
                 refreshed = true;
                 continue;
             }
+            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             return Err(classify_upstream_error(
                 status.as_u16(),
                 &scrubber.scrub_body(&text),
@@ -1875,6 +1906,7 @@ impl Executor for HttpExecutor {
             mut shared_attempt,
             successful_binding,
             successful_attempt,
+            mut tenant_attempt,
         ) = loop {
             let mut body = self.render_execution_request(
                 adapter.as_ref(),
@@ -1919,7 +1951,7 @@ impl Executor for HttpExecutor {
             let mut shared_attempt =
                 shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
             let tenant_binding = applied.tenant_binding();
-            let (mut request, authority) = applied.into_parts();
+            let (mut request, authority, mut tenant_attempt) = applied.into_parts();
             let wire: Option<serde_json::Value> = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
@@ -1944,8 +1976,13 @@ impl Executor for HttpExecutor {
                 NativeProviderWorkKind::HttpDispatch,
                 async {
                     record_native_dispatch(prompt, target, ctx)?;
-                    native_attempt =
-                        tenancy::admit_send(tenant_binding.as_ref(), &mut request, target, ctx)?;
+                    native_attempt = tenancy::admit_send(
+                        tenant_binding.as_ref(),
+                        &mut tenant_attempt,
+                        &mut request,
+                        target,
+                        ctx,
+                    )?;
                     client
                         .send(request, &CancellationToken::new())
                         .await
@@ -1956,6 +1993,7 @@ impl Executor for HttpExecutor {
             .await?;
 
             let status = response.status();
+            receipt::status(&mut tenant_attempt, status.as_u16())?;
             if !status.is_success() {
                 shared_attempt.rejected(status.as_u16()).await?;
             }
@@ -1974,6 +2012,7 @@ impl Executor for HttpExecutor {
                     shared_attempt,
                     tenant_binding,
                     native_attempt,
+                    tenant_attempt,
                 );
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
@@ -1986,6 +2025,7 @@ impl Executor for HttpExecutor {
                 attempted_auth_refresh = true;
                 continue;
             }
+            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             let scrubbed = error_scrubber.scrub_body(&text);
             return Err(classify_upstream_error(
                 status.as_u16(),
@@ -2000,11 +2040,13 @@ impl Executor for HttpExecutor {
                 message: format!("upstream returned non-JSON body: {error}"),
             })
         })?;
+        receipt::json(&mut tenant_attempt, &target.api_protocol, &json)?;
         if target.api_protocol == ApiProtocol::Responses {
-            if shared_attempt.is_shared()
+            if (shared_attempt.is_shared() || tenant_attempt.is_some())
                 && let Some((failure, usage)) =
                     crate::gateway::model::protocol::responses::failed_terminal(&json)
             {
+                receipt::complete(&mut tenant_attempt, false)?;
                 shared_attempt.complete(false, usage.as_ref()).await?;
                 return Err(error_scrubber.scrub_error(failure.into()));
             }
@@ -2020,12 +2062,21 @@ impl Executor for HttpExecutor {
         let mut result =
             crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
                 .map_err(|error| error_scrubber.scrub_error(error.into()))?;
-        if shared_attempt.is_shared() && result.finish_reason.is_none() {
+        if (shared_attempt.is_shared() || tenant_attempt.is_some())
+            && result.finish_reason.is_none()
+        {
             return Err(BitrouterError::UpstreamInvalidResponse {
                 message: "shared response has no provider terminal".into(),
                 usage: result.usage.clone().map(Box::new),
             });
         }
+        receipt::complete(
+            &mut tenant_attempt,
+            !matches!(
+                result.finish_reason,
+                Some(bitrouter_ai::types::FinishReason::Error(_))
+            ),
+        )?;
         shared_attempt
             .complete(
                 !matches!(
@@ -2083,6 +2134,7 @@ impl Executor for HttpExecutor {
             runtime.stored_response(stored_response, replayable, effort_bound);
         }
 
+        drop(tenant_attempt);
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
@@ -2114,19 +2166,23 @@ impl Executor for HttpExecutor {
         self.preflight_decisions(target, request)?;
         let transport: Arc<dyn crate::gateway::model::protocol::Transport> =
             Arc::new(DecisionsTransport);
-        let (text, scrubber, elapsed, mut attempt) =
+        let (text, scrubber, elapsed, mut attempt, mut tenant_attempt) =
             self.execute_json(target, request, &transport, ctx).await?;
+        receipt::json_text(&mut tenant_attempt, &ApiProtocol::Decisions, &text)?;
         let result = match ModelClient::parse_decision_response(&text, request) {
             Ok(result) => result,
             Err(error) => {
                 let error = scrubber.redactor.scrub_error(error);
                 if error.is_completed_decision_failure() {
                     ctx.record_decision_failure_usage(error.decision_usage().cloned());
+                    receipt::complete(&mut tenant_attempt, false)?;
                     attempt.complete(false, error.decision_usage()).await?;
                 }
                 return Err(BitrouterError::from(error));
             }
         };
+        receipt::complete(&mut tenant_attempt, true)?;
+        drop(tenant_attempt);
         attempt.complete(true, Some(&result.usage)).await?;
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),

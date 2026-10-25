@@ -105,6 +105,7 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
             limits: OperationLimits::default(),
             resources,
             proof: proof.clone(),
+            admission: crate::tenancy::admission::Admission::new(),
             http_continuation: crate::continuation::tenant::state::State::new(
                 &crate::config::ContinuationConfig::default(),
                 uuid::Uuid::new_v4().to_string(),
@@ -118,10 +119,12 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
         };
         let (commands, receiver) = tokio::sync::mpsc::channel(16);
         let (safety, safety_receiver) = tokio::sync::mpsc::channel(8);
+        let (_completions, completion_receiver) = tokio::sync::mpsc::channel(128);
         let (initialized, waiter) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(worker.run(
             receiver,
             safety_receiver,
+            completion_receiver,
             tokio_util::sync::CancellationToken::new(),
             None,
             initialized,

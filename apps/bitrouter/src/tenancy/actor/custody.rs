@@ -13,6 +13,7 @@ use crate::tenancy::transaction::{Disposition, Phase};
 enum Policy {
     Management,
     CredentialRead,
+    Receipt,
     #[cfg(feature = "core")]
     OwnedEval,
 }
@@ -38,6 +39,7 @@ impl Worker {
         self,
         mut ordinary: mpsc::Receiver<Job>,
         mut safety: mpsc::Receiver<Job>,
+        mut completions: mpsc::Receiver<Job>,
         stop: tokio_util::sync::CancellationToken,
         import: Option<Vec<u8>>,
         initialized: tokio::sync::oneshot::Sender<
@@ -84,7 +86,8 @@ impl Worker {
             // commit/rollback and its lease until supervision settles.
             let delivered = initialized.send(result).is_ok();
             if ready && delivered {
-                self.run_loop(&mut ordinary, &mut safety, stop).await;
+                self.run_loop(&mut ordinary, &mut safety, &mut completions, stop)
+                    .await;
             }
         })
         .catch_unwind()
@@ -94,7 +97,8 @@ impl Worker {
         }
         if result.is_err() || self.proof.ensure_clean().is_err() {
             self.proof.quarantine();
-            self.quarantine(&mut ordinary, &mut safety).await;
+            self.quarantine(&mut ordinary, &mut safety, &mut completions)
+                .await;
         }
     }
 
@@ -102,23 +106,35 @@ impl Worker {
         &self,
         ordinary: &mut mpsc::Receiver<Job>,
         safety: &mut mpsc::Receiver<Job>,
+        completions: &mut mpsc::Receiver<Job>,
         stop: tokio_util::sync::CancellationToken,
     ) {
         let mut draining = false;
         let mut ordinary_open = true;
         let mut safety_open = true;
+        let mut completions_open = true;
         loop {
+            if !ordinary_open && !safety_open && !completions_open {
+                break;
+            }
+            let escalation = self.admission.next_receipt_escalation();
             let job = tokio::select! {
                 biased;
-                () = stop.cancelled(), if !draining && (ordinary_open || safety_open) => {
+                () = stop.cancelled(), if !draining && (ordinary_open || safety_open || completions_open) => {
                     ordinary.close();
                     safety.close();
+                    completions.close();
                     draining = true;
                     continue;
                 }
                 job = safety.recv(), if safety_open => match job {
                     Some(job) => job,
                     None => { safety_open = false; continue; }
+                },
+                ()=async {match escalation{Some(deadline)=>tokio::time::sleep_until(deadline).await,None=>pending::<()>().await}}=>{self.admission.escalate_receipts();continue;}
+                job = completions.recv(), if completions_open => match job {
+                    Some(job) => job,
+                    None => { completions_open = false; continue; }
                 },
                 job = ordinary.recv(), if ordinary_open => match job {
                     Some(job) => job,
@@ -128,6 +144,54 @@ impl Worker {
             };
             let control = Control::new(self.proof.clone());
             match job {
+                Job::ReceiptRead(read) => {
+                    let result = self
+                        .supervise(
+                            self.read_receipt(&read, &control),
+                            &control,
+                            read.deadline,
+                            Policy::CredentialRead,
+                            None,
+                        )
+                        .await;
+                    let crate::tenancy::receipts::read::Read {
+                        reply,
+                        _permit,
+                        caller,
+                        request,
+                        ..
+                    } = read;
+                    let _ = reply.send(result);
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    drop((_permit, caller, request));
+                }
+                Job::Receipt(owner) => {
+                    let result = self
+                        .supervise(
+                            self.execute_receipt(&owner, &control),
+                            &control,
+                            owner
+                                .cleanup_deadline()
+                                .min(Instant::now() + std::time::Duration::from_secs(30)),
+                            Policy::Receipt,
+                            None,
+                        )
+                        .await;
+                    if result.is_err() && !owner.durable() {
+                        owner.storage_failed(matches!(
+                            self.proof.disposition(),
+                            Disposition::NoTransaction | Disposition::RolledBack
+                        ));
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    // The registry retains the immutable candidate and its reservation
+                    // after a confirmed rollback; an ambiguous actor never releases either.
+                    drop(owner);
+                }
                 Job::Command(message) => {
                     let Message {
                         caller,
@@ -148,7 +212,7 @@ impl Worker {
                         tracing::debug!("tenancy command completed without a response receiver");
                     }
                     if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety).await;
+                        self.quarantine(ordinary, safety, completions).await;
                     }
                     // Keep active command custody outside the caught work future.
                     drop((caller, command));
@@ -183,7 +247,7 @@ impl Worker {
                         );
                     }
                     if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety).await;
+                        self.quarantine(ordinary, safety, completions).await;
                     }
                     // An abandoned HTTP waiter cannot release the DB-read capacity.
                     drop((caller, id, permit));
@@ -226,7 +290,7 @@ impl Worker {
                     if self.proof.disposition() == Disposition::Ambiguous {
                         // Keep ticket, receipt marker, lookup permit, and proof
                         // outside the caught future for the whole quarantine.
-                        self.quarantine(ordinary, safety).await;
+                        self.quarantine(ordinary, safety, completions).await;
                     }
                     drop((origin, work));
                 }
@@ -257,7 +321,7 @@ impl Worker {
                         }
                         // A failure response must not release capacity while cleanup
                         // is unconfirmed. Keep all active custody outside unwind.
-                        self.quarantine(ordinary, safety).await;
+                        self.quarantine(ordinary, safety, completions).await;
                         drop((identity, request, lease, result));
                     } else {
                         let crate::tenancy::eval::Job { reply, lease, .. } = *message;
@@ -302,7 +366,7 @@ impl Worker {
                         tracing::debug!("trajectory begin completed without a response receiver");
                     }
                     if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety).await;
+                        self.quarantine(ordinary, safety, completions).await;
                     }
                     drop((execution, observation, input, evidence));
                 }
@@ -335,7 +399,7 @@ impl Worker {
                         );
                     }
                     if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety).await;
+                        self.quarantine(ordinary, safety, completions).await;
                     }
                     drop((execution, observation, start, facts));
                 }
@@ -367,7 +431,7 @@ impl Worker {
                         );
                     }
                     if self.proof.disposition() == Disposition::Ambiguous {
-                        self.quarantine(ordinary, safety).await;
+                        self.quarantine(ordinary, safety, completions).await;
                     }
                     drop((execution, subject, observation));
                 }
@@ -417,7 +481,7 @@ impl Worker {
                         return Err(Failure::new(policy.expired(Disposition::NoTransaction, !self.live.0.load(std::sync::atomic::Ordering::Acquire)), operation));
                     }
                     let keep_write = match policy {
-                        Policy::Management => true,
+                        Policy::Management | Policy::Receipt => true,
                         Policy::CredentialRead => false,
                         #[cfg(feature = "core")]
                         Policy::OwnedEval => matches!(control.phase(), Phase::Committing)
@@ -479,10 +543,15 @@ impl Worker {
         &self,
         ordinary: &mut mpsc::Receiver<Job>,
         safety: &mut mpsc::Receiver<Job>,
+        completions: &mut mpsc::Receiver<Job>,
     ) {
         self.proof.quarantine();
         ordinary.close();
         safety.close();
+        completions.close();
+        while let Ok(job) = completions.try_recv() {
+            job.reject(&self.http_continuation);
+        }
         while let Ok(job) = safety.try_recv() {
             job.reject(&self.http_continuation);
         }
@@ -499,6 +568,10 @@ impl Worker {
 impl Job {
     fn reject(self, http: &crate::continuation::tenant::state::State) {
         match self {
+            Self::Receipt(owner) => owner.fail(ErrorCode::StorageUnavailable),
+            Self::ReceiptRead(read) => {
+                let _ = read.reply.send(Err(ErrorCode::AuthorityUnavailable.into()));
+            }
             Self::Command(message) => {
                 let error = Failure::new(
                     ErrorCode::AuthorityUnavailable,

@@ -195,6 +195,12 @@ async fn stalled_callback_deadlines_release_detached_execution_and_cleanup_lease
         Hold::Dispatch,
         Hold::Outcome,
     ] {
+        let stage = match hold {
+            Hold::Plan => "plan",
+            Hold::AuthenticationOutcome => "authentication outcome",
+            Hold::Dispatch => "dispatch",
+            Hold::Outcome => "attempt outcome",
+        };
         for disconnect in [false, true] {
             let provider = Provider::start(false).await?;
             let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
@@ -244,25 +250,41 @@ async fn stalled_callback_deadlines_release_detached_execution_and_cleanup_lease
                     },
                 ))
                 .await;
-                let outcome = tokio::time::timeout(Duration::from_secs(2), &mut call).await?;
+                // Only the hung callback uses virtual time. Its cleanup now
+                // commits a real SQLite receipt on the existing writer; paused
+                // auto-advance must not race that external database thread.
+                drop(paused);
+                let outcome = tokio::time::timeout(Duration::from_secs(2), &mut call)
+                    .await
+                    .with_context(|| {
+                        format!("callback result: {stage}, disconnect={disconnect}")
+                    })?;
                 tokio::time::timeout(
                     Duration::from_secs(2),
                     fixture.service.admission.wait_drained(),
                 )
-                .await?;
+                .await
+                .with_context(|| {
+                    format!("receipt admission drain: {stage}, disconnect={disconnect}")
+                })?;
                 tokio::time::timeout(
                     Duration::from_secs(2),
                     fixture.service.pipelines.close_and_drain(),
                 )
-                .await??;
-                drop(paused);
+                .await
+                .with_context(|| {
+                    format!("owned pipeline drain: {stage}, disconnect={disconnect}")
+                })??;
                 if disconnect {
                     ensure!(matches!(outcome, Err(error) if error.is_cancelled()));
                 } else {
                     let error = outcome?
                         .err()
                         .context("expired callback returned success")?;
-                    ensure!(error.status() == 429);
+                    ensure!(
+                        error.status() == 429,
+                        "callback error: {stage}, disconnect={disconnect}: {error:?}"
+                    );
                 }
                 ensure!(
                     !gate.release.is_cancelled(),
@@ -272,6 +294,40 @@ async fn stalled_callback_deadlines_release_detached_execution_and_cleanup_lease
                 let attempts = observed.attempts.lock().await;
                 if hold == Hold::Outcome {
                     ensure!(attempts.len() == 1 && attempts[0].result.is_some());
+                }
+                drop(attempts);
+                let id = observed
+                    .plans
+                    .lock()
+                    .await
+                    .first()
+                    .context("actual native plan")?
+                    .request_id
+                    .clone()
+                    .try_into()?;
+                let receipt = crate::tenancy::receipts::store::lookup(
+                    &fixture.db,
+                    &fixture.installation,
+                    &fixture.tenant,
+                    &id,
+                )
+                .await?
+                .context("expired callback has no durable receipt")?;
+                ensure!(receipt.execution_id == id);
+                ensure!(receipt.attempts.len() == usize::from(hold == Hold::Outcome));
+                ensure!(receipt.outcome != bitrouter_ai::tenancy::execution::Outcome::Completed);
+                if hold == Hold::Outcome {
+                    let attempt = receipt
+                        .attempts
+                        .first()
+                        .context("completed provider evidence")?;
+                    ensure!(
+                        attempt.outcome == bitrouter_ai::tenancy::execution::Outcome::Completed
+                    );
+                    ensure!(
+                        attempt.usage.input_tokens == Some(4)
+                            && attempt.usage.output_tokens == Some(2)
+                    );
                 }
                 Ok(())
             }

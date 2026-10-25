@@ -393,3 +393,5 @@ async fn close_after_release_before_repoll_cannot_turn_a_wakeup_into_a_lease() -
     ensure!(totals(&admission) == (0, 0, 0));
     Ok(())
 }
+
+mod receipts;

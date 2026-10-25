@@ -48,14 +48,18 @@ pub(super) struct Admission {
 pub(super) struct Lease {
     admission: Arc<Admission>,
     tenant: TenantId,
+    completion: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
 struct State {
     closed: bool,
     active: usize,
+    ingress: usize,
+    ingress_bytes: usize,
     tenants: BTreeMap<TenantId, Counts>,
     queue: VecDeque<Arc<Waiter>>,
+    receipts: super::receipts::capacity::Accounting,
 }
 
 #[derive(Default)]
@@ -83,7 +87,83 @@ struct Queued {
     waiter: Arc<Waiter>,
 }
 
+pub(super) struct Ingress {
+    admission: Arc<Admission>,
+    bytes: usize,
+}
+impl Drop for Ingress {
+    fn drop(&mut self) {
+        self.admission.update(|state| {
+            state.ingress = state.ingress.saturating_sub(1);
+            state.ingress_bytes = state.ingress_bytes.saturating_sub(self.bytes);
+        });
+    }
+}
 impl Admission {
+    /// Reserve bytes before reading or parsing. A declared length is a hard
+    /// per-request ceiling; chunked bodies reserve the entire 16 MiB maximum.
+    pub(super) fn ingress(self: &Arc<Self>, bytes: usize) -> Result<Ingress, ErrorCode> {
+        if bytes > 16 * 1024 * 1024 {
+            return Err(ErrorCode::PayloadTooLarge);
+        }
+        self.update(|state| {
+            if state.closed {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            let total = state
+                .ingress_bytes
+                .checked_add(bytes)
+                .ok_or(ErrorCode::CapacityExceeded)?;
+            if state.ingress >= 128 || total > 64 * 1024 * 1024 {
+                return Err(ErrorCode::CapacityExceeded);
+            }
+            state.ingress += 1;
+            state.ingress_bytes = total;
+            Ok(Ingress {
+                admission: self.clone(),
+                bytes,
+            })
+        })
+    }
+
+    pub(super) fn initialize_receipts(
+        &self,
+        inventory: super::receipts::capacity::Inventory,
+        free: u64,
+    ) -> Result<(), ErrorCode> {
+        self.update(|state| state.receipts.initialize(inventory, free))
+    }
+    pub(super) fn next_receipt_escalation(&self) -> Option<Instant> {
+        self.lock().receipts.next_escalation()
+    }
+    pub(super) fn escalate_receipts(&self) {
+        self.update(|state| state.receipts.escalate(chrono::Utc::now()));
+    }
+    pub(super) fn receipt_probe(&self, free: u64) {
+        self.update(|state| state.receipts.free = free);
+    }
+    pub(super) fn fence_receipts(&self) {
+        self.update(|state| state.receipts.fenced = true);
+    }
+    pub(super) fn receipts_ready(&self) -> bool {
+        !self.lock().receipts.fenced
+    }
+
+    /// Read-only socket-test witness: ingress count/bytes, active and queued work.
+    #[cfg(test)]
+    pub(super) fn ingress_for_test(&self) -> Result<(usize, usize, usize, usize), ErrorCode> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        Ok((
+            state.ingress,
+            state.ingress_bytes,
+            state.active,
+            state.queue.len(),
+        ))
+    }
+
     #[cfg(test)]
     pub(super) fn queued_for_test(&self) -> usize {
         self.lock().queue.len()
@@ -144,6 +224,9 @@ impl Admission {
             if Instant::now() >= deadline {
                 return Err(ErrorCode::CapacityExceeded);
             }
+            if !state.receipts.ready(tenant) {
+                return Err(ErrorCode::CapacityExceeded);
+            }
             if active_limit == 0 || self.profile.instance_active == 0 {
                 return Err(ErrorCode::CapacityExceeded);
             }
@@ -156,7 +239,7 @@ impl Admission {
                 && queued == 0
                 && state.next_eligible(self.profile).is_none()
             {
-                state.reserve(tenant);
+                state.reserve(tenant)?;
                 return Ok(Registration::Active);
             }
             if queued >= queue_limit || state.queue.len() >= self.profile.instance_queue {
@@ -190,7 +273,7 @@ impl Admission {
                         .is_some_and(|next| Arc::ptr_eq(next, &queued.waiter))
                     {
                         state.remove(&queued.waiter);
-                        state.reserve(tenant);
+                        state.reserve(tenant)?;
                         Ok(true)
                     } else {
                         Ok(false)
@@ -213,6 +296,7 @@ impl Admission {
         Ok(Lease {
             admission: self.clone(),
             tenant: tenant.clone(),
+            completion: std::sync::atomic::AtomicBool::new(true),
         })
     }
 
@@ -278,9 +362,11 @@ impl Admission {
 }
 
 impl State {
-    fn reserve(&mut self, tenant: &TenantId) {
+    fn reserve(&mut self, tenant: &TenantId) -> Result<(), ErrorCode> {
+        self.receipts.reserve(tenant)?;
         self.active += 1;
         self.tenants.entry(tenant.clone()).or_default().active += 1;
+        Ok(())
     }
 
     fn idle(&mut self, tenant: &TenantId) {
@@ -334,6 +420,7 @@ impl State {
         let mut seen = BTreeSet::new();
         self.queue.iter().find(|waiter| {
             seen.insert(&waiter.tenant)
+                && self.receipts.ready(&waiter.tenant)
                 && self
                     .tenants
                     .get(&waiter.tenant)
@@ -351,11 +438,43 @@ impl Drop for Queued {
 impl Drop for Lease {
     fn drop(&mut self) {
         self.admission.update(|state| {
+            if self
+                .completion
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+                && state.receipts.release(&self.tenant, None).is_err()
+            {
+                state.receipts.fenced = true;
+            }
             if let Some(counts) = state.tenants.get_mut(&self.tenant) {
                 counts.active -= 1;
                 state.active -= 1;
             }
             state.idle(&self.tenant);
         });
+    }
+}
+
+impl Lease {
+    pub(super) fn confirm_receipt(
+        &self,
+        bytes: u64,
+        unknown: Option<(
+            bitrouter_ai::tenancy::identity::ExecutionId,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+    ) -> Result<(), ErrorCode> {
+        self.admission.update(|state| {
+            if !self
+                .completion
+                .swap(false, std::sync::atomic::Ordering::AcqRel)
+            {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            let result = state.receipts.release(&self.tenant, Some((bytes, unknown)));
+            if result.is_err() {
+                state.receipts.fenced = true;
+            }
+            result
+        })
     }
 }

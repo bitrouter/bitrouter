@@ -1,65 +1,79 @@
-//! Bounded ownership of per-invocation pipelines and their completion work.
-//!
-//! The registration ticket belongs to the request and delivery guards, never
-//! to a pipeline hook or TenantExecution. Automatic completion removes the
-//! registry's pipeline reference, breaking the service/pipeline ownership cycle.
-//! Failed completion remains retained for explicit shutdown reconciliation.
-
+//! Admission and pipeline completion share one bounded execution registry.
+//! Receipt ownership precedes preparation; pipeline hooks never own tickets.
+use crate::{
+    gateway::{
+        error::{BitrouterError, Result},
+        pipeline::{
+            execution::Pipeline,
+            owned_tasks::{OwnedTasks, Source},
+            types::PipelineRequest,
+        },
+    },
+    tenancy::receipts::owner::Owner,
+};
+use bitrouter_ai::tenancy::{execution::Outcome, identity::ExecutionId, operation::ErrorCode};
+use futures::{
+    FutureExt,
+    future::{BoxFuture, Shared},
+};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-
-use bitrouter_ai::tenancy::identity::ExecutionId;
-use futures::FutureExt;
-use futures::future::{BoxFuture, Shared};
-
-use crate::gateway::{
-    error::{BitrouterError, Result},
-    pipeline::{
-        execution::Pipeline,
-        owned_tasks::{OwnedTasks, Source},
-        types::PipelineRequest,
-    },
-};
-
 const MAX_ACTIVE: usize = 128;
-
 #[derive(Clone)]
 enum Completion {
     Drained,
     Retryable(BitrouterError),
     Failed(BitrouterError),
 }
-
 type DrainTask = Shared<BoxFuture<'static, Completion>>;
-
-struct Entry {
-    id: ExecutionId,
+#[derive(Clone)]
+struct Attached {
     pipeline: Arc<Pipeline>,
-    registry: Weak<Registry>,
-    task: Mutex<DrainTask>,
     #[cfg(feature = "core")]
     observation: Option<Arc<crate::tenancy::eval::observation::RequiredObservation>>,
 }
-
+enum Attachment {
+    Pending,
+    Attached(Attached),
+    Abandoned,
+}
+struct Entry {
+    id: ExecutionId,
+    registry: Weak<Registry>,
+    attachment: Mutex<Attachment>,
+    changed: tokio::sync::Notify,
+    task: Mutex<Option<DrainTask>>,
+    receipt: Option<Arc<Owner>>,
+}
 #[derive(Default)]
 struct State {
     closed: bool,
     entries: BTreeMap<ExecutionId, Arc<Entry>>,
 }
-
-/// Service-owned task registry. Closing admission does not cancel accepted work.
 pub(crate) struct Registry {
     state: Mutex<State>,
     draining: tokio::sync::Mutex<()>,
 }
-
-/// One external producer, retained through prepared delivery and compensation.
-/// This must not be stored in a pipeline hook or in TenantExecution itself.
 pub(crate) struct Registration {
+    pipeline: Weak<Pipeline>,
     tasks: Arc<OwnedTasks>,
     _source: Source,
 }
-
+/// Only the admitted execution owns preparation custody. The entry owns no
+/// execution, so failure before attach cannot create a service/owner cycle.
+pub(in crate::tenancy) struct AdmissionTicket(Weak<Entry>);
+impl Drop for AdmissionTicket {
+    fn drop(&mut self) {
+        if let Some(entry) = self.0.upgrade() {
+            if let Ok(mut state) = entry.attachment.lock()
+                && matches!(*state, Attachment::Pending)
+            {
+                *state = Attachment::Abandoned;
+            }
+            entry.changed.notify_waiters();
+        }
+    }
+}
 impl Registry {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -67,14 +81,38 @@ impl Registry {
             draining: tokio::sync::Mutex::new(()),
         })
     }
-
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|error| error.into_inner())
     }
-
-    /// Register before moving a request into the pipeline. The returned ticket
-    /// must be attached to that request; dropping it also handles preparation
-    /// failures before entry. A pipeline may be registered exactly once.
+    pub(in crate::tenancy) fn admit(
+        self: &Arc<Self>,
+        receipt: Arc<Owner>,
+    ) -> Result<AdmissionTicket> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| BitrouterError::internal("execution admission requires a runtime"))?;
+        let mut state = self.state();
+        if state.closed
+            || state.entries.len() >= MAX_ACTIVE
+            || state.entries.contains_key(receipt.id())
+        {
+            return Err(BitrouterError::UpstreamUnavailable);
+        }
+        let entry = Arc::new(Entry {
+            id: receipt.id().clone(),
+            registry: Arc::downgrade(self),
+            attachment: Mutex::new(Attachment::Pending),
+            changed: tokio::sync::Notify::new(),
+            task: Mutex::new(None),
+            receipt: Some(receipt),
+        });
+        state.entries.insert(entry.id.clone(), entry.clone());
+        *entry
+            .task
+            .lock()
+            .map_err(|_| BitrouterError::internal("execution task lock unavailable"))? =
+            Some(start_drain(&runtime, entry.clone()));
+        Ok(AdmissionTicket(Arc::downgrade(&entry)))
+    }
     pub(crate) fn register(
         self: &Arc<Self>,
         id: &ExecutionId,
@@ -87,7 +125,6 @@ impl Registry {
             None,
         )
     }
-
     #[cfg(feature = "core")]
     pub(crate) fn register_observed(
         self: &Arc<Self>,
@@ -97,7 +134,6 @@ impl Registry {
     ) -> Result<Registration> {
         self.register_inner(id, pipeline, Some(observation))
     }
-
     fn register_inner(
         self: &Arc<Self>,
         id: &ExecutionId,
@@ -115,59 +151,68 @@ impl Registry {
         if state.closed {
             return Err(BitrouterError::UpstreamUnavailable);
         }
-        if state.entries.len() >= MAX_ACTIVE {
+        let existing = state.entries.get(id).cloned();
+        let entry = match existing {
+            Some(entry) => entry,
+            None => {
+                if state.entries.len() >= MAX_ACTIVE {
+                    return Err(BitrouterError::internal(
+                        "tenant pipeline capacity exceeded",
+                    ));
+                }
+                Arc::new(Entry {
+                    id: id.clone(),
+                    registry: Arc::downgrade(self),
+                    attachment: Mutex::new(Attachment::Pending),
+                    changed: tokio::sync::Notify::new(),
+                    task: Mutex::new(None),
+                    receipt: None,
+                })
+            }
+        };
+        let mut attached = entry
+            .attachment
+            .lock()
+            .map_err(|_| BitrouterError::internal("execution attachment unavailable"))?;
+        if !matches!(*attached, Attachment::Pending)
+            || entry.receipt.as_ref().is_some_and(|owner| {
+                owner.deadline <= tokio::time::Instant::now() || owner.cancelled.is_cancelled()
+            })
+        {
             return Err(BitrouterError::internal(
-                "tenant pipeline capacity exceeded",
-            ));
-        }
-        if state.entries.contains_key(id) {
-            return Err(BitrouterError::internal(
-                "execution pipeline already registered",
+                "execution pipeline already registered or expired",
             ));
         }
         tasks.bind_snapshot()?;
         let source = tasks.acquire()?;
-        // Exactly one invocation owns this pipeline. Its ticket permits all
-        // descendants, but another invocation cannot acquire an external root.
         tasks.close_sources();
-        let registry = Arc::downgrade(self);
-        let task = start_drain(
-            &runtime,
-            registry.clone(),
-            id.clone(),
-            pipeline.clone(),
+        let pipeline_ref = Arc::downgrade(&pipeline);
+        *attached = Attachment::Attached(Attached {
+            pipeline,
             #[cfg(feature = "core")]
-            observation.clone(),
-        );
-        state.entries.insert(
-            id.clone(),
-            Arc::new(Entry {
-                id: id.clone(),
-                pipeline,
-                registry,
-                task: Mutex::new(task),
-                #[cfg(feature = "core")]
-                observation,
-            }),
-        );
+            observation,
+        });
+        drop(attached);
+        if entry.receipt.is_none() {
+            state.entries.insert(id.clone(), entry.clone());
+            *entry
+                .task
+                .lock()
+                .map_err(|_| BitrouterError::internal("execution task unavailable"))? =
+                Some(start_drain(&runtime, entry.clone()));
+        }
+        entry.changed.notify_waiters();
         Ok(Registration {
+            pipeline: pipeline_ref,
             tasks,
             _source: source,
         })
     }
-
-    /// Stop new registrations without affecting already accepted work.
     pub(crate) fn close(&self) {
         self.state().closed = true;
     }
-
-    /// Drain every retained pipeline before shutting down authority. Cancellation
-    /// drops only the waiter: background drains and their join handles remain
-    /// owned. Retryable finalizer drains are restarted on a later call; panicked
-    /// drain tasks and unclean pipeline joins can never be reported as success.
     pub(crate) async fn close_and_drain(&self) -> Result<()> {
         self.close();
-        // Serialize waiters, not task progress. No synchronous mutex spans await.
         let _draining = self.draining.lock().await;
         let entries: Vec<_> = self.state().entries.values().cloned().collect();
         let runtime = tokio::runtime::Handle::try_current()
@@ -175,20 +220,46 @@ impl Registry {
         let mut failure = None;
         for entry in entries {
             let task = {
-                let mut task = entry.task.lock().unwrap_or_else(|error| error.into_inner());
-                if matches!(task.peek(), Some(Completion::Retryable(_))) {
-                    *task = start_drain(
-                        &runtime,
-                        entry.registry.clone(),
-                        entry.id.clone(),
-                        entry.pipeline.clone(),
-                        #[cfg(feature = "core")]
-                        entry.observation.clone(),
-                    );
+                let mut task = entry
+                    .task
+                    .lock()
+                    .map_err(|_| BitrouterError::internal("execution drain unavailable"))?;
+                if task
+                    .as_ref()
+                    .is_some_and(|task| matches!(task.peek(), Some(Completion::Retryable(_))))
+                {
+                    if let Some(receipt) = &entry.receipt {
+                        receipt.reconcile().map_err(|_| {
+                            BitrouterError::internal("receipt reconciliation failed")
+                        })?;
+                    }
+                    *task = Some(start_drain(&runtime, entry.clone()));
                 }
                 task.clone()
+                    .ok_or_else(|| BitrouterError::internal("execution drain missing"))?
             };
-            match task.await {
+            let completion = task.await;
+            // The spawned drain may have failed before a late commit, while
+            // this shared join future had never been polled. Recheck durable
+            // ownership after joining that stale result, then run cleanup once
+            // more. Pipeline/finalizer failures still have to pass their drain.
+            let completion = if matches!(completion, Completion::Retryable(_))
+                && entry
+                    .receipt
+                    .as_ref()
+                    .is_some_and(|receipt| receipt.durable())
+            {
+                let retry = start_drain(&runtime, entry.clone());
+                *entry
+                    .task
+                    .lock()
+                    .map_err(|_| BitrouterError::internal("execution drain unavailable"))? =
+                    Some(retry.clone());
+                retry.await
+            } else {
+                completion
+            };
+            match completion {
                 Completion::Drained => {}
                 Completion::Retryable(error) | Completion::Failed(error) => {
                     failure.get_or_insert(error);
@@ -200,53 +271,129 @@ impl Registry {
             None => Ok(()),
         }
     }
-
-    fn completed(&self, id: &ExecutionId, pipeline: &Arc<Pipeline>) {
+    fn completed(&self, entry: &Arc<Entry>) {
         let removed = {
             let mut state = self.state();
             if state
                 .entries
-                .get(id)
-                .is_some_and(|entry| Arc::ptr_eq(&entry.pipeline, pipeline))
+                .get(&entry.id)
+                .is_some_and(|current| Arc::ptr_eq(current, entry))
             {
-                state.entries.remove(id)
+                state.entries.remove(&entry.id)
             } else {
                 None
             }
         };
-        // Hooks may release their service ownership here; never run their
-        // destructors while holding the registry's admission lock.
         drop(removed);
     }
 }
-
-fn start_drain(
-    runtime: &tokio::runtime::Handle,
-    registry: Weak<Registry>,
-    id: ExecutionId,
-    pipeline: Arc<Pipeline>,
-    #[cfg(feature = "core")] observation: Option<
-        Arc<crate::tenancy::eval::observation::RequiredObservation>,
-    >,
-) -> DrainTask {
-    let task = runtime.spawn(async move {
-        if let Err(error) = pipeline.drain_owned_execution().await {
-            return Completion::Retryable(error);
+impl Entry {
+    async fn attached(&self) -> Result<Option<Attached>> {
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let state = self
+                    .attachment
+                    .lock()
+                    .map_err(|_| BitrouterError::internal("execution attachment unavailable"))?;
+                match &*state {
+                    Attachment::Attached(attached) => return Ok(Some(attached.clone())),
+                    Attachment::Abandoned => return Ok(None),
+                    Attachment::Pending => {}
+                }
+            }
+            notified.await;
         }
-        #[cfg(feature = "core")]
-        if let Some(observation) = observation
-            && let Err(error) = observation.drained()
+    }
+    async fn drain(self: &Arc<Self>) -> Completion {
+        let attached = if let Some(receipt) = &self.receipt {
+            match tokio::time::timeout_at(receipt.deadline, self.attached()).await {
+                Ok(result) => result,
+                Err(_) => {
+                    receipt.cancel();
+                    match self.attachment.lock() {
+                        Ok(mut state) => match &*state {
+                            Attachment::Attached(attached) => Ok(Some(attached.clone())),
+                            _ => {
+                                *state = Attachment::Abandoned;
+                                Ok(None)
+                            }
+                        },
+                        Err(_) => Err(BitrouterError::internal(
+                            "expired execution attachment unavailable",
+                        )),
+                    }
+                }
+            }
+        } else {
+            self.attached().await
+        };
+        let attached = match attached {
+            Ok(attached) => attached,
+            Err(error) => {
+                if let Some(receipt) = &self.receipt {
+                    receipt.fail(ErrorCode::StorageUnavailable);
+                }
+                return Completion::Failed(error);
+            }
+        };
+        if let Some(attached) = attached {
+            let draining = attached.pipeline.drain_owned_execution();
+            tokio::pin!(draining);
+            let result = if let Some(receipt) = &self.receipt {
+                tokio::select! {
+                    result=&mut draining=>result,
+                    ()=tokio::time::sleep_until(receipt.deadline)=>{
+                        receipt.cancel();
+                        match tokio::time::timeout_at(receipt.cleanup_deadline(),&mut draining).await {
+                            Ok(result)=>result,
+                            Err(_)=>{receipt.fail(ErrorCode::StorageUnavailable);return Completion::Failed(BitrouterError::internal("execution cleanup deadline elapsed; ownership retained"));}
+                        }
+                    }
+                }
+            } else {
+                draining.await
+            };
+            if let Err(error) = result {
+                // A finalizer/observation failure must not suppress the independent
+                // receipt of provider work already attempted. Retain both owners.
+                if let Some(receipt) = &self.receipt {
+                    let _ = receipt.finish_or_join(Outcome::Failed).await;
+                }
+                return Completion::Retryable(error);
+            }
+            #[cfg(feature = "core")]
+            if let Some(observation) = attached.observation
+                && let Err(error) = observation.drained()
+            {
+                if let Some(receipt) = &self.receipt {
+                    let _ = receipt.finish_or_join(Outcome::Failed).await;
+                }
+                return Completion::Failed(error);
+            }
+        }
+        if let Some(receipt) = &self.receipt
+            && receipt.finish_or_join(Outcome::Cancelled).await.is_err()
         {
-            return Completion::Failed(error);
+            return Completion::Retryable(BitrouterError::internal(
+                "durable receipt unavailable; ownership retained",
+            ));
         }
-        if let Some(registry) = registry.upgrade() {
-            registry.completed(&id, &pipeline);
+        if let Some(receipt) = &self.receipt
+            && receipt.release_active().is_err()
+        {
+            return Completion::Failed(BitrouterError::internal("receipt release is unconfirmed"));
+        }
+        if let Some(registry) = self.registry.upgrade() {
+            registry.completed(self);
         }
         Completion::Drained
-    });
-    // Sharing the waiter retains the JoinHandle when shutdown is cancelled.
-    // Successful automatic completion removes its own entry; failed tasks keep
-    // the entry and pipeline until a later explicit reconciliation succeeds.
+    }
+}
+fn start_drain(runtime: &tokio::runtime::Handle, entry: Arc<Entry>) -> DrainTask {
+    let task = runtime.spawn(async move { entry.drain().await });
     async move {
         match task.await {
             Ok(completion) => completion,
@@ -256,8 +403,20 @@ fn start_drain(
     .boxed()
     .shared()
 }
-
 impl Registration {
+    pub(crate) fn pipeline(&self, expected: &Pipeline) -> Result<Arc<Pipeline>> {
+        let pipeline = self
+            .pipeline
+            .upgrade()
+            .ok_or(BitrouterError::UpstreamUnavailable)?;
+        if !std::ptr::eq(pipeline.as_ref(), expected) {
+            return Err(BitrouterError::internal(
+                "request lifecycle belongs to another pipeline",
+            ));
+        }
+        self.validate(expected.owned_tasks())?;
+        Ok(pipeline)
+    }
     /// Transfer external custody into a request before detached preparation.
     pub(crate) fn attach(self, request: &mut PipelineRequest) -> Result<()> {
         if request.extensions.get::<Arc<Self>>().is_some() {
@@ -267,6 +426,13 @@ impl Registration {
         }
         request.extensions.insert(Arc::new(self));
         Ok(())
+    }
+
+    pub(crate) fn spawn_delivery(
+        &self,
+        work: impl std::future::Future<Output = ()> + Send + 'static,
+    ) {
+        self.tasks.spawn_settlement(work);
     }
 
     pub(crate) fn validate(&self, tasks: Option<&Arc<OwnedTasks>>) -> Result<()> {

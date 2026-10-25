@@ -45,6 +45,7 @@ mod m20240101_000031_native_continuation_epoch;
 mod m20240101_000032_trajectory_storage_scope;
 mod m20240101_000033_capture_legacy_scope;
 mod m20240101_000034_continuation_storage_scope;
+mod m20240101_000035_execution_receipts;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -89,6 +90,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000032_trajectory_storage_scope::Migration),
             Box::new(m20240101_000033_capture_legacy_scope::Migration),
             Box::new(m20240101_000034_continuation_storage_scope::Migration),
+            Box::new(m20240101_000035_execution_receipts::Migration),
         ]
     }
 }

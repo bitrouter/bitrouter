@@ -133,6 +133,7 @@ async fn http_lookup_expiring_in_mailbox_never_begins_sql_and_keeps_service_heal
         ensure!(status == StatusCode::OK);
         let public = public_id(&bytes, false)?;
         provider.wire().await?;
+        tokio::time::timeout(WAIT, ready.fixture.service.admission.wait_drained()).await?;
         let execution = admitted(&ready).await?;
         // Age only the admitted request, before starting the blocking writer.
         // H's cleanup clock has not started and is never advanced past its bound.
@@ -151,6 +152,7 @@ async fn http_lookup_expiring_in_mailbox_never_begins_sql_and_keeps_service_heal
         let gate = proof.hold(Phase::Active);
         let blocked = enqueue_principal(&ready, 0)?;
         let entered = tokio::time::timeout(WAIT, gate.entered.notified()).await;
+        let counts = proof.sql_counts_for_test();
         let port = ready.fixture.service.http_continuation.clone();
         let mut lookup = Box::pin(port.resolve(access, public.clone()));
         let checked: Result<()> = async {
@@ -172,27 +174,25 @@ async fn http_lookup_expiring_in_mailbox_never_begins_sql_and_keeps_service_heal
         }
         .await;
         drop(lookup);
-        // No yield between releasing Active and installing Beginning on this
-        // current-thread runtime: only the queued HTTP lookup can reach it.
+        // Expiry now also queues a durable no-send receipt. Count its one real
+        // BEGIN separately; a global phase gate would confuse it with lookup.
         proof.release_gate();
-        let unexpected_begin = proof.hold(Phase::Beginning);
         let settled: Result<()> = async {
             tokio::time::timeout(WAIT, blocked)
                 .await??
                 .map_err(failure)?;
-            tokio::select! {
-                biased;
-                () = unexpected_begin.entered.notified() => {
-                    anyhow::bail!("an expired mailbox read entered BEGIN");
-                }
-                returned = read_permits_returned(&ready) => returned?,
-            }
-            ensure!(proof.disposition() == Disposition::NoTransaction);
+            read_permits_returned(&ready).await?;
+            drop(execution);
+            tokio::time::timeout(WAIT, ready.fixture.service.admission.wait_drained()).await?;
+            ensure!(
+                proof.sql_counts_for_test() == (counts.0 + 1, counts.1),
+                "expired lookup added SQL beyond its one required no-send receipt"
+            );
+            proof.ensure_clean()?;
             Ok(())
         }
         .await;
         proof.release_gate();
-        drop(execution);
         checked?;
         settled?;
         ensure!(ready.fixture.service.current().is_ok());

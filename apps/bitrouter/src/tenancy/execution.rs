@@ -27,7 +27,6 @@ use http::HeaderMap;
 
 use super::{
     Service,
-    admission::Lease,
     error::Failure,
     model::{Caller, Snapshot},
     resources::execution::{RetainedExecutionRevision, RetainedRoute},
@@ -45,8 +44,6 @@ mod profile;
 #[cfg(test)]
 mod tests;
 
-const MAX_ATTEMPTS: u8 = 8;
-
 /// Authenticated ingress identity. The tenant and principal come only from the
 /// current credential record, never from caller-controlled headers or JSON.
 pub(crate) struct Submission {
@@ -59,6 +56,14 @@ pub(crate) struct Submission {
 }
 
 impl Submission {
+    #[cfg(test)]
+    pub(in crate::tenancy) fn narrow_deadline_for_test(
+        mut self,
+        deadline: tokio::time::Instant,
+    ) -> Self {
+        self.deadline = self.deadline.min(deadline);
+        self
+    }
     pub(super) fn deadline(&self) -> tokio::time::Instant {
         self.deadline
     }
@@ -73,13 +78,14 @@ pub(crate) struct TenantExecution {
     route: Arc<RetainedRoute>,
     #[cfg(feature = "core")]
     learning: bitrouter_ai::tenancy::configuration::Learning,
-    attempts: Mutex<u8>,
+    journal: std::sync::OnceLock<Arc<super::receipts::journal::Journal>>,
     rejection: Mutex<Option<ErrorCode>>,
     entered: AtomicBool,
     #[cfg(feature = "core")]
     observation: std::sync::OnceLock<Arc<super::eval::observation::RequiredObservation>>,
     continuation: Option<Arc<continuation::Policy>>,
-    _lease: Lease,
+    receipt: std::sync::OnceLock<Arc<super::receipts::owner::Owner>>,
+    receipt_ticket: std::sync::OnceLock<lifecycle::AdmissionTicket>,
 }
 
 pub(crate) struct OwnedCredential {
@@ -95,7 +101,11 @@ impl Service {
         let qualified = self.dispatch_test_ready.load(Ordering::Acquire);
         #[cfg(not(test))]
         let qualified = false;
-        qualified && !state.saturated && !self.stop.is_cancelled() && !self.caches.is_closed()
+        qualified
+            && !state.saturated
+            && !self.stop.is_cancelled()
+            && !self.caches.is_closed()
+            && self.admission.receipts_ready()
     }
 
     pub(super) fn capability_revision(&self, state: &Snapshot) -> Result<RevisionId, ErrorCode> {
@@ -222,6 +232,9 @@ impl Service {
         #[cfg(feature = "core")]
         let learning = revision.document().learning.clone();
         drop(revision);
+        let free = super::receipts::capacity::free_space(self.receipt_volume.as_deref())
+            .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
+        self.admission.receipt_probe(free);
         let lease = self
             .admission
             .acquire_until(&submission.tenant, &limits, submission.deadline)
@@ -253,18 +266,67 @@ impl Service {
             route,
             #[cfg(feature = "core")]
             learning,
-            attempts: Mutex::new(0),
+            journal: std::sync::OnceLock::new(),
             rejection: Mutex::new(None),
             entered: AtomicBool::new(false),
             #[cfg(feature = "core")]
             observation: std::sync::OnceLock::new(),
-            _lease: lease,
+            receipt: std::sync::OnceLock::new(),
+            receipt_ticket: std::sync::OnceLock::new(),
         });
+        execution
+            .journal
+            .set(super::receipts::journal::Journal::new(&execution))
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        let receipt = super::receipts::owner::Owner::new(
+            super::receipts::owner::Identity {
+                installation: execution.submission.binding.installation_id.clone(),
+                tenant: execution.submission.tenant.clone(),
+                principal: execution.submission.principal.clone(),
+                execution: execution.id.clone(),
+                correlation: execution.submission.binding.correlation_id.clone(),
+                revision: execution.submission.binding.execution_revision.clone(),
+            },
+            execution.journal().map_err(Failure::from)?.clone(),
+            self.completions.clone(),
+            Arc::new(lease),
+            self.admission.clone(),
+            self.cleanup.clone(),
+            execution.submission.deadline,
+        );
+        let ticket = self
+            .pipelines
+            .admit(receipt.clone())
+            .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
+        execution
+            .receipt
+            .set(receipt)
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        execution
+            .receipt_ticket
+            .set(ticket)
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
         Ok(execution)
     }
 }
 
 impl TenantExecution {
+    pub(crate) fn receipt_owner(
+        &self,
+    ) -> crate::gateway::error::Result<&Arc<super::receipts::owner::Owner>> {
+        self.receipt.get().ok_or_else(|| {
+            crate::gateway::error::BitrouterError::internal("admitted receipt owner missing")
+        })
+    }
+    pub(crate) async fn terminal_receipt(
+        &self,
+        outcome: bitrouter_ai::tenancy::execution::Outcome,
+    ) -> crate::gateway::error::Result<()> {
+        self.receipt_owner()?.finish(outcome).await.map_err(|code| {
+            self.reject(code);
+            crate::gateway::error::BitrouterError::UpstreamUnavailable
+        })
+    }
     pub(crate) fn record_native_source(
         &self,
         proof: crate::gateway::pipeline::executor::tenancy::native::Proof,
@@ -420,6 +482,10 @@ impl TenantExecution {
             .retained_credential(&self.submission, &reference)
             .await
             .map_err(|failure| failure.0.code)?;
+        #[cfg(test)]
+        self.service
+            .receipt_credential_read_for_test(&self.id)
+            .await;
         self.revalidate()?;
         Ok(OwnedCredential {
             reference,
@@ -427,15 +493,37 @@ impl TenantExecution {
         })
     }
 
-    /// Call immediately before an actual send, after auth, waits and refresh.
-    /// Current grants and a fresh attempt reservation share one linearization.
-    pub(crate) fn admit_send(&self, target: &RoutingTarget) -> Result<AttemptId, ErrorCode> {
-        self.route.match_candidate(target)?;
+    pub(crate) fn journal(&self) -> Result<&Arc<super::receipts::journal::Journal>, ErrorCode> {
+        self.journal.get().ok_or(ErrorCode::AuthorityUnavailable)
+    }
+
+    /// Exact static identity is validated and a slot is reserved before auth.
+    pub(crate) fn reserve_attempt(
+        &self,
+        target: &RoutingTarget,
+    ) -> Result<super::receipts::journal::AttemptPermit, ErrorCode> {
+        self.revalidate()?;
+        let stamp = super::receipts::journal::TargetStamp::for_execution(self, target)
+            .map_err(super::receipts::journal_error)?;
+        self.journal()?
+            .reserve(stamp)
+            .map_err(super::receipts::journal_error)
+    }
+
+    /// The last synchronous current-grant check and arming share one authority lock.
+    pub(crate) fn arm_attempt(
+        &self,
+        target: &RoutingTarget,
+        permit: &mut super::receipts::journal::AttemptPermit,
+        authenticated: &super::receipts::journal::TargetStamp,
+    ) -> Result<AttemptId, ErrorCode> {
+        let actual = super::receipts::journal::TargetStamp::for_execution(self, target)
+            .map_err(super::receipts::journal_error)?;
+        if !actual.matches(authenticated) {
+            return Err(ErrorCode::Forbidden);
+        }
         self.service
             .with_dispatch_authority(&self.submission, |state| {
-                // Hold the failure latch through the reservation. Outcome
-                // cleanup may still run after rejection, but no new send may
-                // cross this gate once a prior callback has failed.
                 let rejection = self
                     .rejection
                     .lock()
@@ -444,20 +532,17 @@ impl TenantExecution {
                     return Err(code);
                 }
                 authorize_route(state, &self.submission, self.route.dependencies())?;
-                let mut attempts = self
-                    .attempts
-                    .lock()
-                    .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-                if *attempts >= MAX_ATTEMPTS {
-                    return Err(ErrorCode::CapacityExceeded);
-                }
-                let attempt_id = uuid::Uuid::new_v4()
-                    .to_string()
-                    .try_into()
-                    .map_err(|_| ErrorCode::AuthorityUnavailable)?;
-                *attempts += 1;
-                Ok(attempt_id)
+                permit
+                    .arm(authenticated)
+                    .map_err(super::receipts::journal_error)
             })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn admit_send(&self, target: &RoutingTarget) -> Result<AttemptId, ErrorCode> {
+        let mut permit = self.reserve_attempt(target)?;
+        let stamp = permit.stamp().clone();
+        self.arm_attempt(target, &mut permit, &stamp)
     }
 
     /// Authority failures stop fallback and remain available to the HTTP layer
@@ -475,16 +560,18 @@ impl TenantExecution {
     /// actual tenancy class at HTTP ingress. A reserved send cannot prove that
     /// no provider work began; full per-attempt evidence is a separate stage.
     pub(crate) fn failure(&self) -> Option<Failure> {
-        let code = match self.rejection.lock() {
-            Ok(rejection) => *rejection,
-            Err(_) => Some(ErrorCode::AuthorityUnavailable),
-        }?;
+        let code = self.receipt.get().and_then(|owner| owner.failure()).or(
+            match self.rejection.lock() {
+                Ok(rejection) => *rejection,
+                Err(_) => Some(ErrorCode::AuthorityUnavailable),
+            },
+        )?;
         let mut failure = Failure::new(code, None);
         failure.0.execution_id = Some(self.id.clone());
-        failure.0.dispatch_state = match self.attempts.lock() {
-            Ok(attempts) if *attempts == 0 => DispatchState::NotStarted,
-            _ => DispatchState::Unknown,
-        };
+        failure.0.dispatch_state = self
+            .journal()
+            .and_then(|journal| journal.dispatch().map_err(super::receipts::journal_error))
+            .unwrap_or(DispatchState::Unknown);
         Some(failure)
     }
 }

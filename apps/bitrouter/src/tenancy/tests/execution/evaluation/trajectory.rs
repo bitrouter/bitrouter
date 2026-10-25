@@ -133,9 +133,7 @@ async fn retained_guard_settles_off_observe_explore_error_and_stream() -> Result
         let server = upstream(fail, stream).await;
         let (fixture, revision) = fixture(&format!("{}/v1", server.uri()), mode).await?;
         let headers = credential(&fixture, &revision).await?;
-        let execution = admitted(&fixture, &headers).await?;
-        let eval = execution.eval_store();
-        drop(execution);
+        let eval = scoped_eval_store(&fixture, &headers).await?;
         let (status,bytes)=send(&fixture,&headers,json!({"model":MODEL,"stream":stream,"messages":[{"role":"user","content":PRIVATE_PROMPT}]})).await?;
         ensure!(
             status.is_success() != fail,
@@ -218,6 +216,7 @@ async fn failed_atomic_publication_rolls_back_every_terminal_stage_and_retains_c
             fixture(&format!("{}/v1", server.uri()), LearningMode::Observe).await?;
         let headers = credential(&fixture, &revision).await?;
         fixture.db.execute_unprepared(&format!("CREATE TRIGGER trajectory_atomic_failure_{index} {trigger} BEGIN SELECT RAISE(ABORT, 'fixture terminal failure'); END")).await?;
+        let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
         // Transport may already have produced output. Required custody, not an
         // HTTP status or provider receipt, determines whether drain can succeed.
         let _response = send(
@@ -227,10 +226,18 @@ async fn failed_atomic_publication_rolls_back_every_terminal_stage_and_retains_c
         )
         .await;
         ensure!(fixture.service.pipelines.close_and_drain().await.is_err());
-        ensure!(
-            fixture.service.cleanup.disposition()
-                == crate::tenancy::transaction::Disposition::RolledBack
-        );
+        // Only the injected terminal transaction rolls back in this isolated
+        // fixture. The independent receipt COMMIT must not erase that witness.
+        ensure!(fixture.service.cleanup.sql_counts_for_test().1 == rollback_count + 1);
+        fixture.service.cleanup.ensure_clean()?;
+        let receipt = only_receipt(&fixture).await?;
+        ensure!(receipt.attempts.len() == 1);
+        let attempt = receipt
+            .attempts
+            .first()
+            .context("actual provider attempt")?;
+        ensure!(attempt.outcome == bitrouter_ai::tenancy::execution::Outcome::Completed);
+        ensure!(attempt.usage.input_tokens == Some(4) && attempt.usage.output_tokens == Some(2));
         ensure!(fixture.service.current().is_err());
         ensure!(server.received_requests().await.context("requests")?.len() == 1);
         ensure!(count(&fixture.db, "trajectory_requests", "status = 'started'").await? == 1);

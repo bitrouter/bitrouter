@@ -4,6 +4,7 @@ mod continuation;
 mod custody;
 #[cfg(feature = "core")]
 mod eval;
+mod receipts;
 #[cfg(feature = "core")]
 mod trajectory;
 
@@ -42,6 +43,8 @@ pub(super) struct Message {
 pub(super) enum Job {
     Command(Box<Message>),
     Credential(CredentialRead),
+    Receipt(Arc<super::receipts::owner::Owner>),
+    ReceiptRead(super::receipts::read::Read),
     Continuation(Box<super::continuation::http::Job>),
     #[cfg(feature = "core")]
     Eval(Box<super::eval::Job>),
@@ -91,6 +94,7 @@ pub(super) struct Worker {
     pub limits: OperationLimits,
     pub resources: Arc<super::resources::Resources>,
     pub proof: Arc<Proof>,
+    pub admission: Arc<super::admission::Admission>,
     pub http_continuation: Arc<crate::continuation::tenant::state::State>,
     #[cfg(feature = "core")]
     pub eval: Arc<super::eval::State>,

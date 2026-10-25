@@ -223,7 +223,7 @@ impl Drop for Paused {
 
 #[tokio::test]
 async fn real_socket_begin_deadline_and_shutdown_wait_for_rollback_acknowledgment() -> Result<()> {
-    use crate::tenancy::transaction::{Disposition, Phase};
+    use crate::tenancy::transaction::Phase;
     for protocol in protocols() {
         let provider = Provider::new();
         let _headers_cleanup = provider.headers.clone().drop_guard();
@@ -236,6 +236,7 @@ async fn real_socket_begin_deadline_and_shutdown_wait_for_rollback_acknowledgmen
         .await?;
         let (_, headers) = issue(&fixture, &revision).await?;
         let ingress = Listener::start(router(&fixture)).await?;
+        let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
         let gate = fixture.service.cleanup.hold(Phase::Active);
         let _release = ReleaseGate(fixture.service.clone());
         let client = Client::start(protocol, ingress.address, &headers).await?;
@@ -262,34 +263,14 @@ async fn real_socket_begin_deadline_and_shutdown_wait_for_rollback_acknowledgmen
         ensure!(provider.calls.load(Ordering::SeqCst) == 0);
         fixture.service.cleanup.release_gate();
         drop(paused);
-        // Keep driving owned pipeline cleanup while observing this operation's
-        // rollback. The later HTTP producer-close job has no transaction and
-        // correctly replaces the actor's last-operation disposition.
-        tokio::time::timeout(
-            TIMEOUT,
-            std::future::poll_fn(|cx| {
-                if fixture.service.cleanup.disposition() == Disposition::RolledBack {
-                    return std::task::Poll::Ready(Ok(()));
-                }
-                let progress = std::future::Future::poll(shutdown.as_mut(), cx);
-                if fixture.service.cleanup.disposition() == Disposition::RolledBack {
-                    return std::task::Poll::Ready(Ok(()));
-                }
-                match progress {
-                    std::task::Poll::Pending => std::task::Poll::Pending,
-                    std::task::Poll::Ready(result) => {
-                        std::task::Poll::Ready(result.and_then(|()| {
-                            anyhow::bail!(
-                                "shutdown completed without observing the required rollback"
-                            )
-                        }))
-                    }
-                }
-            }),
-        )
-        .await??;
-        ensure!(fixture.service.cleanup.disposition() == Disposition::RolledBack);
+        // Join the same shutdown future after releasing the actual BEGIN gate.
+        // A later receipt COMMIT/producer-close can replace last-job disposition,
+        // but cannot erase this fixture's one acknowledged rollback.
         tokio::time::timeout(TIMEOUT, &mut shutdown).await??;
+        ensure!(fixture.service.cleanup.sql_counts_for_test().1 == rollback_count + 1);
+        let receipt = only_receipt(&fixture).await?;
+        ensure!(receipt.attempts.is_empty());
+        ensure!(receipt.outcome != bitrouter_ai::tenancy::execution::Outcome::Completed);
         fixture.service.cleanup.ensure_clean()?;
         ensure!(fixture.service.eval.healthy());
         closure(&fixture, 0).await?;

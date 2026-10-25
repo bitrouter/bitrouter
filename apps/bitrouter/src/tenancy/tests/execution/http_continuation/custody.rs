@@ -385,7 +385,7 @@ async fn caller_revoke_while_provider_is_awaited_finishes_only_admitted_work() -
 
 #[tokio::test]
 async fn lookup_deadline_during_acknowledged_rollback_does_not_fence_service() -> Result<()> {
-    use crate::tenancy::transaction::{Disposition, Phase};
+    use crate::tenancy::transaction::Phase;
     let server = Server::start().await?;
     let ready = ready(&server).await?;
     ready
@@ -410,6 +410,7 @@ async fn lookup_deadline_during_acknowledged_rollback_does_not_fence_service() -
         .http_access()
         .map_err(|code| anyhow::anyhow!("access {code:?}"))?;
     let gate = ready.fixture.service.cleanup.hold(Phase::RollingBack);
+    let rollback_count = ready.fixture.service.cleanup.sql_counts_for_test().1;
     let port = ready.fixture.service.http_continuation.clone();
     let mut lookup =
         Box::pin(port.resolve(access, encode_gateway_continuation_id("expired-read")?));
@@ -437,7 +438,10 @@ async fn lookup_deadline_during_acknowledged_rollback_does_not_fence_service() -
             }
         })
         .await?;
-        ensure!(ready.fixture.service.cleanup.disposition() == Disposition::RolledBack);
+        // Expiring the execution also schedules its no-send receipt. The
+        // writer's latest disposition can already belong to that next job;
+        // require the lookup's acknowledged rollback rather than its last phase.
+        ensure!(ready.fixture.service.cleanup.sql_counts_for_test().1 == rollback_count + 1);
         ensure!(ready.fixture.service.current().is_ok());
         Ok(())
     }

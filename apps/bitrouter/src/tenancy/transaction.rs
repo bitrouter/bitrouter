@@ -37,6 +37,10 @@ pub(super) struct Proof {
     gate: std::sync::Mutex<Option<Arc<Gate>>>,
     #[cfg(test)]
     pub read_stopped: tokio::sync::Notify,
+    #[cfg(test)]
+    begin_calls: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    acknowledged_rollbacks: std::sync::atomic::AtomicUsize,
 }
 
 impl Proof {
@@ -53,6 +57,10 @@ impl Proof {
             gate: std::sync::Mutex::new(None),
             #[cfg(test)]
             read_stopped: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            begin_calls: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            acknowledged_rollbacks: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -237,6 +245,8 @@ impl Control {
         // SeaORM constructs an open transaction before configuring isolation.
         // Keep that entire await under H custody, including configuration errors.
         // https://docs.rs/sea-orm/1.1.20/src/sea_orm/database/transaction.rs.html
+        #[cfg(test)]
+        self.proof.begin_calls.fetch_add(1, Ordering::SeqCst);
         let beginning = match isolation {
             Some(isolation) => db.begin_with_config(Some(isolation), None).await,
             None => db.begin().await,
@@ -278,6 +288,12 @@ impl Control {
         self.start_cleanup();
         self.enter(Phase::RollingBack).await;
         let result = transaction.rollback().await;
+        #[cfg(test)]
+        if result.is_ok() {
+            self.proof
+                .acknowledged_rollbacks
+                .fetch_add(1, Ordering::SeqCst);
+        }
         self.complete(if result.is_ok() {
             Disposition::RolledBack
         } else {
@@ -303,6 +319,14 @@ pub(super) struct Gate {
 
 #[cfg(test)]
 impl Proof {
+    /// Monotonic observations survive unrelated later jobs on the same writer.
+    pub fn sql_counts_for_test(&self) -> (usize, usize) {
+        (
+            self.begin_calls.load(Ordering::SeqCst),
+            self.acknowledged_rollbacks.load(Ordering::SeqCst),
+        )
+    }
+
     pub fn hold(&self, phase: Phase) -> Arc<Gate> {
         let gate = Arc::new(Gate {
             phase,

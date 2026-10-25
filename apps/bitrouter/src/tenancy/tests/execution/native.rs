@@ -58,6 +58,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 
 mod continuation;
 mod limits;
+mod receipts_authority;
 
 struct Observed {
     path: String,

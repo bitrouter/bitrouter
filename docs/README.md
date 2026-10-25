@@ -17,6 +17,12 @@ the CLI-only contract and implementation record define the current product.
   defines protocol names, extensibility, mapped/authenticated synchronization,
   and BitRouter's first-party source, cache, and refresh policy.
 
+- [Resource tenancy contracts](RESOURCE_TENANCY_M0.md),
+  [implementation tracker](RESOURCE_TENANCY_IMPLEMENTATION.md), and
+  [owned execution receipts](RESOURCE_TENANCY_RECEIPTS.md) — single-instance
+  authority and owned runtime integration in progress; production dispatch and
+  strict-receipt capabilities remain disabled pending qualification.
+
 - [Gateway multi-instance contract](GATEWAY_MULTI_INSTANCE_SPEC.md),
   [progress ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md), and
   [final acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) — implemented

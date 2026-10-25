@@ -630,6 +630,60 @@ only. Strict execution receipts, remaining native/capture consumers, auxiliary
 inference and final performance gates remain outstanding. Dispatch and
 strict-receipt capability flags remain false.
 
+### M3 owned execution receipt implementation
+
+Migration 035 adds immutable owner-qualified execution receipts and a correlation
+index. Admission atomically reserves active capacity and bounded completion
+storage. The existing execution registry retains each admitted invocation through
+provider work, required finalization and durable receipt completion; dropping an
+HTTP waiter does not release that custody. Attempts bind the actual authenticated
+request and current retained authority before sending. Original provider evidence
+supplies usage independently of canonical conversion and local output failure.
+
+The existing authority writer owns receipt transactions and identical-candidate
+reconciliation. Connected JSON and final SSE success wait for acknowledged
+receipt commit. Earlier stream metadata remains provisional, and the final
+positive delivery witness still requires the caller's actual body poll. Negative
+terminal evidence is published synchronously even if its asynchronous finalizer
+is never polled. Continuation compensation does not acknowledge unrelated receipt
+or producer cleanup. Unknown operations retain their owners and never replay
+inference.
+
+Protected receipt reads recheck current authority after waits and validate the
+stored owner and integrity. Ingress is bounded by 128 concurrent uploads, 64 MiB
+reserved bytes, 16 MiB per request and a fixed 60-second deadline. Completion
+reservations, disk-space thresholds and unknown-outcome limits are detailed in
+[the receipt implementation profile](RESOURCE_TENANCY_RECEIPTS.md).
+
+Qualification passed 5,514 all-feature workspace tests (186 opt-in tests skipped),
+12 doctests (one ignored), strict all-target workspace Clippy, warnings-as-errors
+rustdoc, formatting and distribution checks. Reduced-profile receipt,
+continuation and migration coverage passed 152 minimum-gateway, 158 core and 155
+harness tests, with strict all-target Clippy for each. A subsequent backend-only
+test-import scoping correction changed no executable logic or assertions; the
+reduced suites and final workspace Clippy qualify that correction separately
+from the recorded full-suite source snapshot.
+
+Real H1/h2c tests cover 128 upload slots, reserved-byte pressure, absolute 60-second
+upload deadlines and consumed requests above 16MiB, with an exact 16MiB positive
+control. Actual SQL COMMIT/ROLLBACK errors, caught unwind and incremental final
+frame tests retain the real owner when cleanup is unknown. Cancellation and
+callback deadlines preserve original provider usage and synchronous negative
+terminal evidence. Required-observation failures retain their own cleanup
+obligations even when the independent receipt commits successfully.
+
+PostgreSQL 17 and MySQL 8.4 each passed the additive migration 035 and real receipt
+store campaigns, including immutable conflicts, rollback, reconnect and scoped
+lookup. Independent reviews closed the identified integration and fixture
+issues without relaxing production bounds or uncertainty handling. These are
+consumer and storage checks, not measurements of filesystem exhaustion or
+production throughput.
+
+This is an implementation slice. Filesystem fault qualification, recovery,
+remaining owned consumers and final performance gates remain tracked separately.
+Production dispatch, revision-bound dispatch and strict-receipt capability flags
+remain false; M2 and M3 are not marked complete.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

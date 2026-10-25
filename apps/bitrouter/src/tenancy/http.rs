@@ -71,16 +71,26 @@ pub(crate) async fn dispatch(
         Ok(submission) => submission,
         Err(error) => return error.into_response(),
     };
-    let body = match tokio::time::timeout_at(
-        submission.deadline(),
-        axum::body::to_bytes(body, 16 * 1024 * 1024),
-    )
-    .await
-    {
-        Ok(Ok(body)) => body,
-        Ok(Err(_)) => return Failure::from(ErrorCode::PayloadTooLarge).into_response(),
-        Err(_) => return Failure::from(ErrorCode::CapacityExceeded).into_response(),
+    let bound = match one_header(&parts.headers, "content-length") {
+        Ok(Some(value)) => match value.parse::<usize>() {
+            Ok(value) => value,
+            Err(_) => return Failure::from(ErrorCode::InvalidRequest).into_response(),
+        },
+        Ok(None) => 16 * 1024 * 1024,
+        Err(error) => return error.into_response(),
     };
+    let ingress = match service.admission.ingress(bound) {
+        Ok(ingress) => ingress,
+        Err(code) => return Failure::from(code).into_response(),
+    };
+    let body =
+        match tokio::time::timeout_at(submission.deadline(), axum::body::to_bytes(body, bound))
+            .await
+        {
+            Ok(Ok(body)) => body,
+            Ok(Err(_)) => return Failure::from(ErrorCode::PayloadTooLarge).into_response(),
+            Err(_) => return Failure::from(ErrorCode::CapacityExceeded).into_response(),
+        };
     let value = match serde_json::from_slice(&body) {
         Ok(value) => value,
         Err(_) => return Failure::from(ErrorCode::InvalidRequest).into_response(),
@@ -89,7 +99,16 @@ pub(crate) async fn dispatch(
         Ok(input) => input,
         Err(_) => return Failure::from(ErrorCode::InvalidRequest).into_response(),
     };
-    crate::gateway::http::handle_tenant(&service, submission, parts.headers, inbound, input).await
+    drop(body);
+    crate::gateway::http::handle_tenant(
+        &service,
+        submission,
+        parts.headers,
+        inbound,
+        input,
+        ingress,
+    )
+    .await
 }
 
 pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
@@ -100,6 +119,14 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             get(operation),
         )
         .route("/control/v1/tenants/{tenant_id}", put(tenant))
+        .route(
+            "/control/v1/tenants/{tenant_id}/executions/{execution_id}",
+            get(receipt),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/executions",
+            get(receipt_page),
+        )
         .route("/control/v1/principals/{principal_id}", put(principal))
         .route(
             "/control/v1/tenants/{tenant_id}/bindings/{binding_id}",
@@ -419,4 +446,49 @@ async fn active_revision(
     tenant: Result<Path<TenantId>, PathRejection>,
 ) -> Result<Response, Failure> {
     Ok(Json(service.active_revision(&caller, &path(tenant)?)?).into_response())
+}
+
+async fn receipt(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    input: Result<Path<(TenantId, bitrouter_ai::tenancy::identity::ExecutionId)>, PathRejection>,
+) -> Result<Response, Failure> {
+    let (tenant, id) = path(input)?;
+    let body = service
+        .read_receipt(caller, tenant, super::receipts::read::Request::One(id))
+        .await?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReceiptQuery {
+    correlation_id: bitrouter_ai::tenancy::identity::CorrelationId,
+    after: Option<bitrouter_ai::tenancy::identity::ExecutionId>,
+    limit: Option<u64>,
+}
+async fn receipt_page(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    input: Result<Path<TenantId>, PathRejection>,
+    query: Result<axum::extract::Query<ReceiptQuery>, axum::extract::rejection::QueryRejection>,
+) -> Result<Response, Failure> {
+    let tenant = path(input)?;
+    let axum::extract::Query(query) =
+        query.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+    let limit = query.limit.unwrap_or(100);
+    if !(1..=100).contains(&limit) {
+        return Err(ErrorCode::InvalidRequest.into());
+    }
+    let body = service
+        .read_receipt(
+            caller,
+            tenant,
+            super::receipts::read::Request::Page {
+                correlation: query.correlation_id,
+                after: query.after,
+                limit,
+            },
+        )
+        .await?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], body).into_response())
 }

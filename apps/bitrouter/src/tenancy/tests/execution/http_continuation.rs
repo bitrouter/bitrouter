@@ -31,6 +31,7 @@ mod output_mutation;
 mod production_restart;
 #[cfg(unix)]
 mod quarantine;
+mod receipts;
 mod retained_defaults;
 mod revision_policy;
 mod server;

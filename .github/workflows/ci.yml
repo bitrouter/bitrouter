@@ -851,6 +851,19 @@ jobs:
           --lib tenancy::tests::execution::http_continuation::server::server_http034_consumer_exact_cas_absence_race_and_restart
           -- --ignored --exact --test-threads=1
 
+      - name: verify execution receipt migration and persistence on the selected backend
+        # Both campaigns use isolated databases under the existing scoped grant.
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: |
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+            --lib db::migration::m20240101_000035_execution_receipts::tests::server::server_receipt035_exact_indexes_persistent_restart_and_populated_down \
+            -- --ignored --exact --test-threads=1
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+            --lib tenancy::receipts::store::tests::server::server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict \
+            -- --ignored --exact --test-threads=1
+
       - name: verify MySQL transaction snapshot boundaries
         if: matrix.backend == 'mysql'
         env:

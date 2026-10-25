@@ -63,6 +63,16 @@ impl Service {
                 .await
         }
         .await;
+        // The autonomous receipt watchdog can close the output handoff before
+        // the callback's equal-deadline timeout gets polled. Preserve the native
+        // capacity classification in either ordering. Earlier authority failures
+        // remain sticky; receipt storage failure still has priority in failure().
+        if outcome.is_err()
+            && execution.remaining().is_zero()
+            && execution.receipt_owner()?.cancelled.is_cancelled()
+        {
+            execution.reject(ErrorCode::CapacityExceeded);
+        }
         match execution.failure() {
             Some(failure) => Err(native_failure(failure)),
             None => outcome,

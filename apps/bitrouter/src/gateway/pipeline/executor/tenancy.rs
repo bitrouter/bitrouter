@@ -28,6 +28,7 @@ mod tests;
 pub(super) struct BoundAuthentication {
     execution: Arc<TenantExecution>,
     digest: [u8; 32],
+    stamp: crate::tenancy::receipts::journal::TargetStamp,
     candidate: Vec<u8>,
     credential: bitrouter_ai::tenancy::configuration::ResourceRef,
 }
@@ -37,6 +38,7 @@ pub(super) struct BoundAuthentication {
 pub(super) struct AuthenticatedRequest {
     applied: AppliedAuth,
     binding: Option<BoundAuthentication>,
+    reservation: Option<crate::tenancy::receipts::journal::AttemptPermit>,
 }
 
 impl std::ops::Deref for AuthenticatedRequest {
@@ -47,21 +49,32 @@ impl std::ops::Deref for AuthenticatedRequest {
 }
 
 impl AuthenticatedRequest {
-    pub(super) fn new(
+    pub(super) fn new_reserved(
         applied: AppliedAuth,
         target: &RoutingTarget,
         ctx: &PipelineContext,
         url: &str,
+        reservation: Option<crate::tenancy::receipts::journal::AttemptPermit>,
     ) -> Result<Self> {
         let binding = execution(ctx)
             .map(|execution| {
                 execution
                     .revalidate()
                     .map_err(|code| execution.reject(code))?;
-                let candidate = execution
-                    .route()
-                    .candidate_key(target)
-                    .map_err(|code| execution.reject(code))?;
+                let stamp = reservation
+                    .as_ref()
+                    .ok_or_else(|| execution.reject(ErrorCode::Forbidden))?
+                    .stamp()
+                    .clone();
+                let actual = crate::tenancy::receipts::journal::TargetStamp::for_execution(
+                    &execution, target,
+                )
+                .map_err(|error| {
+                    execution.reject(crate::tenancy::receipts::journal_error(error))
+                })?;
+                if !stamp.matches(&actual) {
+                    return Err(execution.reject(ErrorCode::Forbidden));
+                }
                 let expected = reqwest::Url::parse(url)
                     .map_err(|_| execution.reject(ErrorCode::InvalidRequest))?;
                 if applied.url() != &expected {
@@ -69,16 +82,23 @@ impl AuthenticatedRequest {
                 }
                 Ok(BoundAuthentication {
                     digest: digest(&applied).map_err(|code| execution.reject(code))?,
-                    candidate,
-                    credential: execution
-                        .route()
-                        .match_candidate(target)
-                        .map_err(|code| execution.reject(code))?,
+                    candidate: stamp.candidate().to_vec(),
+                    credential: stamp.credential().clone(),
+                    stamp,
                     execution,
                 })
             })
             .transpose()?;
-        Ok(Self { applied, binding })
+        if binding.is_none() != reservation.is_none() {
+            return Err(crate::gateway::error::BitrouterError::Forbidden(
+                "receipt reservation lost binding".into(),
+            ));
+        }
+        Ok(Self {
+            applied,
+            binding,
+            reservation,
+        })
     }
 
     pub(super) fn tenant_binding(&self) -> Option<BoundAuthentication> {
@@ -90,8 +110,10 @@ impl AuthenticatedRequest {
     ) -> (
         reqwest::Request,
         Option<crate::gateway::providers::auth::ContinuationAuthority>,
+        Option<crate::tenancy::receipts::journal::AttemptPermit>,
     ) {
-        self.applied.into_parts()
+        let (request, authority) = self.applied.into_parts();
+        (request, authority, self.reservation)
     }
 }
 
@@ -103,16 +125,33 @@ pub(super) fn has_execution(ctx: &PipelineContext) -> bool {
     execution(ctx).is_some()
 }
 
+pub(super) fn reserve(
+    target: &RoutingTarget,
+    ctx: &PipelineContext,
+) -> Result<Option<crate::tenancy::receipts::journal::AttemptPermit>> {
+    execution(ctx)
+        .map(|execution| {
+            execution
+                .reserve_attempt(target)
+                .map_err(|code| execution.reject(code))
+        })
+        .transpose()
+}
+
 pub(super) async fn authenticate(
     request: reqwest::Request,
     target: &RoutingTarget,
     transport: &Arc<dyn Transport>,
     execution: &Arc<TenantExecution>,
+    reservation: &crate::tenancy::receipts::journal::AttemptPermit,
 ) -> Result<AppliedAuth> {
     let owned = execution
         .credential(target)
         .await
         .map_err(|code| execution.reject(code))?;
+    if &owned.reference != reservation.stamp().credential() {
+        return Err(execution.reject(ErrorCode::Forbidden));
+    }
     let Credential::ApiKey { value } = owned.credential else {
         return Err(execution.reject(ErrorCode::CapabilityMismatch));
     };
@@ -154,35 +193,39 @@ pub(super) async fn authenticate(
 
 pub(super) fn admit_send(
     binding: Option<&BoundAuthentication>,
+    permit: &mut Option<crate::tenancy::receipts::journal::AttemptPermit>,
     request: &mut reqwest::Request,
     target: &RoutingTarget,
     ctx: &PipelineContext,
 ) -> Result<Option<bitrouter_ai::tenancy::identity::AttemptId>> {
     match (binding, execution(ctx)) {
-        (None, None) => Ok(None),
+        (None, None) if permit.is_none() => Ok(None),
         (Some(binding), Some(execution)) if Arc::ptr_eq(&binding.execution, &execution) => {
             if digest(request).map_err(|code| execution.reject(code))? != binding.digest
                 || execution
                     .route()
                     .candidate_key(target)
                     .map_err(|code| execution.reject(code))?
-                    != binding.candidate
+                    != binding.stamp.candidate()
             {
                 return Err(execution.reject(ErrorCode::Forbidden));
             }
-            let permit = execution
-                .admit_send(target)
-                .map_err(|code| execution.reject(code))?;
             let remaining = execution.remaining();
             let timeout = request
                 .timeout()
                 .copied()
                 .map_or(remaining, |timeout| timeout.min(remaining));
             *request.timeout_mut() = Some(timeout);
-            Ok(Some(permit))
+            let permit = permit
+                .as_mut()
+                .ok_or_else(|| execution.reject(ErrorCode::Forbidden))?;
+            execution
+                .arm_attempt(target, permit, &binding.stamp)
+                .map(Some)
+                .map_err(|code| execution.reject(code))
         }
         (_, Some(execution)) => Err(execution.reject(ErrorCode::Forbidden)),
-        (Some(_), None) => Err(crate::gateway::error::BitrouterError::Forbidden(
+        (_, None) => Err(crate::gateway::error::BitrouterError::Forbidden(
             "tenant request lost execution custody".into(),
         )),
     }

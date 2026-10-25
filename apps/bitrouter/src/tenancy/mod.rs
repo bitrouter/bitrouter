@@ -16,6 +16,7 @@ pub(crate) mod http;
 mod model;
 mod mutation;
 pub(crate) mod ownership;
+pub(crate) mod receipts;
 mod resources;
 mod store;
 #[cfg(test)]
@@ -71,6 +72,8 @@ pub(crate) struct Service {
     instance: InstanceId,
     commands: mpsc::Sender<Job>,
     safety: mpsc::Sender<Job>,
+    completions: mpsc::Sender<Job>,
+    receipt_volume: Option<std::path::PathBuf>,
     stop: CancellationToken,
     accepting: Arc<std::sync::Mutex<bool>>,
     cleanup: Arc<transaction::Proof>,
@@ -87,6 +90,9 @@ pub(crate) struct Service {
     pipelines: Arc<execution::lifecycle::Registry>,
     #[cfg(test)]
     dispatch_test_ready: Arc<AtomicBool>,
+    #[cfg(test)]
+    receipt_credential_gate:
+        Arc<std::sync::Mutex<Option<Arc<receipts::authority_test::CredentialGate>>>>,
     completion: Shared<BoxFuture<'static, Result<(), Arc<tokio::task::JoinError>>>>,
 }
 
@@ -227,6 +233,28 @@ impl Service {
         // revokes and stop transitions. Neither queue waits for free capacity.
         let (commands, receiver) = mpsc::channel(16);
         let (safety, safety_receiver) = mpsc::channel(8);
+        let (completions, completion_receiver) = mpsc::channel(128);
+        let receipt_volume = owner
+            .as_ref()
+            .and_then(|owner| owner.path.parent().map(std::path::Path::to_path_buf));
+        let receipt_installation = snapshot
+            .read()
+            .map_err(|_| anyhow::anyhow!("receipt startup authority unavailable"))?
+            .installation
+            .clone();
+        let receipt_inventory = tokio::time::timeout(
+            MANAGEMENT_TIMEOUT,
+            receipts::store::inventory(&db, &receipt_installation),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("receipt inventory deadline elapsed"))??;
+        let admission = admission::Admission::new();
+        admission
+            .initialize_receipts(
+                receipt_inventory,
+                receipts::capacity::free_space(receipt_volume.as_deref())?,
+            )
+            .map_err(|_| anyhow::anyhow!("receipt capacity initialization failed"))?;
         let accepting = Arc::new(std::sync::Mutex::new(true));
         #[cfg(feature = "core")]
         let eval = eval::State::new(live.clone());
@@ -251,6 +279,7 @@ impl Service {
             limits,
             resources: resources.clone(),
             proof: cleanup.clone(),
+            admission: admission.clone(),
             http_continuation: http_state,
             #[cfg(feature = "core")]
             eval: eval.clone(),
@@ -259,8 +288,14 @@ impl Service {
         };
         let stop = CancellationToken::new();
         let (initialized, initialization) = oneshot::channel();
-        let worker =
-            tokio::spawn(worker.run(receiver, safety_receiver, stop.clone(), import, initialized));
+        let worker = tokio::spawn(worker.run(
+            receiver,
+            safety_receiver,
+            completion_receiver,
+            stop.clone(),
+            import,
+            initialized,
+        ));
         let completion = async move { worker.await.map_err(Arc::new) }
             .boxed()
             .shared();
@@ -271,6 +306,8 @@ impl Service {
             instance,
             commands,
             safety,
+            completions,
+            receipt_volume,
             stop,
             accepting,
             #[cfg(feature = "core")]
@@ -282,11 +319,13 @@ impl Service {
             http_continuation,
             http_registry,
             caches,
-            admission: admission::Admission::new(),
+            admission,
             executor,
             pipelines: execution::lifecycle::Registry::new(),
             #[cfg(test)]
             dispatch_test_ready: Arc::new(AtomicBool::new(false)),
+            #[cfg(test)]
+            receipt_credential_gate: Arc::default(),
             completion,
         };
         match initialization.await {
@@ -471,7 +510,9 @@ impl Service {
     fn enqueue(&self, job: Job, safety: bool) -> Result<(), Failure> {
         let operation = match &job {
             Job::Command(message) => Some(message.command.operation_id().clone()),
-            Job::Credential(_) | Job::Continuation(_) => None,
+            Job::Credential(_) | Job::Continuation(_) | Job::Receipt(_) | Job::ReceiptRead(_) => {
+                None
+            }
             #[cfg(feature = "core")]
             Job::Eval(_)
             | Job::Settlement(_)

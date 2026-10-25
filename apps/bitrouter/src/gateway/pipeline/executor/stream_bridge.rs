@@ -405,7 +405,7 @@ impl HttpExecutor {
             None
         };
         let mut attempted_auth_refresh = false;
-        let (response, mut shared_attempt) = loop {
+        let (response, mut shared_attempt, mut tenant_attempt) = loop {
             let mut body =
                 self.render_execution_request(adapter.as_ref(), target, prompt, ctx, true)?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
@@ -444,7 +444,7 @@ impl HttpExecutor {
             let mut shared_attempt =
                 super::shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
             let tenant_binding = applied.tenant_binding();
-            let (mut request, authority) = applied.into_parts();
+            let (mut request, authority, mut tenant_attempt) = applied.into_parts();
             if let Some(capture) = &capture {
                 capture.authenticated(&request, authority.clone(), prompt, target, ctx)?;
             }
@@ -465,6 +465,7 @@ impl HttpExecutor {
                     record_native_dispatch(prompt, target, ctx)?;
                     native_attempt = super::tenancy::admit_send(
                         tenant_binding.as_ref(),
+                        &mut tenant_attempt,
                         &mut request,
                         target,
                         ctx,
@@ -479,6 +480,7 @@ impl HttpExecutor {
             .await?;
 
             let status = response.status();
+            receipt::status(&mut tenant_attempt, status.as_u16())?;
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
             if status.is_success() {
@@ -492,7 +494,7 @@ impl HttpExecutor {
                     source.tenant_binding = tenant_binding;
                     source.tenant_attempt = native_attempt;
                 }
-                break (response, shared_attempt);
+                break (response, shared_attempt, tenant_attempt);
             }
             shared_attempt.rejected(status.as_u16()).await?;
             let text = response_body::read(response, ctx)
@@ -508,6 +510,7 @@ impl HttpExecutor {
                 attempted_auth_refresh = true;
                 continue;
             }
+            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             let scrubbed = error_scrubber.scrub_body(&text);
             return Err(classify_upstream_error(
                 status.as_u16(),
@@ -542,8 +545,9 @@ impl HttpExecutor {
                         };
                         match decoder.decode(&sse) {
                             Ok(parts) => {
+                                if let Err(error) = receipt::batch(&tenant_attempt, &parts, held_terminal.is_some()).and_then(|()| receipt::event(&mut tenant_attempt, &protocol, &sse)) { drop(tenant_attempt.take()); yield Err(error); return; }
                                 if let Err(error) = shared_attempt.observe_batch(&parts, held_terminal.is_some()) {
-                                    yield Err(error);
+                                    drop(tenant_attempt.take()); yield Err(error);
                                     return;
                                 }
                                 if let Some(part) = decoder.pending_terminal() {
@@ -551,19 +555,20 @@ impl HttpExecutor {
                                 }
                                 if let Some(capture) = &capture
                                     && let Err(error) = capture.terminal(&sse) {
-                                    yield Err(error_scrubber.scrub_error(error));
+                                    drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(error));
                                     return;
                                 }
                                 if let Some(source) = &mut http_source
                                     && let Err(error) = source.terminal(&sse)
                                 {
+                                    drop(tenant_attempt.take());
                                     yield Err(error_scrubber.scrub_error(error));
                                     return;
                                 }
                                 for p in parts {
                                     if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                                     terminal |= p.is_terminal();
-                                    if (shared_attempt.is_shared() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
+                                    if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
                                     yield Ok(p);
                                 }
                             }
@@ -577,6 +582,13 @@ impl HttpExecutor {
                                 if matches!(&e, crate::gateway::model::error::ModelError::Provider { .. } | crate::gateway::model::error::ModelError::PolicyViolation { .. })
                                     && let Err(error) = shared_attempt.failed_stream().await
                                 {
+                                    drop(tenant_attempt.take()); yield Err(error);
+                                    return;
+                                }
+                                if matches!(&e, crate::gateway::model::error::ModelError::Provider { .. } | crate::gateway::model::error::ModelError::PolicyViolation { .. })
+                                    && let Err(error) = receipt::event(&mut tenant_attempt, &protocol, &sse).and_then(|()| receipt::complete(&mut tenant_attempt, false))
+                                {
+                                    drop(tenant_attempt.take());
                                     yield Err(error);
                                     return;
                                 }
@@ -585,7 +597,7 @@ impl HttpExecutor {
                                     yield Ok(StreamPart::Usage { usage: reported.clone() });
                                     if let BitrouterError::UpstreamInvalidResponse { usage, .. } = &mut error { *usage = Some(Box::new(reported)); }
                                 }
-                                yield Err(error_scrubber.scrub_error(error));
+                                drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(error));
                                 return;
                             }
                         }
@@ -598,37 +610,47 @@ impl HttpExecutor {
                             eventsource_stream::EventStreamError::Transport(error) => error,
                             other => stream_transport_error(false, &other),
                         };
-                        yield Err(error_scrubber.scrub_error(error));
+                        drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(error));
                         return;
                     }
                 }
             }
             match decoder.finish() {
                 Ok(parts) => {
+                    if let Err(error) = receipt::batch(&tenant_attempt, &parts, held_terminal.is_some()) { drop(tenant_attempt.take()); yield Err(error); return; }
                     if let Err(error) = shared_attempt.observe_batch(&parts, held_terminal.is_some()) {
-                        yield Err(error);
+                        drop(tenant_attempt.take()); yield Err(error);
                         return;
                     }
                     for p in parts {
                         if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                         terminal |= p.is_terminal();
-                        if (shared_attempt.is_shared() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
+                        if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
                         yield Ok(p);
                     }
                 }
                 Err(e) => {
-                    yield Err(error_scrubber.scrub_error(classify_stream_decoder_error(e)));
+                    drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(classify_stream_decoder_error(e)));
                     return;
                 }
             }
             if !terminal {
-                yield Err(BitrouterError::UpstreamInvalidResponse { message: "upstream stream ended without a model terminal part".into(), usage: None });
+                drop(tenant_attempt.take()); yield Err(BitrouterError::UpstreamInvalidResponse { message: "upstream stream ended without a model terminal part".into(), usage: None });
                 return;
             }
-            if let Err(error) = shared_attempt.finish_stream().await { yield Err(error); return; }
-            // All decoder/transport and EOF checks completed. No earlier event
-            // may create publication authority, even a decoded completed frame.
+            if let Some(part) = &held_terminal
+                && let Err(error) = receipt::complete(&mut tenant_attempt, receipt::successful(part))
+            {
+                drop(tenant_attempt.take());
+                yield Err(error);
+                return;
+            }
+            if let Err(error) = shared_attempt.finish_stream().await { drop(tenant_attempt.take()); yield Err(error); return; }
+            // Receipt completion is evidence, not publication authority. Preserve
+            // 034's original terminal/EOF proof and raw replayability before the
+            // exact actual-send permit leaves its producer.
             if let Some(source)=http_source {source.publish();}
+            drop(tenant_attempt.take());
             if let Some(part) = held_terminal { yield Ok(part); }
         };
 

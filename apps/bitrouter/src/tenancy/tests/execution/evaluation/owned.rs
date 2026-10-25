@@ -99,9 +99,7 @@ async fn rejected_entry_outcome_can_prove_no_decision_but_rejected_policy_plan_m
                 issued.secret.as_deref().context("secret")?,
                 &revision,
             )?;
-            let execution = admitted(&fixture, &headers).await?;
-            let store = execution.eval_store();
-            drop(execution);
+            let store = scoped_eval_store(&fixture, &headers).await?;
             let control = Arc::new(Reject {
                 early,
                 entry_outcomes: AtomicUsize::new(0),
@@ -137,10 +135,17 @@ async fn rolled_back_required_observation_is_retained_as_failed_without_retry() 
         fixture.db.execute_unprepared("CREATE TRIGGER reject_observation BEFORE INSERT ON eval_subjects BEGIN SELECT RAISE(ABORT, 'fixture required observation failure'); END").await?;
         let headers = headers(&fixture, issued.secret.as_deref().context("secret")?, &revision)?;
         let control = Arc::new(Reject { early: false, entry_outcomes: AtomicUsize::new(0), plans: AtomicUsize::new(0) });
+        let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
         ensure!(app(&fixture)?.execute_native_controlled_with_headers(prompt(), CallerContext::local(), headers, control.clone()).await.is_err());
         ensure!(control.plans.load(Ordering::SeqCst) == 1);
         ensure!(fixture.service.pipelines.close_and_drain().await.is_err());
-        ensure!(fixture.service.cleanup.disposition() == crate::tenancy::transaction::Disposition::RolledBack);
+        // This isolated invocation has one failing observation transaction;
+        // its following receipt commits on H and replaces last-job disposition.
+        ensure!(fixture.service.cleanup.sql_counts_for_test().1 == rollback_count + 1);
+        fixture.service.cleanup.ensure_clean()?;
+        let receipt = only_receipt(&fixture).await?;
+        ensure!(receipt.attempts.is_empty());
+        ensure!(receipt.outcome == bitrouter_ai::tenancy::execution::Outcome::Failed);
         ensure!(fixture.service.current().is_err());
         fixture.db.execute_unprepared("DROP TRIGGER reject_observation").await?;
         // Restored storage does not acknowledge the failed obligation or retry it.
@@ -165,9 +170,7 @@ async fn full_observation_lane(expire: bool) -> Result<()> {
         issued.secret.as_deref().context("secret")?,
         &revision,
     )?;
-    let execution = admitted(&fixture, &headers).await?;
-    let store = execution.eval_store();
-    drop(execution);
+    let store = scoped_eval_store(&fixture, &headers).await?;
     // Occupy the actual bounded ordinary lane without inventing management jobs.
     let mut reservations = Vec::new();
     for _ in 0..16 {
@@ -196,7 +199,9 @@ async fn full_observation_lane(expire: bool) -> Result<()> {
         )
         .await
     }));
-    tokio::time::timeout(TIMEOUT, fixture.service.eval.producer_waiting.notified()).await?;
+    tokio::time::timeout(TIMEOUT, fixture.service.eval.producer_waiting.notified())
+        .await
+        .context("required observation never reached the full ordinary lane")?;
     ensure!(!task.is_finished());
     ensure!(fixture.service.current().is_ok());
     {
@@ -206,9 +211,14 @@ async fn full_observation_lane(expire: bool) -> Result<()> {
     if expire {
         tokio::time::pause();
         tokio::time::advance(crate::tenancy::eval::WORK + Duration::from_millis(1)).await;
-        // Recorder completion, rather than elapsed time, proves the failed wait.
-        let outcome = tokio::time::timeout(Duration::from_secs(1), task).await?;
+        // Advance only the required-queue clock. Receipt completion now performs
+        // real SQLite I/O; do not let paused time auto-advance its cleanup deadline
+        // while the database worker is still returning the durable result.
         tokio::time::resume();
+        // Recorder completion, rather than elapsed time, proves the failed wait.
+        let outcome = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .context("expired observation did not finish its independent receipt")?;
         ensure!(outcome?.is_err());
         drop(reservations);
         ensure!(fixture.service.current().is_err());

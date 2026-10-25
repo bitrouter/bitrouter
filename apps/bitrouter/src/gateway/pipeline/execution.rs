@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(feature = "server-tools")]
 use async_trait::async_trait;
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, future::BoxFuture};
 use futures_core::Stream;
 use tracing::Instrument;
 
@@ -146,12 +146,25 @@ impl ExecutionCustody {
         if let Some(admission) = &self.admission {
             admission.finish_delivery(successful_terminal).await?;
         }
-        let _ = successful_terminal;
+        if let Some(execution) = &self._tenant {
+            execution
+                .terminal_receipt(if successful_terminal {
+                    bitrouter_ai::tenancy::execution::Outcome::Completed
+                } else {
+                    bitrouter_ai::tenancy::execution::Outcome::Failed
+                })
+                .await?;
+        }
         Ok(())
     }
 }
 
-pub(crate) struct DeliveryPermit {
+pub(crate) enum DeliveryPermit {
+    Local(DeliveryState),
+    Tenant(Arc<std::sync::Mutex<Option<DeliveryState>>>),
+}
+
+pub(crate) struct DeliveryState {
     ready: tokio::sync::oneshot::Receiver<Result<()>>,
     acknowledged: Option<tokio::sync::oneshot::Sender<DeliveryAcknowledgement>>,
     activation_completed: tokio::sync::oneshot::Receiver<Result<()>>,
@@ -162,8 +175,8 @@ pub(crate) struct DeliveryPermit {
     terminal_observation: super::settlement::terminal::Writer,
 }
 
-impl DeliveryPermit {
-    pub(crate) async fn deliver(mut self) -> Result<()> {
+impl DeliveryState {
+    async fn deliver(mut self) -> Result<DeliveryReady> {
         match self.ready.await {
             Ok(Ok(())) => {
                 // Activation and authoritative accounting precede delivery.
@@ -187,18 +200,15 @@ impl DeliveryPermit {
                     self.custody
                         .finish_delivery(self.successful_terminal)
                         .await?;
-                    self.terminal_committed
-                        .take()
-                        .ok_or_else(|| {
+                    Ok(DeliveryReady {
+                        committed: self.terminal_committed.take().ok_or_else(|| {
                             BitrouterError::internal("delivery terminal commit was already used")
-                        })?
-                        .send(())
-                        .map_err(|_| {
-                            BitrouterError::internal("delivery terminal commit receiver closed")
-                        })?;
-                    #[cfg(feature = "multi-instance")]
-                    self.terminal_observation.complete(self.successful_terminal);
-                    Ok(())
+                        })?,
+                        #[cfg(feature = "multi-instance")]
+                        observation: self.terminal_observation,
+                        #[cfg(feature = "multi-instance")]
+                        successful: self.successful_terminal,
+                    })
                 } else {
                     Err(BitrouterError::internal(
                         "delivery authorization closed before acknowledgment",
@@ -215,19 +225,7 @@ impl DeliveryPermit {
         }
     }
 
-    pub(crate) fn fail(
-        self,
-        failure: BitrouterError,
-    ) -> impl std::future::Future<Output = Result<()>> + Send {
-        // The caller already knows rendering/encoding failed. Freeze that
-        // decision before returning a future that can be dropped unpolled.
-        self.custody.record_pipeline_outcome(false);
-        #[cfg(feature = "multi-instance")]
-        self.terminal_observation.complete(false);
-        self.fail_recorded(failure)
-    }
-
-    async fn fail_recorded(mut self, failure: BitrouterError) -> Result<()> {
+    async fn fail_recorded(mut self, failure: BitrouterError) -> Result<DeliveryReady> {
         match self.ready.await {
             Ok(Ok(())) => {
                 let acknowledged = self
@@ -241,16 +239,15 @@ impl DeliveryPermit {
                         ))
                     })??;
                     self.custody.finish_delivery(false).await?;
-                    self.terminal_committed
-                        .take()
-                        .ok_or_else(|| {
+                    Ok(DeliveryReady {
+                        committed: self.terminal_committed.take().ok_or_else(|| {
                             BitrouterError::internal("delivery terminal commit was already used")
-                        })?
-                        .send(())
-                        .map_err(|_| {
-                            BitrouterError::internal("delivery terminal commit receiver closed")
-                        })?;
-                    Ok(())
+                        })?,
+                        #[cfg(feature = "multi-instance")]
+                        observation: self.terminal_observation,
+                        #[cfg(feature = "multi-instance")]
+                        successful: false,
+                    })
                 } else {
                     Err(BitrouterError::internal(
                         "delivery authorization closed before failure acknowledgment",
@@ -262,6 +259,141 @@ impl DeliveryPermit {
                 "delivery authorization ended unexpectedly: {error}"
             ))),
         }
+    }
+}
+
+/// Contains no request, pipeline, receipt owner or body buffers. Its final signal
+/// and caller Ready return remain in one poll, including after an owned await.
+struct DeliveryReady {
+    committed: tokio::sync::oneshot::Sender<()>,
+    #[cfg(feature = "multi-instance")]
+    observation: super::settlement::terminal::Writer,
+    #[cfg(feature = "multi-instance")]
+    successful: bool,
+}
+impl DeliveryReady {
+    fn commit(self) -> Result<()> {
+        self.committed
+            .send(())
+            .map_err(|_| BitrouterError::internal("delivery terminal commit receiver closed"))?;
+        #[cfg(feature = "multi-instance")]
+        self.observation.complete(self.successful);
+        Ok(())
+    }
+}
+
+impl DeliveryPermit {
+    fn new(state: DeliveryState) -> Self {
+        let execution = state.custody._tenant.clone();
+        match execution {
+            None => Self::Local(state),
+            Some(execution) => {
+                let slot = Arc::new(std::sync::Mutex::new(Some(state)));
+                let weak = Arc::downgrade(&slot);
+                let registered = execution.receipt_owner().and_then(|owner| {
+                    owner.on_cancel(Box::new(move || {
+                        if let Some(slot) = weak.upgrade() {
+                            let discarded = slot
+                                .lock()
+                                .unwrap_or_else(|error| error.into_inner())
+                                .take();
+                            drop(discarded);
+                        }
+                    }))
+                });
+                if registered.is_err() {
+                    let discarded = slot
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .take();
+                    drop(discarded);
+                    execution
+                        .reject(bitrouter_ai::tenancy::operation::ErrorCode::StorageUnavailable);
+                }
+                Self::Tenant(slot)
+            }
+        }
+    }
+    fn take(self) -> Result<(DeliveryState, bool)> {
+        match self {
+            Self::Local(state) => Ok((state, false)),
+            Self::Tenant(slot) => {
+                let state = slot
+                    .lock()
+                    .map_err(|_| BitrouterError::UpstreamUnavailable)?
+                    .take()
+                    .ok_or(BitrouterError::UpstreamUnavailable)?;
+                Ok((state, true))
+            }
+        }
+    }
+    /// Ownership moves synchronously, before the returned wait can be dropped.
+    /// Tenant delivery/compensation uses the existing tracked settlement set.
+    pub(crate) fn deliver(self) -> BoxFuture<'static, Result<()>> {
+        self.start(None)
+    }
+    pub(crate) fn fail(self, error: BitrouterError) -> BoxFuture<'static, Result<()>> {
+        self.start(Some(error))
+    }
+    fn start(self, error: Option<BitrouterError>) -> BoxFuture<'static, Result<()>> {
+        let (state, owned) = match self.take() {
+            Ok(state) => state,
+            Err(error) => return futures::future::ready(Err(error)).boxed(),
+        };
+        if error.is_some() {
+            // Freeze known rendering failure before returning a future that
+            // can be dropped unpolled, including on the ordinary local path.
+            state.custody.record_pipeline_outcome(false);
+            #[cfg(feature = "multi-instance")]
+            state.terminal_observation.complete(false);
+        }
+        let execution = state.custody._tenant.clone();
+        let registration = state.custody._registration.clone();
+        let completion = execution.clone();
+        let work = async move {
+            let result = match error {
+                Some(error) => state.fail_recorded(error).await,
+                None => state.deliver().await,
+            };
+            if result.is_err()
+                && let Some(execution) = completion
+            {
+                execution
+                    .receipt_owner()?
+                    .finish_or_join(bitrouter_ai::tenancy::execution::Outcome::Failed)
+                    .await
+                    .map_err(|code| {
+                        execution.reject(code);
+                        BitrouterError::UpstreamUnavailable
+                    })?;
+            }
+            result
+        };
+        if !owned {
+            return async move { work.await?.commit() }.boxed();
+        }
+        let Some(registration) = registration else {
+            return futures::future::ready(Err(BitrouterError::UpstreamUnavailable)).boxed();
+        };
+        let channel = execution
+            .as_ref()
+            .ok_or(BitrouterError::UpstreamUnavailable)
+            .and_then(|execution| execution.receipt_owner())
+            .and_then(crate::tenancy::receipts::output::channel);
+        let (reply, mut wait) = match channel {
+            Ok(channel) => channel,
+            Err(error) => return futures::future::ready(Err(error)).boxed(),
+        };
+        registration.spawn_delivery(async move {
+            let _ = reply.send(work.await).await;
+        });
+        async move {
+            wait.recv()
+                .await
+                .ok_or(BitrouterError::UpstreamUnavailable)??
+                .commit()
+        }
+        .boxed()
     }
 }
 
@@ -321,7 +453,7 @@ fn delivery_handshake(
         terminal_committed_rx,
     );
     (
-        DeliveryPermit {
+        DeliveryPermit::new(DeliveryState {
             ready: ready_rx,
             acknowledged: Some(acknowledged_tx),
             activation_completed: activation_completed_rx,
@@ -330,7 +462,7 @@ fn delivery_handshake(
             successful_terminal,
             #[cfg(feature = "multi-instance")]
             terminal_observation,
-        },
+        }),
         delivery,
     )
 }
@@ -688,6 +820,35 @@ impl Pipeline {
         #[cfg(feature = "server-tools")] run_server_tools: bool,
         control: Option<Arc<dyn NativeExecutionControl>>,
     ) -> Result<PreparedPipelineResponse> {
+        if let Some(execution) = req
+            .extensions
+            .get::<Arc<crate::tenancy::execution::TenantExecution>>()
+            .cloned()
+        {
+            let registration = req
+                .extensions
+                .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+            registration.validate(self.owned_tasks())?;
+            let tasks = self
+                .owned_tasks()
+                .cloned()
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+            let receipt = execution.receipt_owner()?.clone();
+            let (sender, mut receiver) = crate::tenancy::receipts::output::channel(&receipt)?;
+            tasks.spawn_execution(async move {
+                let result={let preparing=self.execute_prepared(req,#[cfg(feature="server-tools")]run_server_tools,control);
+                    tokio::select!{biased;()=receipt.cancelled.cancelled()=>Err(BitrouterError::UpstreamUnavailable),result=preparing=>result}};
+                let result=match result {Ok(prepared)=>Ok(prepared),Err(error)=>{
+                    match execution.terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed).await {Ok(())=>Err(error),Err(error)=>Err(error)}
+                }};
+                let _=sender.send(result).await;
+            }.instrument(tracing::Span::current()));
+            return receiver
+                .recv()
+                .await
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+        }
         let pipeline = Arc::clone(&self);
         // `tokio::spawn` does not propagate the current tracing span, so attach
         // it explicitly — otherwise the whole request's logs would detach from
@@ -723,6 +884,27 @@ impl Pipeline {
 
     /// Execute a non-streaming request: the four stages, in order.
     pub async fn execute(&self, req: PipelineRequest) -> Result<PipelineResponse> {
+        if let Some(execution) = req
+            .extensions
+            .get::<Arc<crate::tenancy::execution::TenantExecution>>()
+            .cloned()
+        {
+            let pipeline = req
+                .extensions
+                .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
+                .ok_or(BitrouterError::UpstreamUnavailable)
+                .and_then(|registration| registration.pipeline(self));
+            match pipeline {
+                Ok(pipeline) => return pipeline.execute_detached(req).await,
+                Err(error) => {
+                    drop(req);
+                    execution
+                        .terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed)
+                        .await?;
+                    return Err(error);
+                }
+            }
+        }
         let prepared = self
             .execute_prepared(
                 req,
@@ -1307,6 +1489,37 @@ impl Pipeline {
         req: PipelineRequest,
         #[cfg(feature = "server-tools")] run_server_tools: bool,
     ) -> Result<PreparedPipelineStream> {
+        if let Some(execution) = req
+            .extensions
+            .get::<Arc<crate::tenancy::execution::TenantExecution>>()
+            .cloned()
+        {
+            let registration = req
+                .extensions
+                .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+            registration.validate(self.owned_tasks())?;
+            let tasks = self
+                .owned_tasks()
+                .cloned()
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+            let receipt = execution.receipt_owner()?.clone();
+            let (sender, mut receiver) = crate::tenancy::receipts::output::channel(&receipt)?;
+            let driver_tasks = tasks.clone();
+            tasks.spawn_execution(async move {
+                let result={let preparing=self.prepare_stream(req,#[cfg(feature="server-tools")]run_server_tools);
+                    tokio::select!{biased;()=receipt.cancelled.cancelled()=>Err(BitrouterError::UpstreamUnavailable),result=preparing=>result}};
+                let result=match result {
+                    Ok(prepared)=>Self::own_tenant_stream(prepared,execution.clone(),driver_tasks),
+                    Err(error)=>match execution.terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed).await {Ok(())=>Err(error),Err(error)=>Err(error)},
+                };
+                let _=sender.send(result).await;
+            }.instrument(tracing::Span::current()));
+            return receiver
+                .recv()
+                .await
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+        }
         if let Some(registration) = req
             .extensions
             .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
@@ -1350,6 +1563,40 @@ impl Pipeline {
             run_server_tools,
         )
         .await
+    }
+
+    fn own_tenant_stream(
+        prepared: PreparedPipelineStream,
+        execution: Arc<crate::tenancy::execution::TenantExecution>,
+        tasks: Arc<super::owned_tasks::OwnedTasks>,
+    ) -> Result<PreparedPipelineStream> {
+        let receipt = execution.receipt_owner()?.clone();
+        let (sender, mut receiver) = crate::tenancy::receipts::output::channel(&receipt)?;
+        let PreparedPipelineStream {
+            mut parts,
+            model_id,
+        } = prepared;
+        tasks.spawn_execution(async move {
+            loop {
+                let item=tokio::select!{biased;()=receipt.cancelled.cancelled()=>break,()=sender.closed()=>break,item=parts.next()=>item};
+                let Some(mut item)=item else{break};
+                if let Ok(part)=&item && let Err(error)=crate::tenancy::receipts::output::bounded_part(&part.part) {item=Err(error);}
+                if item.is_err() {
+                    // Destroy upstream custody before waiting for its journal.
+                    drop(parts);
+                    if let Err(error)=execution.terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed).await {item=Err(error);}
+                    let _=sender.send(item).await;
+                    return;
+                }
+                if sender.send(item).await.is_err(){break;}
+            }
+            // Unpolled/disconnected receivers never retain this stream/guard.
+            drop(parts);
+        }.instrument(tracing::Span::current()));
+        let parts = Box::pin(
+            async_stream::stream! {while let Some(item)=receiver.recv().await {yield item;}},
+        );
+        Ok(PreparedPipelineStream { parts, model_id })
     }
 
     async fn prepare_stream(
@@ -3147,6 +3394,11 @@ impl Pipeline {
         err: &BitrouterError,
         target: &RoutingTarget,
     ) -> FallbackDecision {
+        if let Some(execution) = ctx.extension::<crate::tenancy::execution::TenantExecution>()
+            && execution.receipt_blocks_fallback()
+        {
+            return FallbackDecision::Fail(err.clone());
+        }
         #[cfg(feature = "multi-instance")]
         if let Some(admission) =
             ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
