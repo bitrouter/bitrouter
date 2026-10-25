@@ -236,7 +236,7 @@ impl McpConnections {
         Ok((status, output))
     }
 
-    #[cfg(all(test, feature = "core"))]
+    #[cfg(all(test, unix, feature = "core"))]
     pub(crate) async fn retained_processes_for_test(&self) -> Vec<u32> {
         self.client.retained_processes_for_test().await
     }

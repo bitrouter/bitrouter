@@ -147,6 +147,7 @@ pub(super) struct Probe(std::sync::Weak<Shared>);
 
 #[cfg(all(test, feature = "core", feature = "harness"))]
 impl Probe {
+    #[cfg(unix)]
     pub(super) async fn closing(&self) -> Result<(), String> {
         let shared = self.0.upgrade().ok_or("HTTP worker owner was lost")?;
         loop {

@@ -150,7 +150,7 @@ impl Admission {
     }
 
     /// Copies completion reservation bytes, last probed free bytes and fence.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn receipt_capacity_for_test(&self) -> Result<(u64, u64, bool), ErrorCode> {
         let state = self
             .state

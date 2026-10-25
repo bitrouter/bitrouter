@@ -46,7 +46,7 @@ impl ProcessOwner {
         Ok(())
     }
 
-    #[cfg(all(test, feature = "core", feature = "harness"))]
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
     pub(super) async fn retained_pid(&self) -> Option<u32> {
         self.child
             .lock()

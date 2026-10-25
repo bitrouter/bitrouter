@@ -51,7 +51,7 @@ impl Default for Accounting {
 }
 
 impl Accounting {
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::tenancy) fn snapshot_for_test(&self) -> (u64, u64, bool) {
         (self.reserved, self.free, self.fenced)
     }

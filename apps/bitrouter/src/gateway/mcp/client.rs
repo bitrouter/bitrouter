@@ -553,7 +553,7 @@ impl BoundedMcpClient {
         Ok((&binding.upstream_name, connection.service.peer()))
     }
 
-    #[cfg(all(test, feature = "core", feature = "harness"))]
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
     pub(crate) async fn retained_processes_for_test(&self) -> Vec<u32> {
         let mut ids = Vec::new();
         for owner in &self.cleanup {
@@ -718,6 +718,7 @@ pub(crate) struct HttpProbe(http_owner::Probe);
 
 #[cfg(all(test, feature = "core", feature = "harness"))]
 impl HttpProbe {
+    #[cfg(unix)]
     pub(crate) async fn closing(&self) -> Result<(), String> {
         self.0.closing().await
     }

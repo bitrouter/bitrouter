@@ -1,8 +1,12 @@
 //! Bounded copies of actual receipt SQL outcomes; no retained runtime owner.
 use super::{Disposition, Proof};
 use crate::tenancy::receipts::store::Candidate;
-use anyhow::{Context, Result, ensure};
-use bitrouter_ai::tenancy::identity::{AttemptId, ExecutionId, InstallationId, TenantId};
+use anyhow::Result;
+#[cfg(unix)]
+use anyhow::{Context, ensure};
+#[cfg(unix)]
+use bitrouter_ai::tenancy::identity::AttemptId;
+use bitrouter_ai::tenancy::identity::{ExecutionId, InstallationId, TenantId};
 use sea_orm::sqlx::error::DatabaseError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12,6 +16,7 @@ pub(in crate::tenancy) struct Key {
     pub execution: ExecutionId,
 }
 
+#[cfg(unix)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::tenancy) struct Fingerprint {
     pub digest: String,
@@ -54,6 +59,7 @@ impl SqlOutcome {
 
 #[derive(Clone, Debug)]
 pub(in crate::tenancy) struct Fact {
+    #[cfg(unix)]
     pub fingerprint: Fingerprint,
     pub begin: Option<SqlOutcome>,
     pub store: Option<SqlOutcome>,
@@ -81,6 +87,7 @@ pub(in crate::tenancy) enum Step {
 }
 
 impl Proof {
+    #[cfg(unix)]
     pub(in crate::tenancy) fn observe_receipt_for_test(&self, key: Key) -> Result<()> {
         let mut slot = self
             .receipt_observation
@@ -95,6 +102,7 @@ impl Proof {
         Ok(())
     }
 
+    #[cfg(unix)]
     pub(in crate::tenancy) fn receipt_trace_for_test(&self) -> Result<Trace> {
         self.receipt_observation
             .lock()
@@ -124,6 +132,7 @@ impl Proof {
             return None;
         };
         trace.facts[index] = Some(Fact {
+            #[cfg(unix)]
             fingerprint: candidate.fingerprint_for_test(),
             begin: None,
             store: None,

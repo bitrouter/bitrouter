@@ -64,7 +64,7 @@ impl Candidate {
             digest,
         })
     }
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(in crate::tenancy) fn fingerprint_for_test(
         &self,
     ) -> crate::tenancy::transaction::receipt_observation::Fingerprint {

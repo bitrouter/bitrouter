@@ -86,6 +86,7 @@ impl HostGate {
     pub(crate) fn release(&self) {
         self.release.notify_one();
     }
+    #[cfg(unix)]
     pub(crate) fn unwind(&self) {
         self.unwind
             .store(true, std::sync::atomic::Ordering::Release);
