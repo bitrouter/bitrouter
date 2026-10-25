@@ -74,6 +74,8 @@ pub(crate) struct TenantExecution {
     attempts: Mutex<u8>,
     rejection: Mutex<Option<ErrorCode>>,
     entered: AtomicBool,
+    #[cfg(feature = "core")]
+    observation: std::sync::OnceLock<Arc<super::eval::observation::RequiredObservation>>,
     _lease: Lease,
 }
 
@@ -240,6 +242,8 @@ impl Service {
             attempts: Mutex::new(0),
             rejection: Mutex::new(None),
             entered: AtomicBool::new(false),
+            #[cfg(feature = "core")]
+            observation: std::sync::OnceLock::new(),
             _lease: lease,
         });
         Ok(execution)
@@ -259,6 +263,33 @@ impl TenantExecution {
     #[cfg(feature = "core")]
     pub(crate) fn eval_store(&self) -> crate::core::eval::store::EvalStore {
         crate::core::eval::store::EvalStore::for_execution(self.service.db.clone(), self)
+    }
+
+    #[cfg(feature = "core")]
+    pub(super) fn eval_origin(&self, origin: &Arc<super::transaction::Proof>) -> bool {
+        Arc::ptr_eq(origin, &self.service.cleanup)
+    }
+
+    #[cfg(feature = "core")]
+    pub(super) fn observation_matches(
+        &self,
+        observation: &Arc<super::eval::observation::RequiredObservation>,
+    ) -> bool {
+        self.observation
+            .get()
+            .is_some_and(|own| Arc::ptr_eq(own, observation))
+    }
+
+    #[cfg(feature = "core")]
+    pub(crate) async fn persist_observation(
+        self: &Arc<Self>,
+        observation: Arc<super::eval::observation::RequiredObservation>,
+        subject: Arc<bitrouter_ai::eval::EvalSubject>,
+        deadline: tokio::time::Instant,
+    ) -> crate::gateway::error::Result<()> {
+        self.service
+            .persist_observation(self.clone(), observation, subject, deadline)
+            .await
     }
 
     pub(crate) fn installation_id(&self) -> &InstallationId {

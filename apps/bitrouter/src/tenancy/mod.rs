@@ -8,6 +8,8 @@ mod command;
 mod configuration;
 mod configuration_store;
 mod error;
+#[cfg(feature = "core")]
+pub(crate) mod eval;
 pub(crate) mod execution;
 pub(crate) mod http;
 mod model;
@@ -60,6 +62,8 @@ pub(crate) struct Service {
     stop: CancellationToken,
     accepting: Arc<std::sync::Mutex<bool>>,
     cleanup: Arc<transaction::Proof>,
+    #[cfg(feature = "core")]
+    eval: Arc<eval::State>,
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
     caches: Arc<execution::cached::Caches>,
@@ -146,6 +150,9 @@ impl Service {
         // revokes and stop transitions. Neither queue waits for free capacity.
         let (commands, receiver) = mpsc::channel(16);
         let (safety, safety_receiver) = mpsc::channel(8);
+        let accepting = Arc::new(std::sync::Mutex::new(true));
+        #[cfg(feature = "core")]
+        let eval = eval::State::new(live.clone());
         let worker = Worker {
             db: db.clone(),
             snapshot: snapshot.clone(),
@@ -154,6 +161,10 @@ impl Service {
             limits,
             resources: resources.clone(),
             proof: cleanup.clone(),
+            #[cfg(feature = "core")]
+            eval: eval.clone(),
+            #[cfg(feature = "core")]
+            accepting: accepting.clone(),
         };
         let stop = CancellationToken::new();
         let worker = tokio::spawn(worker.run(receiver, safety_receiver, stop.clone()));
@@ -168,7 +179,9 @@ impl Service {
             commands,
             safety,
             stop,
-            accepting: Arc::new(std::sync::Mutex::new(true)),
+            accepting,
+            #[cfg(feature = "core")]
+            eval,
             cleanup,
             reads: Arc::new(Semaphore::new(8)),
             resources,
@@ -209,6 +222,18 @@ impl Service {
                 .map_err(|_| {
                     anyhow::anyhow!("tenant executions did not drain within 30 seconds")
                 })?;
+            #[cfg(feature = "core")]
+            {
+                let _gate = self
+                    .accepting
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("tenant ingress lock unavailable"))?;
+                anyhow::ensure!(
+                    self.eval.healthy(),
+                    "required tenant observation failed; owner retained"
+                );
+                self.eval.producers_open.store(false, Ordering::Release);
+            }
             self.stop.cancel();
             tokio::time::timeout(Duration::from_secs(30), self.completion.clone())
                 .await
@@ -323,6 +348,8 @@ impl Service {
         let operation = match &job {
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::Credential(_) => None,
+            #[cfg(feature = "core")]
+            Job::Eval(_) | Job::Settlement(_) => None,
         };
         let accepting = self
             .accepting

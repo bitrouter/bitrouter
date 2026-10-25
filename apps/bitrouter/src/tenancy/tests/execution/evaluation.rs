@@ -16,6 +16,7 @@ use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 use tower::ServiceExt;
 
 mod exploration;
+mod owned;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 

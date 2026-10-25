@@ -139,88 +139,102 @@ pub async fn submit(
         });
     }
 
-    if subject.holdout {
-        return record(
-            store,
-            result_id,
-            AdmissionStatus::HeldOut,
-            "subject belongs to a holdout cohort",
-            &result.evaluator.authority_id,
-            duplicate,
-        )
-        .await;
-    }
-
-    let latest = store.latest_admissions().await?;
-    let prior_results = store.results_for_subject(&result.eval_id).await?;
-    let conflicting = prior_results
-        .iter()
-        .filter(|prior| {
-            prior.result_id != result_id
-                && latest.get(&prior.result_id).map(|event| event.status)
-                    == Some(AdmissionStatus::Admitted)
-                && verdicts_conflict(prior.result.verdict, result.verdict)
-        })
-        .collect::<Vec<_>>();
-    if let Some(highest_prior_rank) = conflicting
-        .iter()
-        .map(|prior| evaluator_rank(prior.result.evaluator.kind))
-        .max()
-    {
-        let new_rank = evaluator_rank(result.evaluator.kind);
-        if highest_prior_rank > new_rank {
-            return record(
-                store,
-                result_id,
+    let decision = if subject.holdout {
+        decide(&result, true, &[])
+    } else {
+        let latest = store.latest_admissions().await?;
+        let prior = store.results_for_subject(&result.eval_id).await?;
+        let admitted = prior
+            .iter()
+            .filter(|value| {
+                latest
+                    .get(&value.result_id)
+                    .is_some_and(|event| event.status == AdmissionStatus::Admitted)
+            })
+            .collect::<Vec<_>>();
+        decide(&result, false, &admitted)
+    };
+    for (prior, reason) in decision.disputes {
+        store
+            .append_admission_event(
+                &prior,
                 AdmissionStatus::Disputed,
-                "result conflicts with a higher-authority admitted outcome",
+                reason,
                 &result.evaluator.authority_id,
-                duplicate,
             )
-            .await;
-        }
-        if highest_prior_rank == new_rank {
-            for prior in &conflicting {
-                store
-                    .append_admission_event(
-                        &prior.result_id,
-                        AdmissionStatus::Disputed,
-                        "conflicting outcome at the same authority level",
-                        &result.evaluator.authority_id,
-                    )
-                    .await?;
-            }
-            return record(
-                store,
-                result_id,
-                AdmissionStatus::Disputed,
-                "conflicting outcome at the same authority level",
-                &result.evaluator.authority_id,
-                duplicate,
-            )
-            .await;
-        }
-        for prior in conflicting {
-            store
-                .append_admission_event(
-                    &prior.result_id,
-                    AdmissionStatus::Disputed,
-                    "superseded by a conflicting higher-authority outcome",
-                    &result.evaluator.authority_id,
-                )
-                .await?;
-        }
+            .await?;
     }
-
     record(
         store,
         result_id,
-        AdmissionStatus::Admitted,
-        "admitted",
+        decision.status,
+        decision.reason,
         &result.evaluator.authority_id,
         duplicate,
     )
     .await
+}
+
+pub(super) struct Decision {
+    pub status: AdmissionStatus,
+    pub reason: &'static str,
+    pub disputes: Vec<(String, &'static str)>,
+}
+
+/// Admission policy is independent of authentication and transaction ownership.
+pub(super) fn decide(
+    result: &EvaluationResult,
+    holdout: bool,
+    admitted: &[&super::store::StoredEvaluationResult],
+) -> Decision {
+    if holdout {
+        return Decision {
+            status: AdmissionStatus::HeldOut,
+            reason: "subject belongs to a holdout cohort",
+            disputes: Vec::new(),
+        };
+    }
+    let conflicting = admitted
+        .iter()
+        .filter(|prior| verdicts_conflict(prior.result.verdict, result.verdict))
+        .collect::<Vec<_>>();
+    let rank = evaluator_rank(result.evaluator.kind);
+    if let Some(highest) = conflicting
+        .iter()
+        .map(|prior| evaluator_rank(prior.result.evaluator.kind))
+        .max()
+    {
+        if highest > rank {
+            return Decision {
+                status: AdmissionStatus::Disputed,
+                reason: "result conflicts with a higher-authority admitted outcome",
+                disputes: Vec::new(),
+            };
+        }
+        let equal = highest == rank;
+        let reason = if equal {
+            "conflicting outcome at the same authority level"
+        } else {
+            "superseded by a conflicting higher-authority outcome"
+        };
+        return Decision {
+            status: if equal {
+                AdmissionStatus::Disputed
+            } else {
+                AdmissionStatus::Admitted
+            },
+            reason: if equal { reason } else { "admitted" },
+            disputes: conflicting
+                .iter()
+                .map(|prior| (prior.result_id.clone(), reason))
+                .collect(),
+        };
+    }
+    Decision {
+        status: AdmissionStatus::Admitted,
+        reason: "admitted",
+        disputes: Vec::new(),
+    }
 }
 
 async fn record(

@@ -1,6 +1,8 @@
 //! Bounded single-writer actor; admitted commands outlive HTTP cancellation.
 
 mod custody;
+#[cfg(feature = "core")]
+mod eval;
 
 #[cfg(test)]
 mod tests;
@@ -37,6 +39,10 @@ pub(super) struct Message {
 pub(super) enum Job {
     Command(Box<Message>),
     Credential(CredentialRead),
+    #[cfg(feature = "core")]
+    Eval(Box<super::eval::Job>),
+    #[cfg(feature = "core")]
+    Settlement(Box<super::eval::Settlement>),
 }
 
 impl From<Message> for Job {
@@ -77,6 +83,10 @@ pub(super) struct Worker {
     pub limits: OperationLimits,
     pub resources: Arc<super::resources::Resources>,
     pub proof: Arc<Proof>,
+    #[cfg(feature = "core")]
+    pub eval: Arc<super::eval::State>,
+    #[cfg(feature = "core")]
+    pub accepting: Arc<std::sync::Mutex<bool>>,
 }
 
 #[derive(Clone, Copy)]

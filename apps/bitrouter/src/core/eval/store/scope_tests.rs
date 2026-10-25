@@ -462,32 +462,46 @@ async fn conflict_transaction(db: DatabaseConnection) -> Result<()> {
     let tx = second.transaction(true).await?;
     let owner = second.owner("local")?;
     assert!(matches!(
-        second.insert_subject_in(&tx, &subject()?, &owner).await?,
+        second
+            .insert_subject_in(&tx, &subject()?, &owner, &mut Budget::new(&second))
+            .await?,
         SubjectInsertOutcome::Duplicate
     ));
     let mut conflicting = subject()?;
     conflicting.subject_id = "changed".into();
     assert!(
         second
-            .insert_subject_in(&tx, &conflicting, &owner)
+            .insert_subject_in(&tx, &conflicting, &owner, &mut Budget::new(&second))
             .await
             .is_err()
     );
     assert!(matches!(
         second
-            .insert_result_in(&tx, &result(EvalVerdict::Pass), &owner)
+            .insert_result_in(
+                &tx,
+                &result(EvalVerdict::Pass),
+                &owner,
+                &mut Budget::new(&second)
+            )
             .await?,
         ResultInsertOutcome::Duplicate { .. }
     ));
     assert!(
         second
-            .insert_result_in(&tx, &result(EvalVerdict::Fail), &owner)
+            .insert_result_in(
+                &tx,
+                &result(EvalVerdict::Fail),
+                &owner,
+                &mut Budget::new(&second)
+            )
             .await
             .is_err()
     );
     let mut next = subject()?;
     next.eval_id = "after-conflicts".into();
-    second.insert_subject_in(&tx, &next, &owner).await?;
+    second
+        .insert_subject_in(&tx, &next, &owner, &mut Budget::new(&second))
+        .await?;
     tx.commit().await?;
     assert_eq!(a.subject(&next.eval_id).await?, Some(next));
     Ok(())

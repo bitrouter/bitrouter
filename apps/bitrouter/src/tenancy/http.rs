@@ -93,7 +93,7 @@ pub(crate) async fn dispatch(
 }
 
 pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/control/v1/tenancy/capabilities", get(capabilities))
         .route(
             "/control/v1/tenancy/operations/{operation_id}",
@@ -138,10 +138,16 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             },
             authenticate,
         ))
-        .with_state(service)
+        .with_state(service.clone());
+    #[cfg(feature = "core")]
+    let router = router.merge(super::eval::http::router(service));
+    router
 }
 
-fn one_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<Option<&'a str>, Failure> {
+pub(super) fn one_header<'a>(
+    headers: &'a HeaderMap,
+    name: &str,
+) -> Result<Option<&'a str>, Failure> {
     let mut values = headers.get_all(name).iter();
     let value = values
         .next()

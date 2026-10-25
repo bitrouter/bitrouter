@@ -19,17 +19,36 @@ use crate::gateway::{
 
 struct Entry(Arc<TenantExecution>);
 
-struct PolicyCompletion(crate::gateway::observability::decision::PendingEvalDecisionStore);
+struct PolicyCompletion {
+    pending: crate::gateway::observability::decision::PendingEvalDecisionStore,
+    #[cfg(feature = "core")]
+    observation: Option<Arc<crate::tenancy::eval::observation::RequiredObservation>>,
+}
 
 #[async_trait]
 impl ObserveHook for PolicyCompletion {
-    async fn after_phase(&self, _phase: Phase, _ctx: &PipelineContext) {}
+    async fn after_phase(&self, phase: Phase, _ctx: &PipelineContext) {
+        #[cfg(feature = "core")]
+        if matches!(phase, Phase::Route)
+            && let Some(observation) = &self.observation
+        {
+            observation.route_completed();
+        }
+        #[cfg(not(feature = "core"))]
+        let _ = phase;
+    }
     async fn on_stream_part(&self, _ctx: &StreamContext, _part: &StreamPart) {}
-    async fn on_request_end(&self, ctx: &PipelineContext, _outcome: &RequestOutcome) {
+    async fn on_request_end(&self, ctx: &PipelineContext, outcome: &RequestOutcome) {
+        #[cfg(feature = "core")]
+        if let Some(observation) = &self.observation {
+            observation.before_decision_end(ctx, outcome);
+        }
+        #[cfg(not(feature = "core"))]
+        let _ = outcome;
         if let Some(invocation) =
             ctx.extension::<crate::gateway::observability::decision::EvalInvocation>()
         {
-            self.0.remove(&invocation, ctx.caller().user_id());
+            self.pending.remove(&invocation, ctx.caller().user_id());
         }
     }
 }
@@ -54,6 +73,10 @@ impl PreRequestHook for Entry {
                 .reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));
         }
         ctx.set_caller(self.0.caller());
+        #[cfg(feature = "core")]
+        if let Some(observation) = self.0.observation.get() {
+            observation.entered()?;
+        }
         Ok(HookDecision::Allow)
     }
 
@@ -70,10 +93,18 @@ impl TenantExecution {
         request: &mut crate::gateway::pipeline::types::PipelineRequest,
     ) -> Result<()> {
         self.route.apply_generation_defaults(&mut request.input);
-        self.service
-            .pipelines
-            .register(self.id(), pipeline)?
-            .attach(request)?;
+        #[cfg(feature = "core")]
+        let registration = match self.observation.get() {
+            Some(observation) => self.service.pipelines.register_observed(
+                self.id(),
+                pipeline,
+                observation.clone(),
+            )?,
+            None => self.service.pipelines.register(self.id(), pipeline)?,
+        };
+        #[cfg(not(feature = "core"))]
+        let registration = self.service.pipelines.register(self.id(), pipeline)?;
+        registration.attach(request)?;
         request.extensions.insert(self.clone());
         Ok(())
     }
@@ -122,6 +153,13 @@ impl TenantExecution {
                 .route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             #[cfg(feature = "core")]
             if self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off {
+                let observation = crate::tenancy::eval::observation::RequiredObservation::new(
+                    self.service.eval.clone(),
+                    Arc::downgrade(self),
+                );
+                self.observation.set(observation.clone()).map_err(|_| {
+                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
+                })?;
                 builder
                     .observe_hook(
                         crate::gateway::observability::prediction::PredictiveResponseObserver::new(
@@ -132,11 +170,16 @@ impl TenantExecution {
                         crate::core::eval::settlement::EvalSettlementRecorder::for_execution(
                             self,
                             pending.clone(),
+                            observation,
                         ),
                         OperationScope::Both,
                     );
             }
-            builder.observe_hook(PolicyCompletion(pending));
+            builder.observe_hook(PolicyCompletion {
+                pending,
+                #[cfg(feature = "core")]
+                observation: self.observation.get().cloned(),
+            });
         }
         Ok(Arc::new(builder.build()?))
     }

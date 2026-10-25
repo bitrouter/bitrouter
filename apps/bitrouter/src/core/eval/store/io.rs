@@ -9,36 +9,64 @@ use sea_orm::{
     Select, SqlErr, TransactionTrait,
 };
 
-use super::EvalStore;
+use super::{ErrorCode, EvalStore, OwnedError};
+
+#[derive(Debug, thiserror::Error)]
+#[error("tenant eval collection exceeds {0} bound")]
+pub(super) struct Capacity(&'static str);
 
 pub(super) const MAX_ROWS: usize = 4096;
 pub(super) const MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Bounds serialized SQL cells across one operation, not decoded allocator overhead.
-pub(super) struct Budget {
+pub(super) struct Budget<'a> {
     tenant: bool,
     bytes: usize,
+    rows: usize,
+    check: Option<&'a (dyn Fn() -> std::result::Result<(), ErrorCode> + Sync)>,
 }
-impl Budget {
+impl<'a> Budget<'a> {
     pub(super) fn new(store: &EvalStore) -> Self {
         Self {
             tenant: !store.scope.is_legacy(),
             bytes: 0,
+            rows: MAX_ROWS,
+            check: None,
         }
     }
-    pub(super) fn charge(&mut self, rows: usize, bytes: usize) -> Result<()> {
-        if self.tenant {
-            ensure!(rows <= MAX_ROWS, "tenant eval collection exceeds row bound");
-            self.bytes = self
-                .bytes
-                .checked_add(bytes)
-                .context("eval byte count overflow")?;
-            ensure!(
-                self.bytes <= MAX_BYTES,
-                "tenant eval collection exceeds byte bound"
-            );
+    pub(super) fn owned(
+        store: &EvalStore,
+        check: &'a (dyn Fn() -> std::result::Result<(), ErrorCode> + Sync),
+    ) -> Self {
+        Self {
+            tenant: !store.scope.is_legacy(),
+            bytes: 0,
+            rows: 1024,
+            check: Some(check),
+        }
+    }
+    pub(super) fn check(&self) -> Result<()> {
+        if let Some(check) = self.check {
+            check().map_err(OwnedError::Rejected)?;
         }
         Ok(())
+    }
+    pub(super) fn charge(&mut self, rows: usize, bytes: usize) -> Result<()> {
+        self.check()?;
+        if self.tenant {
+            let next = self.bytes.checked_add(bytes).ok_or(Capacity("byte"))?;
+            if rows > self.rows {
+                return Err(Capacity("row").into());
+            }
+            if next > MAX_BYTES {
+                return Err(Capacity("byte").into());
+            }
+            self.bytes = next;
+        }
+        Ok(())
+    }
+    pub(super) fn response(&mut self, value: &impl serde::Serialize) -> Result<()> {
+        self.charge(0, json_size(value, 8 * 1024 * 1024)?)
     }
 }
 
@@ -70,12 +98,13 @@ impl EvalStore {
 async fn load_limited<E: EntityTrait>(
     db: &impl ConnectionTrait,
     mut query: Select<E>,
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
     limit: u64,
 ) -> Result<Vec<E::Model>>
 where
     E::Model: Columns,
 {
+    budget.check()?;
     if budget.tenant {
         query = query.limit(limit);
         let alias = Alias::new("eval_bound");
@@ -120,17 +149,21 @@ where
             .query_one(backend.build(&preflight))
             .await?
             .context("eval preflight missing")?;
+        budget.check()?;
         let rows: i64 = row.try_get("", "row_count")?;
         let bytes: Option<i64> = row.try_get("", "cell_bytes")?;
         budget.charge(usize::try_from(rows)?, usize::try_from(bytes.unwrap_or(0))?)?;
     }
-    Ok(query.all(db).await?)
+    budget.check()?;
+    let rows = query.all(db).await?;
+    budget.check()?;
+    Ok(rows)
 }
 
 pub(super) async fn one<E: EntityTrait>(
     db: &impl ConnectionTrait,
     query: Select<E>,
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> Result<Option<E::Model>>
 where
     E::Model: Columns,
@@ -150,12 +183,16 @@ where
 pub(super) async fn insert(
     db: &impl ConnectionTrait,
     mut statement: InsertStatement,
+    budget: &mut Budget<'_>,
 ) -> Result<bool> {
     let backend = db.get_database_backend();
     if backend != DatabaseBackend::MySql {
         statement.on_conflict(OnConflict::new().do_nothing().to_owned());
     }
-    match db.execute(backend.build(&statement)).await {
+    budget.check()?;
+    let result = db.execute(backend.build(&statement)).await;
+    budget.check()?;
+    match result {
         Ok(result) => {
             ensure!(result.rows_affected() <= 1, "unexpected eval insert count");
             Ok(result.rows_affected() == 1)
@@ -173,12 +210,13 @@ pub(super) async fn insert(
 pub(super) async fn load<E: EntityTrait>(
     db: &impl ConnectionTrait,
     query: Select<E>,
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> Result<Vec<E::Model>>
 where
     E::Model: Columns,
 {
-    load_limited(db, query, budget, (MAX_ROWS + 1) as u64).await
+    let limit = u64::try_from(budget.rows + 1)?;
+    load_limited(db, query, budget, limit).await
 }
 
 /// Count JSON without allocating a second unbounded serialized copy.
@@ -190,7 +228,7 @@ pub(super) fn json_size(value: &impl serde::Serialize, limit: usize) -> Result<u
     impl std::io::Write for Counter {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             if bytes.len() > self.limit.saturating_sub(self.bytes) {
-                return Err(std::io::Error::other("tenant eval JSON exceeds byte bound"));
+                return Err(std::io::Error::other(Capacity("byte")));
             }
             self.bytes += bytes.len();
             Ok(bytes.len())
@@ -200,6 +238,11 @@ pub(super) fn json_size(value: &impl serde::Serialize, limit: usize) -> Result<u
         }
     }
     let mut count = Counter { bytes: 0, limit };
-    serde_json::to_writer(&mut count, value)?;
+    if let Err(error) = serde_json::to_writer(&mut count, value) {
+        if error.is_io() {
+            return Err(Capacity("byte").into());
+        }
+        return Err(error.into());
+    }
     Ok(count.bytes)
 }

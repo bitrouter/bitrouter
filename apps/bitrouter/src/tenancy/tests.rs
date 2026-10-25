@@ -13,8 +13,12 @@ use super::{Service, command::Command, model::Caller, store::StoredResponse};
 
 mod authority;
 mod configuration;
+#[cfg(feature = "core")]
+mod eval;
 mod execution;
 mod http;
+#[cfg(not(feature = "core"))]
+mod no_core;
 
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]

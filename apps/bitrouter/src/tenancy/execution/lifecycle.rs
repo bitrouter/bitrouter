@@ -37,6 +37,8 @@ struct Entry {
     pipeline: Arc<Pipeline>,
     registry: Weak<Registry>,
     task: Mutex<DrainTask>,
+    #[cfg(feature = "core")]
+    observation: Option<Arc<crate::tenancy::eval::observation::RequiredObservation>>,
 }
 
 #[derive(Default)]
@@ -78,6 +80,32 @@ impl Registry {
         id: &ExecutionId,
         pipeline: Arc<Pipeline>,
     ) -> Result<Registration> {
+        self.register_inner(
+            id,
+            pipeline,
+            #[cfg(feature = "core")]
+            None,
+        )
+    }
+
+    #[cfg(feature = "core")]
+    pub(crate) fn register_observed(
+        self: &Arc<Self>,
+        id: &ExecutionId,
+        pipeline: Arc<Pipeline>,
+        observation: Arc<crate::tenancy::eval::observation::RequiredObservation>,
+    ) -> Result<Registration> {
+        self.register_inner(id, pipeline, Some(observation))
+    }
+
+    fn register_inner(
+        self: &Arc<Self>,
+        id: &ExecutionId,
+        pipeline: Arc<Pipeline>,
+        #[cfg(feature = "core")] observation: Option<
+            Arc<crate::tenancy::eval::observation::RequiredObservation>,
+        >,
+    ) -> Result<Registration> {
         let runtime = tokio::runtime::Handle::try_current()
             .map_err(|_| BitrouterError::internal("execution registration requires a runtime"))?;
         let tasks = pipeline.owned_tasks().cloned().ok_or_else(|| {
@@ -103,7 +131,14 @@ impl Registry {
         // descendants, but another invocation cannot acquire an external root.
         tasks.close_sources();
         let registry = Arc::downgrade(self);
-        let task = start_drain(&runtime, registry.clone(), id.clone(), pipeline.clone());
+        let task = start_drain(
+            &runtime,
+            registry.clone(),
+            id.clone(),
+            pipeline.clone(),
+            #[cfg(feature = "core")]
+            observation.clone(),
+        );
         state.entries.insert(
             id.clone(),
             Arc::new(Entry {
@@ -111,6 +146,8 @@ impl Registry {
                 pipeline,
                 registry,
                 task: Mutex::new(task),
+                #[cfg(feature = "core")]
+                observation,
             }),
         );
         Ok(Registration {
@@ -145,6 +182,8 @@ impl Registry {
                         entry.registry.clone(),
                         entry.id.clone(),
                         entry.pipeline.clone(),
+                        #[cfg(feature = "core")]
+                        entry.observation.clone(),
                     );
                 }
                 task.clone()
@@ -186,21 +225,31 @@ fn start_drain(
     registry: Weak<Registry>,
     id: ExecutionId,
     pipeline: Arc<Pipeline>,
+    #[cfg(feature = "core")] observation: Option<
+        Arc<crate::tenancy::eval::observation::RequiredObservation>,
+    >,
 ) -> DrainTask {
     let task = runtime.spawn(async move {
-        pipeline.drain_owned_execution().await?;
+        if let Err(error) = pipeline.drain_owned_execution().await {
+            return Completion::Retryable(error);
+        }
+        #[cfg(feature = "core")]
+        if let Some(observation) = observation
+            && let Err(error) = observation.drained()
+        {
+            return Completion::Failed(error);
+        }
         if let Some(registry) = registry.upgrade() {
             registry.completed(&id, &pipeline);
         }
-        Ok(())
+        Completion::Drained
     });
     // Sharing the waiter retains the JoinHandle when shutdown is cancelled.
     // Successful automatic completion removes its own entry; failed tasks keep
     // the entry and pipeline until a later explicit reconciliation succeeds.
     async move {
         match task.await {
-            Ok(Ok(())) => Completion::Drained,
-            Ok(Err(error)) => Completion::Retryable(error),
+            Ok(completion) => completion,
             Err(_) => Completion::Failed(BitrouterError::internal("execution drain task failed")),
         }
     }

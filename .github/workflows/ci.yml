@@ -745,6 +745,29 @@ jobs:
           --lib core::eval::store::scope_tests::server_immutable_conflicts_preserve_transaction_and_first_creator
           -- --ignored --test-threads=1
 
+      - name: provision isolated MySQL evaluation test databases
+        if: matrix.backend == 'mysql'
+        # Database-pattern grants retain literal underscores and allow only the
+        # generated test prefix. No server-wide privileges are required.
+        # https://dev.mysql.com/doc/refman/8.4/en/grant.html
+        # This disposable test server has no replication consumers. Allow its
+        # fixture account to create the fault trigger without granting SUPER.
+        # https://dev.mysql.com/doc/refman/8.4/en/stored-programs-logging.html
+        run: |
+          docker exec -i -e MYSQL_PWD=fixture-password "${{ job.services.database.id }}" mysql --user=root <<'SQL'
+          SET GLOBAL log_bin_trust_function_creators = 1;
+          GRANT ALL PRIVILEGES ON `bitrouter\_eval\_%`.* TO 'fixture'@'%';
+          SQL
+
+      - name: verify tenant eval composites share one stable transaction
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
+          --lib core::eval::store::owned_tests::server::
+          -- --ignored --test-threads=1
+
       - name: verify MySQL transaction snapshot boundaries
         if: matrix.backend == 'mysql'
         env:

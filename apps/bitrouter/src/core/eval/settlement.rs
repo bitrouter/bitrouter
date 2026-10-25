@@ -22,15 +22,17 @@ use {
 /// It deliberately emits no score: evaluator-specific work happens outside
 /// the request path and returns through the exchange API.
 pub struct EvalSettlementRecorder {
-    store: EvalStore,
     pending: PendingEvalDecisionStore,
     owner: RecorderOwner,
 }
 
 enum RecorderOwner {
-    Legacy,
+    Legacy {
+        store: EvalStore,
+    },
     Tenant {
-        execution_id: bitrouter_ai::tenancy::identity::ExecutionId,
+        execution: std::sync::Arc<crate::tenancy::execution::TenantExecution>,
+        observation: std::sync::Arc<crate::tenancy::eval::observation::RequiredObservation>,
         caller: crate::gateway::caller::CallerContext,
     },
 }
@@ -38,23 +40,23 @@ enum RecorderOwner {
 impl EvalSettlementRecorder {
     pub fn new(store: EvalStore, pending: PendingEvalDecisionStore) -> Self {
         Self {
-            store,
             pending,
-            owner: RecorderOwner::Legacy,
+            owner: RecorderOwner::Legacy { store },
         }
     }
 
     /// The namespace is captured from admission, independently of settlement
     /// metadata. No public caller or request identifier can select a tenant store.
     pub(crate) fn for_execution(
-        execution: &crate::tenancy::execution::TenantExecution,
+        execution: &std::sync::Arc<crate::tenancy::execution::TenantExecution>,
         pending: PendingEvalDecisionStore,
+        observation: std::sync::Arc<crate::tenancy::eval::observation::RequiredObservation>,
     ) -> Self {
         Self {
-            store: execution.eval_store(),
             pending,
             owner: RecorderOwner::Tenant {
-                execution_id: execution.id().clone(),
+                execution: execution.clone(),
+                observation,
                 caller: execution.caller(),
             },
         }
@@ -151,13 +153,17 @@ impl EvalSettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for EvalSettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> BitrouterResult<()> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let guard = match &self.owner {
+            RecorderOwner::Tenant { observation, .. } => Some(observation.begin()?),
+            RecorderOwner::Legacy { .. } => None,
+        };
         let owner = match &self.owner {
-            RecorderOwner::Legacy => context.caller.user_id(),
+            RecorderOwner::Legacy { .. } => context.caller.user_id(),
             RecorderOwner::Tenant {
-                execution_id,
-                caller,
+                execution, caller, ..
             } => {
-                if context.request_id != execution_id.as_str()
+                if context.request_id != execution.id().as_str()
                     || context.caller.user_id() != caller.user_id()
                     || context.caller.api_key_id() != caller.api_key_id()
                     || context.caller.is_local()
@@ -171,6 +177,9 @@ impl SettlementRecorder for EvalSettlementRecorder {
             }
         };
         if context.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>() {
+            if let Some(guard) = guard {
+                guard.skip()?;
+            }
             return Ok(());
         }
         let invocation = context.get_event::<EvalInvocation>().cloned();
@@ -181,22 +190,56 @@ impl SettlementRecorder for EvalSettlementRecorder {
             }
         });
         let Some(decision) = pending else {
+            if let Some(guard) = guard {
+                if invocation.is_some() || context.has_event::<CapturedEvalDecision>() {
+                    return Err(crate::gateway::error::BitrouterError::internal(
+                        "required tenant evaluation decision is unavailable",
+                    ));
+                }
+                guard.skip()?;
+            }
             return Ok(());
         };
         let subject = self.subject(&decision, context).map_err(|error| {
-            crate::gateway::error::BitrouterError::internal(format!(
-                "building request eval subject: {error}"
-            ))
+            let message = match self.owner {
+                RecorderOwner::Legacy { .. } => format!("building request eval subject: {error}"),
+                RecorderOwner::Tenant { .. } => {
+                    "building required tenant evaluation subject failed".into()
+                }
+            };
+            crate::gateway::error::BitrouterError::internal(message)
         })?;
-        let inserted = match self.owner {
-            RecorderOwner::Legacy => self.store.insert_subject_owned(&subject, owner).await,
-            RecorderOwner::Tenant { .. } => self.store.insert_subject(&subject).await,
-        };
-        inserted.map_err(|error| {
-            crate::gateway::error::BitrouterError::internal(format!(
-                "persisting request eval subject: {error}"
-            ))
-        })?;
+        match (&self.owner, guard) {
+            (RecorderOwner::Legacy { store }, None) => {
+                store
+                    .insert_subject_owned(&subject, owner)
+                    .await
+                    .map_err(|error| {
+                        crate::gateway::error::BitrouterError::internal(format!(
+                            "persisting request eval subject: {error}"
+                        ))
+                    })?;
+            }
+            (
+                RecorderOwner::Tenant {
+                    execution,
+                    observation,
+                    ..
+                },
+                Some(guard),
+            ) => {
+                let subject = guard.prepare(subject)?;
+                execution
+                    .persist_observation(observation.clone(), subject, deadline)
+                    .await?;
+                guard.finish()?;
+            }
+            _ => {
+                return Err(crate::gateway::error::BitrouterError::internal(
+                    "invalid evaluation recorder ownership",
+                ));
+            }
+        }
         if let Some(invocation) = &invocation {
             self.pending.take(invocation, owner);
         }

@@ -15,8 +15,34 @@ use serde::{Deserialize, Serialize};
 
 mod codec;
 mod io;
+mod owned;
+#[cfg(test)]
+mod owned_tests;
 mod snapshots;
+use bitrouter_ai::tenancy::operation::ErrorCode;
 use io::Budget;
+
+/// Redacted classification for the private actor-owned ledger boundary.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OwnedError {
+    #[error("owned evaluation request rejected")]
+    Rejected(ErrorCode),
+    #[error("owned evaluation integrity failure")]
+    Integrity(#[source] anyhow::Error),
+    #[error("owned evaluation storage failure")]
+    Storage(#[source] anyhow::Error),
+}
+
+impl OwnedError {
+    fn classify(error: anyhow::Error) -> Self {
+        match error.downcast::<Self>() {
+            Ok(error) => error,
+            Err(error) if error.is::<io::Capacity>() => Self::Rejected(ErrorCode::CapacityExceeded),
+            Err(error) if error.is::<sea_orm::DbErr>() => Self::Storage(error),
+            Err(error) => Self::Integrity(error),
+        }
+    }
+}
 
 use {
     crate::storage::evaluation::canonical_digest, crate::storage::evaluation::validate_result,
@@ -92,7 +118,16 @@ impl EvalStore {
         }
     }
 
-    fn legacy_only(&self) -> Result<()> {
+    pub(crate) fn for_owned(identity: &crate::tenancy::eval::EvalIdentity) -> Self {
+        let (scope, provenance) = Scope::for_eval(identity);
+        Self {
+            db: identity.database().clone(),
+            scope,
+            provenance,
+        }
+    }
+
+    pub(super) fn legacy_only(&self) -> Result<()> {
         ensure!(
             self.scope.is_legacy(),
             "legacy owner API cannot access a tenant eval store"
@@ -136,7 +171,9 @@ impl EvalStore {
     pub async fn insert_subject(&self, subject: &EvalSubject) -> Result<SubjectInsertOutcome> {
         let owner = self.owner("local")?;
         let tx = self.transaction(true).await?;
-        let outcome = self.insert_subject_in(&tx, subject, &owner).await?;
+        let outcome = self
+            .insert_subject_in(&tx, subject, &owner, &mut Budget::new(self))
+            .await?;
         tx.commit().await?;
         Ok(outcome)
     }
@@ -149,7 +186,9 @@ impl EvalStore {
         self.legacy_only()?;
         validate_owner(owner_user_id)?;
         let tx = self.transaction(true).await?;
-        let outcome = self.insert_subject_in(&tx, subject, owner_user_id).await?;
+        let outcome = self
+            .insert_subject_in(&tx, subject, owner_user_id, &mut Budget::new(self))
+            .await?;
         tx.commit().await?;
         Ok(outcome)
     }
@@ -159,15 +198,14 @@ impl EvalStore {
         db: &impl ConnectionTrait,
         subject: &EvalSubject,
         owner: &str,
+        budget: &mut Budget<'_>,
     ) -> Result<SubjectInsertOutcome> {
         if !self.scope.is_legacy() {
-            io::json_size(subject, io::MAX_BYTES)?;
+            budget.charge(1, io::json_size(subject, io::MAX_BYTES)?)?;
         }
         validate_subject(subject)?;
         let content_digest = crate::storage::evaluation::subject_digest(subject)?;
         let subject_json = serde_json::to_string(subject)?;
-        let mut budget = Budget::new(self);
-        budget.charge(1, subject_json.len())?;
         let key = self.key(KeyDomain::EvalSubject, &subject.eval_id)?;
         let metadata = self.scope.metadata(&self.provenance)?;
         let inserted = io::insert(
@@ -187,6 +225,7 @@ impl EvalStore {
                 created_at: Set(chrono::Utc::now().to_rfc3339()),
             })
             .into_query(),
+            budget,
         )
         .await?;
         // Locked reads observe the committed winner even on MySQL. No uniqueness
@@ -196,7 +235,7 @@ impl EvalStore {
             self.subjects()
                 .filter(subject_entity::Column::EvalId.eq(key))
                 .lock_exclusive(),
-            &mut budget,
+            budget,
         )
         .await?
         .context("eval subject identity conflict")?;
@@ -281,7 +320,9 @@ impl EvalStore {
     pub async fn insert_result(&self, result: &EvaluationResult) -> Result<ResultInsertOutcome> {
         let owner = self.owner("local")?;
         let tx = self.transaction(true).await?;
-        let outcome = self.insert_result_in(&tx, result, &owner).await?;
+        let outcome = self
+            .insert_result_in(&tx, result, &owner, &mut Budget::new(self))
+            .await?;
         tx.commit().await?;
         Ok(outcome)
     }
@@ -294,7 +335,9 @@ impl EvalStore {
         self.legacy_only()?;
         validate_owner(owner_user_id)?;
         let tx = self.transaction(true).await?;
-        let outcome = self.insert_result_in(&tx, result, owner_user_id).await?;
+        let outcome = self
+            .insert_result_in(&tx, result, owner_user_id, &mut Budget::new(self))
+            .await?;
         tx.commit().await?;
         Ok(outcome)
     }
@@ -304,19 +347,19 @@ impl EvalStore {
         db: &impl ConnectionTrait,
         result: &EvaluationResult,
         owner: &str,
+        budget: &mut Budget<'_>,
     ) -> Result<ResultInsertOutcome> {
         if !self.scope.is_legacy() {
             io::json_size(result, io::MAX_BYTES)?;
         }
         validate_result(result)?;
-        let mut budget = Budget::new(self);
         let eval_id = self.key(KeyDomain::EvalSubject, &result.eval_id)?;
         let subject = io::one(
             db,
             self.subjects()
                 .filter(subject_entity::Column::EvalId.eq(&eval_id))
                 .lock_exclusive(),
-            &mut budget,
+            budget,
         )
         .await?
         .context("unknown eval subject")?;
@@ -325,8 +368,10 @@ impl EvalStore {
                 && subject.owner_user_id == owner,
             "eval result parent identity mismatch"
         );
+        if !self.scope.is_legacy() {
+            budget.charge(1, io::json_size(result, io::MAX_BYTES)?)?;
+        }
         let result_json = serde_json::to_string(result)?;
-        budget.charge(1, result_json.len())?;
         let content_digest = crate::storage::evaluation::result_digest(result)?;
         let result_id = self.key(KeyDomain::EvalResult, &content_digest)?;
         let idempotency = self.key(KeyDomain::EvalIdempotency, &result.idempotency_key)?;
@@ -348,6 +393,7 @@ impl EvalStore {
                 created_at: Set(chrono::Utc::now().to_rfc3339()),
             })
             .into_query(),
+            budget,
         )
         .await?;
         let row = io::one(
@@ -356,7 +402,7 @@ impl EvalStore {
                 .filter(result_entity::Column::OwnerUserId.eq(owner))
                 .filter(result_entity::Column::IdempotencyKey.eq(idempotency))
                 .lock_exclusive(),
-            &mut budget,
+            budget,
         )
         .await?
         .context("eval result identity conflict")?;
@@ -405,7 +451,7 @@ impl EvalStore {
         &self,
         db: &impl ConnectionTrait,
         row: &result_entity::Model,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Result<StoredEvaluationResult> {
         let result = self.decode_result(row)?;
         let subject = io::one(
@@ -461,19 +507,41 @@ impl EvalStore {
         authority_id: &str,
     ) -> Result<AdmissionEvent> {
         let tx = self.transaction(true).await?;
-        let mut budget = Budget::new(self);
+        let event = self
+            .append_admission_in(
+                &tx,
+                result_id,
+                status,
+                reason,
+                authority_id,
+                &mut Budget::new(self),
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(event)
+    }
+
+    async fn append_admission_in(
+        &self,
+        db: &impl ConnectionTrait,
+        result_id: &str,
+        status: AdmissionStatus,
+        reason: &str,
+        authority_id: &str,
+        budget: &mut Budget<'_>,
+    ) -> Result<AdmissionEvent> {
         let key = self.key(KeyDomain::EvalResult, result_id)?;
         let row = io::one(
-            &tx,
+            db,
             self.results()
                 .filter(result_entity::Column::ResultId.eq(&key))
                 .lock_exclusive(),
-            &mut budget,
+            budget,
         )
         .await?
         .context("cannot admit unknown result")?;
         ensure!(
-            self.checked_result(&tx, &row, &mut budget).await?.result_id == result_id,
+            self.checked_result(db, &row, budget).await?.result_id == result_id,
             "admission result identity conflict"
         );
         let metadata = self.scope.metadata(&self.provenance)?;
@@ -487,6 +555,7 @@ impl EvalStore {
         // Retrieve only the generated ID. ActiveModel::insert implicitly reloads
         // the whole row without scope on backends without INSERT RETURNING.
         // https://docs.rs/sea-orm/1.1.20/sea_orm/query/struct.Insert.html#method.exec
+        budget.check()?;
         let inserted = admission_entity::Entity::insert(admission_entity::ActiveModel {
             installation_id: Set(metadata.installation),
             tenant_id: Set(metadata.tenant),
@@ -498,19 +567,27 @@ impl EvalStore {
             authority_id: Set(authority_id.to_owned()),
             created_at: Set(chrono::Utc::now().to_rfc3339()),
         })
-        .exec(&tx)
+        .exec(db)
         .await?;
+        budget.check()?;
         let row = io::one(
-            &tx,
+            db,
             self.admissions()
                 .filter(admission_entity::Column::Sequence.eq(inserted.last_insert_id))
                 .lock_exclusive(),
-            &mut budget,
+            budget,
         )
         .await?
         .context("inserted admission is unavailable in this namespace")?;
         let event = self.decode_admission(&row, result_id)?;
-        tx.commit().await?;
+        ensure!(
+            event.status == status
+                && event.reason == reason
+                && event.authority_id == authority_id
+                && row.creator_principal_id.as_deref()
+                    == self.provenance.creator().map(|id| id.as_str()),
+            "inserted admission content mismatch"
+        );
         Ok(event)
     }
 
@@ -537,7 +614,7 @@ impl EvalStore {
         &self,
         db: &impl ConnectionTrait,
         owner: Option<&str>,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Result<BTreeMap<String, AdmissionEvent>> {
         let mut query = self
             .admissions()

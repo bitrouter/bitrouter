@@ -1,4 +1,4 @@
-//! Explicit custody of the two authority transaction consumers.
+//! Explicit custody of authority transaction consumers.
 
 use std::sync::{
     Arc,
@@ -214,9 +214,35 @@ impl Control {
     }
 
     pub async fn begin(&self, db: &DatabaseConnection) -> Result<DatabaseTransaction> {
+        self.begin_configured(db, None).await
+    }
+
+    #[cfg(feature = "core")]
+    pub async fn begin_repeatable_read(
+        &self,
+        db: &DatabaseConnection,
+    ) -> Result<DatabaseTransaction> {
+        use sea_orm::ConnectionTrait;
+        let isolation = (db.get_database_backend() != sea_orm::DatabaseBackend::Sqlite)
+            .then_some(sea_orm::IsolationLevel::RepeatableRead);
+        self.begin_configured(db, isolation).await
+    }
+
+    async fn begin_configured(
+        &self,
+        db: &DatabaseConnection,
+        isolation: Option<sea_orm::IsolationLevel>,
+    ) -> Result<DatabaseTransaction> {
         self.proof.record(Disposition::Pending);
         self.enter(Phase::Beginning).await;
-        match db.begin().await {
+        // SeaORM constructs an open transaction before configuring isolation.
+        // Keep that entire await under H custody, including configuration errors.
+        // https://docs.rs/sea-orm/1.1.20/src/sea_orm/database/transaction.rs.html
+        let beginning = match isolation {
+            Some(isolation) => db.begin_with_config(Some(isolation), None).await,
+            None => db.begin().await,
+        };
+        match beginning {
             Ok(transaction) => {
                 self.enter(Phase::Active).await;
                 Ok(transaction)

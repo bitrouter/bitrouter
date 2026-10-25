@@ -359,7 +359,69 @@ all-feature workspace run passed all 5,242 selected tests (163 opt-in tests
 skipped). Strict all-feature/all-target workspace Clippy, 12 doctests (one
 ignored), the pure HTTP/1 minimal all-target check, generated distribution
 checks, formatting and whitespace checks passed. Owned evaluation HTTP, atomic
-ledger admission and required observation draining remain subsequent work.
+ledger admission and required observation draining are addressed by the next stage.
+
+### M2 tenant evaluation transport and required observations
+
+The `core` feature adds seven tenant evaluation routes to the protected control
+listener, documented in [the additive transport contract](RESOURCE_TENANCY_EVAL_HTTP.md).
+Each request carries an installation header and an ordinary tenant credential.
+The current credential and recipient binding must both cover the path tenant;
+read and submit permissions remain distinct. Installation operators, receipt
+audit credentials, legacy keys and resource-only grants cannot substitute for
+this authority. Manual results use the authenticated stable principal and the
+Generic evaluator profile. These imports do not start providers, activate policy,
+or consume learning-job allowances.
+
+The existing authority actor owns each composite transaction. Result insertion,
+prior-result disputes and terminal admission are atomic; snapshot membership and
+its immutable manifest share one repeatable-read transaction. Current authority
+is checked after storage waits, before commit and before HTTP response handoff.
+Exact replay appends no events. Postcommit deadline failure reports unavailable
+and fences authority; a timeout after enqueue cannot claim no write. Explicit
+freeze timestamps retain their original decoded spelling in the stored root.
+
+Eight ingress leases cover bounded request bodies, queued work and response
+delivery. Collections are limited to 1,024 rows, cumulative SQL/manifest work to
+32 MiB and serialized responses to 8 MiB; overflow rejects the complete operation.
+Latest-admission reads seek one scoped row without materializing historical events.
+The independent SDK exposes the same seven operations without service dependencies.
+After a mutation has been sent, failed confirmation has an explicit unknown
+outcome and never triggers automatic retry or an invented operation identifier.
+
+Admitted execution observations now use the same actor through the existing
+pipeline registry. Each required observation retains its bounded prepared subject
+and completion disposition. Queue exhaustion, rollback and missing confirmation
+cannot become a clean drain merely because a recorder returned or its error was
+logged. Cleanup authority survives credential revocation. Shutdown closes external
+ledger admission first, lets admitted producers settle, then stops the actor.
+Failure before any policy decision has a separate narrowly checked disposition.
+Production dispatch and strict receipts remain disabled pending later stages.
+
+The final all-feature workspace run passed all 5,297 selected tests (169 opt-in
+tests skipped), and 12 doctests passed with one ignored. Strict all-feature,
+all-target workspace Clippy, pure HTTP/1 minimal all-target compilation,
+distribution checks, formatting and whitespace checks passed. Targeted checks
+covered 49 evaluation tests, 223 minimal-core tenancy tests and 197 gateway-only
+tenancy tests. The public SDK exercised all seven operations through the actual
+protected listener over both HTTP/1.1 and h2c, including encoded logical IDs and
+exact freeze timestamps. Independent review found no remaining actionable
+defects after fixing a postcommit deadline race.
+
+Five isolated composite transaction tests passed on each of PostgreSQL 17 and
+MySQL 8.4. Replay assertions inspect the still-active transaction before rollback
+so rollback cannot conceal accidental writes. These stronger assertions were
+added after the full workspace run; both backend suites and strict workspace
+Clippy passed again. CI selects all five tests explicitly and grants the MySQL
+fixture account access only to its generated test databases. Earlier migration
+and point-store tests alone do not establish these composite guarantees.
+
+The same candidate fixes shared-state due scans that encountered a proven
+PostgreSQL serialization abort. The existing bounded retry covers only typed
+transaction aborts; uncertain commits and provider calls are not retried. A
+real PostgreSQL regression failed before the fix and passed afterward, as did
+the three store regressions, four single/dual-process HTTP/1.1 and h2c cases,
+and the cross-replica h2c admission case.
 
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a

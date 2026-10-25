@@ -1,7 +1,8 @@
 //! Internal storage namespaces and immutable provenance, never live authority.
 //!
 //! Legacy keys retain their exact bytes. Tenant namespaces come only from an
-//! admitted execution; decoding row metadata does not create a namespace handle.
+//! admitted execution or authenticated ledger identity; decoding row metadata
+//! does not create a namespace handle.
 
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::identity::{InstallationId, PrincipalId, TenantId};
@@ -65,6 +66,18 @@ impl Scope {
 
     pub(crate) fn for_execution(execution: &TenantExecution) -> (Self, Provenance) {
         let (installation, tenant, principal) = execution.storage_identity();
+        (
+            Self(Namespace::Tenant {
+                installation: installation.clone(),
+                tenant: tenant.clone(),
+            }),
+            Provenance(Some(principal.clone())),
+        )
+    }
+
+    #[cfg(feature = "core")]
+    pub(crate) fn for_eval(identity: &crate::tenancy::eval::EvalIdentity) -> (Self, Provenance) {
+        let (installation, tenant, principal) = identity.storage_identity();
         (
             Self(Namespace::Tenant {
                 installation: installation.clone(),

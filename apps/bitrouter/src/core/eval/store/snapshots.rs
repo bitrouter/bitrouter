@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) struct PreparedManifest<'a> {
+    snapshot: &'a EvalSnapshot,
+    json: String,
+}
+
 impl EvalStore {
     pub(super) fn snapshot_root(
         &self,
@@ -121,7 +126,7 @@ impl EvalStore {
         frozen_at: &str,
         owner: Option<&str>,
         selected: Option<&BTreeSet<String>>,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Result<EvalSnapshot> {
         chrono::DateTime::parse_from_rfc3339(frozen_at)
             .context("snapshot frozen_at must be RFC3339")?;
@@ -210,7 +215,7 @@ impl EvalStore {
         &self,
         snapshot: &EvalSnapshot,
         owner: Option<&str>,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Result<EvalSnapshot> {
         self.verify_manifest(snapshot, owner)?;
         let tx = self.transaction(true).await?;
@@ -220,24 +225,59 @@ impl EvalStore {
             self.manifest_records_in(&tx, snapshot, budget, true, None)
                 .await?;
         }
+        let prepared = self.prepare_manifest(snapshot, budget)?;
+        let existing = self
+            .persist_prepared_in(&tx, prepared, owner, budget)
+            .await?;
+        tx.commit().await?;
+        Ok(existing)
+    }
+
+    pub(super) fn prepare_manifest<'a>(
+        &self,
+        snapshot: &'a EvalSnapshot,
+        budget: &mut Budget<'_>,
+    ) -> Result<PreparedManifest<'a>> {
+        if !self.scope.is_legacy() {
+            budget.charge(
+                snapshot.entries.len(),
+                io::json_size(snapshot, io::MAX_BYTES)?,
+            )?;
+        }
+        budget.check()?;
+        Ok(PreparedManifest {
+            snapshot,
+            json: serde_json::to_string(snapshot)?,
+        })
+    }
+
+    pub(super) async fn persist_prepared_in(
+        &self,
+        db: &impl ConnectionTrait,
+        prepared: PreparedManifest<'_>,
+        owner: Option<&str>,
+        budget: &mut Budget<'_>,
+    ) -> Result<EvalSnapshot> {
+        let snapshot = prepared.snapshot;
         let metadata = self.scope.metadata(&self.provenance)?;
         io::insert(
-            &tx,
+            db,
             snapshot_entity::Entity::insert(snapshot_entity::ActiveModel {
                 installation_id: Set(metadata.installation),
                 tenant_id: Set(metadata.tenant),
                 creator_principal_id: Set(metadata.creator),
                 evidence_root: Set(self.key(KeyDomain::EvalSnapshot, &snapshot.evidence_root)?),
                 owner_user_id: Set(self.owner(owner.unwrap_or("*"))?),
-                manifest_json: Set(serde_json::to_string(snapshot)?),
+                manifest_json: Set(prepared.json),
                 result_count: Set(i32::try_from(snapshot.entries.len())?),
                 frozen_at: Set(snapshot.frozen_at.clone()),
             })
             .into_query(),
+            budget,
         )
         .await?;
         let row = io::one(
-            &tx,
+            db,
             self.snapshots()
                 .filter(
                     snapshot_entity::Column::EvidenceRoot
@@ -253,7 +293,6 @@ impl EvalStore {
             existing == *snapshot,
             "eval snapshot immutable content conflict"
         );
-        tx.commit().await?;
         Ok(existing)
     }
 
@@ -288,12 +327,12 @@ impl EvalStore {
         Ok(value)
     }
 
-    async fn read_snapshot_in(
+    pub(super) async fn read_snapshot_in(
         &self,
         db: &impl ConnectionTrait,
         root: &str,
         owner: Option<&str>,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
     ) -> Result<Option<(EvalSnapshot, String)>> {
         let mut query = self.snapshots().filter(
             snapshot_entity::Column::EvidenceRoot.eq(self.key(KeyDomain::EvalSnapshot, root)?),
@@ -347,11 +386,11 @@ impl EvalStore {
         Ok(values)
     }
 
-    async fn manifest_records_in(
+    pub(super) async fn manifest_records_in(
         &self,
         db: &impl ConnectionTrait,
         snapshot: &EvalSnapshot,
-        budget: &mut Budget,
+        budget: &mut Budget<'_>,
         current: bool,
         stored_owner: Option<&str>,
     ) -> Result<Vec<(StoredEvaluationResult, EvalSubject)>> {

@@ -9,6 +9,30 @@ use tokio::sync::mpsc;
 use super::{Control, CredentialRead, ErrorCode, Failure, Instant, Job, Message, Worker};
 use crate::tenancy::transaction::{Disposition, Phase};
 
+#[derive(Clone, Copy)]
+enum Policy {
+    Management,
+    CredentialRead,
+    #[cfg(feature = "core")]
+    OwnedEval,
+}
+impl Policy {
+    fn expired(self, disposition: Disposition, fenced: bool) -> ErrorCode {
+        #[cfg(feature = "core")]
+        if matches!(self, Self::OwnedEval)
+            && !fenced
+            && matches!(
+                disposition,
+                Disposition::NoTransaction | Disposition::RolledBack
+            )
+        {
+            return ErrorCode::CapacityExceeded;
+        }
+        let _ = (self, disposition, fenced);
+        ErrorCode::AuthorityUnavailable
+    }
+}
+
 impl Worker {
     pub async fn run(
         self,
@@ -72,7 +96,7 @@ impl Worker {
                             self.execute(&caller, &command, &control),
                             &control,
                             Instant::now() + crate::tenancy::MANAGEMENT_TIMEOUT,
-                            true,
+                            Policy::Management,
                             operation,
                         )
                         .await;
@@ -106,7 +130,9 @@ impl Worker {
                                 }
                             })
                     };
-                    let result = self.supervise(work, &control, deadline, false, None).await;
+                    let result = self
+                        .supervise(work, &control, deadline, Policy::CredentialRead, None)
+                        .await;
                     if reply.send(result).is_err() {
                         tracing::debug!(
                             "tenancy credential read completed without a response receiver"
@@ -118,24 +144,101 @@ impl Worker {
                     // An abandoned HTTP waiter cannot release the DB-read capacity.
                     drop((caller, id, permit));
                 }
+                #[cfg(feature = "core")]
+                Job::Eval(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_eval(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        let crate::tenancy::eval::Job {
+                            reply,
+                            identity,
+                            request,
+                            lease,
+                            ..
+                        } = *message;
+                        if reply
+                            .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                            .is_err()
+                        {
+                            tracing::debug!("ambiguous evaluation had no response receiver");
+                        }
+                        // A failure response must not release capacity while cleanup
+                        // is unconfirmed. Keep all active custody outside unwind.
+                        self.quarantine(ordinary, safety).await;
+                        drop((identity, request, lease, result));
+                    } else {
+                        let crate::tenancy::eval::Job { reply, lease, .. } = *message;
+                        if reply
+                            .send(result.map(|body| crate::tenancy::eval::Reply { body, lease }))
+                            .is_err()
+                        {
+                            tracing::debug!("evaluation completed without a response receiver");
+                        }
+                    }
+                }
+                #[cfg(feature = "core")]
+                Job::Settlement(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_settlement(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    message.observation.transaction(self.proof.disposition());
+                    if result.is_err() {
+                        message.observation.fail();
+                    }
+                    let crate::tenancy::eval::Settlement {
+                        reply,
+                        execution,
+                        subject,
+                        observation,
+                        ..
+                    } = *message;
+                    if reply.send(result).is_err() {
+                        tracing::debug!(
+                            "evaluation observation completed without a response receiver"
+                        );
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety).await;
+                    }
+                    drop((execution, subject, observation));
+                }
             }
         }
     }
 
-    /// Two actual consumers share supervision, not a task registry or retry loop.
+    /// Concrete authority consumers share supervision, never a task registry.
     async fn supervise<T>(
         &self,
         work: impl Future<Output = Result<T, Failure>>,
         control: &Control,
         deadline: Instant,
-        keep_write: bool,
+        policy: Policy,
         operation: Option<bitrouter_ai::tenancy::identity::OperationId>,
     ) -> Result<T, Failure> {
         // Reject an already-expired queued job before polling any database
         // future. A selected timer is the watchdog for work admitted here,
         // not the admission check for an elapsed absolute deadline.
         if Instant::now() >= deadline {
-            return Err(Failure::new(ErrorCode::AuthorityUnavailable, operation));
+            return Err(Failure::new(
+                policy.expired(
+                    Disposition::NoTransaction,
+                    !self.live.0.load(std::sync::atomic::Ordering::Acquire),
+                ),
+                operation,
+            ));
         }
         let work = AssertUnwindSafe(work).catch_unwind();
         tokio::pin!(work);
@@ -155,8 +258,15 @@ impl Worker {
                     expired = true;
                     if control.phase() == Phase::Preparing {
                         // No transaction exists and no detached continuation may commit.
-                        return Err(Failure::new(ErrorCode::AuthorityUnavailable, operation));
+                        return Err(Failure::new(policy.expired(Disposition::NoTransaction, !self.live.0.load(std::sync::atomic::Ordering::Acquire)), operation));
                     }
+                    let keep_write = match policy {
+                        Policy::Management => true,
+                        Policy::CredentialRead => false,
+                        #[cfg(feature = "core")]
+                        Policy::OwnedEval => matches!(control.phase(), Phase::Committing)
+                            || self.proof.disposition() == Disposition::Committed,
+                    };
                     if keep_write {
                         // Preserve the existing late durable management operation.
                         self.proof.fenced();
@@ -192,7 +302,7 @@ impl Worker {
                         }
                     } else { response };
                     return if expired {
-                        Err(Failure::new(ErrorCode::AuthorityUnavailable, operation))
+                        Err(Failure::new(policy.expired(self.proof.disposition(), cleanup_fenced || !self.live.0.load(std::sync::atomic::Ordering::Acquire)), operation))
                     } else {
                         response
                     };
@@ -240,6 +350,27 @@ impl Job {
                 );
                 if message.reply.send(Err(error)).is_err() {
                     tracing::debug!("rejected tenancy command had no response receiver");
+                }
+            }
+            #[cfg(feature = "core")]
+            Self::Eval(message) => {
+                if message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                    .is_err()
+                {
+                    tracing::debug!("rejected evaluation had no response receiver");
+                }
+            }
+            #[cfg(feature = "core")]
+            Self::Settlement(message) => {
+                message.observation.fail();
+                if message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                    .is_err()
+                {
+                    tracing::debug!("rejected observation had no response receiver");
                 }
             }
             Self::Credential(message) => {
