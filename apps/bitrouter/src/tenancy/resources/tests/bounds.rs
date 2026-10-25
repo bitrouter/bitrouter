@@ -100,3 +100,68 @@ fn resolver_expansion_is_bounded_before_account_and_endpoint_cloning() -> Result
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn compiler_rejects_execution_projection_capacity_before_returning_retained_payload()
+-> Result<()> {
+    let (db, resources) = fixture().await?;
+    let mut credentials = vec![credential("tenant")?];
+    let mut policy_dependencies = vec![reference("tenant", ResourceKind::Credential, "slot")?];
+    for index in 0..255 {
+        let reference = reference("tenant", ResourceKind::Credential, &format!("slot-{index}"))?;
+        let mut input = credential("tenant")?;
+        input["reference"] = serde_json::to_value(&reference)?;
+        credentials.push(input);
+        policy_dependencies.push(reference);
+    }
+    import(&resources, &db, credentials).await?;
+    let policy_ref = reference("tenant", ResourceKind::Policy, "wide")?;
+    let mut policy = policy("tenant", "wide")?;
+    policy["definition"]["dependencies"] = serde_json::to_value(policy_dependencies)?;
+    let mut imports = vec![policy];
+    let mut roots = Vec::new();
+    for index in 0..65 {
+        let name = format!("route-{index}");
+        let mut input = route("tenant", &name, "base")?;
+        input["definition"]["selector"] = json!("bitrouter/choice");
+        input["definition"]["policy"] = serde_json::to_value(&policy_ref)?;
+        input["definition"]["routing"]["routers"] = json!({"choice": {
+            "selection":{"kind":"policy", "policy":"selected", "base_model":"fixture:base"}
+        }});
+        imports.push(input);
+        roots.push(reference("tenant", ResourceKind::Route, &name)?);
+    }
+    import(&resources, &db, imports).await?;
+    let doc = document(roots.clone(), Some(policy_ref.clone()))?;
+    // Establish that this is the decoded-reference limit, not any older wire
+    // or closure byte limit: 65 * (one route + one policy + 256 slots) = 16770.
+    let artifacts = resources
+        .closure(&db, &roots)
+        .await
+        .map_err(|code| anyhow::anyhow!("fixture closure rejected: {code:?}"))?;
+    let routes = compiler::configuration_routes(&doc, &artifacts)
+        .map_err(|code| anyhow::anyhow!("fixture routes rejected: {code:?}"))?;
+    let envelope = Envelope {
+        document: doc.clone(),
+        routes,
+        artifacts: artifacts
+            .into_iter()
+            .filter(|artifact| !matches!(artifact.definition, Definition::Credential { .. }))
+            .collect(),
+    };
+    manifest::bounded_bytes(&envelope, MAX_ARTIFACT_BYTES)?;
+    let tenant = "tenant".to_owned().try_into()?;
+    let revision = "config-v1".to_owned().try_into()?;
+    assert!(matches!(
+        resources.compile(&db, &tenant, &revision, &doc).await,
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    // Rejection leaves the catalog usable, and a smaller valid composition can
+    // still compile and pass the production retained-data validator immediately.
+    let doc = document(roots.into_iter().take(63).collect(), Some(policy_ref))?;
+    let compiled = compile(&resources, &db, &doc).await?;
+    let row = validation::stored(doc, compiled)?;
+    assert!(resources.validate_compiled(&row).is_ok());
+    assert!(resources.open_execution(&row).is_ok());
+    Ok(())
+}

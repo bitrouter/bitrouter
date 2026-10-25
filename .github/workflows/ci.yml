@@ -876,9 +876,12 @@ jobs:
               exit 1
             fi
             crate_name="${package//-/_}"
+            # Authored conversion impls can render primitive paths such as
+            # u64::from. These are built-in types, not external crate roots.
+            primitives='bool|char|str|[ui](8|16|32|64|128|size)|f(16|32|64|128)'
             grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' "$listing" \
               | cut -d: -f1 | sort -u \
-              | grep -vxE "$crate_name|core|std|alloc" > "$RUNNER_TEMP/$package-public-api-deps.txt"
+              | grep -vxE "$crate_name|core|std|alloc|$primitives" > "$RUNNER_TEMP/$package-public-api-deps.txt"
             diff -u \
               <(grep -v '^#' "crates/$package/public-api-deps.txt") \
               "$RUNNER_TEMP/$package-public-api-deps.txt"

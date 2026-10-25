@@ -258,7 +258,7 @@ impl HttpExecutor {
         Self::check_response_format(prompt, adapter, target)?;
 
         let mut error_scrubber = UpstreamErrorScrubber::new(None);
-        error_scrubber.capture_effective_target_key(target);
+        error_scrubber.capture_target(target, ctx);
         error_scrubber.redactor.capture_prompt_continuity(prompt);
         let url = transport.endpoint_url(&target.model_target(), true);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -267,7 +267,8 @@ impl HttpExecutor {
             target,
             ctx.extension::<super::super::native::NativeManagedRequest>()
                 .is_some()
-                || super::shared::has_admission(ctx),
+                || super::shared::has_admission(ctx)
+                || super::tenancy::has_execution(ctx),
         );
 
         let mut attempted_auth_refresh = false;
@@ -279,7 +280,7 @@ impl HttpExecutor {
                 native_work::observe(
                     ctx,
                     NativeProviderWorkKind::AuthenticationPreparation,
-                    self.shape_request_body(&mut body, target),
+                    self.shape_request_body(&mut body, target, ctx),
                     |_| None,
                 )
                 .await
@@ -309,7 +310,8 @@ impl HttpExecutor {
                 .map_err(|error| error_scrubber.scrub_error(error))?;
             let mut shared_attempt =
                 super::shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
-            let (request, authority) = applied.into_parts();
+            let tenant_binding = applied.tenant_binding();
+            let (mut request, authority) = applied.into_parts();
             if let Some(capture) = &capture {
                 capture.authenticated(&request, authority, prompt)?;
             }
@@ -323,6 +325,12 @@ impl HttpExecutor {
                 NativeProviderWorkKind::HttpDispatch,
                 async {
                     record_native_dispatch(prompt, target, ctx)?;
+                    let _tenant_attempt = super::tenancy::admit_send(
+                        tenant_binding.as_ref(),
+                        &mut request,
+                        target,
+                        ctx,
+                    )?;
                     client
                         .send(request, &CancellationToken::new())
                         .await

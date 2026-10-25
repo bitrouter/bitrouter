@@ -117,20 +117,19 @@ impl EntryPreparationFailure {
 struct ExecutionCustody {
     #[cfg(feature = "multi-instance")]
     admission: Option<Arc<crate::gateway::shared::admitted::SharedAdmission>>,
+    // These retain capacity and the external producer through delivery and
+    // compensation. Receipt outcomes remain the responsibility of finalizers.
+    _tenant: Option<Arc<crate::tenancy::execution::TenantExecution>>,
+    _registration: Option<Arc<crate::tenancy::execution::lifecycle::Registration>>,
 }
 
 impl ExecutionCustody {
     fn from_context(ctx: &PipelineContext) -> Self {
-        #[cfg(feature = "multi-instance")]
-        {
-            Self {
-                admission: ctx.extension(),
-            }
-        }
-        #[cfg(not(feature = "multi-instance"))]
-        {
-            let _ = ctx;
-            Self::default()
+        Self {
+            #[cfg(feature = "multi-instance")]
+            admission: ctx.extension(),
+            _tenant: ctx.extension(),
+            _registration: ctx.extension(),
         }
     }
 
@@ -534,7 +533,6 @@ fn sync_execution_target(ctx: &mut PipelineContext, slot: &SharedStreamAttempt) 
 }
 
 impl Pipeline {
-    #[cfg(feature = "multi-instance")]
     pub(crate) fn owned_tasks(&self) -> Option<&Arc<super::owned_tasks::OwnedTasks>> {
         self.pending_settlements.owned.as_ref()
     }
@@ -565,9 +563,8 @@ impl Pipeline {
     /// Shared generations require the owned lifecycle instead; this legacy
     /// best-effort method logs misuse and returns zero without touching work.
     pub async fn drain_pending_settlements(&self) -> usize {
-        #[cfg(feature = "multi-instance")]
         if self.owned_tasks().is_some() {
-            tracing::error!("Shared generation requires its owned lifecycle drain");
+            tracing::error!("Pipeline requires its owned lifecycle drain");
             return 0;
         }
         let drained = self.drain_detached_work().await;
@@ -591,10 +588,9 @@ impl Pipeline {
     /// Shared generations reject this local-only contract: their lifecycle
     /// must retain task handles and apply one deadline to all resource owners.
     pub async fn drain_required_pending_settlements(&self) -> Result<usize> {
-        #[cfg(feature = "multi-instance")]
         if self.owned_tasks().is_some() {
             return Err(BitrouterError::internal(
-                "shared generation requires its owned lifecycle drain",
+                "pipeline requires its owned lifecycle drain",
             ));
         }
         let drained = self.drain_detached_work().await;
@@ -616,6 +612,26 @@ impl Pipeline {
     async fn drain_required_finalizers(&self) -> Result<()> {
         for finalizer in &self.required_finalizers {
             finalizer.drain_pending_work().await?;
+        }
+        Ok(())
+    }
+
+    /// Drain a closed, explicitly owned pipeline without losing handles if the
+    /// waiter is cancelled. Unclean joins retain their failure classification.
+    pub(crate) async fn drain_owned_execution(&self) -> Result<()> {
+        let tasks = self.owned_tasks().ok_or_else(|| {
+            BitrouterError::internal("execution pipeline has no owned task lifecycle")
+        })?;
+        let summary = tasks.drain().await?;
+        self.drain_required_finalizers().await?;
+        // A finalizer drain may have registered compensation. Join it too and
+        // preserve any late-registration failure instead of trusting a stale
+        // summary collected before the finalizer was awaited.
+        let final_summary = tasks.drain().await?;
+        if !summary.is_clean() || !final_summary.is_clean() {
+            return Err(BitrouterError::internal(
+                "execution task drain was not clean",
+            ));
         }
         Ok(())
     }
@@ -693,14 +709,11 @@ impl Pipeline {
             let _ = prepared_tx.send(result);
         }
         .instrument(span);
-        #[cfg(feature = "multi-instance")]
         if let Some(owner) = self.owned_tasks() {
             owner.spawn_execution(work);
         } else {
             self.detached_executions.spawn(work);
         }
-        #[cfg(not(feature = "multi-instance"))]
-        self.detached_executions.spawn(work);
         prepared_rx.await.map_err(|error| {
             BitrouterError::internal(format!(
                 "non-streaming execution task failed to complete: {error}"
@@ -1283,6 +1296,56 @@ impl Pipeline {
         req: PipelineRequest,
         #[cfg(feature = "server-tools")] run_server_tools: bool,
     ) -> Result<PreparedPipelineStream> {
+        if let Some(registration) = req
+            .extensions
+            .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
+        {
+            registration.validate(self.owned_tasks())?;
+            let owner = self.owned_tasks().cloned().ok_or_else(|| {
+                BitrouterError::internal("tenant stream requires owned task tracking")
+            })?;
+            let (prepared_tx, prepared_rx) = tokio::sync::oneshot::channel();
+            let work = async move {
+                let result = self
+                    .prepare_stream(
+                        req,
+                        #[cfg(feature = "server-tools")]
+                        run_server_tools,
+                    )
+                    .await;
+                // The request retains its registration while provider headers
+                // are pending. If the handler has disappeared, destroy the
+                // prepared stream here: its guard registers settlement before
+                // this owned preparation task can finish. A result queued in
+                // the channel retains the same custody until received/dropped.
+                if let Err(undelivered) = prepared_tx.send(result) {
+                    drop(undelivered);
+                }
+            }
+            .instrument(tracing::Span::current());
+            owner.spawn_execution(work);
+            return prepared_rx.await.map_err(|error| {
+                BitrouterError::internal(format!(
+                    "tenant stream preparation task failed to complete: {error}"
+                ))
+            })?;
+        }
+
+        // Ordinary and shared-generation streams retain their existing inline
+        // preparation/cancellation contract; only tenant registrations detach.
+        self.prepare_stream(
+            req,
+            #[cfg(feature = "server-tools")]
+            run_server_tools,
+        )
+        .await
+    }
+
+    async fn prepare_stream(
+        self: Arc<Self>,
+        req: PipelineRequest,
+        #[cfg(feature = "server-tools")] run_server_tools: bool,
+    ) -> Result<PreparedPipelineStream> {
         let PreparedEntry { mut ctx, chain } = self.prepare_entry(req, true, None).await?;
         let latest_attempt: SharedStreamAttempt = Arc::new(std::sync::Mutex::new(None));
 
@@ -1503,6 +1566,18 @@ impl Pipeline {
             ));
         }
         let mut ctx = PipelineContext::new(req);
+        if let Some(registration) =
+            ctx.extension::<crate::tenancy::execution::lifecycle::Registration>()
+        {
+            registration.validate(self.owned_tasks())?;
+        } else if ctx
+            .extension::<crate::tenancy::execution::TenantExecution>()
+            .is_some()
+        {
+            return Err(BitrouterError::internal(
+                "tenant execution has no lifecycle custody",
+            ));
+        }
         if let Some(control) = control {
             if let Some(limit) = control.provider_response_byte_limit() {
                 ctx.insert_extension(Arc::new(super::native::NativeResponseByteLimit(limit)));
@@ -4149,6 +4224,53 @@ mod stream_outcome_tests {
             required_finalizer_receipt: None,
             state: None,
         }
+    }
+
+    #[tokio::test]
+    async fn private_custody_retains_registration_after_context_is_destroyed() -> anyhow::Result<()>
+    {
+        let registry = crate::tenancy::execution::lifecycle::Registry::new();
+        let mut builder = PipelineBuilder::new();
+        builder
+            .owned_drain()
+            .routing_table(Arc::new(StaticRoutingTable::new()))
+            .executor(Arc::new(MockExecutor::new(Vec::new())));
+        let pipeline = Arc::new(builder.build()?);
+        let weak = Arc::downgrade(&pipeline);
+        let mut request = crate::gateway::pipeline::types::PipelineRequest::new(
+            "route",
+            crate::gateway::caller::CallerContext::new("credential", "principal"),
+            bitrouter_ai::types::Prompt {
+                model: "route".into(),
+                system: None,
+                system_provider_metadata: Default::default(),
+                messages: vec![],
+                tools: vec![],
+                params: Default::default(),
+                response_format: None,
+                tool_choice: None,
+                stream: false,
+            },
+        );
+        registry
+            .register(&"custody".try_into()?, pipeline)?
+            .attach(&mut request)?;
+        let ctx = crate::gateway::pipeline::context::PipelineContext::new(request);
+        let custody = ExecutionCustody::from_context(&ctx);
+        drop(ctx);
+        {
+            let mut drain = Box::pin(registry.close_and_drain());
+            anyhow::ensure!(futures::poll!(&mut drain).is_pending());
+        }
+        anyhow::ensure!(weak.upgrade().is_some());
+        drop(custody);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            registry.close_and_drain(),
+        )
+        .await??;
+        anyhow::ensure!(weak.upgrade().is_none());
+        Ok(())
     }
 
     #[test]

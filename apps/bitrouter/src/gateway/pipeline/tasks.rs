@@ -10,13 +10,11 @@ use crate::gateway::error::BitrouterError;
 #[derive(Clone, Default)]
 pub(super) struct Settlements {
     local: Arc<Mutex<JoinSet<()>>>,
-    #[cfg(feature = "multi-instance")]
     pub owned: Option<Arc<super::owned_tasks::OwnedTasks>>,
 }
 
 impl Settlements {
     pub fn spawn(&self, work: impl Future<Output = ()> + Send + 'static) {
-        #[cfg(feature = "multi-instance")]
         if let Some(owned) = &self.owned {
             owned.spawn_settlement(work);
             return;
@@ -27,7 +25,6 @@ impl Settlements {
     }
 
     pub fn finalizer_failed(&self, error: &BitrouterError) {
-        #[cfg(feature = "multi-instance")]
         if let Some(owned) = &self.owned {
             owned.record_finalizer_failure();
         }

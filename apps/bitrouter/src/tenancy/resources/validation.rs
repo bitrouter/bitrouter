@@ -29,7 +29,10 @@ enum Payload {
     Sealed { sealed: SealedSecret },
 }
 
-pub(super) fn compiled(resources: &Resources, stored: &StoredConfiguration) -> Result<()> {
+pub(super) fn compiled(
+    resources: &Resources,
+    stored: &StoredConfiguration,
+) -> Result<super::execution::ValidatedEnvelope> {
     let revision = &stored.revision;
     ByteBudget::new(MAX_ARTIFACT_BYTES).charge(&revision.document)?;
     revision.validate()?;
@@ -89,7 +92,7 @@ pub(super) fn compiled(resources: &Resources, stored: &StoredConfiguration) -> R
     ByteBudget::new(MAX_ARTIFACT_BYTES - 256).charge(&binding)?;
     // Ciphertext/base64 expansion is bounded before cloning the JSON value.
     ByteBudget::new(2 * MAX_ARTIFACT_BYTES).charge(&stored.compiled)?;
-    match serde_json::from_value::<Payload>(stored.compiled.clone())? {
+    let envelope = match serde_json::from_value::<Payload>(stored.compiled.clone())? {
         Payload::Empty { binding: retained } => {
             ensure!(
                 roots.is_empty() && dependencies.is_empty(),
@@ -99,6 +102,11 @@ pub(super) fn compiled(resources: &Resources, stored: &StoredConfiguration) -> R
                 retained == serde_json::to_value(binding)?,
                 "empty configuration binding mismatch"
             );
+            Envelope {
+                document: document.clone(),
+                routes: Vec::new(),
+                artifacts: Vec::new(),
+            }
         }
         Payload::Sealed { sealed } => {
             ensure!(!roots.is_empty(), "sealed empty configuration");
@@ -194,9 +202,10 @@ pub(super) fn compiled(resources: &Resources, stored: &StoredConfiguration) -> R
                 envelope.routes == expected,
                 "compiled route composition mismatch"
             );
+            envelope
         }
-    }
-    Ok(())
+    };
+    super::execution::validate(envelope)
 }
 
 fn route_shape(route: &RouteEnvelope, dependencies: &HashSet<&ResourceRef>) -> Result<()> {

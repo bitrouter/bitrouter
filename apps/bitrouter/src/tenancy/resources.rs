@@ -15,6 +15,7 @@
 //! do not claim runtime execution or OAuth qualification.
 
 mod compiler;
+pub(crate) mod execution;
 mod manifest;
 mod storage;
 #[cfg(test)]
@@ -25,7 +26,7 @@ use std::{collections::HashSet, path::Path};
 
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::{
-    authority::OwnerKind,
+    authority::{OwnerKind, ResourceKind},
     configuration::{Configuration, ResourceRef},
     identity::{InstallationId, RevisionId, TenantId},
     operation::ErrorCode,
@@ -68,6 +69,12 @@ struct Envelope {
     artifacts: Vec<Artifact>,
 }
 
+/// Distinguish bounded execution projection failures from invalid compositions
+/// while preserving the reader's fail-closed handling of already retained data.
+#[derive(Debug, thiserror::Error)]
+#[error("retained execution capacity exceeded")]
+struct ExecutionCapacityExceeded;
+
 impl Resources {
     /// Authenticate a retained configuration before activation or startup.
     /// This reads no mutable catalog or global configuration. Invalid retained
@@ -76,7 +83,52 @@ impl Resources {
         &self,
         stored: &super::configuration_store::StoredConfiguration,
     ) -> std::result::Result<(), ErrorCode> {
-        validation::compiled(self, stored).map_err(|_| ErrorCode::AuthorityUnavailable)
+        validation::compiled(self, stored)
+            .map(|_| ())
+            .map_err(|_| ErrorCode::AuthorityUnavailable)
+    }
+
+    /// Open the same authenticated typed decode used by retained-data checks.
+    /// The returned view pins data only; it grants no current execution authority.
+    pub(crate) fn open_execution(
+        &self,
+        stored: &super::configuration_store::StoredConfiguration,
+    ) -> std::result::Result<execution::RetainedExecutionRevision, ErrorCode> {
+        let validated =
+            validation::compiled(self, stored).map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        Ok(execution::RetainedExecutionRevision::new(
+            self.installation.clone(),
+            stored.revision.tenant_id.clone(),
+            stored.revision.revision_id.clone(),
+            validated,
+        ))
+    }
+
+    /// Read one exact separately owned static credential slot. No ambient
+    /// provider/account lookup or refresh is performed; callers authorize use.
+    pub(crate) async fn credential(
+        &self,
+        db: &DatabaseConnection,
+        reference: &ResourceRef,
+    ) -> std::result::Result<crate::gateway::providers::auth::credentials::Credential, ErrorCode>
+    {
+        if reference.resource_kind != ResourceKind::Credential {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        let artifact = self.load(db, reference).await?;
+        if artifact.reference != *reference || artifact.envelope.is_some() {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        match artifact.definition {
+            Definition::Credential {
+                credential:
+                    credential @ crate::gateway::providers::auth::credentials::Credential::ApiKey {
+                        ..
+                    },
+                oauth_generation: 0,
+            } => Ok(credential),
+            _ => Err(ErrorCode::AuthorityUnavailable),
+        }
     }
 
     /// Open the explicit catalog and import the optional privileged manifest.
@@ -326,6 +378,17 @@ impl Resources {
             };
             let bytes = manifest::bounded_bytes(&envelope, MAX_ARTIFACT_BYTES)
                 .map_err(|_| ErrorCode::CapacityExceeded)?;
+            // The same typed projection used by activation/GET must accept the
+            // output before the caller can persist it. Consume the envelope
+            // after serialization: validation does not change compiler-v1 bytes
+            // or the authenticated binding, and needs no extra envelope clone.
+            execution::validate(envelope).map_err(|error| {
+                if error.is::<ExecutionCapacityExceeded>() {
+                    ErrorCode::CapacityExceeded
+                } else {
+                    ErrorCode::InvalidRequest
+                }
+            })?;
             let key = self.key.as_ref().ok_or(ErrorCode::AuthorityUnavailable)?;
             let sealed = key
                 .seal_bound("configuration", &binding, &bytes)

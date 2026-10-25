@@ -155,6 +155,63 @@ regressions above together with the existing local, shared, core and harness sui
 Workspace doctests passed 12 tests (one ignored). The pure HTTP/1 minimal build
 passed its all-target check; formatting and staged whitespace checks passed.
 
+### M2 execution integration
+
+The execution adapter selects a literal route from the exact submitted retained
+revision. It uses the existing pipeline, protocol adapters, provider transports
+and JSON/SSE renderers with a request-local profile. Host hooks, provider-name
+credential plugins and mutable policy files are not inherited. Configuration
+generation defaults enter canonical request fields before routing; explicit
+request values take precedence and Decisions receives no generation defaults.
+Compilation now checks the same decoded-work limits as retained-data reads before
+committing a revision.
+
+An internal execution capability binds the installation, tenant, authenticated
+principal, ingress credential, retained revision and fresh execution ID. Current
+grants are checked after queue/storage waits and immediately before every actual
+provider send. Each send binds the exact retained candidate and authenticated
+method, URL, headers and body, with a new attempt identity and an eight-attempt
+ceiling. Static credentials resolve through qualified immutable slots. Repeated
+correlation IDs never deduplicate inference. The submission deadline covers body
+ingress and narrows each provider request's remaining time budget.
+
+Atomic tenant/instance admission bounds active and queued executions. Its lease
+survives non-streaming disconnects, stream preparation, prepared-result handoff,
+stream delivery and tracked cleanup. Per-invocation pipelines use the existing
+owned task tracker; shutdown drains these tasks before stopping authority.
+Failed cleanup remains owned instead of being reported as a clean shutdown.
+Known upstream 401/403 status remains authoritative if its diagnostic body fails,
+so truncated or stalled rejection bodies cannot authorize provider fallback.
+
+This integration remains production-fenced. Positive execution tests use a
+test-only readiness flag; shipped capabilities still advertise dispatch and strict
+receipts as unavailable. Owned OAuth, auxiliary provider work, native callers,
+the remaining state inventory, durable attempt/terminal evidence and final
+performance qualification remain pending. This section does not mark M2 complete.
+
+The minimal-plus-HTTP/2 tenancy suite passed 133 tests, including actual H1/h2c
+JSON/SSE exchanges, canonical token/temperature defaults across three provider
+protocols, queued revocation/suspension/scope reduction, deadline-bound ingress,
+provider-header disconnects, unread stream handoffs and bounded admission.
+Upstream error regressions preserve 401/403 across truncated/stalled bodies and
+redact private fixed-header echoes across Generation, Decisions and SSE.
+Independent review findings about compile/read capacity disagreement, route-ID
+collisions, stream preparation custody and fixed-header diagnostics were corrected
+and re-reviewed. The all-feature workspace run passed 5,147 selected tests
+(161 opt-in tests skipped). After two mechanical lint fixes, all 13 admission
+and provider-header lifecycle regressions passed; independent review confirmed
+equivalent behavior. Strict all-target workspace Clippy, 12 doctests (one ignored),
+the pure HTTP/1 minimal all-target check, generated distribution checks,
+formatting and whitespace checks passed.
+
+Three separately built full, gateway and harness-only executables passed all five
+opt-in profile-transition tests, preserving the 284 historical record payloads,
+original migration timestamps, published policies, judge reservations, trajectory
+cost guards and outbox state. The additive migration check also verifies the exact
+currently registered schema without requiring the historical migration count to
+remain frozen. All 12 artifact identity tests passed. This qualifies compatibility
+of the execution integration, not production tenant dispatch or strict receipts.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

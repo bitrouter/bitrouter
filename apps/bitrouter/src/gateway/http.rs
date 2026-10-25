@@ -1399,17 +1399,6 @@ async fn execute_input(
         Arc<crate::gateway::shared::admitted::SharedAdmission>,
     >,
 ) -> Response {
-    let adapter = if inbound == ApiProtocol::Decisions {
-        None
-    } else {
-        match inbound_adapter_for(&inbound) {
-            Some(adapter) => Some(adapter),
-            None => {
-                return BitrouterError::bad_request("unsupported inbound model protocol")
-                    .into_response();
-            }
-        }
-    };
     let (input, original_model) = match input {
         PipelineInput::Generation(prompt) => {
             let (prompt, original_model) =
@@ -1463,22 +1452,92 @@ async fn execute_input(
         admission.attach(&mut req);
     }
 
+    render_execution(
+        state.language_model.clone(),
+        req,
+        inbound,
+        input,
+        request_id,
+    )
+    .await
+}
+
+/// The tenant ingress has already checked its literal route namespace. Keep it
+/// separate from host aliases/transforms, then share the exact response renderer
+/// and detached/streaming lifecycle used by ordinary inference.
+pub(crate) async fn handle_tenant(
+    service: &crate::tenancy::Service,
+    submission: crate::tenancy::execution::Submission,
+    headers: HeaderMap,
+    inbound: ApiProtocol,
+    input: PipelineInput,
+) -> Response {
+    let raw_model = match &input {
+        PipelineInput::Generation(prompt) => &prompt.model,
+        PipelineInput::Decisions(request) => &request.model,
+    };
+    let execution = match service
+        .admit_execution(submission, raw_model, &inbound)
+        .await
+    {
+        Ok(execution) => execution,
+        Err(error) => return error.into_response(),
+    };
+    let pipeline = match execution.pipeline() {
+        Ok(pipeline) => pipeline,
+        Err(error) => return error.into_response(),
+    };
+    let mut req = match &input {
+        PipelineInput::Generation(prompt) => PipelineRequest::new(
+            raw_model.clone(),
+            execution.caller(),
+            prompt.as_ref().clone(),
+        ),
+        PipelineInput::Decisions(request) => {
+            PipelineRequest::new_decisions(raw_model.clone(), execution.caller(), request.clone())
+        }
+    };
+    let request_id = execution.id().to_string();
+    req.request_id = request_id.clone();
+    req.original_model = raw_model.clone();
+    req.headers = headers;
+    req.inbound_protocol = Some(inbound.clone());
+    if let Err(error) = execution.attach(pipeline.clone(), &mut req) {
+        return error.into_response();
+    }
+    render_execution(pipeline, req, inbound, input, request_id).await
+}
+
+async fn render_execution(
+    pipeline: Arc<Pipeline>,
+    req: PipelineRequest,
+    inbound: ApiProtocol,
+    input: PipelineInput,
+    request_id: String,
+) -> Response {
+    let adapter = if inbound == ApiProtocol::Decisions {
+        None
+    } else {
+        match inbound_adapter_for(&inbound) {
+            Some(adapter) => Some(adapter),
+            None => {
+                return BitrouterError::bad_request("unsupported inbound model protocol")
+                    .into_response();
+            }
+        }
+    };
+
     let mut response = if input
         .generation_prompt()
         .is_some_and(|prompt| prompt.stream)
     {
-        stream_response(state.language_model.clone(), req, inbound.clone()).await
+        stream_response(pipeline.clone(), req, inbound.clone()).await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
         // completion and settle even if the client disconnects (axum drops this
         // handler future on disconnect). The upstream bills us for the accepted
         // request regardless, so the customer must be billed too.
-        match state
-            .language_model
-            .clone()
-            .execute_detached_prepared(req)
-            .await
-        {
+        match pipeline.execute_detached_prepared(req).await {
             Ok(prepared) => {
                 let rendered = match &input {
                     PipelineInput::Generation(prompt) => {

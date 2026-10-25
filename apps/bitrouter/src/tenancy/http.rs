@@ -33,12 +33,63 @@ struct AuthState {
     operators: ControlAuth,
 }
 
-pub(crate) async fn dispatch_not_ready(request: Request, next: Next) -> Response {
+pub(crate) async fn dispatch(
+    State(service): State<Service>,
+    request: Request,
+    next: Next,
+) -> Response {
     if request.uri().path() == "/health" && matches!(*request.method(), Method::GET | Method::HEAD)
     {
         return next.run(request).await;
     }
-    Failure::from(ErrorCode::CapabilityMismatch).into_response()
+    let state = match service.current() {
+        Ok(state) => state,
+        Err(error) => return error.into_response(),
+    };
+    if !service.dispatch_ready(&state) {
+        return Failure::from(ErrorCode::CapabilityMismatch).into_response();
+    }
+    if request.method() != Method::POST {
+        return Failure::from(ErrorCode::Forbidden).into_response();
+    }
+    let inbound = match request.uri().path() {
+        "/v1/chat/completions" => bitrouter_ai::types::ApiProtocol::ChatCompletions,
+        "/v1/messages" => bitrouter_ai::types::ApiProtocol::Messages,
+        "/v1/responses" => bitrouter_ai::types::ApiProtocol::Responses,
+        "/v1/decisions" => bitrouter_ai::types::ApiProtocol::Decisions,
+        _ => return Failure::from(ErrorCode::Forbidden).into_response(),
+    };
+    let (parts, body) = request.into_parts();
+    if one_header(&parts.headers, "origin").is_err()
+        || one_header(&parts.headers, "host").is_err()
+        || !crate::remote_control::origin_matches_host(&parts.headers)
+        || parts.headers.contains_key(header::CONTENT_ENCODING)
+    {
+        return Failure::from(ErrorCode::InvalidRequest).into_response();
+    }
+    let submission = match service.submission(&parts.headers) {
+        Ok(submission) => submission,
+        Err(error) => return error.into_response(),
+    };
+    let body = match tokio::time::timeout_at(
+        submission.deadline(),
+        axum::body::to_bytes(body, 16 * 1024 * 1024),
+    )
+    .await
+    {
+        Ok(Ok(body)) => body,
+        Ok(Err(_)) => return Failure::from(ErrorCode::PayloadTooLarge).into_response(),
+        Err(_) => return Failure::from(ErrorCode::CapacityExceeded).into_response(),
+    };
+    let value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return Failure::from(ErrorCode::InvalidRequest).into_response(),
+    };
+    let input = match crate::gateway::http::parse_input(&inbound, value) {
+        Ok(input) => input,
+        Err(_) => return Failure::from(ErrorCode::InvalidRequest).into_response(),
+    };
+    crate::gateway::http::handle_tenant(&service, submission, parts.headers, inbound, input).await
 }
 
 pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {

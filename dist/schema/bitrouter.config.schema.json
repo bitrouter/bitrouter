@@ -368,6 +368,11 @@
           "const": "control:reload",
           "description": "Reload server-owned configuration; requires the read grant as well.",
           "type": "string"
+        },
+        {
+          "const": "control:tenancy",
+          "description": "Manage installation resource authority; grants no host inspection or reload.",
+          "type": "string"
         }
       ]
     },
@@ -2205,6 +2210,34 @@
         }
       ]
     },
+    "TenancyConfig": {
+      "additionalProperties": false,
+      "description": "Local authority is independent of external login and commercial policy.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Opt in to the tenant control service. Existing local startup stays unchanged.",
+          "type": "boolean"
+        },
+        "resource_import": {
+          "default": null,
+          "description": "Privileged JSON manifest imported before listeners open. Relative paths\nare relative to the server process's working directory, never a tenant.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "wrapping_key_env": {
+          "default": null,
+          "description": "Operator environment variable containing a stable base64 32-byte key.\nThe secret itself is never part of configuration or resource reports.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "TimeoutConfig": {
       "description": "Upstream HTTP timeout knobs, in seconds. Every field is optional; an unset\nfield inherits the level above — a provider override inherits the resolved\nglobal value, and an unset global inherits the built-in default\n([`HttpTimeouts::default`]). `total_secs` is opt-in at every level: unset ⇒\nno overall wall-clock cap (the right default for long agentic streams).\n\nUsed both as the top-level `upstream.timeouts` block and as the per-provider\n`providers.<id>.timeouts` override; timeouts are **not** inherited via a\nprovider's `derives:` chain.",
       "properties": {
@@ -2832,6 +2865,10 @@
         "mcp_sources": {}
       },
       "description": "Explicit native MCP skill source grants. Empty grants no sources."
+    },
+    "tenancy": {
+      "$ref": "#/$defs/TenancyConfig",
+      "description": "Opt-in local resource-tenancy authority."
     },
     "trajectory": {
       "$ref": "#/$defs/TrajectoryConfig",

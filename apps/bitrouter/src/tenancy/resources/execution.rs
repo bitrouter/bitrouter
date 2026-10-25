@@ -1,0 +1,398 @@
+//! Immutable, selected-route execution views. Membership never caches grants.
+
+mod retained;
+mod target;
+
+use std::{collections::HashMap, sync::Arc};
+
+use anyhow::Result;
+use async_trait::async_trait;
+use bitrouter_ai::{
+    routing::{ModelInfo, SortOrder},
+    tenancy::{
+        configuration::{Configuration, GenerationDefaults, ResourceRef},
+        identity::{InstallationId, RevisionId, TenantId},
+        operation::ErrorCode,
+    },
+    types::{ApiProtocol, ModelOperation},
+};
+use serde_json::Value;
+
+use crate::{
+    config::Config,
+    gateway::{
+        caller::CallerContext,
+        error::{BitrouterError, Result as GatewayResult},
+        pipeline::{
+            routing::{ModelResolution, PromptOverrides, RoutingPrefs, RoutingTable},
+            types::RoutingTarget,
+        },
+    },
+    policy_lock::PolicyLock,
+};
+
+use super::{Envelope, compiler};
+
+/// A validated retained revision. No mutable source or authority handles live here.
+pub(crate) struct RetainedExecutionRevision {
+    installation: InstallationId,
+    tenant: TenantId,
+    revision: RevisionId,
+    document: Configuration,
+    routes: HashMap<String, Arc<RouteData>>,
+}
+
+/// The result of the single authenticated decode, consumed without rereading JSON.
+pub(super) struct ValidatedEnvelope {
+    document: Configuration,
+    routes: HashMap<String, Arc<RouteData>>,
+}
+
+pub(super) fn validate(envelope: Envelope) -> Result<ValidatedEnvelope> {
+    retained::decode(envelope)
+}
+
+impl RetainedExecutionRevision {
+    pub(super) fn new(
+        installation: InstallationId,
+        tenant: TenantId,
+        revision: RevisionId,
+        validated: ValidatedEnvelope,
+    ) -> Self {
+        Self {
+            installation,
+            tenant,
+            revision,
+            document: validated.document,
+            routes: validated.routes,
+        }
+    }
+
+    pub(crate) fn installation_id(&self) -> &InstallationId {
+        &self.installation
+    }
+    pub(crate) fn tenant_id(&self) -> &TenantId {
+        &self.tenant
+    }
+    pub(crate) fn revision_id(&self) -> &RevisionId {
+        &self.revision
+    }
+    pub(crate) fn document(&self) -> &Configuration {
+        &self.document
+    }
+
+    /// Match the literal public resource ID, without trimming or selector parsing.
+    pub(crate) fn select(
+        &self,
+        raw_model: &str,
+        inbound: &ApiProtocol,
+    ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
+        if matches!(inbound, ApiProtocol::Custom(_)) {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        let data = self.routes.get(raw_model).ok_or(ErrorCode::NotFound)?;
+        if !data
+            .chains
+            .iter()
+            .any(|chain| chain.selector == data.selector && chain.inbound == *inbound)
+        {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        // Only the inbound protocol is copied. All retained targets, defaults and
+        // policy bytes remain shared; there is no process-global revision cache.
+        Ok(Arc::new(RetainedRoute {
+            data: data.clone(),
+            inbound: inbound.clone(),
+            generation_defaults: self.document.generation_defaults.clone(),
+        }))
+    }
+}
+
+/// One request's protocol-bound view of exactly one qualified route.
+pub(crate) struct RetainedRoute {
+    data: Arc<RouteData>,
+    inbound: ApiProtocol,
+    generation_defaults: GenerationDefaults,
+}
+
+struct RouteData {
+    reference: ResourceRef,
+    dependencies: Vec<ResourceRef>,
+    selector: String,
+    overrides: PromptOverrides,
+    policy: Option<RetainedPolicy>,
+    chains: Vec<Chain>,
+    candidates: Vec<Candidate>,
+}
+
+struct Chain {
+    selector: String,
+    inbound: ApiProtocol,
+    candidates: Vec<usize>,
+}
+
+struct Candidate {
+    target: RoutingTarget,
+    projection: Vec<u8>,
+    credential: ResourceRef,
+}
+
+/// Immutable policy artifact plus the explicit routing source it was bound to.
+pub(crate) struct RetainedPolicy {
+    reference: ResourceRef,
+    name: String,
+    document: Arc<PolicyLock>,
+    routing_source: Arc<Value>,
+}
+
+impl RetainedPolicy {
+    pub(crate) fn reference(&self) -> &ResourceRef {
+        &self.reference
+    }
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+    pub(crate) fn document(&self) -> &PolicyLock {
+        &self.document
+    }
+
+    /// Parse only the retained explicit source for PolicyRuntime::from_document.
+    /// No environment substitution, registry, credential backend or file is read;
+    /// executable candidates still come exclusively from the retained chains.
+    pub(crate) fn configuration(&self) -> std::result::Result<Config, ErrorCode> {
+        compiler::routing_config(&self.routing_source)
+            .map(|(config, _)| config)
+            .map_err(|_| ErrorCode::AuthorityUnavailable)
+    }
+}
+
+impl RetainedRoute {
+    /// Configuration defaults enter canonical fields before routing, accounting
+    /// or rendering. Explicit request values win; Decisions has no generation
+    /// fields. The compiler-v1 retained bytes remain compatible on disk.
+    pub(crate) fn apply_generation_defaults(
+        &self,
+        input: &mut crate::gateway::pipeline::types::PipelineInput,
+    ) {
+        if let Some(prompt) = input.generation_prompt_mut() {
+            prompt
+                .params
+                .max_tokens
+                .get_or_insert(self.generation_defaults.max_output_tokens);
+            prompt
+                .params
+                .temperature
+                .get_or_insert(self.generation_defaults.temperature);
+        }
+    }
+
+    /// Exact private candidate identity, used to bind authentication to the same
+    /// approved candidate at send time. These bytes contain no credential secret.
+    pub(crate) fn candidate_key(
+        &self,
+        candidate: &RoutingTarget,
+    ) -> std::result::Result<Vec<u8>, ErrorCode> {
+        Ok(self.candidate(candidate)?.projection.clone())
+    }
+
+    pub(crate) fn reference(&self) -> &ResourceRef {
+        &self.data.reference
+    }
+    pub(crate) fn dependencies(&self) -> &[ResourceRef] {
+        &self.data.dependencies
+    }
+    pub(crate) fn policy(&self) -> Option<&RetainedPolicy> {
+        self.data.policy.as_ref()
+    }
+
+    /// Candidate membership only. The caller must check live CredentialUse and
+    /// execution authority separately, including after all waits and refreshes.
+    pub(crate) fn match_candidate(
+        &self,
+        candidate: &RoutingTarget,
+    ) -> std::result::Result<ResourceRef, ErrorCode> {
+        Ok(self.candidate(candidate)?.credential.clone())
+    }
+
+    fn candidate(&self, candidate: &RoutingTarget) -> std::result::Result<&Candidate, ErrorCode> {
+        let projection = target::project(candidate).map_err(|_| ErrorCode::Forbidden)?;
+        self.data
+            .chains
+            .iter()
+            .filter(|chain| chain.inbound == self.inbound)
+            .flat_map(|chain| &chain.candidates)
+            .filter_map(|index| self.data.candidates.get(*index))
+            .find(|retained| retained.projection == projection)
+            .ok_or(ErrorCode::Forbidden)
+    }
+
+    fn selector<'a>(&'a self, model: &'a str, raw: bool) -> GatewayResult<&'a str> {
+        let selector = if raw && model == self.data.reference.resource_id.as_str() {
+            self.data.selector.as_str()
+        } else {
+            model
+        };
+        if self
+            .data
+            .chains
+            .iter()
+            .any(|chain| chain.selector == selector && chain.inbound == self.inbound)
+        {
+            Ok(selector)
+        } else {
+            Err(BitrouterError::NotFound(
+                "model is outside the selected retained route".into(),
+            ))
+        }
+    }
+
+    fn overrides(&self) -> PromptOverrides {
+        if self.inbound.operation() == ModelOperation::Decisions {
+            PromptOverrides::default()
+        } else {
+            let mut overrides = self.data.overrides.clone();
+            // Every token-limit spelling and temperature is supplied by the
+            // canonical configuration/request fields, not a wire-shaped extra.
+            for field in [
+                "max_tokens",
+                "max_completion_tokens",
+                "max_output_tokens",
+                "temperature",
+            ] {
+                overrides.params.remove(field);
+            }
+            overrides
+        }
+    }
+
+    fn chain(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        raw: bool,
+    ) -> GatewayResult<Vec<RoutingTarget>> {
+        if prefs.operation != self.inbound.operation()
+            || prefs
+                .inbound_protocol
+                .as_ref()
+                .is_some_and(|protocol| *protocol != self.inbound)
+            || !prefs.require_tags.is_empty()
+            || prefs.sort != SortOrder::default()
+        {
+            return Err(BitrouterError::bad_request(
+                "unsupported retained routing preferences",
+            ));
+        }
+        let selector = self.selector(model, raw)?;
+        let chain = self
+            .data
+            .chains
+            .iter()
+            .find(|chain| chain.selector == selector && chain.inbound == self.inbound)
+            .ok_or_else(|| BitrouterError::NotFound("retained chain unavailable".into()))?;
+        let mut targets = Vec::new();
+        for index in &chain.candidates {
+            let target = &self
+                .data
+                .candidates
+                .get(*index)
+                .ok_or_else(|| BitrouterError::internal("invalid retained target index"))?
+                .target;
+            if (!prefs.only.is_empty() && !prefs.only.contains(&target.provider_name))
+                || prefs.ignore.contains(&target.provider_name)
+            {
+                continue;
+            }
+            // Match ordinary routing: capabilities are positive observations,
+            // never an exhaustive denylist. Missing facts remain unknown; actual
+            // protocol/request feasibility is checked by the execution pipeline.
+            targets.push(target.clone());
+        }
+        if targets.is_empty() {
+            return Err(BitrouterError::NotFound(
+                "no retained target satisfies the request".into(),
+            ));
+        }
+        Ok(targets)
+    }
+}
+
+#[async_trait]
+impl RoutingTable for RetainedRoute {
+    async fn resolve_model(&self, model: &str) -> GatewayResult<ModelResolution> {
+        let selector = self.selector(model, true)?;
+        let mut resolved = ModelResolution::passthrough(selector);
+        if selector == self.data.selector {
+            resolved.overrides = self.overrides();
+            resolved.policy = self.data.policy.as_ref().map(|policy| policy.name.clone());
+        }
+        Ok(resolved)
+    }
+
+    async fn route_chain(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        _caller: &CallerContext,
+    ) -> GatewayResult<Vec<RoutingTarget>> {
+        self.chain(model, prefs, true)
+    }
+
+    async fn route_resolved(
+        &self,
+        model: &str,
+        prefs: &RoutingPrefs,
+        _caller: &CallerContext,
+    ) -> GatewayResult<Vec<RoutingTarget>> {
+        self.chain(model, prefs, false)
+    }
+
+    fn canonical_model_id(&self, model: &str, target: &RoutingTarget) -> Option<String> {
+        (self.selector(model, true).is_ok() && self.match_candidate(target).is_ok())
+            .then(|| self.data.reference.resource_id.to_string())
+    }
+
+    fn list_models(&self) -> Vec<ModelInfo> {
+        self.model_info(self.data.reference.resource_id.as_str())
+            .into_iter()
+            .collect()
+    }
+
+    fn model_info(&self, model: &str) -> Option<ModelInfo> {
+        if model != self.data.reference.resource_id.as_str() {
+            return None;
+        }
+        let mut providers = Vec::new();
+        for candidate in self
+            .data
+            .chains
+            .iter()
+            .filter(|chain| chain.inbound == self.inbound)
+            .flat_map(|chain| &chain.candidates)
+            .filter_map(|index| self.data.candidates.get(*index))
+        {
+            if !providers.contains(&candidate.target.provider_name) {
+                providers.push(candidate.target.provider_name.clone());
+            }
+        }
+        Some(ModelInfo {
+            id: model.to_owned(),
+            providers,
+        })
+    }
+
+    async fn reload(&self) -> GatewayResult<()> {
+        Err(BitrouterError::bad_request(
+            "retained routing cannot be reloaded",
+        ))
+    }
+
+    async fn preset_overrides(&self, model: &str) -> GatewayResult<PromptOverrides> {
+        let selector = self.selector(model, true)?;
+        Ok(if selector == self.data.selector {
+            self.overrides()
+        } else {
+            PromptOverrides::default()
+        })
+    }
+}

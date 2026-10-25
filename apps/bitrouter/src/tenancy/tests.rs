@@ -13,6 +13,7 @@ use super::{Service, command::Command, model::Caller, store::StoredResponse};
 
 mod authority;
 mod configuration;
+mod execution;
 mod http;
 
 #[cfg(unix)]
@@ -30,12 +31,48 @@ async fn failed_assembly_does_not_leave_a_detached_authority() -> Result<()> {
         &config,
         Some(&directory.path().join("bitrouter.yaml")),
     )
-    .await;
+    .await
+    .err()
+    .context("invalid policy store unexpectedly assembled")?;
     ensure!(
-        failed.is_err(),
-        "invalid policy store unexpectedly assembled"
+        failed
+            .to_string()
+            .contains("loading policies from /dev/null"),
+        "assembly failed before the intended policy-store check: {failed:#}"
     );
-    let retry_owner = super::ownership::acquire(&url)?;
+    // SQLx returns checked-out connections in spawned tasks, which retain the
+    // pool's ownership hook until cleanup finishes. Yield this current-thread
+    // runtime while waiting for the real lock; a leaked actor still times out.
+    // https://github.com/launchbadge/sqlx/blob/v0.8.6/sqlx-core/src/pool/connection.rs
+    let retry_owner = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match super::ownership::acquire(&url) {
+                Ok(owner) => break Ok(owner),
+                Err(error)
+                    if matches!(
+                        error.downcast_ref::<std::fs::TryLockError>(),
+                        Some(std::fs::TryLockError::WouldBlock)
+                    ) =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                Err(error) => break Err(error),
+            }
+        }
+    })
+    .await
+    .context("failed assembly retained authority ownership past the cleanup deadline")??;
+    ensure!(
+        super::ownership::acquire(&url).is_err(),
+        "retry owner did not exclude another authority"
+    );
+    let db = crate::db::connect_tenancy(&url, &retry_owner).await?;
+    let installation = super::ownership::has_installation(&db).await;
+    db.close().await?;
+    ensure!(
+        !installation?,
+        "failed assembly initialized authority before finishing validation"
+    );
     drop(retry_owner);
     Ok(())
 }

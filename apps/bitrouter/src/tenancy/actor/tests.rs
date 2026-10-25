@@ -1,4 +1,6 @@
-use std::{sync::atomic::Ordering, time::Duration};
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{

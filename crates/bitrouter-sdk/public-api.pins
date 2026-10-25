@@ -7,7 +7,8 @@
 #   cargo +nightly-2026-05-05 public-api -p PACKAGE --all-features --simplified
 #
 # Extract foreign path roots as in .github/workflows/ci.yml, excluding the
-# package itself and core/std/alloc; update that package's public-api-deps.txt.
+# package itself, core/std/alloc and built-in primitive type paths; update that
+# package's public-api-deps.txt.
 # Recheck after integrating concurrent API changes. A renderer-pin change also
 # requires regeneration of both manifests and review of the resulting surfaces.
 toolchain=nightly-2026-05-05

@@ -13,7 +13,7 @@ pub(super) fn limit(ctx: &PipelineContext) -> Option<u64> {
     let configured = ctx
         .extension::<NativeResponseByteLimit>()
         .map(|limit| limit.0);
-    if super::shared::has_admission(ctx) {
+    if super::shared::has_admission(ctx) || super::tenancy::has_execution(ctx) {
         // A shared execution owns bounded ingress even without a native-core
         // controller. Any narrower request bound continues to apply.
         Some(configured.unwrap_or(u64::MAX).min(16 * 1024 * 1024))
@@ -69,7 +69,12 @@ pub(super) async fn read(response: reqwest::Response, ctx: &PipelineContext) -> 
             .map_err(|error| upstream_body_error("reading upstream body", error));
     };
     let successful = response.status().is_success();
+    let tenant = super::tenancy::has_execution(ctx);
     match read_bounded(response, limit).await {
+        // The received rejection is authoritative even when its optional
+        // diagnostic body resets or stalls. Losing a 401/403 here must not turn
+        // it into a timeout/502 that authorizes another provider fallback.
+        Err(_) if tenant && !successful => Ok("upstream error body unavailable".into()),
         // The HTTP status still governs rejection, refresh and Retry-After.
         // Body admission must not turn a known 4xx into a fallback-eligible
         // invalid successful response. Never retain the rejected body itself.

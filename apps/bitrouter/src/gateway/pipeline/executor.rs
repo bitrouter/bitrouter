@@ -39,6 +39,7 @@ mod input_count;
 mod response_body;
 mod shared;
 mod stream_bridge;
+mod tenancy;
 
 use stream_bridge::BridgeCapture;
 
@@ -463,6 +464,25 @@ impl UpstreamErrorScrubber {
     fn capture_request_credentials(&mut self, request: &reqwest::Request, target: &RoutingTarget) {
         self.redactor
             .capture_request_credentials(request, target.effective_api_key());
+    }
+
+    fn capture_target(&mut self, target: &RoutingTarget, ctx: &PipelineContext) {
+        self.capture_effective_target_key(target);
+        if tenancy::has_execution(ctx) {
+            // Fixed retained headers belong to the private resource closure.
+            // Execution permission does not make their values public, even
+            // when a provider echoes a header with an ordinary-looking name.
+            for rule in &target.headers {
+                if !rule.passthrough()
+                    && let Some(value) = rule
+                        .default()
+                        .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
+                {
+                    self.redactor
+                        .add_replacement(value.to_owned(), "[redacted credential]".to_owned());
+                }
+            }
+        }
     }
 
     fn capture_effective_target_key(&mut self, target: &RoutingTarget) {
@@ -1018,7 +1038,20 @@ impl HttpExecutor {
         &self,
         body: &mut serde_json::Value,
         target: &RoutingTarget,
+        ctx: &PipelineContext,
     ) -> Result<()> {
+        if let Some(execution) = tenancy::execution(ctx) {
+            execution
+                .revalidate()
+                .map_err(|code| execution.reject(code))?;
+            execution
+                .route()
+                .match_candidate(target)
+                .map_err(|code| execution.reject(code))?;
+            // Static owned credentials do not shape request bodies. Never fall
+            // through to a host registry keyed only by provider name.
+            return Ok(());
+        }
         if let Some(applier) = self.auth_applier(target) {
             applier
                 .prepare_body(body, &target.model_target())
@@ -1167,7 +1200,7 @@ impl HttpExecutor {
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
-    ) -> Result<crate::gateway::providers::auth::AppliedAuth> {
+    ) -> Result<tenancy::AuthenticatedRequest> {
         native_work::observe(
             input.ctx,
             NativeProviderWorkKind::Authentication,
@@ -1180,16 +1213,22 @@ impl HttpExecutor {
     async fn build_authenticated_request_inner(
         &self,
         input: &RequestBuildInput<'_>,
-    ) -> Result<AppliedAuth> {
+    ) -> Result<tenancy::AuthenticatedRequest> {
         input.ctx.record_credential_authority(None);
         let mut request = input.client.build_request(input.url, input.body)?;
         forward_inbound_anthropic_beta(&mut request, input.target, input.ctx);
         apply_provider_headers(&mut request, input.target, input.ctx, true);
         let scope = request_scope_headers(input.target, Some(input.ctx.headers()))
             .ok_or_else(|| BitrouterError::internal("request account scope unavailable"))?;
-        let mut applied = self
-            .apply_auth(request, input.target, input.transport)
-            .await?;
+        let mut applied = match tenancy::execution(input.ctx) {
+            Some(execution) => {
+                tenancy::authenticate(request, input.target, input.transport, &execution).await?
+            }
+            None => {
+                self.apply_auth(request, input.target, input.transport)
+                    .await?
+            }
+        };
         apply_provider_headers(&mut applied, input.target, input.ctx, false);
         merge_outbound_trace_headers(&mut applied, input.trace_headers);
         inject_outbound_request_id(&mut applied, input.ctx)?;
@@ -1323,7 +1362,7 @@ impl HttpExecutor {
             Some(stamp) => applied.bind_shared_credential(stamp),
             None => applied,
         };
-        Ok(applied)
+        tenancy::AuthenticatedRequest::new(applied, input.target, input.ctx, input.url)
     }
 
     async fn refresh_auth_after_unauthorized(
@@ -1332,6 +1371,18 @@ impl HttpExecutor {
         rejected_authorization: Option<&reqwest::header::HeaderValue>,
         ctx: &PipelineContext,
     ) -> Result<bool> {
+        if let Some(execution) = tenancy::execution(ctx) {
+            execution
+                .revalidate()
+                .map_err(|code| execution.reject(code))?;
+            execution
+                .route()
+                .match_candidate(target)
+                .map_err(|code| execution.reject(code))?;
+            // Static credentials cannot be refreshed. Owned OAuth supplies its
+            // own qualified refresh path; host OAuth is never a fallback.
+            return Ok(false);
+        }
         let Some(applier) = self.auth_applier(target) else {
             return Ok(false);
         };
@@ -1385,17 +1436,20 @@ impl HttpExecutor {
         transport: &Arc<dyn crate::gateway::model::protocol::Transport>,
         ctx: &PipelineContext,
     ) -> Result<(String, UpstreamErrorScrubber, u64, shared::Attempt)> {
-        let (client, _) = self.client_for(target, shared::has_admission(ctx));
+        let (client, _) = self.client_for(
+            target,
+            shared::has_admission(ctx) || tenancy::has_execution(ctx),
+        );
         let cancellation = CancellationToken::new();
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
         let mut scrubber = UpstreamErrorScrubber::new(None);
-        scrubber.capture_effective_target_key(target);
+        scrubber.capture_target(target, ctx);
         let started = Instant::now();
         let mut refreshed = false;
         loop {
             let mut body = client.render_decision_request(&target.model_target(), request)?;
-            self.shape_request_body(&mut body, target)
+            self.shape_request_body(&mut body, target, ctx)
                 .await
                 .map_err(|error| scrubber.scrub_error(error))?;
             DecisionsCodec::parse_request(body.clone())?;
@@ -1415,12 +1469,15 @@ impl HttpExecutor {
                 .map_err(|error| scrubber.scrub_error(error))?;
             let mut attempt =
                 shared::Attempt::begin(self.shared_authority, &request, target, ctx).await?;
-            let (request, _) = request.into_parts();
+            let tenant_binding = request.tenant_binding();
+            let (mut request, _) = request.into_parts();
             scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
+            let _tenant_attempt =
+                tenancy::admit_send(tenant_binding.as_ref(), &mut request, target, ctx)?;
             if let Some(attempts) =
                 ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>()
             {
@@ -1765,7 +1822,7 @@ impl Executor for HttpExecutor {
         Self::check_response_format(prompt, adapter, target)?;
 
         let mut error_scrubber = UpstreamErrorScrubber::new(None);
-        error_scrubber.capture_effective_target_key(target);
+        error_scrubber.capture_target(target, ctx);
         error_scrubber.redactor.capture_prompt_continuity(prompt);
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -1774,7 +1831,8 @@ impl Executor for HttpExecutor {
             target,
             ctx.extension::<super::native::NativeManagedRequest>()
                 .is_some()
-                || shared::has_admission(ctx),
+                || shared::has_admission(ctx)
+                || tenancy::has_execution(ctx),
         );
 
         let initial_gate = native_work::gate_duration(ctx);
@@ -1799,7 +1857,7 @@ impl Executor for HttpExecutor {
                 native_work::observe(
                     ctx,
                     NativeProviderWorkKind::AuthenticationPreparation,
-                    self.shape_request_body(&mut body, target),
+                    self.shape_request_body(&mut body, target, ctx),
                     |_| None,
                 )
                 .await
@@ -1829,7 +1887,8 @@ impl Executor for HttpExecutor {
                 .map_err(|error| error_scrubber.scrub_error(error))?;
             let mut shared_attempt =
                 shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
-            let (request, authority) = applied.into_parts();
+            let tenant_binding = applied.tenant_binding();
+            let (mut request, authority) = applied.into_parts();
             let wire: Option<serde_json::Value> = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
@@ -1853,6 +1912,8 @@ impl Executor for HttpExecutor {
                 NativeProviderWorkKind::HttpDispatch,
                 async {
                     record_native_dispatch(prompt, target, ctx)?;
+                    let _tenant_attempt =
+                        tenancy::admit_send(tenant_binding.as_ref(), &mut request, target, ctx)?;
                     client
                         .send(request, &CancellationToken::new())
                         .await

@@ -441,7 +441,7 @@ async fn serve_with_options(
 
         pid_guard = Some(PidFile::create(&pid_path).await?);
         let remote_listen = remote_control.as_ref().map(|server| server.listen());
-        let tenancy_enabled = assembled.tenancy.is_some();
+        let tenancy_http = assembled.tenancy.clone();
         let ready_listen = listen.clone();
 
         let http_app = app.clone();
@@ -483,8 +483,8 @@ async fn serve_with_options(
             // Open an OTel SERVER span per inbound request and publish it on the
             // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
             let otel_wrapper = move |router: axum::Router| {
-                let router = if tenancy_enabled {
-                    router.layer(axum::middleware::from_fn(crate::tenancy::http::dispatch_not_ready))
+                let router = if let Some(service) = &tenancy_http {
+                    router.layer(axum::middleware::from_fn_with_state(service.clone(), crate::tenancy::http::dispatch))
                 } else { router };
                 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
                 let router = match &otel_router_wrapper {

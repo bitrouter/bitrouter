@@ -136,6 +136,13 @@ impl HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<NativeInputCount> {
+        if let Some(execution) = super::tenancy::execution(ctx) {
+            // Counting has a separate endpoint and authentication request. Keep
+            // it closed until that owned auxiliary-work contract is integrated.
+            return Err(
+                execution.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)
+            );
+        }
         if self.shared_authority || super::shared::has_admission(ctx) {
             return Err(invalid(
                 "managed input counting is unavailable on a shared gateway",

@@ -10,7 +10,7 @@ use bitrouter_ai::tenancy::{
     operation::{DispatchState, Error, ErrorCode},
 };
 
-pub(super) struct Failure(pub Error);
+pub(crate) struct Failure(pub Error);
 
 impl Failure {
     pub fn new(code: ErrorCode, operation: Option<OperationId>) -> Self {

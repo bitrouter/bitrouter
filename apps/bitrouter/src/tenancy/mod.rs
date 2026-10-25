@@ -1,11 +1,13 @@
 //! Opt-in local resource authority. All authorization and storage stay in the host.
 
 mod actor;
+mod admission;
 mod authority;
 mod command;
 mod configuration;
 mod configuration_store;
 mod error;
+pub(crate) mod execution;
 pub(crate) mod http;
 mod model;
 mod mutation;
@@ -56,6 +58,11 @@ pub(crate) struct Service {
     stop: CancellationToken,
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
+    admission: Arc<admission::Admission>,
+    executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
+    pipelines: Arc<execution::lifecycle::Registry>,
+    #[cfg(test)]
+    dispatch_test_ready: Arc<AtomicBool>,
     completion: Shared<BoxFuture<'static, Result<(), Arc<tokio::task::JoinError>>>>,
 }
 
@@ -122,6 +129,9 @@ impl Service {
         initial: Snapshot,
         resources: Arc<resources::Resources>,
     ) -> anyhow::Result<Self> {
+        // Construct fallible transport state before spawning the owning actor.
+        // Tenant profiles share connection pools, never host credential plugins.
+        let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::with_defaults()?);
         let snapshot = Arc::new(RwLock::new(Arc::new(initial)));
         let live = Arc::new(AtomicBool::new(true));
         let instance = uuid::Uuid::new_v4().to_string().try_into()?;
@@ -152,6 +162,11 @@ impl Service {
             stop,
             reads: Arc::new(Semaphore::new(8)),
             resources,
+            admission: admission::Admission::new(),
+            executor,
+            pipelines: execution::lifecycle::Registry::new(),
+            #[cfg(test)]
+            dispatch_test_ready: Arc::new(AtomicBool::new(false)),
             completion,
         })
     }
@@ -160,6 +175,15 @@ impl Service {
     /// never aborts the writer or releases its file lease; the host must report
     /// unsuccessful shutdown instead of claiming all transactions settled.
     pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
+        self.admission.close();
+        tokio::time::timeout(Duration::from_secs(30), self.pipelines.close_and_drain())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!("tenant pipeline cleanup did not drain within 30 seconds")
+            })??;
+        tokio::time::timeout(Duration::from_secs(30), self.admission.wait_drained())
+            .await
+            .map_err(|_| anyhow::anyhow!("tenant executions did not drain within 30 seconds"))?;
         self.stop.cancel();
         tokio::time::timeout(Duration::from_secs(30), self.completion.clone())
             .await
@@ -222,16 +246,15 @@ impl Service {
         state.principal(caller, Utc::now()).map_err(Failure::from)?;
         // No tenant inference is advertised until immutable dispatch and durable
         // strict receipts have been integrated and qualified together.
+        let dispatch_ready = self.dispatch_ready(&state);
         Ok(TenantCapabilities {
             contract_version: 1,
             installation_id: state.installation.clone(),
             instance_id: self.instance.clone(),
-            capability_revision: format!("{}-{}", self.instance, u8::from(state.saturated))
-                .try_into()
-                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?,
-            revision_bound_dispatch: false,
-            strict_receipts: false,
-            dispatch_enabled: false,
+            capability_revision: self.capability_revision(&state).map_err(Failure::from)?,
+            revision_bound_dispatch: dispatch_ready,
+            strict_receipts: dispatch_ready,
+            dispatch_enabled: dispatch_ready,
         })
     }
 

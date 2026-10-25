@@ -241,7 +241,7 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
     Ok(envelope)
 }
 
-fn routing_config(source: &Value) -> Result<(Config, HashMap<String, usize>)> {
+pub(super) fn routing_config(source: &Value) -> Result<(Config, HashMap<String, usize>)> {
     bounded_bytes(source, super::MAX_ARTIFACT_BYTES)?;
     let mut fields = source
         .as_object()

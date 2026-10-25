@@ -3,7 +3,10 @@ use crate::tenancy::configuration_store::StoredConfiguration;
 use bitrouter_ai::tenancy::configuration::ConfigurationRevision;
 use sha2::{Digest, Sha256};
 
-fn stored(document: Configuration, compiled: CompiledConfiguration) -> Result<StoredConfiguration> {
+pub(super) fn stored(
+    document: Configuration,
+    compiled: CompiledConfiguration,
+) -> Result<StoredConfiguration> {
     let mut canonical = serde_json::to_value(&document)?;
     crate::tenancy::command::sort(&mut canonical);
     let content_digest = hex::encode(Sha256::digest(serde_json::to_vec(&canonical)?)).try_into()?;
@@ -24,7 +27,11 @@ fn stored(document: Configuration, compiled: CompiledConfiguration) -> Result<St
     })
 }
 
-fn reseal(resources: &Resources, row: &mut StoredConfiguration, envelope: &Value) -> Result<()> {
+pub(super) fn reseal(
+    resources: &Resources,
+    row: &mut StoredConfiguration,
+    envelope: &Value,
+) -> Result<()> {
     let revision = &row.revision;
     let sealed = resources
         .key

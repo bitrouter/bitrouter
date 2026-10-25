@@ -4,12 +4,12 @@ use super::*;
 use bitrouter::client::agent_local::{self, Operation, ReplyError, ReplyResult};
 use bitrouter_ai::harness::runtime::ErrorCode;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
+use sea_orm_migration::MigratorTrait;
 use sha2::{Digest, Sha256};
 
 const THREAD: &str = "1149fbda-eb06-43b7-8d0e-108e857d9c2d";
 const OWNER: &str = "46c9adc1-3b84-42b3-8495-24d9b26e9e5f";
-const TABLES: [(&str, usize); 7] = [
-    ("seaql_migrations", 26),
+const TABLES: [(&str, usize); 6] = [
     ("bro_executions", 1),
     ("bro_execution_index", 1),
     ("bro_execution_records", 284),
@@ -20,6 +20,7 @@ const TABLES: [(&str, usize); 7] = [
 
 #[derive(Debug, PartialEq, Eq)]
 struct StoredState {
+    ledger: Vec<(String, i64)>,
     rows: Vec<Vec<String>>,
     original_owner: String,
     schema: Vec<String>,
@@ -29,9 +30,43 @@ struct StoredState {
 
 impl StoredState {
     fn preserved(&self, original: &Self) -> bool {
-        self.rows == original.rows
+        self.ledger == original.ledger
+            && self.rows == original.rows
             && self.original_owner == original.original_owner
             && self.schema == original.schema
+    }
+
+    fn check_additive_migrations(&self, original: &Self) -> Result<()> {
+        ensure!(
+            self.rows == original.rows && self.original_owner == original.original_owner,
+            "migration changed historical records or the stopped owner"
+        );
+        for historical in &original.ledger {
+            ensure!(
+                self.ledger.contains(historical),
+                "migration rewrote historical ledger metadata"
+            );
+        }
+        let mut expected = bitrouter::db::migration::Migrator::migrations()
+            .iter()
+            .map(|migration| migration.name().to_owned())
+            .collect::<Vec<_>>();
+        expected.sort();
+        ensure!(
+            self.ledger
+                .iter()
+                .map(|(version, _)| version)
+                .eq(expected.iter()),
+            "migration ledger differs from the registered migrations"
+        );
+        ensure!(
+            original
+                .schema
+                .iter()
+                .all(|entry| self.schema.contains(entry)),
+            "migration changed historical schema definitions"
+        );
+        Ok(())
     }
 }
 
@@ -74,6 +109,15 @@ pub(super) async fn table_rows(db: &DatabaseConnection, table: &str) -> Result<V
 }
 
 async fn read_state(db: &DatabaseConnection) -> Result<StoredState> {
+    let ledger = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT version, applied_at FROM seaql_migrations ORDER BY version",
+        ))
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.try_get("", "version")?, row.try_get("", "applied_at")?)))
+        .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
     let mut rows = Vec::new();
     for (table, count) in TABLES {
         let values = table_rows(db, table).await?;
@@ -86,6 +130,7 @@ async fn read_state(db: &DatabaseConnection) -> Result<StoredState> {
         [OWNER.into()],
     )).await?.context("baseline stopped owner missing")?;
     Ok(StoredState {
+        ledger,
         rows,
         original_owner: owner.try_get("", "value")?,
         schema: strings(db, "SELECT json_array(type,name,tbl_name,sql) AS value FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY value".into()).await?,
@@ -95,14 +140,21 @@ async fn read_state(db: &DatabaseConnection) -> Result<StoredState> {
 }
 
 fn snapshot(fixture: &Fixture) -> Result<StoredState> {
-    let url = format!(
-        "sqlite://{}",
-        fixture.directory.path().join("profiles.db").display()
-    );
+    database_snapshot(fixture, "profiles.db", false)
+}
+
+fn database_snapshot(fixture: &Fixture, name: &str, migrate: bool) -> Result<StoredState> {
+    let url = format!("sqlite://{}", fixture.directory.path().join(name).display());
     fixture.runtime.block_on(async {
         tokio::time::timeout(COMMAND_TIMEOUT, async {
             let db = bitrouter::db::connect(&url).await?;
-            let result = read_state(&db).await;
+            let result = async {
+                if migrate {
+                    bitrouter::db::run_migrations(&db).await?;
+                }
+                read_state(&db).await
+            }
+            .await;
             let closed = db.close().await;
             let state = result?;
             closed?;
@@ -208,9 +260,24 @@ fn exercise_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
         hex::encode(Sha256::digest(&bytes))
             == "28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9"
     );
-    fs::write(fixture.directory.path().join("profiles.db"), bytes)?;
+    fs::write(fixture.directory.path().join("profiles.db"), &bytes)?;
     let before = snapshot(fixture)?;
+    ensure!(
+        before.ledger.len() == 26,
+        "baseline migration ledger changed"
+    );
+    // Derive the exact allowed schema additions on an independent fixture copy.
+    // The real binaries must apply migrations themselves to the untouched copy.
+    fs::write(fixture.directory.path().join("expected.db"), bytes)?;
+    let expected = database_snapshot(fixture, "expected.db", true)?;
+    expected.check_additive_migrations(&before)?;
     let (config, first_pid) = fixture.configure_and_start_full(binaries[0])?;
+    let migrated = snapshot(fixture)?;
+    migrated.check_additive_migrations(&before)?;
+    ensure!(
+        migrated.schema == expected.schema,
+        "startup schema differs from the registered migration result"
+    );
     // Two transitions share exactly the same historical database and config.
     // None submits new work or changes the old workspace paths/record payloads.
     for (step, index) in [0, 1, 0, 2, 0].into_iter().enumerate() {
@@ -233,13 +300,13 @@ fn exercise_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
         }
         let running = snapshot(fixture)?;
         ensure!(
-            running.preserved(&before),
+            running.preserved(&migrated),
             "profile step {step} changed stored facts while running"
         );
         fixture.stop_resident(pid)?;
         let after = snapshot(fixture)?;
         ensure!(
-            after.preserved(&before),
+            after.preserved(&migrated),
             "profile step {step} changed stored facts on shutdown"
         );
         if index != 0 {
