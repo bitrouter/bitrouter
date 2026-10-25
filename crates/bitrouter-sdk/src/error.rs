@@ -54,6 +54,15 @@ pub enum Error {
     },
     #[error("evaluation service returned HTTP status {}", .0.status)]
     Evaluation(Box<ServiceFailure<bitrouter_ai::eval::ErrorEnvelope>>),
+    /// An owned evaluation mutation may have committed, even when its response
+    /// reports an authorization failure with provider dispatch `not_started`.
+    /// No operation identity or exactly-once recovery guarantee is implied.
+    #[error("owned evaluation outcome is unknown; inspect the ledger before any explicit retry")]
+    OwnedEvalUnknown {
+        /// Transport or response failure; request contents are not retained.
+        #[source]
+        source: Box<Error>,
+    },
     #[error("core service returned HTTP status {}", .0.status)]
     Core(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
     #[error("core reported a managed response stream failure; execution may still be running")]

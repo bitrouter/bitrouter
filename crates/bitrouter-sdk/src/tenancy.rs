@@ -5,6 +5,7 @@
 //! the subsequent submission. The server still checks live authority at dispatch.
 //! Use HTTPS or a tunnel to a loopback control listener for remote administration.
 
+mod eval;
 mod transport;
 
 use std::time::Duration;

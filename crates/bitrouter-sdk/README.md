@@ -237,6 +237,43 @@ An interrupted mutation remains uncertain; the SDK never repeats it implicitly.
 Existing subject/result identities and the server's idempotency rules determine
 whether an explicit later submission is a duplicate.
 
+For owned evaluation on the protected listener, `TenancyClient` exposes the same
+seven method names, each with leading `&InstallationId` and `&TenantId`
+arguments. The routes are `/control/v1/tenants/{tenant_id}/evals`: POST/GET
+`subjects`, GET `subjects/{eval_id}`, POST `results`, POST/GET `snapshots`
+(GET adds `/{evidence_root}`), and GET `status`. Use an explicit tenant credential;
+an installation operator credential does not authorize these routes. Reads need
+current tenant-wide `resource.read`, writes need `evaluation.submit`, and freezing
+needs both. The service checks current authority and evaluator eligibility.
+The methods use existing `bitrouter_ai::eval` DTOs unchanged and require no
+additional SDK feature. Legacy `GatewayClient` routes remain `/v1/evals`.
+
+Every owned Eval request, including POST, carries exactly one
+`Bitrouter-Installation-Id` header and `Cache-Control: no-store`. The SDK never
+caches responses. Subject/result JSON encoding stops at 1 MiB and freeze encoding
+at 4 KiB; `FreezeRequest::default()` sends JSON with service-selected time.
+Responses respect the smaller of the configured `TenancyOptions` limit and
+8 MiB; the default remains 2 MiB. Logical path IDs are bounded and escaped as one
+segment. Returned subject IDs and snapshot lookup roots must match the request.
+An explicit freeze timestamp must retain the same string spelling in the reply;
+equivalent timestamps with different offsets or fractional notation are not
+interchangeable snapshot labels. An omitted timestamp uses the service's clock.
+The DTOs do not echo tenant/installation, and `AdmissionOutcome` does not echo
+the submitted eval ID or idempotency key. The SDK checks bounded wire identities
+but cannot independently attest server namespace or correlate a result receipt
+by recreating private digest algorithms. Use a trusted endpoint.
+
+Owned Eval read errors use `Error::Tenancy`, retaining status, headers (including
+the service's `no-store`) and the optional existing tenancy error body. After a
+mutation is sent, any failed or untrustworthy response is conservatively wrapped
+in `Error::OwnedEvalUnknown { source }`. This includes 401/403/503: a ledger write
+may commit before a final authority check denies the response. The error's
+`dispatch_state=not_started` only describes provider work, not ledger commit.
+No management operation ID is invented, no automatic retry occurs, and freeze
+has no exactly-once recovery guarantee. Inspect the ledger with current authority
+before deciding whether to explicitly resubmit identical subject/result content.
+These client methods do not enable server endpoints or change capability flags.
+
 `GatewayClient::core_capabilities()` reads the existing core HTTP capability
 endpoint. Core requires an active virtual service key even when ordinary
 inference uses `skip_auth`. `Error::Core` retains its typed error envelope,
