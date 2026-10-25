@@ -59,15 +59,44 @@ impl StoredState {
                 .eq(expected.iter()),
             "migration ledger differs from the registered migrations"
         );
-        ensure!(
-            original
-                .schema
-                .iter()
-                .all(|entry| self.schema.contains(entry)),
-            "migration changed historical schema definitions"
-        );
+        for entry in &original.schema {
+            let expected = additive_schema_definition(entry)?;
+            ensure!(
+                self.schema.contains(&expected),
+                "migration changed historical schema beyond the allowed nullable Eval columns: {entry}"
+            );
+        }
         Ok(())
     }
+}
+
+fn additive_schema_definition(entry: &str) -> Result<String> {
+    let mut definition: (String, String, String, Option<String>) = serde_json::from_str(entry)?;
+    if definition.0 != "table"
+        || ![
+            "eval_subjects",
+            "eval_results",
+            "eval_admission_events",
+            "eval_snapshots",
+        ]
+        .contains(&definition.1.as_str())
+    {
+        return Ok(entry.to_owned());
+    }
+    // Independently allow only migration030's exact nullable additions. Keep
+    // every byte of the old column/constraint definitions and all old indexes.
+    // Do not derive the allowance from the migration being tested.
+    let prefix = definition
+        .3
+        .as_deref()
+        .and_then(|sql| sql.strip_suffix(')'))
+        .context("historical Eval table has no closing definition")?;
+    definition.3 = Some(format!(
+        "{prefix}, \"installation_id\" varchar(128) COLLATE BINARY, \
+         \"tenant_id\" varchar(128) COLLATE BINARY, \
+         \"creator_principal_id\" varchar(128) COLLATE BINARY)"
+    ));
+    Ok(serde_json::to_string(&definition)?)
 }
 
 async fn strings(db: &DatabaseConnection, sql: String) -> Result<Vec<String>> {

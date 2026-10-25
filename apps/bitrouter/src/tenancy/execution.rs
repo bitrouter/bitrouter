@@ -30,7 +30,7 @@ use super::{
     admission::Lease,
     error::Failure,
     model::{Caller, Snapshot},
-    resources::execution::RetainedRoute,
+    resources::execution::{RetainedExecutionRevision, RetainedRoute},
 };
 use crate::gateway::{
     caller::CallerContext, pipeline::types::RoutingTarget, providers::auth::credentials::Credential,
@@ -38,6 +38,7 @@ use crate::gateway::{
 
 pub(super) mod cached;
 pub(crate) mod lifecycle;
+mod native;
 mod profile;
 #[cfg(test)]
 mod tests;
@@ -68,6 +69,8 @@ pub(crate) struct TenantExecution {
     submission: Submission,
     id: ExecutionId,
     route: Arc<RetainedRoute>,
+    #[cfg(feature = "core")]
+    learning: bitrouter_ai::tenancy::configuration::Learning,
     attempts: Mutex<u8>,
     rejection: Mutex<Option<ErrorCode>>,
     entered: AtomicBool,
@@ -179,20 +182,43 @@ impl Service {
         raw_model: &str,
         inbound: &ApiProtocol,
     ) -> Result<Arc<TenantExecution>, Failure> {
+        self.admit_selected_execution(submission, |revision| revision.select(raw_model, inbound))
+            .await
+    }
+
+    async fn admit_native_execution(
+        &self,
+        submission: Submission,
+        raw_model: &str,
+    ) -> Result<Arc<TenantExecution>, Failure> {
+        self.admit_selected_execution(submission, |revision| {
+            revision.select_native(raw_model, bitrouter_ai::types::ModelOperation::Generation)
+        })
+        .await
+    }
+
+    async fn admit_selected_execution(
+        &self,
+        submission: Submission,
+        select: impl FnOnce(
+            &super::cache::Pin<RetainedExecutionRevision>,
+        ) -> Result<Arc<RetainedRoute>, ErrorCode>,
+    ) -> Result<Arc<TenantExecution>, Failure> {
         self.with_dispatch_authority(&submission, |_| Ok(()))
             .map_err(Failure::from)?;
-        let (route, limits) = {
-            let revision = self.retained_execution(&submission).await?;
-            let route = revision.select(raw_model, inbound).map_err(Failure::from)?;
-            self.with_dispatch_authority(&submission, |state| {
-                authorize_route(state, &submission, route.dependencies())
-            })
-            .map_err(Failure::from)?;
-            (route, revision.document().limits.clone())
-        };
+        let revision = self.retained_execution(&submission).await?;
+        let route = select(&revision).map_err(Failure::from)?;
+        self.with_dispatch_authority(&submission, |state| {
+            authorize_route(state, &submission, route.dependencies())
+        })
+        .map_err(Failure::from)?;
+        let limits = revision.document().limits.clone();
+        #[cfg(feature = "core")]
+        let learning = revision.document().learning.clone();
+        drop(revision);
         let lease = self
             .admission
-            .acquire(&submission.tenant, &limits)
+            .acquire_until(&submission.tenant, &limits, submission.deadline)
             .await
             .map_err(Failure::from)?;
         // Waiting for capacity never extends a token/binding lifetime. The
@@ -209,6 +235,8 @@ impl Service {
                 .try_into()
                 .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?,
             route,
+            #[cfg(feature = "core")]
+            learning,
             attempts: Mutex::new(0),
             rejection: Mutex::new(None),
             entered: AtomicBool::new(false),
@@ -219,6 +247,20 @@ impl Service {
 }
 
 impl TenantExecution {
+    #[cfg(feature = "core")]
+    pub(crate) fn storage_identity(&self) -> (&InstallationId, &TenantId, &PrincipalId) {
+        (
+            &self.submission.binding.installation_id,
+            &self.submission.tenant,
+            &self.submission.principal,
+        )
+    }
+
+    #[cfg(feature = "core")]
+    pub(crate) fn eval_store(&self) -> crate::core::eval::store::EvalStore {
+        crate::core::eval::store::EvalStore::for_execution(self.service.db.clone(), self)
+    }
+
     pub(crate) fn installation_id(&self) -> &InstallationId {
         &self.submission.binding.installation_id
     }
@@ -247,6 +289,13 @@ impl TenantExecution {
     pub(crate) fn revalidate(&self) -> Result<(), ErrorCode> {
         self.service
             .with_dispatch_authority(&self.submission, |state| {
+                let rejection = self
+                    .rejection
+                    .lock()
+                    .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+                if let Some(code) = *rejection {
+                    return Err(code);
+                }
                 authorize_route(state, &self.submission, self.route.dependencies())
             })
     }
@@ -275,6 +324,16 @@ impl TenantExecution {
         self.route.match_candidate(target)?;
         self.service
             .with_dispatch_authority(&self.submission, |state| {
+                // Hold the failure latch through the reservation. Outcome
+                // cleanup may still run after rejection, but no new send may
+                // cross this gate once a prior callback has failed.
+                let rejection = self
+                    .rejection
+                    .lock()
+                    .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+                if let Some(code) = *rejection {
+                    return Err(code);
+                }
                 authorize_route(state, &self.submission, self.route.dependencies())?;
                 let mut attempts = self
                     .attempts

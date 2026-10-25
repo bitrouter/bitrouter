@@ -75,6 +75,7 @@ pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
             overrides: _,
             policy,
             chains: _,
+            native: _, // Only selector strings and indices; no additional opaque IDs.
             candidates,
         } = Arc::get_mut(route).ok_or(ErrorCode::AuthorityUnavailable)?;
         reference(root)?;

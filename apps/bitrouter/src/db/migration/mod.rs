@@ -40,6 +40,7 @@ mod m20240101_000026_bro_runtime_format;
 mod m20240101_000027_bro_managed_sessions;
 mod m20240101_000028_resource_tenancy;
 mod m20240101_000029_tenancy_configurations;
+mod m20240101_000030_eval_storage_scope;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -79,6 +80,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000027_bro_managed_sessions::Migration),
             Box::new(m20240101_000028_resource_tenancy::Migration),
             Box::new(m20240101_000029_tenancy_configurations::Migration),
+            Box::new(m20240101_000030_eval_storage_scope::Migration),
         ]
     }
 }

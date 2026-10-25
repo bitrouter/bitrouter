@@ -112,22 +112,37 @@ impl Admission {
         })
     }
 
-    /// Acquire capacity, waiting at most five seconds if a queue slot is available.
-    ///
-    /// # Errors
-    /// Returns `CapacityExceeded` for disabled/full capacity or queue expiry, and
-    /// `AuthorityUnavailable` after close. A zero queue limit permits immediate
-    /// admission only. No grant, credential or revision is retained here.
+    #[cfg(test)]
     pub async fn acquire(
         self: &Arc<Self>,
         tenant: &TenantId,
         limits: &Limits,
     ) -> Result<Lease, ErrorCode> {
+        self.acquire_until(tenant, limits, Instant::now() + QUEUE_WAIT)
+            .await
+    }
+
+    /// Acquire capacity before the request deadline, waiting at most five seconds.
+    ///
+    /// # Errors
+    /// Returns `CapacityExceeded` for disabled/full capacity or queue expiry, and
+    /// `AuthorityUnavailable` after close. A zero queue limit permits immediate
+    /// admission only. No grant, credential or revision is retained here.
+    pub async fn acquire_until(
+        self: &Arc<Self>,
+        tenant: &TenantId,
+        limits: &Limits,
+        request_deadline: Instant,
+    ) -> Result<Lease, ErrorCode> {
+        let deadline = request_deadline.min(Instant::now() + QUEUE_WAIT);
         let active_limit = usize::from(limits.active_executions).min(self.profile.tenant_active);
         let queue_limit = usize::from(limits.queued_work).min(self.profile.tenant_queue);
         let registration = self.update(|state| {
             if state.closed {
                 return Err(ErrorCode::AuthorityUnavailable);
+            }
+            if Instant::now() >= deadline {
+                return Err(ErrorCode::CapacityExceeded);
             }
             if active_limit == 0 || self.profile.instance_active == 0 {
                 return Err(ErrorCode::CapacityExceeded);
@@ -150,7 +165,7 @@ impl Admission {
             let waiter = Arc::new(Waiter {
                 tenant: tenant.clone(),
                 active_limit,
-                deadline: Instant::now() + QUEUE_WAIT,
+                deadline,
                 ready: Notify::new(),
             });
             state.tenants.entry(tenant.clone()).or_default().queued += 1;

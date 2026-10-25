@@ -37,6 +37,7 @@ use bitrouter_ai::{
 };
 use serde_json::{Map, Value};
 
+use super::native_v1::{NativeChain, NativeChains, Unavailable};
 use super::{Candidate, Chain, RetainedExecutionRevision, RetainedPolicy, RouteData};
 use crate::{
     config::AdequacyConfig,
@@ -312,6 +313,7 @@ impl Weight {
             overrides,
             policy,
             chains,
+            native,
             candidates,
         } = value;
         self.reference(reference)?;
@@ -339,6 +341,21 @@ impl Weight {
             self.string(selector)?;
             self.protocol(inbound)?;
             self.vector(candidates)?;
+        }
+        match native {
+            NativeChains::Ready(chains) => {
+                self.vector(chains)?;
+                for NativeChain {
+                    selector,
+                    operation: _,
+                    candidates,
+                } in chains
+                {
+                    self.string(selector)?;
+                    self.vector(candidates)?;
+                }
+            }
+            NativeChains::Unavailable(Unavailable::Unsupported | Unavailable::Capacity) => {}
         }
         self.vector(candidates)?;
         for Candidate {

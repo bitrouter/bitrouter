@@ -24,11 +24,40 @@ use {
 pub struct EvalSettlementRecorder {
     store: EvalStore,
     pending: PendingEvalDecisionStore,
+    owner: RecorderOwner,
+}
+
+enum RecorderOwner {
+    Legacy,
+    Tenant {
+        execution_id: bitrouter_ai::tenancy::identity::ExecutionId,
+        caller: crate::gateway::caller::CallerContext,
+    },
 }
 
 impl EvalSettlementRecorder {
     pub fn new(store: EvalStore, pending: PendingEvalDecisionStore) -> Self {
-        Self { store, pending }
+        Self {
+            store,
+            pending,
+            owner: RecorderOwner::Legacy,
+        }
+    }
+
+    /// The namespace is captured from admission, independently of settlement
+    /// metadata. No public caller or request identifier can select a tenant store.
+    pub(crate) fn for_execution(
+        execution: &crate::tenancy::execution::TenantExecution,
+        pending: PendingEvalDecisionStore,
+    ) -> Self {
+        Self {
+            store: execution.eval_store(),
+            pending,
+            owner: RecorderOwner::Tenant {
+                execution_id: execution.id().clone(),
+                caller: execution.caller(),
+            },
+        }
     }
 
     fn subject(
@@ -122,16 +151,33 @@ impl EvalSettlementRecorder {
 #[async_trait]
 impl SettlementRecorder for EvalSettlementRecorder {
     async fn record(&self, context: &mut SettlementContext) -> BitrouterResult<()> {
+        let owner = match &self.owner {
+            RecorderOwner::Legacy => context.caller.user_id(),
+            RecorderOwner::Tenant {
+                execution_id,
+                caller,
+            } => {
+                if context.request_id != execution_id.as_str()
+                    || context.caller.user_id() != caller.user_id()
+                    || context.caller.api_key_id() != caller.api_key_id()
+                    || context.caller.is_local()
+                    || context.caller.launch_id().is_some()
+                {
+                    return Err(crate::gateway::error::BitrouterError::internal(
+                        "tenant evaluation settlement does not match its admitted execution",
+                    ));
+                }
+                caller.user_id()
+            }
+        };
         if context.has_event::<crate::gateway::metering::replay::CanonicalRequestReplayRejected>() {
             return Ok(());
         }
         let invocation = context.get_event::<EvalInvocation>().cloned();
         let pending = invocation.as_ref().and_then(|invocation| {
             match context.get_events::<CapturedEvalDecision>().last() {
-                Some(snapshot) => snapshot
-                    .decision_for(invocation, context.caller.user_id())
-                    .cloned(),
-                None => self.pending.peek(invocation, context.caller.user_id()),
+                Some(snapshot) => snapshot.decision_for(invocation, owner).cloned(),
+                None => self.pending.peek(invocation, owner),
             }
         });
         let Some(decision) = pending else {
@@ -142,16 +188,17 @@ impl SettlementRecorder for EvalSettlementRecorder {
                 "building request eval subject: {error}"
             ))
         })?;
-        self.store
-            .insert_subject_owned(&subject, context.caller.user_id())
-            .await
-            .map_err(|error| {
-                crate::gateway::error::BitrouterError::internal(format!(
-                    "persisting request eval subject: {error}"
-                ))
-            })?;
+        let inserted = match self.owner {
+            RecorderOwner::Legacy => self.store.insert_subject_owned(&subject, owner).await,
+            RecorderOwner::Tenant { .. } => self.store.insert_subject(&subject).await,
+        };
+        inserted.map_err(|error| {
+            crate::gateway::error::BitrouterError::internal(format!(
+                "persisting request eval subject: {error}"
+            ))
+        })?;
         if let Some(invocation) = &invocation {
-            self.pending.take(invocation, context.caller.user_id());
+            self.pending.take(invocation, owner);
         }
         Ok(())
     }

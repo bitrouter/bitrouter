@@ -1,6 +1,7 @@
 //! Immutable, selected-route execution views. Membership never caches grants.
 
 mod compact;
+mod native_v1;
 mod retained;
 mod target;
 mod weight;
@@ -35,6 +36,7 @@ use crate::{
 };
 
 use super::{Envelope, compiler};
+use native_v1::NativeChains;
 
 /// A validated retained revision. No mutable source or authority handles live here.
 pub(crate) struct RetainedExecutionRevision {
@@ -116,10 +118,41 @@ impl RetainedExecutionRevision {
         }
         Ok(RetainedRoute {
             data: data.clone(),
-            inbound: inbound.clone(),
+            selection: RouteSelection::Wire(inbound.clone()),
             generation_defaults: self.document.generation_defaults.clone(),
             _revision: None,
         })
+    }
+
+    fn selected_native_data(
+        &self,
+        raw_model: &str,
+        operation: ModelOperation,
+    ) -> std::result::Result<RetainedRoute, ErrorCode> {
+        let data = self.routes.get(raw_model).ok_or(ErrorCode::NotFound)?;
+        let chains = data.native.chains()?;
+        if !chains
+            .iter()
+            .any(|chain| chain.selector == data.selector && chain.operation == operation)
+        {
+            return Err(ErrorCode::CapabilityMismatch);
+        }
+        Ok(RetainedRoute {
+            data: data.clone(),
+            selection: RouteSelection::Native(operation),
+            generation_defaults: self.document.generation_defaults.clone(),
+            _revision: None,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn select_native(
+        &self,
+        raw_model: &str,
+        operation: ModelOperation,
+    ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
+        self.selected_native_data(raw_model, operation)
+            .map(Arc::new)
     }
 
     /// Uncached decoder fixtures do not participate in a live service budget.
@@ -134,6 +167,17 @@ impl RetainedExecutionRevision {
 }
 
 impl CachePin<RetainedExecutionRevision> {
+    /// Canonical requests have an operation but no inbound wire preference.
+    pub(crate) fn select_native(
+        &self,
+        raw_model: &str,
+        operation: ModelOperation,
+    ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
+        let mut route = self.selected_native_data(raw_model, operation)?;
+        route._revision = Some(self.clone());
+        Ok(Arc::new(route))
+    }
+
     /// Every escaping route retains the entire charged revision, including its
     /// unselected routes. A selected route cannot outlive cache accounting.
     pub(crate) fn select(
@@ -147,10 +191,32 @@ impl CachePin<RetainedExecutionRevision> {
     }
 }
 
-/// One request's protocol-bound view of exactly one qualified route.
+enum RouteSelection {
+    Wire(ApiProtocol),
+    Native(ModelOperation),
+}
+
+impl RouteSelection {
+    fn operation(&self) -> ModelOperation {
+        match self {
+            Self::Wire(inbound) => inbound.operation(),
+            Self::Native(operation) => *operation,
+        }
+    }
+
+    fn accepts(&self, prefs: &RoutingPrefs) -> bool {
+        prefs.operation == self.operation()
+            && match self {
+                Self::Wire(inbound) => prefs.inbound_protocol.as_ref().is_none_or(|p| p == inbound),
+                Self::Native(_) => prefs.inbound_protocol.is_none(),
+            }
+    }
+}
+
+/// One request's selection-bound view of exactly one qualified route.
 pub(crate) struct RetainedRoute {
     data: Arc<RouteData>,
-    inbound: ApiProtocol,
+    selection: RouteSelection,
     generation_defaults: GenerationDefaults,
     _revision: Option<CachePin<RetainedExecutionRevision>>,
 }
@@ -162,6 +228,7 @@ struct RouteData {
     overrides: PromptOverrides,
     policy: Option<RetainedPolicy>,
     chains: Vec<Chain>,
+    native: NativeChains,
     candidates: Vec<Candidate>,
 }
 
@@ -256,14 +323,37 @@ impl RetainedRoute {
 
     fn candidate(&self, candidate: &RoutingTarget) -> std::result::Result<&Candidate, ErrorCode> {
         let projection = target::project(candidate).map_err(|_| ErrorCode::Forbidden)?;
-        self.data
-            .chains
-            .iter()
-            .filter(|chain| chain.inbound == self.inbound)
-            .flat_map(|chain| &chain.candidates)
+        self.selected_chains()
+            .flat_map(|(_, indices)| indices)
             .filter_map(|index| self.data.candidates.get(*index))
             .find(|retained| retained.projection == projection)
             .ok_or(ErrorCode::Forbidden)
+    }
+
+    fn selected_chains(&self) -> impl Iterator<Item = (&str, &[usize])> {
+        let wire = self
+            .data
+            .chains
+            .iter()
+            .filter_map(|chain| match &self.selection {
+                RouteSelection::Wire(inbound) if chain.inbound == *inbound => {
+                    Some((chain.selector.as_str(), chain.candidates.as_slice()))
+                }
+                _ => None,
+            });
+        let native =
+            self.data
+                .native
+                .chains()
+                .into_iter()
+                .flatten()
+                .filter_map(|chain| match &self.selection {
+                    RouteSelection::Native(operation) if chain.operation == *operation => {
+                        Some((chain.selector.as_str(), chain.candidates.as_slice()))
+                    }
+                    _ => None,
+                });
+        wire.chain(native)
     }
 
     fn selector<'a>(&'a self, model: &'a str, raw: bool) -> GatewayResult<&'a str> {
@@ -273,10 +363,8 @@ impl RetainedRoute {
             model
         };
         if self
-            .data
-            .chains
-            .iter()
-            .any(|chain| chain.selector == selector && chain.inbound == self.inbound)
+            .selected_chains()
+            .any(|(selected, _)| selected == selector)
         {
             Ok(selector)
         } else {
@@ -287,7 +375,7 @@ impl RetainedRoute {
     }
 
     fn overrides(&self) -> PromptOverrides {
-        if self.inbound.operation() == ModelOperation::Decisions {
+        if self.selection.operation() == ModelOperation::Decisions {
             PromptOverrides::default()
         } else {
             let mut overrides = self.data.overrides.clone();
@@ -311,11 +399,7 @@ impl RetainedRoute {
         prefs: &RoutingPrefs,
         raw: bool,
     ) -> GatewayResult<Vec<RoutingTarget>> {
-        if prefs.operation != self.inbound.operation()
-            || prefs
-                .inbound_protocol
-                .as_ref()
-                .is_some_and(|protocol| *protocol != self.inbound)
+        if !self.selection.accepts(prefs)
             || !prefs.require_tags.is_empty()
             || prefs.sort != SortOrder::default()
         {
@@ -324,14 +408,12 @@ impl RetainedRoute {
             ));
         }
         let selector = self.selector(model, raw)?;
-        let chain = self
-            .data
-            .chains
-            .iter()
-            .find(|chain| chain.selector == selector && chain.inbound == self.inbound)
+        let (_, indices) = self
+            .selected_chains()
+            .find(|(selected, _)| *selected == selector)
             .ok_or_else(|| BitrouterError::NotFound("retained chain unavailable".into()))?;
         let mut targets = Vec::new();
-        for index in &chain.candidates {
+        for index in indices {
             let target = &self
                 .data
                 .candidates
@@ -371,6 +453,9 @@ impl RoutingTable for RetainedRoute {
     async fn resolve_model(&self, model: &str) -> GatewayResult<ModelResolution> {
         let selector = self.selector(model, true)?;
         let mut resolved = ModelResolution::passthrough(selector);
+        if let RouteSelection::Native(operation) = &self.selection {
+            resolved.prefs.operation = *operation;
+        }
         if selector == self.data.selector {
             resolved.overrides = self.overrides();
             resolved.policy = self.data.policy.as_ref().map(|policy| policy.name.clone());
@@ -413,11 +498,8 @@ impl RoutingTable for RetainedRoute {
         }
         let mut providers = Vec::new();
         for candidate in self
-            .data
-            .chains
-            .iter()
-            .filter(|chain| chain.inbound == self.inbound)
-            .flat_map(|chain| &chain.candidates)
+            .selected_chains()
+            .flat_map(|(_, indices)| indices)
             .filter_map(|index| self.data.candidates.get(*index))
         {
             if !providers.contains(&candidate.target.provider_name) {

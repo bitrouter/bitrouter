@@ -258,6 +258,82 @@ part of the pending performance qualification.
 
 This stage does not enable tenant dispatch or mark M2 complete.
 
+### M2 native execution and evaluation storage
+
+The canonical native entry uses the same authenticated submission, exact retained
+revision, capacity lease and tracked pipeline as tenant HTTP. Public caller
+metadata, host prompt transforms, host cost readers and host Decision runtimes do
+not supply tenant authority. Native routing has no invented inbound wire protocol:
+the runtime derives an ordered chain from authenticated compiler-v1 source, then
+requires every exact target and credential reference to occur in the same
+selector/operation's retained approvals. Persisted compiler-v1 bytes and HTTP
+selection are unchanged. Native derivation has separate cumulative work and
+candidate limits; an unsupported native view does not invalidate its HTTP view.
+
+Embedding callbacks run inside tracked execution with the request deadline and
+bounded outcome cleanup. Returned context alternatives share a 16 MiB serialized
+input budget and a 32-view limit before the shared planner copies them. Request
+queueing cannot extend the submission deadline. Synchronous embedding callbacks
+remain trusted process code and must not block. Owned input counting, provider
+continuations, OAuth and auxiliary inference still require their own integration;
+the current fences are not evidence that those facilities are complete.
+
+Migration030 adds nullable installation, tenant and creator metadata to all four
+evaluation tables. Historical rows retain NULL ownership and their original
+payloads and keys. Internal scoped stores derive ownership from admitted execution,
+use fixed-width physical keys while preserving logical DTO identifiers, and keep
+creator provenance separate from the tenant namespace. Legacy owner APIs reject
+tenant handles. Scoped predicates precede loading, metadata and parent relationships
+are validated, and snapshots bind their namespace and immutable evidence closure.
+Tenant reads are bounded to 4096 rows per collection and 32 MiB of cumulative SQL
+cell/manifest bytes per operation; these are not allocator or RSS guarantees.
+
+Core policy settlement writes observations through the admitted store. Learning
+Off omits those observations. Static policies in Observe mode record outcomes
+without granting exploration. Active experiments remain unavailable until their
+tenant budget/reservation path is qualified; signed policy content is not rewritten
+to disguise a different treatment. The evaluation exchange HTTP API, evolution,
+other ownership families and strict durable execution receipts remain outstanding.
+
+The final all-feature targeted run passed 236 tests; the minimal-plus-HTTP/2
+run passed 189 tests. PostgreSQL 17 and MySQL 8.4
+passed the migration and immutable-conflict scenarios, including scoped admission
+reloads. Migration regressions reject dependent expression indexes, foreign keys
+and incompatible index options before DDL; MySQL catalog escaping is checked
+against actual stored expression and CHECK text. Unrelated objects and historical
+record bytes survive both migration directions. SQLite resolves foreign-key
+columns through its catalog, including single-quoted and case-varied identifiers,
+before either migration direction performs DDL.
+
+Independent review findings were corrected and re-reviewed: outcome callback
+timeouts close subsequent send admission without losing billed error usage;
+snapshot and compiler reads share one cumulative budget; MySQL admission inserts
+reload through scoped queries; and only the selected active experiment is fenced.
+An execution lease is allowed to outlive HTTP response delivery during tracked
+cleanup, so the warm-policy regression waits for automatic release without
+increasing capacity or forcing cleanup. The full workspace run passed all 5,228
+selected tests (163 opt-in tests skipped). Strict all-feature/all-target Clippy,
+12 doctests (one ignored), and the warnings-as-errors workspace rustdoc build
+passed after removing a blank line between a doc comment and its declaration.
+A fresh cross-component review found the SQLite foreign-key preflight gap; the
+fix passed both final targeted runs and independent re-review. The full workspace
+run preceded that final SQLite-only fix. Separately built full, minimum gateway
+and harness-only executables passed 12 artifact metadata checks and five real
+process transition tests. The historical-schema guard now permits only the exact
+three nullable additions on the four Eval tables, preserving all original column
+definitions and indexes; this test correction passed independent review. Historical
+records, published policy/accounting, judge reservations and trajectory/outbox
+state survive the tested profile transitions. The corrected artifact test passed
+strict Clippy; distribution, formatting and whitespace checks passed. This stage
+does not complete M2.
+
+Before exposing owned evaluation HTTP writes, the existing authority actor needs
+explicit transaction-cleanup outcomes for management writes and credential reads.
+A returned transaction error or joined task alone must not prove successful
+rollback. The next stage retains writer ownership on ambiguous cleanup, preserves
+confirmed late commits, and tests failed commit/rollback and canceled shutdown.
+Owned ledger admission and required observation draining follow that boundary.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

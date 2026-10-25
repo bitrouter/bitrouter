@@ -711,6 +711,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: verify eval ownership migration before populating the test database
+        env:
+          BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib server_migration030_preserves_legacy_resumes_and_refuses_owned_down
+          -- --ignored --test-threads=1
+
       - name: exercise migrations and gateway persistence on the selected backend
         env:
           BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -726,6 +735,15 @@ jobs:
         run: >-
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
           --test database_backends --test database_capture -- --include-ignored --test-threads=1
+
+      - name: verify tenant eval conflicts preserve the transaction and creator
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
+          --lib core::eval::store::scope_tests::server_immutable_conflicts_preserve_transaction_and_first_creator
+          -- --ignored --test-threads=1
 
       - name: verify MySQL transaction snapshot boundaries
         if: matrix.backend == 'mysql'

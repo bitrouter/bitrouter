@@ -242,11 +242,23 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
 }
 
 pub(super) fn routing_config(source: &Value) -> Result<(Config, HashMap<String, usize>)> {
+    routing_config_bounded(source, None)
+}
+
+// Native projection shares the v1 parser, but reserves cumulative work before
+// cloning source/ancestry. The wire compiler keeps its existing independent cap.
+pub(super) fn routing_config_bounded(
+    source: &Value,
+    mut work: Option<&mut ByteBudget>,
+) -> Result<(Config, HashMap<String, usize>)> {
+    if let Some(work) = work.as_deref_mut() {
+        work.charge(source)
+            .map_err(|_| super::ExecutionCapacityExceeded)?;
+    }
     bounded_bytes(source, super::MAX_ARTIFACT_BYTES)?;
-    let mut fields = source
+    let fields = source
         .as_object()
-        .context("routing source must be an object")?
-        .clone();
+        .context("routing source must be an object")?;
     ensure!(
         fields.keys().all(|key| matches!(
             key.as_str(),
@@ -281,6 +293,10 @@ pub(super) fn routing_config(source: &Value) -> Result<(Config, HashMap<String, 
             let provider = providers
                 .get(current)
                 .context("unresolved provider derivation")?;
+            if let Some(work) = work.as_deref_mut() {
+                work.charge(&(current, provider))
+                    .map_err(|_| super::ExecutionCapacityExceeded)?;
+            }
             // Charge all ancestors before parse_resolved clones inherited fields.
             // Explicit overrides still count, keeping the preflight conservative.
             expanded
@@ -299,6 +315,7 @@ pub(super) fn routing_config(source: &Value) -> Result<(Config, HashMap<String, 
             super::MAX_ARTIFACT_BYTES - ancestry.remaining(),
         );
     }
+    let mut fields = fields.clone();
     fields.insert("inherit_defaults".into(), json!(false));
     fields.insert("registry".into(), json!({"enabled": false}));
     let config = crate::config::parse_resolved(&serde_json::to_string(&fields)?)
@@ -358,7 +375,12 @@ pub(super) fn routing_config(source: &Value) -> Result<(Config, HashMap<String, 
     Ok((config, provider_sizes))
 }
 
-fn resolution_capacity(config: &Config, sizes: &HashMap<String, usize>, clean: &str) -> Result<()> {
+/// Candidate count and conservative source-expansion bytes, before resolution.
+pub(super) fn resolution_capacity(
+    config: &Config,
+    sizes: &HashMap<String, usize>,
+    clean: &str,
+) -> Result<(usize, usize)> {
     ensure!(clean.len() <= 512, "route selection capacity exceeded");
     let mut count = 0_usize;
     let mut bytes = 0_usize;
@@ -406,10 +428,10 @@ fn resolution_capacity(config: &Config, sizes: &HashMap<String, usize>, clean: &
             }
         }
     }
-    Ok(())
+    Ok((count, bytes))
 }
 
-fn target_value(target: &RoutingTarget) -> Result<Value> {
+pub(super) fn target_value(target: &RoutingTarget) -> Result<Value> {
     ensure!(
         !matches!(target.api_protocol, ApiProtocol::Custom(_)),
         "custom protocol imports are not qualified"

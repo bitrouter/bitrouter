@@ -12,7 +12,7 @@ use super::super::{
     compiler::RouteEnvelope,
     manifest::{Artifact, CredentialBinding, Definition},
 };
-use super::{Candidate, Chain, RetainedPolicy, RouteData, ValidatedEnvelope, target};
+use super::{Candidate, Chain, RetainedPolicy, RouteData, ValidatedEnvelope, native_v1, target};
 use crate::{gateway::pipeline::routing::PromptOverrides, policy_lock::PolicyLock};
 
 // Internal decoded-work limits, in addition to the authenticated 1 MiB plaintext
@@ -81,6 +81,7 @@ pub(super) fn decode(envelope: Envelope) -> Result<ValidatedEnvelope> {
     let mut target_count = 0_usize;
     let mut content_bytes = 0_usize;
     let mut dependency_count = 0_usize;
+    let mut native_budget = native_v1::Budget::new();
     for route in routes {
         let dependencies = dependencies(&route.reference, &graph)?;
         dependency_count = dependency_count
@@ -100,6 +101,7 @@ pub(super) fn decode(envelope: Envelope) -> Result<ValidatedEnvelope> {
             &policies,
             &mut target_count,
             &mut content_bytes,
+            &mut native_budget,
         )?;
         ensure!(
             retained
@@ -148,6 +150,7 @@ fn route_data(
     policies: &HashMap<ResourceRef, Policy>,
     target_count: &mut usize,
     content_bytes: &mut usize,
+    native_budget: &mut native_v1::Budget,
 ) -> Result<RouteData> {
     let policy = match (&route.policy, &route.policy_name) {
         (Some(reference), Some(name)) => {
@@ -159,7 +162,7 @@ fn route_data(
                 reference: reference.clone(),
                 name: name.clone(),
                 document: policy.document.clone(),
-                routing_source: source.routing,
+                routing_source: source.routing.clone(),
             })
         }
         (None, None) => None,
@@ -232,6 +235,14 @@ fn route_data(
         chains.iter().any(|chain| chain.selector == route.selector),
         "retained base chain missing"
     );
+    let native = native_v1::derive(
+        &route.selector,
+        &source.routing,
+        &source.credentials,
+        &chains,
+        &candidates,
+        native_budget,
+    );
     Ok(RouteData {
         reference: route.reference,
         dependencies,
@@ -242,6 +253,7 @@ fn route_data(
         },
         policy,
         chains,
+        native,
         candidates,
     })
 }

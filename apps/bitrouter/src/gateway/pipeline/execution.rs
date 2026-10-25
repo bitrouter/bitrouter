@@ -1067,6 +1067,17 @@ impl Pipeline {
                     ctx,
                 );
             }
+            if routes.iter().any(requires_input_count)
+                && let Some(execution) =
+                    ctx.extension::<crate::tenancy::execution::TenantExecution>()
+            {
+                // A permissive embedding callback cannot turn the current
+                // unavailable counter into permission to skip required work.
+                // Owned counting will replace this gate after its effect and
+                // evidence lifecycle is integrated.
+                return Err(execution
+                    .reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch));
+            }
             let mut plan = NativePlan {
                 request_id: ctx.request_id().to_owned(),
                 original_model: ctx.original_model().to_owned(),
@@ -2856,6 +2867,27 @@ impl Pipeline {
                     self.observe_hop_end(ctx, target, HopOutcome::Failed(e))
                         .await;
                 }
+            }
+            if let Some(execution) = ctx.extension::<crate::tenancy::execution::TenantExecution>()
+                && let Some(failure) = execution.failure()
+            {
+                // A tenant outcome callback may expire after the provider
+                // completed. Preserve billed output for error settlement while
+                // preventing successful delivery or another fallback attempt.
+                let error = execution.reject(failure.0.code);
+                return match outcome {
+                    Ok(result) => {
+                        ctx.set_successful_target(target.clone());
+                        Ok(ControlledExecution {
+                            result,
+                            output_rejection: Some(error),
+                        })
+                    }
+                    // An executor error may carry provider-reported usage.
+                    // The ingress maps the remembered tenancy failure after
+                    // settlement; keep this evidence on the terminal path.
+                    Err(error) => Err(error),
+                };
             }
             match outcome {
                 Ok(result) => {

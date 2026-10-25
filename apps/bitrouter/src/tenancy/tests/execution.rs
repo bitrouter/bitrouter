@@ -15,8 +15,11 @@ const MODEL: &str = "provider:literal-route";
 
 mod cache;
 mod defaults;
+#[cfg(feature = "core")]
+mod evaluation;
 mod ingress;
 mod lifecycle_http;
+mod native;
 mod rejections;
 mod secrets;
 

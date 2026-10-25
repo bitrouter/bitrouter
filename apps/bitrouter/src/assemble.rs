@@ -1529,6 +1529,10 @@ async fn assemble_app(
         ),
         None => None,
     };
+    let app = match &tenancy {
+        Some(service) => app.with_tenancy(service.clone()),
+        None => app,
+    };
     if !is_shared && !tenancy_enabled {
         continuation_registry.start_reconciler();
     }

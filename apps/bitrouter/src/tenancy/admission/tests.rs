@@ -53,6 +53,44 @@ fn lease_and_controller_are_send_sync() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn request_deadline_precedes_queue_timeout_and_free_capacity() -> Result<()> {
+    let admission = narrow(1, 2, 1, 2);
+    let tenant: TenantId = "short-request".try_into()?;
+    let requested = limits(1, 2);
+    let expired = tokio::time::Instant::now();
+    ensure!(matches!(
+        admission.acquire_until(&tenant, &requested, expired).await,
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    ensure!(totals(&admission) == (0, 0, 0));
+
+    for release_before_poll in [false, true] {
+        let active = admission
+            .acquire(&tenant, &requested)
+            .await
+            .map_err(failure)?;
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(250);
+        let mut waiting = Box::pin(admission.acquire_until(&tenant, &requested, deadline));
+        ensure!(matches!(poll!(waiting.as_mut()), Poll::Pending));
+        ensure!(totals(&admission) == (1, 1, 1));
+        tokio::time::advance(Duration::from_millis(250)).await;
+        // A released/notified slot cannot revive an already expired request.
+        let active = if release_before_poll {
+            drop(active);
+            None
+        } else {
+            Some(active)
+        };
+        ensure!(matches!(waiting.await, Err(ErrorCode::CapacityExceeded)));
+        ensure!(tenant_totals(&admission, &tenant) == (usize::from(active.is_some()), 0));
+        drop(active);
+        admission.wait_drained().await;
+        ensure!(totals(&admission) == (0, 0, 0));
+    }
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
 async fn fixed_profile_bounds_tenant_and_instance_totals() -> Result<()> {
     let admission = Admission::new();
     let requested = limits(128, 256);

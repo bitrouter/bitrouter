@@ -75,6 +75,13 @@ strict receipts disabled, and inference is fenced until those runtime stages are
 implemented. Do not send tenant inference based solely on successful credential
 issuance or configuration administration.
 
+Controlled native turns use the same tenant credential and dispatch binding as
+HTTP turns. Caller labels, host inspection credentials and local harness metadata
+cannot bypass the dispatch capability fence. Historical evaluation rows remain
+legacy records after schema upgrades; enabling tenancy does not assign them to a
+tenant. Signed experiments also require qualified tenant exploration admission;
+an Observe configuration does not authorize an active experiment.
+
 ## Tenant configuration commands
 
 Create a dedicated named context using the selected installation operator or

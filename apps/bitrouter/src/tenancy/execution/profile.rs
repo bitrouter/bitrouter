@@ -90,6 +90,21 @@ impl TenantExecution {
             if !self.route.dependencies().contains(policy.reference()) || policy.name().is_empty() {
                 return Err(self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));
             }
+            // Signed experiments still need qualified tenant exploration admission
+            // and budget accounting. Fence only the selected named policy, in every
+            // learning mode, without rewriting its retained artifact or digest.
+            if policy
+                .document()
+                .policies
+                .get(policy.name())
+                .and_then(|definition| definition.optimization.as_ref())
+                .and_then(|optimization| optimization.active.as_ref())
+                .is_some()
+            {
+                return Err(
+                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)
+                );
+            }
             let config = policy.configuration().map_err(|code| self.reject(code))?;
             let pending =
                 crate::gateway::observability::decision::PendingEvalDecisionStore::default();
@@ -104,8 +119,24 @@ impl TenantExecution {
             })?;
             builder
                 .model_selector(runtime)
-                .route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook)
-                .observe_hook(PolicyCompletion(pending));
+                .route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
+            #[cfg(feature = "core")]
+            if self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off {
+                builder
+                    .observe_hook(
+                        crate::gateway::observability::prediction::PredictiveResponseObserver::new(
+                            pending.clone(),
+                        ),
+                    )
+                    .settlement_recorder_for(
+                        crate::core::eval::settlement::EvalSettlementRecorder::for_execution(
+                            self,
+                            pending.clone(),
+                        ),
+                        OperationScope::Both,
+                    );
+            }
+            builder.observe_hook(PolicyCompletion(pending));
         }
         Ok(Arc::new(builder.build()?))
     }

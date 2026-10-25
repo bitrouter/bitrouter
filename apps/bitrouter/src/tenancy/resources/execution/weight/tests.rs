@@ -67,6 +67,11 @@ fn route(name: &str, header: &str) -> TestResult<RouteData> {
             inbound: ApiProtocol::ChatCompletions,
             candidates: vec![0],
         }],
+        native: NativeChains::Ready(vec![NativeChain {
+            selector: "fixture:model".into(),
+            operation: bitrouter_ai::types::ModelOperation::Generation,
+            candidates: vec![0],
+        }]),
         candidates: vec![Candidate {
             target,
             projection,
@@ -103,6 +108,15 @@ fn selection_does_not_hide_unselected_routes_or_their_long_fixed_headers() -> Te
 
 #[tokio::test]
 async fn exported_target_detaches_header_buffers_and_survives_root_eviction() -> TestResult<()> {
+    assert_exported_target_detaches(false).await
+}
+
+#[tokio::test]
+async fn native_target_detaches_headers_and_keeps_the_entire_revision_charged() -> TestResult<()> {
+    assert_exported_target_detaches(true).await
+}
+
+async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
     let long_name = format!("x-{}", "retained-header-".repeat(96));
     let long_value = "private-retained-value-".repeat(4096);
     let mut data = route("chosen", &long_value)?;
@@ -130,9 +144,12 @@ async fn exported_target_detaches_header_buffers_and_survives_root_eviction() ->
     let cache = Cache::<u8, RetainedExecutionRevision>::new(1, 128 * 1024 * 1024)?;
     let root = cache.insert(1, first, first_weight, 0)?;
     // Select through the actual cache Pin, not the uncached decoder-test method.
-    let selected = root
-        .select("chosen", &ApiProtocol::ChatCompletions)
-        .map_err(|code| anyhow::anyhow!("selection failed: {code:?}"))?;
+    let selected = if native {
+        root.select_native("chosen", bitrouter_ai::types::ModelOperation::Generation)
+    } else {
+        root.select("chosen", &ApiProtocol::ChatCompletions)
+    }
+    .map_err(|code| anyhow::anyhow!("selection failed: {code:?}"))?;
     let target = selected
         .route_chain(
             "chosen",
@@ -182,8 +199,16 @@ async fn exported_target_detaches_header_buffers_and_survives_root_eviction() ->
         ensure!(exported.passthrough() == original.passthrough());
         (original_value.is_sensitive(), original.passthrough())
     };
-    drop(selected);
     drop(root);
+    // The selected route alone must prevent replacement of the charged root.
+    let blocked = revision()?;
+    let blocked_weight = weight(&blocked)?;
+    ensure!(
+        cache.insert(2, blocked, blocked_weight, 0).err()
+            == Some(crate::tenancy::cache::CacheError::Capacity)
+    );
+    ensure!(cache.get(&1)?.is_some());
+    drop(selected);
 
     let mut second = revision()?;
     second.revision = "r2".try_into()?;
@@ -392,6 +417,7 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         overrides: _,
         policy,
         chains: _,
+        native: _,
         candidates,
     } = data;
     assert_compact_reference(reference, ResourceKind::Route, "route")?;
@@ -464,5 +490,34 @@ fn accounting_overflow_and_excessive_traversal_fail_closed() -> TestResult<()> {
         Weight::new().json(&nested, 0),
         Err(ErrorCode::CapacityExceeded)
     ));
+    Ok(())
+}
+
+#[test]
+fn unselected_native_selectors_and_index_spare_capacity_are_charged() -> TestResult<()> {
+    let mut value = revision()?;
+    insert(&mut value, "chosen", route("chosen", "short")?);
+    insert(&mut value, "other", route("other", "short")?);
+    let chosen = value
+        .select("chosen", &ApiProtocol::ChatCompletions)
+        .map_err(|code| anyhow::anyhow!("selection failed: {code:?}"))?;
+    let before = weight(&value)?;
+    let other =
+        Arc::get_mut(value.routes.get_mut("other").context("other")?).context("unique route")?;
+    let NativeChains::Ready(chains) = &mut other.native else {
+        anyhow::bail!("ready native chain");
+    };
+    let mut selector = String::with_capacity(4096);
+    selector.push_str("tier");
+    let mut indices = Vec::with_capacity(2048);
+    indices.push(0);
+    let additional = selector.capacity() + indices.capacity() * size_of::<usize>();
+    chains.push(NativeChain {
+        selector,
+        operation: bitrouter_ai::types::ModelOperation::Generation,
+        candidates: indices,
+    });
+    ensure!(weight(&value)? >= before + additional);
+    ensure!(chosen.reference().resource_id.as_str() == "chosen");
     Ok(())
 }

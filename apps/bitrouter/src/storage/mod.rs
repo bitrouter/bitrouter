@@ -3,6 +3,9 @@
 
 pub(crate) mod acp_history;
 
+#[cfg(feature = "core")]
+pub(crate) mod scope;
+
 pub mod checkpoint;
 
 pub mod evaluation;
