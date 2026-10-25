@@ -10,7 +10,7 @@ use bitrouter_ai::tenancy::{
 };
 use chrono::{DateTime, Utc};
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, QueryResult, TransactionTrait, Value,
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, QueryResult, Value,
     sea_query::{Alias, Asterisk, Expr, OnConflict, Query},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -20,6 +20,7 @@ use super::model::{
     AuthorityClass, Binding, Credential, Deadline, ManagedBy, Principal, ReadContext, Snapshot,
     Tenant,
 };
+use super::transaction::Control;
 
 pub(super) const MAX_OPERATIONS: u32 = 100_000;
 pub(super) const SAFETY_OPERATIONS: u32 = 512;
@@ -263,12 +264,8 @@ pub(super) async fn commit(
     state: &Snapshot,
     changes: &[Change],
     operation: &Operation,
+    control: &Control,
 ) -> Result<()> {
-    let txn = db.begin().await?;
-    for change in changes {
-        write_change(&txn, change).await?;
-    }
-    installation(&txn, state).await?;
     let (class, tenant) = match &operation.context {
         ReadContext::Installation => (AuthorityClass::Installation, None),
         ReadContext::Tenant { tenant, .. } => (AuthorityClass::Tenant, Some(tenant.as_str())),
@@ -310,9 +307,29 @@ pub(super) async fn commit(
             ]
             .map(|value: Value| value.into()),
         )?;
-    txn.execute(txn.get_database_backend().build(&statement))
-        .await?;
-    txn.commit().await?;
+    let statement = db.get_database_backend().build(&statement);
+    let txn = control.begin(db).await?;
+    let result = write_transaction(&txn, state, changes, statement).await;
+    match result {
+        Ok(()) => control.commit(txn).await,
+        Err(error) => {
+            control.rollback(txn).await?;
+            Err(error)
+        }
+    }
+}
+
+async fn write_transaction(
+    txn: &DatabaseTransaction,
+    state: &Snapshot,
+    changes: &[Change],
+    statement: sea_orm::Statement,
+) -> Result<()> {
+    for change in changes {
+        write_change(txn, change).await?;
+    }
+    installation(txn, state).await?;
+    txn.execute(statement).await?;
     Ok(())
 }
 
@@ -396,11 +413,27 @@ pub(super) async fn credential(db: &impl ConnectionTrait, id: &str) -> Result<Op
 pub(super) async fn credential_view(
     db: &DatabaseConnection,
     id: &str,
+    control: &Control,
 ) -> Result<(
     bitrouter_ai::tenancy::identity::AuthorityRevision,
     Option<Credential>,
 )> {
-    let txn = db.begin().await?;
+    let txn = control.begin(db).await?;
+    let result = credential_view_in(&txn, id, control).await;
+    // Success and every failure have the same explicit read cleanup boundary.
+    control.rollback(txn).await?;
+    result
+}
+
+async fn credential_view_in(
+    txn: &DatabaseTransaction,
+    id: &str,
+    control: &Control,
+) -> Result<(
+    bitrouter_ai::tenancy::identity::AuthorityRevision,
+    Option<Credential>,
+)> {
+    control.check_read()?;
     let query = Query::select()
         .column(Alias::new("authority_revision"))
         .from(Alias::new("tenancy_installation"))
@@ -410,9 +443,10 @@ pub(super) async fn credential_view(
         .query_one(txn.get_database_backend().build(&query))
         .await?
         .context("authority identity missing")?;
+    control.check_read()?;
     let revision = u64::try_from(row.try_get::<i64>("", "authority_revision")?)?.try_into()?;
-    let credential = credential(&txn, id).await?;
-    txn.commit().await?;
+    let credential = credential(txn, id).await?;
+    control.check_read()?;
     Ok((revision, credential))
 }
 

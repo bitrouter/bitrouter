@@ -17,6 +17,7 @@ mod resources;
 mod store;
 #[cfg(test)]
 mod tests;
+mod transaction;
 
 use std::sync::{
     Arc, RwLock,
@@ -39,7 +40,7 @@ use tokio::sync::{Semaphore, SemaphorePermit, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use self::{
-    actor::{Liveness, Message, Worker},
+    actor::{CredentialRead, Job, Liveness, Message, Worker},
     command::Command,
     error::Failure,
     model::{Caller, Snapshot},
@@ -54,9 +55,11 @@ pub(crate) struct Service {
     snapshot: Arc<RwLock<Arc<Snapshot>>>,
     live: Arc<AtomicBool>,
     instance: InstanceId,
-    commands: mpsc::Sender<Message>,
-    safety: mpsc::Sender<Message>,
+    commands: mpsc::Sender<Job>,
+    safety: mpsc::Sender<Job>,
     stop: CancellationToken,
+    accepting: Arc<std::sync::Mutex<bool>>,
+    cleanup: Arc<transaction::Proof>,
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
     caches: Arc<execution::cached::Caches>,
@@ -137,6 +140,7 @@ impl Service {
         let caches = Arc::new(execution::cached::Caches::new()?);
         let snapshot = Arc::new(RwLock::new(Arc::new(initial)));
         let live = Arc::new(AtomicBool::new(true));
+        let cleanup = transaction::Proof::new(live.clone());
         let instance = uuid::Uuid::new_v4().to_string().try_into()?;
         // Ordinary traffic cannot occupy the queue reserved for installation
         // revokes and stop transitions. Neither queue waits for free capacity.
@@ -149,6 +153,7 @@ impl Service {
             owner,
             limits,
             resources: resources.clone(),
+            proof: cleanup.clone(),
         };
         let stop = CancellationToken::new();
         let worker = tokio::spawn(worker.run(receiver, safety_receiver, stop.clone()));
@@ -163,6 +168,8 @@ impl Service {
             commands,
             safety,
             stop,
+            accepting: Arc::new(std::sync::Mutex::new(true)),
+            cleanup,
             reads: Arc::new(Semaphore::new(8)),
             resources,
             caches,
@@ -179,6 +186,10 @@ impl Service {
     /// never aborts the writer or releases its file lease; the host must report
     /// unsuccessful shutdown instead of claiming all transactions settled.
     pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
+        *self
+            .accepting
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tenant ingress lock unavailable"))? = false;
         {
             let _authority = self
                 .snapshot
@@ -187,21 +198,34 @@ impl Service {
             self.caches.close();
         }
         self.admission.close();
-        tokio::time::timeout(Duration::from_secs(30), self.pipelines.close_and_drain())
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!("tenant pipeline cleanup did not drain within 30 seconds")
-            })??;
-        tokio::time::timeout(Duration::from_secs(30), self.admission.wait_drained())
-            .await
-            .map_err(|_| anyhow::anyhow!("tenant executions did not drain within 30 seconds"))?;
-        self.stop.cancel();
-        tokio::time::timeout(Duration::from_secs(30), self.completion.clone())
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!("tenant authority shutdown did not settle within 30 seconds")
-            })?
-            .map_err(|_| anyhow::anyhow!("tenant authority worker ended unexpectedly"))
+        let draining = async {
+            tokio::time::timeout(Duration::from_secs(30), self.pipelines.close_and_drain())
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("tenant pipeline cleanup did not drain within 30 seconds")
+                })??;
+            tokio::time::timeout(Duration::from_secs(30), self.admission.wait_drained())
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("tenant executions did not drain within 30 seconds")
+                })?;
+            self.stop.cancel();
+            tokio::time::timeout(Duration::from_secs(30), self.completion.clone())
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("tenant authority shutdown did not settle within 30 seconds")
+                })?
+                .map_err(|_| anyhow::anyhow!("tenant authority worker ended unexpectedly"))?;
+            self.cleanup.ensure_clean()
+        };
+        tokio::select! {
+            biased;
+            () = self.cleanup.quarantined() => Err(anyhow::anyhow!("tenant transaction cleanup is unconfirmed; owner retained")),
+            result = draining => {
+                result?;
+                self.cleanup.ensure_clean()
+            }
+        }
     }
 
     fn current(&self) -> Result<Arc<Snapshot>, Failure> {
@@ -285,15 +309,7 @@ impl Service {
             command,
             reply,
         };
-        let queue = if safety { &self.safety } else { &self.commands };
-        queue.try_send(message).map_err(|error| match error {
-            mpsc::error::TrySendError::Full(_) => {
-                Failure::new(ErrorCode::CapacityExceeded, Some(operation.clone()))
-            }
-            mpsc::error::TrySendError::Closed(_) => {
-                Failure::new(ErrorCode::AuthorityUnavailable, Some(operation.clone()))
-            }
-        })?;
+        self.enqueue(message.into(), safety)?;
         match tokio::time::timeout(MANAGEMENT_TIMEOUT, receive).await {
             Ok(Ok(response)) => response,
             _ => Err(Failure::new(
@@ -301,6 +317,30 @@ impl Service {
                 Some(operation),
             )),
         }
+    }
+
+    fn enqueue(&self, job: Job, safety: bool) -> Result<(), Failure> {
+        let operation = match &job {
+            Job::Command(message) => Some(message.command.operation_id().clone()),
+            Job::Credential(_) => None,
+        };
+        let accepting = self
+            .accepting
+            .lock()
+            .map_err(|_| Failure::new(ErrorCode::AuthorityUnavailable, operation.clone()))?;
+        if !*accepting || !self.live.load(Ordering::Acquire) {
+            return Err(Failure::new(ErrorCode::AuthorityUnavailable, operation));
+        }
+        let queue = if safety { &self.safety } else { &self.commands };
+        queue.try_send(job).map_err(|error| {
+            Failure::new(
+                match error {
+                    mpsc::error::TrySendError::Full(_) => ErrorCode::CapacityExceeded,
+                    mpsc::error::TrySendError::Closed(_) => ErrorCode::AuthorityUnavailable,
+                },
+                operation,
+            )
+        })
     }
 
     async fn operation(
@@ -348,14 +388,31 @@ impl Service {
         tenant: &TenantId,
         id: &CredentialId,
     ) -> Result<CredentialStatus, Failure> {
-        let _read = self.read_permit()?;
-        let (observed_revision, target) = tokio::time::timeout(
-            MANAGEMENT_TIMEOUT,
-            store::credential_view(&self.db, id.as_str()),
-        )
-        .await
-        .map_err(|_| self.unavailable())?
-        .map_err(|_| self.unavailable())?;
+        self.current()?
+            .principal(caller, Utc::now())
+            .map_err(Failure::from)?;
+        let deadline = tokio::time::Instant::now() + MANAGEMENT_TIMEOUT;
+        let permit = self
+            .reads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
+        let (reply, receive) = oneshot::channel();
+        self.enqueue(
+            Job::Credential(CredentialRead {
+                caller: caller.clone(),
+                id: id.clone(),
+                deadline,
+                permit,
+                reply,
+            }),
+            false,
+        )?;
+        // The HTTP deadline stops waiting, never the actor's transaction cleanup.
+        let (observed_revision, target) = match tokio::time::timeout_at(deadline, receive).await {
+            Ok(Ok(result)) => result?,
+            _ => return Err(ErrorCode::AuthorityUnavailable.into()),
+        };
         let target = target
             .filter(|credential| &credential.tenant == tenant)
             .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;

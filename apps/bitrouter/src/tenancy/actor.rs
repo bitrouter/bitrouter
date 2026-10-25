@@ -1,5 +1,7 @@
 //! Bounded single-writer actor; admitted commands outlive HTTP cancellation.
 
+mod custody;
+
 #[cfg(test)]
 mod tests;
 
@@ -14,7 +16,8 @@ use bitrouter_ai::tenancy::{
 };
 use chrono::Utc;
 use sea_orm::DatabaseConnection;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, oneshot};
+use tokio::time::Instant;
 
 use super::{
     command::Command,
@@ -22,12 +25,40 @@ use super::{
     model::{Caller, Snapshot},
     mutation,
     store::{self, Operation, StoredResponse},
+    transaction::{Control, Disposition, Proof},
 };
 
 pub(super) struct Message {
     pub caller: Caller,
     pub command: Command,
     pub reply: oneshot::Sender<Result<StoredResponse, Failure>>,
+}
+
+pub(super) enum Job {
+    Command(Box<Message>),
+    Credential(CredentialRead),
+}
+
+impl From<Message> for Job {
+    fn from(message: Message) -> Self {
+        Self::Command(Box::new(message))
+    }
+}
+
+pub(super) struct CredentialRead {
+    pub caller: Caller,
+    pub id: bitrouter_ai::tenancy::identity::CredentialId,
+    pub deadline: Instant,
+    pub permit: OwnedSemaphorePermit,
+    pub reply: oneshot::Sender<
+        Result<
+            (
+                bitrouter_ai::tenancy::identity::AuthorityRevision,
+                Option<super::model::Credential>,
+            ),
+            Failure,
+        >,
+    >,
 }
 
 /// Any exit (including task cancellation) invalidates the last published view.
@@ -45,6 +76,7 @@ pub(super) struct Worker {
     pub owner: Option<super::ownership::Lease>,
     pub limits: OperationLimits,
     pub resources: Arc<super::resources::Resources>,
+    pub proof: Arc<Proof>,
 }
 
 #[derive(Clone, Copy)]
@@ -63,72 +95,6 @@ impl Default for OperationLimits {
 }
 
 impl Worker {
-    pub async fn run(
-        self,
-        mut ordinary: mpsc::Receiver<Message>,
-        mut safety: mpsc::Receiver<Message>,
-        stop: tokio_util::sync::CancellationToken,
-    ) {
-        // The file remains owned until all admitted commands have settled.
-        let _owner = &self.owner;
-        let mut draining = false;
-        let mut ordinary_open = true;
-        let mut safety_open = true;
-        loop {
-            let message = tokio::select! {
-                biased;
-                () = stop.cancelled(), if !draining && (ordinary_open || safety_open) => {
-                    ordinary.close();
-                    safety.close();
-                    draining = true;
-                    continue;
-                }
-                message = safety.recv(), if safety_open => match message {
-                    Some(message) => message,
-                    None => {
-                        safety_open = false;
-                        continue;
-                    }
-                },
-                message = ordinary.recv(), if ordinary_open => match message {
-                    Some(message) => message,
-                    None => {
-                        ordinary_open = false;
-                        continue;
-                    }
-                },
-                else => break,
-            };
-            let writing = AtomicBool::new(false);
-            let response = {
-                // The future stays in this task. Dropping read-only preparation
-                // cannot detach a continuation that later enters store::commit.
-                let work = self.execute(&message.caller, &message.command, &writing);
-                tokio::pin!(work);
-                tokio::select! {
-                    biased;
-                    () = tokio::time::sleep(super::MANAGEMENT_TIMEOUT) => {
-                        if writing.load(Ordering::Acquire) {
-                            // Once commit starts, its outcome may be unknown.
-                            // Fence admission and hold the owner until it settles.
-                            self.live.0.store(false, Ordering::Release);
-                            let _settled = work.await;
-                        }
-                        Err(Failure::new(ErrorCode::AuthorityUnavailable, Some(message.command.operation_id().clone())))
-                    }
-                    response = &mut work => response,
-                }
-                // A timed-out preparation is dropped before replying or taking
-                // another command; it never publishes its private candidate.
-            };
-            if message.reply.send(response).is_err() {
-                // A disconnected caller recovers via its operation ID; do not
-                // retry the command or retain a one-time secret in diagnostics.
-                tracing::debug!("tenancy command completed without a response receiver");
-            }
-        }
-    }
-
     fn current(&self) -> Result<Arc<Snapshot>, Failure> {
         if !self.live.0.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
@@ -148,7 +114,7 @@ impl Worker {
         &self,
         caller: &Caller,
         command: &Command,
-        writing: &AtomicBool,
+        control: &Control,
     ) -> Result<StoredResponse, Failure> {
         let old = self.current()?;
         let now = Utc::now();
@@ -291,14 +257,17 @@ impl Worker {
         if !self.live.0.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
-        // No await or detached work may separate this marker from commit. The
-        // watchdog must never cancel a potentially durable mutation as a read.
-        writing.store(true, Ordering::Release);
-        if store::commit(&self.db, &next, &changes, &operation)
+        // The transaction control enters Beginning before its first await.
+        // Durable management intent is retained even after the caller deadline.
+        if store::commit(&self.db, &next, &changes, &operation, control)
             .await
             .is_err()
         {
             return Err(self.unavailable(ErrorCode::StorageUnavailable));
+        }
+        if self.proof.disposition() != Disposition::Committed {
+            self.proof.quarantine();
+            return Err(ErrorCode::AuthorityUnavailable.into());
         }
         match self.snapshot.write() {
             Ok(mut state) => *state = next,

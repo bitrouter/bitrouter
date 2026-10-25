@@ -327,12 +327,39 @@ state survive the tested profile transitions. The corrected artifact test passed
 strict Clippy; distribution, formatting and whitespace checks passed. This stage
 does not complete M2.
 
-Before exposing owned evaluation HTTP writes, the existing authority actor needs
-explicit transaction-cleanup outcomes for management writes and credential reads.
-A returned transaction error or joined task alone must not prove successful
-rollback. The next stage retains writer ownership on ambiguous cleanup, preserves
-confirmed late commits, and tests failed commit/rollback and canceled shutdown.
-Owned ledger admission and required observation draining follow that boundary.
+### M2 authority transaction custody
+
+Management writes and credential-status reads now share explicit transaction
+outcomes in the existing actor. Precommit write failures await rollback; successful
+reads also end with confirmed rollback. A typed pool-acquisition failure can prove
+that no transaction was created. Other BEGIN errors, consuming commit/rollback
+errors and unexpected transaction unwinds cannot be treated as cleanup proof.
+They fence authority and quarantine the same actor, retaining its database/file
+ownership and active-job custody until process exit. No automatic retry or
+un-fence is added. Confirmed late management commits still publish their durable
+state while leaving authority fenced.
+
+Credential reads carry their original five-second deadline and owned read permit
+through the ordinary queue. Expired queued jobs are rejected synchronously before
+polling storage. In-flight reads finish their current await and explicitly roll
+back after a deadline; cleanup exceeding one second fences new work while the
+actor keeps waiting. A timely confirmed read rollback does not fence authority.
+HTTP cancellation drops only the response waiter. Shutdown closes new command
+admission and requires explicit cleanup confirmation in addition to task drains.
+A canceled shutdown waiter cannot release the actor or turn quarantine into success.
+
+Targeted qualification passed 196 minimal-plus-HTTP/2 tenancy tests and 201
+all-feature tenancy/host tests, including two real host lifecycle cases. Real
+SQLite deferred-constraint commit failure and consuming rollback error regressions
+cover the unknown-outcome boundary. Rust child processes verify file ownership
+after normal service and pool handles close; a protected HTTP router test verifies
+read capacity survives handler cancellation. Independent review found no remaining
+actionable defects after fixing the expired-queue admission check. The final
+all-feature workspace run passed all 5,242 selected tests (163 opt-in tests
+skipped). Strict all-feature/all-target workspace Clippy, 12 doctests (one
+ignored), the pure HTTP/1 minimal all-target check, generated distribution
+checks, formatting and whitespace checks passed. Owned evaluation HTTP, atomic
+ledger admission and required observation draining remain subsequent work.
 
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a

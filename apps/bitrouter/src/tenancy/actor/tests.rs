@@ -1,5 +1,3 @@
-#[cfg(unix)]
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -137,11 +135,14 @@ impl Fixture {
         let (reply, receive) = oneshot::channel();
         self.service
             .commands
-            .try_send(Message {
-                caller: self.operator.clone(),
-                command,
-                reply,
-            })
+            .try_send(
+                Message {
+                    caller: self.operator.clone(),
+                    command,
+                    reply,
+                }
+                .into(),
+            )
             .map_err(|_| anyhow::anyhow!("test actor admission failed"))?;
         // Observe the actor reply directly so the HTTP/client wait deadline
         // cannot mask whether the actor cancelled preparation or kept committing.
@@ -312,11 +313,10 @@ async fn commit_deadline_fences_and_holds_owner_until_durable_settlement() -> Re
         },
     );
     let mut receive = fixture.enqueue(command)?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while fixture.service.live.load(Ordering::Acquire) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        fixture.service.cleanup.wait_fenced(),
+    )
     .await
     .context("uncertain commit did not fence authority")?;
     ensure!(
@@ -345,6 +345,10 @@ async fn commit_deadline_fences_and_holds_owner_until_durable_settlement() -> Re
         if error.0.code == ErrorCode::AuthorityUnavailable
             && error.0.operation_id.as_ref() == Some(&operation)));
     tokio::time::timeout(Duration::from_secs(10), shutdown).await???;
+    ensure!(
+        fixture.service.cleanup.disposition()
+            == crate::tenancy::transaction::Disposition::Committed
+    );
     let stored = fixture
         .operation(&operation)
         .await?
@@ -357,3 +361,6 @@ async fn commit_deadline_fences_and_holds_owner_until_durable_settlement() -> Re
     blocker.close().await?;
     Ok(())
 }
+mod hardening;
+#[cfg(unix)]
+mod quarantine;

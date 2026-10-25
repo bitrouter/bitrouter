@@ -106,11 +106,14 @@ async fn shutdown_settles_admitted_commands_after_the_client_disconnects() -> Re
     fixture
         .service
         .commands
-        .try_send(super::actor::Message {
-            caller: fixture.operator.clone(),
-            command: command(),
-            reply,
-        })
+        .try_send(
+            super::actor::Message {
+                caller: fixture.operator.clone(),
+                command: command(),
+                reply,
+            }
+            .into(),
+        )
         .map_err(|_| anyhow::anyhow!("test command admission failed"))?;
     drop(receive);
     let service = fixture.service.clone();
