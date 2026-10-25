@@ -217,7 +217,6 @@ impl Control {
         self.begin_configured(db, None).await
     }
 
-    #[cfg(feature = "core")]
     pub async fn begin_repeatable_read(
         &self,
         db: &DatabaseConnection,

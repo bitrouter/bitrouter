@@ -573,6 +573,63 @@ additions were accepted.
 Dispatch and strict-receipt capabilities remain disabled; owned capture and
 paid learning remain separate work.
 
+### M2 authenticated HTTP continuations
+
+The Responses consumer resolves and publishes continuations through the existing
+tenant authority actor and continuation registry. Each lookup binds installation,
+tenant, stable principal and the exact retained route revision. A new invocation
+selects its own immutable configuration and current grants; the prior execution
+revision is provenance, not authority to reuse stale defaults or policy.
+Credential rotation can preserve the principal, but equal secret bytes cannot
+substitute another credential resource. Raw provider IDs and reserved continuity
+defaults cannot bypass the owned lookup.
+
+The actual authenticated executor produces private attempt and output evidence.
+JSON and SSE require validated terminal evidence and mandatory post-hook output
+comparison. Provider-backed resume without a reconstructible causal prefix remains
+possible, but cannot authorize history detachment. Publication follows the existing
+required-delivery handshake. Compensation, lookup read permits, pending generations
+and producer shutdown remain owned until the actor acknowledges their exact
+transaction outcome. A private ticket-and-origin-bound acknowledgment distinguishes
+confirmed compensation from uncertain cleanup; generic finalizer failures remain
+sticky. An admitted request may finish after caller-key revocation, while tenant
+suspension or deletion independently prevents new publication transitions.
+
+Migration034 adds nullable ownership projections to `provider_continuations`
+without assigning historical records. Legacy reads and writes require NULL
+ownership, and owned payloads use the installation epoch with authenticated
+metadata. Exact-byte CAS and conflict handling apply on every backend. Downgrade
+refuses populated provenance and incompatible schema dependencies. Production
+startup runs bounded owned reconciliation after initialization; unknown transaction
+outcomes retain the actor and canonical file lease.
+
+All 5,426 all-feature workspace tests passed, with 182 opt-in tests skipped.
+Twelve doctests passed with one ignored. Warnings-as-errors rustdoc, distribution,
+formatting and whitespace checks passed. Reduced-profile continuation/migration
+runs passed 158 minimum-gateway, 161 core and 158 harness tests, with strict
+all-target Clippy for all three profiles and the full workspace. The final
+mailbox/wire additions passed three all-feature tests and five minimum-gateway
+tests including the existing authenticated-request digest checks.
+
+Real PostgreSQL 17 and MySQL 8.4 each passed the isolated migration and actual
+continuation-consumer regression. Five artifact tests passed with separately
+built default-full, minimum-gateway and harness-only executables, preserving the
+pinned historical records and schema through profile transitions. Actual H1/h2
+connection-disconnect tests verify both continuation compensation and the separate
+trajectory/Eval terminal obligation. Isolated child tests retain file ownership
+after real BEGIN, consuming COMMIT/ROLLBACK and caught-unwind failures. A subsequent
+serial-libtest handshake correction was reproduced before fixing and passed all
+five relevant tests in both all-feature and pure H1 gateway builds; strict
+workspace Clippy passed again. The correction changes test framing only.
+
+Independent review found no remaining P1/P2 defects in the merged continuation
+consumer or the serial-child correction. See
+[the HTTP continuation profile](RESOURCE_TENANCY_HTTP_CONTINUATION.md) for request
+binding, output evidence and lifecycle details. These checks qualify this consumer
+only. Strict execution receipts, remaining native/capture consumers, auxiliary
+inference and final performance gates remain outstanding. Dispatch and
+strict-receipt capability flags remain false.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

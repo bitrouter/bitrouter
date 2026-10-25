@@ -1,5 +1,7 @@
 //! Native artifact key custody. Legacy continuation keys and rows are untouched.
 
+pub(crate) mod http;
+
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::identity::InstallationId;
 use sea_orm::{
@@ -159,6 +161,13 @@ pub(super) async fn initialize(
     let result = async {
         super::trajectory_profile::validate_startup(&transaction, &initial.installation, control)
             .await?;
+        http::bootstrap::validate(
+            &transaction,
+            &initial.installation,
+            crypto.as_ref(),
+            control,
+        )
+        .await?;
         verify_epoch(&transaction, &initial.installation, crypto.as_ref()).await?;
         resources.bootstrap(&transaction, import).await?;
         for (tenant, revision) in &initial.active_configurations {

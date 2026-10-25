@@ -92,12 +92,13 @@ fn additive_schema_definition(entry: &str) -> Result<String> {
             "acp_resource_observations",
             "acp_assessment_revisions",
             "acp_effective_assessments",
+            "provider_continuations",
         ]
         .contains(&definition.1.as_str())
     {
         return Ok(entry.to_owned());
     }
-    // Independently allow only migration030/032/033's exact nullable additions. Keep
+    // Independently allow only migration030/032/033/034's exact nullable additions. Keep
     // every byte of the old column/constraint definitions and all old indexes.
     // Do not derive the allowance from the migration being tested.
     let sql = definition
@@ -116,6 +117,9 @@ fn additive_schema_definition(entry: &str) -> Result<String> {
         "acp_checkpoints" => ", PRIMARY KEY (\"checkpoint_id\") )",
         "acp_effective_assessments" => ", PRIMARY KEY (\"session_key\") )",
         "acp_resource_observations" => ", PRIMARY KEY (\"observation_id\") )",
+        "provider_continuations" => {
+            ", CHECK (\"publication_state\" IN ('provisional', 'delivering', 'active')), CHECK (\"publication_generation\" <> ''), CHECK (\"publication_instance_id\" <> ''), CHECK (\"publication_lease_until\" <> '') )"
+        }
         _ => ")",
     };
     let prefix = sql

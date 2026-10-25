@@ -63,9 +63,7 @@ impl ValidatedEnvelope {
     /// reads keep the same authenticated decode without enabling execution.
     pub(super) fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
         for route in self.routes.values() {
-            if let Some(policy) = &route.policy {
-                policy.require_capabilities()?;
-            }
+            route.require_capabilities()?;
         }
         Ok(())
     }
@@ -245,6 +243,29 @@ struct RouteData {
     candidates: Vec<Candidate>,
 }
 
+impl RouteData {
+    fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
+        // A retained routing artifact owns routing, never provider-global state.
+        // Keep old encrypted bytes readable, but reject execution qualification
+        // even when another inbound wire would hide these supplemental extras.
+        if ["previous_response_id", "conversation"]
+            .iter()
+            .any(|field| {
+                self.overrides
+                    .params
+                    .get(*field)
+                    .is_some_and(|value| !value.is_null())
+            })
+        {
+            return Err(ErrorCode::InvalidRequest);
+        }
+        match &self.policy {
+            Some(policy) => policy.require_capabilities(),
+            None => Ok(()),
+        }
+    }
+}
+
 struct Chain {
     selector: String,
     inbound: ApiProtocol,
@@ -297,10 +318,7 @@ impl RetainedRoute {
     /// Admission checks only the literal selected route, before acquiring a
     /// lease. Unused policy documents do not confer or require capabilities.
     pub(crate) fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
-        match self.policy() {
-            Some(policy) => policy.require_capabilities(),
-            None => Ok(()),
-        }
+        self.data.require_capabilities()
     }
 
     /// Configuration defaults enter canonical fields before routing, accounting

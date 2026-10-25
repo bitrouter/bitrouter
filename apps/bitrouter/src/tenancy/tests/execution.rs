@@ -17,6 +17,7 @@ mod cache;
 mod defaults;
 #[cfg(feature = "core")]
 mod evaluation;
+mod http_continuation;
 mod ingress;
 mod lifecycle_http;
 mod native;

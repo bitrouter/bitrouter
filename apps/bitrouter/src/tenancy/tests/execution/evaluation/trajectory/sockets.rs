@@ -262,8 +262,35 @@ async fn real_socket_begin_deadline_and_shutdown_wait_for_rollback_acknowledgmen
         ensure!(provider.calls.load(Ordering::SeqCst) == 0);
         fixture.service.cleanup.release_gate();
         drop(paused);
-        tokio::time::timeout(TIMEOUT, &mut shutdown).await??;
+        // Keep driving owned pipeline cleanup while observing this operation's
+        // rollback. The later HTTP producer-close job has no transaction and
+        // correctly replaces the actor's last-operation disposition.
+        tokio::time::timeout(
+            TIMEOUT,
+            std::future::poll_fn(|cx| {
+                if fixture.service.cleanup.disposition() == Disposition::RolledBack {
+                    return std::task::Poll::Ready(Ok(()));
+                }
+                let progress = std::future::Future::poll(shutdown.as_mut(), cx);
+                if fixture.service.cleanup.disposition() == Disposition::RolledBack {
+                    return std::task::Poll::Ready(Ok(()));
+                }
+                match progress {
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                    std::task::Poll::Ready(result) => {
+                        std::task::Poll::Ready(result.and_then(|()| {
+                            anyhow::bail!(
+                                "shutdown completed without observing the required rollback"
+                            )
+                        }))
+                    }
+                }
+            }),
+        )
+        .await??;
         ensure!(fixture.service.cleanup.disposition() == Disposition::RolledBack);
+        tokio::time::timeout(TIMEOUT, &mut shutdown).await??;
+        fixture.service.cleanup.ensure_clean()?;
         ensure!(fixture.service.eval.healthy());
         closure(&fixture, 0).await?;
         ensure!(provider.calls.load(Ordering::SeqCst) == 0);

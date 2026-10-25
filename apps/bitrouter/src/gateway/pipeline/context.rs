@@ -450,6 +450,23 @@ impl PipelineContext {
     }
 
     /// The request id.
+    pub(crate) fn delivery_attempt_id(&self) -> u64 {
+        self.delivery_attempt_id
+    }
+
+    pub(crate) fn set_tenant_continuation_effort(
+        &mut self,
+        effort: Option<bitrouter_ai::types::ReasoningEffort>,
+    ) -> crate::gateway::error::Result<()> {
+        let prompt = self.input.generation_prompt_mut().ok_or_else(|| {
+            crate::gateway::error::BitrouterError::bad_request("continuation requires Generation")
+        })?;
+        if prompt.params.reasoning_effort.is_none() {
+            prompt.params.reasoning_effort = effort;
+        }
+        Ok(())
+    }
+
     pub fn request_id(&self) -> &str {
         &self.request_id
     }
@@ -853,6 +870,9 @@ impl PipelineContext {
         self.stream_terminal_succeeded = stream.terminal_succeeded;
         self.stream_native_response_completed = stream.native_response_completed;
         let observed = stream.assistant_turn_commitment.finish();
+        if let Some(runtime) = self.extension::<crate::continuation::tenant::runtime::Runtime>() {
+            runtime.observe_delivered(observed.clone());
+        }
         self.stream_assistant_turn_commitment = stream
             .terminal_assistant_turn_commitment
             .filter(|terminal| observed.as_ref() == Some(terminal));
@@ -880,6 +900,11 @@ impl PipelineContext {
         } else {
             generation.and_then(|result| assistant_turn_commitment(&result.content))
         };
+        if !streamed
+            && let Some(runtime) = self.extension::<crate::continuation::tenant::runtime::Runtime>()
+        {
+            runtime.observe_delivered(delivered.clone());
+        }
         let causal_prefix_commitment =
             delivered
                 .as_ref()

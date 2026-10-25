@@ -7,7 +7,7 @@ mod cache;
 mod command;
 mod configuration;
 mod configuration_store;
-mod continuation;
+pub(crate) mod continuation;
 mod error;
 #[cfg(feature = "core")]
 pub(crate) mod eval;
@@ -79,6 +79,8 @@ pub(crate) struct Service {
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
     native_continuation: Option<continuation::PinnedCrypto>,
+    http_continuation: Arc<continuation::http::Port>,
+    http_registry: crate::continuation::ContinuationRegistry,
     caches: Arc<execution::cached::Caches>,
     admission: Arc<admission::Admission>,
     executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
@@ -101,8 +103,16 @@ impl Service {
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
         config: &crate::config::tenancy::TenancyConfig,
+        continuations: &crate::config::ContinuationConfig,
     ) -> anyhow::Result<Self> {
-        Self::open_configured(db, owner, actor::OperationLimits::default(), config).await
+        Self::open_configured(
+            db,
+            owner,
+            actor::OperationLimits::default(),
+            config,
+            continuations,
+        )
+        .await
     }
 
     #[cfg(test)]
@@ -116,6 +126,7 @@ impl Service {
             owner,
             limits,
             &crate::config::tenancy::TenancyConfig::default(),
+            &crate::config::ContinuationConfig::default(),
         )
         .await
     }
@@ -125,6 +136,7 @@ impl Service {
         owner: Option<ownership::Lease>,
         limits: actor::OperationLimits,
         config: &crate::config::tenancy::TenancyConfig,
+        continuations: &crate::config::ContinuationConfig,
     ) -> anyhow::Result<Self> {
         let initial = store::load(&db, Utc::now()).await?;
         let resources = Arc::new(resources::Resources::load_key(
@@ -132,17 +144,21 @@ impl Service {
             config,
         )?);
         let import = resources::Resources::read_import(config.resource_import.as_deref()).await?;
-        Self::start_resources(
+        let service = Self::start_resources_with_continuations(
             db,
             owner,
             limits,
             initial,
             resources,
-            import,
+            (import, continuations),
             #[cfg(test)]
             None,
         )
-        .await
+        .await?;
+        if service.http_continuation.state.enabled() {
+            service.http_registry.start_reconciler();
+        }
+        Ok(service)
     }
 
     #[cfg(test)]
@@ -156,6 +172,7 @@ impl Service {
         Self::start_resources(db, owner, limits, initial, resources, None, None).await
     }
 
+    #[cfg(test)]
     async fn start_resources(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
@@ -165,6 +182,31 @@ impl Service {
         import: Option<Vec<u8>>,
         #[cfg(test)] bootstrap_gate: Option<BootstrapGate>,
     ) -> anyhow::Result<Self> {
+        // Transaction fault fixtures control the sole writer's next operation.
+        // Background timers are started by open_configured, or explicitly by
+        // the tests that exercise reconciliation, after their gates are ready.
+        Self::start_resources_with_continuations(
+            db,
+            owner,
+            limits,
+            initial,
+            resources,
+            (import, &crate::config::ContinuationConfig::default()),
+            bootstrap_gate,
+        )
+        .await
+    }
+
+    async fn start_resources_with_continuations(
+        db: DatabaseConnection,
+        owner: Option<ownership::Lease>,
+        limits: actor::OperationLimits,
+        initial: Snapshot,
+        resources: Arc<resources::Resources>,
+        provisioning: (Option<Vec<u8>>, &crate::config::ContinuationConfig),
+        #[cfg(test)] bootstrap_gate: Option<BootstrapGate>,
+    ) -> anyhow::Result<Self> {
+        let (import, continuations) = provisioning;
         // Construct fallible transport state before spawning the owning actor.
         // Tenant profiles share connection pools, never host credential plugins.
         let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::with_defaults()?);
@@ -180,7 +222,7 @@ impl Service {
                 .send((cleanup.clone(), gate))
                 .map_err(|_| anyhow::anyhow!("bootstrap test gate receiver unavailable"))?;
         }
-        let instance = uuid::Uuid::new_v4().to_string().try_into()?;
+        let instance: InstanceId = uuid::Uuid::new_v4().to_string().try_into()?;
         // Ordinary traffic cannot occupy the queue reserved for installation
         // revokes and stop transitions. Neither queue waits for free capacity.
         let (commands, receiver) = mpsc::channel(16);
@@ -188,6 +230,19 @@ impl Service {
         let accepting = Arc::new(std::sync::Mutex::new(true));
         #[cfg(feature = "core")]
         let eval = eval::State::new(live.clone());
+        let http_state = crate::continuation::tenant::state::State::new(
+            continuations,
+            instance.as_str().to_owned(),
+        )?;
+        let reads = Arc::new(Semaphore::new(8));
+        let http_continuation = continuation::http::Port::new(
+            commands.clone(),
+            &cleanup,
+            reads.clone(),
+            http_state.clone(),
+        );
+        let http_registry =
+            crate::continuation::ContinuationRegistry::for_tenant(http_continuation.clone())?;
         let worker = Worker {
             db: db.clone(),
             snapshot: snapshot.clone(),
@@ -196,6 +251,7 @@ impl Service {
             limits,
             resources: resources.clone(),
             proof: cleanup.clone(),
+            http_continuation: http_state,
             #[cfg(feature = "core")]
             eval: eval.clone(),
             #[cfg(feature = "core")]
@@ -220,9 +276,11 @@ impl Service {
             #[cfg(feature = "core")]
             eval,
             cleanup,
-            reads: Arc::new(Semaphore::new(8)),
+            reads,
             resources,
             native_continuation: None,
+            http_continuation,
+            http_registry,
             caches,
             admission: admission::Admission::new(),
             executor,
@@ -241,6 +299,10 @@ impl Service {
                 anyhow::bail!("native continuation key initialization failed")
             }
         }
+    }
+
+    pub(crate) fn continuation_registry(&self) -> &crate::continuation::ContinuationRegistry {
+        &self.http_registry
     }
 
     /// Stop accepting mutations and drain both admitted command queues. Timeout
@@ -270,6 +332,20 @@ impl Service {
                 .map_err(|_| {
                     anyhow::anyhow!("tenant executions did not drain within 30 seconds")
                 })?;
+            if self.http_continuation.state.enabled() {
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                self.http_continuation
+                    .close_producer(deadline)
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!("HTTP continuation producer barrier unavailable")
+                    })?;
+                let drained = self.http_registry.drain_owned_until(deadline).await?;
+                anyhow::ensure!(
+                    drained.is_clean(),
+                    "HTTP continuation cleanup retained ownership"
+                );
+            }
             #[cfg(feature = "core")]
             {
                 let _gate = self
@@ -395,7 +471,7 @@ impl Service {
     fn enqueue(&self, job: Job, safety: bool) -> Result<(), Failure> {
         let operation = match &job {
             Job::Command(message) => Some(message.command.operation_id().clone()),
-            Job::Credential(_) => None,
+            Job::Credential(_) | Job::Continuation(_) => None,
             #[cfg(feature = "core")]
             Job::Eval(_)
             | Job::Settlement(_)

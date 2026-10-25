@@ -105,6 +105,10 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
             limits: OperationLimits::default(),
             resources,
             proof: proof.clone(),
+            http_continuation: crate::continuation::tenant::state::State::new(
+                &crate::config::ContinuationConfig::default(),
+                uuid::Uuid::new_v4().to_string(),
+            )?,
             // Integration-specific: the parent Eval stage added these fields
             // after the overlay's captured b3888397 source baseline.
             #[cfg(feature = "core")]

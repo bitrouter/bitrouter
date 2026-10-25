@@ -756,6 +756,15 @@ jobs:
           --lib db::migration::m20240101_000032_trajectory_storage_scope::tests::server_migration032_preserves_legacy_and_refuses_partial_down
           -- --ignored --exact --test-threads=1
 
+      - name: verify HTTP continuation ownership before populating the test database
+        env:
+          BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib db::migration::m20240101_000034_continuation_storage_scope::tests::server::server_migration034_preserves_legacy_bytes_exact_scopes_and_dependencies
+          -- --ignored --exact --test-threads=1
+
       - name: exercise migrations and gateway persistence on the selected backend
         env:
           BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -831,6 +840,16 @@ jobs:
           cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
           --lib db::migration::m20240101_000033_capture_legacy_scope::tests::server::
           -- --ignored --test-threads=1
+
+      - name: verify owned HTTP continuation consumers on the selected backend
+        # The campaign creates an isolated database using the scoped fixture grant.
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
+          --lib tenancy::tests::execution::http_continuation::server::server_http034_consumer_exact_cas_absence_race_and_restart
+          -- --ignored --exact --test-threads=1
 
       - name: verify MySQL transaction snapshot boundaries
         if: matrix.backend == 'mysql'

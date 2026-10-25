@@ -49,6 +49,7 @@ pub(super) async fn bind(native: &SharedNative, request: &str) -> Result<Bound> 
 
 pub(super) fn publication(row: &continuation_entity::Model) -> PendingPublication {
     PendingPublication {
+        tenant: None,
         continuation_identity: row.continuation_identity.clone(),
         generation: row.publication_generation.clone(),
         instance_id: row.publication_instance_id.clone(),

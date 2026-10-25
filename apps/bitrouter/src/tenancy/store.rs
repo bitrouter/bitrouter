@@ -498,7 +498,8 @@ pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<
         // An absent singleton with existing authority records is an incomplete
         // cutover, never an invitation to assign a new installation identity.
         ensure!(
-            !super::continuation::has_epoch(db).await?,
+            !super::continuation::has_epoch(db).await?
+                && !super::continuation::http::bootstrap::has_owned(db).await?,
             "authority has no installation identity"
         );
         for table in [

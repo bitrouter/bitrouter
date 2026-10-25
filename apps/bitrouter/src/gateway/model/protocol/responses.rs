@@ -369,7 +369,7 @@ pub fn assistant_turn_commitment(content: &[Content]) -> Option<AssistantTurnCom
 /// Hash the complete terminal Responses output without materializing another
 /// transcript. Only protocol-neutral assistant semantics supported by the
 /// post-hook stream accumulator are eligible; every other item fails closed.
-fn terminal_assistant_turn_commitment(
+pub(crate) fn terminal_assistant_turn_commitment(
     response: &serde_json::Value,
 ) -> Option<AssistantTurnCommitment> {
     let output = response.get("output")?.as_array()?;
@@ -582,6 +582,22 @@ pub fn extend_causal_prefix(
 ) -> Option<CausalPrefixCommitment> {
     let root = fold_causal_messages(prior, messages, |_, _, _| {})?;
     Some(extend_causal_step(&root, Role::Assistant, delivered))
+}
+
+/// Fixed-size HTTP continuation input commitment, using the existing canonical
+/// folding rules without retaining a second prompt during a streaming response.
+pub(crate) struct ContinuationSeed(CausalPrefixCommitment);
+impl ContinuationSeed {
+    pub(crate) fn new(messages: &[Message], plan: Option<&CausalPrefixPlan>) -> Option<Self> {
+        let (prior, messages) = match plan {
+            Some(plan) => (plan.prior.as_ref(), messages.get(plan.suffix_start?..)?),
+            None => (None, messages),
+        };
+        fold_causal_messages(prior, messages, |_, _, _| {}).map(Self)
+    }
+    pub(crate) fn finish(&self, delivered: &AssistantTurnCommitment) -> CausalPrefixCommitment {
+        extend_causal_step(&self.0, Role::Assistant, delivered)
+    }
 }
 
 /// Find the unique exact prior root in a complete visible history. The match

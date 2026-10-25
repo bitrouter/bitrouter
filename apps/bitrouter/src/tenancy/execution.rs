@@ -38,6 +38,7 @@ use crate::gateway::{
 
 pub(super) mod cached;
 mod continuation;
+pub(crate) mod http_continuation;
 pub(crate) mod lifecycle;
 mod native;
 mod profile;

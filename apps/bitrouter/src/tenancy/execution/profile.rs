@@ -117,6 +117,14 @@ impl TenantExecution {
             .routing_table(self.route.clone())
             .executor(self.service.executor.clone())
             .pre_resolution_hook_for(Entry(self.clone()), OperationScope::Both);
+        let http_continuation = crate::continuation::ContinuationRuntime::for_tenant(
+            self.service.http_registry.clone(),
+            self.clone(),
+        )
+        .map_err(|_| {
+            self.reject(bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable)
+        })?;
+        builder.pre_resolution_hook(http_continuation.clone());
         if let Some(policy) = &self.continuation {
             builder.native_private_context(policy.clone());
         }
@@ -233,6 +241,9 @@ impl TenantExecution {
                 observation: self.observation.get().cloned(),
             });
         }
+        builder
+            .route_hook(http_continuation.clone())
+            .required_finalizer(http_continuation);
         Ok(Arc::new(builder.build()?))
     }
 }

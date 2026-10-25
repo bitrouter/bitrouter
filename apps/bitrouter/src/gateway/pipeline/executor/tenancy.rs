@@ -18,6 +18,7 @@ use crate::{
     tenancy::execution::TenantExecution,
 };
 
+pub(crate) mod http_continuation;
 pub(crate) mod native;
 
 #[cfg(test)]

@@ -1,13 +1,13 @@
 //! Encrypted provider continuation registry and pipeline integration.
 
 pub mod native_context;
-#[cfg(feature = "multi-instance")]
 pub(crate) mod owned;
 #[cfg(all(test, feature = "multi-instance"))]
 #[path = "continuation/tests_owned.rs"]
 mod owned_tests;
 #[cfg(feature = "multi-instance")]
 mod shared;
+pub(crate) mod tenant;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -218,6 +218,7 @@ fn hmac_bytes(secret: &[u8], domain: &[u8], fields: &[&str]) -> Result<Vec<u8>> 
 pub struct ContinuationKeySource(Arc<ContinuationKeySourceInner>);
 
 enum ContinuationKeySourceInner {
+    Unavailable,
     Fixed(ContinuationKey),
     Lazy {
         home: PathBuf,
@@ -239,6 +240,9 @@ impl ContinuationKeySource {
 
     fn load(&self) -> Result<ContinuationKey> {
         match self.0.as_ref() {
+            ContinuationKeySourceInner::Unavailable => {
+                anyhow::bail!("tenant registry has no Legacy key source")
+            }
             ContinuationKeySourceInner::Fixed(key) => Ok(key.clone()),
             ContinuationKeySourceInner::Lazy { home, cached } => cached
                 .get_or_init(|| {
@@ -330,6 +334,7 @@ pub struct ContinuationRegistry {
 }
 
 struct ContinuationRegistryInner {
+    tenant: Option<tenant::Backend>,
     #[cfg(feature = "multi-instance")]
     shared: Option<shared::registry::Registry>,
     db: DatabaseConnection,
@@ -361,7 +366,6 @@ struct ReconcilerControl {
     task: Mutex<Option<ReconcilerTask>>,
     pending_cursor: Mutex<Option<u64>>,
     stale_offset: Mutex<u64>,
-    #[cfg(feature = "multi-instance")]
     owned: Option<owned::Control>,
 }
 
@@ -405,6 +409,7 @@ struct MaintenanceFault {
 
 #[derive(Clone)]
 struct PendingPublication {
+    tenant: Option<tenant::state::Publication>,
     continuation_identity: String,
     generation: String,
     instance_id: String,
@@ -518,6 +523,7 @@ impl ContinuationRegistry {
             u64::try_from(prune_batch_size).context("continuation prune_batch_size exceeds u64")?;
         Ok(Self {
             inner: Arc::new(ContinuationRegistryInner {
+                tenant: None,
                 #[cfg(feature = "multi-instance")]
                 shared: None,
                 db,
@@ -533,7 +539,6 @@ impl ContinuationRegistry {
                     task: Mutex::new(None),
                     pending_cursor: Mutex::new(None),
                     stale_offset: Mutex::new(0),
-                    #[cfg(feature = "multi-instance")]
                     owned: None,
                 },
                 #[cfg(test)]
@@ -619,7 +624,14 @@ impl ContinuationRegistry {
     }
 
     pub(crate) fn start_reconciler(&self) {
-        #[cfg(feature = "multi-instance")]
+        if self
+            .inner
+            .tenant
+            .as_ref()
+            .is_some_and(|backend| !backend.port.state.enabled())
+        {
+            return;
+        }
         if let Some(control) = &self.inner.reconciler.owned {
             control.start(|| self.spawn_reconciler());
             self.inner.reconciler.notify.notify_one();
@@ -678,7 +690,6 @@ impl ContinuationRegistry {
     }
 
     async fn stop_reconciler(&self) -> Result<()> {
-        #[cfg(feature = "multi-instance")]
         anyhow::ensure!(
             self.inner.reconciler.owned.is_none(),
             "shared continuation requires its owned lifecycle drain"
@@ -743,6 +754,9 @@ impl ContinuationRegistry {
     }
 
     async fn reconcile_pass(&self, now: DateTime<Utc>) -> bool {
+        if self.inner.tenant.is_some() {
+            return self.tenant_reconcile().await;
+        }
         #[cfg(feature = "multi-instance")]
         if self.inner.shared.is_some() {
             return self.shared_reconcile().await;
@@ -755,6 +769,9 @@ impl ContinuationRegistry {
     }
 
     async fn reconcile_local_publications(&self, now: DateTime<Utc>) -> bool {
+        if self.inner.tenant.is_some() {
+            return self.tenant_reconcile_pending().await;
+        }
         #[cfg(feature = "multi-instance")]
         if self.inner.shared.is_some() {
             return self.shared_reconcile_pending().await;
@@ -893,6 +910,7 @@ impl ContinuationRegistry {
             *offset
         };
         let stale = match continuation_entity::Entity::find()
+            .filter(legacy_continuation_scope())
             .filter(
                 continuation_entity::Column::PublicationState
                     .is_in([PUBLICATION_PROVISIONAL, PUBLICATION_DELIVERING]),
@@ -964,6 +982,7 @@ impl ContinuationRegistry {
         ]);
         let (ciphertext, nonce) = encrypt(&key, &plaintext, &aad)?;
         let claimed = continuation_entity::Entity::update_many()
+            .filter(legacy_continuation_scope())
             .col_expr(
                 continuation_entity::Column::PublicationInstanceId,
                 sea_orm::sea_query::Expr::value(self.inner.instance_id.clone()),
@@ -987,6 +1006,7 @@ impl ContinuationRegistry {
             return Ok(());
         }
         let publication = PendingPublication {
+            tenant: None,
             continuation_identity: row.continuation_identity,
             generation: row.publication_generation,
             instance_id: self.inner.instance_id.clone(),
@@ -1217,6 +1237,7 @@ impl ContinuationRegistry {
             return Ok(publication.clone());
         }
         let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+            .filter(legacy_continuation_scope())
             .one(&self.inner.db)
             .await
             .map_err(OwnershipFailure::unknown)?
@@ -1249,6 +1270,7 @@ impl ContinuationRegistry {
         let (ciphertext, nonce) =
             encrypt(&key, &plaintext, &aad).map_err(OwnershipFailure::owned)?;
         let renewed = continuation_entity::Entity::update_many()
+            .filter(legacy_continuation_scope())
             .col_expr(
                 continuation_entity::Column::PublicationLeaseUntil,
                 sea_orm::sea_query::Expr::value(lease_until.clone()),
@@ -1283,6 +1305,7 @@ impl ContinuationRegistry {
         publication: &PendingPublication,
     ) -> std::result::Result<CompensationOutcome, OwnershipFailure> {
         let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+            .filter(legacy_continuation_scope())
             .one(&self.inner.db)
             .await
             .map_err(OwnershipFailure::unknown)?;
@@ -1315,6 +1338,7 @@ impl ContinuationRegistry {
             }
         }
         let deleted = match continuation_entity::Entity::delete_many()
+            .filter(legacy_continuation_scope())
             .filter(continuation_snapshot_condition(&row))
             .exec(&self.inner.db)
             .await
@@ -1342,6 +1366,7 @@ impl ContinuationRegistry {
         error: anyhow::Error,
     ) -> std::result::Result<CompensationOutcome, OwnershipFailure> {
         match continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+            .filter(legacy_continuation_scope())
             .one(&self.inner.db)
             .await
         {
@@ -1389,6 +1414,7 @@ impl ContinuationRegistry {
                 .map_err(OwnershipFailure::into_error)?;
             let key = self.inner.keys.load()?;
             let row = continuation_entity::Entity::find_by_id(&publication.continuation_identity)
+                .filter(legacy_continuation_scope())
                 .one(&self.inner.db)
                 .await?
                 .ok_or_else(|| {
@@ -1431,6 +1457,7 @@ impl ContinuationRegistry {
                         let row = continuation_entity::Entity::find_by_id(
                             &publication.continuation_identity,
                         )
+                        .filter(legacy_continuation_scope())
                         .one(&self.inner.db)
                         .await?
                         .ok_or_else(|| {
@@ -1530,6 +1557,7 @@ impl ContinuationRegistry {
         ]);
         let (ciphertext, nonce) = encrypt(key, &plaintext, &aad)?;
         let updated = continuation_entity::Entity::update_many()
+            .filter(legacy_continuation_scope())
             .col_expr(
                 continuation_entity::Column::PublicationState,
                 sea_orm::sea_query::Expr::value(next_state),
@@ -1564,6 +1592,10 @@ impl ContinuationRegistry {
         credential_authority: &ContinuationAuthority,
         now: DateTime<Utc>,
     ) -> Result<()> {
+        anyhow::ensure!(
+            self.inner.tenant.is_none(),
+            "Legacy continuation operation unavailable in tenant profile"
+        );
         let effective_model = format!("{}:{}", target.provider_name, target.service_id);
         #[cfg(feature = "multi-instance")]
         if self.inner.shared.is_some() {
@@ -1652,6 +1684,7 @@ impl ContinuationRegistry {
             match publications.entry(delivery_attempt_id) {
                 std::collections::hash_map::Entry::Vacant(entry) => {
                     entry.insert(PendingPublication {
+                        tenant: None,
                         continuation_identity: continuation_identity.clone(),
                         generation: generation.clone(),
                         instance_id: instance_id.clone(),
@@ -1795,6 +1828,9 @@ impl ContinuationRegistry {
         let (ciphertext, nonce) =
             encrypt(&key, &plaintext, &aad).map_err(OwnershipFailure::lost_or_foreign)?;
         let model = continuation_entity::ActiveModel {
+            installation_id: Set(None),
+            tenant_id: Set(None),
+            creator_principal_id: Set(None),
             continuation_identity: Set(continuation_identity.clone()),
             owner_identity: Set(owner_identity),
             ciphertext: Set(Some(ciphertext)),
@@ -1841,7 +1877,7 @@ impl ContinuationRegistry {
         match insert_result {
             Ok(_) => Ok(BindOutcome::Inserted),
             Err(insert_error) => {
-                let existing = continuation_entity::Entity::find_by_id(&continuation_identity)
+                let existing = continuation_entity::Entity::find_by_id(&continuation_identity).filter(legacy_continuation_scope())
                     .one(&self.inner.db)
                     .await
                     .map_err(|reread_error| {
@@ -1902,6 +1938,10 @@ impl ContinuationRegistry {
         gateway_request_id: &str,
         now: DateTime<Utc>,
     ) -> Result<ContinuationResolution> {
+        anyhow::ensure!(
+            self.inner.tenant.is_none(),
+            "Legacy continuation operation unavailable in tenant profile"
+        );
         #[cfg(feature = "multi-instance")]
         if self.inner.shared.is_some() {
             return self.shared_resolve(owner_user_id, gateway_request_id).await;
@@ -1915,6 +1955,7 @@ impl ContinuationRegistry {
         let _identity_guard = identity_lock.lock().await;
         loop {
             let Some(row) = continuation_entity::Entity::find_by_id(&continuation_identity)
+                .filter(legacy_continuation_scope())
                 .one(&self.inner.db)
                 .await?
             else {
@@ -1965,12 +2006,17 @@ impl ContinuationRegistry {
     }
 
     pub async fn prune(&self, now: DateTime<Utc>) -> Result<u64> {
+        anyhow::ensure!(
+            self.inner.tenant.is_none(),
+            "Legacy continuation operation unavailable in tenant profile"
+        );
         #[cfg(feature = "multi-instance")]
         if self.inner.shared.is_some() {
             return self.shared_prune().await;
         }
         let now = timestamp(now);
         let expired = continuation_entity::Entity::find()
+            .filter(legacy_continuation_scope())
             .filter(continuation_entity::Column::ExpiresAt.lte(now.clone()))
             .filter(continuation_entity::Column::Ciphertext.is_not_null())
             .order_by_asc(continuation_entity::Column::ExpiresAt)
@@ -1982,6 +2028,7 @@ impl ContinuationRegistry {
         }
 
         let purge_rows = continuation_entity::Entity::find()
+            .filter(legacy_continuation_scope())
             .filter(continuation_entity::Column::PurgeAfter.lte(now))
             .order_by_asc(continuation_entity::Column::PurgeAfter)
             .limit(self.inner.prune_batch_size)
@@ -1993,6 +2040,7 @@ impl ContinuationRegistry {
         let mut rows_affected = 0;
         for row in purge_rows {
             let result = continuation_entity::Entity::delete_many()
+                .filter(legacy_continuation_scope())
                 .filter(continuation_snapshot_condition(&row))
                 .exec(&self.inner.db)
                 .await?;
@@ -2006,6 +2054,7 @@ impl ContinuationRegistry {
         self.wait_at_maintenance_snapshot(MaintenanceFaultKind::Scrub)
             .await;
         let result = continuation_entity::Entity::update_many()
+            .filter(legacy_continuation_scope())
             .col_expr(
                 continuation_entity::Column::Ciphertext,
                 sea_orm::sea_query::Expr::value(Option::<String>::None),
@@ -2050,8 +2099,16 @@ impl ContinuationRegistry {
     }
 }
 
+fn legacy_continuation_scope() -> sea_orm::Condition {
+    sea_orm::Condition::all()
+        .add(continuation_entity::Column::InstallationId.is_null())
+        .add(continuation_entity::Column::TenantId.is_null())
+        .add(continuation_entity::Column::CreatorPrincipalId.is_null())
+        .add(continuation_entity::Column::CipherVersion.eq(CIPHER_VERSION))
+}
+
 fn continuation_snapshot_condition(row: &continuation_entity::Model) -> sea_orm::Condition {
-    let condition = sea_orm::Condition::all()
+    let condition = legacy_continuation_scope()
         .add(
             continuation_entity::Column::ContinuationIdentity.eq(row.continuation_identity.clone()),
         )
@@ -2099,6 +2156,7 @@ fn publication_owns_row(
 /// Always-on route resolver and success-critical continuation publisher.
 #[derive(Clone)]
 pub struct ContinuationRuntime {
+    tenant: Option<Arc<tenant::runtime::Runtime>>,
     registry: ContinuationRegistry,
     auth_appliers: AuthAppliers,
 }
@@ -2141,6 +2199,7 @@ struct RejectContinuationPreflight(&'static str);
 impl ContinuationRuntime {
     pub fn new(registry: ContinuationRegistry) -> Self {
         Self {
+            tenant: None,
             registry,
             auth_appliers: AuthAppliers::new(),
         }
@@ -2148,6 +2207,7 @@ impl ContinuationRuntime {
 
     pub fn with_auth_appliers(registry: ContinuationRegistry, auth_appliers: AuthAppliers) -> Self {
         Self {
+            tenant: None,
             registry,
             auth_appliers,
         }
@@ -2158,6 +2218,9 @@ impl ContinuationRuntime {
     }
 
     fn validate_context_rebuild(&self, ctx: &PipelineContext) -> PipelineResult<()> {
+        if let Some(runtime) = &self.tenant {
+            return runtime.revalidate(ctx);
+        }
         if ctx.extension::<ContinuationRequestPlan>().is_some()
             || ctx.extension::<CausalPrefixPlan>().is_some()
             || ctx.extension::<RejectContinuationPreflight>().is_some()
@@ -2183,6 +2246,9 @@ impl PreRequestHook for ContinuationRuntime {
     }
 
     async fn check(&self, ctx: &mut PipelineContext) -> PipelineResult<HookDecision> {
+        if let Some(runtime) = &self.tenant {
+            return runtime.check(ctx).await;
+        }
         if ctx.inbound_protocol() != Some(ApiProtocol::Responses) {
             return Ok(HookDecision::Allow);
         }
@@ -2303,6 +2369,9 @@ impl RouteHook for ContinuationRuntime {
         chain: &mut Vec<RoutingTarget>,
         ctx: &mut PipelineContext,
     ) -> PipelineResult<()> {
+        if let Some(runtime) = &self.tenant {
+            return runtime.route(chain, ctx);
+        }
         if ctx.inbound_protocol() != Some(ApiProtocol::Responses) {
             return Ok(());
         }
@@ -2445,6 +2514,9 @@ impl ContinuationRuntime {
         ctx: &RequiredFinalizationContext,
         receipt: Option<&RequiredFinalizationReceipt>,
     ) -> PipelineResult<()> {
+        if let Some(runtime) = &self.tenant {
+            return runtime.finalize(ctx, receipt).await;
+        }
         if !ctx.successful_terminal || ctx.inbound_protocol != Some(ApiProtocol::Responses) {
             return Ok(());
         }
@@ -2518,6 +2590,9 @@ impl ContinuationRuntime {
         ctx: &RequiredFinalizationContext,
         receipt: Option<&RequiredFinalizationReceipt>,
     ) -> PipelineResult<()> {
+        if let Some(runtime) = &self.tenant {
+            return runtime.rollback_with_receipt(receipt).await;
+        }
         if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
             return Ok(());
         }
@@ -2537,6 +2612,9 @@ impl ContinuationRuntime {
         receipt: Option<&RequiredFinalizationReceipt>,
         delivery: &RequiredDeliveryHandshake,
     ) -> PipelineResult<bool> {
+        if let Some(runtime) = &self.tenant {
+            return runtime.commit(delivery).await;
+        }
         if ctx.inbound_protocol != Some(ApiProtocol::Responses) {
             return delivery.wait_for_delivery().await;
         }
@@ -2612,6 +2690,9 @@ impl RequiredFinalizer for ContinuationRuntime {
     }
 
     async fn drain_pending_work(&self) -> PipelineResult<()> {
+        if let Some(runtime) = &self.tenant {
+            return runtime.drain().await;
+        }
         self.registry.stop_reconciler().await.map_err(|error| {
             BitrouterError::internal(format!("draining continuation reconciliation: {error}"))
         })
@@ -2820,6 +2901,12 @@ mod continuation_entity {
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
         pub continuation_identity: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub installation_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tenant_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub creator_principal_id: Option<String>,
         pub owner_identity: String,
         pub ciphertext: Option<String>,
         pub nonce: Option<String>,

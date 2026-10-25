@@ -399,6 +399,11 @@ impl HttpExecutor {
                 || super::tenancy::has_execution(ctx),
         );
 
+        let mut http_source = if target.api_protocol == ApiProtocol::Responses {
+            HttpSource::new(prompt, ctx)
+        } else {
+            None
+        };
         let mut attempted_auth_refresh = false;
         let (response, mut shared_attempt) = loop {
             let mut body =
@@ -441,8 +446,12 @@ impl HttpExecutor {
             let tenant_binding = applied.tenant_binding();
             let (mut request, authority) = applied.into_parts();
             if let Some(capture) = &capture {
-                capture.authenticated(&request, authority, prompt, target, ctx)?;
+                capture.authenticated(&request, authority.clone(), prompt, target, ctx)?;
             }
+            if let Some(source) = &mut http_source {
+                source.authenticated(&request, authority, prompt);
+            }
+
             error_scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
@@ -473,6 +482,10 @@ impl HttpExecutor {
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
             if status.is_success() {
+                if let Some(source) = &mut http_source {
+                    source.binding = tenant_binding.clone();
+                    source.attempt = native_attempt.clone();
+                }
                 if let Some(capture) = &capture {
                     let mut source = capture.source();
                     source.scrubber = Some(error_scrubber.clone());
@@ -541,9 +554,16 @@ impl HttpExecutor {
                                     yield Err(error_scrubber.scrub_error(error));
                                     return;
                                 }
+                                if let Some(source) = &mut http_source
+                                    && let Err(error) = source.terminal(&sse)
+                                {
+                                    yield Err(error_scrubber.scrub_error(error));
+                                    return;
+                                }
                                 for p in parts {
+                                    if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                                     terminal |= p.is_terminal();
-                                    if shared_attempt.is_shared() && p.is_terminal() { held_terminal = Some(p); continue; }
+                                    if (shared_attempt.is_shared() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
                                     yield Ok(p);
                                 }
                             }
@@ -590,8 +610,9 @@ impl HttpExecutor {
                         return;
                     }
                     for p in parts {
+                        if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                         terminal |= p.is_terminal();
-                        if shared_attempt.is_shared() && p.is_terminal() { held_terminal = Some(p); continue; }
+                        if (shared_attempt.is_shared() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
                         yield Ok(p);
                     }
                 }
@@ -605,12 +626,128 @@ impl HttpExecutor {
                 return;
             }
             if let Err(error) = shared_attempt.finish_stream().await { yield Err(error); return; }
+            // All decoder/transport and EOF checks completed. No earlier event
+            // may create publication authority, even a decoded completed frame.
+            if let Some(source)=http_source {source.publish();}
             if let Some(part) = held_terminal { yield Ok(part); }
         };
 
         Ok(Box::pin(
             crate::gateway::providers::google_chat::bind_stream(stream, target.model_target()),
         ))
+    }
+}
+
+// Only a fixed-size terminal commitment and bounded provider ID survive an
+// event. The normal 16MiB incremental ingress bound governs JSON decoding.
+struct HttpSource {
+    input: super::tenancy::http_continuation::Input,
+    binding: Option<super::tenancy::BoundAuthentication>,
+    attempt: Option<bitrouter_ai::tenancy::identity::AttemptId>,
+    authority: Option<ContinuationAuthority>,
+    allowed: bool,
+    effort_bound: bool,
+    delivered: crate::gateway::model::protocol::responses::StreamingAssistantTurnCommitment,
+    terminal: Option<(
+        String,
+        Option<crate::gateway::model::protocol::responses::AssistantTurnCommitment>,
+        bool,
+    )>,
+}
+impl HttpSource {
+    fn new(prompt: &Prompt, ctx: &PipelineContext) -> Option<Self> {
+        Some(Self {
+            input: super::tenancy::http_continuation::Input::new(prompt, ctx)?,
+            binding: None,
+            attempt: None,
+            authority: None,
+            allowed: false,
+            effort_bound: false,
+            delivered: Default::default(),
+            terminal: None,
+        })
+    }
+    fn authenticated(
+        &mut self,
+        request: &reqwest::Request,
+        authority: Option<ContinuationAuthority>,
+        prompt: &Prompt,
+    ) {
+        let wire = request
+            .body()
+            .and_then(reqwest::Body::as_bytes)
+            .and_then(|body| serde_json::from_slice::<serde_json::Value>(body).ok());
+        self.allowed = wire.as_ref().is_some_and(|body| {
+            body.get("store") != Some(&serde_json::Value::Bool(false))
+                && body.get("stream") == Some(&serde_json::Value::Bool(true))
+        });
+        self.effort_bound = wire.as_ref().is_some_and(|body| {
+            body.get("reasoning")
+                .and_then(|r| r.get("effort"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
+                == serde_json::to_value(prompt.params.reasoning_effort)
+                    .unwrap_or(serde_json::Value::Null)
+        });
+        self.authority = authority;
+    }
+    fn terminal(&mut self, event: &SseEvent) -> Result<()> {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data) else {
+            return Ok(());
+        };
+        if !matches!(
+            value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .or(event.event.as_deref()),
+            Some("response.completed" | "response.incomplete")
+        ) {
+            return Ok(());
+        }
+        let response = value
+            .get("response")
+            .ok_or_else(|| BitrouterError::bad_request("HTTP continuation terminal missing"))?;
+        let id = response
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 512)
+            .ok_or_else(|| {
+                BitrouterError::bad_request("HTTP continuation terminal identifier invalid")
+            })?;
+        if self.terminal.is_some() {
+            return Err(BitrouterError::bad_request(
+                "HTTP continuation terminal repeated",
+            ));
+        }
+        self.terminal = Some((
+            id.into(),
+            crate::gateway::model::protocol::responses::output_replayable(response)
+                .then(|| {
+                    crate::gateway::model::protocol::responses::terminal_assistant_turn_commitment(
+                        response,
+                    )
+                })
+                .flatten(),
+            response.get("store") == Some(&serde_json::Value::Bool(true)),
+        ));
+        Ok(())
+    }
+    fn publish(self) {
+        if let (Some(binding), Some(attempt), Some(authority), Some((id, turn, stored))) =
+            (self.binding, self.attempt, self.authority, self.terminal)
+        {
+            binding.record_http_source(
+                self.input,
+                attempt,
+                &authority,
+                Some(&id),
+                super::tenancy::http_continuation::Output {
+                    delivered: self.delivered.finish(),
+                    reconstructible: turn,
+                    stored: stored && self.allowed && self.effort_bound,
+                },
+            );
+        }
     }
 }
 

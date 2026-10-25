@@ -31,7 +31,9 @@ impl NativeExecutionControl for Control {
         report: NativePreparationWorkReport,
     ) -> GatewayResult<()> {
         match report.work.kind {
-            NativePreparationWorkKind::PreResolutionHook if report.error_code.is_none() => {
+            NativePreparationWorkKind::PreResolutionHook
+                if report.work.work_index == 0 && report.error_code.is_none() =>
+            {
                 self.entry_ok.fetch_add(1, Ordering::SeqCst);
                 if self.stop_after_entry {
                     return Err(BitrouterError::bad_request(

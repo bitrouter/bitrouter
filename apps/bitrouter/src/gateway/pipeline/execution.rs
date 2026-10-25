@@ -1973,6 +1973,21 @@ impl Pipeline {
         Ok(())
     }
 
+    fn http_finalizer(
+        &self,
+        ctx: &PipelineContext,
+    ) -> Option<Arc<crate::continuation::tenant::runtime::Runtime>> {
+        // A generic/composed finalizer cannot inherit this private obligation's
+        // proof. Only the actual installed tenant HTTP runtime may use it.
+        self.required_finalizers
+            .iter()
+            .find(|hook| hook.supports(ctx.operation()))
+            .filter(|hook| {
+                hook.type_id == std::any::TypeId::of::<crate::continuation::ContinuationRuntime>()
+            })?;
+        ctx.extension::<crate::continuation::tenant::runtime::Runtime>()
+    }
+
     async fn prepare_required_finalizers(
         &self,
         ctx: &PipelineContext,
@@ -1984,13 +1999,18 @@ impl Pipeline {
             finalization.clone(),
             self.pending_settlements.clone(),
             ExecutionCustody::from_context(ctx),
+            self.http_finalizer(ctx),
         );
         if !finalization.successful_terminal {
             guard.disarm();
             return Ok(guard);
         }
         guard.receipt = self
-            .prepare_required_finalizer_tracked(&finalization, ExecutionCustody::from_context(ctx))
+            .prepare_required_finalizer_tracked(
+                &finalization,
+                ExecutionCustody::from_context(ctx),
+                guard.http.clone(),
+            )
             .await?;
         Ok(guard)
     }
@@ -1999,6 +2019,7 @@ impl Pipeline {
         &self,
         finalization: &RequiredFinalizationContext,
         custody: ExecutionCustody,
+        http: Option<Arc<crate::continuation::tenant::runtime::Runtime>>,
     ) -> Result<Option<RequiredFinalizationReceipt>> {
         let Some(finalizer) = self
             .required_finalizers
@@ -2036,14 +2057,16 @@ impl Pipeline {
                     }
                 }
                 Err(error) => {
-                    tasks.finalizer_failed(&error);
                     preparation_custody.record_pipeline_outcome(false);
-                    if let Err(rollback_error) = finalizer
-                        .rollback_with_receipt(&task_finalization, &task_receipt)
-                        .await
-                    {
-                        tasks.finalizer_failed(&rollback_error);
-                    }
+                    rollback_failed_finalizer(
+                        finalizer.as_ref(),
+                        &task_finalization,
+                        &task_receipt,
+                        &tasks,
+                        http.as_deref(),
+                        &error,
+                    )
+                    .await;
                     let _ = prepared_tx.send(Err(error));
                 }
             }
@@ -3593,6 +3616,7 @@ struct RequiredFinalizationGuard {
     receipt: Option<RequiredFinalizationReceipt>,
     armed: bool,
     custody: ExecutionCustody,
+    http: Option<Arc<crate::continuation::tenant::runtime::Runtime>>,
 }
 
 impl RequiredFinalizationGuard {
@@ -3601,6 +3625,7 @@ impl RequiredFinalizationGuard {
         finalization: RequiredFinalizationContext,
         pending_settlements: super::tasks::Settlements,
         custody: ExecutionCustody,
+        http: Option<Arc<crate::continuation::tenant::runtime::Runtime>>,
     ) -> Self {
         custody.record_pipeline_outcome(finalization.successful_terminal);
         Self {
@@ -3610,6 +3635,7 @@ impl RequiredFinalizationGuard {
             receipt: None,
             armed: true,
             custody,
+            http,
         }
     }
 
@@ -3632,6 +3658,7 @@ impl RequiredFinalizationGuard {
         let receipt = self.receipt.clone();
         let custody = self.custody.clone();
         let tasks = self.pending_settlements.clone();
+        let http = self.http.clone();
         self.disarm();
         let authorization = async move {
             let authorization_result = match receipt.as_ref() {
@@ -3645,17 +3672,18 @@ impl RequiredFinalizationGuard {
             let delivered = match authorization_result {
                 Ok(delivered) => delivered,
                 Err(error) => {
-                    if receipt.is_some() {
-                        tasks.finalizer_failed(&error);
-                    }
                     custody.record_pipeline_outcome(false);
                     delivery.reject(error.clone());
-                    if let Some(receipt) = receipt.as_ref()
-                        && let Err(rollback_error) = finalizers[0]
-                            .rollback_with_receipt(&finalization, receipt)
-                            .await
-                    {
-                        tasks.finalizer_failed(&rollback_error);
+                    if let Some(receipt) = receipt.as_ref() {
+                        rollback_failed_finalizer(
+                            finalizers[0].as_ref(),
+                            &finalization,
+                            receipt,
+                            &tasks,
+                            http.as_deref(),
+                            &error,
+                        )
+                        .await;
                     }
                     let _ = outcome_tx.send(DeliveryAuthorizationOutcome::Failed(error));
                     return;
@@ -3889,7 +3917,11 @@ impl StreamSettlementGuard {
         }
         self.required_finalizer_receipt = self
             .pipeline
-            .prepare_required_finalizer_tracked(&finalization, ExecutionCustody::from_context(ctx))
+            .prepare_required_finalizer_tracked(
+                &finalization,
+                ExecutionCustody::from_context(ctx),
+                self.pipeline.http_finalizer(ctx),
+            )
             .await?;
         Ok(())
     }
@@ -3990,12 +4022,19 @@ impl StreamSettlementGuard {
             let delivered = match authorization_result {
                 Ok(delivered) => delivered,
                 Err(error) => {
-                    if receipt.is_some() {
-                        pipeline.pending_settlements.finalizer_failed(&error);
-                    }
                     ExecutionCustody::from_context(&ctx).record_pipeline_outcome(false);
                     delivery.reject(error.clone());
-                    rollback_required_finalizer(&pipeline, &ctx, true, receipt).await;
+                    if let Some(receipt) = receipt.as_ref() {
+                        rollback_failed_finalizer(
+                            pipeline.required_finalizers[0].hook.as_ref(),
+                            &finalization,
+                            receipt,
+                            &pipeline.pending_settlements,
+                            pipeline.http_finalizer(&ctx).as_deref(),
+                            &error,
+                        )
+                        .await;
+                    }
                     settle_prepared_stream(
                         pipeline.clone(),
                         *ctx,
@@ -4032,6 +4071,31 @@ fn stream_terminal_metadata(outcome: &StreamOutcome) -> (Option<BitrouterError>,
         StreamOutcome::Aborted(err) | StreamOutcome::UpstreamError(err) => {
             (Some(err.clone()), RequestOutcome::Failed(err.clone()))
         }
+    }
+}
+
+/// Request failure remains a failure. Only this private HTTP obligation's
+/// actual actor acknowledgement can distinguish it from failed cleanup.
+async fn rollback_failed_finalizer(
+    finalizer: &dyn RequiredFinalizer,
+    finalization: &RequiredFinalizationContext,
+    receipt: &RequiredFinalizationReceipt,
+    tasks: &super::tasks::Settlements,
+    http: Option<&crate::continuation::tenant::runtime::Runtime>,
+    error: &BitrouterError,
+) {
+    if http.is_none() {
+        tasks.finalizer_failed(error);
+    }
+    let rollback = finalizer.rollback_with_receipt(finalization, receipt).await;
+    if http.is_some()
+        && (rollback.is_err()
+            || !http.is_some_and(|runtime| runtime.confirmed_compensation(receipt)))
+    {
+        tasks.finalizer_failed(error);
+    }
+    if let Err(error) = rollback {
+        tasks.finalizer_failed(&error);
     }
 }
 

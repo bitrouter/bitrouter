@@ -1,5 +1,6 @@
 //! Bounded single-writer actor; admitted commands outlive HTTP cancellation.
 
+mod continuation;
 mod custody;
 #[cfg(feature = "core")]
 mod eval;
@@ -41,6 +42,7 @@ pub(super) struct Message {
 pub(super) enum Job {
     Command(Box<Message>),
     Credential(CredentialRead),
+    Continuation(Box<super::continuation::http::Job>),
     #[cfg(feature = "core")]
     Eval(Box<super::eval::Job>),
     #[cfg(feature = "core")]
@@ -89,6 +91,7 @@ pub(super) struct Worker {
     pub limits: OperationLimits,
     pub resources: Arc<super::resources::Resources>,
     pub proof: Arc<Proof>,
+    pub http_continuation: Arc<crate::continuation::tenant::state::State>,
     #[cfg(feature = "core")]
     pub eval: Arc<super::eval::State>,
     #[cfg(feature = "core")]

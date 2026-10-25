@@ -28,7 +28,11 @@ impl NativeExecutionControl for Reject {
         &self,
         report: NativePreparationWorkReport,
     ) -> GatewayResult<()> {
-        if report.work.kind == NativePreparationWorkKind::PreResolutionHook {
+        // Entry is the first pipeline callback; later continuation hooks do not
+        // establish or replace the owned observation's entry proof.
+        if report.work.kind == NativePreparationWorkKind::PreResolutionHook
+            && report.work.work_index == 0
+        {
             self.entry_outcomes.fetch_add(1, Ordering::SeqCst);
             if self.early {
                 return Err(BitrouterError::Forbidden(

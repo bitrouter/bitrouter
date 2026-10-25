@@ -72,6 +72,13 @@ impl Worker {
             // The privileged manifest contains plaintext definitions. It is
             // bootstrap work, not actor state retained for the serving lifetime.
             drop(import);
+            let result = result.and_then(|crypto| {
+                // Commit has been acknowledged. Install only the narrow HTTP
+                // capability before publishing readiness; markers have no sender.
+                self.http_continuation
+                    .initialize(crypto.as_ref().map(|key| key.http()))?;
+                Ok(crypto)
+            });
             let ready = result.is_ok();
             // Cancellation drops only the waiter. This actor still owns BEGIN,
             // commit/rollback and its lease until supervision settles.
@@ -180,6 +187,48 @@ impl Worker {
                     }
                     // An abandoned HTTP waiter cannot release the DB-read capacity.
                     drop((caller, id, permit));
+                }
+                Job::Continuation(message) => {
+                    let policy = if message.work.read() {
+                        Policy::CredentialRead
+                    } else {
+                        Policy::Management
+                    };
+                    let result = self
+                        .supervise(
+                            self.execute_continuation(&message, &control),
+                            &control,
+                            message.deadline,
+                            policy,
+                            None,
+                        )
+                        .await;
+                    if result.is_err()
+                        && matches!(
+                            self.proof.disposition(),
+                            Disposition::NoTransaction | Disposition::RolledBack
+                        )
+                        && let Some(ticket) = message.work.preparation()
+                    {
+                        self.http_continuation.release(ticket);
+                    }
+                    let crate::tenancy::continuation::http::Job {
+                        origin,
+                        deadline: _,
+                        work,
+                        reply,
+                    } = *message;
+                    if reply.send(result).is_err()
+                        && let Some(ticket) = work.ticket()
+                    {
+                        self.http_continuation.abandon(ticket);
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        // Keep ticket, receipt marker, lookup permit, and proof
+                        // outside the caught future for the whole quarantine.
+                        self.quarantine(ordinary, safety).await;
+                    }
+                    drop((origin, work));
                 }
                 #[cfg(feature = "core")]
                 Job::Eval(message) => {
@@ -435,10 +484,10 @@ impl Worker {
         ordinary.close();
         safety.close();
         while let Ok(job) = safety.try_recv() {
-            job.reject();
+            job.reject(&self.http_continuation);
         }
         while let Ok(job) = ordinary.try_recv() {
-            job.reject();
+            job.reject(&self.http_continuation);
         }
         // SeaORM exposes no acknowledgement for a failed consuming transaction's
         // Drop rollback. Keep this same actor and its lease until process exit.
@@ -448,7 +497,7 @@ impl Worker {
 }
 
 impl Job {
-    fn reject(self) {
+    fn reject(self, http: &crate::continuation::tenant::state::State) {
         match self {
             Self::Command(message) => {
                 let error = Failure::new(
@@ -500,6 +549,19 @@ impl Job {
                     .is_err()
                 {
                     tracing::debug!("rejected trajectory terminal had no response receiver");
+                }
+            }
+            Self::Continuation(message) => {
+                // This queued job never entered SQL; it cannot own a mutation.
+                if let Some(ticket) = message.work.preparation() {
+                    http.release(ticket);
+                }
+                if message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                    .is_err()
+                {
+                    tracing::debug!("rejected HTTP continuation had no response receiver");
                 }
             }
             Self::Credential(message) => {

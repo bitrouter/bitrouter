@@ -47,6 +47,7 @@ pub(crate) struct Drain {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[cfg(feature = "multi-instance")]
 pub(crate) struct Status {
     pub worker: Worker,
     pub markers: Markers,
@@ -54,6 +55,7 @@ pub(crate) struct Status {
     pub joining: bool,
 }
 
+#[cfg(feature = "multi-instance")]
 impl Status {
     pub fn is_quiescent(self) -> bool {
         self.worker.joined && !self.joining
@@ -171,7 +173,7 @@ impl Control {
         self.lock().worker
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "multi-instance"))]
     pub fn healthy(&self) -> bool {
         let state = self.lock();
         state.mode == Mode::Running
@@ -181,7 +183,7 @@ impl Control {
                 .is_none_or(|task| !task.handle.is_finished())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "multi-instance"))]
     pub(super) fn task_id(&self) -> Option<tokio::task::Id> {
         self.lock().task.as_ref().map(|task| task.handle.id())
     }
@@ -204,6 +206,7 @@ impl Drop for Control {
 
 impl ContinuationRegistry {
     /// Select shared ownership before the registry or any worker is published.
+    #[cfg(feature = "multi-instance")]
     pub(crate) fn with_owned_lifecycle(mut self) -> Result<Self> {
         let inner = std::sync::Arc::get_mut(&mut self.inner)
             .ok_or_else(|| anyhow::anyhow!("continuation registry is already shared"))?;
@@ -224,6 +227,21 @@ impl ContinuationRegistry {
         Ok(self)
     }
 
+    /// Test-only isolation for actor fault gates: join the existing maintenance
+    /// task without closing HTTP producers. Production always uses full drain.
+    #[cfg(test)]
+    pub(crate) async fn join_reconciler_for_test(&self) -> Result<()> {
+        let control = self.owned()?;
+        let _waiter = control.waiter()?;
+        control.begin_drain(&self.inner.reconciler.notify, false);
+        let worker = std::future::poll_fn(|cx| control.poll_joined(cx)).await;
+        ensure!(
+            worker.is_clean(),
+            "maintenance test isolation did not join cleanly"
+        );
+        Ok(())
+    }
+
     fn owned(&self) -> Result<&Control> {
         self.inner
             .reconciler
@@ -233,6 +251,7 @@ impl ContinuationRegistry {
     }
 
     fn owned_markers(&self) -> Markers {
+        #[cfg(feature = "multi-instance")]
         if let Some(shared) = &self.inner.shared {
             return shared.markers();
         }
@@ -258,7 +277,7 @@ impl ContinuationRegistry {
         })
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "multi-instance"))]
     pub(crate) fn owned_worker_healthy(&self) -> bool {
         self.inner
             .reconciler
@@ -269,6 +288,7 @@ impl ContinuationRegistry {
 
     /// Refresh this after pipeline producers join: their destructors may leave
     /// additional markers even when the native worker has already stopped.
+    #[cfg(feature = "multi-instance")]
     pub(crate) fn owned_status(&self) -> Result<Status> {
         let (worker, joining) = {
             let state = self.owned()?.lock();
@@ -277,11 +297,22 @@ impl ContinuationRegistry {
         Ok(Status {
             worker,
             markers: self.owned_markers(),
-            producer_closed: self
-                .inner
-                .shared
-                .as_ref()
-                .is_none_or(|shared| shared.producer_closed()),
+            producer_closed: {
+                #[cfg(feature = "multi-instance")]
+                let shared = self
+                    .inner
+                    .shared
+                    .as_ref()
+                    .is_none_or(|shared| shared.producer_closed());
+                #[cfg(not(feature = "multi-instance"))]
+                let shared = true;
+                shared
+                    && self
+                        .inner
+                        .tenant
+                        .as_ref()
+                        .is_none_or(|backend| backend.port.state.barrier())
+            },
             joining,
         })
     }
@@ -309,6 +340,7 @@ impl ContinuationRegistry {
     }
 
     async fn drain_owned_grace(&self, control: &Control, deadline: Instant) -> Result<Drain> {
+        #[cfg(feature = "multi-instance")]
         if let Some(shared) = &self.inner.shared {
             shared.stop_accepting();
         }
@@ -327,6 +359,7 @@ impl ContinuationRegistry {
         }
         // Even an empty local map needs the durable producer-close barrier:
         // cancelled SQL may still hold a bind transaction on the primary.
+        #[cfg(feature = "multi-instance")]
         if let Some(shared) = &self.inner.shared {
             match tokio::time::timeout_at(deadline, shared.close_producer()).await {
                 Ok(Ok(())) => {}
@@ -336,6 +369,11 @@ impl ContinuationRegistry {
                 }
                 Err(_) => return self.owned_report(Some(Retained::Deadline)),
             }
+        }
+        if let Some(backend) = &self.inner.tenant
+            && backend.port.close_producer(deadline).await.is_err()
+        {
+            return self.owned_report(Some(Retained::Backend));
         }
         self.mark_pending_for_shutdown_reconciliation();
         loop {
@@ -375,8 +413,10 @@ impl ContinuationRegistry {
 
     /// Broadcast without waiting, including while graceful cleanup is pending.
     /// The force latch also cancels that borrowed cleanup before its next batch.
+    #[cfg(feature = "multi-instance")]
     pub(crate) fn request_force_owned(&self) -> Result<()> {
         let control = self.owned()?;
+        #[cfg(feature = "multi-instance")]
         if let Some(shared) = &self.inner.shared {
             shared.stop_accepting();
         }
@@ -385,6 +425,7 @@ impl ContinuationRegistry {
     }
 
     /// No database compensation starts here. Cancellation retains the handle.
+    #[cfg(feature = "multi-instance")]
     pub(crate) async fn join_forced_owned(&self) -> Result<Drain> {
         let control = self.owned()?;
         ensure!(
@@ -396,7 +437,7 @@ impl ContinuationRegistry {
         self.owned_report(Some(Retained::Forced))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "multi-instance"))]
     pub(crate) async fn force_owned(&self) -> Result<Drain> {
         self.request_force_owned()?;
         self.join_forced_owned().await

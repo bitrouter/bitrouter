@@ -581,6 +581,17 @@ fn apply_provider_continuation(
     target: &RoutingTarget,
     ctx: &PipelineContext,
 ) -> Result<Option<ProviderContinuationSubstitution>> {
+    if let Some(runtime) = ctx.extension::<crate::continuation::tenant::runtime::Runtime>() {
+        return runtime.substitute(body, target, ctx).map(|value| {
+            value.map(
+                |(native, public_or_redacted)| ProviderContinuationSubstitution {
+                    native,
+                    public_or_redacted,
+                },
+            )
+        });
+    }
+
     if let Some(plan) = native_continuation_plan(target, ctx.require_generation_prompt()?, ctx)? {
         if ctx.extension::<ProviderContinuation>().is_some()
             || ctx.extension::<SuppressProviderContinuation>().is_some()
@@ -691,6 +702,10 @@ fn validate_continuation_authority(
     ctx: &PipelineContext,
     actual: Option<&ContinuationAuthority>,
 ) -> Result<()> {
+    if let Some(runtime) = ctx.extension::<crate::continuation::tenant::runtime::Runtime>() {
+        return runtime.authenticated(target, ctx, actual);
+    }
+
     if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
         runtime
             .validate_continuation_authority(ctx, target, actual)
@@ -1250,6 +1265,12 @@ impl HttpExecutor {
             credential_authority.map(|authority| authority.with_request_scope(&scope));
         let credential_authority =
             tenancy::native::bind_headers(credential_authority, &request, input.target, input.ctx);
+        let credential_authority = tenancy::http_continuation::bind_headers(
+            credential_authority,
+            &request,
+            input.target,
+            input.ctx,
+        );
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
         crate::gateway::providers::google_chat::validate_authenticated_request(
             &request,
@@ -2014,6 +2035,27 @@ impl Executor for HttpExecutor {
                 result.usage.as_ref(),
             )
             .await?;
+        if let (Some(binding), Some(attempt), Some(authority)) = (
+            successful_binding.as_ref(),
+            successful_attempt.as_ref(),
+            successful_authority.as_ref(),
+        ) && let Some(input) = tenancy::http_continuation::Input::new(prompt, ctx)
+        {
+            use crate::gateway::model::protocol::responses;
+            binding.record_http_source(
+                input,
+                attempt.clone(),
+                authority,
+                result.response_id.as_deref(),
+                tenancy::http_continuation::Output {
+                    delivered: responses::assistant_turn_commitment(&result.content),
+                    reconstructible: replayable
+                        .then(|| responses::terminal_assistant_turn_commitment(&json))
+                        .flatten(),
+                    stored: stored_response && effort_bound,
+                },
+            );
+        }
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
         {
