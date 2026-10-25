@@ -13,6 +13,7 @@ use std::sync::{Arc, atomic::Ordering};
 
 const MODEL: &str = "provider:literal-route";
 
+mod cache;
 mod defaults;
 mod ingress;
 mod lifecycle_http;

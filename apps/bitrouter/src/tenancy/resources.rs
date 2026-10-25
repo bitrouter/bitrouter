@@ -96,12 +96,13 @@ impl Resources {
     ) -> std::result::Result<execution::RetainedExecutionRevision, ErrorCode> {
         let validated =
             validation::compiled(self, stored).map_err(|_| ErrorCode::AuthorityUnavailable)?;
-        Ok(execution::RetainedExecutionRevision::new(
+        execution::RetainedExecutionRevision::new(
             self.installation.clone(),
             stored.revision.tenant_id.clone(),
             stored.revision.revision_id.clone(),
+            stored.authority_revision,
             validated,
-        ))
+        )
     }
 
     /// Read one exact separately owned static credential slot. No ambient

@@ -1485,7 +1485,7 @@ pub(crate) async fn handle_tenant(
     };
     let pipeline = match execution.pipeline() {
         Ok(pipeline) => pipeline,
-        Err(error) => return error.into_response(),
+        Err(error) => return tenant_failure(&execution, error.into_response()),
     };
     let mut req = match &input {
         PipelineInput::Generation(prompt) => PipelineRequest::new(
@@ -1503,9 +1503,31 @@ pub(crate) async fn handle_tenant(
     req.headers = headers;
     req.inbound_protocol = Some(inbound.clone());
     if let Err(error) = execution.attach(pipeline.clone(), &mut req) {
-        return error.into_response();
+        return tenant_failure(&execution, error.into_response());
     }
-    render_execution(pipeline, req, inbound, input, request_id).await
+    tenant_failure(
+        &execution,
+        render_execution(pipeline, req, inbound, input, request_id).await,
+    )
+}
+
+fn tenant_failure(
+    execution: &crate::tenancy::execution::TenantExecution,
+    response: Response,
+) -> Response {
+    if response.status().is_success() {
+        return response;
+    }
+    let Some(failure) = execution.failure() else {
+        return response;
+    };
+    let mut rejected = failure.into_response();
+    if let Some(request_id) = response.headers().get(BITROUTER_REQUEST_ID_HEADER) {
+        rejected
+            .headers_mut()
+            .insert(BITROUTER_REQUEST_ID_HEADER, request_id.clone());
+    }
+    rejected
 }
 
 async fn render_execution(

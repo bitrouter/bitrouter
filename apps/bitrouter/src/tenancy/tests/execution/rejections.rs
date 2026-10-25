@@ -67,7 +67,9 @@ struct Provider {
 impl Provider {
     async fn start(status: u16, mode: BodyMode) -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let base = format!("http://localhost:{}/v1", listener.local_addr()?.port());
+        // Match the reserved IPv4 listener exactly. The deliberately short
+        // response-body timeout must not include localhost's IPv6 fallback.
+        let base = format!("http://{}/v1", listener.local_addr()?);
         let calls = Arc::new(AtomicUsize::new(0));
         let counted = calls.clone();
         let stop = CancellationToken::new();
@@ -379,7 +381,9 @@ async fn check_case(
     let second_observed = second.finish().await;
     let shutdown = tokio::time::timeout(CASE_TIMEOUT, fixture.service.shutdown()).await;
     let error = outcome.context("tenant invocation exceeded fixture deadline")??;
-    let first_observed = first_observed?.context("first provider received no request")?;
+    let first_observed = first_observed?.with_context(|| {
+        format!("first provider received no request; invocation failed: {error:?}")
+    })?;
     let second_observed = second_observed?;
     shutdown.context("tenant fixture did not drain")??;
     ensure!(

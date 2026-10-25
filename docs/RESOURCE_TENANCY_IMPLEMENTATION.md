@@ -212,6 +212,52 @@ currently registered schema without requiring the historical migration count to
 remain frozen. All 12 artifact identity tests passed. This qualifies compatibility
 of the execution integration, not production tenant dispatch or strict receipts.
 
+### M2 immutable caches
+
+Service-local caches retain authenticated execution revisions and static
+credentials. Keys include the exact tenant/resource revision and the published
+authority revision; installation, process instance and wrapping-key lifetime
+are fixed by the owning service. Hits retain immutable bytes only. Current
+credential, tenant and dependency grants are checked after waits and again at
+each provider send. Management reads and startup continue to authenticate
+retained storage independently of these execution caches.
+
+Execution entries have a 64-entry/128 MiB allocation-payload budget; credentials
+have a 256-entry/8 MiB budget. Fixed metadata, spare allocation capacity and
+retained nested data are charged with checked arithmetic. Selected routes keep
+the entire revision pinned, including unselected routes. Exported targets copy
+header buffers so they cannot outlive the cache's accounting through shared
+allocations. These budgets exclude allocator metadata, RSS fragmentation and
+bounded transient decoding work; they are not process-memory measurements.
+Misses share the existing eight fail-fast read slots. Pinned entries cannot be
+evicted, capacity exhaustion does not create a waiting queue, and shutdown
+fences further publication.
+
+Read/cache capacity failures retain their typed 429 response; storage-integrity
+failures retain their typed 503 response. Neither is misreported as a caller
+grant denial. An execution that has reserved a provider attempt cannot claim
+proven non-execution in that error response. Post-header streaming evidence
+and durable terminal facts still depend on M3.
+
+The minimal-plus-HTTP/2 suite passed 158 tenancy tests, covering warm hits with
+all read slots occupied, cold-load pressure, authority changes, revocation,
+expiry, same-name tenant/operator resources, restart corruption checks and
+retained-pin eviction. Six real-process host lifecycle tests passed, including
+a deterministic held-port collision and bounded retry of only the exact owned
+child's listener-binding failure. Independent source review found no remaining
+cache-stage defects after the shared-header correction. The subsequent all-feature
+workspace run passed all 5,174 selected tests (161 opt-in tests skipped).
+The provider-rejection fixture now connects to its exact reserved IPv4 listener,
+so its deliberately short response timeout does not depend on localhost's
+IPv6 fallback; it retains the same status and no-fallback assertions. Strict
+all-feature/all-target workspace Clippy, 12 doctests (one ignored), the pure
+HTTP/1 minimal all-target check, generated distribution checks, formatting and
+whitespace checks passed. Cross-platform CI for this stage remains pending.
+Cache eviction/destruction latency under authority publication locks remains
+part of the pending performance qualification.
+
+This stage does not enable tenant dispatch or mark M2 complete.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

@@ -17,7 +17,7 @@ use bitrouter_ai::{
         identity::{
             AttemptId, CredentialId, ExecutionId, InstallationId, PrincipalId, RevisionId, TenantId,
         },
-        operation::{DispatchBinding, ErrorCode},
+        operation::{DispatchBinding, DispatchState, ErrorCode},
         validation::Validate,
     },
     types::ApiProtocol,
@@ -28,7 +28,6 @@ use http::HeaderMap;
 use super::{
     Service,
     admission::Lease,
-    configuration_store,
     error::Failure,
     model::{Caller, Snapshot},
     resources::execution::RetainedRoute,
@@ -37,6 +36,7 @@ use crate::gateway::{
     caller::CallerContext, pipeline::types::RoutingTarget, providers::auth::credentials::Credential,
 };
 
+pub(super) mod cached;
 pub(crate) mod lifecycle;
 mod profile;
 #[cfg(test)]
@@ -87,7 +87,7 @@ impl Service {
         let qualified = self.dispatch_test_ready.load(Ordering::Acquire);
         #[cfg(not(test))]
         let qualified = false;
-        qualified && !state.saturated && !self.stop.is_cancelled()
+        qualified && !state.saturated && !self.stop.is_cancelled() && !self.caches.is_closed()
     }
 
     pub(super) fn capability_revision(&self, state: &Snapshot) -> Result<RevisionId, ErrorCode> {
@@ -182,35 +182,9 @@ impl Service {
         self.with_dispatch_authority(&submission, |_| Ok(()))
             .map_err(Failure::from)?;
         let (route, limits) = {
-            let _read = self.read_permit()?;
-            let retained = tokio::time::timeout(
-                super::MANAGEMENT_TIMEOUT,
-                configuration_store::configuration(
-                    &self.db,
-                    &submission.tenant,
-                    &submission.binding.execution_revision,
-                ),
-            )
-            .await
-            .map_err(|_| self.unavailable())?
-            .map_err(|_| self.unavailable())?
-            .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
-            let revision = self
-                .resources
-                .open_execution(&retained)
-                .map_err(|_| self.unavailable())?;
-            if revision.installation_id() != &submission.binding.installation_id
-                || revision.tenant_id() != &submission.tenant
-                || revision.revision_id() != &submission.binding.execution_revision
-            {
-                return Err(self.unavailable());
-            }
-            super::configuration::validate_profile(revision.document()).map_err(Failure::from)?;
+            let revision = self.retained_execution(&submission).await?;
             let route = revision.select(raw_model, inbound).map_err(Failure::from)?;
             self.with_dispatch_authority(&submission, |state| {
-                if retained.authority_revision > state.revision {
-                    return Err(ErrorCode::AuthorityUnavailable);
-                }
                 authorize_route(state, &submission, route.dependencies())
             })
             .map_err(Failure::from)?;
@@ -283,16 +257,11 @@ impl TenantExecution {
     ) -> Result<OwnedCredential, ErrorCode> {
         self.revalidate()?;
         let reference = self.route.match_candidate(target)?;
-        let _read = self.service.read_permit().map_err(|f| f.0.code)?;
-        let credential = tokio::time::timeout(
-            super::MANAGEMENT_TIMEOUT,
-            self.service
-                .resources
-                .credential(&self.service.db, &reference),
-        )
-        .await
-        .map_err(|_| self.service.unavailable().0.code)?
-        .map_err(|_| self.service.unavailable().0.code)?;
+        let credential = self
+            .service
+            .retained_credential(&self.submission, &reference)
+            .await
+            .map_err(|failure| failure.0.code)?;
         self.revalidate()?;
         Ok(OwnedCredential {
             reference,
@@ -332,6 +301,23 @@ impl TenantExecution {
         crate::gateway::error::BitrouterError::Forbidden(
             "tenant execution is no longer eligible".into(),
         )
+    }
+
+    /// Keep internal eligibility failures non-retryable, while exposing their
+    /// actual tenancy class at HTTP ingress. A reserved send cannot prove that
+    /// no provider work began; full per-attempt evidence is a separate stage.
+    pub(crate) fn failure(&self) -> Option<Failure> {
+        let code = match self.rejection.lock() {
+            Ok(rejection) => *rejection,
+            Err(_) => Some(ErrorCode::AuthorityUnavailable),
+        }?;
+        let mut failure = Failure::new(code, None);
+        failure.0.execution_id = Some(self.id.clone());
+        failure.0.dispatch_state = match self.attempts.lock() {
+            Ok(attempts) if *attempts == 0 => DispatchState::NotStarted,
+            _ => DispatchState::Unknown,
+        };
+        Some(failure)
     }
 }
 

@@ -194,6 +194,50 @@ impl OutboundHeaderRule {
     pub fn passthrough(&self) -> bool {
         self.passthrough
     }
+
+    /// Exhaustive application-cache projection: a new field must be reviewed
+    /// for retained allocation accounting, without adding a public SDK surface.
+    pub(crate) fn retained_heap_parts(
+        &self,
+    ) -> (&http::HeaderName, Option<&http::HeaderValue>, bool) {
+        let Self {
+            name,
+            default,
+            passthrough,
+        } = self;
+        (name, default.as_ref(), *passthrough)
+    }
+
+    /// Export independently owned buffers from an immutable cache. Ordinary
+    /// Clone shares the http types' byte storage and must not release its charge.
+    pub(crate) fn detached(&self) -> crate::gateway::error::Result<Self> {
+        let Self {
+            name,
+            default,
+            passthrough,
+        } = self;
+        let name = http::HeaderName::from_bytes(name.as_str().as_bytes()).map_err(|_| {
+            crate::gateway::error::BitrouterError::internal("invalid retained header name")
+        })?;
+        let default = default
+            .as_ref()
+            .map(|original| -> crate::gateway::error::Result<_> {
+                let mut value =
+                    http::HeaderValue::from_bytes(original.as_bytes()).map_err(|_| {
+                        crate::gateway::error::BitrouterError::internal(
+                            "invalid retained header value",
+                        )
+                    })?;
+                value.set_sensitive(original.is_sensitive());
+                Ok(value)
+            })
+            .transpose()?;
+        Ok(Self {
+            name,
+            default,
+            passthrough: *passthrough,
+        })
+    }
 }
 
 impl std::fmt::Debug for OutboundHeaderRule {

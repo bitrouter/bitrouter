@@ -1,7 +1,9 @@
 //! Immutable, selected-route execution views. Membership never caches grants.
 
+mod compact;
 mod retained;
 mod target;
+mod weight;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -11,7 +13,7 @@ use bitrouter_ai::{
     routing::{ModelInfo, SortOrder},
     tenancy::{
         configuration::{Configuration, GenerationDefaults, ResourceRef},
-        identity::{InstallationId, RevisionId, TenantId},
+        identity::{AuthorityRevision, InstallationId, RevisionId, TenantId},
         operation::ErrorCode,
     },
     types::{ApiProtocol, ModelOperation},
@@ -29,6 +31,7 @@ use crate::{
         },
     },
     policy_lock::PolicyLock,
+    tenancy::cache::Pin as CachePin,
 };
 
 use super::{Envelope, compiler};
@@ -38,6 +41,7 @@ pub(crate) struct RetainedExecutionRevision {
     installation: InstallationId,
     tenant: TenantId,
     revision: RevisionId,
+    authority_revision: AuthorityRevision,
     document: Configuration,
     routes: HashMap<String, Arc<RouteData>>,
 }
@@ -57,15 +61,19 @@ impl RetainedExecutionRevision {
         installation: InstallationId,
         tenant: TenantId,
         revision: RevisionId,
+        authority_revision: AuthorityRevision,
         validated: ValidatedEnvelope,
-    ) -> Self {
-        Self {
+    ) -> std::result::Result<Self, ErrorCode> {
+        let mut value = Self {
             installation,
             tenant,
             revision,
+            authority_revision,
             document: validated.document,
             routes: validated.routes,
-        }
+        };
+        compact::identifiers(&mut value)?;
+        Ok(value)
     }
 
     pub(crate) fn installation_id(&self) -> &InstallationId {
@@ -81,12 +89,20 @@ impl RetainedExecutionRevision {
         &self.document
     }
 
+    pub(crate) fn authority_revision(&self) -> AuthorityRevision {
+        self.authority_revision
+    }
+
+    pub(crate) fn retained_heap_bytes(&self) -> std::result::Result<usize, ErrorCode> {
+        weight::retained_heap_bytes(self)
+    }
+
     /// Match the literal public resource ID, without trimming or selector parsing.
-    pub(crate) fn select(
+    fn selected_data(
         &self,
         raw_model: &str,
         inbound: &ApiProtocol,
-    ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
+    ) -> std::result::Result<RetainedRoute, ErrorCode> {
         if matches!(inbound, ApiProtocol::Custom(_)) {
             return Err(ErrorCode::InvalidRequest);
         }
@@ -98,13 +114,36 @@ impl RetainedExecutionRevision {
         {
             return Err(ErrorCode::InvalidRequest);
         }
-        // Only the inbound protocol is copied. All retained targets, defaults and
-        // policy bytes remain shared; there is no process-global revision cache.
-        Ok(Arc::new(RetainedRoute {
+        Ok(RetainedRoute {
             data: data.clone(),
             inbound: inbound.clone(),
             generation_defaults: self.document.generation_defaults.clone(),
-        }))
+            _revision: None,
+        })
+    }
+
+    /// Uncached decoder fixtures do not participate in a live service budget.
+    #[cfg(test)]
+    pub(crate) fn select(
+        &self,
+        raw_model: &str,
+        inbound: &ApiProtocol,
+    ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
+        self.selected_data(raw_model, inbound).map(Arc::new)
+    }
+}
+
+impl CachePin<RetainedExecutionRevision> {
+    /// Every escaping route retains the entire charged revision, including its
+    /// unselected routes. A selected route cannot outlive cache accounting.
+    pub(crate) fn select(
+        &self,
+        raw_model: &str,
+        inbound: &ApiProtocol,
+    ) -> std::result::Result<Arc<RetainedRoute>, ErrorCode> {
+        let mut route = self.selected_data(raw_model, inbound)?;
+        route._revision = Some(self.clone());
+        Ok(Arc::new(route))
     }
 }
 
@@ -113,6 +152,7 @@ pub(crate) struct RetainedRoute {
     data: Arc<RouteData>,
     inbound: ApiProtocol,
     generation_defaults: GenerationDefaults,
+    _revision: Option<CachePin<RetainedExecutionRevision>>,
 }
 
 struct RouteData {
@@ -306,7 +346,16 @@ impl RetainedRoute {
             // Match ordinary routing: capabilities are positive observations,
             // never an exhaustive denylist. Missing facts remain unknown; actual
             // protocol/request feasibility is checked by the execution pipeline.
-            targets.push(target.clone());
+            let mut owned = target.clone();
+            // Public RoutingTarget cannot carry the private cache pin. Header
+            // clones otherwise retain shared Bytes allocations after eviction.
+            // The remaining target fields clone into independently owned data.
+            owned.headers = target
+                .headers
+                .iter()
+                .map(crate::gateway::pipeline::types::OutboundHeaderRule::detached)
+                .collect::<GatewayResult<_>>()?;
+            targets.push(owned);
         }
         if targets.is_empty() {
             return Err(BitrouterError::NotFound(

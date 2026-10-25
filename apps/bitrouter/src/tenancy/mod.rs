@@ -3,6 +3,7 @@
 mod actor;
 mod admission;
 mod authority;
+mod cache;
 mod command;
 mod configuration;
 mod configuration_store;
@@ -58,6 +59,7 @@ pub(crate) struct Service {
     stop: CancellationToken,
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
+    caches: Arc<execution::cached::Caches>,
     admission: Arc<admission::Admission>,
     executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
     pipelines: Arc<execution::lifecycle::Registry>,
@@ -132,6 +134,7 @@ impl Service {
         // Construct fallible transport state before spawning the owning actor.
         // Tenant profiles share connection pools, never host credential plugins.
         let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::with_defaults()?);
+        let caches = Arc::new(execution::cached::Caches::new()?);
         let snapshot = Arc::new(RwLock::new(Arc::new(initial)));
         let live = Arc::new(AtomicBool::new(true));
         let instance = uuid::Uuid::new_v4().to_string().try_into()?;
@@ -162,6 +165,7 @@ impl Service {
             stop,
             reads: Arc::new(Semaphore::new(8)),
             resources,
+            caches,
             admission: admission::Admission::new(),
             executor,
             pipelines: execution::lifecycle::Registry::new(),
@@ -175,6 +179,13 @@ impl Service {
     /// never aborts the writer or releases its file lease; the host must report
     /// unsuccessful shutdown instead of claiming all transactions settled.
     pub(crate) async fn shutdown(&self) -> anyhow::Result<()> {
+        {
+            let _authority = self
+                .snapshot
+                .write()
+                .map_err(|_| anyhow::anyhow!("tenant authority lock unavailable at shutdown"))?;
+            self.caches.close();
+        }
         self.admission.close();
         tokio::time::timeout(Duration::from_secs(30), self.pipelines.close_and_drain())
             .await
