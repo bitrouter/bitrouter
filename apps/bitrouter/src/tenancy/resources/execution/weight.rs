@@ -15,7 +15,7 @@
 //! bytes, followed only by moves/clones, never reserve/removal/retain. Do not
 //! pass a manually grown-and-shrunk JSON map through this accounting boundary.
 //! Opaque tenancy IDs must first be normalized by the cache integration through
-//! String -> Box<str> -> String -> typed ID. That guarantees capacity == length
+//! `String -> Box<str> -> String -> typed ID`. That guarantees capacity == length
 //! for every root ID and every ID in document/route/dependency/credential/policy
 //! references; it avoids exposing allocation details through the wire crate.
 

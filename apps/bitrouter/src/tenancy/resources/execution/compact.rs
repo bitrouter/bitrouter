@@ -1,7 +1,7 @@
 //! Normalize opaque public identifiers at the private cache boundary.
 //!
 //! Public contract types intentionally expose text, not allocation internals.
-//! Rebuild their String storage through Box<str> before weighing the view, so
+//! Rebuild their String storage through `Box<str>` before weighing the view, so
 //! each identifier's capacity equals its byte length without widening that API.
 //! Allocator size classes/fragmentation remain outside the retained-byte budget.
 //! <https://doc.rust-lang.org/std/primitive.str.html#method.into_string>

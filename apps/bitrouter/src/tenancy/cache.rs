@@ -8,7 +8,7 @@
 //! two bytes, covering the Arc counters and conservative leading/trailing padding.
 //! Vec storage includes each inline K, Pin pointer, and entry bookkeeping, even
 //! for unused slots. The Vec never grows after construction. Allocator bookkeeping,
-//! caller-owned Pin handles, an outer Arc<Cache>, and caller construction buffers
+//! caller-owned Pin handles, an outer `Arc<Cache>`, and caller construction buffers
 //! are outside this budget.
 //!
 //! `owned_bytes` counts V's heap allocations only, including reserved capacity
