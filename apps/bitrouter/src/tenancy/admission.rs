@@ -149,6 +149,16 @@ impl Admission {
         !self.lock().receipts.fenced
     }
 
+    /// Copies completion reservation bytes, last probed free bytes and fence.
+    #[cfg(test)]
+    pub(super) fn receipt_capacity_for_test(&self) -> Result<(u64, u64, bool), ErrorCode> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        Ok(state.receipts.snapshot_for_test())
+    }
+
     /// Read-only socket-test witness: ingress count/bytes, active and queued work.
     #[cfg(test)]
     pub(super) fn ingress_for_test(&self) -> Result<(usize, usize, usize, usize), ErrorCode> {

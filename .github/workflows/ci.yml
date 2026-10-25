@@ -143,9 +143,9 @@ jobs:
           - os: windows-latest
             # Windows also exposes the trajectory timestamp race under load.
             retries: "2"
-            # A cold build and full suite took 43 minutes before cache upload.
-            # Leave time for post-job cleanup; per-test deadlines still apply.
-            timeout: 60
+            # Cold builds, the full suite and post-job cache upload exceeded
+            # 45 minutes after all tests passed. Keep per-test deadlines intact.
+            timeout: 75
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
     steps:
@@ -163,6 +163,15 @@ jobs:
           --retries "${{ matrix.retries }}"
         env:
           BITROUTER_TEST_EXAMPLES_DIR: ${{ runner.os == 'macOS' && format('{0}/target/debug/examples', github.workspace) || '' }}
+
+      - name: verify native child and file ownership under cleanup faults
+        if: runner.os == 'macOS'
+        env:
+          BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
+        run: >-
+          cargo nextest run --locked -p bitrouter --all-features --lib
+          --build-jobs 2 --test-threads 1 --run-ignored only
+          -E 'test(=tenancy::tests::execution::native::session::custody::native36_real_child_and_file_owner_follow_actual_cleanup_disposition)'
 
   # A cold all-features build used to compile and link every large application
   # test target on one runner. Split by Cargo target so each runner has bounded
@@ -224,6 +233,15 @@ jobs:
           cargo nextest run -p bitrouter --all-features \
             --build-jobs "$TEST_BUILD_JOBS" \
             "${target_flags[@]}"
+
+      - name: verify native child and file ownership under cleanup faults
+        if: matrix.target == 'lib'
+        env:
+          BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
+        run: >-
+          cargo nextest run --locked -p bitrouter --all-features --lib
+          --build-jobs 2 --test-threads 1 --run-ignored only
+          -E 'test(=tenancy::tests::execution::native::session::custody::native36_real_child_and_file_owner_follow_actual_cleanup_disposition)'
 
   test-ubuntu-integration:
     name: test (ubuntu-latest, bitrouter integration ${{ matrix.shard }})
@@ -765,6 +783,15 @@ jobs:
           --lib db::migration::m20240101_000034_continuation_storage_scope::tests::server::server_migration034_preserves_legacy_bytes_exact_scopes_and_dependencies
           -- --ignored --exact --test-threads=1
 
+      - name: verify native harness ownership before populating the test database
+        env:
+          BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib db::migration::m20240101_000036_native_harness_scope::tests::server_native36_legacy_resume_and_down_matrix
+          -- --ignored --exact --test-threads=1
+
       - name: exercise migrations and gateway persistence on the selected backend
         env:
           BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -863,6 +890,38 @@ jobs:
           cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
             --lib tenancy::receipts::store::tests::server::server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict \
             -- --ignored --exact --test-threads=1
+
+      - name: verify native harness consumers on the selected backend
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+          FIXTURE_BACKEND: ${{ matrix.backend }}
+          FIXTURE_CONTAINER: ${{ job.services.database.id }}
+        run: |
+          # This job owns a fresh service container. Plain CREATE refuses an
+          # existing database; DROP is reached only after confirmed test cleanup.
+          if [[ "$FIXTURE_BACKEND" == 'postgres' ]]; then
+            docker exec -e PGPASSWORD=fixture-password "$FIXTURE_CONTAINER" \
+              psql --username=fixture --dbname=bitrouter_test --set=ON_ERROR_STOP=1 \
+              --command='CREATE DATABASE bitrouter_eval_native36 TEMPLATE template0'
+          else
+            docker exec -e MYSQL_PWD=fixture-password "$FIXTURE_CONTAINER" \
+              mysql --user=fixture --database=bitrouter_test \
+              --execute='CREATE DATABASE bitrouter_eval_native36 CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin'
+          fi
+          export BITROUTER_TEST_NATIVE_DATABASE_URL="${BITROUTER_TEST_DATABASE_URL%/*}/bitrouter_eval_native36"
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness" \
+            --lib tenancy::tests::execution::native::session::server::server_native36_persistent_consumer_rotation_rollback_and_foreign_row \
+            -- --ignored --exact --test-threads=1
+          if [[ "$FIXTURE_BACKEND" == 'postgres' ]]; then
+            docker exec -e PGPASSWORD=fixture-password "$FIXTURE_CONTAINER" \
+              psql --username=fixture --dbname=bitrouter_test --set=ON_ERROR_STOP=1 \
+              --command='DROP DATABASE bitrouter_eval_native36'
+          else
+            docker exec -e MYSQL_PWD=fixture-password "$FIXTURE_CONTAINER" \
+              mysql --user=fixture --database=bitrouter_test \
+              --execute='DROP DATABASE bitrouter_eval_native36'
+          fi
 
       - name: verify MySQL transaction snapshot boundaries
         if: matrix.backend == 'mysql'

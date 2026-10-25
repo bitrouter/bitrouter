@@ -80,3 +80,18 @@ Migration 035 adds an owner-qualified receipt table and correlation index withou
 assigning legacy records. It checks the supported SQLite, PostgreSQL and MySQL
 catalog shapes, preserves immutable conflicts, and refuses a populated downgrade.
 The public contract crate and SDK operation set are unchanged.
+
+## Filesystem fault qualification
+
+An isolated macOS campaign passed on a fully allocated, capped 1.5 GiB APFS
+image. A bounded filler observed actual `ENOSPC` from `sync_all`; the original
+receipt transaction then returned SQLite `SQLITE_FULL` from its consuming COMMIT.
+The test verified that the uncertain owner retained execution capacity and the
+file lease, did not publish terminal success, and did not replay the provider.
+After the child process exited, the database passed integrity checks, the earlier
+immutable receipt was unchanged, and a fresh process could acquire the lease.
+The exact test attachment and its owned images were removed after qualification.
+
+This qualifies the observed APFS/SQLite failure path. It does not establish Linux
+filesystem behavior, power-loss or fsync durability, distributed coordination,
+write amplification, or production throughput. Those remain separate gates.

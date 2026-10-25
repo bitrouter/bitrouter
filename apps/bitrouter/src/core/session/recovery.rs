@@ -68,6 +68,42 @@ impl CoreSession {
         Register: FnOnce(CoreSession) -> Registered + Send,
         Registered: std::future::Future<Output = Result<(), CoreError>> + Send,
     {
+        app.require_legacy_core()?;
+        Self::restore_host(
+            request,
+            capabilities,
+            owned::Host {
+                app,
+                caller,
+                request_headers,
+                harness,
+                #[cfg(feature = "harness")]
+                owned: None,
+            },
+            register,
+        )
+        .await
+    }
+
+    pub(super) async fn restore_host<Register, Registered>(
+        request: Restore,
+        capabilities: &Capabilities,
+        host: owned::Host,
+        register: Register,
+    ) -> Result<Self, CoreError>
+    where
+        Register: FnOnce(CoreSession) -> Registered + Send,
+        Registered: std::future::Future<Output = Result<(), CoreError>> + Send,
+    {
+        host.check(&request.binding.grant)?;
+        let owned::Host {
+            app,
+            caller,
+            request_headers,
+            harness,
+            #[cfg(feature = "harness")]
+            owned,
+        } = host;
         let handoff = Instant::now();
         if !request.previous_owner_stopped {
             return Err(reject(
@@ -76,6 +112,10 @@ impl CoreSession {
             ));
         }
         let mut state = restore_snapshot(&request, capabilities, harness.as_ref()).await?;
+        #[cfg(feature = "harness")]
+        if let Some(binding) = &owned {
+            binding.check()?;
+        }
         let workspace_changed =
             state.manifest.workspace_revision != request.binding.manifest.workspace_revision;
         state.manifest = request.binding.manifest.clone();
@@ -135,6 +175,8 @@ impl CoreSession {
                 app,
                 caller,
                 request_headers,
+                #[cfg(feature = "harness")]
+                owned,
                 harness,
                 limits: binding.limits,
                 capabilities: capabilities.clone(),

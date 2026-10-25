@@ -51,6 +51,11 @@ impl Default for Accounting {
 }
 
 impl Accounting {
+    #[cfg(test)]
+    pub(in crate::tenancy) fn snapshot_for_test(&self) -> (u64, u64, bool) {
+        (self.reserved, self.free, self.fenced)
+    }
+
     /// Initialization precedes publication of the Service and any execution.
     pub fn initialize(&mut self, inventory: Inventory, free: u64) -> Result<(), ErrorCode> {
         if self.reserved != 0 || !self.potential_unknown.is_empty() {

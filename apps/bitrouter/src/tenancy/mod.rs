@@ -12,12 +12,16 @@ mod error;
 #[cfg(feature = "core")]
 pub(crate) mod eval;
 pub(crate) mod execution;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod hosts;
 pub(crate) mod http;
 mod model;
 mod mutation;
 pub(crate) mod ownership;
 pub(crate) mod receipts;
 mod resources;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod session;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -77,6 +81,8 @@ pub(crate) struct Service {
     stop: CancellationToken,
     accepting: Arc<std::sync::Mutex<bool>>,
     cleanup: Arc<transaction::Proof>,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    hosts: Arc<hosts::Hosts>,
     #[cfg(feature = "core")]
     eval: Arc<eval::State>,
     reads: Arc<Semaphore>,
@@ -313,6 +319,8 @@ impl Service {
             #[cfg(feature = "core")]
             eval,
             cleanup,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            hosts: Arc::new(hosts::Hosts::new()),
             reads,
             resources,
             native_continuation: None,
@@ -360,7 +368,15 @@ impl Service {
             self.caches.close();
         }
         self.admission.close();
+        #[cfg(all(feature = "core", feature = "harness"))]
+        self.hosts.close();
         let draining = async {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            tokio::time::timeout(Duration::from_secs(30), self.hosts.drain())
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("native host cleanup did not drain; owner retained")
+                })??;
             tokio::time::timeout(Duration::from_secs(30), self.pipelines.close_and_drain())
                 .await
                 .map_err(|_| {
@@ -509,6 +525,8 @@ impl Service {
 
     fn enqueue(&self, job: Job, safety: bool) -> Result<(), Failure> {
         let operation = match &job {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Job::Native(_) => None,
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::Credential(_) | Job::Continuation(_) | Job::Receipt(_) | Job::ReceiptRead(_) => {
                 None

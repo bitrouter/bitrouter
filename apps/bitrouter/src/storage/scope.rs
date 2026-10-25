@@ -45,6 +45,8 @@ pub(crate) enum KeyDomain {
     EvalResult,
     EvalIdempotency,
     EvalSnapshot,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    NativeSession,
     TrajectoryEpisode,
     TrajectoryRequest,
     TrajectoryEvent,
@@ -59,6 +61,8 @@ impl KeyDomain {
             Self::EvalResult => "eval.result",
             Self::EvalIdempotency => "eval.idempotency",
             Self::EvalSnapshot => "eval.snapshot",
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::NativeSession => "native.session",
             Self::TrajectoryEpisode => "trajectory.episode",
             Self::TrajectoryRequest => "trajectory.request",
             Self::TrajectoryEvent => "trajectory.event",
@@ -86,6 +90,20 @@ impl Scope {
     #[cfg(feature = "core")]
     pub(crate) fn for_eval(identity: &crate::tenancy::eval::EvalIdentity) -> (Self, Provenance) {
         let (installation, tenant, principal) = identity.storage_identity();
+        (
+            Self(Namespace::Tenant {
+                installation: installation.clone(),
+                tenant: tenant.clone(),
+            }),
+            Provenance(Some(principal.clone())),
+        )
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn for_session(
+        authority: &crate::tenancy::execution::session::Authority,
+    ) -> (Self, Provenance) {
+        let (installation, tenant, principal) = authority.storage_identity();
         (
             Self(Namespace::Tenant {
                 installation: installation.clone(),

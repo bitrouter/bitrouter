@@ -679,10 +679,67 @@ issues without relaxing production bounds or uncertainty handling. These are
 consumer and storage checks, not measurements of filesystem exhaustion or
 production throughput.
 
-This is an implementation slice. Filesystem fault qualification, recovery,
+The subsequent capped APFS campaign observed actual filesystem ENOSPC and
+SQLite FULL at the original consuming COMMIT. It passed owner/capacity and file
+lease retention, absence of terminal success, and post-exit integrity and lease
+reacquisition checks. The earlier immutable receipt survived unchanged. This is
+the observed macOS failure path only; Linux, power-loss/fsync durability, write
+amplification and production performance are not established by it.
+
+This is an implementation slice. Broader filesystem qualification, recovery,
 remaining owned consumers and final performance gates remain tracked separately.
 Production dispatch, revision-bound dispatch and strict-receipt capability flags
 remain false; M2 and M3 are not marked complete.
+
+### M2 authenticated native harness
+
+The additive in-process native session facade derives its owner from the App's
+actual Service and current authenticated binding. It retains the original
+configuration revision and scope ceiling across close/reopen, credential rotation,
+child creation and wakeups. Each model step re-enters the existing controlled
+pipeline with fresh admission and current grants; an idle session holds no
+execution lease or retained cache pin. The facade requires both `core` and
+`harness` and adds no HTTP Session resource or CLI command.
+
+Migration 036 adds eight nullable ownership fields to the existing native journal
+without assigning Legacy rows. Scoped metadata and actual SQL payload length are
+checked before loading journal bytes. Existing checkpoints, exact acknowledgments,
+artifacts and tool-start records remain one atomic journal. Unknown-write readback
+accepts only the complete prior journal or exact attempted replacement; it never
+replays a provider or tool effect.
+
+The existing Service owns initialization, the actual MCP client/process/reaper,
+journal transactions and shutdown. Dropping a caller does not abandon the owner.
+Revocation stops new effects while admitted checkpoint acknowledgments and cleanup
+retain their exact origin-bound access. A missed cleanup deadline preserves the
+real owner and fences authority. Legacy managed CLI and HTTP entry points retain
+their explicit boundaries.
+
+All 5,540 all-feature workspace tests passed (191 opt-in tests skipped), together
+with 12 doctests (one ignored), strict all-target Clippy, warnings-as-errors
+rustdoc, formatting and distribution checks. Reduced consumer/migration suites
+passed 109 minimum-gateway, 112 core, 109 harness and 130 core-plus-harness tests,
+with strict all-target Clippy for each profile. The separately invoked real MCP
+process parent passed its seven cleanup/cancellation scenarios.
+
+PostgreSQL 17 and MySQL 8.4 each passed migration 036 and the real native journal
+consumer, including credential rotation, rollback and a conflicting foreign row.
+The PostgreSQL length projection correction was exercised on the actual backend.
+Later changes were confined to tests, CI and documentation; the qualified
+production source remained unchanged.
+
+Five real artifact tests passed using separately built default-full, minimum
+gateway and harness-only executables. All 284 historical record payloads, original
+schema definitions, indexes and migration timestamps survived the profile
+transitions. The schema guard accepts only the eight exact nullable additions
+and rejects twelve malformed variants; all 12 artifact identity tests passed.
+
+Independent composition review found no remaining P1/P2 in this slice. See
+[the native harness profile](RESOURCE_TENANCY_NATIVE_HARNESS_PROFILE.md) for the
+binding, journal and lifecycle contract. Owned capture, paid learning, auxiliary
+provider work, broader recovery and final performance remain separate gates.
+Production dispatch, revision-bound dispatch and strict receipts remain disabled;
+this consumer does not mark M2 or M3 complete.
 
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a

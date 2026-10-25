@@ -5,6 +5,8 @@ mod custody;
 #[cfg(feature = "core")]
 mod eval;
 mod receipts;
+#[cfg(all(feature = "core", feature = "harness"))]
+mod session;
 #[cfg(feature = "core")]
 mod trajectory;
 
@@ -41,6 +43,8 @@ pub(super) struct Message {
 }
 
 pub(super) enum Job {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    Native(Box<super::session::Job>),
     Command(Box<Message>),
     Credential(CredentialRead),
     Receipt(Arc<super::receipts::owner::Owner>),

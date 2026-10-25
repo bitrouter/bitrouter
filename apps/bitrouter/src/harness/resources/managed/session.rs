@@ -1,6 +1,8 @@
 //! One CoreSession drives the native harness. Workspace tools and approvals
 //! remain local, with their start ledger serialized against checkpoint fences.
 
+mod owned;
+
 use crate::storage::checkpoint::CheckpointBatchExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -46,6 +48,7 @@ pub struct NativeSession {
     receiver: mpsc::Receiver<ServerMessage>,
     workspace: Arc<WorkspaceFence>,
     effects: Arc<RwLock<()>>,
+    owned_handle: Option<owned::Handle>,
 }
 
 /// A passive view of the original native journal. Reading it neither claims
@@ -57,6 +60,11 @@ pub struct StoredSession {
     pub head: DurableHead,
     pub released: bool,
     pub snapshot: Option<SessionSnapshot>,
+}
+
+struct Preparation<'a> {
+    opening: Option<&'a mut owned::Opening>,
+    cancel: &'a CancellationToken,
 }
 
 impl NativeSession {
@@ -121,6 +129,7 @@ impl NativeSession {
         mode: ToolMode,
         config: &HarnessConfig,
     ) -> Result<Self, CoreError> {
+        app.require_legacy_core()?;
         Self::open_cancellable(
             app,
             caller,
@@ -144,10 +153,106 @@ impl NativeSession {
         config: &HarnessConfig,
         cancel: &CancellationToken,
     ) -> Result<Self, CoreError> {
-        let workspace = workspace
-            .canonicalize()
-            .map_err(|err| error(err.to_string()))?;
+        app.require_legacy_core()?;
+        Self::open_prepared(
+            app,
+            caller,
+            store,
+            workspace,
+            mode,
+            config,
+            Preparation {
+                opening: None,
+                cancel,
+            },
+        )
+        .await
+    }
+
+    /// Open the persistent in-process harness with checked tenancy credentials.
+    /// The local name selects within the authenticated principal's namespace.
+    /// Workspace and tool configuration remain trusted host inputs, not a remote API.
+    ///
+    /// # Errors
+    /// Rejects unsupported authority, an occupied host slot, incompatible retained
+    /// identity, or unconfirmed journal/workspace cleanup. It never falls back to Legacy.
+    pub async fn open_authenticated(
+        app: Arc<App>,
+        headers: http::HeaderMap,
+        name: &str,
+        workspace: &Path,
+        mode: ToolMode,
+        config: &HarnessConfig,
+    ) -> Result<Self, CoreError> {
+        owned::open(app, headers, name, workspace, mode, config).await
+    }
+
+    async fn open_inner(
+        app: Arc<App>,
+        caller: CallerContext,
+        store: Arc<dyn NativeStore>,
+        workspace: &Path,
+        mode: ToolMode,
+        config: &HarnessConfig,
+        opening: Option<&mut owned::Opening>,
+    ) -> Result<Self, CoreError> {
+        let cancel = opening
+            .as_ref()
+            .map_or_else(CancellationToken::new, |opening| {
+                opening.cancellation().clone()
+            });
+        Self::open_prepared(
+            app,
+            caller,
+            store,
+            workspace,
+            mode,
+            config,
+            Preparation {
+                opening,
+                cancel: &cancel,
+            },
+        )
+        .await
+    }
+
+    async fn open_prepared(
+        app: Arc<App>,
+        caller: CallerContext,
+        store: Arc<dyn NativeStore>,
+        workspace: &Path,
+        mode: ToolMode,
+        config: &HarnessConfig,
+        preparation: Preparation<'_>,
+    ) -> Result<Self, CoreError> {
+        let Preparation {
+            mut opening,
+            cancel,
+        } = preparation;
+        if let Some(opening) = &opening {
+            opening.check()?;
+        } else {
+            app.require_legacy_core()?;
+        }
+        let legacy_workspace = if opening.is_none() {
+            Some(
+                workspace
+                    .canonicalize()
+                    .map_err(|err| error(err.to_string()))?,
+            )
+        } else {
+            None
+        };
         let loaded = store.load().await?;
+        if let Some(opening) = &opening {
+            opening.check()?;
+        }
+        let workspace = match legacy_workspace {
+            Some(workspace) => workspace,
+            None => workspace
+                .canonicalize()
+                .map_err(|err| error(err.to_string()))?,
+        };
         let (revision, previous) = match loaded {
             Some((revision, bytes)) => {
                 if bytes.len() > MAX_STORE_BYTES {
@@ -177,7 +282,7 @@ impl NativeSession {
                 .ok_or_else(|| error("native epoch exhausted"))
         })?;
         let core_id = format!("core_{}", uuid::Uuid::new_v4());
-        let grant = OwnershipGrant {
+        let mut grant = OwnershipGrant {
             session_id: previous.as_ref().map_or_else(
                 || format!("session_{}", uuid::Uuid::new_v4()),
                 |journal| journal.grant.session_id.clone(),
@@ -189,6 +294,10 @@ impl NativeSession {
             core_instance_id: core_id.clone(),
             execution_epoch: epoch,
         };
+        if let Some(opening) = &opening {
+            grant.harness_id = opening.store.descriptor().harness.clone();
+            grant.session_id = opening.store.descriptor().session.clone();
+        }
         let owner = ExecutionOwner {
             server_instance_id: core_id,
             generation: epoch,
@@ -198,18 +307,61 @@ impl NativeSession {
             WorkspaceFence::acquire(&workspace, &owner, &grant.session_id)
                 .map_err(|err| error(err.to_string()))?,
         );
-        let resources =
-            match NativeResources::discover_for_caller(&workspace, mode, config, &caller, cancel)
+        if let Some(opening) = &mut opening {
+            opening.workspace = Some(fence.clone());
+        }
+        #[cfg(test)]
+        if let Some(opening) = &opening {
+            let gate = opening
+                .authority
+                .service()
+                .take_host_gate(crate::tenancy::hosts::HostBoundary::Transport)?;
+            if let Some(gate) = &gate {
+                gate.mcp
+                    .set(Arc::downgrade(&opening.mcp))
+                    .map_err(|_| error("native test resource observer already set"))?;
+            }
+            opening.mcp.lock().await.set_discovery_gate(gate);
+        }
+        let discovered = match &opening {
+            Some(opening) => {
+                NativeResources::discover_in(
+                    &workspace,
+                    mode,
+                    config,
+                    &caller,
+                    opening.cancellation(),
+                    opening.mcp.clone(),
+                    &crate::gateway::mcp::client::Discovery::native(
+                        opening.authority.clone(),
+                        opening.cancellation().clone(),
+                    ),
+                )
                 .await
-            {
-                Ok(resources) => Arc::new(resources),
-                Err(err) => {
-                    if !err.cleanup_unknown {
-                        fence.finish().map_err(|err| error(err.to_string()))?;
-                    }
-                    return Err(error(err.to_string()));
+            }
+            None => {
+                NativeResources::discover_for_caller(&workspace, mode, config, &caller, cancel)
+                    .await
+            }
+        };
+        let resources = match discovered {
+            Ok(resources) => Arc::new(resources),
+            Err(err) => {
+                if let Some(opening) = &mut opening {
+                    opening.ambiguous = err.cleanup_unknown;
                 }
-            };
+                if !err.cleanup_unknown && opening.is_none() {
+                    fence.finish().map_err(|err| error(err.to_string()))?;
+                }
+                return Err(error(err.to_string()));
+            }
+        };
+        if let Some(opening) = &mut opening {
+            opening.resources = Some(resources.clone());
+            #[cfg(test)]
+            opening.authority.service().host_resources_ready().await?;
+            opening.check()?;
+        }
         let initialized = async {
             let mut journal = previous.clone().unwrap_or_else(|| {
                 Journal::new(workspace, mode, grant.clone(), resources.manifest().clone())
@@ -218,16 +370,40 @@ impl NativeSession {
             journal.manifest = resources.manifest().clone();
             journal.released = false;
             let (sender, receiver) = mpsc::channel(32);
-            let port = Arc::new(NativePort::new(
-                revision,
-                journal.clone(),
-                store,
-                sender,
-                resources.clone(),
-            ));
+            let port = if let Some(opening) = &mut opening {
+                let binding = opening
+                    .authority
+                    .bind(opening.store.descriptor().clone(), grant.clone())?;
+                opening.store.attach(binding.clone())?;
+                opening.binding = Some(binding.clone());
+                let port = Arc::new(NativePort::new_owned(
+                    revision,
+                    journal.clone(),
+                    store,
+                    sender,
+                    resources.clone(),
+                    binding,
+                ));
+                opening.port = Some(port.clone());
+                port
+            } else {
+                Arc::new(NativePort::new(
+                    revision,
+                    journal.clone(),
+                    store,
+                    sender,
+                    resources.clone(),
+                ))
+            };
             {
                 let mut state = port.state.lock().await;
+                if let Some(opening) = &mut opening {
+                    opening.epoch_started = true;
+                }
                 port.persist(&mut state, journal.clone()).await?;
+                if let Some(opening) = &mut opening {
+                    opening.epoch_committed = true;
+                }
             }
             let caps = Capabilities {
                 version: VERSION,
@@ -246,7 +422,45 @@ impl NativeSession {
                 manifest: journal.manifest.clone(),
                 limits: journal.limits.clone(),
             };
-            let core = if previous.is_some() {
+            let core = if let Some(opening) = &mut opening {
+                let checked = opening
+                    .binding
+                    .clone()
+                    .ok_or_else(|| error("native ownership missing"))?;
+                let register = |core| {
+                    opening.core = Some(core);
+                    std::future::ready(Ok(()))
+                };
+                if previous.is_some() {
+                    CoreSession::restore_owned_registered(
+                        Restore {
+                            binding,
+                            journal_tail: vec![],
+                            tools: vec![],
+                            results: vec![],
+                            available_artifacts: journal.available(),
+                            previous_owner_stopped: true,
+                            active_time: None,
+                        },
+                        &caps,
+                        app,
+                        checked,
+                        port.clone(),
+                        register,
+                    )
+                    .await?
+                } else {
+                    CoreSession::bind_owned_registered(
+                        binding,
+                        &caps,
+                        app,
+                        checked,
+                        port.clone(),
+                        register,
+                    )
+                    .await?
+                }
+            } else if previous.is_some() {
                 CoreSession::restore(
                     Restore {
                         binding,
@@ -278,6 +492,10 @@ impl NativeSession {
                 resources.signals(&grant, revision),
             )
             .await?;
+            if let Some(opening) = &opening {
+                opening.check()?;
+            }
+            port.restored();
             Ok(Self {
                 core,
                 port,
@@ -285,10 +503,11 @@ impl NativeSession {
                 receiver,
                 workspace: fence.clone(),
                 effects: Arc::new(RwLock::new(())),
+                owned_handle: None,
             })
         }
         .await;
-        if initialized.is_err() {
+        if initialized.is_err() && opening.is_none() {
             // No core driver or workspace tool has started during initialization.
             // A failed journal remains blocked, but confirmed resource shutdown
             // permits a different session to use this workspace.
@@ -308,6 +527,9 @@ impl NativeSession {
         approval: Arc<dyn NativeApproval>,
         cancel: CancellationToken,
     ) -> Result<SessionSnapshot, CoreError> {
+        if let Some(handle) = &self.owned_handle {
+            return handle.run(input, approval, cancel).await;
+        }
         self.start(&format!("input_{}", uuid::Uuid::new_v4()), input)
             .await?;
         self.drive(approval, cancel).await
@@ -320,6 +542,12 @@ impl NativeSession {
         operation_id: &str,
         input: TaskInput,
     ) -> Result<OperationReceipt, CoreError> {
+        if self.owned_handle.is_some() {
+            return Err(CoreError::rejected(
+                ErrorCode::UnauthorizedScope,
+                "authenticated native sessions must use the owned run path",
+            ));
+        }
         let revision = match self.core.operation(operation_id).await {
             Some(receipt) => receipt
                 .state_revision
@@ -336,6 +564,15 @@ impl NativeSession {
         approval: Arc<dyn NativeApproval>,
         cancel: CancellationToken,
     ) -> Result<SessionSnapshot, CoreError> {
+        if self.owned_handle.is_some() {
+            return Err(CoreError::rejected(
+                ErrorCode::UnauthorizedScope,
+                "authenticated native sessions must use the owned run path",
+            ));
+        }
+        if cancel.is_cancelled() {
+            cancel_current_run(&self.core).await?;
+        }
         let result = self.drive_inner(approval, cancel).await;
         if result.is_err() {
             self.port.cancel_tools();
@@ -404,7 +641,18 @@ impl NativeSession {
                             });
                         }
                         Some(ServerMessage::MaterialRequest { request_id, material_id, version }) => {
-                            let (material, unavailable) = match self.resources.material(&material_id, &version).await { Ok(material) => (Some(material), None), Err(reason) => (None, Some(reason)) };
+                            let resources = self.resources.clone();
+                            let result = self.port.with_dispatch(|| tokio::spawn(async move {
+                                resources.material(&material_id, &version).await
+                            }));
+                            let (material, unavailable) = match result {
+                                Ok(worker) => match worker.await {
+                                    Ok(Ok(material)) => (Some(material), None),
+                                    Ok(Err(reason)) => (None, Some(reason)),
+                                    Err(_) => (None, Some("native material worker unavailable".into())),
+                                },
+                                Err(_) => (None, Some("native material request no longer authorized".into())),
+                            };
                             if let Err(err) = core.material_result(&operation("material", &request_id), &request_id, material, unavailable).await {
                                 break Err(err);
                             }
@@ -428,10 +676,14 @@ impl NativeSession {
         }
         // Keep polling the core so SDK work settles; dropping the driver does not
         // prove it stopped. Native shell workers similarly must be joined.
-        if driving {
-            let _ = driver.await;
-        }
         let mut outcome = outcome;
+        if driving {
+            match driver.await {
+                Ok(Ok(_)) => {}
+                Ok(Err(error)) => outcome = Err(error),
+                Err(_) => outcome = Err(error("native core driver did not settle")),
+            }
+        }
         while let Some(result) = jobs.join_next().await {
             let settled = result
                 .map_err(|err| error(err.to_string()))
@@ -443,7 +695,10 @@ impl NativeSession {
         outcome
     }
 
-    pub async fn close(self) -> Result<(), CoreError> {
+    pub async fn close(mut self) -> Result<(), CoreError> {
+        if let Some(handle) = self.owned_handle.take() {
+            return handle.close().await;
+        }
         self.resources.shutdown().await.map_err(error)?;
         self.core
             .release(
@@ -541,7 +796,6 @@ async fn execute(
         .ok_or_else(|| error("native tool missing from inventory"))?;
     {
         let mut state = port.state.lock().await;
-        port.authorize_dispatch().await?;
         if command.execution_epoch != state.journal.grant.execution_epoch
             || command.authorizing_event_seq > state.journal.head.event_seq
         {
@@ -580,6 +834,7 @@ async fn execute(
                 "native invocation already admitted; effects cannot restart",
             ));
         }
+        port.authorize_dispatch().await?;
         let mut next = state.journal.clone();
         next.starts.insert(
             command.invocation_id.clone(),
@@ -655,9 +910,13 @@ async fn execute(
                 .started = true;
             port.persist(&mut state, next).await?;
             let (resources, command, cancel) = (resources.clone(), command.clone(), cancel.clone());
-            Some(tokio::spawn(async move {
-                resources.execute(&command, &cancel).await
-            }))
+            // A dispatch rejection never calls the closure, so no worker was
+            // admitted. Convert only that rejection to None; the result path
+            // below durably records NotExecuted, preserving cleanup and ACK.
+            port.with_dispatch(|| {
+                tokio::spawn(async move { resources.execute(&command, &cancel).await })
+            })
+            .ok()
         }
     };
     let result = match worker {
@@ -702,4 +961,12 @@ async fn execute(
     core.tool_result(&operation("result", &command.invocation_id), result)
         .await?;
     Ok(())
+}
+
+impl Drop for NativeSession {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.owned_handle {
+            handle.cancel();
+        }
+    }
 }

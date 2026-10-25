@@ -20,6 +20,8 @@ struct OwnedChild {
 pub(super) struct ProcessOwner {
     child: Arc<Mutex<Option<OwnedChild>>>,
     closed: Arc<AtomicBool>,
+    #[cfg(all(test, feature = "core", feature = "harness"))]
+    cleanup_gate: Arc<std::sync::Mutex<Option<Arc<crate::tenancy::hosts::HostGate>>>>,
 }
 
 impl ProcessOwner {
@@ -27,7 +29,30 @@ impl ProcessOwner {
         Self {
             child: Arc::new(Mutex::new(None)),
             closed: Arc::new(AtomicBool::new(true)),
+            #[cfg(all(test, feature = "core", feature = "harness"))]
+            cleanup_gate: Default::default(),
         }
+    }
+
+    #[cfg(all(test, feature = "core", feature = "harness"))]
+    pub(super) fn hold_cleanup(
+        &self,
+        gate: Arc<crate::tenancy::hosts::HostGate>,
+    ) -> std::io::Result<()> {
+        *self
+            .cleanup_gate
+            .lock()
+            .map_err(|_| std::io::Error::other("MCP cleanup test gate poisoned"))? = Some(gate);
+        Ok(())
+    }
+
+    #[cfg(all(test, feature = "core", feature = "harness"))]
+    pub(super) async fn retained_pid(&self) -> Option<u32> {
+        self.child
+            .lock()
+            .await
+            .as_ref()
+            .and_then(|child| child.process.id())
     }
 
     pub(super) async fn stop(&self) -> std::io::Result<()> {
@@ -36,6 +61,17 @@ impl ProcessOwner {
             let Some(child) = slot.as_mut() else {
                 return Ok(());
             };
+            #[cfg(all(test, feature = "core", feature = "harness"))]
+            {
+                let gate = self
+                    .cleanup_gate
+                    .lock()
+                    .map_err(|_| std::io::Error::other("MCP cleanup test gate poisoned"))?
+                    .clone();
+                if let Some(gate) = gate {
+                    gate.reached().await;
+                }
+            }
             // Stop the group/job, including descendants, then await exit.
             // Keeping the child in its owner also allows cancellation of wait.
             if child.process.id().is_some() {

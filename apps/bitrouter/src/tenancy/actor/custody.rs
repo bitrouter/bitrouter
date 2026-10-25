@@ -12,6 +12,8 @@ use crate::tenancy::transaction::{Disposition, Phase};
 #[derive(Clone, Copy)]
 enum Policy {
     Management,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    Native,
     CredentialRead,
     Receipt,
     #[cfg(feature = "core")]
@@ -191,6 +193,37 @@ impl Worker {
                     // The registry retains the immutable candidate and its reservation
                     // after a confirmed rollback; an ambiguous actor never releases either.
                     drop(owner);
+                }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                Job::Native(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_native_journal(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::Native,
+                            None,
+                        )
+                        .await;
+                    let crate::tenancy::session::Job {
+                        request,
+                        reply,
+                        _read: read,
+                        ..
+                    } = *message;
+                    if reply
+                        .send(crate::tenancy::session::Outcome {
+                            result,
+                            disposition: self.proof.disposition(),
+                        })
+                        .is_err()
+                    {
+                        tracing::debug!("native journal completed without a response receiver");
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    drop((request, read));
                 }
                 Job::Command(message) => {
                     let Message {
@@ -483,6 +516,9 @@ impl Worker {
                     let keep_write = match policy {
                         Policy::Management | Policy::Receipt => true,
                         Policy::CredentialRead => false,
+                        #[cfg(all(feature = "core", feature = "harness"))]
+                        Policy::Native => matches!(control.phase(), Phase::Committing)
+                            || self.proof.disposition() == Disposition::Committed,
                         #[cfg(feature = "core")]
                         Policy::OwnedEval => matches!(control.phase(), Phase::Committing)
                             || self.proof.disposition() == Disposition::Committed,
@@ -571,6 +607,16 @@ impl Job {
             Self::Receipt(owner) => owner.fail(ErrorCode::StorageUnavailable),
             Self::ReceiptRead(read) => {
                 let _ = read.reply.send(Err(ErrorCode::AuthorityUnavailable.into()));
+            }
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::Native(message) => {
+                if message
+                    .reply
+                    .send(crate::tenancy::session::Outcome::rejected())
+                    .is_err()
+                {
+                    tracing::debug!("rejected native journal had no response receiver");
+                }
             }
             Self::Command(message) => {
                 let error = Failure::new(

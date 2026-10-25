@@ -11,6 +11,9 @@ use sea_orm::{DatabaseConnection, DatabaseTransaction, DbErr, TransactionTrait};
 use tokio::sync::watch;
 use tokio::time::Instant;
 
+#[cfg(test)]
+pub(in crate::tenancy) mod receipt_observation;
+
 pub(super) const CLEANUP_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +44,8 @@ pub(super) struct Proof {
     begin_calls: std::sync::atomic::AtomicUsize,
     #[cfg(test)]
     acknowledged_rollbacks: std::sync::atomic::AtomicUsize,
+    #[cfg(test)]
+    receipt_observation: std::sync::Mutex<Option<receipt_observation::Trace>>,
 }
 
 impl Proof {
@@ -61,6 +66,8 @@ impl Proof {
             begin_calls: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             acknowledged_rollbacks: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            receipt_observation: std::sync::Mutex::new(None),
         })
     }
 

@@ -64,6 +64,21 @@ impl Candidate {
             digest,
         })
     }
+    #[cfg(test)]
+    pub(in crate::tenancy) fn fingerprint_for_test(
+        &self,
+    ) -> crate::tenancy::transaction::receipt_observation::Fingerprint {
+        crate::tenancy::transaction::receipt_observation::Fingerprint {
+            digest: self.digest.clone(),
+            bytes: self.bytes(),
+            attempt_count: self.receipt.attempts.len(),
+            first_attempt: self
+                .receipt
+                .attempts
+                .first()
+                .map(|attempt| attempt.attempt_id.clone()),
+        }
+    }
     pub fn bytes(&self) -> u64 {
         (self.json.len() + self.private_json.len()) as u64
     }

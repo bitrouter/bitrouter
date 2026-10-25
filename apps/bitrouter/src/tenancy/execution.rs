@@ -37,10 +37,14 @@ use crate::gateway::{
 
 pub(super) mod cached;
 mod continuation;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod host;
 pub(crate) mod http_continuation;
 pub(crate) mod lifecycle;
 mod native;
 mod profile;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod session;
 #[cfg(test)]
 mod tests;
 
@@ -53,6 +57,8 @@ pub(crate) struct Submission {
     credential: CredentialId,
     binding: DispatchBinding,
     deadline: tokio::time::Instant,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    session_closed: Option<Arc<AtomicBool>>,
 }
 
 impl Submission {
@@ -133,6 +139,14 @@ impl Service {
         if !self.live.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable);
         }
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if submission
+            .session_closed
+            .as_ref()
+            .is_some_and(|closed| closed.load(Ordering::Acquire))
+        {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
         let state = guard.as_ref();
         if submission.deadline <= tokio::time::Instant::now() {
             return Err(ErrorCode::CapacityExceeded);
@@ -185,6 +199,8 @@ impl Service {
             credential: credential.id.clone(),
             binding,
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+            #[cfg(all(feature = "core", feature = "harness"))]
+            session_closed: None,
         };
         self.with_dispatch_authority(&submission, |_| Ok(()))
             .map_err(Failure::from)?;

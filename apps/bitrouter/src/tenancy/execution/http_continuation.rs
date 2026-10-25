@@ -28,6 +28,15 @@ impl Access {
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if self
+            .submission
+            .session_closed
+            .as_ref()
+            .is_some_and(|closed| closed.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
         if self.deadline() <= tokio::time::Instant::now() {
             return Err(ErrorCode::CapacityExceeded);
         }
@@ -63,6 +72,8 @@ impl TenantExecution {
             credential,
             binding,
             deadline,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            session_closed,
         } = &self.submission;
         Ok(Access {
             submission: Submission {
@@ -72,6 +83,8 @@ impl TenantExecution {
                 credential: credential.clone(),
                 binding: binding.clone(),
                 deadline: *deadline,
+                #[cfg(all(feature = "core", feature = "harness"))]
+                session_closed: session_closed.clone(),
             },
             route: self.route.clone(),
             owner: self.http_owner(),

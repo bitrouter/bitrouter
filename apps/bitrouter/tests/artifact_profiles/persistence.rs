@@ -93,12 +93,13 @@ fn additive_schema_definition(entry: &str) -> Result<String> {
             "acp_assessment_revisions",
             "acp_effective_assessments",
             "provider_continuations",
+            "bro_managed_sessions",
         ]
         .contains(&definition.1.as_str())
     {
         return Ok(entry.to_owned());
     }
-    // Independently allow only migration030/032/033/034's exact nullable additions. Keep
+    // Independently allow only migration030/032/033/034/036's exact nullable additions. Keep
     // every byte of the old column/constraint definitions and all old indexes.
     // Do not derive the allowance from the migration being tested.
     let sql = definition
@@ -137,12 +138,157 @@ fn additive_schema_definition(entry: &str) -> Result<String> {
     } else {
         ""
     };
+    // The pinned v7 managed-session table has an inline primary key, so its
+    // original closing suffix remains ")". Only this table gets migration036's five
+    // additional columns after the three common nullable ownership columns.
+    let native_identity = if definition.1 == "bro_managed_sessions" {
+        ", \"session_principal_id\" varchar(128) COLLATE BINARY, \
+         \"logical_name\" varchar(128) COLLATE BINARY, \
+         \"harness_id\" varchar(128) COLLATE BINARY, \
+         \"session_id\" varchar(128) COLLATE BINARY, \
+         \"execution_revision\" varchar(128) COLLATE BINARY"
+    } else {
+        ""
+    };
     definition.3 = Some(format!(
         "{prefix}, \"installation_id\" varchar(128) COLLATE BINARY, \
          \"tenant_id\" varchar(128) COLLATE BINARY, \
-         \"creator_principal_id\" varchar(128) COLLATE BINARY{logical_identity}{suffix}"
+         \"creator_principal_id\" varchar(128) COLLATE BINARY{logical_identity}{native_identity}{suffix}"
     ));
     Ok(serde_json::to_string(&definition)?)
+}
+
+#[test]
+fn native036_schema_allowance_is_exact_and_preserves_historical_definition() -> Result<()> {
+    // Literal SQL from the hash-pinned v7 artifact, not from migration036 or
+    // additive_schema_definition. The first comma preserves the old trailing
+    // space; SQLite inserts at the original closing parenthesis here.
+    const ORIGINAL: &str = r#"CREATE TABLE "bro_managed_sessions" ( "id" varchar NOT NULL PRIMARY KEY, "revision" bigint NOT NULL, "payload_bytes" bigint NOT NULL, "payload" text NOT NULL )"#;
+    const EXPECTED: &str = concat!(
+        r#"CREATE TABLE "bro_managed_sessions" ( "id" varchar NOT NULL PRIMARY KEY, "revision" bigint NOT NULL, "payload_bytes" bigint NOT NULL, "payload" text NOT NULL , "#,
+        r#""installation_id" varchar(128) COLLATE BINARY, "#,
+        r#""tenant_id" varchar(128) COLLATE BINARY, "#,
+        r#""creator_principal_id" varchar(128) COLLATE BINARY, "#,
+        r#""session_principal_id" varchar(128) COLLATE BINARY, "#,
+        r#""logical_name" varchar(128) COLLATE BINARY, "#,
+        r#""harness_id" varchar(128) COLLATE BINARY, "#,
+        r#""session_id" varchar(128) COLLATE BINARY, "#,
+        r#""execution_revision" varchar(128) COLLATE BINARY)"#,
+    );
+    let bytes = zstd::stream::decode_all(
+        include_bytes!("../fixtures/baseline-runtime-v7/database.sqlite.zst").as_slice(),
+    )?;
+    ensure!(
+        hex::encode(Sha256::digest(&bytes))
+            == "28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9"
+    );
+    ensure!(
+        bytes
+            .windows(ORIGINAL.len())
+            .any(|part| part == ORIGINAL.as_bytes())
+    );
+    let entry = |kind: &str, name: &str, sql: &str| -> Result<String> {
+        Ok(serde_json::to_string(&(kind, name, name, Some(sql)))?)
+    };
+    let original = entry("table", "bro_managed_sessions", ORIGINAL)?;
+    let expected = entry("table", "bro_managed_sessions", EXPECTED)?;
+    ensure!(additive_schema_definition(&original)? == expected);
+
+    // Satisfy the unchanged ledger guard without executing any migration. Only
+    // registry names are used here; expected DDL above is independent.
+    let mut ledger = bitrouter::db::migration::Migrator::migrations()
+        .iter()
+        .map(|migration| (migration.name().to_owned(), 17))
+        .collect::<Vec<_>>();
+    ledger.sort();
+    let before = StoredState {
+        ledger: ledger.clone(),
+        rows: vec![],
+        original_owner: OWNER.into(),
+        schema: vec![original],
+        owners: vec![],
+        authority: vec![],
+    };
+    let mut after = StoredState {
+        ledger,
+        rows: vec![],
+        original_owner: OWNER.into(),
+        schema: vec![expected],
+        owners: vec![],
+        authority: vec![],
+    };
+    // A positive control precedes every negative: unrelated fixture failure
+    // cannot masquerade as rejection of a malformed schema addition.
+    after.check_additive_migrations(&before)?;
+    for (from, to) in [
+        (r#", "session_id" varchar(128) COLLATE BINARY"#, ""),
+        (
+            r#""execution_revision" varchar(128) COLLATE BINARY)"#,
+            r#""execution_revision" varchar(128) COLLATE BINARY, "extra" text)"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY NOT NULL"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY DEFAULT NULL"#,
+        ),
+        (
+            r#""logical_name" varchar(128)"#,
+            r#""logical_name" varchar(129)"#,
+        ),
+        (
+            r#""harness_id" varchar(128) COLLATE BINARY"#,
+            r#""harness_id" varchar(128) COLLATE NOCASE"#,
+        ),
+        (r#""session_principal_id""#, r#""Session_principal_id""#),
+        (
+            r#""session_principal_id" varchar(128) COLLATE BINARY, "logical_name" varchar(128) COLLATE BINARY"#,
+            r#""logical_name" varchar(128) COLLATE BINARY, "session_principal_id" varchar(128) COLLATE BINARY"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY UNIQUE"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY CHECK (length(session_id) > 0)"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY REFERENCES bro_executions(id)"#,
+        ),
+        (r#""payload" text NOT NULL "#, r#""payload" blob NOT NULL "#),
+    ] {
+        let malformed = EXPECTED.replacen(from, to, 1);
+        ensure!(
+            malformed != EXPECTED,
+            "negative fixture did not change its target"
+        );
+        after.schema = vec![entry("table", "bro_managed_sessions", &malformed)?];
+        ensure!(
+            after.check_additive_migrations(&before).is_err(),
+            "accepted malformed native schema: {from} -> {to}"
+        );
+    }
+    for (kind, name) in [
+        ("table", "bro_managed_sessions_extra"),
+        ("table", "Bro_managed_sessions"),
+        ("index", "bro_managed_sessions"),
+    ] {
+        let other = entry(kind, name, ORIGINAL)?;
+        ensure!(additive_schema_definition(&other)? == other);
+    }
+    ensure!(
+        additive_schema_definition(&entry(
+            "table",
+            "bro_managed_sessions",
+            "CREATE TABLE broken(id);"
+        )?)
+        .is_err()
+    );
+    Ok(())
 }
 
 async fn strings(db: &DatabaseConnection, sql: String) -> Result<Vec<String>> {

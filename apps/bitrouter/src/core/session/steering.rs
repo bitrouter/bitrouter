@@ -81,6 +81,7 @@ impl CoreSession {
         agent_turn_id: &str,
         text: String,
     ) -> Result<OperationReceipt, CoreError> {
+        self.check_owned()?;
         validate_id(operation_id)?;
         let fingerprint = fingerprint(expected_revision, run_id, agent_turn_id, &text)?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
@@ -121,6 +122,7 @@ impl CoreSession {
                 return Ok(receipt);
             }
             self.transition_for(Some(&target), "input.steer.received", |state, head| {
+                self.check_owned()?;
                 if head.state_revision != expected_revision {
                     return Err(reject(
                         ErrorCode::StaleRevision,

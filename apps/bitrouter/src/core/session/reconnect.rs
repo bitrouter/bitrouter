@@ -72,6 +72,20 @@ impl CoreSession {
         grant: &OwnershipGrant,
         durable: &DurableHead,
     ) -> Result<DurableHead, CoreError> {
+        self.check_owned()?;
+        let result = self.reconnect_inner(grant, durable).await;
+        if let Err(error) = self.check_owned() {
+            self.disconnect().await;
+            return Err(error);
+        }
+        result
+    }
+
+    pub(super) async fn reconnect_inner(
+        &self,
+        grant: &OwnershipGrant,
+        durable: &DurableHead,
+    ) -> Result<DurableHead, CoreError> {
         {
             let mut live = self.shared.live.lock().await;
             if live.gate.grant() != grant {

@@ -10,6 +10,9 @@ use sea_orm::{
     TransactionTrait,
 };
 
+#[cfg(feature = "core")]
+pub(crate) mod owned;
+
 pub struct DatabaseNativeStore {
     db: DatabaseConnection,
     id: String,
@@ -32,6 +35,14 @@ mod session {
         pub revision: i64,
         pub payload_bytes: i64,
         pub payload: String,
+        pub installation_id: Option<String>,
+        pub tenant_id: Option<String>,
+        pub creator_principal_id: Option<String>,
+        pub session_principal_id: Option<String>,
+        pub logical_name: Option<String>,
+        pub harness_id: Option<String>,
+        pub session_id: Option<String>,
+        pub execution_revision: Option<String>,
     }
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
@@ -56,6 +67,7 @@ impl NativeStore for DatabaseNativeStore {
             .await
             .map_err(storage)?;
         let metadata = session::Entity::find_by_id(&self.id)
+            .filter(legacy())
             .select_only()
             .columns([session::Column::Revision, session::Column::PayloadBytes])
             .into_tuple::<(i64, i64)>()
@@ -70,6 +82,7 @@ impl NativeStore for DatabaseNativeStore {
             return Err(storage("invalid or oversized managed session"));
         }
         let record = session::Entity::find_by_id(&self.id)
+            .filter(legacy())
             .filter(session::Column::Revision.eq(revision))
             .one(&transaction)
             .await
@@ -98,6 +111,14 @@ impl NativeStore for DatabaseNativeStore {
                 revision: Set(next),
                 payload_bytes: Set(length),
                 payload: Set(payload),
+                installation_id: Set(None),
+                tenant_id: Set(None),
+                creator_principal_id: Set(None),
+                session_principal_id: Set(None),
+                logical_name: Set(None),
+                harness_id: Set(None),
+                session_id: Set(None),
+                execution_revision: Set(None),
             }
             .insert(&self.db)
             .await
@@ -116,6 +137,7 @@ impl NativeStore for DatabaseNativeStore {
                     session::Column::Payload,
                     sea_orm::sea_query::Expr::value(payload),
                 )
+                .filter(legacy())
                 .filter(session::Column::Id.eq(&self.id))
                 .filter(session::Column::Revision.eq(previous))
                 .exec(&self.db)
@@ -134,6 +156,18 @@ fn storage(error: impl std::fmt::Display) -> CoreError {
         ErrorCode::CheckpointUnavailable,
         format!("managed session storage: {error}"),
     )
+}
+
+fn legacy() -> sea_orm::Condition {
+    sea_orm::Condition::all()
+        .add(session::Column::InstallationId.is_null())
+        .add(session::Column::TenantId.is_null())
+        .add(session::Column::CreatorPrincipalId.is_null())
+        .add(session::Column::SessionPrincipalId.is_null())
+        .add(session::Column::LogicalName.is_null())
+        .add(session::Column::HarnessId.is_null())
+        .add(session::Column::SessionId.is_null())
+        .add(session::Column::ExecutionRevision.is_null())
 }
 
 #[cfg(test)]

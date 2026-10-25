@@ -137,6 +137,8 @@ pub(in crate::harness::resources::managed) struct NativePort {
     pub commands: mpsc::Sender<ServerMessage>,
     pub active: std::sync::Mutex<BTreeMap<String, CancellationToken>>,
     pub failed: AtomicBool,
+    owned: Option<Arc<crate::tenancy::execution::session::Binding>>,
+    restoring: AtomicBool,
     staging: Mutex<BTreeMap<String, (ArtifactRef, Vec<u8>)>>,
 }
 
@@ -155,14 +157,54 @@ impl NativePort {
             commands,
             active: Default::default(),
             failed: AtomicBool::new(false),
+            owned: None,
+            restoring: AtomicBool::new(false),
             staging: Default::default(),
         }
     }
 
+    pub fn new_owned(
+        revision: u64,
+        journal: Journal,
+        store: Arc<dyn NativeStore>,
+        commands: mpsc::Sender<ServerMessage>,
+        resources: Arc<super::super::NativeResources>,
+        binding: Arc<crate::tenancy::execution::session::Binding>,
+    ) -> Self {
+        let mut port = Self::new(revision, journal, store, commands, resources);
+        port.owned = Some(binding);
+        port.restoring.store(true, Ordering::Release);
+        port
+    }
+
+    pub fn restored(&self) {
+        self.restoring.store(false, Ordering::Release);
+    }
+
+    fn healthy(&self) -> Result<(), CoreError> {
+        if self.failed.load(Ordering::Acquire) {
+            Err(error("native durable authority requires reconciliation"))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn with_dispatch<T>(&self, work: impl FnOnce() -> T) -> Result<T, CoreError> {
+        self.healthy()?;
+        match &self.owned {
+            Some(binding) => binding.with_dispatch(work),
+            None => Ok(work()),
+        }
+    }
+
     pub async fn persist(&self, state: &mut DurableState, next: Journal) -> Result<(), CoreError> {
-        self.authorize_dispatch().await?;
-        let bytes =
-            serde_json::to_vec(&next).map_err(|_| error("native journal encoding failed"))?;
+        self.healthy()?;
+        let bytes = if self.owned.is_some() {
+            crate::managed_store::owned::encode(&next)
+                .map_err(|_| error("native journal exceeds storage allowance"))?
+        } else {
+            serde_json::to_vec(&next).map_err(|_| error("native journal encoding failed"))?
+        };
         if bytes.len() > MAX_STORE_BYTES {
             return Err(error("native journal exceeds storage allowance"));
         }
@@ -171,7 +213,9 @@ impl NativePort {
             .checked_add(1)
             .ok_or_else(|| error("native store revision exhausted"))?;
         if let Err(error) = self.store.save(state.revision, bytes).await {
-            self.failed.store(true, Ordering::SeqCst);
+            if error.commit_status != bitrouter_ai::core::protocol::CommitStatus::NotCommitted {
+                self.failed.store(true, Ordering::SeqCst);
+            }
             return Err(error);
         }
         state.revision = revision;
@@ -348,16 +392,19 @@ impl HarnessPort for NativePort {
     }
 
     async fn authorize_dispatch(&self) -> Result<(), CoreError> {
-        if self.failed.load(Ordering::SeqCst) {
-            Err(error("native durable authority requires reconciliation"))
-        } else {
-            Ok(())
+        self.with_dispatch(|| ())
+    }
+
+    async fn model_cancelled(&self) {
+        match &self.owned {
+            Some(binding) => binding.authority().service().host_stop().cancelled().await,
+            None => std::future::pending::<()>().await,
         }
     }
 
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
         let mut state = self.state.lock().await;
-        self.authorize_dispatch().await?;
+        self.healthy()?;
         let journal = &state.journal;
         let available = journal
             .available()
@@ -408,7 +455,7 @@ impl HarnessPort for NativePort {
     }
 
     async fn send(&self, message: ServerMessage) -> Result<(), CoreError> {
-        self.authorize_dispatch().await?;
+        self.healthy()?;
         match message {
             ServerMessage::ArtifactPut {
                 reference,
@@ -435,11 +482,13 @@ impl HarnessPort for NativePort {
             }
             ServerMessage::ToolExecute(_)
             | ServerMessage::MaterialRequest { .. }
-            | ServerMessage::SkillConsentRequest(_) => self
-                .commands
-                .send(message)
-                .await
-                .map_err(|_| error("native harness driver stopped")),
+            | ServerMessage::SkillConsentRequest(_) => {
+                self.authorize_dispatch().await?;
+                self.commands
+                    .send(message)
+                    .await
+                    .map_err(|_| error("native harness driver stopped"))
+            }
             _ => Err(error("unsupported native harness message")),
         }
     }
@@ -450,7 +499,14 @@ impl HarnessPort for NativePort {
         offset: u64,
         max_bytes: u64,
     ) -> Result<Vec<u8>, CoreError> {
+        self.healthy()?;
         let state = self.state.lock().await;
+        // Fresh restore must revalidate before every artifact access. Once this
+        // private port is bound, only admitted Core work can read its retained
+        // closure, including cleanup after revocation; no external reader exists.
+        if self.restoring.load(Ordering::Acquire) {
+            self.authorize_dispatch().await?;
+        }
         if max_bytes > state.journal.manifest.max_artifact_chunk_bytes {
             return Err(error("artifact read exceeds native bound"));
         }

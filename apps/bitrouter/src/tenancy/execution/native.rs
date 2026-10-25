@@ -44,6 +44,51 @@ impl Service {
             .admit_native_execution(submission, &prompt.model)
             .await
             .map_err(native_failure)?;
+        self.execute_admitted_native(prompt, headers, control, execution)
+            .await
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) async fn execute_session_native(
+        &self,
+        binding: &super::session::Binding,
+        prompt: Prompt,
+        headers: HeaderMap,
+        control: Arc<dyn NativeExecutionControl>,
+    ) -> Result<PipelineResponse> {
+        if !binding.belongs_to(self) {
+            return Err(native_failure(ErrorCode::CapabilityMismatch.into()));
+        }
+        if prompt.stream {
+            return Err(BitrouterError::bad_request(
+                "controlled model turns must be non-streaming",
+            ));
+        }
+        bounded_prompt(&prompt).map_err(native_failure)?;
+        bounded_headers(&headers).map_err(native_failure)?;
+        // Owned Core constructors start with empty headers; the step adds only
+        // committed run/agent associations. These are trace inputs, never scope,
+        // authentication or a replacement for the binding's retained revision.
+        if headers.keys().any(|name| {
+            !matches!(
+                name.as_str(),
+                "x-bitrouter-parent-session-id" | "x-bitrouter-agent-session-id"
+            )
+        }) {
+            return Err(native_failure(ErrorCode::InvalidRequest.into()));
+        }
+        let execution = binding.admit(&prompt.model).await.map_err(native_failure)?;
+        self.execute_admitted_native(prompt, headers, control, execution)
+            .await
+    }
+
+    async fn execute_admitted_native(
+        &self,
+        prompt: Prompt,
+        headers: HeaderMap,
+        control: Arc<dyn NativeExecutionControl>,
+        execution: Arc<super::TenantExecution>,
+    ) -> Result<PipelineResponse> {
         let outcome = async {
             let pipeline = execution.pipeline()?;
             let mut request =
@@ -102,7 +147,7 @@ fn native_failure(failure: Failure) -> BitrouterError {
     }
 }
 
-fn bounded_headers(headers: &HeaderMap) -> std::result::Result<(), Failure> {
+pub(super) fn bounded_headers(headers: &HeaderMap) -> std::result::Result<(), Failure> {
     let mut bytes = 0_usize;
     let mut count = 0_usize;
     for (name, value) in headers {

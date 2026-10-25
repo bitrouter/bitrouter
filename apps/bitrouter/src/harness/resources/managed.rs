@@ -1,6 +1,7 @@
 //! Native workspace resources behind the managed core's execution boundary.
 //! This adapter owns no model loop and never interprets collaboration tools.
 
+use crate::gateway::mcp::client::Discovery;
 use crate::skills::library::LocalSkillExt;
 use crate::storage::checkpoint::validation::HarnessManifestExt;
 use crate::storage::checkpoint::validation::ToolResultLimitsExt;
@@ -71,21 +72,51 @@ impl NativeResources {
         caller: &crate::gateway::caller::CallerContext,
         cancel: &CancellationToken,
     ) -> Result<Self, ResourceError> {
-        let tools = WorkspaceTools::new(workspace, mode).map_err(|error| error.to_string())?;
+        Self::discover_in(
+            workspace,
+            mode,
+            config,
+            caller,
+            cancel,
+            std::sync::Arc::new(tokio::sync::Mutex::new(
+                super::mcp::McpConnections::default(),
+            )),
+            &Discovery::default(),
+        )
+        .await
+    }
+
+    async fn discover_in(
+        workspace: &Path,
+        mode: ToolMode,
+        config: &HarnessConfig,
+        caller: &crate::gateway::caller::CallerContext,
+        cancel: &CancellationToken,
+        mcp: std::sync::Arc<tokio::sync::Mutex<super::mcp::McpConnections>>,
+        discovery: &Discovery,
+    ) -> Result<Self, ResourceError> {
+        let tools = discovery
+            .with(|| WorkspaceTools::new(workspace, mode))?
+            .map_err(|error| error.to_string())?;
         let root = tools.root().to_path_buf();
         let instruction_config = config.instructions.clone();
-        let startup = tokio::task::spawn_blocking(move || {
-            instructions::InstructionSnapshot::load(&root, &root, &instruction_config)
-        })
-        .await
-        .map_err(|error| error.to_string())??;
-        let resources = HarnessResources::discover(
+        let startup = discovery
+            .with(|| {
+                tokio::task::spawn_blocking(move || {
+                    instructions::InstructionSnapshot::load(&root, &root, &instruction_config)
+                })
+            })?
+            .await
+            .map_err(|error| error.to_string())??;
+        let resources = HarnessResources::discover_in(
             tools.root(),
             config,
             caller,
             mode,
             cancel,
             Duration::from_secs(30),
+            mcp,
+            discovery,
         )
         .await?;
         let prepared = Self::prepare(

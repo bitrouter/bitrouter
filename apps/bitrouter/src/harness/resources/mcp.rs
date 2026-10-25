@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::mcp::McpServerConfig;
-use crate::gateway::mcp::client::{BoundedMcpClient, CatalogTool, ConnectError};
+use crate::gateway::mcp::client::{BoundedMcpClient, CatalogTool, ConnectError, Discovery};
 use rmcp::model::{
     CallToolRequest, CallToolRequestParams, ClientRequest, ProtocolVersion, ServerResult,
 };
@@ -33,6 +33,13 @@ pub struct McpConnections {
 }
 
 impl McpConnections {
+    #[cfg(all(test, feature = "core"))]
+    pub(crate) fn set_discovery_gate(
+        &mut self,
+        gate: Option<std::sync::Arc<crate::tenancy::hosts::HostGate>>,
+    ) {
+        self.client.discovery_gate = gate;
+    }
     pub fn tools(&self) -> &[McpTool] {
         &self.tools
     }
@@ -50,27 +57,6 @@ impl McpConnections {
             .await
             .map(Self::from_client)
             .map_err(resource_error)
-    }
-
-    pub(crate) async fn connect_scoped(
-        workspace: &Path,
-        servers: &[McpServerConfig],
-        tool_servers: &std::collections::BTreeSet<String>,
-        version: ProtocolVersion,
-        cancel: &CancellationToken,
-        max_duration: Duration,
-    ) -> Result<Self, ResourceError> {
-        BoundedMcpClient::connect_scoped(
-            workspace,
-            servers,
-            tool_servers,
-            version,
-            cancel,
-            max_duration,
-        )
-        .await
-        .map(Self::from_client)
-        .map_err(resource_error)
     }
 
     pub async fn list_skills(
@@ -104,27 +90,57 @@ impl McpConnections {
             .await
     }
 
+    pub(crate) async fn connect_in_place(
+        &mut self,
+        workspace: &Path,
+        servers: &[McpServerConfig],
+        tool_servers: &std::collections::BTreeSet<String>,
+        version: ProtocolVersion,
+        cancel: &CancellationToken,
+        max_duration: Duration,
+        discovery: &Discovery,
+    ) -> Result<(), ResourceError> {
+        self.client
+            .connect_in_place(
+                workspace,
+                servers,
+                tool_servers,
+                version,
+                cancel,
+                max_duration,
+                discovery,
+            )
+            .await
+            .map_err(resource_error)?;
+        self.refresh_metadata();
+        Ok(())
+    }
+
     fn from_client(client: BoundedMcpClient) -> Self {
-        let tools = client.tools().iter().map(harness_tool).collect();
-        let mut instructions = Vec::new();
-        let mut instruction_bodies = BTreeMap::new();
-        for instruction in client.instructions() {
+        let mut connections = Self {
+            client,
+            ..Self::default()
+        };
+        connections.refresh_metadata();
+        connections
+    }
+
+    fn refresh_metadata(&mut self) {
+        self.tools = self.client.tools().iter().map(harness_tool).collect();
+        self.instructions.clear();
+        self.instruction_bodies.clear();
+        for instruction in self.client.instructions() {
             let digest = sha256(instruction.text.as_bytes());
             let material_id = format!("mcp_instructions_{}", sha256(instruction.server.as_bytes()));
-            instruction_bodies.insert(material_id.clone(), instruction.text.clone());
-            instructions.push(MaterialRef {
+            self.instruction_bodies
+                .insert(material_id.clone(), instruction.text.clone());
+            self.instructions.push(MaterialRef {
                 material_id,
                 version: digest.clone(),
                 sha256: digest,
                 media_type: "text/plain".into(),
                 provenance: format!("mcp_server:{}", instruction.server),
             });
-        }
-        Self {
-            client,
-            tools,
-            instructions,
-            instruction_bodies,
         }
     }
 
@@ -218,6 +234,11 @@ impl McpConnections {
         }
         let status = EffectStatus::Completed;
         Ok((status, output))
+    }
+
+    #[cfg(all(test, feature = "core"))]
+    pub(crate) async fn retained_processes_for_test(&self) -> Vec<u32> {
+        self.client.retained_processes_for_test().await
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {

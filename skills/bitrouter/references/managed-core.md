@@ -342,6 +342,15 @@ establish a per-token monetary charge.
 
 ## Native managed tasks
 
+The local Rust `NativeSession::open_authenticated` facade binds an in-process
+host to checked tenancy credentials and one retained execution revision. Its
+journal is scoped to the authenticated tenant and stable principal; each model
+step obtains separate execution admission. Close or cancellation retains the
+host until checkpoint, tool and workspace cleanup is confirmed. This additive
+facade adds no CLI, HTTP or SDK session contract. Tenant production dispatch
+remains gated, and the existing managed CLI and HTTP entrypoints retain their
+Legacy fences.
+
 `bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 submits to the selected local daemon's versioned managed endpoint. The daemon
 owns CoreSession, native BRO tools and resource connections; the CLI is only a

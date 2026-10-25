@@ -26,6 +26,8 @@ use std::{
 use tokio::sync::mpsc;
 use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod filesystem;
 mod fixture;
 #[cfg(unix)]
 mod unknown;

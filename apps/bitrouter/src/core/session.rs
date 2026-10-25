@@ -72,6 +72,7 @@ mod budget;
 mod capacity;
 mod context_decisions;
 mod model_output;
+mod owned;
 mod pairing;
 mod preparation_work;
 mod provider_work;
@@ -282,6 +283,8 @@ struct Shared {
     app: Arc<App>,
     caller: CallerContext,
     request_headers: http::HeaderMap,
+    #[cfg(feature = "harness")]
+    owned: Option<Arc<crate::tenancy::execution::session::Binding>>,
     harness: Arc<dyn HarnessPort>,
     limits: Limits,
     capabilities: Capabilities,
@@ -353,6 +356,42 @@ impl CoreSession {
         Register: FnOnce(CoreSession) -> Registered + Send,
         Registered: std::future::Future<Output = Result<(), CoreError>> + Send,
     {
+        app.require_legacy_core()?;
+        Self::bind_host(
+            binding,
+            capabilities,
+            owned::Host {
+                app,
+                caller,
+                request_headers,
+                harness,
+                #[cfg(feature = "harness")]
+                owned: None,
+            },
+            register,
+        )
+        .await
+    }
+
+    async fn bind_host<Register, Registered>(
+        binding: Bind,
+        capabilities: &Capabilities,
+        host: owned::Host,
+        register: Register,
+    ) -> Result<Self, CoreError>
+    where
+        Register: FnOnce(CoreSession) -> Registered + Send,
+        Registered: std::future::Future<Output = Result<(), CoreError>> + Send,
+    {
+        host.check(&binding.grant)?;
+        let owned::Host {
+            app,
+            caller,
+            request_headers,
+            harness,
+            #[cfg(feature = "harness")]
+            owned,
+        } = host;
         binding.grant.validate()?;
         binding.manifest.validate(capabilities, &binding.limits)?;
         if binding.grant.core_instance_id != capabilities.core_instance_id {
@@ -440,6 +479,8 @@ impl CoreSession {
                 app,
                 caller,
                 request_headers,
+                #[cfg(feature = "harness")]
+                owned,
                 harness,
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
@@ -573,6 +614,7 @@ impl CoreSession {
         response: bool,
     ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
+        self.check_owned()?;
         validate_id(operation_id)?;
         let fingerprint = digest(
             &json!({"type":if response { "response.start" } else { "start" }, "expected_state_revision":expected_revision,"input":input}),
@@ -583,6 +625,7 @@ impl CoreSession {
         validate_input(&input, &self.shared.limits)?;
         let operation_id = operation_id.to_owned();
         self.transition("input.accepted", |state, head| {
+            self.check_owned()?;
             let mut input = input;
             validate_verification(&input, &state.manifest)?;
             pin_required_materials(state, &mut input)?;
@@ -664,6 +707,7 @@ impl CoreSession {
         operation_id: &str,
         update: SignalUpdate,
     ) -> Result<OperationReceipt, CoreError> {
+        self.check_owned()?;
         validate_id(operation_id)?;
         let fingerprint = digest(&json!({"type":"signals.update","update":update}))?;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
@@ -696,6 +740,7 @@ impl CoreSession {
                 .harness_id
                 .clone();
             self.transition("signals.updated", |state, head| {
+                self.check_owned()?;
                 if update.manifest.workspace_id != state.manifest.workspace_id
                     || update.manifest.permission_revision < state.manifest.permission_revision
                 {
@@ -1363,6 +1408,7 @@ impl CoreSession {
                 }
                 let started = self
                     .transition_for(Some(agent_id), "agent.followup.started", |state, head| {
+                        self.check_owned()?;
                         if !collaboration::has_turn_capacity(state, Some(agent_id)) {
                             return Err(reject(
                                 ErrorCode::Busy,
@@ -1652,6 +1698,7 @@ impl CoreSession {
         if needs_request || turn.status != AgentStatus::WaitingMaterial {
             let _input = self.shared.inputs.lock().await;
             self.transition_for(Some(agent_id), "material.requested", |state, _| {
+                self.check_owned()?;
                 budget::ensure(state)?;
                 steering::ensure_ready(state, agent_id)?;
                 let current = agent_turn(state, agent_id)?;
@@ -1694,6 +1741,7 @@ impl CoreSession {
             .await?;
         }
         for material in &missing {
+            self.check_owned()?;
             let (message, disconnected, generation) = {
                 let _input = self.shared.inputs.lock().await;
                 let _admission = self.shared.commits.lock().await;
@@ -1905,7 +1953,7 @@ impl CoreSession {
                 Err(reject(ErrorCode::LimitExceeded, "collaboration input exceeds bound"))
             } else {
                 let mut candidate = state.clone();
-                match collaboration::apply(&mut candidate, agent_id, &call.action, now, head.state_revision) {
+                match self.check_owned_action(&call.action).and_then(|()| collaboration::apply(&mut candidate, agent_id, &call.action, now, head.state_revision)) {
                     Ok(applied) => { *state = candidate; Ok(applied) }
                     Err(error) => Err(error),
                 }
@@ -1944,6 +1992,7 @@ impl CoreSession {
         actor_id: &str,
         action: Action,
     ) -> Result<OperationReceipt, CoreError> {
+        self.check_owned_action(&action)?;
         validate_id(operation_id)?;
         let fingerprint = digest(
             &json!({"source":"runtime","actor_id":actor_id,"expected_state_revision":expected_revision,"action":action}),
@@ -1974,6 +2023,7 @@ impl CoreSession {
         }
         let result = self
             .transition_for(Some(actor_id), "collaboration.runtime", |state, head| {
+                self.check_owned_action(&action)?;
                 if !interrupt {
                     steering::ensure_ready(state, actor_id)?;
                 }
@@ -2522,14 +2572,7 @@ impl CoreSession {
             }
         }
         let response = self
-            .shared
-            .app
-            .execute_native_controlled_with_headers(
-                prompt,
-                self.shared.caller.clone(),
-                request_headers,
-                control.clone(),
-            )
+            .execute_model(prompt, request_headers, control.clone())
             .await;
         let context_replan = control
             .routing_stale
@@ -3042,6 +3085,18 @@ impl CoreSession {
     }
 
     async fn dispatch_tools(&self, agent_id: &str) -> Result<(), CoreError> {
+        #[cfg(feature = "harness")]
+        if self.shared.owned.is_some() {
+            let live = self.shared.live.lock().await;
+            if live
+                .state
+                .run
+                .as_ref()
+                .is_none_or(|run| !matches!(run.status, RunStatus::Running | RunStatus::Waiting))
+            {
+                return Ok(());
+            }
+        }
         loop {
             let (command, disconnected, generation) = {
                 let _input = self.shared.inputs.lock().await;
@@ -3213,13 +3268,14 @@ impl CoreSession {
     }
 
     async fn authorize_dispatch(&self) -> Result<(), CoreError> {
+        self.check_owned()?;
         let disconnected = self.shared.live.lock().await.disconnected.clone();
         let result = tokio::select! {
             biased;
             _ = disconnected.cancelled() => Err(reject(
                 ErrorCode::CheckpointUnavailable, "dispatch authority disconnected",
             )),
-            result = self.shared.harness.authorize_dispatch() => result,
+            result = self.shared.harness.authorize_dispatch() => result.and_then(|()| self.check_owned()),
         };
         if result.is_err() {
             self.disconnect().await;
