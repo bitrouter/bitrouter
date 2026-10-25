@@ -15,7 +15,12 @@ const TABLES: [&str; 6] = [
     "tenancy_operations",
 ];
 
-fn identity(backend: DatabaseBackend, name: &str, length: u32, nullable: bool) -> ColumnDef {
+pub(super) fn identity(
+    backend: DatabaseBackend,
+    name: &str,
+    length: u32,
+    nullable: bool,
+) -> ColumnDef {
     let mut column = ColumnDef::new(Alias::new(name));
     // IDs and issuer/subject pairs are byte-exact, including case and trailing
     // spaces. MySQL's NO PAD binary Unicode collation avoids both default
@@ -40,7 +45,7 @@ fn identity(backend: DatabaseBackend, name: &str, length: u32, nullable: bool) -
     column
 }
 
-fn payload(backend: DatabaseBackend, name: &str) -> ColumnDef {
+pub(super) fn payload(backend: DatabaseBackend, name: &str) -> ColumnDef {
     let mut column = ColumnDef::new(Alias::new(name));
     // Valid 256-key scopes exceed MySQL TEXT's 64 KiB ceiling. Application
     // validation supplies the tighter semantic/byte bounds on these payloads.

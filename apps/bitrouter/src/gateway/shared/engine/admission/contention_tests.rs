@@ -1,6 +1,7 @@
 //! A committed heartbeat between admission's snapshot and owner check must not
 //! force every admission attempt to abort. No sleeps determine the interleaving.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -11,7 +12,6 @@ use super::*;
 use crate::auth::db::{NewApiKey, insert_api_key, upsert_user};
 use crate::gateway::shared::{
     authority::Authority,
-    crypto::DeploymentKey,
     engine::{Heartbeat, TenantLimits},
     schema,
     test_database::EmptyDatabase,

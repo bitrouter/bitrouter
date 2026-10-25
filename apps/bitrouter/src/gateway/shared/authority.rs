@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::continuation::ContinuationKey;
 use crate::trajectory::canonical::CorrelationKey;
 
-use super::crypto::{DeploymentKey, SealedSecret, SecretIdentity};
 use super::store::{Kind, NewRecord, Store, Stored};
+use crate::runtime_crypto::{DeploymentKey, SealedSecret, SecretIdentity};
 
 const MAX_CORRELATION_EPOCHS: usize = 16;
 const HEAD: &str = "head";

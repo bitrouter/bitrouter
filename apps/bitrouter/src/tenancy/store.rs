@@ -3,6 +3,7 @@
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     authority::{CredentialIssued, CredentialState},
+    configuration::ConfigurationRevision,
     identity::{InstallationId, OperationId, PrincipalId},
     operation::{Error, OperationResult},
     validation::Validate,
@@ -14,6 +15,7 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use super::configuration_store::{self, StoredConfiguration};
 use super::model::{
     AuthorityClass, Binding, Credential, Deadline, ManagedBy, Principal, ReadContext, Snapshot,
     Tenant,
@@ -33,6 +35,7 @@ pub(super) const ORDINARY_OPERATIONS: u32 = MAX_OPERATIONS - SAFETY_OPERATIONS;
 pub(super) enum StoredResponse {
     Operation(OperationResult),
     Issued(CredentialIssued),
+    Configuration(ConfigurationRevision),
     Failure(Error),
 }
 
@@ -62,6 +65,13 @@ pub(super) enum Change {
     Principal(Principal),
     Binding(Binding),
     Credential(Credential),
+    Configuration(StoredConfiguration),
+    Activation {
+        tenant: bitrouter_ai::tenancy::identity::TenantId,
+        expected: Option<bitrouter_ai::tenancy::identity::RevisionId>,
+        revision: bitrouter_ai::tenancy::identity::RevisionId,
+        authority_revision: bitrouter_ai::tenancy::identity::AuthorityRevision,
+    },
 }
 
 async fn upsert(
@@ -136,6 +146,22 @@ async fn installation(db: &impl ConnectionTrait, state: &Snapshot) -> Result<()>
 
 async fn write_change(db: &impl ConnectionTrait, change: &Change) -> Result<()> {
     match change {
+        Change::Configuration(value) => configuration_store::insert_configuration(db, value).await,
+        Change::Activation {
+            tenant,
+            expected,
+            revision,
+            authority_revision,
+        } => {
+            configuration_store::set_active(
+                db,
+                tenant,
+                expected.as_ref(),
+                revision,
+                *authority_revision,
+            )
+            .await
+        }
         Change::Tenant(value) => {
             upsert(
                 db,
@@ -432,6 +458,7 @@ pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<
             bindings: Default::default(),
             credentials: Default::default(),
             credential_hashes: Default::default(),
+            active_configurations: Default::default(),
         }
     } else {
         // An absent singleton with existing authority records is an incomplete
@@ -442,6 +469,9 @@ pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<
             "tenancy_bindings",
             "tenancy_credentials",
             "tenancy_operations",
+            "tenancy_resource_revisions",
+            "tenancy_configurations",
+            "tenancy_active_configurations",
         ] {
             ensure!(
                 rows(db, table, 0).await?.is_empty(),
@@ -460,6 +490,7 @@ pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<
             bindings: Default::default(),
             credentials: Default::default(),
             credential_hashes: Default::default(),
+            active_configurations: Default::default(),
         };
         installation(db, &state).await?;
         state
@@ -592,6 +623,16 @@ pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<
                 state.credentials.insert(credential.id.clone(), credential);
             }
         }
+    }
+    for pointer in configuration_store::active_revisions(db).await? {
+        ensure!(
+            state.tenants.contains_key(&pointer.tenant)
+                && pointer.authority_revision <= state.revision,
+            "active configuration is outside published authority"
+        );
+        state
+            .active_configurations
+            .insert(pointer.tenant, pointer.revision);
     }
     Ok(state)
 }

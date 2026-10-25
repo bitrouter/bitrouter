@@ -12,6 +12,7 @@ use chrono::Utc;
 use super::{Service, command::Command, model::Caller, store::StoredResponse};
 
 mod authority;
+mod configuration;
 mod http;
 
 #[cfg(unix)]
@@ -646,6 +647,44 @@ async fn protected_http_and_sdk_share_real_authority_without_dispatch_eligibilit
                 )
                 .await
                 .is_err()
+        );
+        let observed = client
+            .active_revision(&fixture.installation, &fixture.tenant)
+            .await?;
+        let mut input = fixture.configuration_input(&format!("http-config-{index}"))?;
+        input.expected_authority_revision = observed.authority_revision;
+        let stored = client.put_configuration(&fixture.tenant, &input).await?;
+        let recovered = client
+            .configuration(&fixture.installation, &fixture.tenant, &stored.revision_id)
+            .await?;
+        ensure!(recovered.document == input.document);
+        let operation = client
+            .operation(&fixture.installation, &input.operation_id)
+            .await?;
+        let current = client
+            .active_revision(&fixture.installation, &fixture.tenant)
+            .await?;
+        ensure!(
+            current.authority_revision
+                == operation
+                    .authority_revision
+                    .context("configuration result authority missing")?
+        );
+        ensure!(current.revision_id == observed.revision_id);
+        let activation = bitrouter_ai::tenancy::configuration::Activation {
+            operation_id: format!("http-activate-{index}").try_into()?,
+            expected_active_revision: current.revision_id,
+            revision_id: stored.revision_id.clone(),
+            expected_authority_revision: current.authority_revision,
+            installation_id: fixture.installation.clone(),
+        };
+        client.activate(&fixture.tenant, &activation).await?;
+        ensure!(
+            client
+                .active_revision(&fixture.installation, &fixture.tenant)
+                .await?
+                .revision_id
+                == Some(stored.revision_id)
         );
     }
     stop.cancel();

@@ -1,5 +1,6 @@
 //! Cross-tenant admission and authority interleavings against real PostgreSQL.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -18,7 +19,6 @@ use crate::gateway::providers::auth::{credentials::Credential, store::Credential
 use crate::gateway::shared::{
     authority::{Authority, Revision},
     credentials::{CredentialStamp, Credentials},
-    crypto::DeploymentKey,
     engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits, TrajectoryBinding},
     store::{Kind, NewRecord, Store, Stored},
 };

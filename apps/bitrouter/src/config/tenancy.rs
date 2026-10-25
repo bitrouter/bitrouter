@@ -3,6 +3,7 @@
 use anyhow::{Result, ensure};
 use bitrouter_ai::control::ControlScope;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 /// Local authority is independent of external login and commercial policy.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
@@ -10,6 +11,12 @@ use serde::Deserialize;
 pub struct TenancyConfig {
     /// Opt in to the tenant control service. Existing local startup stays unchanged.
     pub enabled: bool,
+    /// Privileged JSON manifest imported before listeners open. Relative paths
+    /// are relative to the server process's working directory, never a tenant.
+    pub resource_import: Option<PathBuf>,
+    /// Operator environment variable containing a stable base64 32-byte key.
+    /// The secret itself is never part of configuration or resource reports.
+    pub wrapping_key_env: Option<String>,
 }
 
 impl TenancyConfig {
@@ -19,6 +26,32 @@ impl TenancyConfig {
     /// Rejects anonymous ingress, missing operator authority, shared mode,
     /// non-file SQLite configurations and unsupported local ownership platforms.
     pub fn validate(&self, config: &super::Config) -> Result<()> {
+        ensure!(
+            self.enabled || (self.resource_import.is_none() && self.wrapping_key_env.is_none()),
+            "tenancy resource provisioning requires tenancy.enabled"
+        );
+        ensure!(
+            self.resource_import.is_none() || self.wrapping_key_env.is_some(),
+            "tenancy resource import requires wrapping_key_env"
+        );
+        if let Some(path) = &self.resource_import {
+            ensure!(
+                !path.as_os_str().is_empty(),
+                "tenancy resource import path is empty"
+            );
+        }
+        if let Some(name) = &self.wrapping_key_env {
+            ensure!(
+                !name.is_empty()
+                    && name.len() <= 128
+                    && name.bytes().enumerate().all(|(index, byte)| {
+                        byte == b'_'
+                            || byte.is_ascii_alphabetic()
+                            || (index > 0 && byte.is_ascii_digit())
+                    }),
+                "invalid tenancy wrapping key environment name"
+            );
+        }
         if !self.enabled {
             return Ok(());
         }
@@ -61,6 +94,33 @@ impl TenancyConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provisioning_settings_require_explicit_authority_and_a_key_name() -> anyhow::Result<()> {
+        for source in [
+            "resource_import: manifest.json",
+            "wrapping_key_env: WRAP_KEY",
+            "enabled: true\nresource_import: manifest.json",
+            "enabled: true\nwrapping_key_env: '9BAD'",
+            "enabled: true\nwrapping_key_env: ''",
+        ] {
+            let settings: super::TenancyConfig = serde_saphyr::from_str(source)?;
+            assert!(
+                settings
+                    .validate(&crate::config::Config::default())
+                    .is_err()
+            );
+        }
+        let settings: super::TenancyConfig = serde_saphyr::from_str(
+            "enabled: true\nresource_import: manifest.json\nwrapping_key_env: TENANCY_WRAP_KEY",
+        )?;
+        assert_eq!(settings.resource_import, Some("manifest.json".into()));
+        assert_eq!(
+            settings.wrapping_key_env.as_deref(),
+            Some("TENANCY_WRAP_KEY")
+        );
+        Ok(())
+    }
+
     #[test]
     fn parsing_rejects_unsafe_owner_profiles_before_opening_a_store() {
         for document in [

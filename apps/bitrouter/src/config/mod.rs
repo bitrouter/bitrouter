@@ -1378,7 +1378,7 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
-    fn outbound_headers(&self) -> Result<Vec<OutboundHeaderRule>> {
+    pub(crate) fn outbound_headers(&self) -> Result<Vec<OutboundHeaderRule>> {
         let mut names = HashSet::new();
         let mut rules = Vec::with_capacity(self.headers.len());
         for (name, config) in &self.headers {

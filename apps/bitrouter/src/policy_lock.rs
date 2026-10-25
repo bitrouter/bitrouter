@@ -2640,7 +2640,6 @@ pub struct PolicyRuntime {
     continuation_config: crate::config::ContinuationConfig,
     trajectory_config: TrajectoryConfig,
     trajectory: Option<Arc<TrajectoryRuntime>>,
-    #[cfg(feature = "multi-instance")]
     published: bool,
 }
 
@@ -2696,7 +2695,6 @@ impl PolicyRuntime {
             continuation_config: config.continuation.clone(),
             trajectory_config: config.trajectory.clone(),
             trajectory,
-            #[cfg(feature = "multi-instance")]
             published: false,
         });
         runtime.reload_for_config(config, config_path).await?;
@@ -2705,7 +2703,6 @@ impl PolicyRuntime {
 
     /// Build one immutable shared routing generation without consulting local
     /// policy paths or bundled defaults. Replacement swaps the entire runtime.
-    #[cfg(feature = "multi-instance")]
     pub(crate) fn from_document(
         config: &Config,
         document: Option<PolicyLock>,
@@ -2770,7 +2767,6 @@ impl PolicyRuntime {
         config: &Config,
         config_path: Option<&Path>,
     ) -> Result<PreparedPolicySnapshot> {
-        #[cfg(feature = "multi-instance")]
         anyhow::ensure!(
             !self.published,
             "published policy runtime must be replaced as a complete configuration"
@@ -3383,7 +3379,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "multi-instance")]
     #[tokio::test]
     async fn published_runtime_keeps_its_document_and_rejects_file_reload() -> Result<()> {
         let config = crate::config::parse(

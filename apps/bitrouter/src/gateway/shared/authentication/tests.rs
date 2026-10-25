@@ -1,5 +1,6 @@
 //! Real shared credentials through the production authentication registry.
 
+use crate::runtime_crypto::DeploymentKey;
 use anyhow::{Context, ensure};
 
 use super::*;
@@ -7,8 +8,7 @@ use crate::gateway::model::target::{AuthScheme, CredentialPriority};
 use crate::gateway::providers::auth::credentials::OAuthToken;
 use crate::gateway::providers::auth::store::OAuthRefresher;
 use crate::gateway::shared::{
-    authority::Authority, credentials::CredentialStamp, crypto::DeploymentKey, engine::Engine,
-    store::Store,
+    authority::Authority, credentials::CredentialStamp, engine::Engine, store::Store,
 };
 
 fn target(provider: &str, protocol: ApiProtocol) -> ModelTarget {

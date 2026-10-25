@@ -1524,7 +1524,9 @@ async fn assemble_app(
     // Start the authority actor only after every other fallible assembly step.
     // Failed startup must not leave a detached owner behind during a retry.
     let tenancy = match tenancy_owner {
-        Some(owner) => Some(crate::tenancy::Service::open(db.clone(), Some(owner)).await?),
+        Some(owner) => Some(
+            crate::tenancy::Service::open_profile(db.clone(), Some(owner), &config.tenancy).await?,
+        ),
         None => None,
     };
     if !is_shared && !tenancy_enabled {

@@ -9,9 +9,9 @@ use crate::gateway::providers::auth::credentials::Credential;
 use crate::gateway::providers::auth::store::CredentialKey;
 
 use super::authority::Authority;
-use super::crypto::SealedSecret;
 use super::engine::Rejection;
 use super::store::{Kind, NewRecord, Store, Stored};
+use crate::runtime_crypto::SealedSecret;
 
 pub(crate) mod observation;
 mod refresh;

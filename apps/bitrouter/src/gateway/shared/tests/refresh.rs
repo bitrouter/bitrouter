@@ -1,5 +1,6 @@
 //! Independent-pool OAuth rotation and crash ambiguity fixtures.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::{
     sync::{
         Arc,
@@ -22,7 +23,6 @@ use crate::gateway::{
     shared::{
         authority::Authority,
         credentials::Credentials,
-        crypto::DeploymentKey,
         engine::Engine,
         store::{Kind, Store, Stored},
     },

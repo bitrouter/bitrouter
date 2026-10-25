@@ -15,7 +15,10 @@ use bitrouter_ai::{
     control::ControlScope,
     tenancy::{
         authority::{AuditReaderCreate, BindingPut, CredentialCreate, PrincipalPut, TenantPut},
-        identity::{BindingId, CredentialId, InstallationId, OperationId, PrincipalId, TenantId},
+        configuration::{Activation, ConfigurationPut},
+        identity::{
+            BindingId, CredentialId, InstallationId, OperationId, PrincipalId, RevisionId, TenantId,
+        },
         operation::{ErrorCode, Mutation},
         validation::Validate,
     },
@@ -63,6 +66,18 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
         .route(
             "/control/v1/tenants/{tenant_id}/audit-readers",
             post(audit_reader),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/configurations",
+            post(put_configuration),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/configurations/{revision_id}",
+            get(configuration),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/activation",
+            get(active_revision).post(activate),
         )
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
@@ -183,6 +198,7 @@ fn response(value: StoredResponse) -> Response {
     match value {
         StoredResponse::Operation(result) => Json(result).into_response(),
         StoredResponse::Issued(issued) => Json(issued).into_response(),
+        StoredResponse::Configuration(configuration) => Json(configuration).into_response(),
         StoredResponse::Failure(error) => Failure(error).into_response(),
     }
 }
@@ -303,4 +319,47 @@ async fn revoke(
             .execute(caller, Command::Revoke(tenant, id, body(input)?))
             .await?,
     ))
+}
+
+async fn put_configuration(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    tenant: Result<Path<TenantId>, PathRejection>,
+    input: Result<Json<ConfigurationPut>, JsonRejection>,
+) -> Result<Response, Failure> {
+    Ok(response(
+        service
+            .execute(caller, Command::Configuration(path(tenant)?, body(input)?))
+            .await?,
+    ))
+}
+
+async fn activate(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    tenant: Result<Path<TenantId>, PathRejection>,
+    input: Result<Json<Activation>, JsonRejection>,
+) -> Result<Response, Failure> {
+    Ok(response(
+        service
+            .execute(caller, Command::Activate(path(tenant)?, body(input)?))
+            .await?,
+    ))
+}
+
+async fn configuration(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    target: Result<Path<(TenantId, RevisionId)>, PathRejection>,
+) -> Result<Response, Failure> {
+    let (tenant, revision) = path(target)?;
+    Ok(Json(service.configuration(&caller, &tenant, &revision).await?).into_response())
+}
+
+async fn active_revision(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    tenant: Result<Path<TenantId>, PathRejection>,
+) -> Result<Response, Failure> {
+    Ok(Json(service.active_revision(&caller, &path(tenant)?)?).into_response())
 }

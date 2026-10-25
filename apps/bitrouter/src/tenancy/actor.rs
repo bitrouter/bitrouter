@@ -1,5 +1,8 @@
 //! Bounded single-writer actor; admitted commands outlive HTTP cancellation.
 
+#[cfg(test)]
+mod tests;
+
 use std::sync::{
     Arc, RwLock,
     atomic::{AtomicBool, Ordering},
@@ -41,6 +44,7 @@ pub(super) struct Worker {
     pub live: Liveness,
     pub owner: Option<super::ownership::Lease>,
     pub limits: OperationLimits,
+    pub resources: Arc<super::resources::Resources>,
 }
 
 #[derive(Clone, Copy)]
@@ -95,17 +99,27 @@ impl Worker {
                 },
                 else => break,
             };
-            let work = self.execute(&message.caller, &message.command);
-            tokio::pin!(work);
-            let response = tokio::select! {
-                response = &mut work => response,
-                () = tokio::time::sleep(super::MANAGEMENT_TIMEOUT) => {
-                    // Keep awaiting the transaction so the writer lock cannot
-                    // be released while a late commit still owns the store.
-                    self.live.0.store(false, Ordering::Release);
-                    let _settled = work.await;
-                    Err(Failure::new(ErrorCode::AuthorityUnavailable, Some(message.command.operation_id().clone())))
+            let writing = AtomicBool::new(false);
+            let response = {
+                // The future stays in this task. Dropping read-only preparation
+                // cannot detach a continuation that later enters store::commit.
+                let work = self.execute(&message.caller, &message.command, &writing);
+                tokio::pin!(work);
+                tokio::select! {
+                    biased;
+                    () = tokio::time::sleep(super::MANAGEMENT_TIMEOUT) => {
+                        if writing.load(Ordering::Acquire) {
+                            // Once commit starts, its outcome may be unknown.
+                            // Fence admission and hold the owner until it settles.
+                            self.live.0.store(false, Ordering::Release);
+                            let _settled = work.await;
+                        }
+                        Err(Failure::new(ErrorCode::AuthorityUnavailable, Some(message.command.operation_id().clone())))
+                    }
+                    response = &mut work => response,
                 }
+                // A timed-out preparation is dropped before replying or taking
+                // another command; it never publishes its private candidate.
             };
             if message.reply.send(response).is_err() {
                 // A disconnected caller recovers via its operation ID; do not
@@ -130,7 +144,12 @@ impl Worker {
         code.into()
     }
 
-    async fn execute(&self, caller: &Caller, command: &Command) -> Result<StoredResponse, Failure> {
+    async fn execute(
+        &self,
+        caller: &Caller,
+        command: &Command,
+        writing: &AtomicBool,
+    ) -> Result<StoredResponse, Failure> {
         let old = self.current()?;
         let now = Utc::now();
         if command.installation() != &old.installation {
@@ -190,15 +209,19 @@ impl Worker {
         // Management reads may have waited on storage. Expiry and lifecycle are
         // checked once more at application, under the actor's current authority.
         let now = Utc::now();
-        let prepared = mutation::prepare(&self.db, &candidate, caller, command, now)
-            .await
-            .map_err(|code| {
-                if code == ErrorCode::StorageUnavailable {
-                    self.unavailable(code)
-                } else {
-                    code.into()
-                }
-            })?;
+        let prepared =
+            mutation::prepare(&self.db, &candidate, &self.resources, caller, command, now)
+                .await
+                .map_err(|code| {
+                    if matches!(
+                        code,
+                        ErrorCode::StorageUnavailable | ErrorCode::AuthorityUnavailable
+                    ) {
+                        self.unavailable(code)
+                    } else {
+                        code.into()
+                    }
+                })?;
         let now = Utc::now();
         let outcome = mutation::apply(&mut candidate, caller, &principal, command, &prepared, now);
         let (changes, result, mut response) = match outcome {
@@ -224,6 +247,9 @@ impl Worker {
                         StoredResponse::Issued(issued)
                     },
                 );
+                let response = applied
+                    .configuration
+                    .map_or(response, StoredResponse::Configuration);
                 (applied.changes, result, response)
             }
             Err(code) => {
@@ -265,6 +291,9 @@ impl Worker {
         if !self.live.0.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
+        // No await or detached work may separate this marker from commit. The
+        // watchdog must never cancel a potentially durable mutation as a read.
+        writing.store(true, Ordering::Release);
         if store::commit(&self.db, &next, &changes, &operation)
             .await
             .is_err()

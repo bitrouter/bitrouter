@@ -7,11 +7,11 @@ use serde_json::json;
 
 use super::super::authority::Authority;
 use super::super::credentials::Credentials;
-use super::super::crypto::{DeploymentKey, SealedSecret};
 use super::super::engine::Engine;
 use super::super::publication::{Configuration, CredentialBinding};
 use super::super::store::{Kind, Store, Stored};
 use crate::gateway::providers::auth::credentials::Credential;
+use crate::runtime_crypto::{DeploymentKey, SealedSecret};
 
 fn candidate() -> Configuration {
     Configuration {

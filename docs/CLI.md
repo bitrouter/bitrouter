@@ -82,8 +82,9 @@ Every command prints a single **formatted JSON object** to **stdout** — succes
 
 - `-j`, `--json` — force JSON (the default).
 - `--human` — render a human-readable view to stdout instead of JSON.
-- `--context <name>` — run a supported read action against a named remote
-  BitRouter target; `local` explicitly selects normal local behavior.
+- `--context <name>` — run a supported administration action against a named remote
+  BitRouter target; `local` explicitly selects normal local behavior for commands
+  that support it. `tenancy` HTTP commands require a named remote target.
 - `-H` before the subcommand (for example, `bro -H cloud whoami`) — compatibility spelling for `--human`. Under `bro cloud api`, `-H` means `--header`, matching `gh api`.
 - `-h`, `--help` — unchanged (`-h` is **not** human output).
 
@@ -571,7 +572,7 @@ Contexts live in `contexts.toml` under `$BITROUTER_HOME`, or under
 `~/.bitrouter` when that variable is unset. They contain the endpoint and token
 environment-variable **name**, never the bearer value. Endpoints must use HTTPS;
 plain HTTP is accepted only for `localhost`/loopback, including an SSH-forwarded
-port. The client performs the `/control/v1/capabilities` handshake before its
+port. Host administration performs the `/control/v1/capabilities` handshake before its
 first action (and retains it for that command), follows no redirects, and
 never falls back to this computer's config, socket, or database after a remote
 error. A named context is the complete target: supported remote commands reject
@@ -587,15 +588,115 @@ picker and inspector.
 
 `agents list` is a catalog read only. `agents list --remote`, agent checks and
 launches, ACP sessions, native harness UIs, and `code <agent>` stay local. The
-only remote mutation is the explicit `reload` action; it reloads server-owned
-files and never uploads config or forwards the client's environment. Provider,
-key, configuration, policy-publication, and service lifecycle administration
-remain local.
+remote host mutation is the explicit `reload` action; it reloads server-owned
+files and never uploads config or forwards the client's environment. The separate
+`tenancy` command group prepares and activates typed tenant configuration through
+the tenancy HTTP SDK. Host provider, key, configuration, policy-publication, and
+service lifecycle administration remain local.
 
 Local CLI compatibility adapters retain the established `providers list`
 `api_base` field and `observe status` socket, endpoint, and service fields.
 Those host details are omitted from remote administration and dashboard
 reports, which use the redacted typed read contracts.
+
+## Tenant configuration over HTTP
+
+`bro tenancy` is available in the base gateway build. It is a client adapter;
+the server must implement the selected tenancy operation. Choose either a named
+context or an explicit `--endpoint URL --token-env NAME` pair on each remote
+command. Mixing them is an error. There is no default target, local daemon
+discovery, database access, or `--context local` fallback. The token comes only
+from the selected environment variable; no token-value flag is provided. HTTPS
+or loopback HTTP is required. The client follows no redirects and preserves the
+existing CLI system-proxy behavior.
+
+```console
+bro context add resource-admin \
+  --endpoint https://router.example/control/v1 --token-env RESOURCE_ADMIN_TOKEN
+bro --context resource-admin tenancy capabilities
+bro tenancy capabilities --endpoint http://127.0.0.1:4358 --token-env RESOURCE_ADMIN_TOKEN
+bro tenancy configuration validate --input draft.json
+bro --context resource-admin tenancy configuration apply --tenant tenant-a --input draft.json
+bro --context resource-admin tenancy configuration read \
+  --installation-id install-a --tenant tenant-a --revision config-r1
+bro --context resource-admin tenancy configuration active \
+  --installation-id install-a --tenant tenant-a
+bro --context resource-admin tenancy configuration activate --tenant tenant-a --input activation.json
+bro --context resource-admin tenancy operation --installation-id install-a --operation-id prepare-1
+```
+
+| Command | Input and effect |
+| --- | --- |
+| `tenancy capabilities` | One fresh `TenantCapabilities` read. No host-capabilities handshake or implicit submission follows. |
+| `tenancy configuration validate --input FILE` | Local `ConfigurationPut` JSON shape, duplicate/unknown-field, reference-count and numeric-bound checks only. Rejects target/context flags. No authorization, resource lookup, compilation, CAS or dispatch check. |
+| `tenancy configuration apply --tenant ID --input FILE` | One `put_configuration` call. Prepares an immutable draft; does not activate it. |
+| `tenancy configuration read --installation-id ID --tenant ID --revision ID` | Reads exactly the requested retained revision under current grants. |
+| `tenancy configuration activate --tenant ID --input FILE` | One `activate` call with the complete `Activation` document; rollback uses the same command with the chosen retained revision. |
+| `tenancy configuration active --installation-id ID --tenant ID` | Reads the current pointer and authority revision; does not copy them into any submission. Requires tenant-wide read authority or an installation operator. |
+| `tenancy operation --installation-id ID --operation-id ID` | Reads the original principal's nonsecret management result under current read authority. Separate from host `operations show`. |
+
+Files are literal UTF-8 JSON, bounded to 2 MiB; the configuration document also
+has the contract's 1 MiB bound. No YAML, environment expansion, host-file upload,
+or implicit resource import occurs. Validate and apply take the **same complete
+ConfigurationPut file**, for example:
+
+```json
+{
+  "operation_id": "prepare-1",
+  "installation_id": "install-a",
+  "expected_authority_revision": 17,
+  "document": {
+    "routes": [
+      {
+        "owner_kind": "tenant",
+        "owner_id": "tenant-a",
+        "resource_kind": "route",
+        "resource_id": "coding",
+        "revision_id": "route-r1"
+      }
+    ],
+    "policy": null,
+    "generation_defaults": { "max_output_tokens": 2048, "temperature": 0.2 },
+    "learning": { "mode": "off", "max_evaluations": 0 },
+    "limits": { "active_executions": 16, "queued_work": 32, "learning_jobs": 0 }
+  }
+}
+```
+
+These IDs and revisions are illustrative. Use the actual installation, observed
+authority revision, and already provisioned owner-qualified resource revisions.
+The local validator can accept references that the server cannot resolve or
+authorize. Its output explicitly reports `validation: "local_shape_only"` and
+`server_checked: false`.
+
+`activation.json` supplies both CAS observations and the exact retained target:
+
+```json
+{
+  "operation_id": "activate-1",
+  "installation_id": "install-a",
+  "expected_authority_revision": 18,
+  "expected_active_revision": null,
+  "revision_id": "config-r1"
+}
+```
+
+`expected_active_revision` must be present. Use `null` only after observing no
+active revision; otherwise supply the observed ID. The CLI never generates an
+operation ID, fetches a replacement CAS value, substitutes an installation, or
+retries a mutation. After an unknown response, retain the exact request and query
+its original operation with the original installation and same principal's
+current read authority. A missing result does not prove non-application. An
+applied configuration operation identifies the revision for an explicit read.
+Do not submit a new operation ID to resolve uncertainty.
+
+Output uses the usual JSON default and `--human` view. Remote success output keeps
+the typed service response shape; operation statuses other than `applied` exit
+nonzero while emitting one operation object. Capability discovery remains a
+successful read when dispatch is disabled. The presence of these commands, local
+validation, or a prepared/activated revision does not establish inference support:
+`revision_bound_dispatch`, `strict_receipts`, and `dispatch_enabled` must all be
+true for strict tenant dispatch. Authority-only servers keep these flags false.
 
 ---
 
@@ -639,8 +740,37 @@ on the same protected listener. It currently requires a Unix host, local gateway
 state, authenticated ingress and a literal SQLite file URL. Tenancy configuration
 is restart-only. Use `bitrouter-sdk`'s `TenancyClient` for these operations;
 host reload operation IDs belong to a separate namespace. This stage exposes
-authority management with tenant dispatch disabled pending immutable execution
-revisions and strict receipts.
+authority and retained-configuration management with tenant dispatch disabled
+pending runtime execution binding and strict receipts.
+
+The optional restart-only `tenancy.resource_import` names an operator JSON
+manifest, relative to the server process working directory when not absolute.
+Set `tenancy.wrapping_key_env` to the name of an environment variable containing
+a stable base64-encoded 32-byte wrapping key before importing resources. These
+settings require `tenancy.enabled`; import additionally requires the key setting.
+The key is also required on subsequent restarts while retained resources exist,
+even if the manifest path has been removed. A missing/wrong key fails startup.
+No key is generated implicitly, and changing it is not a key-rotation operation.
+
+The manifest's `format: 1`, `installation_id`, and `resources` identify an
+explicit installation catalog. Each resource contains its qualified `reference`
+and a route, policy, or credential `definition`. Routes retain their complete
+routing source, selector and explicit provider/account credential references;
+policies retain a policy-lock document and named entry. The initial importer
+accepts static API-key credentials with generation zero; OAuth/ambient stores
+and native request-check definitions remain unsupported. The manifest is
+privileged secret-bearing input: tenant configuration requests only name
+references and cannot supply provider endpoints, keys, files or executables.
+
+Imports commit atomically before listeners start. Identical qualified revisions
+are idempotent; changed content under the same revision is rejected. Removing or
+editing a source file does not alter retained revisions. Catalog definitions and
+compiled configurations are authenticated ciphertext; public configuration
+responses expose references and the public document only. Active compiled
+configurations are verified again on restart and before activation. Import files
+are limited to 4 MiB/256 resources, with at most 4,096 retained resources; these
+are internal provisioning bounds. Tenant draft documents retain their public
+1 MiB/256-reference limits.
 
 An operator's principal ID is `operator.<configured credential ID>`, preserving
 case. Tenancy credential IDs are limited to 119 bytes. Use the public

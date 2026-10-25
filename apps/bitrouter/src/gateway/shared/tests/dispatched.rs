@@ -1,5 +1,6 @@
 //! Real HTTP sends must be preceded by shared intent and retain truthful facts.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -25,7 +26,6 @@ use super::super::{
     authentication,
     authority::{Authority, Revision},
     credentials::Credentials,
-    crypto::DeploymentKey,
     engine::{Admission, Engine, TenantLimits},
     ownership::{Registry, Submission},
     publication::{Configuration, CredentialBinding},

@@ -98,6 +98,8 @@ pub(super) struct Snapshot {
     /// Revoked history remains queryable through the protected store path.
     pub credentials: BTreeMap<CredentialId, Credential>,
     pub credential_hashes: BTreeMap<String, CredentialId>,
+    /// Only the bounded activation pointers are cached, not every retained draft.
+    pub active_configurations: BTreeMap<TenantId, RevisionId>,
 }
 
 /// Authentication produces this internal identity; requests cannot deserialize it.

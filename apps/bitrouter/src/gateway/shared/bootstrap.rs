@@ -1,5 +1,6 @@
 //! Explicit local bootstrap entry used by the stock executable.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::path::Path;
 use std::time::Duration;
 
@@ -9,7 +10,6 @@ use tokio::io::AsyncReadExt;
 
 use super::{
     authority::Authority,
-    crypto::DeploymentKey,
     operator::{self, Actor},
     store::{self, Store},
 };

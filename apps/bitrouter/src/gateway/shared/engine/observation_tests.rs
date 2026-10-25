@@ -22,10 +22,10 @@ use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingT
 use crate::gateway::shared::admitted::SharedAdmission;
 use crate::gateway::shared::authority::Authority;
 use crate::gateway::shared::capture::{Inputs, Requirements};
-use crate::gateway::shared::crypto::DeploymentKey;
 use crate::gateway::shared::ownership::Custody;
 use crate::gateway::shared::store::Store;
 use crate::policy_lock::{PolicyLock, PolicyRuntime};
+use crate::runtime_crypto::DeploymentKey;
 
 struct Fixture {
     context: PipelineContext,

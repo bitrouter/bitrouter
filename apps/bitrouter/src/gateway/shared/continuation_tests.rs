@@ -9,10 +9,10 @@ use std::time::Duration;
 use sea_orm::DatabaseConnection;
 
 use super::*;
-use crate::gateway::shared::crypto::DeploymentKey;
 use crate::gateway::shared::schema;
 use crate::gateway::shared::store::Store;
 use crate::gateway::shared::test_database::EmptyDatabase;
+use crate::runtime_crypto::DeploymentKey;
 
 struct Fixture {
     second: DatabaseConnection,

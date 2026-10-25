@@ -547,7 +547,7 @@ pub fn resolve_route_chain(
 }
 
 /// Resolve an effective model after Stage 0 has already run.
-fn resolve_clean_route_chain(
+pub(crate) fn resolve_clean_route_chain(
     config: &Config,
     clean: &str,
     prefs: &RoutingPrefs,
@@ -968,7 +968,7 @@ fn registry_route_result(
 }
 
 /// Merge `extra`'s knobs additively into `base` (caller prefs refine defaults).
-fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
+pub(crate) fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
     base.operation = extra.operation;
     if extra.registry_requirements.is_some() {
         base.registry_requirements = extra.registry_requirements.clone();

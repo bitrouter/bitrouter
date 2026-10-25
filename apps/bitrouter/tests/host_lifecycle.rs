@@ -127,27 +127,40 @@ models:
     }
 
     fn spawn(&mut self, config: &std::path::Path) -> Result<()> {
+        self.spawn_with_wrapping_key(config, None)
+    }
+
+    fn spawn_with_wrapping_key(
+        &mut self,
+        config: &std::path::Path,
+        key: Option<&str>,
+    ) -> Result<()> {
         let output = File::options().create(true).append(true).open(&self.log)?;
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+        command
+            .args(["serve", "--managed-child", "--config"])
+            .arg(config)
+            .current_dir(&self.home)
+            // Do not inherit credentials, discovery paths, proxies, OTel,
+            // workflow tracing, or feature activation from the developer.
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", self.home.join("home"))
+            .env("USERPROFILE", self.home.join("home"))
+            .env("BITROUTER_HOME", self.home.join("runtime"))
+            .env("XDG_CONFIG_HOME", self.home.join("config"))
+            .env("XDG_CACHE_HOME", self.home.join("cache"))
+            .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("TMPDIR", self.home.join("tmp"))
+            .env("BITROUTER_CONTROL_TOKEN", CONTROL_TOKEN)
+            .stdin(Stdio::null())
+            .stdout(output.try_clone()?)
+            .stderr(output);
+        if let Some(key) = key {
+            command.env("TEST_TENANCY_WRAPPING_KEY", key);
+        }
         self.child = Some(
-            Command::new(env!("CARGO_BIN_EXE_bro"))
-                .args(["serve", "--managed-child", "--config"])
-                .arg(config)
-                .current_dir(&self.home)
-                // Do not inherit credentials, discovery paths, proxies, OTel,
-                // workflow tracing, or feature activation from the developer.
-                .env_clear()
-                .env("PATH", "/usr/bin:/bin")
-                .env("HOME", self.home.join("home"))
-                .env("USERPROFILE", self.home.join("home"))
-                .env("BITROUTER_HOME", self.home.join("runtime"))
-                .env("XDG_CONFIG_HOME", self.home.join("config"))
-                .env("XDG_CACHE_HOME", self.home.join("cache"))
-                .env("XDG_DATA_HOME", self.home.join("data"))
-                .env("TMPDIR", self.home.join("tmp"))
-                .env("BITROUTER_CONTROL_TOKEN", CONTROL_TOKEN)
-                .stdin(Stdio::null())
-                .stdout(output.try_clone()?)
-                .stderr(output)
+            command
                 .spawn()
                 .context("spawn the Cargo-built official host")?,
         );

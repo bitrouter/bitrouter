@@ -336,17 +336,52 @@ and `config_state`. All saves report `config_activation: saved_only`.
 Global `--context NAME` selects a named remote-control target for `status`
 (including `--requests`), `requests`, `models`, `route`, `providers list`,
 `observe status`, `policy status|show`, and `agents list`; `local` forces normal local behavior. `reload` is the
-one remote mutation, and `operations show <request-id> --instance <boot-id>`
-looks up its retained receipt.
+remote host mutation, and `operations show <request-id> --instance <boot-id>`
+looks up its retained receipt. `tenancy` additionally uses named contexts for its
+separate resource-configuration HTTP API, including explicit mutations.
 Manage targets with `bro context add NAME --endpoint URL --token-env
 ENV`, `context list`, `context show NAME`, and `context remove NAME`. The store
 contains the token environment-variable name, never its value. HTTPS is
-required except for loopback/SSH-forwarded HTTP. The client handshakes first,
+required except for loopback/SSH-forwarded HTTP. The host-control client handshakes first,
 follows no redirects, never falls back to local state on a remote error, and
 rejects local `--config`/`--socket` before reading local config, environment, or
 metering data. Remote `agents list` is catalog-only: external-registry fetches,
 checks, launches, and ACP sessions remain local. Remote policy defaults to
 `--view active`; local policy defaults to `--view disk`.
+
+## Tenant configuration
+
+These base-build commands use the HTTP `TenancyClient`. Select a named
+`--context NAME`, or append `--endpoint URL --token-env NAME` to each remote
+command. Never mix targets or pass a secret as an argument. No local daemon or
+database is discovered; `--context local` is rejected. Server support for each
+operation is required.
+
+| Command | Meaning |
+| --- | --- |
+| `bro tenancy capabilities` | Read the selected server's current tenancy descriptor. |
+| `bro tenancy configuration validate --input FILE` | Validate a full `ConfigurationPut` JSON file locally. No context/endpoint, authorization, resource resolution, compilation, or CAS checks. Reports `local_shape_only` and `server_checked: false`. |
+| `bro tenancy configuration apply --tenant ID --input FILE` | Prepare a draft using that same complete file. Does not activate it. |
+| `bro tenancy configuration read --installation-id ID --tenant ID --revision ID` | Read an exact retained revision. |
+| `bro tenancy configuration activate --tenant ID --input FILE` | Activate or roll back using a complete `Activation` JSON file and both observed CAS values. |
+| `bro tenancy configuration active --installation-id ID --tenant ID` | Read the active pointer and authority revision with tenant-wide read authority or an installation operator. |
+| `bro tenancy operation --installation-id ID --operation-id ID` | Recover the original principal's nonsecret result under current read authority. |
+
+All remote rows above need an explicit target. Files are literal JSON (2 MiB
+input, 1 MiB configuration limit), without environment expansion. Apply requires
+`operation_id`, `installation_id`, `expected_authority_revision`, and `document`.
+Activation also requires `expected_active_revision` (explicit `null` only when
+none is active) and the exact `revision_id`. No identity/CAS value is generated
+or refreshed; no mutation is automatically retried. An uncertain response retains
+its original operation/installation for lookup. Do not replace its operation ID.
+`operation` and activation reports with a non-`applied` status exit nonzero and
+emit one object. JSON is the default; `--human` renders the same result.
+
+Administration success does not enable inference. Inspect all three capability
+flags (`revision_bound_dispatch`, `strict_receipts`, `dispatch_enabled`); an
+authority-only server advertises them as false. See
+[remote administration](remote-administration.md#tenant-configuration-commands)
+for the explicit submission/recovery workflow.
 
 ## Daemon lifecycle
 

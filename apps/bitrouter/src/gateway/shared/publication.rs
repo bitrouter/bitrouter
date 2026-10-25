@@ -12,9 +12,9 @@ use crate::policy_lock::PolicyLock;
 
 use super::authority::{Authority, Head};
 use super::credentials::Credentials;
-use super::crypto::SealedSecret;
 use super::engine::Rejection;
 use super::store::{Kind, NewRecord, Store, Stored};
+use crate::runtime_crypto::SealedSecret;
 
 const MAX_PUBLICATION_BYTES: usize = 1024 * 1024;
 const MAX_PROVIDERS: usize = 256;

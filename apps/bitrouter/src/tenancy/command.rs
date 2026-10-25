@@ -4,6 +4,7 @@ use bitrouter_ai::tenancy::{
     authority::{
         AuditReaderCreate, BindingPut, CredentialCreate, PrincipalPut, TenantPut, TenantState,
     },
+    configuration::{Activation, ConfigurationPut},
     identity::{BindingId, CredentialId, InstallationId, OperationId, PrincipalId, TenantId},
     operation::Mutation,
     validation::{Validate, ValidationError},
@@ -19,6 +20,8 @@ pub(super) enum Command {
     AuditReader(TenantId, AuditReaderCreate),
     Detach(TenantId, BindingId, Mutation),
     Revoke(TenantId, CredentialId, Mutation),
+    Configuration(TenantId, ConfigurationPut),
+    Activate(TenantId, Activation),
 }
 
 impl Command {
@@ -30,6 +33,8 @@ impl Command {
             Self::Issue(_, body) => body.validate(),
             Self::AuditReader(_, body) => body.validate(),
             Self::Detach(_, _, body) | Self::Revoke(_, _, body) => body.validate(),
+            Self::Configuration(_, body) => body.validate(),
+            Self::Activate(_, body) => body.validate(),
         }
     }
 
@@ -41,6 +46,8 @@ impl Command {
             Self::Issue(_, body) => &body.operation_id,
             Self::AuditReader(_, body) => &body.operation_id,
             Self::Detach(_, _, body) | Self::Revoke(_, _, body) => &body.operation_id,
+            Self::Configuration(_, body) => &body.operation_id,
+            Self::Activate(_, body) => &body.operation_id,
         }
     }
 
@@ -52,6 +59,8 @@ impl Command {
             Self::Issue(_, body) => &body.installation_id,
             Self::AuditReader(_, body) => &body.installation_id,
             Self::Detach(_, _, body) | Self::Revoke(_, _, body) => &body.installation_id,
+            Self::Configuration(_, body) => &body.installation_id,
+            Self::Activate(_, body) => &body.installation_id,
         }
     }
 
@@ -104,6 +113,18 @@ impl Command {
                 json!({"tenant_id": tenant, "credential_id": credential}),
                 serde_json::to_value(body)?,
             ),
+            Self::Configuration(tenant, body) => (
+                "POST",
+                "configuration.create",
+                json!({"tenant_id": tenant}),
+                serde_json::to_value(body)?,
+            ),
+            Self::Activate(tenant, body) => (
+                "POST",
+                "configuration.activate",
+                json!({"tenant_id": tenant}),
+                serde_json::to_value(body)?,
+            ),
         };
         let mut value = json!({
             "hash_version": 1,
@@ -119,7 +140,7 @@ impl Command {
     }
 }
 
-fn sort(value: &mut Value) {
+pub(super) fn sort(value: &mut Value) {
     match value {
         Value::Object(object) => {
             object.sort_keys();

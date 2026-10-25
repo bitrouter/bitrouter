@@ -4,6 +4,7 @@
 #[path = "regression_tests.rs"]
 mod regression_tests;
 
+use crate::runtime_crypto::DeploymentKey;
 use std::{collections::BTreeMap, panic::AssertUnwindSafe, time::Duration};
 
 use anyhow::{Context, Result, ensure};
@@ -18,7 +19,6 @@ use crate::gateway::routing::workflow::ir::RouteProjection;
 use crate::gateway::shared::{
     authority::Authority,
     capture::Requirements,
-    crypto::DeploymentKey,
     engine::{
         Admission, AdmissionResult, Engine, Execution, Outbox, TenantLimits, TrajectoryBinding,
     },

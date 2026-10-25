@@ -74,7 +74,10 @@ impl SharedContinuationDb {
             super::store::Store::new(database, &namespace, std::time::Duration::from_secs(3))?;
         super::schema::initialize(&store).await?;
         let secret = rand::random();
-        let authority = Authority::new(store, super::crypto::DeploymentKey::from_bytes(secret)?);
+        let authority = Authority::new(
+            store,
+            crate::runtime_crypto::DeploymentKey::from_bytes(secret)?,
+        );
         let head = authority.initialize().await?;
         let key = authority.keys(&head).await?.continuation()?;
         Self::create(authority, key).await

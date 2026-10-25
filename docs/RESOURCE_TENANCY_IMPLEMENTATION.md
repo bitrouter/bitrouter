@@ -105,6 +105,56 @@ dispatch, revision-bound dispatch and strict receipts as false. Inference, nativ
 embedding calls and MCP remain fenced; the process health endpoint stays usable.
 These intermediate controls must not be interpreted as tenant inference support.
 
+### M2 configuration foundation
+
+The configuration foundation adds three empty, additive tables for explicitly
+owned resource revisions, retained configurations and tenant active pointers.
+It assigns no legacy records. Draft creation, exact revision reads and CAS
+activation/rollback use the existing authority actor and operation journal;
+publication follows commit. Current grants cover every retained dependency,
+including credential slots, and activation additionally requires whole-tenant
+authority. Configuration GET authenticates retained content before trusting its
+dependency closure. Active configurations are verified before activation and
+again at startup; a minimal build rejects activation/restoration of a document
+that requires `core` learning facilities.
+
+An explicit installation manifest supplies complete route/policy definitions and
+static credential bindings. Definitions and compiled output are encrypted with
+an operator-supplied stable key and bound to their qualified identities. Source
+changes/removal cannot change a retained revision. No ambient provider registry,
+credential lookup or policy file supplies a missing reference. Reusable encryption
+primitives moved inside the application; the existing shared-store wire format
+and its feature boundary remain unchanged. Compiler traversal, source expansion,
+resolved route envelopes and concurrent management reads have finite bounds.
+
+The base CLI adds `tenancy configuration validate/apply/read/activate/active`,
+`tenancy capabilities` and `tenancy operation`. Local validation checks typed
+document shape only; remote commands use the existing HTTP SDK with explicit
+operation, installation and CAS identities. They do not discover a daemon,
+assemble a service, open a local database or retry uncertain writes.
+
+M2 remains incomplete: the compiled envelopes still need execution adapters,
+live per-attempt eligibility and owner-bound background work. OAuth refresh,
+native in-process caller integration and the other inventory families remain pending.
+Successful draft preparation or activation does not advertise tenant dispatch.
+
+Targeted qualification passed 79 minimal-plus-HTTP/2 tenancy tests, ten CLI unit
+tests and two CLI process tests. Two Cargo-built host lifecycle tests passed,
+including SDK activation, source-manifest removal, durable restart and rejection
+of missing/wrong wrapping keys. PostgreSQL 17 and MySQL 8.4 each passed the new
+configuration-store regression and the existing database-backend integration
+test. These cover exact qualified identities, large UTF-8 values, immutable
+conflicts, CAS and transaction usability after a rejected expected-absence CAS.
+Independent reviews covered storage, compilation, authorization, deadlines and
+process lifecycle. Findings about selector re-parsing, effective URL validation,
+retained-content authentication, feature downgrade and read-only timeout fencing
+were corrected and re-reviewed. Strict all-target workspace Clippy passed.
+The subsequent all-feature workspace run passed all 5,087 selected tests
+(161 opt-in tests skipped); it includes the configuration, CLI and process
+regressions above together with the existing local, shared, core and harness suites.
+Workspace doctests passed 12 tests (one ignored). The pure HTTP/1 minimal build
+passed its all-target check; formatting and staged whitespace checks passed.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

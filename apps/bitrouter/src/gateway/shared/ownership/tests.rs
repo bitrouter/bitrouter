@@ -1,5 +1,6 @@
 //! Real storage interleavings for custody; these do not claim transport bounds.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -15,7 +16,6 @@ use crate::auth::{
 };
 use crate::gateway::shared::{
     authority::{Authority, Revision},
-    crypto::DeploymentKey,
     engine::{Admission, AdmissionResult, Engine, TenantLimits},
     store::{Kind, NewRecord, Store, Stored},
 };

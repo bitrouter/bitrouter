@@ -3,6 +3,7 @@
 use base64::Engine;
 use bitrouter_ai::tenancy::{
     authority::{CredentialIssued, CredentialState, GrantScope, Permission, TenantState},
+    configuration::ConfigurationRevision,
     identity::{CredentialId, PrincipalId, ResourceId, RevisionId, TenantId},
     operation::ErrorCode,
 };
@@ -12,6 +13,8 @@ use sea_orm::DatabaseConnection;
 use super::{
     authority::{has_pools, scope_subset},
     command::Command,
+    configuration,
+    configuration_store::{self, StoredConfiguration},
     model::{
         AuthorityClass, Binding, Caller, Credential, Deadline, ManagedBy, Principal, ReadContext,
         Snapshot, Tenant,
@@ -24,6 +27,7 @@ type Result<T> = std::result::Result<T, ErrorCode>;
 pub(super) struct Prepared {
     pub context: ReadContext,
     pub credential: Option<Credential>,
+    pub configuration: Option<StoredConfiguration>,
 }
 
 fn operator(caller: &Caller) -> Result<()> {
@@ -70,11 +74,13 @@ fn scoped_context(
 pub(super) async fn prepare(
     db: &DatabaseConnection,
     state: &Snapshot,
+    resources: &super::resources::Resources,
     caller: &Caller,
     command: &Command,
     now: DateTime<Utc>,
 ) -> Result<Prepared> {
     let mut credential = None;
+    let mut retained = None;
     let context = match command {
         Command::Tenant(..)
         | Command::Principal(..)
@@ -82,6 +88,34 @@ pub(super) async fn prepare(
         | Command::Detach(..) => {
             operator(caller)?;
             ReadContext::Installation
+        }
+        Command::Configuration(tenant, input) => {
+            let value =
+                configuration::prepare(db, resources, state, caller, tenant, &input.document, now)
+                    .await?;
+            let context = configuration::read_context(caller, tenant, &value.dependencies, false);
+            retained = Some(value);
+            context
+        }
+        Command::Activate(tenant, input) => {
+            configuration::authorize(state, caller, tenant, Permission::PolicyActivate, &[], now)?;
+            let value = configuration_store::configuration(db, tenant, &input.revision_id)
+                .await
+                .map_err(|_| ErrorCode::StorageUnavailable)?
+                .ok_or(ErrorCode::NotFound)?;
+            configuration::authorize(
+                state,
+                caller,
+                tenant,
+                Permission::ResourceRead,
+                &value.dependencies,
+                Utc::now(),
+            )?;
+            resources.validate_compiled(&value)?;
+            configuration::validate_profile(&value.revision.document)?;
+            let context = configuration::read_context(caller, tenant, &value.dependencies, true);
+            retained = Some(value);
+            context
         }
         Command::Binding(tenant, id, input) => {
             state.authorize(caller, tenant, Permission::BindingManage, &input.scope, now)?;
@@ -183,6 +217,7 @@ pub(super) async fn prepare(
     Ok(Prepared {
         context,
         credential,
+        configuration: retained,
     })
 }
 
@@ -191,6 +226,7 @@ pub(super) struct Applied {
     pub resource: ResourceId,
     pub revision: RevisionId,
     pub issued: Option<CredentialIssued>,
+    pub configuration: Option<ConfigurationRevision>,
 }
 
 fn revision() -> Result<RevisionId> {
@@ -286,6 +322,9 @@ pub(super) fn apply(
     let next_revision = revision()?;
     let mut issued = None;
     let (resource, changes) = match command {
+        Command::Configuration(..) | Command::Activate(..) => {
+            return configuration::apply(state, caller, command, prepared, now);
+        }
         Command::Tenant(id, input) => {
             let old = state.tenants.get(id);
             cas(
@@ -443,6 +482,7 @@ pub(super) fn apply(
                         .map_err(|_| ErrorCode::AuthorityUnavailable)?,
                     revision: credential.revision,
                     issued: None,
+                    configuration: None,
                 });
             }
             credential.state = CredentialState::Revoked;
@@ -537,6 +577,7 @@ pub(super) fn apply(
                 resource: id,
                 revision: next_revision,
                 issued: Some(response),
+                configuration: None,
             });
         }
         Command::AuditReader(tenant, input) => {
@@ -581,6 +622,7 @@ pub(super) fn apply(
                 resource: id,
                 revision: next_revision,
                 issued,
+                configuration: None,
             });
         }
     };
@@ -591,6 +633,7 @@ pub(super) fn apply(
             .map_err(|_| ErrorCode::AuthorityUnavailable)?,
         revision: next_revision,
         issued,
+        configuration: None,
     })
 }
 

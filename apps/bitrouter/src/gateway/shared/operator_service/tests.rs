@@ -1,3 +1,4 @@
+use crate::runtime_crypto::DeploymentKey;
 use anyhow::{Context, Result, ensure};
 use axum::{body::Body, http::Method};
 use bitrouter_ai::gateway::operator::{
@@ -10,7 +11,6 @@ use tower::ServiceExt;
 use super::*;
 use crate::config::shared_process::operator::{Config, Credential};
 use crate::gateway::shared::{
-    crypto::DeploymentKey,
     publication::Configuration,
     schema,
     store::{self, Store},

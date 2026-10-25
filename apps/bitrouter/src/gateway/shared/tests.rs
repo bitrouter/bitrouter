@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use super::authority::Authority;
-use super::crypto::DeploymentKey;
 use super::engine::{Admission, AdmissionResult, Engine, Rejection, TenantLimits};
 use super::schema;
 use super::store::{self, Kind, NewRecord, Store, Stored};
+use crate::runtime_crypto::DeploymentKey;
 
 mod admitted;
 mod dispatched;

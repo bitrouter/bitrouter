@@ -1,5 +1,6 @@
 //! Admission identity remains fixed across key edits and detached execution.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
@@ -22,7 +23,6 @@ use crate::gateway::pipeline::{
 use crate::gateway::shared::{
     admitted::SharedAdmission,
     authority::Authority,
-    crypto::DeploymentKey,
     engine::{Admission, AdmissionResult, Engine, TenantLimits},
     store::{Kind, Store},
 };

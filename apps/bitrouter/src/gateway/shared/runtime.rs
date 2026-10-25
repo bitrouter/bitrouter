@@ -17,7 +17,6 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::authority::Authority;
-use super::crypto::DeploymentKey;
 use super::engine::Engine;
 use super::generations::Generations;
 use super::operator_service::{self, auth::Auth};
@@ -25,6 +24,7 @@ use super::store::{self, Store};
 use super::telemetry::Telemetry;
 use super::transport::owned::Transport;
 use crate::config::shared_process::Process;
+use crate::runtime_crypto::DeploymentKey;
 use health::Health;
 use lifecycle::Lifecycle;
 use workers::Workers;

@@ -3,11 +3,14 @@
 mod actor;
 mod authority;
 mod command;
+mod configuration;
+mod configuration_store;
 mod error;
 pub(crate) mod http;
 mod model;
 mod mutation;
 pub(crate) mod ownership;
+mod resources;
 mod store;
 #[cfg(test)]
 mod tests;
@@ -29,7 +32,7 @@ use futures::{
     future::{BoxFuture, Shared},
 };
 use sea_orm::DatabaseConnection;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, SemaphorePermit, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use self::{
@@ -51,10 +54,13 @@ pub(crate) struct Service {
     commands: mpsc::Sender<Message>,
     safety: mpsc::Sender<Message>,
     stop: CancellationToken,
+    reads: Arc<Semaphore>,
+    resources: Arc<resources::Resources>,
     completion: Shared<BoxFuture<'static, Result<(), Arc<tokio::task::JoinError>>>>,
 }
 
 impl Service {
+    #[cfg(test)]
     pub(crate) async fn open(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
@@ -62,12 +68,60 @@ impl Service {
         Self::open_with_limits(db, owner, actor::OperationLimits::default()).await
     }
 
+    pub(crate) async fn open_profile(
+        db: DatabaseConnection,
+        owner: Option<ownership::Lease>,
+        config: &crate::config::tenancy::TenancyConfig,
+    ) -> anyhow::Result<Self> {
+        Self::open_configured(db, owner, actor::OperationLimits::default(), config).await
+    }
+
+    #[cfg(test)]
     async fn open_with_limits(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
         limits: actor::OperationLimits,
     ) -> anyhow::Result<Self> {
+        Self::open_configured(
+            db,
+            owner,
+            limits,
+            &crate::config::tenancy::TenancyConfig::default(),
+        )
+        .await
+    }
+
+    async fn open_configured(
+        db: DatabaseConnection,
+        owner: Option<ownership::Lease>,
+        limits: actor::OperationLimits,
+        config: &crate::config::tenancy::TenancyConfig,
+    ) -> anyhow::Result<Self> {
         let initial = store::load(&db, Utc::now()).await?;
+        let resources =
+            Arc::new(resources::Resources::open(&db, &initial.installation, config).await?);
+        for (tenant, revision) in &initial.active_configurations {
+            let stored = configuration_store::configuration(&db, tenant, revision)
+                .await
+                .map_err(|_| anyhow::anyhow!("active tenant configuration unavailable"))?
+                .ok_or_else(|| anyhow::anyhow!("active tenant configuration unavailable"))?;
+            resources.validate_compiled(&stored).map_err(|_| {
+                anyhow::anyhow!("active tenant configuration authentication failed")
+            })?;
+            configuration::validate_profile(&stored.revision.document).map_err(|_| {
+                anyhow::anyhow!("active tenant configuration requires unavailable features")
+            })?;
+        }
+        Self::start_prepared(db, owner, limits, initial, resources)
+    }
+
+    fn start_prepared(
+        db: DatabaseConnection,
+        owner: Option<ownership::Lease>,
+        limits: actor::OperationLimits,
+        initial: Snapshot,
+        resources: Arc<resources::Resources>,
+    ) -> anyhow::Result<Self> {
         let snapshot = Arc::new(RwLock::new(Arc::new(initial)));
         let live = Arc::new(AtomicBool::new(true));
         let instance = uuid::Uuid::new_v4().to_string().try_into()?;
@@ -81,6 +135,7 @@ impl Service {
             live: Liveness(live.clone()),
             owner,
             limits,
+            resources: resources.clone(),
         };
         let stop = CancellationToken::new();
         let worker = tokio::spawn(worker.run(receiver, safety_receiver, stop.clone()));
@@ -95,6 +150,8 @@ impl Service {
             commands,
             safety,
             stop,
+            reads: Arc::new(Semaphore::new(8)),
+            resources,
             completion,
         })
     }
@@ -125,6 +182,14 @@ impl Service {
     fn unavailable(&self) -> Failure {
         self.live.store(false, Ordering::Release);
         ErrorCode::StorageUnavailable.into()
+    }
+
+    fn read_permit(&self) -> Result<SemaphorePermit<'_>, Failure> {
+        // Do not create an unbounded queue of multi-megabyte retained reads on
+        // the single SQLite pool. Ordinary read pressure is not storage failure.
+        self.reads
+            .try_acquire()
+            .map_err(|_| ErrorCode::CapacityExceeded.into())
     }
 
     fn authenticate(&self, token: &str) -> Result<Caller, Failure> {
@@ -209,6 +274,7 @@ impl Service {
         caller: &Caller,
         id: &OperationId,
     ) -> Result<OperationResult, Failure> {
+        let _read = self.read_permit()?;
         let state = self.current()?;
         let principal = state
             .principal(caller, Utc::now())
@@ -248,6 +314,7 @@ impl Service {
         tenant: &TenantId,
         id: &CredentialId,
     ) -> Result<CredentialStatus, Failure> {
+        let _read = self.read_permit()?;
         let (observed_revision, target) = tokio::time::timeout(
             MANAGEMENT_TIMEOUT,
             store::credential_view(&self.db, id.as_str()),
