@@ -56,6 +56,7 @@ use crate::{
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+mod continuation;
 mod limits;
 
 struct Observed {
@@ -920,7 +921,8 @@ async fn revised_route(
         OperationLimits::default(),
         snapshot,
         Arc::new(resources),
-    )?;
+    )
+    .await?;
     Ok(route)
 }
 

@@ -237,7 +237,8 @@ async fn provision_pair(
         OperationLimits::default(),
         snapshot,
         Arc::new(resources),
-    )?;
+    )
+    .await?;
     fixture.service.executor = Arc::new(HttpExecutor::new(HttpTimeouts {
         connect: Duration::from_secs(2),
         read: Duration::from_millis(250),

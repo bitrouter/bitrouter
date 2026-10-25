@@ -39,12 +39,49 @@ impl Worker {
         mut ordinary: mpsc::Receiver<Job>,
         mut safety: mpsc::Receiver<Job>,
         stop: tokio_util::sync::CancellationToken,
+        import: Option<Vec<u8>>,
+        initialized: tokio::sync::oneshot::Sender<
+            Result<Option<crate::tenancy::continuation::PinnedCrypto>, Failure>,
+        >,
     ) {
         // The owning frame is outside every fallible transaction continuation.
         let _owner = &self.owner;
-        let result = AssertUnwindSafe(self.run_loop(&mut ordinary, &mut safety, stop))
-            .catch_unwind()
-            .await;
+        let result = AssertUnwindSafe(async {
+            let control = Control::new(self.proof.clone());
+            let work = async {
+                let initial = self.current()?;
+                crate::tenancy::continuation::initialize(
+                    &self.db,
+                    &initial,
+                    &self.resources,
+                    import.as_deref(),
+                    &control,
+                )
+                .await
+                .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))
+            };
+            let result = self
+                .supervise(
+                    work,
+                    &control,
+                    Instant::now() + crate::tenancy::MANAGEMENT_TIMEOUT,
+                    Policy::Management,
+                    None,
+                )
+                .await;
+            // The privileged manifest contains plaintext definitions. It is
+            // bootstrap work, not actor state retained for the serving lifetime.
+            drop(import);
+            let ready = result.is_ok();
+            // Cancellation drops only the waiter. This actor still owns BEGIN,
+            // commit/rollback and its lease until supervision settles.
+            let delivered = initialized.send(result).is_ok();
+            if ready && delivered {
+                self.run_loop(&mut ordinary, &mut safety, stop).await;
+            }
+        })
+        .catch_unwind()
+        .await;
         if result.is_err() {
             tracing::error!("tenant authority worker unwound; owner retained");
         }
@@ -219,7 +256,7 @@ impl Worker {
         }
     }
 
-    /// Concrete authority consumers share supervision, never a task registry.
+    /// Bootstrap and serving consumers share the existing transaction supervision.
     async fn supervise<T>(
         &self,
         work: impl Future<Output = Result<T, Failure>>,

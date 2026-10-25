@@ -37,6 +37,7 @@ use crate::gateway::{
 };
 
 pub(super) mod cached;
+mod continuation;
 pub(crate) mod lifecycle;
 mod native;
 mod profile;
@@ -76,6 +77,7 @@ pub(crate) struct TenantExecution {
     entered: AtomicBool,
     #[cfg(feature = "core")]
     observation: std::sync::OnceLock<Arc<super::eval::observation::RequiredObservation>>,
+    continuation: Option<Arc<continuation::Policy>>,
     _lease: Lease,
 }
 
@@ -229,13 +231,23 @@ impl Service {
             authorize_route(state, &submission, route.dependencies())
         })
         .map_err(Failure::from)?;
+        let id = uuid::Uuid::new_v4()
+            .to_string()
+            .try_into()
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        let continuation = self.native_continuation.clone().map(|crypto| {
+            Arc::new(continuation::Policy::new(
+                crypto,
+                &submission,
+                &id,
+                route.clone(),
+            ))
+        });
         let execution = Arc::new(TenantExecution {
             service: self.clone(),
             submission,
-            id: uuid::Uuid::new_v4()
-                .to_string()
-                .try_into()
-                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?,
+            id,
+            continuation,
             route,
             #[cfg(feature = "core")]
             learning,
@@ -251,6 +263,15 @@ impl Service {
 }
 
 impl TenantExecution {
+    pub(crate) fn record_native_source(
+        &self,
+        proof: crate::gateway::pipeline::executor::tenancy::native::Proof,
+    ) {
+        if let Some(policy) = &self.continuation {
+            policy.record(proof);
+        }
+    }
+
     #[cfg(feature = "core")]
     pub(crate) fn storage_identity(&self) -> (&InstallationId, &TenantId, &PrincipalId) {
         (

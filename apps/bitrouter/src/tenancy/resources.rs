@@ -1,7 +1,7 @@
 //! Explicit operator provisioning and immutable, encrypted tenant compilation.
 //!
-//! The parent opens this under the installation's exclusive lease, before actor
-//! or listener startup. This module supplies dependency references, not grants;
+//! Production authenticates/imports under the authority actor bootstrap, before
+//! readiness or listener publication. This module supplies dependency references, not grants;
 //! the authority actor authorizes roots before compilation and the complete
 //! closure before commit. It never reads the host's ambient routing catalog.
 //!
@@ -32,7 +32,9 @@ use bitrouter_ai::tenancy::{
     operation::ErrorCode,
     validation::Validate,
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
+#[cfg(test)]
+use sea_orm::TransactionTrait;
+use sea_orm::{ConnectionTrait, DatabaseConnection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncReadExt;
@@ -76,6 +78,12 @@ struct Envelope {
 struct ExecutionCapacityExceeded;
 
 impl Resources {
+    pub(super) fn continuation_crypto(&self) -> Option<super::continuation::Crypto> {
+        self.key
+            .clone()
+            .map(|key| super::continuation::Crypto::new(self.installation.clone(), key))
+    }
+
     /// Authenticate a retained configuration before activation or startup.
     /// This reads no mutable catalog or global configuration. Invalid retained
     /// bytes, missing keys and unsupported formats fence authority.
@@ -132,34 +140,63 @@ impl Resources {
         }
     }
 
-    /// Open the explicit catalog and import the optional privileged manifest.
+    #[cfg(test)]
+    /// Open a test catalog without a serving authority. Production uses actor bootstrap.
     /// All startup errors deliberately discard source/SQL diagnostics.
     pub(crate) async fn open(
         db: &DatabaseConnection,
         installation: &InstallationId,
         config: &TenancyConfig,
     ) -> Result<Self> {
-        let key = config
-            .wrapping_key_env
-            .as_deref()
-            .map(DeploymentKey::from_environment)
-            .transpose()
-            .map_err(|_| anyhow::anyhow!("tenancy wrapping key unavailable"))?;
-        let resources = Self {
-            installation: installation.clone(),
-            key,
-        };
+        let resources = Self::load_key(installation, config)?;
         resources
             .initialize_catalog(db, config.resource_import.as_deref())
             .await?;
         Ok(resources)
     }
 
+    pub(super) fn load_key(installation: &InstallationId, config: &TenancyConfig) -> Result<Self> {
+        let key = config
+            .wrapping_key_env
+            .as_deref()
+            .map(DeploymentKey::from_environment)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("tenancy wrapping key unavailable"))?;
+        Ok(Self {
+            installation: installation.clone(),
+            key,
+        })
+    }
+
+    #[cfg(test)]
     async fn initialize_catalog(
         &self,
         db: &DatabaseConnection,
         import: Option<&Path>,
     ) -> Result<()> {
+        self.authenticate_retained(db).await?;
+        if let Some(path) = import {
+            let bytes = Self::read_import(Some(path))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing import"))?;
+            self.import_bytes(db, &bytes).await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn bootstrap(
+        &self,
+        db: &impl ConnectionTrait,
+        import: Option<&[u8]>,
+    ) -> Result<()> {
+        self.authenticate_retained(db).await?;
+        if let Some(bytes) = import {
+            self.import_in(db, bytes).await?;
+        }
+        Ok(())
+    }
+
+    async fn authenticate_retained(&self, db: &impl ConnectionTrait) -> Result<()> {
         let retained = storage::has_resources(db)
             .await
             .map_err(|_| anyhow::anyhow!("tenancy catalog unavailable"))?;
@@ -178,9 +215,6 @@ impl Resources {
                 .await
                 .map_err(|_| anyhow::anyhow!("retained tenancy resource authentication failed"))?;
         }
-        if let Some(path) = import {
-            self.provision(db, path).await?;
-        }
         Ok(())
     }
 
@@ -192,7 +226,10 @@ impl Resources {
         })
     }
 
-    async fn provision(&self, db: &DatabaseConnection, path: &Path) -> Result<()> {
+    pub(super) async fn read_import(path: Option<&Path>) -> Result<Option<Vec<u8>>> {
+        let Some(path) = path else {
+            return Ok(None);
+        };
         let file = tokio::fs::File::open(path)
             .await
             .map_err(|_| anyhow::anyhow!("tenancy resource manifest unavailable"))?;
@@ -209,9 +246,11 @@ impl Resources {
             .read_to_end(&mut bytes)
             .await
             .map_err(|_| anyhow::anyhow!("tenancy resource manifest unavailable"))?;
-        self.import_bytes(db, &bytes)
-            .await
-            .map_err(|_| anyhow::anyhow!("tenancy resource import rejected"))
+        ensure!(
+            bytes.len() <= MAX_MANIFEST_BYTES,
+            "tenancy resource manifest exceeds file bounds"
+        );
+        Ok(Some(bytes))
     }
 
     #[cfg(test)]
@@ -223,7 +262,22 @@ impl Resources {
         self.import_bytes(db, bytes).await
     }
 
+    #[cfg(test)]
     async fn import_bytes(&self, db: &DatabaseConnection, bytes: &[u8]) -> Result<()> {
+        let transaction = db.begin().await?;
+        match self.import_in(&transaction, bytes).await {
+            Ok(()) => {
+                transaction.commit().await?;
+                Ok(())
+            }
+            Err(error) => {
+                transaction.rollback().await?;
+                Err(error)
+            }
+        }
+    }
+
+    async fn import_in(&self, db: &impl ConnectionTrait, bytes: &[u8]) -> Result<()> {
         ensure!(
             bytes.len() <= MAX_MANIFEST_BYTES,
             "resource manifest capacity exceeded"
@@ -247,8 +301,7 @@ impl Resources {
             );
             resource.validate()?;
         }
-        let tx = db.begin().await?;
-        let mut retained: HashSet<_> = storage::references(&tx).await?.into_iter().collect();
+        let mut retained: HashSet<_> = storage::references(db).await?.into_iter().collect();
         retained.extend(
             manifest
                 .resources
@@ -267,7 +320,7 @@ impl Resources {
         {
             storage::retain(
                 self,
-                &tx,
+                db,
                 &Artifact {
                     reference: resource.reference.clone(),
                     definition: resource.definition.clone(),
@@ -283,7 +336,7 @@ impl Resources {
         {
             let policy = match resource.definition.policy_reference() {
                 Some(reference) => Some(
-                    self.load(&tx, reference)
+                    self.load(db, reference)
                         .await
                         .map_err(|_| anyhow::anyhow!("imported policy unavailable"))?,
                 ),
@@ -293,7 +346,7 @@ impl Resources {
                 .map_err(|_| anyhow::anyhow!("invalid imported route closure"))?;
             storage::retain(
                 self,
-                &tx,
+                db,
                 &Artifact {
                     reference: resource.reference.clone(),
                     definition: resource.definition.clone(),
@@ -304,11 +357,10 @@ impl Resources {
         }
         // Validate the complete dependency graph before the import becomes visible.
         for resource in &manifest.resources {
-            self.closure(&tx, std::slice::from_ref(&resource.reference))
+            self.closure(db, std::slice::from_ref(&resource.reference))
                 .await
                 .map_err(|_| anyhow::anyhow!("imported resource dependency unavailable"))?;
         }
-        tx.commit().await?;
         Ok(())
     }
 

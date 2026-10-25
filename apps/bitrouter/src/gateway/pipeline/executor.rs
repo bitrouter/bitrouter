@@ -39,7 +39,7 @@ mod input_count;
 mod response_body;
 mod shared;
 mod stream_bridge;
-mod tenancy;
+pub(crate) mod tenancy;
 
 use stream_bridge::BridgeCapture;
 
@@ -1248,6 +1248,8 @@ impl HttpExecutor {
         }
         let credential_authority =
             credential_authority.map(|authority| authority.with_request_scope(&scope));
+        let credential_authority =
+            tenancy::native::bind_headers(credential_authority, &request, input.target, input.ctx);
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
         crate::gateway::providers::google_chat::validate_authenticated_request(
             &request,
@@ -1844,7 +1846,15 @@ impl Executor for HttpExecutor {
                     ContinuationFailure::BindingChanged,
                 )
             })?;
-        let (text, successful_authority, storage_allowed, effort_bound, mut shared_attempt) = loop {
+        let (
+            text,
+            successful_authority,
+            storage_allowed,
+            effort_bound,
+            mut shared_attempt,
+            successful_binding,
+            successful_attempt,
+        ) = loop {
             let mut body = self.render_execution_request(
                 adapter.as_ref(),
                 target,
@@ -1907,12 +1917,13 @@ impl Executor for HttpExecutor {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
+            let mut native_attempt = None;
             let response = native_work::observe(
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
                 async {
                     record_native_dispatch(prompt, target, ctx)?;
-                    let _tenant_attempt =
+                    native_attempt =
                         tenancy::admit_send(tenant_binding.as_ref(), &mut request, target, ctx)?;
                     client
                         .send(request, &CancellationToken::new())
@@ -1940,6 +1951,8 @@ impl Executor for HttpExecutor {
                     storage_allowed,
                     effort_bound,
                     shared_attempt,
+                    tenant_binding,
+                    native_attempt,
                 );
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
@@ -2006,6 +2019,23 @@ impl Executor for HttpExecutor {
         {
             if target.api_protocol == ApiProtocol::Responses && !replayable {
                 super::native_continuation::mark_required_state(&mut result.content);
+            }
+            if let (Some(binding), Some(attempt), Some(authority)) = (
+                successful_binding.as_ref(),
+                successful_attempt,
+                successful_authority.as_ref(),
+            ) {
+                binding.record_native_source(
+                    attempt,
+                    authority,
+                    prompt,
+                    &result,
+                    tenancy::native::Storage {
+                        stored: stored_response,
+                        replayable,
+                        effort_bound,
+                    },
+                );
             }
             runtime.succeeded(prompt, target, successful_authority, &result);
             runtime.stored_response(stored_response, replayable, effort_bound);

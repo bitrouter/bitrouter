@@ -18,6 +18,8 @@ use crate::{
     tenancy::execution::TenantExecution,
 };
 
+pub(crate) mod native;
+
 #[cfg(test)]
 mod tests;
 
@@ -26,6 +28,7 @@ pub(super) struct BoundAuthentication {
     execution: Arc<TenantExecution>,
     digest: [u8; 32],
     candidate: Vec<u8>,
+    credential: bitrouter_ai::tenancy::configuration::ResourceRef,
 }
 
 /// The private proof travels beside AppliedAuth so no public transport contract
@@ -66,6 +69,10 @@ impl AuthenticatedRequest {
                 Ok(BoundAuthentication {
                     digest: digest(&applied).map_err(|code| execution.reject(code))?,
                     candidate,
+                    credential: execution
+                        .route()
+                        .match_candidate(target)
+                        .map_err(|code| execution.reject(code))?,
                     execution,
                 })
             })

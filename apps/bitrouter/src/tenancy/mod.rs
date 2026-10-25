@@ -7,6 +7,7 @@ mod cache;
 mod command;
 mod configuration;
 mod configuration_store;
+mod continuation;
 mod error;
 #[cfg(feature = "core")]
 pub(crate) mod eval;
@@ -51,6 +52,14 @@ use self::{
 
 const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
+// The startup test installs H's existing fault gate before the actor can run.
+// No global hook or alternate transaction implementation is involved.
+#[cfg(test)]
+struct BootstrapGate {
+    phase: transaction::Phase,
+    attached: oneshot::Sender<(Arc<transaction::Proof>, Arc<transaction::Gate>)>,
+}
+
 #[derive(Clone)]
 pub(crate) struct Service {
     db: DatabaseConnection,
@@ -66,6 +75,7 @@ pub(crate) struct Service {
     eval: Arc<eval::State>,
     reads: Arc<Semaphore>,
     resources: Arc<resources::Resources>,
+    native_continuation: Option<continuation::PinnedCrypto>,
     caches: Arc<execution::cached::Caches>,
     admission: Arc<admission::Admission>,
     executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
@@ -114,29 +124,43 @@ impl Service {
         config: &crate::config::tenancy::TenancyConfig,
     ) -> anyhow::Result<Self> {
         let initial = store::load(&db, Utc::now()).await?;
-        let resources =
-            Arc::new(resources::Resources::open(&db, &initial.installation, config).await?);
-        for (tenant, revision) in &initial.active_configurations {
-            let stored = configuration_store::configuration(&db, tenant, revision)
-                .await
-                .map_err(|_| anyhow::anyhow!("active tenant configuration unavailable"))?
-                .ok_or_else(|| anyhow::anyhow!("active tenant configuration unavailable"))?;
-            resources.validate_compiled(&stored).map_err(|_| {
-                anyhow::anyhow!("active tenant configuration authentication failed")
-            })?;
-            configuration::validate_profile(&stored.revision.document).map_err(|_| {
-                anyhow::anyhow!("active tenant configuration requires unavailable features")
-            })?;
-        }
-        Self::start_prepared(db, owner, limits, initial, resources)
+        let resources = Arc::new(resources::Resources::load_key(
+            &initial.installation,
+            config,
+        )?);
+        let import = resources::Resources::read_import(config.resource_import.as_deref()).await?;
+        Self::start_resources(
+            db,
+            owner,
+            limits,
+            initial,
+            resources,
+            import,
+            #[cfg(test)]
+            None,
+        )
+        .await
     }
 
-    fn start_prepared(
+    #[cfg(test)]
+    async fn start_prepared(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
         limits: actor::OperationLimits,
         initial: Snapshot,
         resources: Arc<resources::Resources>,
+    ) -> anyhow::Result<Self> {
+        Self::start_resources(db, owner, limits, initial, resources, None, None).await
+    }
+
+    async fn start_resources(
+        db: DatabaseConnection,
+        owner: Option<ownership::Lease>,
+        limits: actor::OperationLimits,
+        initial: Snapshot,
+        resources: Arc<resources::Resources>,
+        import: Option<Vec<u8>>,
+        #[cfg(test)] bootstrap_gate: Option<BootstrapGate>,
     ) -> anyhow::Result<Self> {
         // Construct fallible transport state before spawning the owning actor.
         // Tenant profiles share connection pools, never host credential plugins.
@@ -145,6 +169,14 @@ impl Service {
         let snapshot = Arc::new(RwLock::new(Arc::new(initial)));
         let live = Arc::new(AtomicBool::new(true));
         let cleanup = transaction::Proof::new(live.clone());
+        #[cfg(test)]
+        if let Some(bootstrap_gate) = bootstrap_gate {
+            let gate = cleanup.hold(bootstrap_gate.phase);
+            bootstrap_gate
+                .attached
+                .send((cleanup.clone(), gate))
+                .map_err(|_| anyhow::anyhow!("bootstrap test gate receiver unavailable"))?;
+        }
         let instance = uuid::Uuid::new_v4().to_string().try_into()?;
         // Ordinary traffic cannot occupy the queue reserved for installation
         // revokes and stop transitions. Neither queue waits for free capacity.
@@ -167,11 +199,13 @@ impl Service {
             accepting: accepting.clone(),
         };
         let stop = CancellationToken::new();
-        let worker = tokio::spawn(worker.run(receiver, safety_receiver, stop.clone()));
+        let (initialized, initialization) = oneshot::channel();
+        let worker =
+            tokio::spawn(worker.run(receiver, safety_receiver, stop.clone(), import, initialized));
         let completion = async move { worker.await.map_err(Arc::new) }
             .boxed()
             .shared();
-        Ok(Self {
+        let mut service = Self {
             db,
             snapshot,
             live,
@@ -185,6 +219,7 @@ impl Service {
             cleanup,
             reads: Arc::new(Semaphore::new(8)),
             resources,
+            native_continuation: None,
             caches,
             admission: admission::Admission::new(),
             executor,
@@ -192,7 +227,17 @@ impl Service {
             #[cfg(test)]
             dispatch_test_ready: Arc::new(AtomicBool::new(false)),
             completion,
-        })
+        };
+        match initialization.await {
+            Ok(Ok(crypto)) => {
+                service.native_continuation = crypto;
+                Ok(service)
+            }
+            _ => {
+                service.shutdown().await?;
+                anyhow::bail!("native continuation key initialization failed")
+            }
+        }
     }
 
     /// Stop accepting mutations and drain both admitted command queues. Timeout

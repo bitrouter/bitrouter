@@ -423,6 +423,51 @@ real PostgreSQL regression failed before the fix and passed afterward, as did
 the three store regressions, four single/dual-process HTTP/1.1 and h2c cases,
 and the cross-replica h2c admission case.
 
+### M2 native continuation and startup key custody
+
+Controlled native Generation installs a request-local policy in the existing
+private-context runtime. Opaque `btct2.` continuation and `btpo2.` origin artifacts
+bind the installation, tenant, stable principal and exact retained route. The
+executor supplies private proof of the actual candidate, credential reference,
+authenticated request, attempt, prompt and terminal output. Public continuation
+source fields cannot mint that proof. Caller-key rotation may retain the same
+principal; equal upstream secrets do not substitute for a different credential
+reference. Changed eligible targets may replay independently replayable history
+but cannot receive another target's provider handle.
+
+The native SSE bridge verifies the canonical prompt against the actual streaming
+request before recording either source. A complete terminal must still agree
+with the observed stream and the final canonical request. Failed artifact sealing
+preserves received output and usage, records unverified evidence and exposes no
+raw provider response ID. Token, origin-count, aggregate-origin and incremental
+prompt-hash bounds limit the added work.
+
+The existing configured wrapping key supplies a private domain-restricted crypto
+capability. Migration031 adds one durable installation/key epoch. The owning
+authority actor validates that epoch before importing resources, authenticates
+retained and active configuration in the same transaction, and publishes readiness
+only after acknowledged commit. Cancellation drops the startup waiter without
+dropping SQL custody. Ambiguous completion and unwind retain the actor and file
+owner. A missing or changed key rejects even when the retained catalog is empty;
+a populated epoch cannot be downgraded away. PostgreSQL resumability requires a
+permanent ordinary table, and identity comparisons remain exact on all backends.
+
+The final all-feature workspace run passed 5,318 selected tests (170 opt-in tests
+skipped). Targeted all-feature and minimal `core,http2` runs each passed 247 tests;
+the minimal gateway passed 217. These include actual native two-turn/streaming
+consumers, startup cancellation, consuming-commit failure, bootstrap unwind and
+file-owner retention after ordinary handles close. Migration030, migration031
+and the populated database integration passed on PostgreSQL 17 and MySQL 8.4.
+CI runs the isolated epoch test before populating its backend fixture.
+
+Strict workspace and minimal-core Clippy, pure HTTP/1 all-target compilation,
+12 doctests (one ignored), warnings-as-errors rustdoc, distribution, formatting
+and whitespace checks passed. Independent reviews found no remaining actionable
+defects in native binding, startup custody, backend regressions or the merged
+Eval/lifecycle integration. HTTP continuation mappings and reconciliation are a
+subsequent consumer integration. This stage does not enable production dispatch
+or strict receipts, store harness session history, or complete M2.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

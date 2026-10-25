@@ -720,6 +720,15 @@ jobs:
           --lib server_migration030_preserves_legacy_resumes_and_refuses_owned_down
           -- --ignored --test-threads=1
 
+      - name: verify native continuation epoch durability before populating the test database
+        env:
+          BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib db::migration::m20240101_000031_native_continuation_epoch::tests::server::server_migration031_epoch_is_permanent_exact_and_restartable
+          -- --ignored --exact --test-threads=1
+
       - name: exercise migrations and gateway persistence on the selected backend
         env:
           BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}

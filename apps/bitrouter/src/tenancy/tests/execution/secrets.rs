@@ -104,7 +104,8 @@ async fn provision_private_headers(
         OperationLimits::default(),
         snapshot,
         Arc::new(resources),
-    )?;
+    )
+    .await?;
     Ok((fixture, route))
 }
 

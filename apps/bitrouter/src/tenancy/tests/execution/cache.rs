@@ -681,13 +681,26 @@ async fn warm_configuration_and_static_key_bytes_do_not_survive_service_restart(
         ensure!(snapshot.revision == before);
         // No activation pointer: reopen the fixture with the same installation,
         // wrapping key and authority revision, but a fresh Service-local cache.
-        fixture.service = Service::start_prepared(
+        let reopened = Service::start_prepared(
             fixture.db.clone(),
             None,
             OperationLimits::default(),
             snapshot,
             fixture.service.resources.clone(),
-        )?;
+        )
+        .await;
+        if corrupt_key {
+            // The fixture now uses production's authenticated actor bootstrap.
+            // Corrupt credential rows must fail there before any Service/cache
+            // is exposed; inactive configuration corruption is still read below.
+            ensure!(
+                reopened.is_err(),
+                "cold corrupt credential passed bootstrap"
+            );
+            ensure!(provider.calls() == 2);
+            continue;
+        }
+        fixture.service = reopened?;
         enable_dispatch(&fixture);
         let binding = headers(&fixture, token, &revision.revision_id)?;
         let (status, rejection) = dispatch(&fixture.service, &binding).await?;
@@ -804,7 +817,8 @@ async fn identical_credential_names_remain_isolated_across_tenants_and_operator_
         OperationLimits::default(),
         store::load(&first.db, Utc::now()).await?,
         first.service.resources.clone(),
-    )?;
+    )
+    .await?;
     result(
         first
             .service

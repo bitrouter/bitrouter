@@ -117,6 +117,9 @@ impl TenantExecution {
             .routing_table(self.route.clone())
             .executor(self.service.executor.clone())
             .pre_resolution_hook_for(Entry(self.clone()), OperationScope::Both);
+        if let Some(policy) = &self.continuation {
+            builder.native_private_context(policy.clone());
+        }
         if let Some(policy) = self.route.policy() {
             if !self.route.dependencies().contains(policy.reference()) || policy.name().is_empty() {
                 return Err(self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));

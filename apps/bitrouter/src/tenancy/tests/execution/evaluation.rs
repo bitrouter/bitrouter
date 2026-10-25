@@ -117,7 +117,8 @@ async fn policy_fixture_with_document(
         super::super::super::actor::OperationLimits::default(),
         snapshot,
         Arc::new(resources),
-    )?;
+    )
+    .await?;
     let mut input = fixture.configuration_input("observed-config")?;
     input.document.routes = vec![route];
     input.document.policy = Some(policy);

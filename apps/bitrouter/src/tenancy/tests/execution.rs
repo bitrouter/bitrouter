@@ -64,7 +64,8 @@ async fn provision_protocol(
         super::super::actor::OperationLimits::default(),
         snapshot,
         Arc::new(resources),
-    )?;
+    )
+    .await?;
     Ok((fixture, route, slot))
 }
 

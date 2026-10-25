@@ -332,7 +332,8 @@ async fn retained_nonempty_configuration_requires_every_credential_dependency() 
         super::super::actor::OperationLimits::default(),
         snapshot,
         std::sync::Arc::new(resources),
-    )?;
+    )
+    .await?;
     let credential = fixture.issue("resource-editor").await?;
     let caller = fixture
         .service
