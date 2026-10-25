@@ -31,7 +31,15 @@ async fn provision_protocol(
     url: &str,
     protocol: &str,
 ) -> Result<(Fixture, ResourceRef, ResourceRef)> {
-    let mut fixture = Fixture::new().await?;
+    provision_protocol_with_fixture(Fixture::new().await?, url, protocol, &mut |_| {}).await
+}
+
+async fn provision_protocol_with_fixture(
+    mut fixture: Fixture,
+    url: &str,
+    protocol: &str,
+    started: &mut impl FnMut(&Service),
+) -> Result<(Fixture, ResourceRef, ResourceRef)> {
     fixture.service.shutdown().await?;
     let resources =
         super::super::resources::Resources::with_key(fixture.installation.clone(), [29; 32])?;
@@ -66,6 +74,7 @@ async fn provision_protocol(
         Arc::new(resources),
     )
     .await?;
+    started(&fixture.service);
     Ok((fixture, route, slot))
 }
 

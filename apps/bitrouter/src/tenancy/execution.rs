@@ -217,6 +217,7 @@ impl Service {
         })
         .map_err(Failure::from)?;
         let limits = revision.document().limits.clone();
+        route.require_capabilities().map_err(Failure::from)?;
         #[cfg(feature = "core")]
         let learning = revision.document().learning.clone();
         drop(revision);
@@ -270,6 +271,61 @@ impl TenantExecution {
         if let Some(policy) = &self.continuation {
             policy.record(proof);
         }
+    }
+
+    #[cfg(feature = "core")]
+    pub(in crate::tenancy) fn send_trajectory(
+        &self,
+        permit: tokio::sync::mpsc::OwnedPermit<super::actor::Job>,
+        job: super::actor::Job,
+        deadline: tokio::time::Instant,
+    ) -> Result<(), ErrorCode> {
+        let _gate = self
+            .service
+            .accepting
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        if !self.trajectory_producer_ready() || tokio::time::Instant::now() >= deadline {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        drop(permit.send(job));
+        Ok(())
+    }
+
+    #[cfg(feature = "core")]
+    pub(crate) fn storage_database(&self) -> &sea_orm::DatabaseConnection {
+        &self.service.db
+    }
+    #[cfg(feature = "core")]
+    pub(in crate::tenancy) fn trajectory_identity(
+        &self,
+    ) -> (
+        &bitrouter_ai::tenancy::identity::RevisionId,
+        &bitrouter_ai::tenancy::configuration::Learning,
+    ) {
+        (&self.submission.binding.execution_revision, &self.learning)
+    }
+    #[cfg(feature = "core")]
+    pub(in crate::tenancy) fn trajectory_resources(&self) -> &super::resources::Resources {
+        &self.service.resources
+    }
+    #[cfg(all(test, feature = "core"))]
+    pub(in crate::tenancy) fn trajectory_observation(
+        &self,
+    ) -> Option<&Arc<super::eval::observation::RequiredObservation>> {
+        self.observation.get()
+    }
+    #[cfg(feature = "core")]
+    pub(in crate::tenancy) fn trajectory_sender(
+        &self,
+    ) -> tokio::sync::mpsc::Sender<super::actor::Job> {
+        self.service.commands.clone()
+    }
+    #[cfg(feature = "core")]
+    pub(in crate::tenancy) fn trajectory_producer_ready(&self) -> bool {
+        self.service.eval.producers_open.load(Ordering::Acquire)
+            && self.service.eval.healthy()
+            && self.service.live.load(Ordering::Acquire)
     }
 
     #[cfg(feature = "core")]

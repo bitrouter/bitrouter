@@ -23,7 +23,20 @@ enum Phase {
     Skipped,
     SkippedBeforeDecision,
 }
+enum BeginProgress {
+    Absent,
+    Waiting,
+    Committed(Arc<crate::tenancy::trajectory::StartProof>),
+    NoStart,
+}
+pub(in crate::tenancy) enum TrajectoryStart {
+    Absent,
+    Committed(Arc<crate::tenancy::trajectory::StartProof>),
+    NoStart,
+}
 struct Progress {
+    start: BeginProgress,
+    terminal: Option<Arc<crate::tenancy::trajectory::recorder::Facts>>,
     phase: Phase,
     route_completed: bool,
     failed: bool,
@@ -45,6 +58,8 @@ impl RequiredObservation {
             state,
             execution,
             progress: Mutex::new(Progress {
+                start: BeginProgress::Absent,
+                terminal: None,
                 phase: Phase::PreEntry,
                 route_completed: false,
                 failed: false,
@@ -112,7 +127,9 @@ impl RequiredObservation {
         match self.progress.lock() {
             Ok(mut state)
                 if same
-                    && no_decision
+                    && (no_decision && matches!(state.start, BeginProgress::Absent)
+                        || matches!(state.start, BeginProgress::NoStart)
+                            && !context.has_event::<CapturedEvalDecision>())
                     && matches!(outcome, RequestOutcome::Failed(_))
                     && !state.failed
                     && !state.route_completed
@@ -139,6 +156,89 @@ impl RequiredObservation {
             observation: self.clone(),
             finished: false,
         })
+    }
+    pub(in crate::tenancy) fn start_requested(&self) -> Result<()> {
+        let mut state = self.progress.lock().map_err(|_| Self::error())?;
+        if state.failed
+            || state.phase != Phase::Entered
+            || !matches!(state.start, BeginProgress::Absent)
+        {
+            return Err(Self::error());
+        }
+        state.start = BeginProgress::Waiting;
+        Ok(())
+    }
+    pub(in crate::tenancy) fn committed_start(
+        &self,
+        start: Arc<crate::tenancy::trajectory::StartProof>,
+    ) -> Result<()> {
+        let execution = self.execution.upgrade().ok_or_else(Self::error)?;
+        let mut state = self.progress.lock().map_err(|_| Self::error())?;
+        if !start.matches(&execution) || !matches!(state.start, BeginProgress::Waiting) {
+            return Err(Self::error());
+        }
+        // Publish before responding, including a receiver lost after commit.
+        state.start = BeginProgress::Committed(start);
+        Ok(())
+    }
+    pub(in crate::tenancy) fn no_start(&self, disposition: Disposition) {
+        match self.progress.lock() {
+            Ok(mut state)
+                if matches!(state.start, BeginProgress::Waiting)
+                    && matches!(
+                        disposition,
+                        Disposition::NoTransaction | Disposition::RolledBack
+                    ) =>
+            {
+                state.start = BeginProgress::NoStart
+            }
+            Ok(state) if matches!(state.start, BeginProgress::Committed(_)) => {}
+            _ => self.state.fail(),
+        }
+    }
+    pub(in crate::tenancy) fn start_resolved(&self) -> bool {
+        self.progress.lock().is_ok_and(|state| {
+            matches!(
+                state.start,
+                BeginProgress::Committed(_) | BeginProgress::NoStart
+            )
+        })
+    }
+    pub(in crate::tenancy) fn trajectory_start(&self) -> Result<TrajectoryStart> {
+        let state = self.progress.lock().map_err(|_| Self::error())?;
+        if state.failed {
+            return Err(Self::error());
+        }
+        match &state.start {
+            BeginProgress::Absent => Ok(TrajectoryStart::Absent),
+            BeginProgress::NoStart => Ok(TrajectoryStart::NoStart),
+            BeginProgress::Committed(value) => Ok(TrajectoryStart::Committed(value.clone())),
+            BeginProgress::Waiting => Err(Self::error()),
+        }
+    }
+    pub(in crate::tenancy) fn writing_trajectory(
+        &self,
+        start: &Arc<crate::tenancy::trajectory::StartProof>,
+        facts: &Arc<crate::tenancy::trajectory::recorder::Facts>,
+    ) -> std::result::Result<(), crate::tenancy::error::Failure> {
+        let mut state = self.progress.lock().map_err(|_| {
+            crate::tenancy::error::Failure::from(
+                bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable,
+            )
+        })?;
+        if state.failed
+            || state.phase != Phase::Queued
+            || !matches!(&state.start,BeginProgress::Committed(value) if Arc::ptr_eq(value,start))
+            || !state
+                .terminal
+                .as_ref()
+                .is_some_and(|value| Arc::ptr_eq(value, facts))
+            || state.subject.is_some()
+        {
+            return Err(bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable.into());
+        }
+        state.phase = Phase::Writing;
+        Ok(())
     }
     pub(in crate::tenancy) fn queued(&self) -> Result<()> {
         let mut state = self.progress.lock().map_err(|_| {
@@ -223,12 +323,55 @@ impl Guard {
                 .progress
                 .lock()
                 .map_err(|_| RequiredObservation::error())?;
-            if state.failed || state.phase != Phase::Recording {
+            if state.failed
+                || state.phase != Phase::Recording
+                || !matches!(state.start, BeginProgress::Absent)
+            {
                 return Err(RequiredObservation::error());
             }
             state.phase = Phase::Skipped;
         }
         self.finished = true;
+        Ok(())
+    }
+    pub(in crate::tenancy) fn skip_no_start(mut self) -> Result<()> {
+        {
+            let mut state = self
+                .observation
+                .progress
+                .lock()
+                .map_err(|_| RequiredObservation::error())?;
+            if state.failed
+                || state.phase != Phase::Recording
+                || !matches!(state.start, BeginProgress::NoStart)
+            {
+                return Err(RequiredObservation::error());
+            }
+            state.phase = Phase::Skipped;
+        }
+        self.finished = true;
+        Ok(())
+    }
+    pub(in crate::tenancy) fn prepare_trajectory(
+        &self,
+        start: &Arc<crate::tenancy::trajectory::StartProof>,
+        facts: &Arc<crate::tenancy::trajectory::recorder::Facts>,
+    ) -> Result<()> {
+        super::wire::size(facts.as_ref(), BODY_BYTES).map_err(|_| RequiredObservation::error())?;
+        let mut state = self
+            .observation
+            .progress
+            .lock()
+            .map_err(|_| RequiredObservation::error())?;
+        if state.failed
+            || state.phase != Phase::Recording
+            || !matches!(&state.start,BeginProgress::Committed(value) if Arc::ptr_eq(value,start))
+            || state.subject.is_some()
+        {
+            return Err(RequiredObservation::error());
+        }
+        state.terminal = Some(facts.clone());
+        state.phase = Phase::Waiting;
         Ok(())
     }
     pub(crate) fn prepare(&self, subject: EvalSubject) -> Result<Arc<EvalSubject>> {
@@ -251,7 +394,10 @@ impl Guard {
                 .progress
                 .lock()
                 .map_err(|_| RequiredObservation::error())?;
-            if state.failed || state.phase != Phase::Recording {
+            if state.failed
+                || state.phase != Phase::Recording
+                || !matches!(state.start, BeginProgress::Absent)
+            {
                 return Err(RequiredObservation::error());
             }
             state.subject = Some(subject.clone());

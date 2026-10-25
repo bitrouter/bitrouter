@@ -595,6 +595,24 @@ jobs:
           cargo nextest run --locked -p bitrouter --no-default-features --features core
           --test core_contract --test core_execution --build-jobs 2 --test-threads 2
 
+      - name: verify guarded drafts across core feature removal
+        if: matrix.features == 'core'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked -p bitrouter --no-default-features --features core \
+            --lib --no-run --message-format=json > "$RUNNER_TEMP/tenancy-core.json"
+          fixture_core_binary=$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "bitrouter" and .profile.test and (.target.kind | index("lib")) and .executable != null) | .executable] | if length == 1 then .[0] else error("expected one core libtest") end' "$RUNNER_TEMP/tenancy-core.json")
+          cp "$fixture_core_binary" "$RUNNER_TEMP/tenancy-core-test"
+          cargo test --locked -p bitrouter --no-default-features \
+            --lib --no-run --message-format=json > "$RUNNER_TEMP/tenancy-no-core.json"
+          fixture_gateway_binary=$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "bitrouter" and .profile.test and (.target.kind | index("lib")) and .executable != null) | .executable] | if length == 1 then .[0] else error("expected one gateway libtest") end' "$RUNNER_TEMP/tenancy-no-core.json")
+          cp "$fixture_gateway_binary" "$RUNNER_TEMP/tenancy-no-core-test"
+          BITROUTER_TEST_NO_CORE_LIBTEST="$RUNNER_TEMP/tenancy-no-core-test" \
+            "$RUNNER_TEMP/tenancy-core-test" --exact \
+            tenancy::tests::configuration::trajectory_features::producer::guarded_draft_cross_feature_transition \
+            --ignored --nocapture
+
       - name: verify execution SDK against the headless service
         if: matrix.features == 'core,harness'
         run: >-
@@ -729,6 +747,15 @@ jobs:
           --lib db::migration::m20240101_000031_native_continuation_epoch::tests::server::server_migration031_epoch_is_permanent_exact_and_restartable
           -- --ignored --exact --test-threads=1
 
+      - name: verify trajectory ownership migration before populating the test database
+        env:
+          BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib db::migration::m20240101_000032_trajectory_storage_scope::tests::server_migration032_preserves_legacy_and_refuses_partial_down
+          -- --ignored --exact --test-threads=1
+
       - name: exercise migrations and gateway persistence on the selected backend
         env:
           BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -775,6 +802,24 @@ jobs:
         run: >-
           cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
           --lib core::eval::store::owned_tests::server::
+          -- --ignored --test-threads=1
+
+      - name: verify tenant trajectory scope and immutable replay on the selected backend
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
+          --lib trajectory::store::owned::tests::server_owned_trajectory_store_preserves_transaction_and_scope
+          -- --ignored --exact --test-threads=1
+
+      - name: verify atomic trajectory and evaluation closure on the selected backend
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
+          --lib tenancy::tests::execution::evaluation::trajectory::server::
           -- --ignored --test-threads=1
 
       - name: verify MySQL transaction snapshot boundaries

@@ -1,4 +1,5 @@
 use super::*;
+mod trajectory_features;
 use bitrouter_ai::tenancy::configuration::{
     Activation, Configuration, ConfigurationPut, ConfigurationRevision, GenerationDefaults,
     Learning, LearningMode, Limits,

@@ -63,7 +63,7 @@ impl StoredState {
             let expected = additive_schema_definition(entry)?;
             ensure!(
                 self.schema.contains(&expected),
-                "migration changed historical schema beyond the allowed nullable Eval columns: {entry}"
+                "migration changed historical schema beyond the allowed nullable ownership columns: {entry}"
             );
         }
         Ok(())
@@ -78,23 +78,49 @@ fn additive_schema_definition(entry: &str) -> Result<String> {
             "eval_results",
             "eval_admission_events",
             "eval_snapshots",
+            "trajectory_episodes",
+            "trajectory_events",
+            "trajectory_requests",
+            "trajectory_prefix_index",
+            "trajectory_outbox",
         ]
         .contains(&definition.1.as_str())
     {
         return Ok(entry.to_owned());
     }
-    // Independently allow only migration030's exact nullable additions. Keep
+    // Independently allow only migration030/032's exact nullable additions. Keep
     // every byte of the old column/constraint definitions and all old indexes.
     // Do not derive the allowance from the migration being tested.
-    let prefix = definition
+    let sql = definition
         .3
         .as_deref()
-        .and_then(|sql| sql.strip_suffix(')'))
-        .context("historical Eval table has no closing definition")?;
+        .context("historical scoped table has no SQL definition")?;
+    // SQLite inserts added columns before an existing table-level primary key.
+    // Preserve that historical constraint, including its original whitespace.
+    let suffix = if definition.1 == "trajectory_prefix_index" {
+        ", PRIMARY KEY (\"owner_user_id\", \"full_input_digest\") )"
+    } else {
+        ")"
+    };
+    let prefix = sql
+        .strip_suffix(suffix)
+        .context("historical scoped table has an unexpected closing definition")?;
+    let logical_identity = if [
+        "trajectory_episodes",
+        "trajectory_requests",
+        "trajectory_prefix_index",
+        "trajectory_outbox",
+    ]
+    .contains(&definition.1.as_str())
+    {
+        ", \"logical_identity_json\" varchar(8192) COLLATE BINARY"
+    } else {
+        ""
+    };
     definition.3 = Some(format!(
         "{prefix}, \"installation_id\" varchar(128) COLLATE BINARY, \
          \"tenant_id\" varchar(128) COLLATE BINARY, \
-         \"creator_principal_id\" varchar(128) COLLATE BINARY)"
+         \"creator_principal_id\" varchar(128) COLLATE BINARY{logical_identity}{suffix}"
     ));
     Ok(serde_json::to_string(&definition)?)
 }

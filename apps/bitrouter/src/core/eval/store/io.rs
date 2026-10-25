@@ -20,6 +20,7 @@ pub(super) const MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Bounds serialized SQL cells across one operation, not decoded allocator overhead.
 pub(super) struct Budget<'a> {
+    shared: Option<&'a crate::storage::operation_budget::OperationBudget<'a>>,
     tenant: bool,
     bytes: usize,
     rows: usize,
@@ -28,6 +29,7 @@ pub(super) struct Budget<'a> {
 impl<'a> Budget<'a> {
     pub(super) fn new(store: &EvalStore) -> Self {
         Self {
+            shared: None,
             tenant: !store.scope.is_legacy(),
             bytes: 0,
             rows: MAX_ROWS,
@@ -39,13 +41,29 @@ impl<'a> Budget<'a> {
         check: &'a (dyn Fn() -> std::result::Result<(), ErrorCode> + Sync),
     ) -> Self {
         Self {
+            shared: None,
             tenant: !store.scope.is_legacy(),
             bytes: 0,
             rows: 1024,
             check: Some(check),
         }
     }
+    pub(super) fn trajectory(
+        store: &EvalStore,
+        shared: &'a crate::storage::operation_budget::OperationBudget<'a>,
+    ) -> Self {
+        Self {
+            shared: Some(shared),
+            tenant: !store.scope.is_legacy(),
+            bytes: 0,
+            rows: MAX_ROWS,
+            check: None,
+        }
+    }
     pub(super) fn check(&self) -> Result<()> {
+        if let Some(shared) = self.shared {
+            shared.check()?;
+        }
         if let Some(check) = self.check {
             check().map_err(OwnedError::Rejected)?;
         }
@@ -53,6 +71,9 @@ impl<'a> Budget<'a> {
     }
     pub(super) fn charge(&mut self, rows: usize, bytes: usize) -> Result<()> {
         self.check()?;
+        if let Some(shared) = self.shared {
+            return Ok(shared.charge(rows, bytes)?);
+        }
         if self.tenant {
             let next = self.bytes.checked_add(bytes).ok_or(Capacity("byte"))?;
             if rows > self.rows {

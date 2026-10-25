@@ -1,6 +1,9 @@
 //! Application encryption primitives. Shared wire identities remain unchanged;
 //! local tenancy supplies independently framed, domain-separated identities.
 
+#[cfg(feature = "core")]
+pub(crate) mod trajectory;
+
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;

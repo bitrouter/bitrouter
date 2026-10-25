@@ -17,6 +17,7 @@ use tower::ServiceExt;
 
 mod exploration;
 mod owned;
+mod trajectory;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -80,7 +81,51 @@ async fn policy_fixture_with_document(
     document: crate::policy_lock::PolicyLock,
     bind_route: bool,
 ) -> Result<(Fixture, RevisionId)> {
-    let (mut fixture, mut route, slot) = provision(url).await?;
+    policy_fixture_with_trajectory(url, mode, document, bind_route, None).await
+}
+
+async fn policy_fixture_with_trajectory(
+    url: &str,
+    mode: LearningMode,
+    document: crate::policy_lock::PolicyLock,
+    bind_route: bool,
+    trajectory: Option<serde_json::Value>,
+) -> Result<(Fixture, RevisionId)> {
+    policy_fixture_named(url, mode, document, bind_route, trajectory, "selected").await
+}
+
+async fn policy_fixture_named(
+    url: &str,
+    mode: LearningMode,
+    document: crate::policy_lock::PolicyLock,
+    bind_route: bool,
+    trajectory: Option<serde_json::Value>,
+    name: &str,
+) -> Result<(Fixture, RevisionId)> {
+    policy_fixture_with_existing(
+        Fixture::new().await?,
+        url,
+        mode,
+        (name, document),
+        bind_route,
+        trajectory,
+        &mut |_| {},
+    )
+    .await
+}
+
+async fn policy_fixture_with_existing(
+    fixture: Fixture,
+    url: &str,
+    mode: LearningMode,
+    policy: (&str, crate::policy_lock::PolicyLock),
+    bind_route: bool,
+    trajectory: Option<serde_json::Value>,
+    started: &mut impl FnMut(&Service),
+) -> Result<(Fixture, RevisionId)> {
+    let (name, document) = policy;
+    let (mut fixture, mut route, slot) =
+        provision_protocol_with_fixture(fixture, url, "chat_completions", started).await?;
     fixture.service.shutdown().await?;
     let policy = ResourceRef {
         owner_kind: OwnerKind::Tenant,
@@ -94,13 +139,20 @@ async fn policy_fixture_with_document(
         [29; 32],
     )?;
     let mut imports = vec![json!({"reference":policy,
-        "definition":{"kind":"policy","name":"selected","document":document}})];
+        "definition":{"kind":"policy","name":name,"document":document}})];
     if bind_route {
         route.revision_id = "r2".try_into()?;
         imports.push(json!({"reference":route,"definition":{"kind":"route","selector":"bitrouter/observed","policy":policy,
                 "routing":{"providers":{"mock":{"api_base":url,"api_protocol":[{"*":"chat_completions"}],"models":[{"id":"model-a"}]}},
-                    "routers":{"observed":{"selection":{"kind":"policy","policy":"selected","base_model":"mock:model-a"}}}},
+                    "routers":{"observed":{"selection":{"kind":"policy","policy":name,"base_model":"mock:model-a"}}}},
                 "credentials":[{"provider":"mock","account":"default","credential":slot}]}}));
+    }
+    if let Some(trajectory) = trajectory {
+        for artifact in &mut imports {
+            if artifact["definition"]["kind"] == "route" {
+                artifact["definition"]["routing"]["trajectory"] = trajectory.clone();
+            }
+        }
     }
     resources
         .provision_bytes(
@@ -119,6 +171,7 @@ async fn policy_fixture_with_document(
         Arc::new(resources),
     )
     .await?;
+    started(&fixture.service);
     let mut input = fixture.configuration_input("observed-config")?;
     input.document.routes = vec![route];
     input.document.policy = Some(policy);

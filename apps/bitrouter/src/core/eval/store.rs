@@ -19,6 +19,7 @@ mod owned;
 #[cfg(test)]
 mod owned_tests;
 mod snapshots;
+mod trajectory;
 use bitrouter_ai::tenancy::operation::ErrorCode;
 use io::Budget;
 
@@ -35,6 +36,17 @@ pub(crate) enum OwnedError {
 
 impl OwnedError {
     fn classify(error: anyhow::Error) -> Self {
+        if let Some(error) = error.downcast_ref::<crate::storage::operation_budget::Error>() {
+            return match error {
+                crate::storage::operation_budget::Error::Rejected(code) => Self::Rejected(*code),
+                crate::storage::operation_budget::Error::Capacity => {
+                    Self::Rejected(ErrorCode::CapacityExceeded)
+                }
+                crate::storage::operation_budget::Error::Unavailable => {
+                    Self::Rejected(ErrorCode::AuthorityUnavailable)
+                }
+            };
+        }
         match error.downcast::<Self>() {
             Ok(error) => error,
             Err(error) if error.is::<io::Capacity>() => Self::Rejected(ErrorCode::CapacityExceeded),

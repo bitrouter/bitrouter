@@ -25,11 +25,18 @@ async fn additive_epoch_migration_preserves_legacy_bytes_and_refuses_populated_d
         .await?
         .context("legacy schema")?
         .try_get::<String>("", "sql")?;
-    crate::db::migration::Migrator::up(&db, None).await?;
+    // Exercise exactly this additive migration even when later migrations are
+    // registered; its predecessor schema and one-entry ledger delta are fixed.
+    crate::db::migration::Migrator::up(&db, Some(1)).await?;
     let manager = SchemaManager::new(&db);
     Migration.up(&manager).await?;
     let after = crate::db::migration::Migrator::get_migration_models(&db).await?;
     ensure!(after.starts_with(&before) && after.len() == before.len() + 1);
+    ensure!(
+        after
+            .last()
+            .is_some_and(|row| row.version == Migration.name())
+    );
     let row = db
         .query_one(Statement::from_string(
             DatabaseBackend::Sqlite,

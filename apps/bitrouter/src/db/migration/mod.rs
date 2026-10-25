@@ -42,6 +42,7 @@ mod m20240101_000028_resource_tenancy;
 mod m20240101_000029_tenancy_configurations;
 mod m20240101_000030_eval_storage_scope;
 mod m20240101_000031_native_continuation_epoch;
+mod m20240101_000032_trajectory_storage_scope;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
@@ -83,6 +84,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000029_tenancy_configurations::Migration),
             Box::new(m20240101_000030_eval_storage_scope::Migration),
             Box::new(m20240101_000031_native_continuation_epoch::Migration),
+            Box::new(m20240101_000032_trajectory_storage_scope::Migration),
         ]
     }
 }

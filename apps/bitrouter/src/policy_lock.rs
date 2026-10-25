@@ -2630,6 +2630,15 @@ impl PolicyRoutingSnapshot {
 /// Fully built policy candidate that has not yet replaced the live snapshot.
 pub(crate) struct PreparedPolicySnapshot(Arc<PolicySnapshot>);
 
+enum PolicyTrajectory {
+    Legacy(Arc<TrajectoryRuntime>),
+    #[cfg(feature = "core")]
+    Owned(Arc<crate::tenancy::trajectory::Adapter>),
+    // Retained trajectory configuration can accompany an unguarded selection.
+    // It carries no database, key or authority and cannot start a ledger.
+    Inactive,
+}
+
 /// Live last-known-good policy registry shared by the model selector and
 /// daemon reloader. A request clones one snapshot before deciding, so reloads
 /// never mix old and new policy state inside one request.
@@ -2639,7 +2648,7 @@ pub struct PolicyRuntime {
     eval_decisions: PendingEvalDecisionStore,
     continuation_config: crate::config::ContinuationConfig,
     trajectory_config: TrajectoryConfig,
-    trajectory: Option<Arc<TrajectoryRuntime>>,
+    trajectory: Option<PolicyTrajectory>,
     published: bool,
 }
 
@@ -2688,6 +2697,13 @@ impl PolicyRuntime {
         eval_decisions: PendingEvalDecisionStore,
         trajectory: Option<Arc<TrajectoryRuntime>>,
     ) -> Result<Arc<Self>> {
+        // Tenancy keeps host policy administration readable, but its fenced host
+        // pipeline has no ambient trajectory store, publisher or generated key.
+        // Only the separately admitted retained profile can execute a guard.
+        let trajectory = trajectory.map(PolicyTrajectory::Legacy).or_else(|| {
+            (config.tenancy.enabled && config.trajectory.enabled)
+                .then_some(PolicyTrajectory::Inactive)
+        });
         let runtime = Arc::new(Self {
             snapshot: RwLock::new(Arc::new(PolicySnapshot::default())),
             decision_recorder,
@@ -2708,6 +2724,47 @@ impl PolicyRuntime {
         document: Option<PolicyLock>,
         eval_decisions: PendingEvalDecisionStore,
         trajectory: Option<Arc<TrajectoryRuntime>>,
+    ) -> Result<Arc<Self>> {
+        Self::from_document_profile(
+            config,
+            document,
+            eval_decisions,
+            trajectory.map(PolicyTrajectory::Legacy),
+        )
+    }
+
+    pub(crate) fn from_retained_document(
+        config: &Config,
+        document: PolicyLock,
+        eval_decisions: PendingEvalDecisionStore,
+        selected: &str,
+        #[cfg(feature = "core")] trajectory: Option<Arc<crate::tenancy::trajectory::Adapter>>,
+    ) -> Result<Arc<Self>> {
+        let guarded = crate::tenancy::trajectory_profile::guarded(config, &document, selected)?;
+        let trajectory = if guarded {
+            #[cfg(feature = "core")]
+            {
+                Some(PolicyTrajectory::Owned(trajectory.ok_or_else(|| {
+                    anyhow::anyhow!("retained guard requires admitted trajectory adapter")
+                })?))
+            }
+            #[cfg(not(feature = "core"))]
+            {
+                anyhow::bail!("owned trajectory requires core")
+            }
+        } else if config.trajectory.enabled {
+            Some(PolicyTrajectory::Inactive)
+        } else {
+            None
+        };
+        Self::from_document_profile(config, Some(document), eval_decisions, trajectory)
+    }
+
+    fn from_document_profile(
+        config: &Config,
+        document: Option<PolicyLock>,
+        eval_decisions: PendingEvalDecisionStore,
+        trajectory: Option<PolicyTrajectory>,
     ) -> Result<Arc<Self>> {
         anyhow::ensure!(
             config.policy.path.is_none() && !config.inherit_defaults,
@@ -3183,7 +3240,7 @@ impl ModelSelector for PolicyRuntime {
 }
 
 async fn begin_guarded_trajectory(
-    trajectory: &TrajectoryRuntime,
+    trajectory: &PolicyTrajectory,
     ctx: &PipelineContext,
     protocol: bitrouter_ai::types::ApiProtocol,
     captured_at: &str,
@@ -3192,6 +3249,15 @@ async fn begin_guarded_trajectory(
     crate::trajectory::correlation::CorrelatedRequest,
     crate::trajectory::store::GuardedRouteResult,
 )> {
+    #[cfg(feature = "core")]
+    if let PolicyTrajectory::Owned(trajectory) = trajectory {
+        return trajectory.begin(ctx, protocol, captured_at, input).await;
+    }
+    let PolicyTrajectory::Legacy(trajectory) = trajectory else {
+        return Err(crate::gateway::error::BitrouterError::internal(
+            "trajectory execution requires its admitted profile",
+        ));
+    };
     #[cfg(feature = "multi-instance")]
     if let Some(admission) = ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>() {
         return admission
@@ -3308,6 +3374,27 @@ pub struct PolicyRuntimeStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tenancy_host_policy_has_no_ambient_trajectory_authority() -> Result<()> {
+        let mut config = crate::config::parse_resolved(
+            "inherit_defaults: false\ntrajectory:\n  enabled: true\n",
+        )?;
+        // Ordinary assembly still has to supply its actual trajectory runtime.
+        assert!(
+            PolicyRuntime::new(&config, None, None, Default::default(), None)
+                .await
+                .is_err()
+        );
+        config.tenancy.enabled = true;
+        let runtime = PolicyRuntime::new(&config, None, None, Default::default(), None).await?;
+        assert!(matches!(
+            runtime.trajectory,
+            Some(PolicyTrajectory::Inactive)
+        ));
+        assert!(runtime.status(config.policy.mode).policies.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn shared_guard_continuation_preserves_committed_treatment() -> Result<()> {

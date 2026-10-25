@@ -3,6 +3,8 @@
 mod custody;
 #[cfg(feature = "core")]
 mod eval;
+#[cfg(feature = "core")]
+mod trajectory;
 
 #[cfg(test)]
 mod tests;
@@ -43,6 +45,10 @@ pub(super) enum Job {
     Eval(Box<super::eval::Job>),
     #[cfg(feature = "core")]
     Settlement(Box<super::eval::Settlement>),
+    #[cfg(feature = "core")]
+    TrajectoryBegin(Box<super::trajectory::Begin>),
+    #[cfg(feature = "core")]
+    TrajectoryTerminal(Box<super::trajectory::Terminal>),
 }
 
 impl From<Message> for Job {

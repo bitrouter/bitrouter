@@ -183,8 +183,19 @@ impl Fixture {
 
     async fn with_limits(limits: super::actor::OperationLimits) -> Result<Self> {
         let db = crate::db::connect("sqlite::memory:").await?;
+        Self::with_database(db, limits, &mut |_| {}).await
+    }
+
+    // Test-only injection before Service construction, never a post-admission DB swap.
+    // The callback lets isolated backend tests retain every actor outside cancellation.
+    async fn with_database(
+        db: sea_orm::DatabaseConnection,
+        limits: super::actor::OperationLimits,
+        started: &mut impl FnMut(&Service),
+    ) -> Result<Self> {
         crate::db::run_migrations(&db).await?;
         let service = Service::open_with_limits(db.clone(), None, limits).await?;
+        started(&service);
         let installation = service.current().map_err(failure)?.installation.clone();
         let operator =
             Caller::Installation(super::operator_principal("test-operator").map_err(failure)?);

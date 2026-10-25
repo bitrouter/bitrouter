@@ -45,6 +45,10 @@ pub(crate) enum KeyDomain {
     EvalResult,
     EvalIdempotency,
     EvalSnapshot,
+    TrajectoryEpisode,
+    TrajectoryRequest,
+    TrajectoryEvent,
+    TrajectoryOutbox,
 }
 
 impl KeyDomain {
@@ -55,6 +59,10 @@ impl KeyDomain {
             Self::EvalResult => "eval.result",
             Self::EvalIdempotency => "eval.idempotency",
             Self::EvalSnapshot => "eval.snapshot",
+            Self::TrajectoryEpisode => "trajectory.episode",
+            Self::TrajectoryRequest => "trajectory.request",
+            Self::TrajectoryEvent => "trajectory.event",
+            Self::TrajectoryOutbox => "trajectory.outbox",
         }
     }
 }

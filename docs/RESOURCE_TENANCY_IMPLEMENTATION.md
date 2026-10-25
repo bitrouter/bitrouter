@@ -468,6 +468,67 @@ Eval/lifecycle integration. HTTP continuation mappings and reconciliation are a
 subsequent consumer integration. This stage does not enable production dispatch
 or strict receipts, store harness session history, or complete M2.
 
+### M2 retained trajectory and atomic operational evaluation
+
+Selected retained progress guards now use an execution-bound adapter and the
+existing authority writer. A separately derived correlation key binds the exact
+installation, tenant, configuration revision, route and policy. Principal and
+credential rotation do not split that profile's canonical history; each row still
+retains its original creator. Migration032 adds nullable ownership projections to
+the five existing trajectory tables without assigning historical rows. Legacy
+reads, publication, metering joins and pruning exclude owned records.
+
+An acknowledged start installs its settlement obligation before any fallible
+reply or deadline check. Start, route and optional guard are validated as one
+batch. Required terminal history, built-in operational Eval and delivered outbox
+commit together through the same transaction owner and shared operation budget.
+Missing terminal closure fails read-only validation, including inside the open
+transaction; replay cannot tentatively recreate missing Eval rows. Foreign
+secondary-key collisions leave the PostgreSQL transaction usable while exact
+scoped winner validation refuses adoption.
+
+Before committing another start, the writer reserves complete terminal event
+and Eval/outbox allowances for every outstanding request. Capacity exhaustion
+rejects before another provider send and preserves management availability.
+Learning Off retains operational history without an Eval/outbox obligation.
+The [retained trajectory profile](RESOURCE_TENANCY_TRAJECTORY_PROFILE.md) records
+the finite bounds and unsupported cost, experiment and retention settings.
+Retained integrity remains independent of build capabilities: a gateway without
+`core` can read an authentic inactive guarded revision while rejecting its
+creation, activation, dispatch and active restoration.
+
+Qualification passed 487 all-feature targeted tests, 281 minimal `core,http2`
+tests and 224 pure HTTP/1 gateway tests. A separately built core producer and
+no-core consumer passed the real encrypted-file transition. Actual H1/h2c socket
+tests cover disconnects before headers and during streaming, revocation before
+begin and after commit, and shutdown waiting for acknowledged rollback. SQLite
+tests detect tentative replay writes across 18 intact/damaged closure cases.
+PostgreSQL 17 and MySQL 8.4 each passed migration032, scoped immutable storage and
+three compound tests spanning 17 isolated fault/replay campaigns. Their generated
+databases were removed after verified actor, transaction and pool cleanup.
+
+Independent reviews found no remaining P1/P2 defects in capability separation,
+complete terminal reservation, socket custody, scoped replay, PostgreSQL
+conflicts, backend fixtures or the merged integration. SQLite downgrade tests
+preserve schema, rows, indexes and migration ledger when persistent/TEMP views
+or external triggers prevent safe column removal.
+
+Final workspace qualification passed 5,359 all-feature tests, with 176 opt-in
+tests skipped, plus 12 doctests with one ignored. Strict all-target workspace,
+minimal-core and pure HTTP/1 gateway Clippy, warnings-as-errors rustdoc,
+distribution and formatting checks passed. Five real artifact tests passed with
+separately built default-full, minimum-gateway and harness-only executables,
+preserving historical records, resident ownership, learned state, reserved judge
+charges and trajectory/outbox state across profile transitions. The schema
+allowance retains the original composite-primary-key bytes and inserts only the
+literal nullable additions in SQLite's actual column position.
+Nextest reported one output-pipe leak warning in an existing status-only test;
+its isolated rerun passed without that warning. The cause was not established.
+
+Production tenancy remains the local SQLite profile; these server-backend
+regressions do not enable distributed authority. Dispatch and strict-receipt
+capability flags remain disabled, and M2 is not complete.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

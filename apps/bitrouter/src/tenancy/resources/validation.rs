@@ -195,6 +195,22 @@ pub(super) fn compiled(
             );
             for route in &envelope.routes {
                 route_shape(route, &dependencies)?;
+                if let (Some(reference), Some(name)) = (&route.policy, &route.policy_name) {
+                    let source = artifacts
+                        .get(&route.reference)
+                        .context("retained route source missing")?;
+                    let Definition::Route { routing, .. } = &source.definition else {
+                        anyhow::bail!("retained route source kind")
+                    };
+                    let policy = artifacts
+                        .get(reference)
+                        .context("retained policy missing")?;
+                    let Definition::Policy { document, .. } = &policy.definition else {
+                        anyhow::bail!("retained policy kind")
+                    };
+                    let (config, _) = compiler::routing_config(routing)?;
+                    crate::tenancy::trajectory_profile::retained_guarded(&config, document, name)?;
+                }
             }
             let expected = compiler::configuration_routes(document, &envelope.artifacts)
                 .map_err(|_| anyhow::anyhow!("invalid retained route composition"))?;

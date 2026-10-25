@@ -140,13 +140,57 @@ impl TenantExecution {
                 );
             }
             let config = policy.configuration().map_err(|code| self.reject(code))?;
+            let guarded = crate::tenancy::trajectory_profile::guarded(
+                &config,
+                policy.document(),
+                policy.name(),
+            )
+            .map_err(|_| {
+                self.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)
+            })?;
             let pending =
                 crate::gateway::observability::decision::PendingEvalDecisionStore::default();
-            let runtime = crate::policy_lock::PolicyRuntime::from_document(
+            #[cfg(feature = "core")]
+            let observation = if guarded
+                || self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off
+            {
+                let observation = crate::tenancy::eval::observation::RequiredObservation::new(
+                    self.service.eval.clone(),
+                    Arc::downgrade(self),
+                );
+                self.observation.set(observation.clone()).map_err(|_| {
+                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
+                })?;
+                Some(observation)
+            } else {
+                None
+            };
+            #[cfg(feature = "core")]
+            let trajectory = if guarded {
+                let observation = observation.as_ref().ok_or_else(|| {
+                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::AuthorityUnavailable)
+                })?;
+                Some(
+                    crate::tenancy::trajectory::Adapter::new(self, observation.clone()).map_err(
+                        |_| {
+                            self.reject(
+                                bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch,
+                            )
+                        },
+                    )?,
+                )
+            } else {
+                None
+            };
+            #[cfg(not(feature = "core"))]
+            let _ = guarded;
+            let runtime = crate::policy_lock::PolicyRuntime::from_retained_document(
                 &config,
-                Some(policy.document().clone()),
+                policy.document().clone(),
                 pending.clone(),
-                None,
+                policy.name(),
+                #[cfg(feature = "core")]
+                trajectory,
             )
             .map_err(|_| {
                 self.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)
@@ -155,21 +199,25 @@ impl TenantExecution {
                 .model_selector(runtime)
                 .route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             #[cfg(feature = "core")]
-            if self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off {
-                let observation = crate::tenancy::eval::observation::RequiredObservation::new(
-                    self.service.eval.clone(),
-                    Arc::downgrade(self),
-                );
-                self.observation.set(observation.clone()).map_err(|_| {
-                    self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
-                })?;
-                builder
-                    .observe_hook(
+            if let Some(observation) = observation {
+                if self.learning.mode != bitrouter_ai::tenancy::configuration::LearningMode::Off {
+                    builder.observe_hook(
                         crate::gateway::observability::prediction::PredictiveResponseObserver::new(
                             pending.clone(),
                         ),
-                    )
-                    .settlement_recorder_for(
+                    );
+                }
+                if guarded {
+                    builder.settlement_recorder_for(
+                        crate::tenancy::trajectory::Recorder::new(
+                            self,
+                            observation,
+                            pending.clone(),
+                        ),
+                        OperationScope::Both,
+                    );
+                } else {
+                    builder.settlement_recorder_for(
                         crate::core::eval::settlement::EvalSettlementRecorder::for_execution(
                             self,
                             pending.clone(),
@@ -177,6 +225,7 @@ impl TenantExecution {
                         ),
                         OperationScope::Both,
                     );
+                }
             }
             builder.observe_hook(PolicyCompletion {
                 pending,

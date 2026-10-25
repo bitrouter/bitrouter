@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RuntimeErr, Set,
-    TransactionTrait,
+    ColumnTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait, IntoActiveModel,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, RuntimeErr, Set, TransactionTrait,
     sea_query::{Cond, Expr, OnConflict, Query, SelectStatement},
 };
 
@@ -133,6 +132,22 @@ pub(super) mod outbox_entity {
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
     pub enum Relation {}
     impl ActiveModelBehavior for ActiveModel {}
+}
+
+#[cfg(feature = "core")]
+pub(crate) mod owned;
+
+fn legacy_scope(table: &str) -> sea_orm::sea_query::Condition {
+    use sea_orm::sea_query::Alias;
+    let mut condition = sea_orm::sea_query::Condition::all();
+    for column in ["installation_id", "tenant_id", "creator_principal_id"] {
+        condition = condition.add(Expr::col((Alias::new(table), Alias::new(column))).is_null());
+    }
+    if table != "trajectory_events" {
+        condition = condition
+            .add(Expr::col((Alias::new(table), Alias::new("logical_identity_json"))).is_null());
+    }
+    condition
 }
 
 #[derive(Clone)]
@@ -312,6 +327,7 @@ impl TrajectoryStore {
     ) -> Result<CorrelateAttempt> {
         let txn = self.db.begin().await?;
         if let Some(existing) = request_entity::Entity::find()
+            .filter(legacy_scope("trajectory_requests"))
             .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(request_entity::Column::RequestId.eq(&input.request_id))
             .one(&txn)
@@ -322,6 +338,7 @@ impl TrajectoryStore {
             return Ok(CorrelateAttempt::Complete(Box::new(result)));
         }
         if request_entity::Entity::find_by_id(&input.request_id)
+            .filter(legacy_scope("trajectory_requests"))
             .one(&txn)
             .await?
             .is_some()
@@ -487,6 +504,7 @@ impl TrajectoryStore {
                 if unique_start_conflict {
                     txn.rollback().await?;
                     if request_entity::Entity::find_by_id(&input.request_id)
+                        .filter(legacy_scope("trajectory_requests"))
                         .one(&self.db)
                         .await?
                         .is_some()
@@ -670,6 +688,7 @@ impl TrajectoryStore {
     {
         let txn = self.db.begin().await?;
         let request = request_entity::Entity::find()
+            .filter(legacy_scope("trajectory_requests"))
             .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(request_entity::Column::RequestId.eq(request_id))
             .one(&txn)
@@ -726,6 +745,7 @@ impl TrajectoryStore {
         validate_candidate_history(&events, &settlement.event)?;
         append_event(&txn, &settlement.event).await?;
 
+        let request_key = request.request_id.clone();
         let mut active = request.into_active_model();
         active.settlement_event_id = Set(Some(settlement.event.event_id.clone()));
         active.settlement_outbox_id = Set(settlement
@@ -733,7 +753,16 @@ impl TrajectoryStore {
             .as_ref()
             .map(|outbox| outbox.outbox_id.clone()));
         active.status = Set(request_status_name(settlement.status.clone()).into());
-        active.update(&txn).await?;
+        let changed = request_entity::Entity::update_many()
+            .set(active)
+            .filter(legacy_scope("trajectory_requests"))
+            .filter(request_entity::Column::RequestId.eq(request_key))
+            .exec(&txn)
+            .await?;
+        anyhow::ensure!(
+            changed.rows_affected == 1,
+            "trajectory request changed during settlement"
+        );
         update_episode_head(&txn, episode, &settlement.event, None).await?;
         if let Some(outbox) = &settlement.outbox {
             insert_outbox(&txn, owner_user_id, outbox.clone()).await?;
@@ -750,6 +779,7 @@ impl TrajectoryStore {
         let txn = self.db.begin().await?;
         let request_id = settlement.event.request_id.as_deref().unwrap_or_default();
         let request = request_entity::Entity::find()
+            .filter(legacy_scope("trajectory_requests"))
             .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(request_entity::Column::RequestId.eq(request_id))
             .one(&txn)
@@ -787,6 +817,7 @@ impl TrajectoryStore {
         validate_candidate_history(&events, &settlement.event)?;
         append_event(&txn, &settlement.event).await?;
 
+        let request_key = request.request_id.clone();
         let mut active = request.into_active_model();
         active.settlement_event_id = Set(Some(settlement.event.event_id.clone()));
         active.settlement_outbox_id = Set(settlement
@@ -794,7 +825,16 @@ impl TrajectoryStore {
             .as_ref()
             .map(|outbox| outbox.outbox_id.clone()));
         active.status = Set(request_status_name(settlement.status.clone()).into());
-        active.update(&txn).await?;
+        let changed = request_entity::Entity::update_many()
+            .set(active)
+            .filter(legacy_scope("trajectory_requests"))
+            .filter(request_entity::Column::RequestId.eq(request_key))
+            .exec(&txn)
+            .await?;
+        anyhow::ensure!(
+            changed.rows_affected == 1,
+            "trajectory request changed during settlement"
+        );
         update_episode_head(&txn, episode, &settlement.event, None).await?;
         if let Some(outbox) = &settlement.outbox {
             insert_outbox(&txn, owner_user_id, outbox.clone()).await?;
@@ -805,6 +845,7 @@ impl TrajectoryStore {
 
     async fn persisted_event_matches(&self, event: &TrajectoryEvent) -> Result<bool> {
         let row = event_entity::Entity::find()
+            .filter(legacy_scope("trajectory_events"))
             .filter(event_entity::Column::OwnerUserId.eq(&event.owner_user_id))
             .filter(event_entity::Column::EventId.eq(&event.event_id))
             .one(&self.db)
@@ -829,6 +870,7 @@ impl TrajectoryStore {
     ) -> Result<Vec<TrajectoryEvent>> {
         validate_owner(owner_user_id)?;
         let rows = event_entity::Entity::find()
+            .filter(legacy_scope("trajectory_events"))
             .filter(event_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(event_entity::Column::EpisodeId.eq(episode_id))
             .order_by_asc(event_entity::Column::Sequence)
@@ -856,6 +898,7 @@ impl TrajectoryStore {
     ) -> Result<Option<StoredRequest>> {
         validate_owner(owner_user_id)?;
         request_entity::Entity::find()
+            .filter(legacy_scope("trajectory_requests"))
             .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(request_entity::Column::RequestId.eq(request_id))
             .one(&self.db)
@@ -873,6 +916,7 @@ impl TrajectoryStore {
         validate_opaque(request_id, "request_id")?;
         let txn = self.db.begin().await?;
         let request = request_entity::Entity::find()
+            .filter(legacy_scope("trajectory_requests"))
             .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(request_entity::Column::RequestId.eq(request_id))
             .one(&txn)
@@ -941,6 +985,7 @@ impl TrajectoryStore {
             anyhow::anyhow!("terminal trajectory request '{request_id}' lost its outbox index")
         })?;
         let outbox = outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
             .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(outbox_entity::Column::OutboxId.eq(settlement_outbox_id))
             .one(&txn)
@@ -974,6 +1019,7 @@ impl TrajectoryStore {
     pub async fn pending_outbox(&self, owner_user_id: &str) -> Result<Vec<PendingOutbox>> {
         validate_owner(owner_user_id)?;
         outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
             .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(outbox_entity::Column::DeliveredAt.is_null())
             .order_by_asc(outbox_entity::Column::Attempts)
@@ -994,6 +1040,7 @@ impl TrajectoryStore {
             )
         }
         let rows = outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
             .filter(outbox_entity::Column::DeliveredAt.is_null())
             .order_by_asc(outbox_entity::Column::Attempts)
             .order_by_asc(outbox_entity::Column::CreatedAt)
@@ -1007,6 +1054,7 @@ impl TrajectoryStore {
     #[cfg(feature = "core")]
     pub(crate) async fn pending_outbox_count(&self) -> Result<u64> {
         outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
             .filter(outbox_entity::Column::DeliveredAt.is_null())
             .count(&self.db)
             .await
@@ -1021,6 +1069,7 @@ impl TrajectoryStore {
     ) -> Result<()> {
         validate_owner(owner_user_id)?;
         let Some(row) = outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
             .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(outbox_entity::Column::OutboxId.eq(outbox_id))
             .one(&self.db)
@@ -1035,9 +1084,19 @@ impl TrajectoryStore {
             .attempts
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("trajectory outbox attempts overflow"))?;
+        let outbox_key = row.outbox_id.clone();
         let mut active = row.into_active_model();
         active.attempts = Set(next_attempt);
-        active.update(&self.db).await?;
+        let changed = outbox_entity::Entity::update_many()
+            .set(active)
+            .filter(legacy_scope("trajectory_outbox"))
+            .filter(outbox_entity::Column::OutboxId.eq(outbox_key))
+            .exec(&self.db)
+            .await?;
+        anyhow::ensure!(
+            changed.rows_affected == 1,
+            "trajectory outbox changed during attempt"
+        );
         Ok(())
     }
 
@@ -1050,6 +1109,7 @@ impl TrajectoryStore {
         validate_owner(owner_user_id)?;
         validate_timestamp(delivered_at, "delivered_at")?;
         let updated = outbox_entity::Entity::update_many()
+            .filter(legacy_scope("trajectory_outbox"))
             .col_expr(
                 outbox_entity::Column::DeliveredAt,
                 Expr::value(Some(delivered_at.to_owned())),
@@ -1066,6 +1126,7 @@ impl TrajectoryStore {
             anyhow::bail!("owner-scoped trajectory outbox delivery updated multiple rows")
         }
         match outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
             .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(outbox_entity::Column::OutboxId.eq(outbox_id))
             .one(&self.db)
@@ -1082,6 +1143,7 @@ impl TrajectoryStore {
     pub async fn resolve_episode_owner(&self, episode_id: &str) -> Result<Option<String>> {
         validate_opaque(episode_id, "episode_id")?;
         Ok(episode_entity::Entity::find_by_id(episode_id)
+            .filter(legacy_scope("trajectory_episodes"))
             .one(&self.db)
             .await?
             .map(|episode| episode.owner_user_id))
@@ -1095,6 +1157,7 @@ impl TrajectoryStore {
         validate_owner(owner_user_id)?;
         validate_opaque(episode_id, "episode_id")?;
         episode_entity::Entity::find()
+            .filter(legacy_scope("trajectory_episodes"))
             .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(episode_entity::Column::EpisodeId.eq(episode_id))
             .one(&self.db)
@@ -1174,6 +1237,7 @@ impl TrajectoryStore {
         episode_id: &str,
     ) -> Result<Option<episode_entity::Model>> {
         episode_entity::Entity::find()
+            .filter(legacy_scope("trajectory_episodes"))
             .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(episode_entity::Column::EpisodeId.eq(episode_id))
             .one(&self.db)
@@ -1187,6 +1251,7 @@ impl TrajectoryStore {
         episode_id: &str,
     ) -> Result<Vec<event_entity::Model>> {
         event_entity::Entity::find()
+            .filter(legacy_scope("trajectory_events"))
             .filter(event_entity::Column::OwnerUserId.eq(owner_user_id))
             .filter(event_entity::Column::EpisodeId.eq(episode_id))
             .order_by_asc(event_entity::Column::Sequence)
@@ -1227,6 +1292,7 @@ impl TrajectoryStore {
     ) -> Result<PruneSummary> {
         let txn = self.db.begin().await?;
         let delivered = outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
             .filter(outbox_entity::Column::DeliveredAt.is_not_null())
             .all(&txn)
             .await?;
@@ -1237,7 +1303,10 @@ impl TrajectoryStore {
             before,
             "stored trajectory outbox delivered_at",
         )?;
-        let episodes = episode_entity::Entity::find().all(&txn).await?;
+        let episodes = episode_entity::Entity::find()
+            .filter(legacy_scope("trajectory_episodes"))
+            .all(&txn)
+            .await?;
         let mut summary = PruneSummary {
             delivered_outbox_rows,
             ..PruneSummary::default()
@@ -1265,6 +1334,7 @@ impl TrajectoryStore {
         loop {
             let txn = self.db.begin().await?;
             let mut query = outbox_entity::Entity::find()
+                .filter(legacy_scope("trajectory_outbox"))
                 .filter(outbox_entity::Column::DeliveredAt.is_not_null())
                 .order_by_asc(outbox_entity::Column::OutboxId)
                 .limit(u64::try_from(batch_size).context("prune batch size exceeds u64")?);
@@ -1286,6 +1356,7 @@ impl TrajectoryStore {
                     "stored trajectory outbox delivered_at",
                 )? {
                     let deleted = outbox_entity::Entity::delete_many()
+                        .filter(legacy_scope("trajectory_outbox"))
                         .filter(outbox_entity::Column::OwnerUserId.eq(&row.owner_user_id))
                         .filter(outbox_entity::Column::OutboxId.eq(&row.outbox_id))
                         .filter(outbox_entity::Column::DeliveredAt.eq(delivered_at))
@@ -1310,6 +1381,7 @@ impl TrajectoryStore {
         let mut summary = PruneSummary::default();
         loop {
             let mut query = episode_entity::Entity::find()
+                .filter(legacy_scope("trajectory_episodes"))
                 .order_by_asc(episode_entity::Column::EpisodeId)
                 .limit(u64::try_from(batch_size).context("prune batch size exceeds u64")?);
             if let Some(cursor) = cursor.as_deref() {
@@ -1336,6 +1408,7 @@ impl TrajectoryStore {
         for attempt in 0..MAX_LEDGER_MUTATION_ATTEMPTS {
             let txn = self.db.begin().await?;
             let current = episode_entity::Entity::find()
+                .filter(legacy_scope("trajectory_episodes"))
                 .filter(episode_entity::Column::OwnerUserId.eq(&candidate.owner_user_id))
                 .filter(episode_entity::Column::EpisodeId.eq(&candidate.episode_id))
                 .one(&txn)
@@ -1456,11 +1529,13 @@ async fn delete_prunable_episode_in_tx(
     serialize_prefix_prune(txn, &episode.owner_user_id, &episode.episode_id).await?;
     delete_prefixes_owned_only_by_episode(txn, &episode.owner_user_id, &episode.episode_id).await?;
     let deleted_requests = request_entity::Entity::delete_many()
+        .filter(legacy_scope("trajectory_requests"))
         .filter(request_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
         .filter(request_entity::Column::EpisodeId.eq(&episode.episode_id))
         .exec(txn)
         .await?;
     let deleted_events = event_entity::Entity::delete_many()
+        .filter(legacy_scope("trajectory_events"))
         .filter(event_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
         .filter(event_entity::Column::EpisodeId.eq(&episode.episode_id))
         .exec(txn)
@@ -1472,6 +1547,7 @@ async fn delete_prunable_episode_in_tx(
     }
 
     let mut delete_episode = episode_entity::Entity::delete_many()
+        .filter(legacy_scope("trajectory_episodes"))
         .filter(episode_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
         .filter(episode_entity::Column::EpisodeId.eq(&episode.episode_id))
         .filter(episode_entity::Column::NextSequence.eq(episode.next_sequence))
@@ -1496,6 +1572,7 @@ fn episode_prefix_digests(owner_user_id: &str, episode_id: &str) -> SelectStatem
     Query::select()
         .column(request_entity::Column::FullInputDigest)
         .from(request_entity::Entity)
+        .cond_where(legacy_scope("trajectory_requests"))
         .and_where(Expr::col(request_entity::Column::OwnerUserId).eq(owner_user_id.to_owned()))
         .and_where(Expr::col(request_entity::Column::EpisodeId).eq(episode_id.to_owned()))
         .to_owned()
@@ -1507,6 +1584,7 @@ async fn serialize_prefix_prune(
     episode_id: &str,
 ) -> Result<()> {
     prefix_entity::Entity::update_many()
+        .filter(legacy_scope("trajectory_prefix_index"))
         .col_expr(
             prefix_entity::Column::Ambiguous,
             Expr::col(prefix_entity::Column::Ambiguous).into(),
@@ -1529,6 +1607,7 @@ async fn delete_prefixes_owned_only_by_episode(
     let other_episode_request = Query::select()
         .expr(Expr::value(1))
         .from(request_entity::Entity)
+        .cond_where(legacy_scope("trajectory_requests"))
         .and_where(
             Expr::col((request_entity::Entity, request_entity::Column::OwnerUserId))
                 .equals((prefix_entity::Entity, prefix_entity::Column::OwnerUserId)),
@@ -1546,6 +1625,7 @@ async fn delete_prefixes_owned_only_by_episode(
         .and_where(Expr::col(request_entity::Column::EpisodeId).ne(episode_id.to_owned()))
         .to_owned();
     prefix_entity::Entity::delete_many()
+        .filter(legacy_scope("trajectory_prefix_index"))
         .filter(prefix_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(
             Expr::col(prefix_entity::Column::FullInputDigest)
@@ -1580,6 +1660,7 @@ async fn prunable_episode_counts(
     }
 
     let requests = request_entity::Entity::find()
+        .filter(legacy_scope("trajectory_requests"))
         .filter(request_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
         .filter(request_entity::Column::EpisodeId.eq(&episode.episode_id))
         .all(txn)
@@ -1599,6 +1680,7 @@ async fn prunable_episode_counts(
         .collect::<Vec<_>>();
     if !outbox_ids.is_empty()
         && outbox_entity::Entity::find()
+            .filter(legacy_scope("trajectory_outbox"))
             .filter(outbox_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
             .filter(outbox_entity::Column::OutboxId.is_in(outbox_ids))
             .filter(outbox_entity::Column::DeliveredAt.is_null())
@@ -1610,6 +1692,7 @@ async fn prunable_episode_counts(
     }
     let request_rows = u64::try_from(requests.len()).context("too many trajectory requests")?;
     let event_rows = event_entity::Entity::find()
+        .filter(legacy_scope("trajectory_events"))
         .filter(event_entity::Column::OwnerUserId.eq(&episode.owner_user_id))
         .filter(event_entity::Column::EpisodeId.eq(&episode.episode_id))
         .count(txn)
@@ -1663,6 +1746,7 @@ async fn begin_request_in_tx(
 ) -> Result<()> {
     validate_native_parent(txn, owner_user_id, input.native_parent_id.as_deref()).await?;
     if let Some(existing) = request_entity::Entity::find()
+        .filter(legacy_scope("trajectory_requests"))
         .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(request_entity::Column::RequestId.eq(request_id))
         .one(txn)
@@ -1679,6 +1763,7 @@ async fn begin_request_in_tx(
         )
     }
     if request_entity::Entity::find_by_id(request_id)
+        .filter(legacy_scope("trajectory_requests"))
         .one(txn)
         .await?
         .is_some()
@@ -1687,6 +1772,7 @@ async fn begin_request_in_tx(
     }
 
     let episode = episode_entity::Entity::find()
+        .filter(legacy_scope("trajectory_episodes"))
         .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(episode_entity::Column::EpisodeId.eq(&input.episode.episode_id))
         .one(txn)
@@ -1706,6 +1792,7 @@ async fn begin_request_in_tx(
         }
         None => {
             if episode_entity::Entity::find_by_id(&input.episode.episode_id)
+                .filter(legacy_scope("trajectory_episodes"))
                 .one(txn)
                 .await?
                 .is_some()
@@ -1718,7 +1805,7 @@ async fn begin_request_in_tx(
             validate_new_episode_start(&input)?;
             validate_candidate_history(&[], &input.event)?;
             append_event(txn, &input.event).await?;
-            episode_entity::ActiveModel {
+            episode_entity::Entity::insert(episode_entity::ActiveModel {
                 episode_id: Set(input.episode.episode_id.clone()),
                 owner_user_id: Set(owner_user_id.to_owned()),
                 correlation_digest: Set(input.episode.correlation_digest.as_str().to_owned()),
@@ -1730,8 +1817,8 @@ async fn begin_request_in_tx(
                 last_captured_at: Set(input.event.captured_at.clone()),
                 closed_at: Set(None),
                 latest_request_id: Set(input.event.request_id.clone()),
-            }
-            .insert(txn)
+            })
+            .exec_without_returning(txn)
             .await?;
         }
     }
@@ -1746,7 +1833,7 @@ async fn insert_request(
 ) -> Result<()> {
     let full_input_digest = input.full_input_digest.as_str().to_owned();
     let episode_id = input.episode.episode_id;
-    request_entity::ActiveModel {
+    request_entity::Entity::insert(request_entity::ActiveModel {
         request_id: Set(request_id.to_owned()),
         owner_user_id: Set(owner_user_id.to_owned()),
         episode_id: Set(episode_id.clone()),
@@ -1757,8 +1844,8 @@ async fn insert_request(
         native_parent_id: Set(input.native_parent_id),
         protocol: Set(input.protocol),
         status: Set(request_status_name(RequestStatus::Started).into()),
-    }
-    .insert(txn)
+    })
+    .exec_without_returning(txn)
     .await?;
     record_prefix_episode(txn, owner_user_id, &full_input_digest, &episode_id).await?;
     Ok(())
@@ -1784,7 +1871,18 @@ async fn record_prefix_episode(
         Ok(_) | Err(DbErr::RecordNotInserted) => {}
         Err(error) => return Err(error.into()),
     }
+    let winner = prefix_entity::Entity::find()
+        .filter(legacy_scope("trajectory_prefix_index"))
+        .filter(prefix_entity::Column::OwnerUserId.eq(owner_user_id))
+        .filter(prefix_entity::Column::FullInputDigest.eq(full_input_digest))
+        .one(txn)
+        .await?;
+    anyhow::ensure!(
+        winner.is_some(),
+        "legacy prefix collides with another storage namespace"
+    );
     prefix_entity::Entity::update_many()
+        .filter(legacy_scope("trajectory_prefix_index"))
         .col_expr(prefix_entity::Column::Ambiguous, Expr::value(true))
         .filter(prefix_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(prefix_entity::Column::FullInputDigest.eq(full_input_digest))
@@ -1846,6 +1944,7 @@ async fn load_prefix_evidence(
     requested_digests: std::collections::BTreeSet<String>,
 ) -> Result<Vec<prefix_entity::Model>> {
     Ok(prefix_entity::Entity::find()
+        .filter(legacy_scope("trajectory_prefix_index"))
         .filter(prefix_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(prefix_entity::Column::FullInputDigest.is_in(requested_digests))
         .all(txn)
@@ -1858,6 +1957,7 @@ async fn native_parent_request(
     native_parent_id: &str,
 ) -> Result<Option<request_entity::Model>> {
     request_entity::Entity::find()
+        .filter(legacy_scope("trajectory_requests"))
         .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(request_entity::Column::RequestId.eq(native_parent_id))
         .one(txn)
@@ -2460,6 +2560,7 @@ async fn validate_stored_native_parent(
         return Ok(());
     };
     let parent = request_entity::Entity::find_by_id(native_parent_id)
+        .filter(legacy_scope("trajectory_requests"))
         .one(txn)
         .await?
         .ok_or_else(|| anyhow::anyhow!("trajectory retry has a missing stored native parent"))?;
@@ -2520,6 +2621,7 @@ async fn reserve_episode_head(
         .checked_add(1)
         .ok_or_else(|| anyhow::anyhow!("trajectory sequence overflow"))?;
     let result = episode_entity::Entity::update_many()
+        .filter(legacy_scope("trajectory_episodes"))
         .col_expr(episode_entity::Column::NextSequence, Expr::value(next))
         .col_expr(
             episode_entity::Column::LastCapturedAt,
@@ -2616,6 +2718,7 @@ async fn events_for_episode_in_tx(
     episode_id: &str,
 ) -> Result<Vec<TrajectoryEvent>> {
     let rows = event_entity::Entity::find()
+        .filter(legacy_scope("trajectory_events"))
         .filter(event_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(event_entity::Column::EpisodeId.eq(episode_id))
         .order_by_asc(event_entity::Column::Sequence)
@@ -2646,6 +2749,7 @@ async fn owned_episode(
     episode_id: &str,
 ) -> Result<episode_entity::Model> {
     episode_entity::Entity::find()
+        .filter(legacy_scope("trajectory_episodes"))
         .filter(episode_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(episode_entity::Column::EpisodeId.eq(episode_id))
         .one(txn)
@@ -2655,6 +2759,7 @@ async fn owned_episode(
 
 async fn append_event(txn: &DatabaseTransaction, event: &TrajectoryEvent) -> Result<()> {
     if event_entity::Entity::find()
+        .filter(legacy_scope("trajectory_events"))
         .filter(event_entity::Column::OwnerUserId.eq(&event.owner_user_id))
         .filter(event_entity::Column::EventId.eq(&event.event_id))
         .one(txn)
@@ -2664,13 +2769,14 @@ async fn append_event(txn: &DatabaseTransaction, event: &TrajectoryEvent) -> Res
         anyhow::bail!("trajectory event '{}' already exists", event.event_id)
     }
     if event_entity::Entity::find_by_id(&event.event_id)
+        .filter(legacy_scope("trajectory_events"))
         .one(txn)
         .await?
         .is_some()
     {
         anyhow::bail!("trajectory event id is already owned by another user")
     }
-    event_entity::ActiveModel {
+    event_entity::Entity::insert(event_entity::ActiveModel {
         event_id: Set(event.event_id.clone()),
         owner_user_id: Set(event.owner_user_id.clone()),
         episode_id: Set(event.episode_id.clone()),
@@ -2682,8 +2788,8 @@ async fn append_event(txn: &DatabaseTransaction, event: &TrajectoryEvent) -> Res
         event_json: Set(serde_json::to_string(event)?),
         content_digest: Set(event.content_digest.clone()),
         captured_at: Set(event.captured_at.clone()),
-    }
-    .insert(txn)
+    })
+    .exec_without_returning(txn)
     .await
     .context("appending immutable trajectory event")?;
     Ok(())
@@ -2694,6 +2800,7 @@ async fn event_matches_existing(
     event: &TrajectoryEvent,
 ) -> Result<bool> {
     let existing = event_entity::Entity::find()
+        .filter(legacy_scope("trajectory_events"))
         .filter(event_entity::Column::OwnerUserId.eq(&event.owner_user_id))
         .filter(event_entity::Column::EventId.eq(&event.event_id))
         .one(txn)
@@ -2709,6 +2816,7 @@ async fn event_matches_existing(
         )
     }
     if event_entity::Entity::find_by_id(&event.event_id)
+        .filter(legacy_scope("trajectory_events"))
         .one(txn)
         .await?
         .is_some()
@@ -2788,6 +2896,7 @@ async fn validate_event_request(
         return Ok(());
     };
     let request = request_entity::Entity::find()
+        .filter(legacy_scope("trajectory_requests"))
         .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(request_entity::Column::RequestId.eq(request_id))
         .one(txn)
@@ -2808,6 +2917,7 @@ async fn validate_native_parent(
         return Ok(());
     };
     if request_entity::Entity::find()
+        .filter(legacy_scope("trajectory_requests"))
         .filter(request_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(request_entity::Column::RequestId.eq(native_parent_id))
         .one(txn)
@@ -2817,6 +2927,7 @@ async fn validate_native_parent(
         return Ok(());
     }
     if request_entity::Entity::find_by_id(native_parent_id)
+        .filter(legacy_scope("trajectory_requests"))
         .one(txn)
         .await?
         .is_some()
@@ -2832,6 +2943,7 @@ async fn update_episode_head(
     event: &TrajectoryEvent,
     latest_request_id: Option<String>,
 ) -> Result<()> {
+    let episode_key = episode.episode_id.clone();
     let mut active = episode.into_active_model();
     active.next_sequence = Set(i64::try_from(
         event
@@ -2844,7 +2956,16 @@ async fn update_episode_head(
     if latest_request_id.is_some() {
         active.latest_request_id = Set(latest_request_id);
     }
-    active.update(txn).await?;
+    let changed = episode_entity::Entity::update_many()
+        .set(active)
+        .filter(legacy_scope("trajectory_episodes"))
+        .filter(episode_entity::Column::EpisodeId.eq(episode_key))
+        .exec(txn)
+        .await?;
+    anyhow::ensure!(
+        changed.rows_affected == 1,
+        "trajectory episode changed during update"
+    );
     Ok(())
 }
 
@@ -2966,7 +3087,7 @@ async fn insert_outbox(
 ) -> Result<()> {
     let payload_json = serde_json::to_string(&outbox.payload)?;
     let payload_digest = canonical_digest(&outbox.payload)?;
-    outbox_entity::ActiveModel {
+    outbox_entity::Entity::insert(outbox_entity::ActiveModel {
         outbox_id: Set(outbox.outbox_id),
         owner_user_id: Set(owner_user_id.to_owned()),
         topic: Set(outbox.topic),
@@ -2975,8 +3096,8 @@ async fn insert_outbox(
         attempts: Set(0),
         created_at: Set(outbox.created_at),
         delivered_at: Set(None),
-    }
-    .insert(txn)
+    })
+    .exec_without_returning(txn)
     .await
     .context("inserting trajectory outbox item")?;
     Ok(())
@@ -3028,6 +3149,7 @@ async fn owned_event(
     event_id: &str,
 ) -> Result<TrajectoryEvent> {
     let row = event_entity::Entity::find()
+        .filter(legacy_scope("trajectory_events"))
         .filter(event_entity::Column::OwnerUserId.eq(owner_user_id))
         .filter(event_entity::Column::EventId.eq(event_id))
         .one(txn)
@@ -3049,6 +3171,7 @@ async fn settlement_outbox_matches(
             if stored_outbox_id == supplied_outbox.outbox_id =>
         {
             let row = outbox_entity::Entity::find()
+                .filter(legacy_scope("trajectory_outbox"))
                 .filter(outbox_entity::Column::OwnerUserId.eq(owner_user_id))
                 .filter(outbox_entity::Column::OutboxId.eq(stored_outbox_id))
                 .one(txn)
@@ -5607,7 +5730,7 @@ mod tests {
         Ok(outbox_id)
     }
 
-    fn begin(episode_id: &str, request_id: &str) -> BeginRequest {
+    pub(super) fn begin(episode_id: &str, request_id: &str) -> BeginRequest {
         let mut start = event(
             &format!("event-start-{request_id}"),
             episode_id,
@@ -5776,7 +5899,10 @@ mod tests {
         event
     }
 
-    fn guarded_route_input(route_event_id: &str, guard_event_id: &str) -> GuardedRouteInput {
+    pub(super) fn guarded_route_input(
+        route_event_id: &str,
+        guard_event_id: &str,
+    ) -> GuardedRouteInput {
         GuardedRouteInput {
             route_event_id: route_event_id.into(),
             guard_event_id: guard_event_id.into(),
@@ -5811,7 +5937,7 @@ mod tests {
         }
     }
 
-    fn correlate_input(
+    pub(super) fn correlate_input(
         request_id: &str,
         episode_id: &str,
         event_id: &str,
@@ -5855,7 +5981,7 @@ mod tests {
         Ok(start)
     }
 
-    fn keyed_digest(key_id: &str, digit: &str) -> KeyedDigest {
+    pub(super) fn keyed_digest(key_id: &str, digit: &str) -> KeyedDigest {
         KeyedDigest::parse(format!("hmac-sha256:{key_id}:{}", digit.repeat(64)))
             .unwrap_or_else(|_| unreachable!())
     }

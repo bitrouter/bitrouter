@@ -20,6 +20,9 @@ mod resources;
 mod store;
 #[cfg(test)]
 mod tests;
+#[cfg(feature = "core")]
+pub(crate) mod trajectory;
+pub(super) mod trajectory_profile;
 mod transaction;
 
 use std::sync::{
@@ -394,7 +397,10 @@ impl Service {
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::Credential(_) => None,
             #[cfg(feature = "core")]
-            Job::Eval(_) | Job::Settlement(_) => None,
+            Job::Eval(_)
+            | Job::Settlement(_)
+            | Job::TrajectoryBegin(_)
+            | Job::TrajectoryTerminal(_) => None,
         };
         let accepting = self
             .accepting

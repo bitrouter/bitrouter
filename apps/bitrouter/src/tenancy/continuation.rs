@@ -157,6 +157,8 @@ pub(super) async fn initialize(
     let crypto = resources.continuation_crypto();
     let transaction = control.begin(db).await?;
     let result = async {
+        super::trajectory_profile::validate_startup(&transaction, &initial.installation, control)
+            .await?;
         verify_epoch(&transaction, &initial.installation, crypto.as_ref()).await?;
         resources.bootstrap(&transaction, import).await?;
         for (tenant, revision) in &initial.active_configurations {
@@ -164,8 +166,10 @@ pub(super) async fn initialize(
                 .await
                 .map_err(|_| anyhow::anyhow!("active tenant configuration unavailable"))?
                 .ok_or_else(|| anyhow::anyhow!("active tenant configuration unavailable"))?;
-            resources.validate_compiled(&stored).map_err(|_| {
-                anyhow::anyhow!("active tenant configuration authentication failed")
+            resources.validate_executable(&stored).map_err(|_| {
+                anyhow::anyhow!(
+                    "active tenant configuration authentication or qualification failed"
+                )
             })?;
             super::configuration::validate_profile(&stored.revision.document).map_err(|_| {
                 anyhow::anyhow!("active tenant configuration requires unavailable features")

@@ -58,6 +58,19 @@ pub(super) fn validate(envelope: Envelope) -> Result<ValidatedEnvelope> {
     retained::decode(envelope)
 }
 
+impl ValidatedEnvelope {
+    /// Create/activate/restore qualify every exposed route. Integrity-only
+    /// reads keep the same authenticated decode without enabling execution.
+    pub(super) fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
+        for route in self.routes.values() {
+            if let Some(policy) = &route.policy {
+                policy.require_capabilities()?;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl RetainedExecutionRevision {
     pub(super) fn new(
         installation: InstallationId,
@@ -253,6 +266,13 @@ pub(crate) struct RetainedPolicy {
 }
 
 impl RetainedPolicy {
+    fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
+        let config = self.configuration()?;
+        crate::tenancy::trajectory_profile::guarded(&config, self.document(), self.name())
+            .map(|_| ())
+            .map_err(|_| ErrorCode::CapabilityMismatch)
+    }
+
     pub(crate) fn reference(&self) -> &ResourceRef {
         &self.reference
     }
@@ -274,6 +294,15 @@ impl RetainedPolicy {
 }
 
 impl RetainedRoute {
+    /// Admission checks only the literal selected route, before acquiring a
+    /// lease. Unused policy documents do not confer or require capabilities.
+    pub(crate) fn require_capabilities(&self) -> std::result::Result<(), ErrorCode> {
+        match self.policy() {
+            Some(policy) => policy.require_capabilities(),
+            None => Ok(()),
+        }
+    }
+
     /// Configuration defaults enter canonical fields before routing, accounting
     /// or rendering. Explicit request values win; Decisions has no generation
     /// fields. The compiler-v1 retained bytes remain compatible on disk.

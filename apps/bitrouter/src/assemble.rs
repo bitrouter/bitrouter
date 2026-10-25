@@ -1142,7 +1142,7 @@ async fn assemble_app(
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
     #[cfg(feature = "core")]
     let mut trajectory_outbox_publisher = None;
-    let trajectory_services = if config.trajectory.enabled {
+    let trajectory_services = if config.trajectory.enabled && !config.tenancy.enabled {
         let trajectory_store = TrajectoryStore::new(db.clone());
         let retention = chrono::TimeDelta::try_days(i64::from(config.trajectory.retention_days))
             .ok_or_else(|| anyhow::anyhow!("trajectory retention_days exceeds time range"))?;

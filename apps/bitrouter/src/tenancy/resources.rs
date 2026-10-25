@@ -84,7 +84,22 @@ impl Resources {
             .map(|key| super::continuation::Crypto::new(self.installation.clone(), key))
     }
 
-    /// Authenticate a retained configuration before activation or startup.
+    #[cfg(feature = "core")]
+    pub(in crate::tenancy) fn trajectory_crypto(
+        &self,
+        installation: &InstallationId,
+    ) -> Result<crate::runtime_crypto::trajectory::TrajectoryCrypto> {
+        ensure!(
+            &self.installation == installation,
+            "trajectory installation mismatch"
+        );
+        self.key
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("explicit trajectory wrapping key unavailable"))?
+            .trajectory()
+    }
+
+    /// Authenticate a retained configuration, including integrity-only reads.
     /// This reads no mutable catalog or global configuration. Invalid retained
     /// bytes, missing keys and unsupported formats fence authority.
     pub(crate) fn validate_compiled(
@@ -94,6 +109,17 @@ impl Resources {
         validation::compiled(self, stored)
             .map(|_| ())
             .map_err(|_| ErrorCode::AuthorityUnavailable)
+    }
+
+    /// Activation and startup must also qualify the authenticated routes for
+    /// this binary. A missing capability is not retained-data corruption.
+    pub(crate) fn validate_executable(
+        &self,
+        stored: &super::configuration_store::StoredConfiguration,
+    ) -> std::result::Result<(), ErrorCode> {
+        validation::compiled(self, stored)
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?
+            .require_capabilities()
     }
 
     /// Open the same authenticated typed decode used by retained-data checks.
@@ -435,13 +461,14 @@ impl Resources {
             // output before the caller can persist it. Consume the envelope
             // after serialization: validation does not change compiler-v1 bytes
             // or the authenticated binding, and needs no extra envelope clone.
-            execution::validate(envelope).map_err(|error| {
+            let validated = execution::validate(envelope).map_err(|error| {
                 if error.is::<ExecutionCapacityExceeded>() {
                     ErrorCode::CapacityExceeded
                 } else {
                     ErrorCode::InvalidRequest
                 }
             })?;
+            validated.require_capabilities()?;
             let key = self.key.as_ref().ok_or(ErrorCode::AuthorityUnavailable)?;
             let sealed = key
                 .seal_bound("configuration", &binding, &bytes)

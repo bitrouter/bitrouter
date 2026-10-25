@@ -207,26 +207,15 @@ pub(crate) fn build_from_evidence(
     captured_at: String,
     status: RequestStatus,
 ) -> Result<Settlement> {
-    let event_seed = canonical_digest(&(
+    let terminal = build_terminal_from_evidence(
         owner_user_id,
-        request.episode_id.as_str(),
-        request.request_id.as_str(),
+        request,
         sequence,
-        "request-settled",
-    ))?;
-    let mut event = TrajectoryEvent {
-        schema_version: TRAJECTORY_SCHEMA_VERSION,
-        event_id: format!("trajectory-settlement:{}", digest_hex(&event_seed)?),
-        owner_user_id: owner_user_id.to_owned(),
-        episode_id: request.episode_id.clone(),
-        request_id: Some(request.request_id.clone()),
-        sequence,
-        kind: TrajectoryEventKind::RequestSettled,
         evidence,
-        captured_at: captured_at.clone(),
-        content_digest: String::new(),
-    };
-    event.content_digest = event.semantic_digest()?;
+        captured_at.clone(),
+        status.clone(),
+    )?;
+    let event = terminal.event;
     let mut candidate = events.to_vec();
     candidate.push(event.clone());
     let envelope = build_operational_evaluation(&candidate)?;
@@ -253,6 +242,42 @@ pub(crate) fn build_from_evidence(
         event,
         status,
         outbox: Some(outbox),
+    })
+}
+
+/// Operational-only terminal state. Learning Off does not construct an Eval envelope.
+pub(crate) fn build_terminal_from_evidence(
+    owner_user_id: &str,
+    request: &super::types::StoredRequest,
+    sequence: u64,
+    evidence: TrajectoryEvidence,
+    captured_at: String,
+    status: RequestStatus,
+) -> Result<Settlement> {
+    let event_seed = canonical_digest(&(
+        owner_user_id,
+        request.episode_id.as_str(),
+        request.request_id.as_str(),
+        sequence,
+        "request-settled",
+    ))?;
+    let mut event = TrajectoryEvent {
+        schema_version: TRAJECTORY_SCHEMA_VERSION,
+        event_id: format!("trajectory-settlement:{}", digest_hex(&event_seed)?),
+        owner_user_id: owner_user_id.to_owned(),
+        episode_id: request.episode_id.clone(),
+        request_id: Some(request.request_id.clone()),
+        sequence,
+        kind: TrajectoryEventKind::RequestSettled,
+        evidence,
+        captured_at,
+        content_digest: String::new(),
+    };
+    event.content_digest = event.semantic_digest()?;
+    Ok(Settlement {
+        event,
+        status,
+        outbox: None,
     })
 }
 

@@ -35,47 +35,54 @@ impl EvalStore {
     ) -> OwnedResult<PutSubjectReport> {
         async {
             let mut budget = self.owned_budget(check)?;
-            validate_subject(subject)
-                .map_err(|_| OwnedError::Rejected(ErrorCode::InvalidRequest))?;
-            budget.charge(1, io::json_size(subject, io::MAX_BYTES)?)?;
-            let row = io::one(
-                tx,
-                self.subjects().filter(
-                    subject_entity::Column::EvalId
-                        .eq(self.key(KeyDomain::EvalSubject, &subject.eval_id)?),
-                ),
-                &mut budget,
-            )
-            .await?;
-            let outcome = if let Some(row) = row {
-                if self.decode_subject(&row)? != *subject {
-                    return Err(OwnedError::Rejected(ErrorCode::InvalidRequest).into());
-                }
-                SubjectInsertOutcome::Duplicate
-            } else {
-                let report = PutSubjectReport {
-                    eval_id: subject.eval_id.clone(),
-                    outcome: SubjectInsertOutcome::Inserted,
-                };
-                budget.response(&report)?;
-                let outcome = self
-                    .insert_subject_in(tx, subject, &self.owner("local")?, &mut budget)
-                    .await?;
-                ensure!(
-                    outcome == SubjectInsertOutcome::Inserted,
-                    "unexpected concurrent subject insertion"
-                );
-                return Ok(report);
-            };
-            let report = PutSubjectReport {
-                eval_id: subject.eval_id.clone(),
-                outcome,
-            };
-            budget.response(&report)?;
-            Ok(report)
+            self.put_with_budget(tx, subject, &mut budget).await
         }
         .await
         .map_err(OwnedError::classify)
+    }
+    pub(super) async fn put_with_budget(
+        &self,
+        tx: &DatabaseTransaction,
+        subject: &EvalSubject,
+        budget: &mut Budget<'_>,
+    ) -> Result<PutSubjectReport> {
+        validate_subject(subject).map_err(|_| OwnedError::Rejected(ErrorCode::InvalidRequest))?;
+        budget.charge(1, io::json_size(subject, io::MAX_BYTES)?)?;
+        let row = io::one(
+            tx,
+            self.subjects().filter(
+                subject_entity::Column::EvalId
+                    .eq(self.key(KeyDomain::EvalSubject, &subject.eval_id)?),
+            ),
+            budget,
+        )
+        .await?;
+        let outcome = if let Some(row) = row {
+            if self.decode_subject(&row)? != *subject {
+                return Err(OwnedError::Rejected(ErrorCode::InvalidRequest).into());
+            }
+            SubjectInsertOutcome::Duplicate
+        } else {
+            let report = PutSubjectReport {
+                eval_id: subject.eval_id.clone(),
+                outcome: SubjectInsertOutcome::Inserted,
+            };
+            budget.response(&report)?;
+            let outcome = self
+                .insert_subject_in(tx, subject, &self.owner("local")?, budget)
+                .await?;
+            ensure!(
+                outcome == SubjectInsertOutcome::Inserted,
+                "unexpected concurrent subject insertion"
+            );
+            return Ok(report);
+        };
+        let report = PutSubjectReport {
+            eval_id: subject.eval_id.clone(),
+            outcome,
+        };
+        budget.response(&report)?;
+        Ok(report)
     }
 
     pub(crate) async fn submit_owned_in(
@@ -90,121 +97,133 @@ impl EvalStore {
                 || self.provenance.creator().map(|id| id.as_str())
                     != Some(result.evaluator.authority_id.as_str())
                 || !result.hard_violations.is_empty()
+                // An operator may provision this literal principal name. Its
+                // spelling must not mint the private built-in evaluator proof.
+                || (result.evaluator.authority_id
+                    == crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_AUTHORITY_ID
+                    && result.evaluator.evaluator_id
+                        == crate::trajectory::evaluation::TRAJECTORY_EVALUATOR_ID)
             {
                 return Err(OwnedError::Rejected(ErrorCode::Forbidden).into());
             }
-            validate_result(result).map_err(|_| OwnedError::Rejected(ErrorCode::InvalidRequest))?;
-            budget.charge(1, io::json_size(result, io::MAX_BYTES)?)?;
-            let parent = io::one(
-                tx,
-                self.subjects().filter(
-                    subject_entity::Column::EvalId
-                        .eq(self.key(KeyDomain::EvalSubject, &result.eval_id)?),
-                ),
-                &mut budget,
-            )
-            .await?
-            .ok_or(OwnedError::Rejected(ErrorCode::NotFound))?;
-            let subject = self.decode_subject(&parent)?;
-            validate_result_for_subject(result, &subject)
-                .map_err(|_| OwnedError::Rejected(ErrorCode::InvalidRequest))?;
-            let candidate = io::one(
-                tx,
-                self.results()
-                    .filter(result_entity::Column::OwnerUserId.eq(self.owner("local")?))
-                    .filter(
-                        result_entity::Column::IdempotencyKey
-                            .eq(self.key(KeyDomain::EvalIdempotency, &result.idempotency_key)?),
-                    ),
-                &mut budget,
-            )
-            .await?;
-            if let Some(candidate) = candidate {
-                let value = self.checked_result(tx, &candidate, &mut budget).await?;
-                if value.result != *result {
-                    return Err(OwnedError::Rejected(ErrorCode::InvalidRequest).into());
-                }
-                let latest = self
-                    .latest_owned_in(tx, &value.result_id, &mut budget)
-                    .await?;
-                let response = AdmissionOutcome {
-                    result_id: value.result_id,
-                    status: latest.status,
-                    reason: latest.reason,
-                    duplicate: true,
-                };
-                budget.response(&response)?;
-                return Ok(response);
-            }
-            let records = self
-                .records_owned_in(
-                    tx,
-                    self.results()
-                        .filter(result_entity::Column::EvalId.eq(&parent.eval_id)),
-                    &mut budget,
-                )
-                .await?;
-            let admitted = records
-                .iter()
-                .filter(|record| record.latest.status == AdmissionStatus::Admitted)
-                .map(|record| &record.result)
-                .collect::<Vec<_>>();
-            let decision = crate::core::eval::admission::decide(result, subject.holdout, &admitted);
-            let result_id = crate::storage::evaluation::result_digest(result)?;
-            let response = AdmissionOutcome {
-                result_id: result_id.clone(),
-                status: decision.status,
-                reason: decision.reason.into(),
-                duplicate: false,
-            };
-            budget.response(&response)?;
-            // Bound the complete append batch before any INSERT, including fixed
-            // timestamp/metadata fields. Actual transfers are charged separately.
-            budget.charge(decision.disputes.len() + 1, 0)?;
-            for (id, reason) in decision
-                .disputes
-                .iter()
-                .map(|(id, reason)| (id.as_str(), *reason))
-                .chain(std::iter::once((result_id.as_str(), decision.reason)))
-            {
-                budget.charge(
-                    1,
-                    id.len() + reason.len() + result.evaluator.authority_id.len() + 512,
-                )?;
-            }
-            budget.check()?;
-            let inserted = self
-                .insert_result_in(tx, result, &self.owner("local")?, &mut budget)
-                .await?;
-            ensure!(
-                matches!(inserted, ResultInsertOutcome::Inserted { .. }),
-                "unexpected concurrent result insertion"
-            );
-            for (id, reason) in decision.disputes {
-                self.append_admission_in(
-                    tx,
-                    &id,
-                    AdmissionStatus::Disputed,
-                    reason,
-                    &result.evaluator.authority_id,
-                    &mut budget,
-                )
-                .await?;
-            }
-            self.append_admission_in(
-                tx,
-                &result_id,
-                decision.status,
-                decision.reason,
-                &result.evaluator.authority_id,
-                &mut budget,
-            )
-            .await?;
-            budget.check()?;
-            Ok(response)
+            self.submit_with_budget(tx, result, &mut budget).await
         }
         .await
         .map_err(OwnedError::classify)
+    }
+    pub(super) async fn submit_with_budget(
+        &self,
+        tx: &DatabaseTransaction,
+        result: &EvaluationResult,
+        budget: &mut Budget<'_>,
+    ) -> Result<AdmissionOutcome> {
+        validate_result(result).map_err(|_| OwnedError::Rejected(ErrorCode::InvalidRequest))?;
+        budget.charge(1, io::json_size(result, io::MAX_BYTES)?)?;
+        let parent = io::one(
+            tx,
+            self.subjects().filter(
+                subject_entity::Column::EvalId
+                    .eq(self.key(KeyDomain::EvalSubject, &result.eval_id)?),
+            ),
+            budget,
+        )
+        .await?
+        .ok_or(OwnedError::Rejected(ErrorCode::NotFound))?;
+        let subject = self.decode_subject(&parent)?;
+        validate_result_for_subject(result, &subject)
+            .map_err(|_| OwnedError::Rejected(ErrorCode::InvalidRequest))?;
+        let candidate = io::one(
+            tx,
+            self.results()
+                .filter(result_entity::Column::OwnerUserId.eq(self.owner("local")?))
+                .filter(
+                    result_entity::Column::IdempotencyKey
+                        .eq(self.key(KeyDomain::EvalIdempotency, &result.idempotency_key)?),
+                ),
+            budget,
+        )
+        .await?;
+        if let Some(candidate) = candidate {
+            let value = self.checked_result(tx, &candidate, budget).await?;
+            if value.result != *result {
+                return Err(OwnedError::Rejected(ErrorCode::InvalidRequest).into());
+            }
+            let latest = self.latest_owned_in(tx, &value.result_id, budget).await?;
+            let response = AdmissionOutcome {
+                result_id: value.result_id,
+                status: latest.status,
+                reason: latest.reason,
+                duplicate: true,
+            };
+            budget.response(&response)?;
+            return Ok(response);
+        }
+        let records = self
+            .records_owned_in(
+                tx,
+                self.results()
+                    .filter(result_entity::Column::EvalId.eq(&parent.eval_id)),
+                budget,
+            )
+            .await?;
+        let admitted = records
+            .iter()
+            .filter(|record| record.latest.status == AdmissionStatus::Admitted)
+            .map(|record| &record.result)
+            .collect::<Vec<_>>();
+        let decision = crate::core::eval::admission::decide(result, subject.holdout, &admitted);
+        let result_id = crate::storage::evaluation::result_digest(result)?;
+        let response = AdmissionOutcome {
+            result_id: result_id.clone(),
+            status: decision.status,
+            reason: decision.reason.into(),
+            duplicate: false,
+        };
+        budget.response(&response)?;
+        // Bound the complete append batch before any INSERT, including fixed
+        // timestamp/metadata fields. Actual transfers are charged separately.
+        budget.charge(decision.disputes.len() + 1, 0)?;
+        for (id, reason) in decision
+            .disputes
+            .iter()
+            .map(|(id, reason)| (id.as_str(), *reason))
+            .chain(std::iter::once((result_id.as_str(), decision.reason)))
+        {
+            budget.charge(
+                1,
+                id.len() + reason.len() + result.evaluator.authority_id.len() + 512,
+            )?;
+        }
+        budget.check()?;
+        let inserted = self
+            .insert_result_in(tx, result, &self.owner("local")?, budget)
+            .await?;
+        ensure!(
+            matches!(inserted, ResultInsertOutcome::Inserted { .. }),
+            "unexpected concurrent result insertion"
+        );
+        for (id, reason) in decision.disputes {
+            self.append_admission_in(
+                tx,
+                &id,
+                AdmissionStatus::Disputed,
+                reason,
+                &result.evaluator.authority_id,
+                budget,
+            )
+            .await?;
+        }
+        self.append_admission_in(
+            tx,
+            &result_id,
+            decision.status,
+            decision.reason,
+            &result.evaluator.authority_id,
+            budget,
+        )
+        .await?;
+        budget.check()?;
+        Ok(response)
     }
 
     async fn latest_owned_in(

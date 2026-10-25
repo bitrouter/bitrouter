@@ -17,3 +17,6 @@ pub mod session_identity;
 pub mod capture;
 
 pub mod skills;
+
+#[cfg(feature = "core")]
+pub(crate) mod operation_budget;

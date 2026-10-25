@@ -221,6 +221,76 @@ impl Worker {
                     }
                 }
                 #[cfg(feature = "core")]
+                Job::TrajectoryBegin(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_trajectory_begin(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    if result.is_err() {
+                        if matches!(
+                            self.proof.disposition(),
+                            Disposition::NoTransaction | Disposition::RolledBack
+                        ) {
+                            message.observation.no_start(self.proof.disposition());
+                        } else {
+                            message.observation.fail();
+                        }
+                    }
+                    let crate::tenancy::trajectory::Begin {
+                        reply,
+                        execution,
+                        observation,
+                        input,
+                        evidence,
+                        ..
+                    } = *message;
+                    if reply.send(result).is_err() {
+                        tracing::debug!("trajectory begin completed without a response receiver");
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety).await;
+                    }
+                    drop((execution, observation, input, evidence));
+                }
+                #[cfg(feature = "core")]
+                Job::TrajectoryTerminal(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_trajectory_terminal(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    message.observation.transaction(self.proof.disposition());
+                    if result.is_err() {
+                        message.observation.fail();
+                    }
+                    let crate::tenancy::trajectory::Terminal {
+                        reply,
+                        execution,
+                        observation,
+                        start,
+                        facts,
+                        ..
+                    } = *message;
+                    if reply.send(result).is_err() {
+                        tracing::debug!(
+                            "trajectory terminal completed without a response receiver"
+                        );
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety).await;
+                    }
+                    drop((execution, observation, start, facts));
+                }
+                #[cfg(feature = "core")]
                 Job::Settlement(message) => {
                     let result = self
                         .supervise(
@@ -408,6 +478,28 @@ impl Job {
                     .is_err()
                 {
                     tracing::debug!("rejected observation had no response receiver");
+                }
+            }
+            #[cfg(feature = "core")]
+            Self::TrajectoryBegin(message) => {
+                message.observation.no_start(Disposition::NoTransaction);
+                if message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                    .is_err()
+                {
+                    tracing::debug!("rejected trajectory begin had no response receiver");
+                }
+            }
+            #[cfg(feature = "core")]
+            Self::TrajectoryTerminal(message) => {
+                message.observation.fail();
+                if message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                    .is_err()
+                {
+                    tracing::debug!("rejected trajectory terminal had no response receiver");
                 }
             }
             Self::Credential(message) => {

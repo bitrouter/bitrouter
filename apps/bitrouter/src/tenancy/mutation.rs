@@ -111,7 +111,7 @@ pub(super) async fn prepare(
                 &value.dependencies,
                 Utc::now(),
             )?;
-            resources.validate_compiled(&value)?;
+            resources.validate_executable(&value)?;
             configuration::validate_profile(&value.revision.document)?;
             let context = configuration::read_context(caller, tenant, &value.dependencies, true);
             retained = Some(value);

@@ -103,6 +103,7 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
                 .policies
                 .get(name)
                 .context("selected policy missing")?;
+            crate::tenancy::trajectory_profile::retained_guarded(&config, document, name)?;
             ensure!(
                 definition.tiers.len() <= 256,
                 "policy tier capacity exceeded"
