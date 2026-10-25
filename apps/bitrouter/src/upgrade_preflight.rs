@@ -162,7 +162,17 @@ impl Preflight {
         snapshot(&live, &copy).await?;
         drop(live);
         let copy_url = sqlite_url(&copy, "rw");
-        let candidate = crate::db::connect(&copy_url).await?;
+        // A private snapshot may be migrated while the live owner keeps its
+        // own file locked. Never acquire or steal the live authority lock here.
+        let snapshot_owner = config
+            .tenancy
+            .enabled
+            .then(|| crate::tenancy::ownership::acquire_path(&copy, false))
+            .transpose()?;
+        let candidate = match &snapshot_owner {
+            Some(owner) => crate::db::connect_tenancy(&copy_url, owner).await?,
+            None => crate::db::connect(&copy_url).await?,
+        };
         crate::db::run_migrations(&candidate)
             .await
             .context("snapshot migration preflight failed")?;
@@ -283,6 +293,29 @@ mod tests {
         assert!(format!("{error:#}").contains("duplicate column name: router_id"));
         let live = read_only(&path).await?;
         assert_eq!(applied(&live).await?, prior);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tenancy_snapshot_preflight_supports_escaped_home_paths() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let home = directory.path().join("state#one");
+        std::fs::create_dir(&home)?;
+        let config_path = home.join("bitrouter.yaml");
+        std::fs::write(
+            &config_path,
+            "inherit_defaults: false\ntenancy: {enabled: true}\nserver: {skip_auth: false}\ncontrol:\n  enabled: true\n  credentials:\n    - id: test-operator\n      token_env: TEST_TENANCY_OPERATOR\n      scopes: [control:tenancy]\n",
+        )?;
+        let database = home.join("bitrouter.db");
+        let owner = crate::tenancy::ownership::acquire_path(&database, true)?;
+        let db = crate::db::connect_tenancy(&sqlite_url(&database, "rwc"), &owner).await?;
+        crate::db::run_migrations(&db).await?;
+        let authority = crate::tenancy::Service::open(db.clone(), Some(owner)).await?;
+        Preflight::check_explicit(&ConfigSource::File(config_path)).await?;
+        authority.shutdown().await?;
+        drop(authority);
+        db.close().await?;
         Ok(())
     }
 }

@@ -122,6 +122,7 @@ pub struct Assembled {
     pub app: App,
     /// The shared database connection.
     pub db: DatabaseConnection,
+    pub(crate) tenancy: Option<crate::tenancy::Service>,
     /// In-memory API-principal-scoped ACP route leases.
     #[cfg(feature = "harness")]
     pub acp_runtime: Arc<AcpRuntime>,
@@ -413,6 +414,7 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
 }
 
 fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -> Result<()> {
+    config.tenancy.validate(config)?;
     config
         .gateway_state
         .validate(&config.database.url, config.server.skip_auth)?;
@@ -719,18 +721,26 @@ async fn assemble_app(
     let shared_db = shared.map(|inputs| inputs.continuation.database().clone());
     #[cfg(not(feature = "multi-instance"))]
     let shared_db: Option<DatabaseConnection> = None;
+    let tenancy_owner = config
+        .tenancy
+        .enabled
+        .then(|| crate::tenancy::ownership::acquire(&config.database.url))
+        .transpose()?;
     let db = match shared_db {
         Some(database) => database,
         None => {
-            let database = crate::db::connect(&config.database.url)
-                .await
-                .context("connecting to database")?;
+            let database = match &tenancy_owner {
+                Some(owner) => crate::db::connect_tenancy(&config.database.url, owner).await,
+                None => crate::db::connect(&config.database.url).await,
+            }
+            .context("connecting to database")?;
             crate::db::run_migrations(&database)
                 .await
                 .context("running database migrations")?;
             database
         }
     };
+    let tenancy_enabled = tenancy_owner.is_some();
     #[cfg(feature = "harness")]
     let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
@@ -788,7 +798,7 @@ async fn assemble_app(
     } else {
         continuation_registry
     };
-    if !is_shared {
+    if !is_shared && !tenancy_enabled {
         let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
         if continuation_pruned > 0 {
             tracing::info!(
@@ -796,7 +806,6 @@ async fn assemble_app(
                 "pruned expired provider continuations at startup"
             );
         }
-        continuation_registry.start_reconciler();
     }
     let continuation_runtime = ContinuationRuntime::with_auth_appliers(
         continuation_registry.clone(),
@@ -1392,7 +1401,10 @@ async fn assemble_app(
             // API-principal-scoped route lease before Stage 2 model selection;
             // explicit routes and provider continuations retain precedence.
             // The pipeline runs bound external checks after these local hooks.
-            lm.pre_resolution_hook_for(AuthHook::new(db_for_hooks.clone()), OperationScope::Both);
+            lm.pre_resolution_hook_for(
+                AuthHook::new(db_for_hooks.clone()).with_tenancy(tenancy_enabled),
+                OperationScope::Both,
+            );
             lm.pre_resolution_hook_for(session_context, OperationScope::Both);
             lm.pre_resolution_hook(private_context);
             lm.pre_resolution_hook(continuation_for_pre_request);
@@ -1497,7 +1509,7 @@ async fn assemble_app(
             let app = app.mcp(move |m| {
                 m.routing_table(table)
                     .executor(exec)
-                    .pre_request_hook(AuthHook::new(db_for_mcp_auth));
+                    .pre_request_hook(AuthHook::new(db_for_mcp_auth).with_tenancy(tenancy_enabled));
             });
             if let Some(route) = mcp_aggregate_route {
                 app.mcp_aggregate_route(route)
@@ -1509,9 +1521,19 @@ async fn assemble_app(
     };
     let app = app.build().context("building the App")?;
 
+    // Start the authority actor only after every other fallible assembly step.
+    // Failed startup must not leave a detached owner behind during a retry.
+    let tenancy = match tenancy_owner {
+        Some(owner) => Some(crate::tenancy::Service::open(db.clone(), Some(owner)).await?),
+        None => None,
+    };
+    if !is_shared && !tenancy_enabled {
+        continuation_registry.start_reconciler();
+    }
     Ok(Assembled {
         app,
         db,
+        tenancy,
         #[cfg(feature = "harness")]
         acp_runtime,
         policy_store: policy_store_for_reload,

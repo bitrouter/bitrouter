@@ -1,7 +1,8 @@
 //! Database layer: connection handling and schema migrations.
 //!
 //! bitrouter talks to its database exclusively through `sea-orm`, the
-//! high-level ORM abstraction — never a concrete driver. That buys two
+//! high-level ORM abstraction. SQLite pool construction additionally retains
+//! file ownership through its underlying driver's lifecycle hook. That buys two
 //! things:
 //!
 //! 1. **Selectable backends.** SQLite is always available. The default product
@@ -12,6 +13,7 @@
 //!    verbatim on whichever backend is configured.
 
 pub mod migration;
+mod sqlite;
 
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
@@ -30,16 +32,54 @@ use crate::gateway::error::Result;
 ///   otherwise each connection in the pool would see its own empty
 ///   database.
 pub async fn connect(url: &str) -> Result<DatabaseConnection> {
+    connect_inner(url, None).await
+}
+
+pub(crate) async fn connect_tenancy(
+    url: &str,
+    owner: &crate::tenancy::ownership::Lease,
+) -> Result<DatabaseConnection> {
+    connect_inner(url, Some(owner)).await
+}
+
+async fn connect_inner(
+    url: &str,
+    owner: Option<&crate::tenancy::ownership::Lease>,
+) -> Result<DatabaseConnection> {
     validate_backend_availability(url)?;
-    let mut opts = ConnectOptions::new(normalize_url(url));
+    let normalized = normalize_url(url);
+    let mut opts = ConnectOptions::new(&normalized);
     opts.sqlx_logging(false);
     if is_sqlite_memory(url) {
         opts.min_connections(1).max_connections(1);
     }
-    let db = Database::connect(opts)
-        .await
-        .map_err(|e| BitrouterError::internal(format!("connecting to database {url}: {e}")))?;
-    if wants_wal(url) {
+    let (db, readonly) = if normalized.starts_with("sqlite:") {
+        sqlite::connect(&normalized, opts, owner)
+            .await
+            .map_err(|error| {
+                BitrouterError::internal(format!("connecting to SQLite database: {error}"))
+            })?
+    } else {
+        (
+            Database::connect(opts).await.map_err(|e| {
+                BitrouterError::internal(format!("connecting to database {url}: {e}"))
+            })?,
+            false,
+        )
+    };
+    if owner.is_none()
+        && !readonly
+        && crate::tenancy::ownership::has_installation(&db)
+            .await
+            .map_err(|_| {
+                BitrouterError::internal("could not establish database tenancy ownership")
+            })?
+    {
+        return Err(BitrouterError::bad_request(
+            "tenant-aware stores require their configured owner; use protected HTTP administration",
+        ));
+    }
+    if !readonly && wants_wal(url) {
         enable_wal(&db).await;
     }
     Ok(db)
@@ -160,8 +200,10 @@ fn is_sqlite_memory(url: &str) -> bool {
 /// so the database file is created on first run. Every other URL — including
 /// in-memory SQLite and all Postgres / MySQL URLs — is returned unchanged.
 fn normalize_url(url: &str) -> String {
-    let is_sqlite_file =
-        url.starts_with("sqlite:") && !url.contains(":memory:") && !url.contains("mode=");
+    let explicit_mode = url.split_once('?').is_some_and(|(_, query)| {
+        url::form_urlencoded::parse(query.as_bytes()).any(|(key, _)| key == "mode")
+    });
+    let is_sqlite_file = url.starts_with("sqlite:") && !url.contains(":memory:") && !explicit_mode;
     if is_sqlite_file {
         let sep = if url.contains('?') { '&' } else { '?' };
         format!("{url}{sep}mode=rwc")
@@ -201,6 +243,10 @@ mod tests {
             "postgres://u:p@host/db"
         );
         assert_eq!(normalize_url("mysql://u:p@host/db"), "mysql://u:p@host/db");
+        assert_eq!(
+            normalize_url("sqlite://./x.db?%6dode=ro"),
+            "sqlite://./x.db?%6dode=ro"
+        );
     }
 
     #[test]

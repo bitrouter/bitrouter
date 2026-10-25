@@ -633,6 +633,29 @@ be at least 32 bytes. `control:read` grants the host-wide operational reports;
 `control:reload` permits the guarded reload operation and requires the read
 scope alongside it.
 
+`control:tenancy` grants installation resource management independently of host
+read/reload authority. The opt-in `tenancy.enabled` service uses this credential
+on the same protected listener. It currently requires a Unix host, local gateway
+state, authenticated ingress and a literal SQLite file URL. Tenancy configuration
+is restart-only. Use `bitrouter-sdk`'s `TenancyClient` for these operations;
+host reload operation IDs belong to a separate namespace. This stage exposes
+authority management with tenant dispatch disabled pending immutable execution
+revisions and strict receipts.
+
+An operator's principal ID is `operator.<configured credential ID>`, preserving
+case. Tenancy credential IDs are limited to 119 bytes. Use the public
+`PrincipalId::for_control_credential` helper as `expected_management_owner` when
+updating a binding created by that operator. Changing the token or `token_env`
+preserves identity; renaming the ID changes it. Reusing an old ID intentionally
+reuses its management and operation identity.
+
+Stop existing writers before enabling tenancy on a legacy SQLite file, including
+processes from releases that predate file ownership leases. Current writable
+pools hold a shared lease; an authority owner requires exclusive access and
+retains it through shutdown and outstanding transactions. `mode=rw` requires an
+existing file. Host-authorized read-only reports remain available; direct local
+commands cannot reopen a provisioned authority store for writing.
+
 This listener is disabled by default, accepts loopback addresses only, and is
 never affected by inference `server.skip_auth`. Its typed HTTP actions live
 under `/control/v1`; it exposes neither an MCP origin nor remote ACP sessions.

@@ -31,6 +31,9 @@ const PROVIDER_KEY: &str = "host-lifecycle-private-provider-key";
 const REQUEST_ID: &str = "host-lifecycle-control-error";
 const REPLY: &str = "completed after control shutdown failed";
 
+#[path = "host_lifecycle/tenancy.rs"]
+mod tenancy;
+
 struct Host {
     child: Option<Child>,
     home: PathBuf,
@@ -44,6 +47,10 @@ struct Host {
 
 impl Host {
     fn start(upstream: &str) -> Result<Self> {
+        Self::start_profile(upstream, false)
+    }
+
+    fn start_profile(upstream: &str, tenancy: bool) -> Result<Self> {
         // Short, owner-only paths also fit macOS's Unix-socket path limit.
         let directory = tempfile::Builder::new()
             .prefix("bro-life-")
@@ -71,10 +78,20 @@ impl Host {
             fs::create_dir(host.home.join(name))?;
         }
         let config = host.home.join("private.yaml");
+        let tenancy_config = if tenancy {
+            "tenancy: {enabled: true}\n"
+        } else {
+            ""
+        };
+        let control_credentials = if tenancy {
+            "  credentials:\n    - id: test-operator\n      token_env: BITROUTER_CONTROL_TOKEN\n      scopes: [control:read, control:tenancy]\n"
+        } else {
+            ""
+        };
         fs::write(
             &config,
             format!(
-                r#"inherit_defaults: false
+                r#"{tenancy_config}inherit_defaults: false
 registry:
   enabled: false
 server:
@@ -84,7 +101,7 @@ server:
 control:
   enabled: true
   listen: {}
-database:
+{control_credentials}database:
   url: 'sqlite://host.db?mode=rwc'
 agent_api:
   enabled: false
@@ -103,25 +120,30 @@ models:
                 host.inference, host.remote,
             ),
         )?;
-        let output = File::create(&host.log)?;
         // Reserve distinct ephemeral ports until immediately before spawn.
         drop((inference, remote));
-        host.child = Some(
+        host.spawn(&config)?;
+        Ok(host)
+    }
+
+    fn spawn(&mut self, config: &std::path::Path) -> Result<()> {
+        let output = File::options().create(true).append(true).open(&self.log)?;
+        self.child = Some(
             Command::new(env!("CARGO_BIN_EXE_bro"))
                 .args(["serve", "--managed-child", "--config"])
                 .arg(config)
-                .current_dir(&host.home)
+                .current_dir(&self.home)
                 // Do not inherit credentials, discovery paths, proxies, OTel,
                 // workflow tracing, or feature activation from the developer.
                 .env_clear()
                 .env("PATH", "/usr/bin:/bin")
-                .env("HOME", host.home.join("home"))
-                .env("USERPROFILE", host.home.join("home"))
-                .env("BITROUTER_HOME", host.home.join("runtime"))
-                .env("XDG_CONFIG_HOME", host.home.join("config"))
-                .env("XDG_CACHE_HOME", host.home.join("cache"))
-                .env("XDG_DATA_HOME", host.home.join("data"))
-                .env("TMPDIR", host.home.join("tmp"))
+                .env("HOME", self.home.join("home"))
+                .env("USERPROFILE", self.home.join("home"))
+                .env("BITROUTER_HOME", self.home.join("runtime"))
+                .env("XDG_CONFIG_HOME", self.home.join("config"))
+                .env("XDG_CACHE_HOME", self.home.join("cache"))
+                .env("XDG_DATA_HOME", self.home.join("data"))
+                .env("TMPDIR", self.home.join("tmp"))
                 .env("BITROUTER_CONTROL_TOKEN", CONTROL_TOKEN)
                 .stdin(Stdio::null())
                 .stdout(output.try_clone()?)
@@ -129,7 +151,7 @@ models:
                 .spawn()
                 .context("spawn the Cargo-built official host")?,
         );
-        Ok(host)
+        Ok(())
     }
 
     fn child(&mut self) -> Result<&mut Child> {

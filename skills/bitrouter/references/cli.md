@@ -350,6 +350,12 @@ checks, launches, and ACP sessions remain local. Remote policy defaults to
 
 ## Daemon lifecycle
 
+For local resource authority, `tenancy.enabled: true` additionally requires a
+dedicated `control:tenancy` credential. That scope is independent of host
+read/reload grants. See [remote administration](remote-administration.md) for
+the supported ownership profile and current dispatch eligibility; manage tenants
+through `TenancyClient`, not host reload operation commands.
+
 | Command | Effect |
 |---|---|
 | `bro serve [--config PATH]` | Run the inference HTTP server + local control socket **in the foreground**. Optional `control.enabled: true` also starts the authenticated typed HTTP control listener at `control.listen` (default `127.0.0.1:4358`). `control.credentials` may name `{id, token_env, scopes}` credentials using `control:read` and `control:reload`; absent/empty credentials preserve `BITROUTER_CONTROL_TOKEN` as read-only. Explicit credentials exclude that legacy token. Tokens are at least 32 bytes, browser origins are checked, the listener stays loopback-only for a private tunnel/TLS reverse proxy, and inference `server.skip_auth` does not affect it. This optional HTTP control listener exposes neither an MCP origin nor remote ACP sessions; native ACP uses its separate OS-local stream. |

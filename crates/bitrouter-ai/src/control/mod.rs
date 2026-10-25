@@ -29,6 +29,9 @@ pub enum ControlScope {
     /// Reload server-owned configuration; requires the read grant as well.
     #[serde(rename = "control:reload")]
     Reload,
+    /// Manage installation resource authority; grants no host inspection or reload.
+    #[serde(rename = "control:tenancy")]
+    Tenancy,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

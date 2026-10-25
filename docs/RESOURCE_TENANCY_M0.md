@@ -1,8 +1,8 @@
 # Resource tenancy: M0 contracts and migration inventory
 
-Status: M0 design/fixture delivery, 2026-10-25. Proposed tenant endpoints below
-are **not implemented or advertised by the gateway yet**. M1 implements local
-authority; M2 implements owned configuration/state; M3 implements strict receipts.
+Status: M0 contracts frozen on 2026-10-25. M1 implements local authority;
+M2 implements owned configuration/state; M3 implements strict receipts.
+The presence of a contract or client method does not advertise its runtime support.
 Current stage status and runtime qualification gates are tracked in
 [Resource tenancy implementation](RESOURCE_TENANCY_IMPLEMENTATION.md).
 
@@ -134,6 +134,16 @@ expected_management_owner and claims the authenticated writer;
 updates compare both revision and expected_management_owner. Installation-operator
 detach clears management ownership; ordinary controllers cannot claim an existing
 detached binding. Principal issuer/subject cannot change on a CAS update.
+
+Installation operators use the reserved principal identity
+`operator.<control credential ID>` (exact case). Credential IDs granted
+`control:tenancy` must follow the existing control-ID alphabet and fit within
+119 bytes. `PrincipalId::for_control_credential` provides the same pure mapping
+to clients. Use that identity for `expected_management_owner` when updating a
+binding created by this operator; no private database lookup is needed.
+Token rotation under the same ID preserves management and operation identity.
+Renaming the credential ID creates a different operator identity. Ordinary
+principal provisioning rejects the entire `operator.` namespace.
 
 ### Eligibility bound to dispatch
 
@@ -327,6 +337,51 @@ page size; a one-row last page may still report true. Empty results have null
 next_after. A newly observed execution may require restarting from no after;
 clients deduplicate installation/execution IDs. There are no delivery cursors or
 ACKs. Retention cannot hide admitted completions. External consumers keep submission intent and must not treat missing evidence as unexecuted.
+
+### Configuration composition in M2
+
+The sixteen operations above manage configuration references; they do not create
+route or policy definitions. An explicit installation import/provisioning action
+supplies those definitions and returns their owner-qualified references. Import
+retains validated definition bytes and the resolved dependency closure, including
+credential/account versions. Reusing the same owner/kind/resource/revision with
+different definition or dependency content is rejected. Changing or removing the
+import source cannot mutate an already retained revision. Legacy rows require the
+explicit ownership mapping below; host-global resources are not implicitly public.
+
+For tenant execution, the request model matches exactly one `routes` entry's
+`resource_id`, case-sensitively, before legacy alias, provider, variant or reserved
+name interpretation. Identical IDs in different tenants are valid. Two references
+with the same visible model ID inside one configuration are ambiguous and fail
+compilation, even when their owners differ. There is no implicit host-global route
+fallback. Array order does not establish route preference: each retained route
+contains its own selection/fallback rules. The submitted array remains unchanged
+in the stored document and command digest, so reordering it under one operation ID
+still conflicts. An empty route array defines an empty dispatch namespace.
+
+The optional `policy` is an exact tenant-owned or explicitly granted operator-pool
+policy revision. Provisioning records its fully qualified resource identity and
+the selected named policy within the existing policy artifact. Matching a legacy
+policy name alone never establishes identity. A route with policy selection must
+bind that same qualified policy and any pinned dependency revision; a missing or
+conflicting configuration policy fails compilation. Fixed model routes keep their
+fixed selection. An unused non-null policy is authorized and retained but inert;
+it never silently overrides those routes.
+
+Explicit request generation values take precedence over tenant configuration
+defaults; those defaults take precedence over overlapping retained router defaults.
+Other retained router defaults continue to fill absent request values. Compilation
+records an approved target envelope per route, including its base model, policy
+tiers, fallbacks, account bindings and exploration alternatives. Selecting route A
+cannot acquire route B's envelope merely because both appear in the configuration.
+All independently owned dependencies require current authority. Live health,
+credential and permission changes can remove eligible targets, never add targets
+outside that route's retained envelope.
+
+These composition rules clarify M2 implementation without adding wire fields or
+remote resource-authoring endpoints. Ownership adaptation for learning, scheduling,
+continuations, trajectories and background jobs remains a separate required part
+of M2; successful draft compilation alone does not complete that milestone.
 
 ## Owner/query/cache inventory and migration
 

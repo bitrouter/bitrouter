@@ -291,6 +291,7 @@ async fn serve_with_options(
     let assembled =
         crate::assemble::build_app_with_extensions(&cfg, config_path_for_reload, register).await?;
     let observe_for_shutdown = assembled.observe.clone();
+    let tenancy_for_shutdown = assembled.tenancy.clone();
     #[cfg(feature = "core")]
     let trajectory_outbox_for_shutdown = assembled.trajectory_outbox_publisher.clone();
     // Every failure after assembly follows the same flush/drain path, including
@@ -431,6 +432,7 @@ async fn serve_with_options(
                 server
                     .with_administration(administration.clone())
                     .with_reloader(reloader.clone())
+                    .with_tenancy(assembled.tenancy.clone())
                     .bind()
                     .await?,
             ),
@@ -439,6 +441,7 @@ async fn serve_with_options(
 
         pid_guard = Some(PidFile::create(&pid_path).await?);
         let remote_listen = remote_control.as_ref().map(|server| server.listen());
+        let tenancy_enabled = assembled.tenancy.is_some();
         let ready_listen = listen.clone();
 
         let http_app = app.clone();
@@ -480,6 +483,9 @@ async fn serve_with_options(
             // Open an OTel SERVER span per inbound request and publish it on the
             // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
             let otel_wrapper = move |router: axum::Router| {
+                let router = if tenancy_enabled {
+                    router.layer(axum::middleware::from_fn(crate::tenancy::http::dispatch_not_ready))
+                } else { router };
                 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
                 let router = match &otel_router_wrapper {
                     Some(wrapper) => wrapper(router),
@@ -851,6 +857,11 @@ async fn serve_with_options(
     }
     .await;
 
+    let tenancy_shutdown = match tenancy_for_shutdown {
+        Some(service) => service.shutdown().await,
+        None => Ok(()),
+    };
+
     #[cfg(feature = "core")]
     if let Some(publisher) = trajectory_outbox_for_shutdown {
         match publisher.drain_after_active_worker().await {
@@ -876,7 +887,7 @@ async fn serve_with_options(
     observe_for_shutdown.shutdown().await;
     drop(pid_guard);
 
-    result
+    result.and(tenancy_shutdown)
 }
 
 struct PidFile {

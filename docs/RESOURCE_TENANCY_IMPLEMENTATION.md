@@ -11,7 +11,7 @@ evidence and independent review; fixtures alone do not satisfy runtime gates.
 - [x] M0: frozen contracts, ownership inventory, migration example, adversarial
   scenarios and local benchmark profile.
 - [x] M1a: public value types and bounded HTTP SDK with contract conformance.
-- [ ] M1b: persistent local authority, protected HTTP commands, roles/scopes,
+- [x] M1b: persistent local authority, protected HTTP commands, roles/scopes,
   managed writers, CAS/idempotency, secret-once issuance and revocation fencing.
 - [ ] M2a: owned drafts, immutable revisions, CAS activation/rollback, pinned
   execution envelopes, configuration validation/apply/read through SDK and CLI.
@@ -60,7 +60,50 @@ Independent review covered the migration and compatibility-test adjustment.
 The serialized all-feature workspace run passed all 4,996 selected tests
 (160 opt-in tests skipped), followed by strict all-target workspace Clippy,
 12 passing doctests (one ignored), formatting and whitespace checks. This
-foundation does not yet expose a live tenant authority service.
+foundation was qualified before adding the live authority runtime below.
+
+The M1b runtime adds an opt-in local authority under the existing
+protected control listener. Its runtime exposes the ten authority operations
+(seven mutations, capabilities, credential status and operation recovery).
+`control:tenancy` is independent of host read/reload grants. The initial profile
+requires authenticated ingress, Unix file ownership, a literal SQLite database
+path and local gateway state. It does not require a new Cargo feature or service.
+
+One bounded command actor owns mutations and publishes immutable authority only
+after committing the mutation and operation result. Token authentication uses
+that current snapshot. Roles, explicit resource/pool scopes, delegation expiry,
+managed writers and credential rotation are intersected with current bindings.
+Secrets appear only in the first issuance response; replay and stored results
+omit them. Ordinary/safety queues and retained operation IDs have separate
+bounds. The saturation latch survives restart and cannot be reset by configuration.
+The initial authority cache additionally bounds all retained principals to 128
+and bindings to 256; the frozen per-tenant and live-credential ceilings still apply.
+
+Writable SQLite pools retain shared file leases; a tenant authority requires an
+exclusive lease before connecting or migrating. A dedicated canonical sidecar
+avoids opening/closing database descriptors outside SQLite. Ambiguous nested
+URIs and repeated mode/scheme parameters are rejected. Stop older binaries that
+predate these leases before first cutover. Read-only host reports remain available.
+Startup failures do not start authority/continuation workers; normal shutdown
+drains admitted commands even after their HTTP callers disconnect. Legacy
+continuation reconciliation is inactive in this control-only profile.
+
+Runtime validation passed 5,026 all-feature workspace tests (160 opt-in tests
+skipped), 12 doctests (one ignored), seven minimal-profile SQLite tests and a
+subsequent 35-test minimal-plus-HTTP/2 tenancy run. The last run includes the
+public operator-identity mapping, token rotation/restart, managed binding updates,
+reserved-principal rejection and saved-result scope reduction regressions added
+after the full run. Strict all-target workspace Clippy, formatting and whitespace
+checks passed. Independent adversarial reviews covered authority, file ownership,
+shutdown/startup failure handling and the operator identity contract. A real
+Cargo-built host test verifies health, HTTP management, read-only reports,
+cross-process writer fencing and durable restart; protocol tests exercise both
+HTTP/1.1 and h2c through the public SDK.
+
+Until M2/M3 complete, capabilities report
+dispatch, revision-bound dispatch and strict receipts as false. Inference, native
+embedding calls and MCP remain fenced; the process health endpoint stays usable.
+These intermediate controls must not be interpreted as tenant inference support.
 
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a

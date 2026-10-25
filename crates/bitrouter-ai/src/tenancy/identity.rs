@@ -53,6 +53,30 @@ identifier! {
     AccountId: "Nonsecret identity of the account actually selected for an attempt.",
 }
 
+impl PrincipalId {
+    /// Derive the stable installation-operator identity from a configured
+    /// `control:tenancy` credential ID. Use this identity as the expected
+    /// management owner when updating a binding created by that operator.
+    /// Rotating the token preserves the identity; renaming the ID does not.
+    ///
+    /// # Errors
+    /// Rejects IDs outside the control credential alphabet or longer than
+    /// 119 bytes, leaving room for the reserved `operator.` prefix.
+    pub fn for_control_credential(id: &str) -> Result<Self, ValidationError> {
+        require(
+            !id.is_empty()
+                && id.len() <= 119
+                && id.bytes().enumerate().all(|(index, byte)| {
+                    byte.is_ascii_alphabetic()
+                        || byte == b'_'
+                        || (index > 0 && (byte.is_ascii_digit() || b"-.".contains(&byte)))
+                }),
+            "installation operator credential ID",
+        )?;
+        format!("operator.{id}").try_into()
+    }
+}
+
 /// Monotonic local authority revision, exactly representable in JSON clients.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(into = "u64")]

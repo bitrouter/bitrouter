@@ -32,6 +32,35 @@ only those entries authenticate; the legacy variable is not an extra credential.
 Read authority includes host-wide spend, request metadata, and policy rules.
 It is not a personal usage scope. Inference `server.skip_auth` has no effect.
 
+`control:tenancy` is a separate installation-management grant. It does not imply
+`control:read` or `control:reload`; use a dedicated credential when only tenant
+management is needed. The optional `tenancy.enabled: true` service requires
+authenticated ingress, this explicit operator grant, local gateway state and a
+literal SQLite file URL. Its initial owning-process profile is qualified on Unix;
+shared databases, memory databases, encoded paths and the host coding-task API
+are rejected. Enabling or disabling tenancy requires restart. Once provisioned,
+the store cannot be reopened by ordinary local database commands with tenancy
+disabled; use protected HTTP administration. Read-only host reports remain
+available. Stop all old writers before first enabling tenancy, especially older
+binaries that predate ownership leases. Current writable pools retain a shared
+file lease, and the authority owner requires an exclusive lease until its
+transactions and connections have settled. `mode=rw` never creates a missing
+database.
+
+Tenancy operator credential IDs are limited to 119 bytes. Their stable principal
+ID is exactly `operator.<configured ID>`; use
+`PrincipalId::for_control_credential` to derive the management owner for binding
+updates. Token rotation preserves this identity; renaming the configured ID
+changes it. Ordinary principals cannot use the reserved `operator.` prefix.
+
+Use the HTTP `TenancyClient` for tenant management. The tenant-operation namespace
+is `/control/v1/tenancy/operations/{operation_id}`, separate from host reload
+operations. Retain operation IDs after a lost response; credential secrets are
+returned only once. This implementation stage exposes authority management only:
+tenant capabilities keep dispatch, revision binding and strict receipts disabled,
+and inference is fenced until those runtime stages are implemented. Do not send
+tenant inference based solely on successful credential issuance.
+
 ## Client context
 
 Set the selected token in the client's environment, then save its variable name:
