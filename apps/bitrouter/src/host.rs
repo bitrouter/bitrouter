@@ -812,13 +812,13 @@ async fn serve_with_options(
         #[cfg(feature = "core")]
         let evolution_stop = tokio_util::sync::CancellationToken::new();
         #[cfg(feature = "core")]
-        let evolution_worker = app.language_model().cloned().map(|pipeline| {
-            let worker =
-                crate::core::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
-                    .with_handoff_gate(handoff_gate.clone());
-            let stop = evolution_stop.clone();
-            tokio::spawn(async move { worker.run(pipeline, stop).await })
-        });
+        let evolution_worker = crate::core::evolution::scheduler::EvolutionScheduler::start_legacy(
+            assembled.evolution.clone(),
+            app.language_model().cloned(),
+            assembled.tenancy.is_some(),
+            handoff_gate.clone(),
+            evolution_stop.clone(),
+        );
         #[cfg(feature = "core")]
         let control = async {
             let result = control.await;

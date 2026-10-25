@@ -83,12 +83,21 @@ fn additive_schema_definition(entry: &str) -> Result<String> {
             "trajectory_requests",
             "trajectory_prefix_index",
             "trajectory_outbox",
+            "acp_capture_connections",
+            "acp_canonical_sessions",
+            "acp_capture_events",
+            "checkpoint_evolution",
+            "acp_checkpoints",
+            "acp_checkpoint_members",
+            "acp_resource_observations",
+            "acp_assessment_revisions",
+            "acp_effective_assessments",
         ]
         .contains(&definition.1.as_str())
     {
         return Ok(entry.to_owned());
     }
-    // Independently allow only migration030/032's exact nullable additions. Keep
+    // Independently allow only migration030/032/033's exact nullable additions. Keep
     // every byte of the old column/constraint definitions and all old indexes.
     // Do not derive the allowance from the migration being tested.
     let sql = definition
@@ -97,10 +106,17 @@ fn additive_schema_definition(entry: &str) -> Result<String> {
         .context("historical scoped table has no SQL definition")?;
     // SQLite inserts added columns before an existing table-level primary key.
     // Preserve that historical constraint, including its original whitespace.
-    let suffix = if definition.1 == "trajectory_prefix_index" {
-        ", PRIMARY KEY (\"owner_user_id\", \"full_input_digest\") )"
-    } else {
-        ")"
+    let suffix = match definition.1.as_str() {
+        "trajectory_prefix_index" => ", PRIMARY KEY (\"owner_user_id\", \"full_input_digest\") )",
+        "acp_assessment_revisions" => ", PRIMARY KEY (\"revision_id\") )",
+        "acp_canonical_sessions" => ", PRIMARY KEY (\"session_key\") )",
+        "acp_capture_connections" => ", PRIMARY KEY (\"connection_id\") )",
+        "acp_capture_events" => ", PRIMARY KEY (\"connection_id\", \"sequence\") )",
+        "acp_checkpoint_members" => ", PRIMARY KEY (\"checkpoint_id\", \"session_key\") )",
+        "acp_checkpoints" => ", PRIMARY KEY (\"checkpoint_id\") )",
+        "acp_effective_assessments" => ", PRIMARY KEY (\"session_key\") )",
+        "acp_resource_observations" => ", PRIMARY KEY (\"observation_id\") )",
+        _ => ")",
     };
     let prefix = sql
         .strip_suffix(suffix)

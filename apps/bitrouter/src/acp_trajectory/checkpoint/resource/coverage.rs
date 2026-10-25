@@ -121,6 +121,7 @@ impl CanonicalStore {
     ) -> Result<InventoryObservation> {
         let cp = &content.checkpoint;
         let own_successor_at = events::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_capture_events"))
             .filter(events::Column::SessionKey.eq(cp.identity.key()?))
             .filter(events::Column::SessionSequence.gt(cp.watermark))
             .filter(events::Column::Replay.eq(false))
@@ -149,6 +150,7 @@ impl CanonicalStore {
                     continue;
                 }
                 let row = connections::Entity::find_by_id(id)
+                    .filter(crate::storage::legacy::scope("acp_capture_connections"))
                     .one(&self.db)
                     .await?
                     .context("capture connection missing")?;

@@ -141,6 +141,7 @@ impl BlockPolicyStore {
         self.store.ensure_owner(&identity.owner)?;
         let key = identity.key()?;
         records::Entity::find()
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .filter(records::Column::ScopeId.eq(&self.store.scope_id))
             .filter(records::Column::Kind.eq(REQUEST_KIND))
             .filter(records::Column::SessionKey.eq(key))
@@ -212,6 +213,7 @@ impl BlockPolicyStore {
             "control changed while resolving live routing dependencies; retry"
         );
         sessions::Entity::update_many()
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
             .col_expr(
                 sessions::Column::Head,
                 Expr::col(sessions::Column::Head).into(),
@@ -220,6 +222,7 @@ impl BlockPolicyStore {
             .exec(&tx)
             .await?;
         let session = sessions::Entity::find_by_id(&key)
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
             .one(&tx)
             .await?
             .context("native session is not recorded")?;
@@ -232,6 +235,7 @@ impl BlockPolicyStore {
         // Serialized replay is safe even after a restart. Reusing an ID with
         // another session or request context is an error, never another draw.
         if let Some(row) = records::Entity::find_by_id(self.store.id(REQUEST_KIND, request_id)?)
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .one(&tx)
             .await?
         {
@@ -259,6 +263,7 @@ impl BlockPolicyStore {
             return Ok(Some(intent));
         }
         let enrollment_row = records::Entity::find_by_id(self.store.id(SESSION_KIND, &key)?)
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .one(&tx)
             .await?;
         let is_new = enrollment_row.is_none();
@@ -266,6 +271,7 @@ impl BlockPolicyStore {
             serde_json::from_str(&row.body)?
         } else {
             let captured = events::Entity::find()
+                .filter(crate::storage::legacy::scope("acp_capture_events"))
                 .filter(events::Column::SessionKey.eq(&key))
                 .filter(events::Column::Replay.eq(false))
                 .all(&tx)

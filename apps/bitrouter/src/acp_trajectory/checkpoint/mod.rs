@@ -15,10 +15,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::storage::capture::{CaptureEvent, CaptureKind};
 
 use anyhow::{Context, Result, ensure};
-use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -76,6 +76,7 @@ fn native(row: &sessions::Model) -> SessionIdentity {
 
 async fn session(db: &impl ConnectionTrait, key: &str) -> Result<sessions::Model> {
     let row = sessions::Entity::find_by_id(key)
+        .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
         .one(db)
         .await?
         .context("recorded native session not found")?;
@@ -98,6 +99,7 @@ async fn lock_session_metadata(
     // A write locks the row on every supported database, including SQLite.
     // Do not inspect rows_affected: MySQL may report zero for an unchanged value.
     sessions::Entity::update_many()
+        .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
         .col_expr(
             sessions::Column::Head,
             Expr::col(sessions::Column::Head).into(),
@@ -109,6 +111,7 @@ async fn lock_session_metadata(
     // view. Validation must use the current row, including its deletion fence.
     // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
     Ok(sessions::Entity::find_by_id(key)
+        .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
         .lock_exclusive()
         .one(tx)
         .await?)
@@ -120,6 +123,7 @@ async fn manifest(
     id: &str,
 ) -> Result<Checkpoint> {
     let row = checkpoints::Entity::find_by_id(id)
+        .filter(crate::storage::legacy::scope("acp_checkpoints"))
         .one(db)
         .await?
         .context("checkpoint not found")?;
@@ -139,6 +143,7 @@ async fn locked_manifest(
     locked_sessions: &BTreeMap<String, sessions::Model>,
 ) -> Result<Checkpoint> {
     let row = checkpoints::Entity::find_by_id(id)
+        .filter(crate::storage::legacy::scope("acp_checkpoints"))
         .lock_exclusive()
         .one(tx)
         .await?
@@ -241,6 +246,7 @@ impl CanonicalStore {
                 break;
             };
             let Some(parent) = sessions::Entity::find_by_id(&parent_key)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .one(&self.db)
                 .await?
             else {
@@ -265,6 +271,7 @@ impl CanonicalStore {
         for expected in segments.iter().flat_map(|segment| &segment.setup) {
             let raw =
                 events::Entity::find_by_id((expected.connection_id.clone(), expected.sequence))
+                    .filter(crate::storage::legacy::scope("acp_capture_events"))
                     .one(&self.db)
                     .await?
                     .context("supplementary checkpoint evidence disappeared")?;
@@ -300,6 +307,7 @@ impl CanonicalStore {
             locked_sessions.insert(key.clone(), current);
         }
         if checkpoints::Entity::find_by_id(&checkpoint_id)
+            .filter(crate::storage::legacy::scope("acp_checkpoints"))
             .lock_exclusive()
             .one(&tx)
             .await?
@@ -312,6 +320,7 @@ impl CanonicalStore {
             return Ok(existing);
         }
         let previous = checkpoints::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_checkpoints"))
             .filter(checkpoints::Column::SessionKey.eq(identity.key()?))
             .filter(checkpoints::Column::Deleted.eq(false))
             .filter(checkpoints::Column::Watermark.lt(expected_watermark))
@@ -332,22 +341,24 @@ impl CanonicalStore {
             gaps: gaps.into_iter().collect(),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        checkpoints::ActiveModel {
+        let inserted = checkpoints::Entity::insert(checkpoints::ActiveModel {
             checkpoint_id: Set(checkpoint_id.clone()),
             session_key: Set(identity.key()?),
             watermark: Set(expected_watermark),
             manifest_json: Set(serde_json::to_string(&cp)?),
             deleted: Set(false),
-        }
-        .insert(&tx)
+        })
+        .exec_without_returning(&tx)
         .await?;
+        ensure!(inserted == 1, "checkpoints row was not inserted");
         for key in dependencies.keys() {
-            members::ActiveModel {
+            let inserted = members::Entity::insert(members::ActiveModel {
                 checkpoint_id: Set(checkpoint_id.clone()),
                 session_key: Set(key.clone()),
-            }
-            .insert(&tx)
+            })
+            .exec_without_returning(&tx)
             .await?;
+            ensure!(inserted == 1, "members row was not inserted");
         }
         tx.commit().await?;
         self.observe_checkpoint_resources(identity, &checkpoint_id)
@@ -361,6 +372,7 @@ impl CanonicalStore {
         watermark: i64,
     ) -> Result<(PrefixSegment, Vec<String>)> {
         let rows = events::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_capture_events"))
             .filter(events::Column::SessionKey.eq(&row.session_key))
             .filter(events::Column::SessionSequence.lte(watermark))
             .filter(events::Column::Replay.eq(false))
@@ -435,6 +447,7 @@ impl CanonicalStore {
                 continue;
             };
             let candidates = super::events::Entity::find()
+                .filter(crate::storage::legacy::scope("acp_capture_events"))
                 .filter(super::events::Column::ConnectionId.eq(connection))
                 .filter(super::events::Column::Sequence.gt(*start))
                 .filter(super::events::Column::Sequence.lte(boundary))
@@ -452,6 +465,7 @@ impl CanonicalStore {
                     continue;
                 };
                 let Some(child) = sessions::Entity::find_by_id(child_key)
+                    .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                     .one(&self.db)
                     .await?
                 else {
@@ -476,6 +490,7 @@ impl CanonicalStore {
         }
         for (connection, call, method) in setup_calls {
             let candidates = super::events::Entity::find()
+                .filter(crate::storage::legacy::scope("acp_capture_events"))
                 .filter(super::events::Column::ConnectionId.eq(&connection))
                 .all(&self.db)
                 .await?;
@@ -506,6 +521,7 @@ impl CanonicalStore {
         let mut observed_connections = Vec::new();
         for id in connection_ids {
             let connection = connections::Entity::find_by_id(&id)
+                .filter(crate::storage::legacy::scope("acp_capture_connections"))
                 .one(&self.db)
                 .await?
                 .context("capture connection missing")?;
@@ -549,6 +565,7 @@ impl CanonicalStore {
     pub async fn checkpoints(&self, identity: &SessionIdentity) -> Result<Vec<Checkpoint>> {
         session(&self.db, &identity.key()?).await?;
         let rows = checkpoints::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_checkpoints"))
             .filter(checkpoints::Column::SessionKey.eq(identity.key()?))
             .filter(checkpoints::Column::Deleted.eq(false))
             .order_by_asc(checkpoints::Column::Watermark)
@@ -579,6 +596,7 @@ impl CanonicalStore {
                         expected.connection_id.clone(),
                         expected.sequence,
                     ))
+                    .filter(crate::storage::legacy::scope("acp_capture_events"))
                     .one(&self.db)
                     .await?
                     .context("checkpoint source event missing")?;
@@ -609,7 +627,11 @@ impl CanonicalStore {
         let mut visited = BTreeSet::new();
         loop {
             ensure!(visited.insert(key.clone()), "cyclic native fork lineage");
-            let Some(row) = sessions::Entity::find_by_id(&key).one(&self.db).await? else {
+            let Some(row) = sessions::Entity::find_by_id(&key)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
+                .one(&self.db)
+                .await?
+            else {
                 return Ok(key);
             };
             ensure!(
@@ -628,6 +650,7 @@ impl CanonicalStore {
 /// including child checkpoints. Assessment explanations can quote that content.
 pub(super) async fn delete_dependents(tx: &DatabaseTransaction, key: &str) -> Result<()> {
     let affected = members::Entity::find()
+        .filter(crate::storage::legacy::scope("acp_checkpoint_members"))
         .filter(members::Column::SessionKey.eq(key))
         .all(tx)
         .await?;
@@ -635,22 +658,27 @@ pub(super) async fn delete_dependents(tx: &DatabaseTransaction, key: &str) -> Re
         // A stopped judge may have cached a response quoting the deleted
         // source, including through an inherited prefix. Remove those jobs
         // in the same transaction that invalidates their checkpoint.
-        if let Some(cp) = checkpoints::Entity::find_by_id(&member.checkpoint_id)
+        let cp = checkpoints::Entity::find_by_id(&member.checkpoint_id)
+            .filter(crate::storage::legacy::scope("acp_checkpoints"))
             .one(tx)
             .await?
+            .context("checkpoint member has no Legacy checkpoint")?;
         {
             crate::storage::evolution::records::Entity::delete_many()
+                .filter(crate::storage::legacy::scope("checkpoint_evolution"))
                 .filter(crate::storage::evolution::records::Column::SessionKey.eq(cp.session_key))
                 .filter(crate::storage::evolution::records::Column::Kind.eq("judge_job"))
                 .exec(tx)
                 .await?;
         }
         let revisions = revisions::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
             .filter(revisions::Column::CheckpointId.eq(&member.checkpoint_id))
             .all(tx)
             .await?;
         for revision in revisions {
             heads::Entity::update_many()
+                .filter(crate::storage::legacy::scope("acp_effective_assessments"))
                 .col_expr(
                     heads::Column::RevisionId,
                     Expr::value(Option::<String>::None),
@@ -660,14 +688,17 @@ pub(super) async fn delete_dependents(tx: &DatabaseTransaction, key: &str) -> Re
                 .await?;
         }
         revisions::Entity::delete_many()
+            .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
             .filter(revisions::Column::CheckpointId.eq(&member.checkpoint_id))
             .exec(tx)
             .await?;
         resources::Entity::delete_many()
+            .filter(crate::storage::legacy::scope("acp_resource_observations"))
             .filter(resources::Column::CheckpointId.eq(&member.checkpoint_id))
             .exec(tx)
             .await?;
         checkpoints::Entity::update_many()
+            .filter(crate::storage::legacy::scope("acp_checkpoints"))
             .col_expr(checkpoints::Column::Deleted, Expr::value(true))
             .col_expr(checkpoints::Column::ManifestJson, Expr::value("{}"))
             .filter(checkpoints::Column::CheckpointId.eq(&member.checkpoint_id))

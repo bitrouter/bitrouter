@@ -822,6 +822,16 @@ jobs:
           --lib tenancy::tests::execution::evaluation::trajectory::server::
           -- --ignored --test-threads=1
 
+      - name: verify Legacy capture and checkpoint isolation on the selected backend
+        # Each case owns and removes an isolated fixture database.
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
+          --lib db::migration::m20240101_000033_capture_legacy_scope::tests::server::
+          -- --ignored --test-threads=1
+
       - name: verify MySQL transaction snapshot boundaries
         if: matrix.backend == 'mysql'
         env:

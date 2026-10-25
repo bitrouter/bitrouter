@@ -114,6 +114,7 @@ impl GatewayInventory {
         );
         let inventory = self.scoped_store(principal, controller)?;
         for request in records::Entity::find()
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .filter(records::Column::ScopeId.eq(&inventory.scope_id))
             .filter(records::Column::Kind.eq(INVENTORY_KIND))
             .all(&tx)
@@ -166,6 +167,7 @@ impl GatewayInventory {
             return Ok(BeginResult::Duplicate);
         }
         let mut candidates = connections::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_capture_connections"))
             .filter(connections::Column::RouteScopeId.eq(principal))
             .filter(connections::Column::ControllerInstanceId.eq(controller))
             .filter(connections::Column::State.eq("recording"))
@@ -190,6 +192,7 @@ impl GatewayInventory {
         if let Some(proposed) = binding.as_mut() {
             let key = proposed.identity.key()?;
             sessions::Entity::update_many()
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .col_expr(
                     sessions::Column::Head,
                     Expr::col(sessions::Column::Head).into(),
@@ -198,6 +201,7 @@ impl GatewayInventory {
                 .exec(&tx)
                 .await?;
             match sessions::Entity::find_by_id(&key)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .lock_exclusive()
                 .one(&tx)
                 .await?
@@ -209,6 +213,7 @@ impl GatewayInventory {
             }
         }
         if records::Entity::find_by_id(store.id(INVENTORY_KIND, request_id)?)
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .lock_exclusive()
             .one(&tx)
             .await?
@@ -304,6 +309,7 @@ impl GatewayInventory {
                 let bound_store = EvolutionStore::new(self.db.clone(), &binding.identity.owner)?;
                 let id = bound_store.id(EXECUTION_KIND, &request.request_id)?;
                 if records::Entity::find_by_id(&id)
+                    .filter(crate::storage::legacy::scope("checkpoint_evolution"))
                     .lock_exclusive()
                     .one(&tx)
                     .await?
@@ -334,6 +340,7 @@ impl GatewayInventory {
         let mut complete = true;
         for id in anchors.keys() {
             let connection = connections::Entity::find_by_id(id)
+                .filter(crate::storage::legacy::scope("acp_capture_connections"))
                 .lock_exclusive()
                 .one(tx)
                 .await?
@@ -341,6 +348,7 @@ impl GatewayInventory {
             let store = EvolutionStore::new(self.db.clone(), &connection.owner)?;
             let record_id = store.id(COVERAGE_KIND, id)?;
             if records::Entity::find_by_id(record_id)
+                .filter(crate::storage::legacy::scope("checkpoint_evolution"))
                 .lock_exclusive()
                 .one(tx)
                 .await?
@@ -405,6 +413,7 @@ pub(crate) async fn lock_connection(
     id: &str,
 ) -> Result<connections::Model> {
     connections::Entity::update_many()
+        .filter(crate::storage::legacy::scope("acp_capture_connections"))
         .col_expr(
             connections::Column::Head,
             Expr::col(connections::Column::Head).into(),
@@ -416,6 +425,7 @@ pub(crate) async fn lock_connection(
     // an earlier connection in this transaction established a read view.
     // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
     connections::Entity::find_by_id(id)
+        .filter(crate::storage::legacy::scope("acp_capture_connections"))
         .lock_exclusive()
         .one(tx)
         .await?

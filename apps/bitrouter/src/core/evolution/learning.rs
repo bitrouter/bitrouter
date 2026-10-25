@@ -64,6 +64,7 @@ struct Snapshot {
 
 async fn assessment_head(db: &impl ConnectionTrait, key: &str) -> Result<Option<String>> {
     Ok(heads::Entity::find_by_id(key)
+        .filter(crate::storage::legacy::scope("acp_effective_assessments"))
         .one(db)
         .await?
         .and_then(|row| row.revision_id))
@@ -71,6 +72,7 @@ async fn assessment_head(db: &impl ConnectionTrait, key: &str) -> Result<Option<
 
 async fn resource_head(db: &DatabaseTransaction, checkpoint: &str) -> Result<Option<String>> {
     Ok(resources::Entity::find()
+        .filter(crate::storage::legacy::scope("acp_resource_observations"))
         .filter(resources::Column::CheckpointId.eq(checkpoint))
         .order_by_desc(resources::Column::Revision)
         .lock_exclusive()
@@ -275,6 +277,7 @@ impl BlockPolicyStore {
             self.store.ensure_owner(&enrollment.identity.owner)?;
             let key = enrollment.identity.key()?;
             let session = sessions::Entity::find_by_id(&key)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .one(&self.store.db)
                 .await?
                 .context("assigned session metadata disappeared")?;
@@ -297,6 +300,7 @@ impl BlockPolicyStore {
             while let Some(parent_key) = parent {
                 ensure!(visited.insert(parent_key.clone()), "cyclic fork lineage");
                 let ancestor = sessions::Entity::find_by_id(&parent_key)
+                    .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                     .one(&self.store.db)
                     .await?
                     .context("fork ancestor metadata disappeared")?;
@@ -529,6 +533,7 @@ impl Snapshot {
             .collect();
         for key in keys {
             sessions::Entity::update_many()
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .col_expr(
                     sessions::Column::Head,
                     Expr::col(sessions::Column::Head).into(),
@@ -537,6 +542,7 @@ impl Snapshot {
                 .exec(tx)
                 .await?;
             let row = sessions::Entity::find_by_id(key)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .lock_exclusive()
                 .one(tx)
                 .await?
@@ -568,6 +574,7 @@ impl Snapshot {
                 "assessment references an unlocked session"
             );
             let current = heads::Entity::find_by_id(key)
+                .filter(crate::storage::legacy::scope("acp_effective_assessments"))
                 .lock_exclusive()
                 .one(tx)
                 .await?
@@ -580,6 +587,7 @@ impl Snapshot {
         for id in &self.checkpoint_ids {
             ensure!(
                 checkpoints::Entity::find_by_id(id)
+                    .filter(crate::storage::legacy::scope("acp_checkpoints"))
                     .lock_exclusive()
                     .one(tx)
                     .await?

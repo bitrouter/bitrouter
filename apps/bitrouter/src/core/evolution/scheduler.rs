@@ -78,6 +78,25 @@ async fn feedback_epoch(
 }
 
 impl EvolutionScheduler {
+    /// The daemon's only Legacy worker launch path. Tenancy must not inspect,
+    /// discover, reserve or recover Legacy work even when provider dispatch denies.
+    pub(crate) fn start_legacy(
+        runtime: EvolutionRuntime,
+        pipeline: Option<Arc<Pipeline>>,
+        tenancy_enabled: bool,
+        gate: crate::daemon_handoff::HandoffGate,
+        shutdown: CancellationToken,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        if tenancy_enabled {
+            return None;
+        }
+        let pipeline = pipeline?;
+        let worker = Self::new(runtime).with_handoff_gate(gate);
+        Some(tokio::spawn(
+            async move { worker.run(pipeline, shutdown).await },
+        ))
+    }
+
     pub fn new(runtime: EvolutionRuntime) -> Self {
         Self {
             runtime,
@@ -158,6 +177,7 @@ impl EvolutionScheduler {
         self.status(|status| status.last_started_at = Some(chrono::Utc::now().to_rfc3339()));
         let mut owners = BTreeMap::<String, Vec<sessions::Model>>::new();
         for row in sessions::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
             .filter(sessions::Column::Deleted.eq(false))
             .all(&self.runtime.db)
             .await?
@@ -247,6 +267,7 @@ impl EvolutionScheduler {
         let mut open = BTreeSet::new();
         let mut stopped = false;
         for raw in events::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_capture_events"))
             .filter(events::Column::SessionKey.eq(&row.session_key))
             .filter(events::Column::SessionSequence.lte(row.head))
             .filter(events::Column::Replay.eq(false))
@@ -320,6 +341,7 @@ impl EvolutionScheduler {
         let tx = self.runtime.db.begin().await?;
         feedback_epoch(&service.store, &tx, state).await?;
         sessions::Entity::update_many()
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
             .col_expr(
                 sessions::Column::Head,
                 Expr::col(sessions::Column::Head).into(),
@@ -329,6 +351,7 @@ impl EvolutionScheduler {
             .await?;
         ensure!(
             sessions::Entity::find_by_id(&row.session_key)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .one(&tx)
                 .await?
                 .as_ref()
@@ -427,6 +450,7 @@ impl EvolutionScheduler {
             .await?
         {
             let row = sessions::Entity::find_by_id(enrollment.identity.key()?)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .one(&self.runtime.db)
                 .await?;
             if row.is_none_or(|row| row.deleted) {

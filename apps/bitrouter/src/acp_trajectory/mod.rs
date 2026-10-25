@@ -100,6 +100,7 @@ impl CanonicalStore {
 
     pub async fn list(&self, owner: &str, source: &str) -> Result<Vec<sessions::Model>> {
         Ok(sessions::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
             .filter(sessions::Column::Deleted.eq(false))
             .filter(sessions::Column::Owner.eq(owner))
             .filter(sessions::Column::Source.eq(source))
@@ -111,11 +112,13 @@ impl CanonicalStore {
     pub async fn transcript(&self, identity: &SessionIdentity) -> Result<SessionTranscript> {
         let key = identity.key()?;
         let session = sessions::Entity::find_by_id(&key)
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
             .one(&self.db)
             .await?
             .context("no recorded ACP session with this native identity")?;
         ensure!(!session.deleted, "recorded ACP content was deleted");
         let rows = events::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_capture_events"))
             .filter(events::Column::SessionKey.eq(&key))
             .order_by_asc(events::Column::SessionSequence)
             .order_by_asc(events::Column::ConnectionId)
@@ -176,6 +179,7 @@ impl CanonicalStore {
         let mut setup_evidence = Vec::new();
         for connection in &connection_ids {
             let unbound = events::Entity::find()
+                .filter(crate::storage::legacy::scope("acp_capture_events"))
                 .filter(events::Column::ConnectionId.eq(connection))
                 .filter(events::Column::SessionKey.is_null())
                 .all(&self.db)
@@ -203,6 +207,7 @@ impl CanonicalStore {
         let mut captured_connections = Vec::new();
         for id in connection_ids {
             let connection = connections::Entity::find_by_id(id)
+                .filter(crate::storage::legacy::scope("acp_capture_connections"))
                 .one(&self.db)
                 .await?
                 .context("missing capture connection")?;
@@ -230,6 +235,7 @@ impl CanonicalStore {
             }
         }
         let current = sessions::Entity::find_by_id(&key)
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
             .one(&self.db)
             .await?
             .context("capture session disappeared while reading")?;
@@ -340,12 +346,25 @@ impl CanonicalStore {
         // Fence appenders before deleting any content. Metadata is retained to
         // prevent an outstanding response from recreating the deleted session.
         sessions::Entity::update_many()
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
             .col_expr(sessions::Column::Deleted, Expr::value(true))
             .filter(sessions::Column::SessionKey.eq(&key))
             .exec(&tx)
             .await?;
+        // Never infer deletion authority from a guessed key or its dependents.
+        // The scoped UPDATE above locks any Legacy root before this read.
+        if sessions::Entity::find_by_id(&key)
+            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
+            .one(&tx)
+            .await?
+            .is_none()
+        {
+            tx.rollback().await?;
+            return Ok(());
+        }
         checkpoint::delete_dependents(&tx, &key).await?;
         let rows = events::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_capture_events"))
             .filter(events::Column::SessionKey.eq(&key))
             .all(&tx)
             .await?;
@@ -361,6 +380,7 @@ impl CanonicalStore {
         }
         for (connection, calls) in setup_calls {
             let unbound = events::Entity::find()
+                .filter(crate::storage::legacy::scope("acp_capture_events"))
                 .filter(events::Column::ConnectionId.eq(connection))
                 .filter(events::Column::SessionKey.is_null())
                 .all(&tx)
@@ -369,12 +389,14 @@ impl CanonicalStore {
                 let event: CaptureEvent = serde_json::from_str(&row.event_json)?;
                 if event.call_id.is_some_and(|call| calls.contains(&call)) {
                     events::Entity::delete_by_id((row.connection_id, row.sequence))
+                        .filter(crate::storage::legacy::scope("acp_capture_events"))
                         .exec(&tx)
                         .await?;
                 }
             }
         }
         events::Entity::delete_many()
+            .filter(crate::storage::legacy::scope("acp_capture_events"))
             .filter(events::Column::SessionKey.eq(&key))
             .exec(&tx)
             .await?;

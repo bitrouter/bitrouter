@@ -313,6 +313,7 @@ impl JudgeCosts {
                 .map(|id| lookup.id(LOOKUP_KIND, id))
                 .collect::<Result<Vec<_>>>()?;
             for row in records::Entity::find()
+                .filter(crate::storage::legacy::scope("checkpoint_evolution"))
                 .filter(records::Column::ScopeId.eq(&lookup.scope_id))
                 .filter(records::Column::Kind.eq(LOOKUP_KIND))
                 .filter(records::Column::RecordId.is_in(record_ids))

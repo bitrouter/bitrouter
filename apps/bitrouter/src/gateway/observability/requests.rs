@@ -79,6 +79,7 @@ impl GatewayRequestTracker {
             auth.route_scope_id.as_str()
         };
         let connections = connections::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_capture_connections"))
             .filter(connections::Column::ControllerInstanceId.eq(controller))
             .filter(connections::Column::RouteScopeId.eq(principal))
             .filter(connections::Column::State.eq("recording"))
@@ -105,13 +106,18 @@ impl GatewayRequestTracker {
                     native_session_id: claim.clone(),
                 };
                 let key = identity.key()?;
-                let Some(row) = sessions::Entity::find_by_id(&key).one(&self.db).await? else {
+                let Some(row) = sessions::Entity::find_by_id(&key)
+                    .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
+                    .one(&self.db)
+                    .await?
+                else {
                     continue;
                 };
                 if row.deleted {
                     continue;
                 }
                 let observed = events::Entity::find()
+                    .filter(crate::storage::legacy::scope("acp_capture_events"))
                     .filter(events::Column::SessionKey.eq(&key))
                     .filter(events::Column::ConnectionId.eq(&connection.connection_id))
                     .one(&self.db)

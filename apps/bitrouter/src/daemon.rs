@@ -912,6 +912,7 @@ async fn active_recording_count(acp: &AcpControlPlane) -> Result<Option<u64>> {
         return Ok(None);
     };
     let count = crate::storage::capture::connections::Entity::find()
+        .filter(crate::storage::legacy::scope("acp_capture_connections"))
         .filter(crate::storage::capture::connections::Column::State.eq("recording"))
         .count(&inventory.db)
         .await?;

@@ -3,7 +3,7 @@
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::{DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -143,6 +143,7 @@ impl CanonicalRequestBinding {
                 "routing reloaded after canonical admission"
             );
             let session = sessions::Entity::find_by_id(fence.identity.key()?)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .one(&self.db)
                 .await?
                 .context("canonical session disappeared")?;

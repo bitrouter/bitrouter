@@ -529,6 +529,50 @@ Production tenancy remains the local SQLite profile; these server-backend
 regressions do not enable distributed authority. Dispatch and strict-receipt
 capability flags remain disabled, and M2 is not complete.
 
+### M2 Legacy capture and evolution namespace
+
+Migration033 adds nullable installation, tenant and creator projections to the
+nine existing capture, canonical-session, checkpoint, observation, assessment
+and evolution tables. Historical bytes, public entity shapes, logical IDs and
+existing indexes remain unchanged. Every Legacy read, mutation and count
+requires all three ownership columns to be NULL before loading payloads,
+including child rows and partially populated ownership metadata.
+
+Recorder and evolution initialization use conflict-safe insertion followed by
+scoped current reads; a marked conflicting key cannot be adopted or updated.
+Non-returning inserts require one affected row. Evolution saves use revision
+CAS, and assessment selection cannot overwrite a foreign head. Canonical
+deletion, dependent checkpoint invalidation and cached judge-job deletion use
+one existing transaction and reject foreign graph edges before committing.
+
+The daemon's Legacy evolution launch path exits before discovery or task
+creation when tenancy is enabled. Ordinary local launch and drain behavior
+remain available. This supplies isolation for existing consumers; it does not
+provide the authenticated owned capture/controller path or paid evaluation.
+Migration preflight covers all nine tables before DDL, supports partial resume
+and refuses populated ownership or incompatible dependent objects on downgrade.
+
+Qualification passed 457 all-feature targeted tests. The same affected unit and
+checkpoint CLI coverage passed 89 minimum-gateway, 177 core-only, 104
+harness-only and 197 core+harness tests, with strict all-target Clippy for each
+profile and the all-feature workspace. PostgreSQL 17 and MySQL 8.4 each passed
+the isolated nine-table migration and actual mixed-namespace consumer tests;
+all 11 existing MySQL snapshot regressions also passed. Generated fixture
+databases were absent after verified cleanup.
+
+Independent review found no remaining P1/P2 defects in the integrated Legacy
+consumers, graph edges, insertion conflicts, launch gate, transactional deletion,
+migration safeguards or artifact schema allowances. All 5,372 workspace tests
+passed, with 178 opt-in tests skipped, and 12 doctests passed with one ignored.
+Warnings-as-errors rustdoc, distribution, formatting and whitespace checks passed.
+Five real artifact tests passed using separately built default-full,
+minimum-gateway and harness-only executables. The pinned historical database
+preserved its rows, original column/constraint bytes, indexes and migration
+timestamps across all profile transitions; only the exact nullable ownership
+additions were accepted.
+Dispatch and strict-receipt capabilities remain disabled; owned capture and
+paid learning remain separate work.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.
