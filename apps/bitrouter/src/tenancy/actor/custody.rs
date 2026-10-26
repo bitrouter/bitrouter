@@ -195,6 +195,40 @@ impl Worker {
                     drop(owner);
                 }
                 #[cfg(all(feature = "core", feature = "harness"))]
+                Job::Capture(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_capture(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    let crate::tenancy::capture::queue::Job {
+                        binding,
+                        request,
+                        reply,
+                        _read: read,
+                        ..
+                    } = *message;
+                    if reply
+                        .send(crate::tenancy::capture::queue::Outcome {
+                            result,
+                            disposition: self.proof.disposition(),
+                        })
+                        .is_err()
+                    {
+                        tracing::debug!(
+                            "capture operation completed without its response receiver"
+                        );
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    drop((binding, request, read));
+                }
+                #[cfg(all(feature = "core", feature = "harness"))]
                 Job::Native(message) => {
                     let result = self
                         .supervise(
@@ -607,6 +641,16 @@ impl Job {
             Self::Receipt(owner) => owner.fail(ErrorCode::StorageUnavailable),
             Self::ReceiptRead(read) => {
                 let _ = read.reply.send(Err(ErrorCode::AuthorityUnavailable.into()));
+            }
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::Capture(message) => {
+                if message
+                    .reply
+                    .send(crate::tenancy::capture::queue::Outcome::rejected())
+                    .is_err()
+                {
+                    tracing::debug!("rejected capture had no response receiver");
+                }
             }
             #[cfg(all(feature = "core", feature = "harness"))]
             Self::Native(message) => {

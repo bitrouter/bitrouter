@@ -970,6 +970,22 @@ impl AcpClient {
         transport: impl ConnectTo<Client> + 'static,
         options: ClientOptions,
     ) -> anyhow::Result<Self> {
+        let (connected, driver) = Self::begin_connect(transport, options);
+        // Preserve the ordinary client lifetime: command channel closure or
+        // explicit shutdown ends its detached driver. Owned hosts keep the join.
+        drop(driver);
+        connected.await
+    }
+
+    /// Private synchronous startup: the owning host retains the driver before
+    /// the first handshake wait. An initializer error never consumes its owner.
+    pub(crate) fn begin_connect(
+        transport: impl ConnectTo<Client> + 'static,
+        options: ClientOptions,
+    ) -> (
+        futures::future::BoxFuture<'static, anyhow::Result<Self>>,
+        tokio::task::JoinHandle<()>,
+    ) {
         let (cmd_tx, cmd_rx) = mpsc::unbounded::<Command>();
         let (updates_tx, _) = broadcast::channel::<SessionUpdateKind>(UPDATE_CHANNEL_CAPACITY);
         let (raw_updates_tx, _) = broadcast::channel::<SessionUpdate>(UPDATE_CHANNEL_CAPACITY);
@@ -995,33 +1011,33 @@ impl AcpClient {
             options.terminal_auth,
         );
 
-        // Detached: the driver ends when the command channel closes (this
-        // client dropped) or an explicit `shutdown` arrives.
-        tokio::spawn(driver);
-
-        let init = handshake_rx
-            .await
-            .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
-        let route_control = RouteControlCapability::from_init(&init);
-        let agent_capabilities = init.agent_capabilities.clone();
-        let auth_methods = init.auth_methods.clone();
-        let protocol_version = init.protocol_version;
-        let agent_info = init.agent_info.clone();
-        Ok(Self {
-            agent_capabilities,
-            route_control,
-            auth_methods,
-            protocol_version,
-            agent_info,
-            cmd_tx,
-            updates_tx,
-            raw_updates_tx,
-            raw_notifications,
-            permissions_rx: Arc::new(Mutex::new(Some(perm_rx))),
-            usage,
-            permissions,
-            turn_timeout: options.turn_timeout,
-        })
+        let driver = tokio::spawn(driver);
+        let connected = Box::pin(async move {
+            let init = handshake_rx
+                .await
+                .map_err(|_| anyhow::anyhow!("the ACP connection ended before the handshake"))??;
+            let route_control = RouteControlCapability::from_init(&init);
+            let agent_capabilities = init.agent_capabilities.clone();
+            let auth_methods = init.auth_methods.clone();
+            let protocol_version = init.protocol_version;
+            let agent_info = init.agent_info.clone();
+            Ok(Self {
+                agent_capabilities,
+                route_control,
+                auth_methods,
+                protocol_version,
+                agent_info,
+                cmd_tx,
+                updates_tx,
+                raw_updates_tx,
+                raw_notifications,
+                permissions_rx: Arc::new(Mutex::new(Some(perm_rx))),
+                usage,
+                permissions,
+                turn_timeout: options.turn_timeout,
+            })
+        });
+        (connected, driver)
     }
 
     /// Create the session: `session/new` with `cwd` and the given MCP servers.

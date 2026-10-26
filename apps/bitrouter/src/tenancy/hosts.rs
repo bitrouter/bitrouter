@@ -13,6 +13,9 @@ pub(super) struct Hosts {
     stop: CancellationToken,
     #[cfg(test)]
     resources_gate: std::sync::Mutex<Option<(HostBoundary, Arc<HostGate>)>>,
+    #[cfg(all(test, unix))]
+    first_cleanup_unknown:
+        std::sync::OnceLock<(&'static std::panic::Location<'static>, tokio::time::Instant)>,
 }
 
 pub(crate) struct HostSlot {
@@ -42,6 +45,8 @@ impl Hosts {
             stop: CancellationToken::new(),
             #[cfg(test)]
             resources_gate: Default::default(),
+            #[cfg(all(test, unix))]
+            first_cleanup_unknown: Default::default(),
         }
     }
     pub(super) fn close(&self) {
@@ -67,6 +72,7 @@ pub(crate) struct HostGate {
     pub mcp: std::sync::OnceLock<
         std::sync::Weak<tokio::sync::Mutex<crate::harness::resources::mcp::McpConnections>>,
     >,
+    #[cfg(unix)]
     pub http: std::sync::OnceLock<crate::gateway::mcp::client::HttpProbe>,
     release: tokio::sync::Notify,
     unwind: std::sync::atomic::AtomicBool,
@@ -83,6 +89,7 @@ pub(crate) enum HostBoundary {
 
 #[cfg(test)]
 impl HostGate {
+    #[cfg(unix)]
     pub(crate) fn release(&self) {
         self.release.notify_one();
     }
@@ -103,6 +110,7 @@ impl HostGate {
 
 #[cfg(test)]
 impl Service {
+    #[cfg(unix)]
     pub(crate) fn hold_host(&self, boundary: HostBoundary) -> anyhow::Result<Arc<HostGate>> {
         let gate = Arc::new(HostGate {
             entered: tokio::sync::Notify::new(),
@@ -120,6 +128,13 @@ impl Service {
         *slot = Some((boundary, gate.clone()));
         Ok(gate)
     }
+    #[cfg(unix)]
+    pub(crate) fn host_cleanup_unknown_site_for_test(
+        &self,
+    ) -> Option<(&'static std::panic::Location<'static>, tokio::time::Instant)> {
+        self.hosts.first_cleanup_unknown.get().copied()
+    }
+    #[cfg(unix)]
     pub(crate) fn host_slots_for_test(&self) -> usize {
         self.hosts.slots.available_permits()
     }
@@ -193,7 +208,17 @@ impl Service {
             drop(slot);
         });
     }
+    #[cfg_attr(all(test, unix), track_caller)]
     pub(crate) fn host_cleanup_unknown(&self) {
+        // One fixed observation preserves the first cause across later cleanup.
+        // It never replaces quarantine or changes a cleanup acknowledgement.
+        #[cfg(all(test, unix))]
+        {
+            let caller = std::panic::Location::caller();
+            self.hosts
+                .first_cleanup_unknown
+                .get_or_init(|| (caller, tokio::time::Instant::now()));
+        }
         self.cleanup.quarantine();
     }
 }

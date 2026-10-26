@@ -181,6 +181,25 @@ impl App {
             .await
     }
 
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn capture_service(
+        &self,
+    ) -> std::result::Result<crate::tenancy::Service, anyhow::Error> {
+        self.tenancy
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("authenticated capture requires tenancy"))
+    }
+
+    pub(crate) fn owned_inference_router(&self, router: axum::Router) -> axum::Router {
+        match &self.tenancy {
+            Some(service) => router.layer(axum::middleware::from_fn_with_state(
+                service.clone(),
+                crate::tenancy::http::dispatch,
+            )),
+            None => router,
+        }
+    }
+
     pub(crate) fn with_tenancy(mut self, service: crate::tenancy::Service) -> Self {
         self.tenancy = Some(service);
         self

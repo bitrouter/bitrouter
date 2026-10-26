@@ -78,6 +78,18 @@ async fn feedback_epoch(
 }
 
 impl EvolutionScheduler {
+    /// One authenticated host association, supplied by the Service actor.
+    /// The Legacy daemon worker remains dormant in tenancy mode.
+    #[cfg(feature = "harness")]
+    pub(crate) async fn owned_pass_in(
+        tx: &DatabaseTransaction,
+        association: &crate::harness::trajectory::owned::Association,
+        native: &str,
+        budget: &crate::storage::operation_budget::OperationBudget<'_>,
+    ) -> Result<Option<crate::acp_trajectory::checkpoint::owned::Summary>> {
+        crate::acp_trajectory::checkpoint::owned::freeze_in(tx, association, native, budget).await
+    }
+
     /// The daemon's only Legacy worker launch path. Tenancy must not inspect,
     /// discover, reserve or recover Legacy work even when provider dispatch denies.
     pub(crate) fn start_legacy(

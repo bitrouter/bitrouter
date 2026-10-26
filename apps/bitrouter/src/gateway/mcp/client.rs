@@ -655,7 +655,7 @@ impl BoundedMcpClient {
                 // Register the actual worker owner before polling handshake. A
                 // cancelled/failed handshake drops only its facade, never this owner.
                 self.http.push(transport.clone());
-                #[cfg(all(test, feature = "core", feature = "harness"))]
+                #[cfg(all(test, unix, feature = "core", feature = "harness"))]
                 if let Some(gate) = &self.discovery_gate {
                     gate.http
                         .set(HttpProbe(transport.observe()))
@@ -713,10 +713,10 @@ fn validate_id(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(all(test, feature = "core", feature = "harness"))]
+#[cfg(all(test, unix, feature = "core", feature = "harness"))]
 pub(crate) struct HttpProbe(http_owner::Probe);
 
-#[cfg(all(test, feature = "core", feature = "harness"))]
+#[cfg(all(test, unix, feature = "core", feature = "harness"))]
 impl HttpProbe {
     #[cfg(unix)]
     pub(crate) async fn closing(&self) -> Result<(), String> {

@@ -156,7 +156,7 @@ jobs:
         if: runner.os == 'macOS'
         run: >-
           cargo build --locked -p bitrouter --all-features --jobs 2
-          --example harness_mcp_fixture --example pty_acp_fixture --example acp_codex_skill_fixture --example acp_claude_skill_fixture --example mcp_skills_fixture --example onboarding_fixture --example managed_effect_fixture
+          --example harness_mcp_fixture --example pty_acp_fixture --example acp_codex_skill_fixture --example acp_claude_skill_fixture --example mcp_skills_fixture --example onboarding_fixture --example managed_effect_fixture --example owned_capture_fixture
       - run: >-
           cargo nextest run --workspace --all-features
           --no-fail-fast
@@ -172,6 +172,29 @@ jobs:
           cargo nextest run --locked -p bitrouter --all-features --lib
           --build-jobs 2 --test-threads 1 --run-ignored only
           -E 'test(=tenancy::tests::execution::native::session::custody::native36_real_child_and_file_owner_follow_actual_cleanup_disposition)'
+
+      - name: verify owned capture child and cleanup consumers
+        if: runner.os == 'macOS'
+        timeout-minutes: 10
+        env:
+          BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
+        # Exact public parents only; never select the internal fault child.
+        run: >-
+          cargo nextest run --locked -p bitrouter --all-features --lib
+          --build-jobs 2 --test-threads 1 --retries 0 --run-ignored only
+          -E 'test(=tenancy::tests::execution::native::capture::real_controller_passive_modes_freeze_owned_prefix_without_judge_or_legacy_reads)
+          | test(=tenancy::tests::execution::native::capture::revocation_refuses_new_content_but_retains_admitted_disconnect_cleanup)
+          | test(=tenancy::tests::execution::native::capture::cancelled_initialize_waiter_keeps_real_child_owner_until_service_drain)
+          | test(=tenancy::tests::execution::native::capture::failed_provider_initialization_keeps_partial_client_child_and_capture_until_joined)
+          | test(=tenancy::tests::execution::native::capture::revoke_across_initialize_wait_prevents_the_next_provider_configuration_effect)
+          | test(=tenancy::tests::execution::native::capture::ingress::real_unterminated_child_line_is_refused_before_sdk_accumulation)
+          | test(=tenancy::tests::execution::native::capture::ingress::real_small_frame_flood_is_bounded_while_capture_writer_is_held)
+          | test(=tenancy::tests::execution::native::capture::ingress::real_byte_flood_exhausts_cumulative_allowance_without_frame_reset)
+          | test(=tenancy::tests::execution::native::capture::faults::capture_caught_reaper_unwind_retains_the_actual_child_and_file_owner)
+          | test(=tenancy::tests::execution::native::capture::faults::capture_missed_child_cleanup_keeps_owner_even_after_the_same_child_is_reaped)
+          | test(=harness::acp::up::owned::tests::process::reaped_leader_with_live_descendant_is_not_group_absence)
+          | test(=tenancy::tests::execution::native::capture::faults::reap::exited_child_is_reaped_before_owned_capture_cleanup_ack)
+          | test(=tenancy::tests::execution::native::capture::faults::reap::exited_leader_does_not_skip_owned_live_descendant_cleanup)'
 
   # A cold all-features build used to compile and link every large application
   # test target on one runner. Split by Cargo target so each runner has bounded
@@ -219,9 +242,11 @@ jobs:
           cache-save-if: false
           cache-workspace-crates: true
       - uses: taiki-e/install-action@nextest
-      - name: build MCP fixture before library test deadlines
+      - name: build MCP and capture fixtures before library test deadlines
         if: matrix.target == 'lib'
-        run: cargo build --locked -p bitrouter --all-features --jobs 2 --example harness_mcp_fixture
+        run: >-
+          cargo build --locked -p bitrouter --all-features --jobs 2
+          --example harness_mcp_fixture --example owned_capture_fixture
       - env:
           TEST_TARGET_FLAGS: ${{ matrix.flags }}
           BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
@@ -242,6 +267,29 @@ jobs:
           cargo nextest run --locked -p bitrouter --all-features --lib
           --build-jobs 2 --test-threads 1 --run-ignored only
           -E 'test(=tenancy::tests::execution::native::session::custody::native36_real_child_and_file_owner_follow_actual_cleanup_disposition)'
+
+      - name: verify owned capture child and cleanup consumers
+        if: matrix.target == 'lib'
+        timeout-minutes: 10
+        env:
+          BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
+        # Exact public parents only; never select the internal fault child.
+        run: >-
+          cargo nextest run --locked -p bitrouter --all-features --lib
+          --build-jobs 2 --test-threads 1 --retries 0 --run-ignored only
+          -E 'test(=tenancy::tests::execution::native::capture::real_controller_passive_modes_freeze_owned_prefix_without_judge_or_legacy_reads)
+          | test(=tenancy::tests::execution::native::capture::revocation_refuses_new_content_but_retains_admitted_disconnect_cleanup)
+          | test(=tenancy::tests::execution::native::capture::cancelled_initialize_waiter_keeps_real_child_owner_until_service_drain)
+          | test(=tenancy::tests::execution::native::capture::failed_provider_initialization_keeps_partial_client_child_and_capture_until_joined)
+          | test(=tenancy::tests::execution::native::capture::revoke_across_initialize_wait_prevents_the_next_provider_configuration_effect)
+          | test(=tenancy::tests::execution::native::capture::ingress::real_unterminated_child_line_is_refused_before_sdk_accumulation)
+          | test(=tenancy::tests::execution::native::capture::ingress::real_small_frame_flood_is_bounded_while_capture_writer_is_held)
+          | test(=tenancy::tests::execution::native::capture::ingress::real_byte_flood_exhausts_cumulative_allowance_without_frame_reset)
+          | test(=tenancy::tests::execution::native::capture::faults::capture_caught_reaper_unwind_retains_the_actual_child_and_file_owner)
+          | test(=tenancy::tests::execution::native::capture::faults::capture_missed_child_cleanup_keeps_owner_even_after_the_same_child_is_reaped)
+          | test(=harness::acp::up::owned::tests::process::reaped_leader_with_live_descendant_is_not_group_absence)
+          | test(=tenancy::tests::execution::native::capture::faults::reap::exited_child_is_reaped_before_owned_capture_cleanup_ack)
+          | test(=tenancy::tests::execution::native::capture::faults::reap::exited_leader_does_not_skip_owned_live_descendant_cleanup)'
 
   test-ubuntu-integration:
     name: test (ubuntu-latest, bitrouter integration ${{ matrix.shard }})
@@ -922,6 +970,19 @@ jobs:
               mysql --user=fixture --database=bitrouter_test \
               --execute='DROP DATABASE bitrouter_eval_native36'
           fi
+
+      - name: verify owned capture actor and child on the selected backend
+        # The test owns an isolated database under the existing scoped grant.
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+          BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
+        run: |
+          cargo build --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness" \
+            --jobs 2 --example owned_capture_fixture
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness" \
+            --lib tenancy::tests::execution::native::capture::server::server_capture03_actor_facade_namespace_replay_and_reconnect \
+            -- --ignored --exact --test-threads=1
 
       - name: verify MySQL transaction snapshot boundaries
         if: matrix.backend == 'mysql'

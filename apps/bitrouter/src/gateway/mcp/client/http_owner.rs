@@ -72,7 +72,7 @@ impl Owner {
         .await
     }
 
-    #[cfg(all(test, feature = "core", feature = "harness"))]
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
     pub(super) fn observe(&self) -> Probe {
         Probe(Arc::downgrade(&self.0))
     }
@@ -142,10 +142,10 @@ impl Transport<RoleClient> for Owner {
 
 // Weak inspection of the actual retained transport/close future. It owns no
 // worker and cannot mark cleanup complete, cancel it, or drive a separate join.
-#[cfg(all(test, feature = "core", feature = "harness"))]
+#[cfg(all(test, unix, feature = "core", feature = "harness"))]
 pub(super) struct Probe(std::sync::Weak<Shared>);
 
-#[cfg(all(test, feature = "core", feature = "harness"))]
+#[cfg(all(test, unix, feature = "core", feature = "harness"))]
 impl Probe {
     #[cfg(unix)]
     pub(super) async fn closing(&self) -> Result<(), String> {

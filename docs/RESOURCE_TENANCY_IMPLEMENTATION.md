@@ -741,6 +741,63 @@ provider work, broader recovery and final performance remain separate gates.
 Production dispatch, revision-bound dispatch and strict receipts remain disabled;
 this consumer does not mark M2 or M3 complete.
 
+### M2 authenticated passive capture
+
+The local `ControlledSession::open_authenticated` facade reuses the assembled
+App, its authenticated loopback inference listener and the ordinary ACP controller
+factory. One current authority pins the retained revision and exact route closure.
+Fresh native sessions, prompts, live updates, permission replies, passive checkpoint
+summaries and explicit shutdown use the same bounded capture owner. The shipped
+CLI retains its Legacy profile; no tenant session HTTP API is introduced.
+
+Raw stdout is bounded before SDK line parsing and queueing. The actual child,
+process group, stderr copy, controller, driver and admitted transactions remain
+owned through cancellation and shutdown. An uncertain cleanup fences Service.
+An initial process-group EPERM is deferred to actual child wait and an absence-only
+probe; only ESRCH confirms absence, and no group signal is sent after reaping.
+
+Owned observations and stopped-prefix checkpoints use migration 033's existing
+namespace columns and the same authority transaction. They preserve Legacy NULL
+filters, validate complete replay closures and reserve terminal-response space.
+Off, Observe and passive Explore do not dispatch paid assessments or publish a
+new learned policy.
+
+All 5,559 all-feature workspace tests passed (206 opt-in tests skipped), together
+with 12 doctests (one ignored), strict all-target workspace Clippy and
+warnings-as-errors rustdoc. The final formatter-only test correction and macOS
+CI budget change passed formatting and distribution checks. The updated
+core-plus-harness profile passed strict all-target Clippy and all 156 selected
+tests. Earlier minimum-gateway, core and harness profiles passed their respective
+116, 125 and 118 selected tests and strict all-target Clippy.
+
+All 13 separately selected real process parents passed serially without retries,
+including actual exited children, live descendants, stderr ownership and file
+lease reacquisition. The raw small-frame flood also passed twenty independent
+post-fix runs without retries. Earlier real PostgreSQL 17 and MySQL 8.4 capture
+consumers passed namespace, replay and reconnect checks; the qualified backend
+implementation remained unchanged by subsequent reaper and test corrections.
+
+The full workspace run retained one nextest LEAK marker on an unchanged startup
+reconstruction test. One isolated run on the same source passed without the
+marker. The original cause remains unconfirmed; this is not a memory-leak
+diagnosis or a claim that an intermittent condition was fixed.
+
+Independent source and correction reviews closed the identified ownership,
+replay-fixture and feature-gate findings without relaxing the production limits.
+Windows excludes Unix-only file-owner consumers and retains explicit unsupported
+configuration/file-owner refusal coverage. The prior Windows run exposed those
+fixture assumptions; the new platform CI results remain pending. macOS receives
+a 90-minute outer CI budget after actual cold fixture/test compilation consumed
+about 59 minutes of the previous 75-minute job. Per-test deadlines and retries
+are unchanged; an incomplete earlier CI run is not counted as a pass.
+
+See [the passive capture profile](RESOURCE_TENANCY_CAPTURE_PROFILE.md) for the
+actual consumer and lifecycle boundaries. These results do not measure throughput,
+RSS or provider cost. Paid learning, auxiliary provider work, broader recovery
+and final performance remain separate gates. Production dispatch,
+revision-bound dispatch and strict receipts remain disabled; M2 and M3 remain
+incomplete.
+
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a
 runtime ownership decision and a regression test before M2 is complete.

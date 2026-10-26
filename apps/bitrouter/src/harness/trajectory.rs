@@ -3,6 +3,9 @@
 //! Historical projections and checkpoints remain in `acp_trajectory`; only
 //! this harness adapter creates recording connections and acknowledges appends.
 
+#[cfg(feature = "core")]
+pub(crate) mod owned;
+
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 

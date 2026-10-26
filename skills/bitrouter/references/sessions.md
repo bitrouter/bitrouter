@@ -567,3 +567,28 @@ Start a fresh session explicitly with `bro threads` or a new supervised
 with `learning --experiment`; reconciliation remains bound to the inspected
 version. Evaluator scores are not pooled when their contracts differ. See the
 [CLI reference](cli.md) for command flags and owner-instance fencing.
+
+## Authenticated embedding capture
+
+The local Rust `harness::acp::controlled::ControlledSession::open_authenticated`
+facade uses an assembled App and its existing tenant inference listener. This is
+a capability-gated embedding entry, not a tenant CLI or session HTTP endpoint;
+production tenant dispatch and strict receipts remain unavailable. The embedding
+host supplies the original execution headers and a trusted agent launch descriptor.
+Capture uses the same process/controller factory as ordinary ACP clients.
+
+The first profile requires explicit tenant-wide execution, evaluation submission,
+resource read and credential-use grants, one retained route, provider configuration
+support and a confirmed `model` select option. It permits fresh native sessions;
+list/load/resume/fork/delete and selected active experiments are refused. The
+explicit launch environment is complete: ambient variables are cleared.
+
+Raw opted-in observations remain in harness capture. The checkpoint operation
+returns a bounded stopped-prefix reference in Observe/passive Explore; Off does
+no checkpoint discovery. There is no paid judge, automatic delegation, quota
+funding, selection or promotion. Dropping a handle requests stop while the shared
+Service owner retains child and capture cleanup. An unconfirmed shutdown is an
+error, not permission to launch a replacement. See the library embedding example
+`apps/bitrouter/examples/owned_capture_handler.rs`.
+
+Owned passive capture bounds child stdout before SDK line accumulation/JSON/queues: 64 KiB per raw frame, 512 frames and 8 MiB cumulative wire input per connection, without refill. Exhaustion closes that same owned connection and leaves an interrupted capture; Legacy transport is unchanged. These input caps are separate from serialized observation bounds and do not constitute runtime memory qualification.

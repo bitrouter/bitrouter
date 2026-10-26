@@ -166,9 +166,13 @@ impl App {
         let options = RouterOptions {
             omit_v1_models: false,
             mcp_aggregate_route: self.mcp_aggregate_route().map(String::from),
-            router_wrapper: wrapper,
+            router_wrapper: None,
         };
-        let router = build_router_with_options(state, options);
+        let router = self.owned_inference_router(build_router_with_options(state, options));
+        let router = match wrapper {
+            Some(wrapper) => wrapper(router),
+            None => router,
+        };
         tracing::info!(listen = ?listener.local_addr(), "bitrouter listening");
         // Graceful shutdown: on SIGINT/SIGTERM
         // stop accepting new connections and let in-flight requests finish.

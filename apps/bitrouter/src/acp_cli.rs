@@ -65,12 +65,12 @@ use crate::commands::invocation;
 use crate::config::Config;
 use crate::config::agent::{AcpAgentConfig, AcpTransport};
 use anyhow::{Context, Result};
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use serde::Serialize;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-use crate::harness::acp::client::{AcpClient, ClientOptions, PendingPermission};
+use crate::harness::acp::client::{AcpClient, PendingPermission};
 use crate::harness::acp::controller::{
     RouteControl as AcpRouteControl, RouteControlError, RouteControlState,
     SessionCost as AcpSessionCost,
@@ -2708,58 +2708,35 @@ async fn launch_controlled_with_cancel(
     agent
         .validate()
         .with_context(|| format!("invalid ACP agent '{agent_id}'"))?;
-    let AcpTransport::Stdio { command, args, env } = &agent.transport;
+    let AcpTransport::Stdio { command, args, .. } = &agent.transport;
 
     let identity = controller_identity(agent_id, command, args, routed.endpoint_plan.as_ref());
     let mut controller_config = crate::harness::acp::controller::ControllerConfig::new(identity);
     if let Some(endpoint) = routed.endpoint_plan.as_ref() {
         controller_config = controller_config.endpoint(controller_endpoint(endpoint));
     }
-    let mut process =
-        crate::harness::acp::up::AgentProcess::new(command.clone(), args.clone(), env.clone())
-            .strip_inherited_env(options.strip_inherited_env);
-    let reaped = process.reaped().shared();
-    let mut controller =
-        crate::harness::acp::controller::Controller::new(process, controller_config);
-    if let Some(binding) = &binding {
-        controller = controller
-            .route_control(binding.route_control())
-            .session_cost(binding.session_cost());
-    }
-
-    if let Some(capture) = open_capture(config, agent_id, binding.as_ref()).await? {
-        controller = controller.capture(capture);
-    }
-
-    // In-process duplex: no bytes, no pipe, no second process between the
-    // manager and the controller it drives.
-    let (manager_side, controller_side) = agent_client_protocol::Channel::duplex();
-    let controller = tokio::spawn(async move {
-        controller
-            .run(controller_side)
-            .await
-            .map_err(|error| anyhow::anyhow!("acp controller: {error}"))
-    });
+    let attachments = crate::harness::acp::controlled::factory::Attachments {
+        capture: open_capture(config, agent_id, binding.as_ref()).await?,
+        route: binding.as_ref().map(LocalControllerBinding::route_control),
+        cost: binding.as_ref().map(LocalControllerBinding::session_cost),
+        #[cfg(feature = "core")]
+        owned: None,
+    };
+    let connection = crate::harness::acp::controlled::factory::start(
+        agent,
+        controller_config,
+        &options,
+        attachments,
+    )?;
     let mut cleanup = ControlledCleanup {
         binding,
-        reaped,
-        controller,
+        reaped: connection.reaped,
+        controller: connection.controller,
     };
     let connected = tokio::select! {
         biased;
         _ = cancel.cancelled() => None,
-        result = AcpClient::connect(
-            manager_side,
-            ClientOptions {
-                turn_timeout: options.turn_timeout,
-                // §6.2's first condition always holds here — the harness is a local
-                // child of this process, `AcpTransport::Stdio` being the only
-                // transport, so its invocation is always reproducible. The second
-                // is the caller's to answer, because only an interactive caller can
-                // hand a person the terminal the login needs.
-                terminal_auth: options.terminal_auth,
-            },
-        ) => Some(result),
+        result = connection.connect => Some(result),
     };
     match connected {
         Some(Ok(client)) => Ok(ControlledSession { client, cleanup }),

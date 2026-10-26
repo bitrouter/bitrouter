@@ -34,6 +34,8 @@ pub trait CapturePort: Send + Sync {
 
 pub(crate) struct CaptureProxy {
     pub(crate) port: Arc<dyn CapturePort>,
+    #[cfg(feature = "core")]
+    pub(crate) owned: Option<Arc<crate::tenancy::capture::port::Port>>,
 }
 
 impl ConnectTo<Conductor> for CaptureProxy {
@@ -41,22 +43,40 @@ impl ConnectTo<Conductor> for CaptureProxy {
         self,
         client: impl ConnectTo<Proxy>,
     ) -> Result<(), agent_client_protocol::Error> {
+        #[cfg(feature = "core")]
+        let initialize_owned = self.owned.clone();
         Proxy
             .builder()
             .name("bitrouter-durable-capture")
             .on_receive_request_from(
                 Client,
-                async |request: agent_client_protocol::schema::InitializeProxyRequest,
-                       responder,
-                       connection| {
-                    connection
-                        .send_request_to(Agent, request.initialize)
-                        .forward_response_to(responder)
+                move |request: agent_client_protocol::schema::InitializeProxyRequest,
+                      responder: agent_client_protocol::Responder<
+                    agent_client_protocol::schema::v1::InitializeResponse,
+                >,
+                      connection: ConnectionTo<Conductor>| {
+                    #[cfg(feature = "core")]
+                    let owned = initialize_owned.clone();
+                    async move {
+                        #[cfg(feature = "core")]
+                        if let Some(owned) = owned {
+                            return owned.deliver_new(|| {
+                                connection
+                                    .send_request_to(Agent, request.initialize)
+                                    .forward_response_to(responder)
+                            });
+                        }
+                        connection
+                            .send_request_to(Agent, request.initialize)
+                            .forward_response_to(responder)
+                    }
                 },
                 agent_client_protocol::on_receive_request!(),
             )
             .with_handler(CaptureMessages {
                 port: self.port,
+                #[cfg(feature = "core")]
+                owned: self.owned,
                 next_call: AtomicU64::new(1),
             })
             .connect_to(client)
@@ -67,6 +87,8 @@ impl ConnectTo<Conductor> for CaptureProxy {
 struct CaptureMessages {
     port: Arc<dyn CapturePort>,
     next_call: AtomicU64,
+    #[cfg(feature = "core")]
+    owned: Option<Arc<crate::tenancy::capture::port::Port>>,
 }
 
 pub(crate) async fn record(
@@ -112,7 +134,29 @@ impl CaptureMessages {
     where
         Conductor: HasPeer<P>,
     {
+        #[cfg(feature = "core")]
+        if let Some(owned) = &self.owned {
+            let parameters = match &message {
+                Dispatch::Request(request, _) => Some(&request.params),
+                Dispatch::Notification(notification) => Some(&notification.params),
+                Dispatch::Response(_, _) => None,
+            };
+            if let Some(parameters) = parameters {
+                owned
+                    .check_forward(direction, message.method(), parameters)
+                    .await
+                    .map_err(|_| {
+                        agent_client_protocol::Error::invalid_request()
+                            .data("owned ACP operation rejected")
+                    })?;
+            }
+        }
         if !captures(message.method()) {
+            #[cfg(feature = "core")]
+            if let Some(owned) = &self.owned {
+                owned.deliver_new(|| connection.send_proxied_message_to(peer, message))?;
+                return Ok(Handled::Yes);
+            }
             connection.send_proxied_message_to(peer, message)?;
             return Ok(Handled::Yes);
         }
@@ -132,38 +176,59 @@ impl CaptureMessages {
                 )
                 .await?;
                 let port = Arc::clone(&self.port);
+                #[cfg(feature = "core")]
+                let owned = self.owned.clone();
                 // Keep the SDK's ordered response delivery and hop-local cancellation.
                 // Reference: rust-sdk jsonrpc.rs, SentRequest::forward_response_to:
                 // https://github.com/agentclientprotocol/rust-sdk/blob/c63610fc38a642f7a73ba2719f403f17d771c345/src/agent-client-protocol/src/jsonrpc.rs
-                connection
-                    .send_request_to(peer, request)
-                    .forward_cancellation_from(responder.cancellation())
-                    .on_receiving_result(async move |result| {
-                        let payload = match &result {
-                            Ok(value) => serde_json::json!({"result": value}),
-                            Err(error) => serde_json::json!({"error": error}),
-                        };
-                        if let Err(error) = record(
-                            port.as_ref(),
-                            CaptureEvent {
-                                direction: match direction {
-                                    CaptureDirection::Client => CaptureDirection::Agent,
-                                    CaptureDirection::Agent => CaptureDirection::Client,
-                                    CaptureDirection::Controller => CaptureDirection::Controller,
+                let forward = || {
+                    connection
+                        .send_request_to(peer, request)
+                        .forward_cancellation_from(responder.cancellation())
+                        .on_receiving_result(async move |result| {
+                            let payload = match &result {
+                                Ok(value) => serde_json::json!({"result": value}),
+                                Err(error) => serde_json::json!({"error": error}),
+                            };
+                            if let Err(error) = record(
+                                port.as_ref(),
+                                CaptureEvent {
+                                    direction: match direction {
+                                        CaptureDirection::Client => CaptureDirection::Agent,
+                                        CaptureDirection::Agent => CaptureDirection::Client,
+                                        CaptureDirection::Controller => {
+                                            CaptureDirection::Controller
+                                        }
+                                    },
+                                    kind: CaptureKind::Response,
+                                    call_id: Some(call_id),
+                                    method: method.clone(),
+                                    payload,
                                 },
-                                kind: CaptureKind::Response,
-                                call_id: Some(call_id),
-                                method,
-                                payload,
-                            },
-                        )
-                        .await
-                        {
-                            responder.respond_with_error(error.clone())?;
-                            return Err(error);
-                        }
-                        responder.respond_with_result(result)
-                    })?;
+                            )
+                            .await
+                            {
+                                responder.respond_with_error(error.clone())?;
+                                return Err(error);
+                            }
+                            #[cfg(feature = "core")]
+                            if let Some(owned) = owned {
+                                if method == "session/request_permission" && result.is_ok() {
+                                    return owned
+                                        .deliver_new(|| responder.respond_with_result(result));
+                                }
+                                return owned
+                                    .deliver_observed(|| responder.respond_with_result(result));
+                            }
+                            responder.respond_with_result(result)
+                        })
+                };
+                #[cfg(feature = "core")]
+                if let Some(owned) = &self.owned {
+                    owned.deliver_new(forward)?;
+                    return Ok(Handled::Yes);
+                }
+                forward()?;
             }
             Dispatch::Notification(notification) => {
                 record(
@@ -177,12 +242,30 @@ impl CaptureMessages {
                     },
                 )
                 .await?;
-                connection.send_proxied_message_to(
-                    peer,
-                    Dispatch::<agent_client_protocol::UntypedMessage>::Notification(notification),
-                )?;
+                let forward = || {
+                    connection.send_proxied_message_to(
+                        peer,
+                        Dispatch::<agent_client_protocol::UntypedMessage>::Notification(
+                            notification,
+                        ),
+                    )
+                };
+                #[cfg(feature = "core")]
+                if let Some(owned) = &self.owned {
+                    owned.deliver_observed(forward)?;
+                    return Ok(Handled::Yes);
+                }
+                forward()?;
             }
-            Dispatch::Response(result, router) => router.route_with_result(result)?,
+            Dispatch::Response(result, router) => {
+                let forward = || router.route_with_result(result);
+                #[cfg(feature = "core")]
+                if let Some(owned) = &self.owned {
+                    owned.deliver_observed(forward)?;
+                    return Ok(Handled::Yes);
+                }
+                forward()?;
+            }
         }
         Ok(Handled::Yes)
     }

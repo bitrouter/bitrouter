@@ -56,11 +56,43 @@ use crate::{
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg(all(unix, feature = "core", feature = "harness"))]
+mod capture;
 mod continuation;
 mod limits;
 mod receipts_authority;
-#[cfg(all(feature = "core", feature = "harness"))]
+#[cfg(all(unix, feature = "core", feature = "harness"))]
 mod session;
+
+#[cfg(not(unix))]
+#[test]
+fn local_tenancy_remains_unavailable_without_creating_files() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let database = directory.path().join("owned.db");
+    let denied = crate::tenancy::ownership::acquire_path(&database, true)
+        .err()
+        .context("unsupported local owner was accepted")?;
+    ensure!(
+        denied.to_string()
+            == "local tenancy file ownership is currently qualified on Unix hosts only"
+    );
+    ensure!(std::fs::read_dir(directory.path())?.next().is_none());
+
+    let document = concat!(
+        "tenancy: {enabled: true}\n",
+        "server: {skip_auth: false}\n",
+        "control:\n  enabled: true\n  credentials:\n",
+        "    - id: tenancy-operator\n",
+        "      token_env: TEST_TENANCY_OPERATOR\n",
+        "      scopes: [control:tenancy]\n",
+    );
+    let denied = crate::config::parse_resolved(document)
+        .err()
+        .context("unsupported local tenancy configuration was accepted")?;
+    ensure!(format!("{denied:#}").contains("local tenancy currently requires a Unix host"));
+    ensure!(std::fs::read_dir(directory.path())?.next().is_none());
+    Ok(())
+}
 
 struct Observed {
     path: String,

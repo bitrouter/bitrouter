@@ -5,6 +5,8 @@
 
 mod assessment;
 pub mod entities;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod owned;
 mod resource;
 #[cfg(test)]
 mod tests;

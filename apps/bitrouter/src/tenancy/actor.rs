@@ -1,5 +1,7 @@
 //! Bounded single-writer actor; admitted commands outlive HTTP cancellation.
 
+#[cfg(all(feature = "core", feature = "harness"))]
+mod capture;
 mod continuation;
 mod custody;
 #[cfg(feature = "core")]
@@ -43,6 +45,8 @@ pub(super) struct Message {
 }
 
 pub(super) enum Job {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    Capture(Box<super::capture::queue::Job>),
     #[cfg(all(feature = "core", feature = "harness"))]
     Native(Box<super::session::Job>),
     Command(Box<Message>),

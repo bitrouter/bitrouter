@@ -4,6 +4,8 @@ mod actor;
 mod admission;
 mod authority;
 mod cache;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod capture;
 mod command;
 mod configuration;
 mod configuration_store;
@@ -526,7 +528,7 @@ impl Service {
     fn enqueue(&self, job: Job, safety: bool) -> Result<(), Failure> {
         let operation = match &job {
             #[cfg(all(feature = "core", feature = "harness"))]
-            Job::Native(_) => None,
+            Job::Native(_) | Job::Capture(_) => None,
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::Credential(_) | Job::Continuation(_) | Job::Receipt(_) | Job::ReceiptRead(_) => {
                 None
