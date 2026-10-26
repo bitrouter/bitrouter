@@ -28,6 +28,7 @@ fn candidate(installation: &str, tenant: &str, id: &str, principal: &str) -> Res
         Disposition {
             dispatch: DispatchState::NotStarted,
             statuses: Vec::new(),
+            auxiliary_digest: None,
         },
     )
 }
@@ -265,3 +266,5 @@ async fn startup_inventory_rejects_understated_bytes_and_hidden_unknown_before_a
 
 #[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
 mod server;
+
+mod counts;

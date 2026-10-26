@@ -17,6 +17,7 @@
 mod compiler;
 pub(crate) mod execution;
 mod manifest;
+mod oauth;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -161,6 +162,7 @@ impl Resources {
                         ..
                     },
                 oauth_generation: 0,
+                oauth: None,
             } => Ok(credential),
             _ => Err(ErrorCode::AuthorityUnavailable),
         }
@@ -237,9 +239,11 @@ impl Resources {
             .await
             .map_err(|_| anyhow::anyhow!("tenancy catalog unavailable"))?
         {
-            self.load(db, &reference)
+            let artifact = self
+                .load(db, &reference)
                 .await
                 .map_err(|_| anyhow::anyhow!("retained tenancy resource authentication failed"))?;
+            self.authenticate_oauth(db, &artifact).await?;
         }
         Ok(())
     }
@@ -338,6 +342,7 @@ impl Resources {
             retained.len() <= MAX_CLOSURE,
             "retained resource capacity exceeded"
         );
+        self.preflight_oauth(db, &manifest.resources).await?;
         // Credentials and policy documents precede routes, independent of input order.
         for resource in manifest
             .resources
@@ -354,6 +359,7 @@ impl Resources {
                 },
             )
             .await?;
+            self.retain_oauth(db, resource).await?;
         }
         for resource in manifest
             .resources

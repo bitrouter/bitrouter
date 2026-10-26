@@ -939,6 +939,19 @@ jobs:
             --lib tenancy::receipts::store::tests::server::server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict \
             -- --ignored --exact --test-threads=1
 
+      - name: verify owned OAuth migration and compound receipts on the selected backend
+        # Each campaign owns a bitrouter_eval_oauth_ database under the existing grant.
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: |
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+            --lib db::migration::m20240101_000037_owned_oauth::tests::server::owned_oauth_additive_schema_real_commit_rollback_down_and_reconnect \
+            -- --ignored --exact --test-threads=1
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+            --lib tenancy::oauth::storage::tests::server::owned_oauth_slot_and_auxiliary_receipt_real_commit_rollback_reconnect \
+            -- --ignored --exact --test-threads=1
+
       - name: verify native harness consumers on the selected backend
         env:
           BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}

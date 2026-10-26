@@ -409,7 +409,7 @@ impl HttpExecutor {
             let mut body =
                 self.render_execution_request(adapter.as_ref(), target, prompt, ctx, true)?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-            if self.auth_appliers.lookup(&target.provider_name).is_some() {
+            if self.needs_body_shaping(target, ctx)? {
                 native_work::observe(
                     ctx,
                     NativeProviderWorkKind::AuthenticationPreparation,

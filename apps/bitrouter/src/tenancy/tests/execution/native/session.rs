@@ -5,6 +5,7 @@ mod consumer;
 #[cfg(unix)]
 mod custody;
 mod discovery;
+mod input_count;
 mod server;
 mod waits;
 use crate::harness::resources::{
@@ -47,6 +48,14 @@ async fn file_fixture(
     provider: &Provider,
     directory: &std::path::Path,
 ) -> Result<(Fixture, ResourceRef)> {
+    file_fixture_profile(provider, directory, false).await
+}
+
+async fn file_fixture_profile(
+    provider: &Provider,
+    directory: &std::path::Path,
+    count: bool,
+) -> Result<(Fixture, ResourceRef)> {
     let database = directory.join("owned.db");
     let url = format!("sqlite://{}", database.display());
     let owner = crate::tenancy::ownership::acquire(&url)?;
@@ -54,14 +63,31 @@ async fn file_fixture(
     // Provision the encrypted resources on this leased file from the start.
     // An in-memory connection's VACUUM INTO can retain SQLITE_OPEN_MEMORY.
     let fixture = Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
-    let (mut fixture, route, _) =
+    let (mut fixture, route, slot) =
         crate::tenancy::tests::execution::provision_protocol_with_fixture(
             fixture,
             &provider.url,
-            "chat_completions",
+            if count {
+                "responses"
+            } else {
+                "chat_completions"
+            },
             &mut |_| {},
         )
         .await?;
+    let route = if count {
+        revised_route(
+            &mut fixture,
+            &route,
+            &slot,
+            &provider.url,
+            &["responses"],
+            true,
+        )
+        .await?
+    } else {
+        route
+    };
     fixture.service.shutdown().await?;
     let metadata = std::fs::metadata(&owner.path)?;
     ensure!(

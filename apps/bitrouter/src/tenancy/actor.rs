@@ -6,6 +6,7 @@ mod continuation;
 mod custody;
 #[cfg(feature = "core")]
 mod eval;
+mod oauth;
 mod receipts;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod session;
@@ -49,6 +50,7 @@ pub(super) enum Job {
     Capture(Box<super::capture::queue::Job>),
     #[cfg(all(feature = "core", feature = "harness"))]
     Native(Box<super::session::Job>),
+    OAuth(Box<super::oauth::exchange::Job>),
     Command(Box<Message>),
     Credential(CredentialRead),
     Receipt(Arc<super::receipts::owner::Owner>),
@@ -95,6 +97,7 @@ impl Drop for Liveness {
 }
 
 pub(super) struct Worker {
+    pub oauth: Arc<super::oauth::State>,
     pub db: DatabaseConnection,
     pub snapshot: Arc<RwLock<Arc<Snapshot>>>,
     pub live: Liveness,

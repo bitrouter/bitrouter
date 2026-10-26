@@ -26,13 +26,16 @@ const MAX_DISPOSITION: usize = 1024;
 pub(in crate::tenancy) struct Disposition {
     pub dispatch: DispatchState,
     pub statuses: Vec<Option<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auxiliary_digest: Option<String>,
 }
 
 pub(in crate::tenancy) struct Candidate {
     pub receipt: ExecutionReceipt,
     json: String,
     private_json: String,
-    digest: String,
+    pub(super) digest: String,
+    pub(super) auxiliary: Option<super::auxiliary_store::Evidence>,
 }
 
 impl Candidate {
@@ -62,6 +65,7 @@ impl Candidate {
             json,
             private_json,
             digest,
+            auxiliary: None,
         })
     }
     #[cfg(all(test, unix))]
@@ -78,6 +82,34 @@ impl Candidate {
                 .first()
                 .map(|attempt| attempt.attempt_id.clone()),
         }
+    }
+    pub fn with_auxiliary(mut self, facts: impl Into<super::auxiliary::Snapshot>) -> Result<Self> {
+        let facts = facts.into();
+        if facts.is_empty() {
+            return Ok(self);
+        }
+        let evidence = super::auxiliary_store::Evidence::new(&self.receipt, facts)?;
+        let mut disposition: Disposition = serde_json::from_str(&self.private_json)?;
+        disposition.auxiliary_digest = Some(evidence.digest.clone());
+        self.private_json = serde_json::to_string(&disposition)?;
+        ensure!(
+            self.private_json.len() <= MAX_DISPOSITION,
+            "receipt disposition byte bound"
+        );
+        self.digest = digest(&self.json, &self.private_json);
+        self.auxiliary = Some(evidence);
+        Ok(self)
+    }
+    pub fn auxiliary_unclean(&self) -> bool {
+        self.auxiliary.as_ref().is_some_and(|aux| aux.unclean())
+    }
+    pub fn auxiliary_unknown(&self) -> bool {
+        self.auxiliary.as_ref().is_some_and(|aux| aux.unknown())
+    }
+    pub fn auxiliary_bytes(&self) -> u64 {
+        self.auxiliary
+            .as_ref()
+            .map_or(0, |aux| aux.json.len() as u64 + 16 * 1024)
     }
     pub fn bytes(&self) -> u64 {
         (self.json.len() + self.private_json.len()) as u64
@@ -204,10 +236,27 @@ pub(in crate::tenancy) async fn lookup(
     tenant: &TenantId,
     id: &ExecutionId,
 ) -> Result<Option<ExecutionReceipt>> {
-    row(db, point(installation, tenant, id))
+    Ok(lookup_candidate(db, installation, tenant, id)
         .await?
-        .map(|row| decode(row, installation, tenant, id).map(|candidate| candidate.receipt))
-        .transpose()
+        .map(|candidate| candidate.receipt))
+}
+
+/// Inventory and pending-work reconciliation use the same bounded integrity
+/// checks as a point read; stored digest projections alone are not evidence.
+pub(super) async fn lookup_candidate(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+) -> Result<Option<Candidate>> {
+    let Some(row) = row(db, point(installation, tenant, id)).await? else {
+        return Ok(None);
+    };
+    let mut candidate = decode(row, installation, tenant, id)?;
+    let disposition: Disposition = serde_json::from_str(&candidate.private_json)?;
+    super::auxiliary_store::validate(db, &mut candidate, disposition.auxiliary_digest.as_deref())
+        .await?;
+    Ok(Some(candidate))
 }
 
 /// The actor owns this transaction through confirmed commit/rollback. Reconciliation
@@ -442,7 +491,7 @@ pub(in crate::tenancy) async fn inventory(
         .await?
         .context("receipt inventory")?;
     let bytes = row.try_get::<Option<i64>>("", "bytes")?.unwrap_or(0);
-    let count = u64::try_from(row.try_get::<i64>("", "rows")?)?;
+    let mut count = u64::try_from(row.try_get::<i64>("", "rows")?)?;
     let query = Query::select()
         .from(Alias::new(TABLE))
         .columns(["tenant_id", "execution_id", "recorded_at"].map(Alias::new))
@@ -465,8 +514,45 @@ pub(in crate::tenancy) async fn inventory(
         ensure!(*count <= 100, "receipt unknown tenant bound");
         unknown.push((tenant, id, recorded));
     }
+    let (aux_bytes, aux_unknown) = super::auxiliary_store::inventory(db, installation).await?;
+    for (tenant, id, recorded) in aux_unknown {
+        if unknown.iter().any(|(t, e, _)| t == &tenant && e == &id) {
+            continue;
+        }
+        let count = counts.entry(tenant.clone()).or_default();
+        *count += 1;
+        ensure!(
+            *count <= 100 && unknown.len() < 1000,
+            "auxiliary unknown capacity"
+        );
+        unknown.push((tenant, id, recorded));
+    }
+    for (tenant, id, recorded) in
+        crate::tenancy::oauth::storage::pending_unknown(db, installation).await?
+    {
+        if unknown.iter().any(|(t, e, _)| t == &tenant && e == &id) {
+            continue;
+        }
+        let tenant_count = counts.entry(tenant.clone()).or_default();
+        *tenant_count += 1;
+        ensure!(
+            *tenant_count <= 100 && unknown.len() < 1000,
+            "pending OAuth unknown capacity"
+        );
+        // Private accounting rows include this persisted obligation, not a
+        // fabricated public receipt or model attempt. Slot bytes are separately
+        // charged at their worst-case envelope, so this overhead is conservative.
+        count = count
+            .checked_add(1)
+            .context("pending OAuth accounting overflow")?;
+        unknown.push((tenant, id, recorded));
+    }
+    let oauth_bytes = crate::tenancy::oauth::storage::inventory(db, installation).await?;
     Ok(Inventory {
-        bytes: u64::try_from(bytes)?,
+        bytes: u64::try_from(bytes)?
+            .checked_add(aux_bytes)
+            .and_then(|bytes| bytes.checked_add(oauth_bytes))
+            .context("auxiliary receipt inventory overflow")?,
         rows: count,
         unknown,
     })

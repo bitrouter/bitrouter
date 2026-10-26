@@ -351,6 +351,15 @@ facade adds no CLI, HTTP or SDK session contract. Tenant production dispatch
 remains gated, and the existing managed CLI and HTTP entrypoints retain their
 Legacy fences.
 
+The authenticated native Generation profile can count provider input tokens on
+one retained Responses target with static credentials. The optional reduced
+context is counted again before generation; counting facts remain separate from
+model attempts and token usage. Its request proof includes the executor's actual
+streaming choice. `NativeSession` itself uses the persistent managed port's
+default non-streaming delivery; a controlled caller observing streams binds the
+streaming generation request. Owned native OAuth and server-managed continuation
+references with counting remain unsupported and fail before provider work.
+
 `bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 submits to the selected local daemon's versioned managed endpoint. The daemon
 owns CoreSession, native BRO tools and resource connections; the CLI is only a

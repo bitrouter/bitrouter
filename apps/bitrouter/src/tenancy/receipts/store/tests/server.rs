@@ -157,6 +157,7 @@ async fn server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict(
             .await?
             .context("committed source")?;
             ensure!(serde_json::to_string(&before)? == first.json);
+            let counted = super::counts::before_reconnect(&db).await?;
             db.clone().close().await?;
             let reopened = connect(target.as_str()).await?;
             pools.push(reopened.clone());
@@ -193,6 +194,7 @@ async fn server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict(
                 .is_none()
             );
             ensure!(bitrouter_ai::tenancy::identity::TenantId::try_from("tenant ").is_err());
+            super::counts::after_reconnect(&reopened, &counted).await?;
             ensure!(!commit(&reopened, &first).await?);
             let mut unknown_receipt =
                 candidate("installation", "tenant", "unknown", "creator")?.receipt;
@@ -203,14 +205,22 @@ async fn server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict(
                 Disposition {
                     dispatch: DispatchState::Unknown,
                     statuses: Vec::new(),
+                    auxiliary_digest: None,
                 },
             )?;
             ensure!(commit(&reopened, &unknown).await?);
             let inventory = inventory(&reopened, &first.receipt.installation_id).await?;
             ensure!(
-                inventory.rows == 4
-                    && inventory.unknown.len() == 1
-                    && inventory.unknown[0].1.as_str() == "unknown"
+                inventory.rows == 7
+                    && inventory.unknown.len() == 2
+                    && inventory
+                        .unknown
+                        .iter()
+                        .any(|entry| entry.1.as_str() == "unknown")
+                    && inventory
+                        .unknown
+                        .iter()
+                        .any(|entry| entry.1.as_str() == "count-unknown")
             );
             Ok::<_, anyhow::Error>(())
         })

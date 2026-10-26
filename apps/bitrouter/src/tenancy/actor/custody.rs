@@ -54,15 +54,27 @@ impl Worker {
             let control = Control::new(self.proof.clone());
             let work = async {
                 let initial = self.current()?;
-                crate::tenancy::continuation::initialize(
+                let crypto = crate::tenancy::continuation::initialize(
                     &self.db,
                     &initial,
                     &self.resources,
                     import.as_deref(),
                     &control,
+                    &self.oauth,
                 )
                 .await
-                .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))
+                .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?;
+                let inventory =
+                    crate::tenancy::receipts::store::inventory(&self.db, &initial.installation)
+                        .await
+                        .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                let volume = self.owner.as_ref().and_then(|owner| owner.path.parent());
+                let free = crate::tenancy::receipts::capacity::free_space(volume)
+                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                self.admission
+                    .initialize_receipts(inventory, free)
+                    .map_err(|code| self.unavailable(code))?;
+                Ok(crypto)
             };
             let result = self
                 .supervise(
@@ -146,6 +158,37 @@ impl Worker {
             };
             let control = Control::new(self.proof.clone());
             match job {
+                Job::OAuth(job) => {
+                    let result = self
+                        .supervise(
+                            self.execute_oauth(&job, &control),
+                            &control,
+                            job.exchange
+                                .owner
+                                .cleanup_deadline()
+                                .min(Instant::now() + std::time::Duration::from_secs(30)),
+                            Policy::Receipt,
+                            None,
+                        )
+                        .await;
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        job.exchange.owner.fail(ErrorCode::StorageUnavailable);
+                        job.progress.finish(Err(ErrorCode::StorageUnavailable));
+                        // Keep the exact pending replacement/exchange outside caught work.
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    if result.is_err()
+                        && job.operation == crate::tenancy::oauth::exchange::Operation::Release
+                    {
+                        job.exchange.owner.fail(ErrorCode::StorageUnavailable);
+                    }
+                    // A resumed waiter can immediately submit Commit/Release.
+                    // Clear the exchange's in-flight marker before publishing
+                    // completion, otherwise another runtime thread races it.
+                    job.exchange.completed();
+                    job.progress
+                        .finish(result.map_err(|failure| failure.0.code));
+                }
                 Job::ReceiptRead(read) => {
                     let result = self
                         .supervise(
@@ -638,6 +681,10 @@ impl Worker {
 impl Job {
     fn reject(self, http: &crate::continuation::tenant::state::State) {
         match self {
+            Job::OAuth(job) => {
+                job.exchange.owner.fail(ErrorCode::StorageUnavailable);
+                job.progress.finish(Err(ErrorCode::StorageUnavailable));
+            }
             Self::Receipt(owner) => owner.fail(ErrorCode::StorageUnavailable),
             Self::ReceiptRead(read) => {
                 let _ = read.reply.send(Err(ErrorCode::AuthorityUnavailable.into()));

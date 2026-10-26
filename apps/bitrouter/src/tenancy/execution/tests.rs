@@ -45,3 +45,13 @@ fn dispatch_headers_require_one_exact_complete_binding() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn missing_public_count_extension_cannot_bypass_private_final_send_guard() -> Result<()> {
+    crate::tenancy::tests::execution::native::counting::check_missing_public_count_extension(
+        |service, submission, model| async move {
+            service.admit_native_execution(submission, &model).await
+        },
+    )
+    .await
+}

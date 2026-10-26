@@ -28,6 +28,7 @@ mod tests;
 pub(super) struct BoundAuthentication {
     execution: Arc<TenantExecution>,
     digest: [u8; 32],
+    oauth: Option<crate::tenancy::oauth::ModelStamp>,
     stamp: crate::tenancy::receipts::journal::TargetStamp,
     candidate: Vec<u8>,
     credential: bitrouter_ai::tenancy::configuration::ResourceRef,
@@ -55,6 +56,7 @@ impl AuthenticatedRequest {
         ctx: &PipelineContext,
         url: &str,
         reservation: Option<crate::tenancy::receipts::journal::AttemptPermit>,
+        oauth: Option<crate::tenancy::oauth::ModelStamp>,
     ) -> Result<Self> {
         let binding = execution(ctx)
             .map(|execution| {
@@ -85,6 +87,7 @@ impl AuthenticatedRequest {
                     candidate: stamp.candidate().to_vec(),
                     credential: stamp.credential().clone(),
                     stamp,
+                    oauth,
                     execution,
                 })
             })
@@ -144,12 +147,71 @@ pub(super) async fn authenticate(
     transport: &Arc<dyn Transport>,
     execution: &Arc<TenantExecution>,
     reservation: &crate::tenancy::receipts::journal::AttemptPermit,
+) -> Result<(AppliedAuth, Option<crate::tenancy::oauth::ModelStamp>)> {
+    if let Some(store) = execution
+        .oauth(target)
+        .await
+        .map_err(|code| execution.reject(code))?
+    {
+        use crate::gateway::providers::auth::AuthApplier;
+        if execution
+            .route()
+            .match_candidate(target)
+            .map_err(|code| execution.reject(code))?
+            != *reservation.stamp().credential()
+        {
+            return Err(execution.reject(ErrorCode::Forbidden));
+        }
+        let applier = store.applier();
+        // Retained targets have no explicit/fallback credential; the applier must
+        // resolve the exact bound store, never its compatibility shortcut.
+        let mut request = applier.apply(request, &target.model_target()).await?;
+        if let Some(bearer) = request
+            .headers_mut()
+            .get_mut(reqwest::header::AUTHORIZATION)
+        {
+            bearer.set_sensitive(true);
+        }
+        let stamp = store.stamp().map_err(|code| execution.reject(code))?;
+        let reference = serde_json::to_string(reservation.stamp().credential())
+            .map_err(|_| execution.reject(ErrorCode::AuthorityUnavailable))?;
+        return Ok((
+            AppliedAuth::proven(
+                request,
+                CredentialAuthority::derive_scoped(
+                    "tenant-credential-revision-v1",
+                    execution.installation_id().as_str(),
+                    &reference,
+                ),
+            ),
+            Some(stamp),
+        ));
+    }
+    Ok((
+        authenticate_static_exact(
+            request,
+            target,
+            transport,
+            execution,
+            reservation.stamp().credential(),
+        )
+        .await?,
+        None,
+    ))
+}
+
+pub(in crate::gateway::pipeline::executor) async fn authenticate_static_exact(
+    request: reqwest::Request,
+    target: &RoutingTarget,
+    transport: &Arc<dyn Transport>,
+    execution: &Arc<TenantExecution>,
+    expected: &bitrouter_ai::tenancy::configuration::ResourceRef,
 ) -> Result<AppliedAuth> {
     let owned = execution
         .credential(target)
         .await
         .map_err(|code| execution.reject(code))?;
-    if &owned.reference != reservation.stamp().credential() {
+    if &owned.reference != expected {
         return Err(execution.reject(ErrorCode::Forbidden));
     }
     let Credential::ApiKey { value } = owned.credential else {
@@ -219,8 +281,22 @@ pub(super) fn admit_send(
             let permit = permit
                 .as_mut()
                 .ok_or_else(|| execution.reject(ErrorCode::Forbidden))?;
+            let counted = if execution
+                .count_required()
+                .map_err(|code| execution.reject(code))?
+            {
+                Some(super::input_count::request_digest(request, target)?)
+            } else {
+                None
+            };
             execution
-                .arm_attempt(target, permit, &binding.stamp)
+                .arm_attempt_with_oauth(
+                    target,
+                    permit,
+                    &binding.stamp,
+                    binding.oauth.as_ref(),
+                    counted.as_deref(),
+                )
                 .map(Some)
                 .map_err(|code| execution.reject(code))
         }

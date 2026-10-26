@@ -59,6 +59,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(all(unix, feature = "core", feature = "harness"))]
 mod capture;
 mod continuation;
+pub(in crate::tenancy) mod counting;
 mod limits;
 mod receipts_authority;
 #[cfg(all(unix, feature = "core", feature = "harness"))]
@@ -95,6 +96,7 @@ fn local_tenancy_remains_unavailable_without_creating_files() -> Result<()> {
 }
 
 struct Observed {
+    version: http::Version,
     path: String,
     headers: HeaderMap,
     body: Value,
@@ -107,19 +109,24 @@ struct ProviderState {
     release: CancellationToken,
     stop: CancellationToken,
     empty_choices: Arc<std::sync::atomic::AtomicBool>,
+    count_reply: Arc<std::sync::Mutex<Option<(StatusCode, String)>>>,
+    count_stall_body: Arc<std::sync::atomic::AtomicBool>,
 }
 
 async fn provider(
     State(state): State<ProviderState>,
     OriginalUri(uri): OriginalUri,
+    version: http::Version,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
     state.calls.fetch_add(1, Ordering::SeqCst);
     let path = uri.path().to_owned();
+    let streaming = body.get("stream") == Some(&Value::Bool(true));
     if state
         .received
         .try_send(Observed {
+            version,
             path: path.clone(),
             headers,
             body,
@@ -131,6 +138,27 @@ async fn provider(
     tokio::select! {
         _ = state.release.cancelled() => {}
         _ = state.stop.cancelled() => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    if path == "/v1/responses/input_tokens" {
+        let override_reply = match state.count_reply.lock() {
+            Ok(reply) => reply.clone(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        if let Some((status, body)) = override_reply {
+            if state.count_stall_body.load(Ordering::Acquire) {
+                let stop = state.stop.clone();
+                return (
+                    status,
+                    [("content-type", "application/json")],
+                    axum::body::Body::from_stream(futures::stream::once(async move {
+                        stop.cancelled().await;
+                        Ok::<_, std::io::Error>(axum::body::Bytes::new())
+                    })),
+                )
+                    .into_response();
+            }
+            return (status, [("content-type", "application/json")], body).into_response();
+        }
     }
     // Real wire replies, including response identity, terminal state and usage.
     // https://platform.openai.com/docs/api-reference/chat/object
@@ -161,6 +189,17 @@ async fn provider(
     if path == "/v1/chat/completions" && state.empty_choices.load(Ordering::SeqCst) {
         reply["choices"] = json!([]);
     }
+    if path == "/v1/responses" && streaming {
+        let created =
+            json!({"type":"response.created","response":{"id":reply["id"],"status":"in_progress"}});
+        let delta = json!({"type":"response.output_text.delta","delta":"native reply"});
+        let terminal = json!({"type":"response.completed","response":reply});
+        return (
+            [("content-type", "text/event-stream")],
+            format!("data: {created}\n\ndata: {delta}\n\ndata: {terminal}\n\n"),
+        )
+            .into_response();
+    }
     (StatusCode::OK, Json(reply)).into_response()
 }
 
@@ -180,6 +219,8 @@ impl Provider {
             release: CancellationToken::new(),
             stop: CancellationToken::new(),
             empty_choices: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            count_reply: Arc::new(std::sync::Mutex::new(None)),
+            count_stall_body: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         if !held {
             state.release.cancel();
@@ -944,6 +985,7 @@ async fn revised_route(
         "format":1, "installation_id":fixture.installation,
         "resources":[{"reference":route,"definition":{"kind":"route","selector":"bitrouter/owned","policy":null,
             "routing":{"providers":{"mock":{"api_base":url,"api_protocol":[{"*":protocols}],
+                "headers": if count { json!({"openai-organization":"count-owned-org", "openai-project":"count-owned-project", "x-private":"count-private"}) } else { json!({}) },
                 "models":[{"id":"model-a","input_token_counting":count.then_some("responses")}]}},
                 "routers":{"owned":{"selection":{"kind":"model","model":"mock:model-a"},
                     "defaults":{"params":{"max_tokens":999,"max_completion_tokens":777,"max_output_tokens":888,"temperature":1.9}}}}},
@@ -962,8 +1004,8 @@ async fn revised_route(
 }
 
 #[tokio::test]
-async fn configured_native_input_counter_stops_before_count_plan_or_generation() -> Result<()> {
-    let provider = Provider::start(false).await?;
+async fn configured_native_counter_uses_actual_count_then_generation() -> Result<()> {
+    let mut provider = Provider::start(false).await?;
     let (mut fixture, route, slot) = provision_protocol(&provider.url, "responses").await?;
     let checked = async {
         let route = revised_route(
@@ -978,38 +1020,26 @@ async fn configured_native_input_counter_stops_before_count_plan_or_generation()
         let (ingress, _) = ready(&fixture, &route).await?;
         let app = host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
             .with_tenancy(fixture.service.clone());
-        for reject_plan in [false, true] {
-            let control = Arc::new(Control {
-                reject_plan,
-                ..Default::default()
-            });
-            let error = tokio::time::timeout(
-                TIMEOUT,
-                app.execute_native_controlled_with_headers(
-                    prompt(),
-                    CallerContext::local(),
-                    ingress.clone(),
-                    control.clone(),
-                ),
-            )
-            .await?
-            .err()
-            .context("required input counter was bypassed")?;
-            ensure!(error.status() == StatusCode::FORBIDDEN.as_u16());
-            ensure!(
-                control.routing_commits.load(Ordering::SeqCst) == 1,
-                "counter rejection occurred before native routing"
-            );
-            ensure!(control.counts.load(Ordering::SeqCst) == 0);
-            ensure!(
-                control.plans.lock().await.is_empty() && control.attempts.lock().await.is_empty()
-            );
-            ensure!(control.work.lock().await.is_empty());
-        }
+        let control = Arc::new(Control::default());
+        tokio::time::timeout(
+            TIMEOUT,
+            app.execute_native_controlled_with_headers(
+                prompt(),
+                CallerContext::local(),
+                ingress,
+                control.clone(),
+            ),
+        )
+        .await??;
+        let counted = provider.receive().await?;
+        let generated = provider.receive().await?;
+        ensure!(counted.path == "/v1/responses/input_tokens" && generated.path == "/v1/responses");
+        ensure!(counted.body["input"] == generated.body["input"]);
+        ensure!(counted.headers["authorization"] == "Bearer owned-upstream-secret");
         ensure!(
-            provider.calls() == 0,
-            "required counter sent count or generation work"
+            control.counts.load(Ordering::SeqCst) == 2 && control.attempts.lock().await.len() == 1
         );
+        ensure!(provider.calls() == 2);
         Ok(())
     }
     .await;

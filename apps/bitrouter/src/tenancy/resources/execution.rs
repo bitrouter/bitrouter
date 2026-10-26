@@ -368,6 +368,89 @@ impl RetainedRoute {
         Ok(self.candidate(candidate)?.credential.clone())
     }
 
+    /// A fixed native count profile is selected before embedding callbacks.
+    pub(in crate::tenancy) fn count_candidate(
+        &self,
+    ) -> std::result::Result<Option<&RoutingTarget>, ErrorCode> {
+        if !matches!(self.selection, RouteSelection::Native(_)) {
+            return Ok(None);
+        }
+        let mut candidate = None;
+        let mut required = false;
+        let mut fixed = true;
+        for (_, indices) in self.selected_chains() {
+            if indices.len() != 1 {
+                fixed = false;
+            }
+            for index in indices {
+                let target = &self
+                    .data
+                    .candidates
+                    .get(*index)
+                    .ok_or(ErrorCode::Forbidden)?
+                    .target;
+                required |= target.model_constraints.input_token_counting.is_some();
+                if candidate.is_some_and(|prior| prior != *index) {
+                    fixed = false;
+                }
+                candidate = Some(*index);
+            }
+        }
+        if !required {
+            return Ok(None);
+        }
+        let target = &self
+            .data
+            .candidates
+            .get(candidate.ok_or(ErrorCode::Forbidden)?)
+            .ok_or(ErrorCode::Forbidden)?
+            .target;
+        if !fixed
+            || self.data.policy.is_some()
+            || !matches!(
+                self.selection,
+                RouteSelection::Native(ModelOperation::Generation)
+            )
+            || target.api_protocol != ApiProtocol::Responses
+            || target.model_constraints.input_token_counting
+                != Some(bitrouter_ai::core::evidence::InputTokenCounting::Responses)
+            || target.headers.iter().any(|rule| rule.passthrough())
+        {
+            return Err(ErrorCode::CapabilityMismatch);
+        }
+        Ok(Some(target))
+    }
+
+    pub(in crate::tenancy) fn require_oauth_messages(
+        &self,
+        target: &RoutingTarget,
+    ) -> std::result::Result<(), ErrorCode> {
+        if !matches!(self.selection, RouteSelection::Wire(ApiProtocol::Messages))
+            || target.api_protocol != ApiProtocol::Messages
+            || target.provider_name != "claude-code"
+            || self.data.policy.is_some()
+            || self
+                .selected_chains()
+                .any(|(_, indices)| indices.len() != 1)
+            || target.headers.iter().any(|header| {
+                header.passthrough()
+                    || matches!(
+                        header.name().as_str(),
+                        "authorization"
+                            | "x-api-key"
+                            | "anthropic-version"
+                            | "anthropic-beta"
+                            | "user-agent"
+                            | "x-app"
+                    )
+            })
+        {
+            return Err(ErrorCode::CapabilityMismatch);
+        }
+        self.candidate(target)?;
+        Ok(())
+    }
+
     fn candidate(&self, candidate: &RoutingTarget) -> std::result::Result<&Candidate, ErrorCode> {
         let projection = target::project(candidate).map_err(|_| ErrorCode::Forbidden)?;
         self.selected_chains()

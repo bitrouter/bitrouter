@@ -19,8 +19,9 @@ the CLI-only contract and implementation record define the current product.
 
 - [Resource tenancy contracts](RESOURCE_TENANCY_M0.md),
   [implementation tracker](RESOURCE_TENANCY_IMPLEMENTATION.md),
-  [owned execution receipts](RESOURCE_TENANCY_RECEIPTS.md), and
-  [authenticated native harness](RESOURCE_TENANCY_NATIVE_HARNESS_PROFILE.md) — single-instance
+  [owned execution receipts](RESOURCE_TENANCY_RECEIPTS.md),
+  [authenticated native harness](RESOURCE_TENANCY_NATIVE_HARNESS_PROFILE.md), and
+  [owned OAuth and input counting](RESOURCE_TENANCY_AUXILIARY_PROFILE.md) — single-instance
   authority and owned runtime integration in progress; production dispatch and
   strict-receipt capabilities remain disabled pending qualification.
 

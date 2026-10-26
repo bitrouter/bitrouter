@@ -19,6 +19,7 @@ pub(crate) mod hosts;
 pub(crate) mod http;
 mod model;
 mod mutation;
+pub(crate) mod oauth;
 pub(crate) mod ownership;
 pub(crate) mod receipts;
 mod resources;
@@ -72,6 +73,7 @@ struct BootstrapGate {
 
 #[derive(Clone)]
 pub(crate) struct Service {
+    oauth: Arc<oauth::State>,
     db: DatabaseConnection,
     snapshot: Arc<RwLock<Arc<Snapshot>>>,
     live: Arc<AtomicBool>,
@@ -225,6 +227,7 @@ impl Service {
         // Tenant profiles share connection pools, never host credential plugins.
         let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::with_defaults()?);
         let caches = Arc::new(execution::cached::Caches::new()?);
+        let oauth = Arc::new(oauth::State::default());
         let snapshot = Arc::new(RwLock::new(Arc::new(initial)));
         let live = Arc::new(AtomicBool::new(true));
         let cleanup = transaction::Proof::new(live.clone());
@@ -280,6 +283,7 @@ impl Service {
         let http_registry =
             crate::continuation::ContinuationRegistry::for_tenant(http_continuation.clone())?;
         let worker = Worker {
+            oauth: oauth.clone(),
             db: db.clone(),
             snapshot: snapshot.clone(),
             live: Liveness(live.clone()),
@@ -308,6 +312,7 @@ impl Service {
             .boxed()
             .shared();
         let mut service = Self {
+            oauth,
             db,
             snapshot,
             live,
@@ -530,9 +535,11 @@ impl Service {
             #[cfg(all(feature = "core", feature = "harness"))]
             Job::Native(_) | Job::Capture(_) => None,
             Job::Command(message) => Some(message.command.operation_id().clone()),
-            Job::Credential(_) | Job::Continuation(_) | Job::Receipt(_) | Job::ReceiptRead(_) => {
-                None
-            }
+            Job::OAuth(_)
+            | Job::Credential(_)
+            | Job::Continuation(_)
+            | Job::Receipt(_)
+            | Job::ReceiptRead(_) => None,
             #[cfg(feature = "core")]
             Job::Eval(_)
             | Job::Settlement(_)

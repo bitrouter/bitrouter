@@ -1252,11 +1252,11 @@ impl Pipeline {
             if routes.iter().any(requires_input_count)
                 && let Some(execution) =
                     ctx.extension::<crate::tenancy::execution::TenantExecution>()
+                && (chain.len() != 1
+                    || !execution
+                        .count_required()
+                        .map_err(|code| execution.reject(code))?)
             {
-                // A permissive embedding callback cannot turn the current
-                // unavailable counter into permission to skip required work.
-                // Owned counting will replace this gate after its effect and
-                // evidence lifecycle is integrated.
                 return Err(execution
                     .reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch));
             }
@@ -1281,6 +1281,7 @@ impl Pipeline {
                 let report_limit = super::native_auxiliary::limit(control, &plan.request_id)?;
                 control.before_input_count(&plan, route_index).await?;
                 let started = Instant::now();
+                let mut count_error = None;
                 let outcome = match self
                     .executor
                     .count_input_tokens(target, ctx.require_generation_prompt()?, ctx)
@@ -1289,13 +1290,15 @@ impl Pipeline {
                     Ok(outcome) => outcome,
                     // Errors can contain parser body previews, native continuation
                     // IDs or credentials from extensions. Persist categories only.
-                    Err(error) => NativeInputCount::Unavailable {
-                        reason: format!(
+                    Err(error) => {
+                        let reason = format!(
                             "input_count_failed:{}:{}",
                             error.error_code(),
                             error.status()
-                        ),
-                    },
+                        );
+                        count_error = Some(error);
+                        NativeInputCount::Unavailable { reason }
+                    }
                 };
                 let mut report = NativeInputCountReport {
                     request_id: plan.request_id.clone(),
@@ -1308,6 +1311,13 @@ impl Pipeline {
                 let outcome = report.outcome.clone();
                 let rejected = report.report_rejection.is_some();
                 control.after_input_count(report).await?;
+                if ctx
+                    .extension::<crate::tenancy::execution::TenantExecution>()
+                    .is_some()
+                    && let Some(error) = count_error
+                {
+                    return Err(error);
+                }
                 if rejected {
                     return Err(BitrouterError::UpstreamInvalidResponse {
                         usage: None,
@@ -1370,6 +1380,16 @@ impl Pipeline {
                             )
                             .await?;
                         validated?;
+                        if let Some(execution) =
+                            ctx.extension::<crate::tenancy::execution::TenantExecution>()
+                            && execution
+                                .count_required()
+                                .map_err(|code| execution.reject(code))?
+                        {
+                            execution
+                                .allow_count_rebuild(ctx.require_generation_prompt()?)
+                                .map_err(|code| execution.reject(code))?;
+                        }
                         continue;
                     }
                     return Err(error);

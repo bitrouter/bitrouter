@@ -190,7 +190,11 @@ async fn capture_missed_child_cleanup_keeps_owner_even_after_the_same_child_is_r
 async fn diagnostics(reader: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(8193).read_to_end(&mut bytes).await?;
-    ensure!(bytes.len() <= 8192, "fault child diagnostic bound");
+    ensure!(
+        bytes.len() <= 8192,
+        "fault child diagnostic bound: {}",
+        String::from_utf8_lossy(&bytes[..8192.min(bytes.len())])
+    );
     Ok(bytes)
 }
 
@@ -291,7 +295,12 @@ async fn isolated(mode: &str) -> Result<()> {
         .map(|error| format!("{error:#}"))
         .collect::<Vec<_>>();
     let diagnostic = match diagnostic {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Ok(bytes) => {
+            if mode == "commit-error" && !bytes.is_empty() {
+                failures.push("commit-error child wrote unexpected stderr".to_owned());
+            }
+            String::from_utf8_lossy(&bytes).into_owned()
+        }
         Err(error) => {
             failures.push(format!("{error:#}"));
             String::new()

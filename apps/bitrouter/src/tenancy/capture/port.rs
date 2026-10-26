@@ -200,6 +200,7 @@ impl Port {
         self.settle(state).await
     }
     async fn settle(&self, state: &mut State) -> Result<Reply> {
+        ensure!(!state.ambiguous, "capture SQL cleanup unconfirmed");
         let pending = state
             .pending
             .as_mut()
@@ -211,7 +212,12 @@ impl Port {
             state.failed = true;
             anyhow::bail!("capture enqueue was interrupted");
         };
-        let outcome = match receive.await {
+        // Keep the receiver in Pending across cancellation, then retire it
+        // synchronously once it resolves. Unknown custody remains sticky, but
+        // a completed oneshot must never be polled again during finish.
+        let received = receive.await;
+        pending.receive = None;
+        let outcome = match received {
             Ok(outcome) => outcome,
             Err(_) => {
                 state.ambiguous = true;
@@ -230,9 +236,14 @@ impl Port {
         if outcome.disposition == Disposition::Committed {
             match &pending.input {
                 Request::Create(_) => state.created = true,
-                Request::Append { value, .. } => {
-                    state.current = state.current.next(value)?.0;
-                }
+                Request::Append { value, .. } => match state.current.next(value) {
+                    Ok((next, _, _)) => state.current = next,
+                    Err(error) => {
+                        state.ambiguous = true;
+                        self.binding.service().host_cleanup_unknown();
+                        return Err(error);
+                    }
+                },
                 Request::Freeze(_) => {}
             }
         }

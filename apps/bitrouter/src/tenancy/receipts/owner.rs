@@ -35,6 +35,12 @@ enum Phase {
 
 pub(crate) struct Owner {
     identity: Identity,
+    // Retain the exact encrypted replacement independently of adapter/future
+    // lifetime, including a confirmed rollback whose bounded reconciliation
+    // also fails. No token bytes or second lifecycle registry escape this owner.
+    oauth_replacement: std::sync::OnceLock<Arc<crate::tenancy::oauth::storage::Row>>,
+    oauth_acknowledged: std::sync::atomic::AtomicBool,
+    pub(in crate::tenancy) auxiliary: Arc<super::auxiliary::Journal>,
     pub(in crate::tenancy) journal: Arc<Journal>,
     sender: tokio::sync::mpsc::Sender<Job>,
     phase: Mutex<Phase>,
@@ -61,6 +67,9 @@ impl Owner {
     ) -> Arc<Self> {
         Arc::new(Self {
             identity,
+            oauth_replacement: std::sync::OnceLock::new(),
+            oauth_acknowledged: std::sync::atomic::AtomicBool::new(false),
+            auxiliary: super::auxiliary::Journal::new(),
             journal,
             sender,
             phase: Mutex::new(Phase::Open),
@@ -74,6 +83,29 @@ impl Owner {
             cleanup: Mutex::new(deadline + std::time::Duration::from_secs(30)),
             cancelled: tokio_util::sync::CancellationToken::new(),
         })
+    }
+    pub(in crate::tenancy) fn retain_oauth_replacement(
+        &self,
+        row: Arc<crate::tenancy::oauth::storage::Row>,
+    ) -> Result<(), ErrorCode> {
+        self.oauth_replacement
+            .set(row)
+            .map_err(|_| ErrorCode::Forbidden)
+    }
+    pub(in crate::tenancy) fn acknowledge_oauth_replacement(
+        &self,
+        row: &crate::tenancy::oauth::storage::Row,
+    ) -> Result<(), ErrorCode> {
+        if !self
+            .oauth_replacement
+            .get()
+            .is_some_and(|retained| retained.same(row))
+        {
+            return Err(ErrorCode::Forbidden);
+        }
+        self.oauth_acknowledged
+            .store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
     }
     pub(crate) fn on_cancel(
         &self,
@@ -267,21 +299,55 @@ impl Owner {
         Ok(())
     }
     pub(crate) async fn finish(self: &Arc<Self>, outcome: Outcome) -> Result<(), ErrorCode> {
+        self.close_auxiliary().await?;
         self.begin(outcome, false)?;
-        self.wait_bounded().await
+        self.wait_bounded(true).await
     }
+    /// Join durable settlement without turning a refused success ACK into a
+    /// storage failure. This cannot acknowledge delivery: callers retain their
+    /// error/cancellation, and uncertain storage still fails in every mode.
     pub(crate) async fn finish_or_join(
         self: &Arc<Self>,
         fallback: Outcome,
     ) -> Result<(), ErrorCode> {
+        self.close_auxiliary().await?;
         self.begin(fallback, true)?;
-        self.wait_bounded().await
+        self.wait_bounded(false).await
     }
-    async fn wait_bounded(&self) -> Result<(), ErrorCode> {
+    async fn close_auxiliary(&self) -> Result<(), ErrorCode> {
+        let close = async {
+            tokio::select! {
+                result = self.auxiliary.close() => result,
+                code = self.wait_failure() => Err(code),
+            }
+        };
+        let deadline = self
+            .cleanup_deadline()
+            .min(tokio::time::Instant::now() + std::time::Duration::from_secs(30));
+        match tokio::time::timeout_at(deadline, close).await {
+            Ok(result) => result,
+            Err(_) => {
+                self.fail(ErrorCode::StorageUnavailable);
+                Err(ErrorCode::StorageUnavailable)
+            }
+        }
+    }
+    async fn wait_failure(&self) -> ErrorCode {
+        loop {
+            let notified = self.changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(code) = self.failure() {
+                return code;
+            }
+            notified.await;
+        }
+    }
+    async fn wait_bounded(&self, delivery: bool) -> Result<(), ErrorCode> {
         match tokio::time::timeout_at(
             self.cleanup_deadline()
                 .min(tokio::time::Instant::now() + std::time::Duration::from_secs(30)),
-            self.wait(),
+            self.wait(delivery),
         )
         .await
         {
@@ -292,7 +358,7 @@ impl Owner {
             }
         }
     }
-    async fn wait(&self) -> Result<(), ErrorCode> {
+    async fn wait(&self, delivery: bool) -> Result<(), ErrorCode> {
         loop {
             let notified = self.changed.notified();
             tokio::pin!(notified);
@@ -304,7 +370,12 @@ impl Owner {
                     .map_err(|_| ErrorCode::StorageUnavailable)?;
                 match &*state {
                     Phase::Durable(candidate) => {
-                        let _ = &candidate.receipt;
+                        if delivery
+                            && candidate.auxiliary_unclean()
+                            && self.proposal.get() == Some(&Outcome::Completed)
+                        {
+                            return Err(ErrorCode::StorageUnavailable);
+                        }
                         return Ok(());
                     }
                     Phase::Failed { code, .. } => return Err(*code),
@@ -328,6 +399,18 @@ impl Owner {
                 _ => anyhow::bail!("receipt owner not queued"),
             }
         };
+        anyhow::ensure!(
+            self.oauth_replacement.get().is_none()
+                || self
+                    .oauth_acknowledged
+                    .load(std::sync::atomic::Ordering::Acquire),
+            "OAuth replacement remains in owner custody without commit acknowledgement"
+        );
+        let auxiliary = self
+            .auxiliary
+            .snapshot()
+            .map_err(|_| anyhow::anyhow!("auxiliary producers remain live"))?;
+        let auxiliary_unclean = auxiliary.unclean();
         let frozen = self.journal.settled().await?;
         anyhow::ensure!(
             frozen.belongs_to_identity(&self.identity.installation, &self.identity.execution),
@@ -337,7 +420,9 @@ impl Owner {
             .attempts
             .iter()
             .any(|attempt| attempt.outcome == Outcome::Unknown);
-        let outcome = if proposed == Outcome::Completed
+        let outcome = if proposed == Outcome::Completed && auxiliary_unclean {
+            Outcome::Failed
+        } else if proposed == Outcome::Completed
             && !frozen
                 .attempts
                 .iter()
@@ -353,6 +438,8 @@ impl Owner {
         };
         let state = if unknown || outcome == Outcome::Unknown {
             ReceiptState::Unknown
+        } else if auxiliary_unclean {
+            ReceiptState::Incomplete
         } else if frozen.usage.complete {
             ReceiptState::Committed
         } else {
@@ -373,13 +460,17 @@ impl Owner {
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                 .try_into()?,
         };
-        let candidate = Arc::new(Candidate::new(
-            receipt,
-            Disposition {
-                dispatch: frozen.dispatch,
-                statuses: frozen.http_statuses,
-            },
-        )?);
+        let candidate = Arc::new(
+            Candidate::new(
+                receipt,
+                Disposition {
+                    dispatch: frozen.dispatch,
+                    statuses: frozen.http_statuses,
+                    auxiliary_digest: None,
+                },
+            )?
+            .with_auxiliary(auxiliary)?,
+        );
         let mut phase = self
             .phase
             .lock()
@@ -411,7 +502,7 @@ impl Owner {
             .cloned()
             .ok_or(ErrorCode::StorageUnavailable)?;
         if inserted {
-            let unknown = if candidate.unknown() {
+            let unknown = if candidate.unknown() || candidate.auxiliary_unknown() {
                 Some((
                     candidate.receipt.execution_id.clone(),
                     chrono::DateTime::parse_from_rfc3339(candidate.receipt.recorded_at.as_str())
@@ -421,7 +512,13 @@ impl Owner {
             } else {
                 None
             };
-            lease.confirm_receipt(candidate.bytes(), unknown)?;
+            lease.confirm_receipt(
+                candidate
+                    .bytes()
+                    .checked_add(candidate.auxiliary_bytes())
+                    .ok_or(ErrorCode::CapacityExceeded)?,
+                unknown,
+            )?;
         } else {
             lease.confirm_receipt(0, None)?;
         }

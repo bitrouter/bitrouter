@@ -90,6 +90,13 @@ impl Service {
         execution: Arc<super::TenantExecution>,
     ) -> Result<PipelineResponse> {
         let outcome = async {
+            if let Err(code) = execution.prepare_count_profile(&prompt) {
+                let error = execution.reject(code);
+                execution
+                    .terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed)
+                    .await?;
+                return Err(error);
+            }
             let pipeline = execution.pipeline()?;
             let mut request =
                 PipelineRequest::new(prompt.model.clone(), execution.caller(), prompt);

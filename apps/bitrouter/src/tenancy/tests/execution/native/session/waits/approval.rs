@@ -21,6 +21,7 @@ impl NativeApproval for HeldApproval {
 
 async fn reply(
     State(state): State<ProviderState>,
+    version: http::Version,
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
@@ -28,6 +29,7 @@ async fn reply(
     if state
         .received
         .try_send(Observed {
+            version,
             path: "/v1/chat/completions".into(),
             headers,
             body,
@@ -62,6 +64,8 @@ async fn tool_provider() -> Result<Provider> {
         release: CancellationToken::new(),
         stop: CancellationToken::new(),
         empty_choices: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        count_reply: Arc::new(std::sync::Mutex::new(None)),
+        count_stall_body: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
     state.release.cancel();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;

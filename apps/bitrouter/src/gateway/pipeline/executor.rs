@@ -35,7 +35,7 @@ use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 use tokio_util::sync::CancellationToken;
 
-mod input_count;
+pub(crate) mod input_count;
 mod receipt;
 mod response_body;
 mod shared;
@@ -1046,16 +1046,23 @@ impl HttpExecutor {
         }
     }
 
-    /// Run the per-provider [`AuthApplier::prepare_body`] hook on the freshly
-    /// rendered request body when an applier is registered for the target's
-    /// provider. No-op otherwise. Shared by `execute` and `execute_stream` so
-    /// subscription-OAuth body shaping happens identically on both paths.
-    async fn shape_request_body(
-        &self,
+    fn needs_body_shaping(&self, target: &RoutingTarget, ctx: &PipelineContext) -> Result<bool> {
+        match tenancy::execution(ctx) {
+            Some(execution) => execution
+                .uses_oauth(target)
+                .map_err(|code| execution.reject(code)),
+            None => Ok(self.auth_applier(target).is_some()),
+        }
+    }
+
+    /// Apply only the retained owned credential's deterministic normalization.
+    /// Returning true also covers static credentials, which must not consult a
+    /// host registry. The actual body and managed baseline use this same rule.
+    fn shape_owned_request_body(
         body: &mut serde_json::Value,
         target: &RoutingTarget,
         ctx: &PipelineContext,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if let Some(execution) = tenancy::execution(ctx) {
             execution
                 .revalidate()
@@ -1064,8 +1071,26 @@ impl HttpExecutor {
                 .route()
                 .match_candidate(target)
                 .map_err(|code| execution.reject(code))?;
-            // Static owned credentials do not shape request bodies. Never fall
-            // through to a host registry keyed only by provider name.
+            if execution
+                .uses_oauth(target)
+                .map_err(|code| execution.reject(code))?
+            {
+                crate::gateway::providers::claude_code::normalize_owned_body(body)?;
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Normalize an owned body or run the Legacy provider's registered hook.
+    /// Shared by JSON and streaming sends, independently of registry presence.
+    async fn shape_request_body(
+        &self,
+        body: &mut serde_json::Value,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
+    ) -> Result<()> {
+        if Self::shape_owned_request_body(body, target, ctx)? {
             return Ok(());
         }
         if let Some(applier) = self.auth_applier(target) {
@@ -1181,7 +1206,10 @@ impl HttpExecutor {
         ctx: &PipelineContext,
     ) -> std::result::Result<serde_json::Value, &'static str> {
         let mut expected = rendered.clone();
-        if let Some(applier) = self.auth_applier(target) {
+        if !Self::shape_owned_request_body(&mut expected, target, ctx)
+            .map_err(|_| "provider_body_normalization_failed")?
+            && let Some(applier) = self.auth_applier(target)
+        {
             applier
                 .normalize_managed_body(&mut expected, &target.model_target())
                 .map_err(|_| "provider_body_normalization_failed")?;
@@ -1237,7 +1265,7 @@ impl HttpExecutor {
         apply_provider_headers(&mut request, input.target, input.ctx, true);
         let scope = request_scope_headers(input.target, Some(input.ctx.headers()))
             .ok_or_else(|| BitrouterError::internal("request account scope unavailable"))?;
-        let mut applied = match tenancy::execution(input.ctx) {
+        let (mut applied, oauth_stamp) = match tenancy::execution(input.ctx) {
             Some(execution) => {
                 tenancy::authenticate(
                     request,
@@ -1250,10 +1278,11 @@ impl HttpExecutor {
                 )
                 .await?
             }
-            None => {
+            None => (
                 self.apply_auth(request, input.target, input.transport)
-                    .await?
-            }
+                    .await?,
+                None,
+            ),
         };
         apply_provider_headers(&mut applied, input.target, input.ctx, false);
         merge_outbound_trace_headers(&mut applied, input.trace_headers);
@@ -1402,6 +1431,7 @@ impl HttpExecutor {
             input.ctx,
             input.url,
             reservation,
+            oauth_stamp,
         )
     }
 
@@ -1916,7 +1946,7 @@ impl Executor for HttpExecutor {
                 target.provider_name == "openai-codex",
             )?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-            if self.auth_applier(target).is_some() {
+            if self.needs_body_shaping(target, ctx)? {
                 native_work::observe(
                     ctx,
                     NativeProviderWorkKind::AuthenticationPreparation,

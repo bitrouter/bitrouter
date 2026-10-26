@@ -155,6 +155,7 @@ pub(super) async fn initialize(
     resources: &super::resources::Resources,
     import: Option<&[u8]>,
     control: &Control,
+    oauth: &super::oauth::State,
 ) -> Result<Option<PinnedCrypto>> {
     let crypto = resources.continuation_crypto();
     let transaction = control.begin(db).await?;
@@ -184,12 +185,15 @@ pub(super) async fn initialize(
                 anyhow::anyhow!("active tenant configuration requires unavailable features")
             })?;
         }
-        Ok::<_, anyhow::Error>(())
+        resources.oauth_metadata(&transaction).await
     }
     .await;
     match result {
-        Ok(()) => {
+        Ok(metadata) => {
             control.commit(transaction).await?;
+            oauth
+                .initialize(metadata)
+                .map_err(|_| anyhow::anyhow!("OAuth startup state unavailable"))?;
             Ok(crypto.map(PinnedCrypto))
         }
         Err(error) => {

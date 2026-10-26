@@ -98,6 +98,7 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
         let proof = Proof::new(live.clone());
         let gate = proof.hold(phase);
         let worker = Worker {
+            oauth: Arc::new(crate::tenancy::oauth::State::default()),
             db: db.clone(),
             snapshot: Arc::new(RwLock::new(Arc::new(initial))),
             live: Liveness(live.clone()),

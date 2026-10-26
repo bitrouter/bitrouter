@@ -47,9 +47,12 @@ pub(super) enum Definition {
     Credential {
         credential: Credential,
         /// Token generation is separate from the ResourceRef's immutable
-        /// authority revision. Only static credentials/generation zero qualify.
+        /// authority revision. Imports seed generation zero; the private live
+        /// OAuth slot owns every subsequent token generation.
         #[serde(default)]
         oauth_generation: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        oauth: Option<crate::tenancy::oauth::profile::Profile>,
     },
 }
 
@@ -134,19 +137,25 @@ impl Import {
             Definition::Credential {
                 credential,
                 oauth_generation,
+                oauth,
             } => {
                 ensure!(
                     *oauth_generation == 0,
-                    "OAuth generations are not qualified for tenancy"
+                    "imported OAuth seed generation must be zero"
                 );
                 match credential {
                     Credential::ApiKey { value } => ensure!(
-                        !value.is_empty() && value.len() <= 65_536,
+                        oauth.is_none() && !value.is_empty() && value.len() <= 65_536,
                         "static credential exceeds bounds"
                     ),
-                    _ => anyhow::bail!(
-                        "OAuth and ambient credential backends are not qualified for tenancy"
-                    ),
+                    Credential::Oauth(token) => {
+                        oauth
+                            .as_ref()
+                            .ok_or_else(|| anyhow::anyhow!("missing owned OAuth profile"))?
+                            .validate()?;
+                        crate::tenancy::oauth::profile::validate_token(token)?;
+                    }
+                    _ => anyhow::bail!("ambient credential backends are not qualified for tenancy"),
                 }
                 ResourceKind::Credential
             }

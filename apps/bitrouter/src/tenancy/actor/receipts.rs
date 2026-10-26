@@ -57,6 +57,7 @@ impl Worker {
                 }
             }
             let inserted = insertion?;
+            crate::tenancy::receipts::auxiliary_store::insert(&transaction, &candidate).await?;
             let checked = control.check_read();
             #[cfg(test)]
             self.proof

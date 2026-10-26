@@ -15,7 +15,7 @@ mod authority;
 mod configuration;
 #[cfg(feature = "core")]
 mod eval;
-mod execution;
+pub(in crate::tenancy) mod execution;
 mod http;
 #[cfg(not(feature = "core"))]
 mod no_core;

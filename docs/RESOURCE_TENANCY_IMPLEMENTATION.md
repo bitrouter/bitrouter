@@ -786,7 +786,14 @@ Independent source and correction reviews closed the identified ownership,
 replay-fixture and feature-gate findings without relaxing the production limits.
 Windows excludes Unix-only file-owner consumers and retains explicit unsupported
 configuration/file-owner refusal coverage. The prior Windows run exposed those
-fixture assumptions; the new platform CI results remain pending. macOS receives
+fixture assumptions. At `185164c75924edaccce21cd92b9f2a29602e89b0`, CI
+reported 67 successful checks, eight skipped checks and three failed checks.
+The Linux and macOS library jobs failed the consuming-COMMIT capture fault
+parent; the third failure was the aggregate Linux check. This failure exposed
+repolling of an already-completed oneshot receiver during cleanup. The next
+implementation slice retires the receiver before processing its result and
+retains pending work and sticky uncertainty on an ambiguous transaction.
+New platform CI on that correction remains required. macOS receives
 a 90-minute outer CI budget after actual cold fixture/test compilation consumed
 about 59 minutes of the previous 75-minute job. Per-test deadlines and retries
 are unchanged; an incomplete earlier CI run is not counted as a pass.
@@ -797,6 +804,60 @@ RSS or provider cost. Paid learning, auxiliary provider work, broader recovery
 and final performance remain separate gates. Production dispatch,
 revision-bound dispatch and strict receipts remain disabled; M2 and M3 remain
 incomplete.
+
+### M2 owned OAuth and provider input counting
+
+The current slice adds encrypted live OAuth slots with immutable seed lineage,
+serialized generation changes and bounded refresh ownership. Its supported
+consumer is a retained HTTP Messages route to Claude Code. Native OAuth remains
+explicitly refused before I/O. A separate native Generation profile supports
+provider input counting with static Responses credentials, including observed
+streaming and one bounded context reduction followed by a second count.
+
+Both consumers retain auxiliary facts separately from model attempts and token
+usage. The existing terminal transaction commits those facts with the receipt.
+An unclean auxiliary result cannot acknowledge successful delivery; cleanup may
+join an already-known durable terminal result without converting it to success.
+No public authority type, endpoint, feature or runtime crate is added.
+
+Independent review identified a real count-to-stream mismatch: the expected
+generation request was rendered with `stream=false`, while native observation
+sent `stream=true`. The new streaming regression failed with the digest mismatch
+while its non-streaming control passed. The correction renders both requests
+with the executor's existing streaming choice and retains complete request,
+credential and current-authority checks.
+
+Final local qualification passed 5,619 all-feature workspace tests (210 opt-in
+tests skipped), 12 doctests (one ignored), strict workspace/all-target Clippy,
+formatting, warnings-as-errors rustdoc, distribution and tenancy-contract checks.
+All 13 separately selected capture process parents passed serially. Runtime
+campaigns used zero retries. The focused auxiliary campaign passed 56 tests,
+including observed streaming with one/two counts, actual non-streaming
+NativeSession counting, same-slot refresh races, and truncated/stalled rejected
+refresh bodies. Independent source and regression-evidence review closed the
+streaming mismatch and the identified OAuth coverage gaps.
+
+Minimum HTTP/1.1 gateway, HTTP/2 gateway, core+HTTP/2 and core+harness+HTTP/2
+passed strict all-target Clippy and respectively 406, 409, 459 and 483 selected
+tests. Reduced PostgreSQL 17 and MySQL 8.4 profiles each passed strict Clippy
+and three real migration037/OAuth/compound-receipt campaigns. Existing unrelated
+fixture databases were preserved. Final source qualification also includes the
+optional-dependency fixture corrections exposed by the first reduced build.
+
+Earlier failures remain separate evidence. One full run was interrupted for the
+streaming correction after 890 passes, two interrupted tests and 4,722 not run.
+A later run passed 5,618 tests but timed out in the existing MCP handshake
+cancellation test; its stderr showed a nested fixture build. Supplying the
+already-built examples directory, as Unix CI already does, passed that exact
+test and the subsequent full run without changing source, assertions or test
+deadlines. This does not establish the original timeout's cause. The completed
+oneshot correction also passes the real capture process campaigns; CI on the
+new commit remains required after the preceding head's failures.
+
+See [the auxiliary profile](RESOURCE_TENANCY_AUXILIARY_PROFILE.md) for the exact
+consumer, custody and bounded-response rules. These functional results do not
+establish full recovery or performance. Production dispatch, revision-bound
+dispatch and strict receipts remain disabled; M2 and M3 remain incomplete.
 
 The 16 operations and 35 runtime scenarios in `contracts/resource-tenancy/` are
 the minimum conformance inventory. Every family in `inventory.json` needs a

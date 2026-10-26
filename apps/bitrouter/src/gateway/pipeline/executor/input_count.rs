@@ -10,9 +10,15 @@ use crate::gateway::pipeline::types::RoutingTarget;
 use bitrouter_ai::core::evidence::{InputTokenCounting, NativeInputCount};
 use bitrouter_ai::types::{ApiProtocol, Prompt};
 use tokio_util::sync::CancellationToken;
+pub(crate) mod owned;
 
 fn invalid(message: &str) -> BitrouterError {
     BitrouterError::bad_request(message)
+}
+
+fn generation_stream(target: &RoutingTarget, ctx: &PipelineContext) -> bool {
+    target.provider_name == "openai-codex"
+        || ctx.extension::<super::NativeStreamCapture>().is_some()
 }
 
 pub(super) fn request_digest(request: &reqwest::Request, target: &RoutingTarget) -> Result<String> {
@@ -137,11 +143,7 @@ impl HttpExecutor {
         ctx: &PipelineContext,
     ) -> Result<NativeInputCount> {
         if let Some(execution) = super::tenancy::execution(ctx) {
-            // Counting has a separate endpoint and authentication request. Keep
-            // it closed until that owned auxiliary-work contract is integrated.
-            return Err(
-                execution.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)
-            );
+            return self.count_owned_input(target, prompt, ctx, execution).await;
         }
         if self.shared_authority || super::shared::has_admission(ctx) {
             return Err(invalid(
@@ -164,19 +166,12 @@ impl HttpExecutor {
             .input_token_count_endpoint(&target.model_target())
             .ok_or_else(|| invalid("transport does not support input counting"))?;
         Self::check_response_format(prompt, adapter, target)?;
-        let mut body = self.render_execution_request(
-            adapter.as_ref(),
-            target,
-            prompt,
-            ctx,
-            target.provider_name == "openai-codex",
-        )?;
+        let stream = generation_stream(target, ctx);
+        let mut body =
+            self.render_execution_request(adapter.as_ref(), target, prompt, ctx, stream)?;
         let managed_expected = self.managed_expected_body(&body, target, ctx)?;
         apply_provider_continuation(&mut body, target, ctx)?;
-        let url = transport.endpoint_url(
-            &target.model_target(),
-            target.provider_name == "openai-codex",
-        );
+        let url = transport.endpoint_url(&target.model_target(), stream);
         let (client, timeouts) = self.client_for(
             target,
             ctx.extension::<crate::gateway::pipeline::native::NativeManagedRequest>()

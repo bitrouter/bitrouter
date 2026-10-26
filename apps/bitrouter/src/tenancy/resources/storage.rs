@@ -82,10 +82,24 @@ pub(super) async fn retain(
     let key = resources.key.as_ref().context("resource key unavailable")?;
     let bytes = bounded_bytes(artifact, MAX_ARTIFACT_BYTES)?;
     let dependencies = artifact.definition.dependencies();
+    let oauth = matches!(
+        &artifact.definition,
+        super::manifest::Definition::Credential { oauth: Some(_), .. }
+    );
+    let version = if oauth {
+        "tenancy-oauth-resource-v1"
+    } else {
+        COMPILER_VERSION
+    };
+    let purpose = if oauth {
+        "owned-oauth-seed-v1"
+    } else {
+        "resource"
+    };
     let binding = (
         &resources.installation,
         &artifact.reference,
-        COMPILER_VERSION,
+        version,
         &dependencies,
     );
     let fingerprint_input = bounded_bytes(&(&binding, &artifact), 2 * MAX_ARTIFACT_BYTES)?;
@@ -104,12 +118,12 @@ pub(super) async fn retain(
         // Retain the original random nonce, ciphertext and creation time.
         return Ok(());
     }
-    let sealed = key.seal_bound("resource", &binding, &bytes)?;
+    let sealed = key.seal_bound(purpose, &binding, &bytes)?;
     configuration_store::insert_resource(
         db,
         &StoredResource {
             reference: artifact.reference.clone(),
-            compiler_version: COMPILER_VERSION.into(),
+            compiler_version: version.into(),
             payload: serde_json::to_value(sealed)?,
             dependencies: serde_json::to_value(dependencies)?,
             content_digest: fingerprint.try_into()?,
@@ -123,7 +137,8 @@ pub(super) async fn retain(
 
 pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Result<Artifact> {
     ensure!(
-        record.compiler_version == COMPILER_VERSION,
+        record.compiler_version == COMPILER_VERSION
+            || record.compiler_version == "tenancy-oauth-resource-v1",
         "unsupported resource compiler"
     );
     let key = resources.key.as_ref().context("resource key unavailable")?;
@@ -135,12 +150,26 @@ pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Res
     let binding = (
         &resources.installation,
         &record.reference,
-        COMPILER_VERSION,
+        record.compiler_version.as_str(),
         &dependencies,
     );
     let sealed: SealedSecret = serde_json::from_value(record.payload)?;
-    let bytes = key.open_bound("resource", &binding, &sealed)?;
+    let oauth = record.compiler_version == "tenancy-oauth-resource-v1";
+    let purpose = if oauth {
+        "owned-oauth-seed-v1"
+    } else {
+        "resource"
+    };
+    let bytes = key.open_bound(purpose, &binding, &sealed)?;
     let artifact: Artifact = serde_json::from_slice(&bytes)?;
+    ensure!(
+        oauth
+            == matches!(
+                &artifact.definition,
+                super::manifest::Definition::Credential { oauth: Some(_), .. }
+            ),
+        "OAuth resource purpose mismatch"
+    );
     ensure!(
         artifact.reference == record.reference
             && artifact.definition.dependencies() == dependencies,

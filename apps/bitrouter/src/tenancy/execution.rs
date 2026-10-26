@@ -37,11 +37,13 @@ use crate::gateway::{
 
 pub(super) mod cached;
 mod continuation;
+mod count;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod host;
 pub(crate) mod http_continuation;
 pub(crate) mod lifecycle;
 mod native;
+mod oauth;
 mod profile;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod session;
@@ -527,11 +529,23 @@ impl TenantExecution {
     }
 
     /// The last synchronous current-grant check and arming share one authority lock.
+    #[cfg(test)]
     pub(crate) fn arm_attempt(
         &self,
         target: &RoutingTarget,
         permit: &mut super::receipts::journal::AttemptPermit,
         authenticated: &super::receipts::journal::TargetStamp,
+    ) -> Result<AttemptId, ErrorCode> {
+        self.arm_attempt_with_oauth(target, permit, authenticated, None, None)
+    }
+
+    pub(crate) fn arm_attempt_with_oauth(
+        &self,
+        target: &RoutingTarget,
+        permit: &mut super::receipts::journal::AttemptPermit,
+        authenticated: &super::receipts::journal::TargetStamp,
+        oauth: Option<&super::oauth::ModelStamp>,
+        counted: Option<&str>,
     ) -> Result<AttemptId, ErrorCode> {
         let actual = super::receipts::journal::TargetStamp::for_execution(self, target)
             .map_err(super::receipts::journal_error)?;
@@ -548,6 +562,8 @@ impl TenantExecution {
                     return Err(code);
                 }
                 authorize_route(state, &self.submission, self.route.dependencies())?;
+                self.validate_oauth_model(target, oauth)?;
+                self.verify_count_send(target, counted)?;
                 permit
                     .arm(authenticated)
                     .map_err(super::receipts::journal_error)

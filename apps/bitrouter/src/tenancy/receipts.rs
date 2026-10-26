@@ -3,6 +3,8 @@
 
 #[cfg(test)]
 pub(in crate::tenancy) mod authority_test;
+pub(crate) mod auxiliary;
+pub(in crate::tenancy) mod auxiliary_store;
 pub(in crate::tenancy) mod capacity;
 pub(crate) mod evidence;
 pub(crate) mod journal;
