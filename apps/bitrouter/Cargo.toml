@@ -20,12 +20,11 @@ name = "bro"
 path = "src/main.rs"
 
 [features]
-default = ["core", "harness", "tui", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql"]
+default = ["core", "harness", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql"]
 core = ["dep:rand_distr"]
 harness = ["mcp", "dep:jsonschema", "dep:agent-client-protocol", "dep:agent-client-protocol-schema", "dep:agent-client-protocol-conductor", "dep:globset", "dep:ignore", "dep:tokio-stream"]
 mcp = ["dep:rmcp", "dep:process-wrap"]
 server-tools = ["mcp"]
-tui = ["harness", "dep:ratatui", "dep:crossterm"]
 guardrails = ["dep:bitrouter-guardrails"]
 db-postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
 db-mysql = ["sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
@@ -90,6 +89,7 @@ bitrouter-ai = { workspace = true, features = ["schema"] }
 keyring.workspace = true
 chrono.workspace = true
 sha2.workspace = true
+shell-words.workspace = true
 hmac.workspace = true
 ring.workspace = true
 subtle.workspace = true
@@ -117,6 +117,7 @@ erased-serde = "0.4"
 async-trait.workspace = true
 reqwest.workspace = true
 url.workspace = true
+fluent-uri.workspace = true
 anyhow = "1"
 tempfile.workspace = true
 thiserror.workspace = true
@@ -128,20 +129,15 @@ agent-client-protocol = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["compat", "rt"] }
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
-# Terminal implementations now live under the application tui module.
-ratatui = { workspace = true, optional = true }
-shell-words.workspace = true
-unicode-width.workspace = true
-unicode-segmentation.workspace = true
-crossterm = { workspace = true, optional = true }
 jsonschema = { version = "0.47.0", default-features = false, optional = true }
 schemars.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 atomicwrites.workspace = true
+winapi-util = "0.1"
 
 [target.'cfg(unix)'.dependencies]
-rustix = { workspace = true, features = ["process"] }
+rustix = { workspace = true, features = ["process", "event", "termios", "fs"] }
 
 [build-dependencies]
 # Reads the committed registry artifacts to generate the ACP harness catalog.
@@ -180,8 +176,6 @@ prost.workspace = true
 # Real-terminal acceptance coverage: the process under test must see a PTY,
 # while the test controls its size, input bytes, output, and child lifetime.
 portable-pty = "0.9"
-# Reconstructs cursor-addressed ratatui frames for semantic PTY assertions.
-vt100 = "0.15"
 
 [[test]]
 name = "observe_hierarchy"
@@ -261,14 +255,6 @@ name = "database_capture"
 required-features = ["harness"]
 
 [[test]]
-name = "code_tui_pty"
-required-features = ["tui"]
-
-[[test]]
-name = "native_agent_tui"
-required-features = ["core", "tui"]
-
-[[test]]
 name = "acp"
 required-features = ["harness"]
 
@@ -287,3 +273,23 @@ required-features = ["core", "harness"]
 [[test]]
 name = "harness_sdk"
 required-features = ["core", "harness"]
+
+[[test]]
+name = "mcp_skill_host"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "managed_daemon"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "management_cli"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "native_evolution_cli"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "acp_skill_delivery"
+required-features = ["harness"]

@@ -31,6 +31,8 @@ fn config(server: &wiremock::MockServer) -> HarnessConfig {
         servers: vec![fixture::configuration(server)],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
+        skills: Default::default(),
+        library: None,
         instructions: Default::default(),
     }
 }
@@ -331,6 +333,8 @@ fn stdio_config() -> Result<HarnessConfig, String> {
         )],
         protocol: ProtocolVersion::LATEST,
         skill_roots: Vec::new(),
+        skills: Default::default(),
+        library: None,
         instructions: Default::default(),
     })
 }
@@ -569,7 +573,7 @@ async fn checkpoint_continuation_reuses_results_and_refuses_changed_resources()
             .recover_thread(
                 &target,
                 &caller,
-                crate::harness::thread::ThreadRecoveryRequest {
+                bitrouter_ai::harness::thread::ThreadRecoveryRequest {
                     source_server_instance_id: recovery.source_server_instance_id.clone(),
                     source_cursor: recovery.source_cursor,
                     idempotency_key: "continue".into(),

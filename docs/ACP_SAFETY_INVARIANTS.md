@@ -1,6 +1,18 @@
 # ACP safety invariants: what `engine::Session` guarantees today
 
+> **CLI-only G05 entry update (2026-10-19, local worktree).** Runtime, protocol,
+> permission and recovery requirements in this document remain authoritative.
+> First-party code/tui/chat/agents attach interfaces are removed; earlier UI
+> examples and source paths are historical. Use native Thread controls, headless
+> ACP commands or native harness launchers from the [current CLI reference](CLI.md).
+> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Status: **implementation gate** · Date: 2026-09-02
+
+G01 local update (2026-10-18): I6's headless policy/reply owner is now
+`bitrouter_orchestrator::acp::permission`. The client still owns cancellation and
+permission lifetimes; UI presentation remains separate. Local validation and
+revision scope are recorded in the [CLI-only implementation record](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 Companion to [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md). That document
 says what the controller *is*; this one says what the code being deleted
@@ -68,7 +80,7 @@ The class where a mistake grants consent that nobody gave.
 | **I3** | `Cancelled` passes through as `Cancelled` — it is never upgraded to a selection | `translate.rs` `sanitize_selection` | `translate.rs` `sanitize_selection_cancelled_passes_through` `sanitize_selection_cancelled_passes_through` | shared client | existing |
 | **I4** | Each request is answered **exactly once**; later answers are no-ops | `client.rs` `PermissionResolver::answer` — `guard.take()`, first wins | `client.rs` `a_permission_is_answered_exactly_once` | shared client — **landed** | `client.rs` `a_permission_is_answered_exactly_once` |
 | **I5** | Explicit interactive turn cancellation resolves all pending permissions as `RequestPermissionOutcome::Cancelled`; dismissal while continuing uses offered reject-once, otherwise cancelled | `code.rs` queues choices by identity; `chat/code_wire.rs` cancels pending and ledger requests before sending `session/cancel`, retaining the prompt until settlement or shared grace expiry | Code reducer, wire, ACP protocol, and real-PTY acceptance tests | Shared Code interaction core; ACP client abandonment/headless deny semantics remain distinct | See `CODE_TUI_UX_PROGRESS.md` for current verification |
-| **I6** | A **headless** path answers rather than hanging the harness, and answers *deny* unless the caller said otherwise | `chat/effects.rs` `Wire::answer` under a `bitrouter_tui::permission::Policy`, whose default is deny-all; `acp_cli.rs` `prompt` answers with the flagged policy, `chat_plain` with the default. An approval the agent offered no allow option for resolves to the reject option (`Prompt::answer`) | `tests/acp.rs` `prompt_headless_denies_permission_and_completes` (default, exit 5), `prompt_approve_all_selects_the_allow_option`, `prompt_approve_reads_reads_the_kind`, `prompt_permission_policy_title_head_wins`; `machine.rs` `a_policy_that_cannot_approve_reports_deny` | NDJSON + pipe presentations — **landed** | as listed |
+| **I6** | A **headless** path answers rather than hanging the harness, and answers *deny* unless the caller said otherwise | `acp/permission.rs` `answer_request` under its `Policy`, whose default is deny-all; `acp_cli.rs` `prompt` answers with the flagged policy, `chat_plain` with the default. An approval the agent offered no allow option for resolves to the reject option (`Prompt::answer`) | `tests/acp.rs` `prompt_headless_denies_permission_and_completes` (default, exit 5), `prompt_approve_all_selects_the_allow_option`, `prompt_approve_reads_reads_the_kind`, `prompt_permission_policy_title_head_wins`; `acp/permission.rs` `an_approval_with_nothing_to_select_reports_deny` | NDJSON + pipe presentations — **landed** | as listed |
 | **I7** | A permission outstanding at **session teardown** is denied | `client.rs` `AcpClient::shutdown` denies, then waits (bounded) for the parked handlers to answer before the transport goes; the command loop and the driver tail repeat it for the drop path | `client.rs` `teardown_denies_an_outstanding_permission` | shared client teardown — **landed** | `client.rs` `teardown_denies_an_outstanding_permission` |
 
 ### Deliberately dropped

@@ -52,6 +52,60 @@ pub struct ManagedCoreApi {
 }
 
 impl ManagedCoreApi {
+    /// Owner-local inspection of actual channel bindings. Retained disconnected
+    /// sessions are excluded; the opaque identity isolates equal session IDs
+    /// belonging to different principals without disclosing their credentials.
+    pub async fn connected_sessions(
+        &self,
+    ) -> anyhow::Result<Vec<crate::connected_agents::Instance>> {
+        use sha2::Digest;
+        let sessions = self
+            .shared
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, entry)| entry.connected)
+            .map(|(key, entry)| {
+                (
+                    key.clone(),
+                    entry.grant.clone(),
+                    entry.ready,
+                    entry.port.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut connected = Vec::new();
+        for (key, grant, ready, port) in sessions {
+            if !port.is_connected().await {
+                continue;
+            }
+            let id = hex::encode(sha2::Sha256::digest(serde_json::to_vec(&(&key, &grant))?));
+            connected.push(crate::connected_agents::Instance {
+                kind: crate::connected_agents::Kind::ManagedCoreChannel,
+                id,
+                agent: "managed_core".into(),
+                state: if ready { "connected" } else { "binding" }.into(),
+                thread_id: None,
+                turn_id: None,
+                run_id: None,
+                session_id: Some(grant.session_id.clone()),
+                agent_session_id: None,
+                via: None,
+                connection_id: None,
+                parent_run_id: None,
+                model: None,
+                model_selector: None,
+                model_source: None,
+                resource_binding: None,
+                harness_id: Some(grant.harness_id),
+                execution_epoch: Some(grant.execution_epoch),
+                runtime_instance_id: Some(grant.core_instance_id),
+            });
+        }
+        Ok(connected)
+    }
+
     pub fn new(app: Arc<App>, db: DatabaseConnection, core_instance_id: String) -> Self {
         let limits = Limits::default();
         // Admission bounds the sum of all session model slots by the host cap.

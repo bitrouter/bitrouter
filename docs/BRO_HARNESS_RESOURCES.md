@@ -1,5 +1,12 @@
 # Native BRO project instructions, MCP and skills
 
+> **CLI-only G05 entry update (2026-10-19, local worktree).** Runtime, protocol,
+> permission and recovery requirements in this document remain authoritative.
+> First-party code/tui/chat/agents attach interfaces are removed; earlier UI
+> examples and source paths are historical. Use native Thread controls, headless
+> ACP commands or native harness launchers from the [current CLI reference](CLI.md).
+> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 This is the resource extension of PR #945's production `ThreadService`. The app
 wires static daemon configuration in `host.rs`; `Agent` discovers resources while
 preparing an admitted execution pass. MCP is a direct harness client, independent
@@ -23,9 +30,10 @@ selected configuration and workspace; it is not an authorization grant.
 
 The existing workspace/caller and permission-profile checks apply. `Ask` requests
 an identified approval for MCP effects; an explicitly granted `AllowEffects`
-profile follows its existing approval policy. Read-only Threads never connect to
-MCP servers or advertise their tools: upstream read-only annotations do not grant
-local permission. An allowed workspace is not a filesystem sandbox for a
+profile follows its existing approval policy. Read-only Threads expose no MCP
+tools; only explicitly granted native skill sources may connect for metadata
+and source-bound reads. Upstream read-only annotations do not grant local
+permission. An allowed workspace is not a filesystem sandbox for a
 configured MCP server; stdio launches trusted operator-selected code, and HTTP
 uses the operator-selected server credentials.
 
@@ -67,8 +75,10 @@ readable; a new append upgrades the root envelope in the same version-fenced
 transaction, without rewriting its history or identities. An older binary refuses
 format 7 before decoding new instruction/resource/close facts. Formats 0/1 and future versions remain
 unsupported. There is no schema migration or automatic lost-owner retirement.
-Local protocol remains v17: inventories use optional fields in existing snapshot
-and context-advanced messages; no new public message variant is introduced.
+Local protocol is v19. Inventories still use optional snapshot/context fields;
+the new version prevents older task-run clients from auto-approving MCP skill
+requests as ordinary commands. HTTP v2 advertises `explicit_skill_consent` and
+requires `skill_consent: true` on an answer to `mcp_skill.activate`.
 
 ## Workspace project instructions
 
@@ -118,6 +128,30 @@ prevent sampling. SQLite reopen preserves startup facts without rereading files.
 
 ## Skills discovery
 
+The CLI also manages BitRouter-owned immutable bundles through
+`bro skills install/show/update/uninstall`; see [CLI skills](CLI.md#skills).
+G09 now supplies a read-only adapter over G07's same aliases, retained receipts
+and immutable version files. Native resource inventory records active managed
+entries and per-library revisions, including empty catalogs. A version reader
+keeps scope/installation identity and the exact whole-bundle receipt; updates
+or uninstall do not substitute a new version. The managed library is separate
+from the compatibility discovery below. Native Core now selects managed versions
+through its configured decision backend and freezes original receipts, reasons,
+budgets and verified instructions in the existing WorkUnit/decision ledger before
+context/model preparation. Each child evaluates its own candidates; explicit
+user constraints remain inherited. MCP roots use explicit consent and a verified
+per-Turn cache. Explicit task include/exclude selectors are supported, including
+direct URI metadata lookup independently of listing. Native `skill_read` loads
+only files committed by the selected original receipt/entry. It records a metadata
+tool receipt and persists verified UTF-8 data in that Turn's WorkUnit; subsequent
+model inputs receive a protected user data frame with parent/file provenance.
+No file body enters ordinary tool history or automatically activates a nested
+skill. `native_skill_files_v1` gates these cache/budget facts during restoration;
+legacy Turns without the feature/frozen budget receive no new tool. File data
+counts against the frozen Turn allowance and final model/context admission,
+without truncation. Local fixtures cover active update/uninstall and original
+SQLite restoration; lost owners retain the existing recovery block.
+
 The orchestrator owns the shared parser and discovery implementation used by
 `bro skills list` and `skills init`. Each active pass includes its workspace and
 host-selected user roots: `$HOME/.agents/skills`, `$HOME/.codex/skills`,
@@ -136,15 +170,77 @@ different roots retain distinct path-derived material IDs.
 The inventory exposes name, description, source and a content-hashed version.
 It contains no skill bodies. Discovery does not activate skills, execute scripts,
 expand frontmatter `allowed-tools`, or inject skills/MCP instructions into the
-system prompt. Skill/MCP material-body delivery, plugin/namespace recursion and Core
-selection/value optimization remain subsequent work.
+system prompt. Native managed selection and verified root/support delivery use
+the path above; compatibility discovery alone does not activate material.
+Plugin/namespace recursion and selection/value optimization are separate work.
+
+G09's native loading primitives additionally admit MCP entries only under
+`skills.mcp_sources.<configuration-key>`. Each source needs exact absolute
+workspace roots and a matching synthetic-local, authenticated key-ID or user-ID
+grant. These grants do not replace the existing execution caller/workspace and
+tool permissions. Removed configurations cannot authorize old caches. Source policy and
+transport changes are startup-owned; apply them with an explicit restart.
+
+The host keeps the complete entry, original URI, host-assigned configuration ID,
+configuration digest and caller/workspace scope. A live connection must
+declare Resources and Skills. Listing and direct lookup fetch no files. Held
+manifest reads use the same source, verify raw byte size/hash, and compare the
+complete root frontmatter. Supplied cached bytes undergo the same checks on
+every access. Generic URI/IRI syntax permits rootless, authority-based and
+absolute paths without URL normalization or authority resolution. Query and
+fragment components remain part of each exact resource identity; only the path
+determines directory containment. Filesystem-relative reads match the original
+held manifest; ambiguous decoded paths require an exact URI. Nested SKILL.md
+reads remain supporting data. Dynamic
+entries are excluded with reasons; direct dynamic loading is rejected.
+
+Native Core can select held entries and request explicit per-skill consent through
+the original checkpoint ledger. Native Threads use their pending/answer controls;
+managed CLI uses `task managed-status` and `task managed-answer` with the original
+boot/input/consent identity. Ordinary headless command approval does not approve a
+skill. Root reads follow the consent ACK; exact entry and verified root bytes
+enter source-tagged user data, rather than system instructions. The frame counts
+toward context budgets and is not automatically shared with unconsenting children.
+Tool grants remain unchanged. The original WorkUnit retains ACKed root bytes;
+later model steps and authenticated Core restoration reuse that exact cache
+after current caller/workspace/configuration and raw-byte validation. No cache
+directory participates in filesystem skill discovery. A resource-only source
+can be offline without supplying new candidates; missing cache bytes still need
+the original server. Connections supplying tools or server instructions retain
+their execution-catalog guards. A new live connection without Resources/Skills
+cannot authorize cache use. Supporting-file cache/data uses the same source and
+approval checks, with exact file size/hash and protected evidence validation.
+Local CLI, model-input and restored-journal fixtures cover these native gates.
+Daemon restart does not authorize lost-owner takeover or task replay. Supervised
+Codex/Claude support separately reported local prompt-instruction delivery;
+required MCP-origin external delivery is unsupported. Vendor history/token
+admission and real provider/adapter/remote-MCP conformance remain unverified.
+
+`bro skills explain` queries original native Thread/Turn records or a managed
+session/input in the selected database. It uses bounded store pages, existing
+checkpoint/projection verification and caller ownership for native Threads; no
+App, resources, daemon, ownership claim or restoration is needed. It reports
+source/version/entry, constraints, reasons, policy, consent, verified-byte
+commitments and exact prepared SDK inputs separately from available execution
+observations. Missing historical attempt details stay unknown. Workspace or source
+file deletion does not replace the original evidence; lost owners remain unreleased.
+
+Load errors are checkpoint facts. An optional root that has never activated can
+be excluded with a retained cause; it contributes no model instructions. A
+required root, or an already loaded version that can no longer be verified,
+fails the original accepted work without replacing its binding. Permission,
+signal, context and steering changes cancel stale reads before their bytes can
+be committed. An unacknowledged failure cannot authorize a model fallback.
 
 ## Bounds and verification
 
 MCP accepts at most 32 servers, 256 tools and 1 MiB of serialized declarations;
 server instructions are bounded to 64 KiB each. Native inventory, including skill
 metadata, is capped at 256 KiB, so this tighter bound can reject a catalog accepted
-by MCP-only diagnostics. Connection/list requests have a 30-second bound and
+by MCP-only diagnostics. MCP skill entries are capped separately at 2 MiB of
+metadata, listings at 16 MiB and 256 skills per source. The supported atomic
+manifest baseline is 512 files/16 MiB, with per-file host/context read budgets;
+content is never fetched to satisfy metadata listing. Connection/list requests have a 30-second bound and
 per-server discovery has a total 30-second bound; preparation also respects the
 remaining Turn deadline/cancellation. Calls have a 120-second total bound and
 32 KiB retained output allowance; cancellation cleanup and close are bounded.

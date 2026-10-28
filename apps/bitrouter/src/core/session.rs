@@ -1,6 +1,7 @@
 //! Managed session transitions. Provider calls and harness commits run outside
 //! the state lock. A separate commit serializer preserves the one-batch rule.
 
+use crate::skills::mcp::HeldMcpSkillExt;
 use crate::storage::checkpoint::snapshot::AgentState;
 use crate::storage::checkpoint::snapshot::AgentTurn;
 use crate::storage::checkpoint::snapshot::AttemptRecord;
@@ -81,6 +82,9 @@ pub mod release;
 pub mod responses;
 pub mod restoration_activity;
 pub mod root_queue;
+mod skill_consents;
+mod skill_files;
+pub(crate) mod skills;
 pub mod steering;
 mod tool_payloads;
 mod tool_status;
@@ -93,6 +97,61 @@ mod wait_output;
 /// delivery before ACK. Report actual outcomes separately through `tool_result`.
 #[async_trait]
 pub trait HarnessPort: Send + Sync {
+    /// Metadata only; called after the original Turn has been accepted. None
+    /// means this authenticated host does not provide native skill loading.
+    async fn skill_catalog(
+        &self,
+    ) -> Result<Option<crate::storage::skills::SkillCatalog>, CoreError> {
+        Ok(None)
+    }
+
+    /// Metadata-only lookup for an explicit URI that listing did not contain.
+    /// The same host source/caller/workspace policy applies; no file is read.
+    async fn resolve_mcp_skill(
+        &self,
+        _server: &str,
+        _uri: &str,
+        _cancel: &CancellationToken,
+    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
+        Err(reject(
+            ErrorCode::UnsupportedCapability,
+            "host does not resolve MCP skill metadata",
+        ))
+    }
+
+    /// Read an exact persisted binding, never its current installation alias.
+    /// The host rechecks caller/workspace authority and original raw bytes.
+    /// MCP cache bytes come from this Turn's acknowledged selection; they are
+    /// never a local installation or evidence of current source authorization.
+    async fn skill_instructions(
+        &self,
+        _source: &crate::storage::skills::SkillSource,
+        _max_bytes: u64,
+        _cached_bytes: Option<&[u8]>,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<u8>, CoreError> {
+        Err(reject(
+            ErrorCode::UnsupportedCapability,
+            "host does not load native skills",
+        ))
+    }
+
+    /// Reads only a file committed by the selected source. This grants no
+    /// execution or nested-skill activation; cached MCP bytes are reauthorized.
+    async fn skill_file(
+        &self,
+        _source: &crate::storage::skills::SkillSource,
+        _reference: &str,
+        _max_bytes: u64,
+        _cached_bytes: Option<&[u8]>,
+        _cancel: &CancellationToken,
+    ) -> Result<Vec<u8>, CoreError> {
+        Err(reject(
+            ErrorCode::UnsupportedCapability,
+            "host does not load bound skill files",
+        ))
+    }
+
     /// Local owner cancellation also interrupts a provider stream while Core
     /// waits for its next scheduling boundary. Remote ports use Core's token.
     async fn model_cancelled(&self) {
@@ -177,6 +236,7 @@ struct LiveSession {
     unresolved_tool_deliveries: BTreeSet<String>,
     cancelled_tools: BTreeSet<String>,
     sent_materials: BTreeSet<String>,
+    sent_skill_consents: BTreeSet<String>,
     provisional_blocks: BTreeSet<String>,
     provisional_steering: BTreeMap<String, steering::SteeringTarget>,
     disconnected: CancellationToken,
@@ -226,6 +286,7 @@ struct Shared {
     limits: Limits,
     capabilities: Capabilities,
     changed: Notify,
+    skill_consents_changed: Notify,
     steering_changed: Notify,
     budget_changed: Arc<Notify>,
 }
@@ -360,6 +421,7 @@ impl CoreSession {
                     unresolved_tool_deliveries: BTreeSet::new(),
                     cancelled_tools: BTreeSet::new(),
                     sent_materials: BTreeSet::new(),
+                    sent_skill_consents: BTreeSet::new(),
                     provisional_blocks: BTreeSet::new(),
                     provisional_steering: BTreeMap::new(),
                     disconnected: CancellationToken::new(),
@@ -382,6 +444,7 @@ impl CoreSession {
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
                 changed: Notify::new(),
+                skill_consents_changed: Notify::new(),
                 steering_changed: Notify::new(),
                 budget_changed: Arc::new(Notify::new()),
             }),
@@ -1270,6 +1333,9 @@ impl CoreSession {
             return self.advance_steering(agent_id).await;
         }
         if turn.status == AgentStatus::WaitingMaterial {
+            if crate::storage::skills::state::awaits_skill_consent(&state, agent_id) {
+                return self.prepare_skill_consents(agent_id).await;
+            }
             return self.prepare_materials(agent_id).await;
         }
         if turn.status.terminal() {
@@ -1521,7 +1587,10 @@ impl CoreSession {
             .await?;
             return Ok(true);
         }
-        self.prepare_materials(agent_id).await
+        if self.prepare_materials(agent_id).await? {
+            return Ok(true);
+        }
+        self.prepare_skills(agent_id).await
     }
 
     async fn prepare_materials(&self, agent_id: &str) -> Result<bool, CoreError> {
@@ -1772,7 +1841,9 @@ impl CoreSession {
             return Ok(false);
         }
         let failed = root.status != AgentStatus::Completed || run.resource_error.is_some();
-        let cancelled = run.cancellation.is_some() && run.resource_error.is_none();
+        let cancelled = run.cancellation.is_some()
+            && run.resource_error.is_none()
+            && !crate::storage::skills::state::root_failed(state);
         self.transition(if cancelled { "run.cancelled" } else if failed { "run.failed" } else { "run.completed" }, |state, _| {
             let current=state.run.as_ref().ok_or_else(|| reject(ErrorCode::Busy,"no run"))?;
             // Late evidence can raise the counter while this transition waits
@@ -1780,7 +1851,7 @@ impl CoreSession {
             if current.resource_error.is_none() && matches!(current.status, RunStatus::Running | RunStatus::Waiting) && budget::ensure(state).is_err() {
                 return Err(reject(ErrorCode::Busy,"run terminal boundary awaits active-time enforcement"));
             }
-            if current.run_id!=run.run_id || (current.cancellation.is_some() && current.resource_error.is_none())!=cancelled || state.agents.values().any(|agent| !agent.queue.is_empty() || agent.turn.as_ref().is_some_and(|turn| turn.run_id==current.run_id && (!turn.status.terminal() || (agent.parent_id.is_some()&&!turn.notified) || turn.invocations.iter().any(|call|call.result.is_none())))) {return Err(reject(ErrorCode::Busy,"run terminal boundary changed"));}
+            if current.run_id!=run.run_id || (current.cancellation.is_some() && current.resource_error.is_none() && !crate::storage::skills::state::root_failed(state))!=cancelled || state.agents.values().any(|agent| !agent.queue.is_empty() || agent.turn.as_ref().is_some_and(|turn| turn.run_id==current.run_id && (!turn.status.terminal() || (agent.parent_id.is_some()&&!turn.notified) || turn.invocations.iter().any(|call|call.result.is_none())))) {return Err(reject(ErrorCode::Busy,"run terminal boundary changed"));}
             let root = state.root_turn().ok_or_else(|| reject(ErrorCode::Busy, "no root turn"))?;
             if (root.status!=AgentStatus::Completed || current.resource_error.is_some())!=failed {return Err(reject(ErrorCode::Busy,"root terminal changed"));}
             let answer = root.final_answer.clone();
@@ -1794,6 +1865,9 @@ impl CoreSession {
     }
 
     async fn dispatch_collaboration(&self, agent_id: &str) -> Result<bool, CoreError> {
+        if self.dispatch_skill_file(agent_id).await? {
+            return Ok(true);
+        }
         let _input = self.shared.inputs.lock().await;
         let state = self.snapshot().await;
         let Some(turn) = state
@@ -2255,9 +2329,20 @@ impl CoreSession {
             self.consume_results(agent_id).await?;
         }
         self.transition_for(Some(agent_id), "agent.interrupted", |state, _| {
+            let turn_id = agent_turn(state, agent_id)?.agent_turn_id.clone();
+            let failure = state
+                .skill_selection(&turn_id)
+                .and_then(|selection| selection.failure.clone());
             let turn = agent_turn(state, agent_id)?;
-            turn.status = AgentStatus::Interrupted;
-            turn.terminal_reason = Some("interruption and outstanding effects settled".into());
+            turn.status = if failure.is_some() {
+                AgentStatus::Failed
+            } else {
+                AgentStatus::Interrupted
+            };
+            turn.terminal_reason = Some(failure.map_or_else(
+                || "interruption and outstanding effects settled".into(),
+                |error| format!("skill source failed; effects settled: {}", error.message),
+            ));
             Ok(json!({}))
         })
         .await?;
@@ -3149,6 +3234,22 @@ impl CoreSession {
         activity_id: String,
         requires_remaining_attempt: bool,
     ) -> Result<(), CoreError> {
+        self.ensure_work_dispatch(
+            agent_id,
+            Some(step_id),
+            activity_id,
+            requires_remaining_attempt,
+        )
+        .await
+    }
+
+    async fn ensure_work_dispatch(
+        &self,
+        agent_id: &str,
+        step_id: Option<&str>,
+        activity_id: String,
+        requires_remaining_attempt: bool,
+    ) -> Result<(), CoreError> {
         loop {
             let changed = self.shared.steering_changed.notified();
             tokio::pin!(changed);
@@ -3178,7 +3279,14 @@ impl CoreSession {
                     .agents
                     .get(agent_id)
                     .and_then(|agent| agent.turn.as_ref())
-                    .is_none_or(|turn| turn.status != AgentStatus::ModelRunning)
+                    .is_none_or(|turn| {
+                        turn.status
+                            != if step_id.is_some() {
+                                AgentStatus::ModelRunning
+                            } else {
+                                AgentStatus::Runnable
+                            }
+                    })
             {
                 return Err(reject(
                     ErrorCode::CheckpointUnavailable,
@@ -3193,7 +3301,11 @@ impl CoreSession {
                     "dispatch resource budget exhausted",
                 ));
             }
-            validate_step_source(&live.state, agent_id, step_id)?;
+            if let Some(step_id) = step_id {
+                validate_step_source(&live.state, agent_id, step_id)?;
+            } else {
+                skills::validate_selection_source(&live.state, agent_id)?;
+            }
             live.activity.start(activity_id);
             budget::watch(self, &mut live);
             return Ok(());
@@ -3290,6 +3402,7 @@ impl CoreSession {
         }
         super::accounting::work::synchronize(next)?;
         context_decisions::synchronize(next)?;
+        crate::storage::skills::state::validate(next)?;
         let mut prepared = archive::prepare(next, false, &self.shared.limits)?;
         let mut proposed = CheckpointPayload {
             identity: BatchIdentity {
@@ -3473,6 +3586,7 @@ impl CoreSession {
                     reconnect::adopt_pending(&mut live, &payload)?;
                     budget::watch(self, &mut live);
                     self.shared.changed.notify_one();
+                    self.shared.skill_consents_changed.notify_waiters();
                     Ok(())
                 }
                 Ok(None) => Err(reject(
@@ -4606,6 +4720,9 @@ fn active_run(state: &mut SessionSnapshot) -> Result<&mut RootRun, CoreError> {
 }
 
 pub(super) fn validate_input(input: &TaskInput, limits: &Limits) -> Result<(), CoreError> {
+    if let Some(constraints) = &input.routing.skills {
+        constraints.validate()?;
+    }
     if input.text.is_empty() || input.model.is_empty() {
         return Err(reject(
             ErrorCode::NoFeasibleRoute,
@@ -4716,6 +4833,7 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
         }
         messages.push(material_message(&material)?);
     }
+    messages.extend(crate::storage::skills::state::messages(state, turn)?);
     messages.extend(agent.history.clone());
     crate::gateway::model::history::prepare_tool_results(&mut messages);
     let guidance = format!(
@@ -4736,6 +4854,7 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
             "{guidance}\nRequired user instructions:\n{instructions}\nAcceptance criteria:\n{criteria}"
         )
     };
+    let system = crate::storage::skills::state::instructions(state, turn, system)?;
     Ok(Prompt {
         model: turn.input.model.clone(),
         system: Some(system),
@@ -4756,6 +4875,7 @@ fn build_prompt(state: &SessionSnapshot, agent_id: &str) -> Result<Prompt, CoreE
             .chain(super::context_router::tools::declarations(
                 context_decisions::enabled(state),
             ))
+            .chain(crate::storage::skills::files::declarations(state, turn)?)
             .collect(),
         params: GenerationParams {
             max_tokens: turn.input.max_output_tokens,

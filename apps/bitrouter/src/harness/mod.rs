@@ -22,5 +22,3 @@ pub(crate) mod tools;
 #[cfg(feature = "harness")]
 pub mod trajectory;
 pub mod turn;
-
-pub mod permission;

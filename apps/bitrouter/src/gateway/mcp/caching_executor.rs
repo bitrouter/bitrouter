@@ -25,12 +25,12 @@ use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
 use tokio::sync::broadcast;
 
-use super::skills::SKILLS_LIST_METHOD;
 use super::{
     Executor, InvalidationEvent, InvalidationKind, McpRequest, McpResponse, McpStreamPart,
     McpTarget,
 };
 use crate::gateway::error::Result;
+use bitrouter_ai::protocol::mcp_skills::SKILLS_LIST_METHOD;
 
 // Defaults for `CacheTtls` and the YAML-facing `McpCacheConfig`
 // (`apps/bitrouter/src/config/mod.rs`) — single source of truth so a

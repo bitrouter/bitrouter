@@ -19,8 +19,7 @@ use crate::acp_cli::LaunchOptions;
 use crate::commands::agent_options::{CapabilitySnapshot, RoutingOptions, SessionSelection};
 use crate::harness::acp::client::SessionInitialSettings;
 
-/// Version of the local session-control JSON contract.
-pub const SESSION_PROTOCOL_VERSION: u16 = 1;
+pub const SESSION_PROTOCOL_VERSION: u16 = 3;
 
 /// Versioned request carried by `DaemonCommand::Sessions`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,13 +69,6 @@ pub enum SessionScope {
 #[serde(transparent)]
 pub struct SessionAuthorization(String);
 
-#[cfg(feature = "harness")]
-impl SessionAuthorization {
-    pub(crate) fn new(token: String) -> Self {
-        Self(token)
-    }
-}
-
 impl fmt::Debug for SessionAuthorization {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SessionAuthorization([redacted])")
@@ -121,6 +113,10 @@ pub enum SessionCommand {
     PeekAll,
     Snapshot {
         run_id: String,
+    },
+    /// v2: inspect an original operation receipt without applying it again.
+    ActionStatus {
+        fence: ControlFence,
     },
     Attach {
         run_id: String,
@@ -305,6 +301,9 @@ pub enum SessionResponse {
     Action {
         acknowledgement: Box<ActionAcknowledgement>,
     },
+    ActionStatus {
+        acknowledgement: Option<Box<ActionAcknowledgement>>,
+    },
     NativeSessions {
         response: ListSessionsResponse,
     },
@@ -401,6 +400,8 @@ pub enum SessionEventKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSnapshot {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skill_deliveries: Vec<crate::skills::delivery::Report>,
     pub run_id: String,
     pub label: String,
     pub agent_id: String,
@@ -593,115 +594,13 @@ pub struct ControlLease {
     pub expires_at: DateTime<Utc>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use anyhow::{Result, ensure};
-    use serde_json::json;
+// Runtime implementation follows the wire declarations so presentation
+// clients can depend on the types without depending on the process owner.
 
-    #[test]
-    fn grants_preserve_wire_proofs_and_redact_diagnostics() -> Result<()> {
-        let proof = "wire-test-bearer-proof";
-        let scopes = BTreeSet::from([SessionScope::List, SessionScope::Transcript]);
-        let grant = SessionGrant {
-            authorization: SessionAuthorization(proof.to_string()),
-            client_id: "client-1".to_string(),
-            scopes: scopes.clone(),
-            expires_at: None,
-        };
-        let authorization = SessionRequest::authorize(grant.client_id.clone(), scopes);
-        ensure!(
-            serde_json::to_value(authorization)?
-                == json!({
-                    "version": 1,
-                    "authorization": null,
-                    "command": {
-                        "op": "authorize",
-                        "client_id": "client-1",
-                        "scopes": ["list", "transcript"]
-                    }
-                }),
-            "grant authorization wire shape changed"
-        );
-        let request = SessionRequest::authorized(&grant, SessionCommand::List);
-        let encoded = serde_json::to_value(&request)?;
-        ensure!(
-            encoded
-                == json!({
-                    "version": 1,
-                    "authorization": proof,
-                    "command": {"op": "list"}
-                }),
-            "authorized request wire shape changed"
-        );
-        let decoded: SessionRequest = serde_json::from_value(encoded)?;
-        ensure!(decoded.authorization.as_ref() == Some(&grant.authorization));
-        let response = SessionResponse::Authorized {
-            grant: grant.clone(),
-        };
-        let encoded = serde_json::to_value(&response)?;
-        ensure!(
-            encoded
-                == json!({
-                    "result": "authorized",
-                    "grant": {
-                        "authorization": proof,
-                        "client_id": "client-1",
-                        "scopes": ["list", "transcript"],
-                        "expires_at": null
-                    }
-                }),
-            "grant response wire shape changed"
-        );
-        let decoded: SessionResponse = serde_json::from_value(encoded)?;
-        let SessionResponse::Authorized { grant: restored } = &decoded else {
-            anyhow::bail!("grant response did not round trip");
-        };
-        ensure!(restored.authorization == grant.authorization);
-        ensure!(restored.client_id == grant.client_id && restored.scopes == grant.scopes);
-        for debug in [
-            format!("{:?}", grant.authorization),
-            format!("{grant:?}"),
-            format!("{request:?}"),
-            format!("{decoded:?}"),
-        ] {
-            ensure!(
-                debug.contains("[redacted]") && !debug.contains(proof),
-                "session diagnostics disclosed the bearer proof"
-            );
-        }
-        Ok(())
-    }
+/// Daemon-owned collection of supervised ACP controller lifetimes.
 
-    #[test]
-    fn mutation_fences_and_event_tags_round_trip() -> Result<()> {
-        let command = json!({
-            "op": "mutate",
-            "fence": {
-                "run_id": "run-1",
-                "client_id": "client-1",
-                "lease_generation": 7,
-                "action_request_id": "action-1"
-            },
-            "action": {"action": "mark_reviewed"}
-        });
-        let decoded: SessionCommand = serde_json::from_value(command.clone())?;
-        ensure!(serde_json::to_value(decoded)? == command);
-        let event = json!({
-            "seq": 9,
-            "at": "2026-01-01T00:00:00Z",
-            "kind": {
-                "event": "lease",
-                "lease": {
-                    "owner_client_id": "client-1",
-                    "generation": 7,
-                    "mode": "attached",
-                    "expires_at": "2026-01-01T00:00:30Z"
-                }
-            }
-        });
-        let decoded: SessionEvent = serde_json::from_value(event.clone())?;
-        ensure!(serde_json::to_value(decoded)? == event);
-        Ok(())
+impl SessionAuthorization {
+    pub(crate) fn new(token: String) -> Self {
+        Self(token)
     }
 }

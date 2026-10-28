@@ -9,3 +9,5 @@ pub mod resources;
 pub mod runtime;
 pub mod thread;
 pub mod turn;
+
+pub mod skills;

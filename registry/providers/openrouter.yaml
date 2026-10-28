@@ -117,15 +117,6 @@ models:
       output_tokens:
         text: 5
     capabilities: [tools]
-  - id: anthropic/claude-opus-4.8
-    provider_model_id: anthropic/claude-opus-4.8
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
   - id: anthropic/claude-sonnet-4.6
     provider_model_id: anthropic/claude-sonnet-4.6
     pricing:
@@ -570,6 +561,40 @@ models:
         cache_read: 0.003
       output_tokens:
         text: 0.6
+  - id: minimax/minimax-m3.1-flash
+    provider_model_id: minimax/minimax-m3.1-flash
+    pricing:
+      input_tokens:
+        no_cache: 0.15
+        cache_read: 0.015
+      output_tokens:
+        text: 0.6
+  - id: moonshotai/kimi-k3.1-pro
+    provider_model_id: moonshotai/kimi-k3.1-pro
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+      output_tokens:
+        text: 10.0
+  - id: openai/gpt-6.1-terra
+    provider_model_id: openai/gpt-6.1-terra
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.05
+        cache_write: 1.25
+      output_tokens:
+        text: 5.0
+  - id: openai/gpt-6.1-terra-pro
+    provider_model_id: openai/gpt-6.1-terra-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.05
+        cache_write: 1.25
+      output_tokens:
+        text: 5.0
 status: active
 weight: 1
 community: false

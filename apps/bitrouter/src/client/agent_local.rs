@@ -18,7 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufRea
 
 use crate::daemon::transport;
 
-pub const CONTRACT_VERSION: u32 = 17;
+pub const CONTRACT_VERSION: u32 = 19;
 pub(crate) const MAX_COMMAND_BYTES: u64 = 64 * 1024;
 const MAX_REPLY_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -26,7 +26,6 @@ pub fn socket_path(control_socket: &Path) -> PathBuf {
     control_socket.with_extension("agent.sock")
 }
 
-#[cfg(feature = "harness")]
 pub async fn connect_or_start(
     source: &crate::paths::ConfigSource,
     control_socket: &Path,
@@ -90,7 +89,7 @@ pub struct ThreadCommand {
     pub operation: Operation,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Operation {
     Capabilities,
@@ -107,6 +106,8 @@ pub enum Operation {
         effort: Option<ReasoningEffort>,
         #[serde(default)]
         max_output_tokens: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
         #[serde(default)]
         read_only: bool,
         verification_command: Option<String>,
@@ -117,6 +118,19 @@ pub enum Operation {
     },
     UnloadThread {
         thread_id: String,
+    },
+    /// Reconstruct the OS-local workspace grant, then load without continuing.
+    LoadThread {
+        thread_id: String,
+        workspace: PathBuf,
+    },
+    CloseThread {
+        thread_id: String,
+        idempotency_key: String,
+    },
+    RecoverThread {
+        thread_id: String,
+        request: bitrouter_ai::harness::thread::ThreadRecoveryRequest,
     },
     ReadTurn {
         thread_id: String,
@@ -236,6 +250,7 @@ pub struct ReplyError {
 pub struct ThreadClient {
     socket: PathBuf,
     pub server_instance_id: String,
+    pub skill_constraints: bool,
 }
 
 impl ThreadClient {
@@ -244,6 +259,7 @@ impl ThreadClient {
             ReplyResult::Capabilities { runtime, .. } => Ok(Self {
                 socket: socket.into(),
                 server_instance_id: runtime.server_instance_id,
+                skill_constraints: runtime.skill_constraints,
             }),
             _ => anyhow::bail!("unexpected task capabilities reply"),
         }
@@ -265,6 +281,10 @@ impl ThreadClient {
         verification_command: Option<String>,
         prompt: String,
     ) -> Result<(ThreadSnapshot, TurnReceipt)> {
+        anyhow::ensure!(
+            config.skills.is_none() || self.skill_constraints,
+            "selected native daemon does not support skill constraints; no Thread created"
+        );
         let request_key = uuid::Uuid::new_v4().to_string();
         let create_key = format!("{request_key}:create");
         let turn_key = format!("{request_key}:start");
@@ -274,6 +294,7 @@ impl ThreadClient {
             model_mode: config.model_mode,
             effort: config.effort,
             max_output_tokens: config.max_output_tokens,
+            skills: config.skills.clone(),
             read_only: config.tool_mode == bitrouter_ai::harness::agent::ToolMode::ReadOnly,
             verification_command: verification_command.clone(),
             idempotency_key: create_key.clone(),
@@ -391,7 +412,7 @@ pub async fn request(socket: &Path, operation: Operation) -> Result<ReplyResult>
     }
 }
 
-fn uncertain(error: &anyhow::Error) -> bool {
+pub(crate) fn uncertain(error: &anyhow::Error) -> bool {
     error.downcast_ref::<ReplyError>().is_none_or(|failure| {
         matches!(
             failure.code,
@@ -504,6 +525,23 @@ pub(crate) async fn write_reply(
 
 #[cfg(test)]
 mod tests {
+    fn fixture_config() -> AgentConfig {
+        AgentConfig {
+            model: "fixture-model".into(),
+            model_mode: Default::default(),
+            effort: None,
+            max_output_tokens: None,
+            skills: None,
+            instructions: String::new(),
+            max_steps: 32,
+            max_tool_calls: 128,
+            max_duration: std::time::Duration::from_secs(600),
+            max_context_bytes: 512 * 1024,
+            max_spend_microusd: None,
+            estimate_rates: None,
+            tool_mode: bitrouter_ai::harness::agent::ToolMode::ReadOnly,
+        }
+    }
     use super::*;
 
     #[test]
@@ -698,24 +736,12 @@ mod tests {
         let client = ThreadClient {
             socket,
             server_instance_id: "fixture-epoch".into(),
+            skill_constraints: false,
         };
         let (thread, turn) = client
             .create_and_start(
                 PathBuf::from("/fixture"),
-                AgentConfig {
-                    model: "fixture-model".into(),
-                    model_mode: Default::default(),
-                    effort: None,
-                    max_output_tokens: None,
-                    instructions: String::new(),
-                    max_steps: 32,
-                    max_tool_calls: 128,
-                    max_duration: std::time::Duration::from_secs(600),
-                    max_context_bytes: 512 * 1024,
-                    max_spend_microusd: None,
-                    estimate_rates: None,
-                    tool_mode: bitrouter_ai::harness::agent::ToolMode::ReadOnly,
-                },
+                fixture_config(),
                 None,
                 "original prompt".into(),
             )
@@ -723,6 +749,35 @@ mod tests {
         assert_eq!(thread.thread_id, "original-thread");
         assert_eq!(turn.turn_id, "original-turn");
         server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_skill_constraints_require_advertised_native_support() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let client = ThreadClient {
+            socket: root.path().join("never-connect.sock"),
+            server_instance_id: "legacy-owner".into(),
+            skill_constraints: false,
+        };
+        let mut config = fixture_config();
+        config.skills = Some(bitrouter_ai::core::skills::SkillConstraints {
+            include: vec![bitrouter_ai::core::skills::SkillSelector::Mcp {
+                server: "source".into(),
+                uri: "skill://review/SKILL.md".into(),
+            }],
+            exclude: Vec::new(),
+        });
+        let error = client
+            .create_and_start(root.path().into(), config, None, "inspect".into())
+            .await
+            .err()
+            .context("legacy host silently accepted skill constraints")?;
+        assert!(
+            error
+                .to_string()
+                .contains("does not support skill constraints")
+        );
         Ok(())
     }
 }

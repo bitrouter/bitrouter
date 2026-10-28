@@ -15,6 +15,9 @@ pub struct EvidenceSource {
     pub workspace_revision: Option<String>,
     pub permission_revision: u64,
     pub tool_manifest_digest: String,
+    /// Host-bound MCP instruction data cannot inherit another task's consent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_binding: Option<String>,
 }
 
 /// An atomic source group. Tool calls and their results are always stored together.
@@ -71,6 +74,7 @@ impl EvidenceSource {
             workspace_revision: manifest.workspace_revision.clone(),
             permission_revision: manifest.permission_revision,
             tool_manifest_digest: manifest.tool_manifest_digest.clone(),
+            skill_binding: None,
         }
     }
 

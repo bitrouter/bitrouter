@@ -34,8 +34,6 @@ pub mod agents;
 pub mod artifact;
 pub mod assemble;
 pub mod auth;
-#[cfg(feature = "harness")]
-pub mod chat;
 pub mod claude_code;
 pub mod client;
 pub mod cloud;
@@ -46,14 +44,15 @@ pub mod config;
 pub mod config_synthesis;
 #[cfg(feature = "harness")]
 pub mod conformance;
+pub mod connected_agents;
 pub mod contexts;
 pub mod continuation;
+pub mod control_output;
 #[cfg(feature = "core")]
 pub mod core;
 pub mod daemon;
 pub mod daemon_handoff;
 pub mod daemon_locator;
-pub mod dashboard;
 pub mod db;
 pub mod error_report;
 pub mod gateway;
@@ -67,12 +66,13 @@ mod local_cli;
 #[cfg(feature = "harness")]
 pub mod managed_store;
 pub mod managed_task;
+pub mod mcp_config;
 pub mod mcp_registry;
 pub mod metering;
 #[cfg(feature = "harness")]
 pub mod native_acp;
-#[cfg(feature = "tui")]
-pub mod native_code;
+pub mod thread_cli;
+
 pub mod onboarding;
 #[cfg(feature = "core")]
 pub mod orchestrator_api;
@@ -88,6 +88,7 @@ pub mod reload;
 pub mod remote_control;
 pub mod request_checks;
 pub mod router_migration;
+pub mod session_diagnostics;
 pub mod session_identity;
 pub mod skills;
 #[cfg(feature = "harness")]
@@ -111,9 +112,3 @@ pub const HANDOFF_BUILD_ID: &str = env!("BITROUTER_HANDOFF_BUILD_ID");
 
 /// Optional application telemetry transports.
 pub mod telemetry;
-
-/// Terminal-independent presentation values.
-pub mod presentation;
-/// Terminal views and interaction reducers.
-#[cfg(feature = "tui")]
-pub(crate) mod tui;

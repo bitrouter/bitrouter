@@ -14,7 +14,9 @@ use crate::acp_trajectory::checkpoint::types::{
 use crate::storage::evolution::digest;
 use crate::storage::session_identity::SessionIdentity;
 
+/// Historical manual evaluator identity; retain the wire value after UI removal.
 pub const TUI_EVALUATOR_ID: &str = "local-tui-reviewer";
+/// Historical measurement-contract version; existing labels depend on this value.
 pub const TUI_EVALUATOR_VERSION: &str = "manual-rubric-ui-v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -21,6 +21,9 @@ pub struct AgentConfig {
     /// Per-step output reservation, retained with the Thread configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u32>,
+    /// Explicit scoped constraints retained with this native Thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<crate::core::skills::SkillConstraints>,
     pub instructions: String,
     pub max_steps: u32,
     pub max_tool_calls: u32,

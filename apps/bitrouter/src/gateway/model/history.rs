@@ -9,6 +9,7 @@ use std::collections::HashSet;
 /// Gemini's absent wire call ID must survive the corresponding result. Do not
 /// copy private assistant signatures or origin seals into a tool message.
 /// <https://ai.google.dev/gemini-api/docs/function-calling>
+#[cfg(any(feature = "core", feature = "harness"))]
 pub(crate) fn tool_result_metadata(
     messages: &[Message],
     call_id: &str,

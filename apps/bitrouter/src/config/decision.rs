@@ -8,7 +8,8 @@ use crate::gateway::error::Result;
 use crate::gateway::model::decision::policy::DecisionPolicy;
 use crate::gateway::model::decision::policy::DecisionPricing;
 
-/// An optional `decision_model:` block enables native context decisions.
+/// An optional `decision_model:` block enables SDK routing assessment.
+/// Native orchestrator context and skill selection do not invoke this backend.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DecisionModelConfig {

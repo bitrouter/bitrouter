@@ -692,3 +692,52 @@ async fn release_preparation_failure_retains_exclusion_without_publishing_comple
     peer.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn connected_workers_follow_guards_instead_of_thread_history()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::gateway::caller::CallerContext;
+    let workspace = TempDir::new()?;
+    let model = Arc::new(HeldModel::with_turns(vec![final_turn()]));
+    let service = ThreadService::new(
+        app_with_executor(model.clone())?,
+        &[workspace.path().into()],
+    )?;
+    let thread = service
+        .create_thread(
+            &service.capabilities().server_instance_id,
+            thread_request(&workspace, "connected-create"),
+        )
+        .await?;
+    let target = target(&thread);
+    let caller = CallerContext::local();
+    assert!(service.active_workers().is_empty());
+    let turn = service
+        .start_turn(&target, &caller, input("held", "connected-turn"))
+        .await?;
+    model.wait().await?;
+    let workers = service.active_workers();
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0].thread_id, thread.thread_id);
+    assert_eq!(workers[0].turn_id, turn.turn_id);
+    assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    model.release.add_permits(1);
+    service
+        .wait_turn_settled(&target, &caller, &turn.turn_id)
+        .await?;
+    assert!(service.active_workers().is_empty());
+    service.unload_thread(&target, &caller).await?;
+    let history = service
+        .list_threads(
+            &service.capabilities().server_instance_id,
+            &caller,
+            0,
+            None,
+            16,
+        )
+        .await?;
+    assert!(!history.entries.is_empty());
+    assert!(service.active_workers().is_empty());
+    service.shutdown().await;
+    Ok(())
+}

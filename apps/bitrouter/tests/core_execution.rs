@@ -18,6 +18,8 @@ mod context_decisions;
 mod input_count;
 #[path = "core_execution/material_work.rs"]
 mod material_work;
+#[path = "core_execution/native_skills.rs"]
+mod native_skills;
 #[path = "core_execution/output_admission.rs"]
 mod output_admission;
 #[path = "core_execution/preparation_work.rs"]

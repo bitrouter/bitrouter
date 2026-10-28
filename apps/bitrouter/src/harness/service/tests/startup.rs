@@ -676,7 +676,7 @@ async fn terminal_native_plan_without_attempt_does_not_block_fresh_workspace_wor
         .recover_thread(
             &old_target,
             &CallerContext::local(),
-            crate::harness::thread::ThreadRecoveryRequest {
+            bitrouter_ai::harness::thread::ThreadRecoveryRequest {
                 source_server_instance_id: report.source_server_instance_id.clone(),
                 source_cursor: report.source_cursor,
                 idempotency_key: "recover-terminal".into(),

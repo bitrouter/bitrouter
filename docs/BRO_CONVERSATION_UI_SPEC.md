@@ -1,5 +1,13 @@
 # BRO Conversation and durable Threads navigation
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Updated: 2026-10-04. This is the native presentation and navigation contract for
 PR #945. Runtime identity, admission, context, ownership and recovery are defined
 once in [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md). Explicit
@@ -62,7 +70,7 @@ Threads can be inspected but cannot start new work through this view.
 
 ## Local protocol and directory
 
-Local protocol is v17; HTTP v2 is unchanged. All local clients use the same
+Local protocol is v18; HTTP v2 is unchanged. All local clients use the same
 version and negotiated instance. No old-protocol fallback or implicit resubmit.
 `ListThreads { after, cutoff, limit }` permits 1–16 roots per request and uses the
 durable root index. Membership cutoff is stable across pagination; each row's

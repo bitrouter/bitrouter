@@ -46,6 +46,11 @@ impl CliReport for ProvidersReport {
 
 impl CliReport for AgentsReport {
     fn render(&self, human: &mut Human<'_>) -> std::io::Result<()> {
+        if self.skill_delivery.is_empty() {
+            human.line("Skill delivery capabilities were not reported by this daemon.")?;
+        } else {
+            human.line("Skill delivery: native activation; negotiated ACP local prompt instructions. Launcher, inference-only, transparent ACP and external MCP-origin delivery: unsupported.")?;
+        }
         if self.agents.is_empty() {
             human.line("(no configured or catalog agents)")?;
         } else {

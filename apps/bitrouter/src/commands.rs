@@ -7,10 +7,8 @@ use anyhow::{Context, Result};
 use crate::config::Config;
 use crate::config::routing_table::ConfigRoutingTable;
 use crate::gateway::caller::CallerContext;
-use {
-    crate::gateway::pipeline::routing::RoutingPrefs,
-    crate::gateway::pipeline::routing::RoutingTable, bitrouter_ai::routing::ModelInfo,
-};
+use crate::gateway::pipeline::routing::{RoutingPrefs, RoutingTable};
+use bitrouter_ai::routing::ModelInfo;
 
 use crate::actions::skills::SkillsReport;
 use crate::auth::{NewApiKey, db as auth_db, generate};
@@ -452,14 +450,14 @@ fn available_methods(entry: &crate::providers::entry::ProviderEntry) -> Vec<Auth
     methods
 }
 
-/// Use the same searchable keyboard selector as onboarding.
+/// Use the same line-based selector as onboarding.
 async fn prompt_method_choice(provider: &str, options: &[AuthMethod]) -> Result<AuthMethod> {
     let index = crate::prompt::select(
         &format!("Log in to {provider}"),
         "Choose an authentication method",
         options
             .iter()
-            .map(|method| crate::presentation::selection::Item::new(method.label(), ""))
+            .map(|method| crate::prompt::Item::new(method.label(), ""))
             .collect(),
         0,
     )
@@ -551,7 +549,6 @@ pub async fn login_provider_with_options(
 }
 
 /// Onboarding uses the exact registry entry shown in its provider list.
-#[cfg(feature = "tui")]
 pub(crate) async fn login_registry_provider(
     provider: &bitrouter_ai::catalog::types::RegistryProvider,
 ) -> Result<LoginOutcome> {
@@ -601,7 +598,7 @@ async fn login_entry(
                 }
                 crate::gateway::providers::auth::credentials::Credential::api_key(key)
             }
-            None => run_api_key_paste(&entry.display_name)?,
+            None => run_api_key_paste(&entry.display_name).await?,
         },
     };
 
@@ -712,7 +709,6 @@ async fn run_claude_code_session()
     use std::io::IsTerminal;
 
     use crate::gateway::providers::auth::credentials::Credential;
-    use crate::providers::cli_install::{SpawnAgent, ensure_agent_installed};
     use crate::providers::import::claude_code::ClaudeCodeStore;
 
     // Adopt a legacy #590 marker stored under `anthropic` before checking the
@@ -747,9 +743,12 @@ async fn run_claude_code_session()
         );
     }
 
-    let claude = ensure_agent_installed(SpawnAgent::Claude, false)
-        .await
-        .context("locating the claude CLI to sign you in")?;
+    let claude = crate::providers::cli_install::ensure_agent_installed(
+        crate::providers::cli_install::SpawnAgent::Claude,
+        false,
+    )
+    .await
+    .context("locating the claude CLI to sign you in")?;
 
     // The handoff is stated before it happens, and marked at both ends.
     //
@@ -769,6 +768,7 @@ async fn run_claude_code_session()
         .arg("auth")
         .arg("login")
         .arg("--claudeai")
+        .kill_on_drop(true)
         .status()
         .await
         .context("running `claude auth login`")?;
@@ -938,36 +938,19 @@ fn run_cli_import(
     Ok(crate::gateway::providers::auth::credentials::Credential::from_oauth_token(imported.token))
 }
 
-/// Read a static API key from stdin. Input is **not** masked — the user
-/// sees what they're pasting, which is the simplest correct UX and
-/// matches `gh auth login --with-token`. Future work could wire
-/// `rpassword` for a hidden prompt.
-fn run_api_key_paste(
+/// Read a static API key with terminal echo disabled until the line finishes.
+async fn run_api_key_paste(
     display_name: &str,
 ) -> Result<crate::gateway::providers::auth::credentials::Credential> {
     Ok(
-        crate::gateway::providers::auth::credentials::Credential::api_key(read_api_key(
-            display_name,
-        )?),
+        crate::gateway::providers::auth::credentials::Credential::api_key(
+            read_api_key(display_name).await?,
+        ),
     )
 }
 
-pub(crate) fn read_api_key(display_name: &str) -> Result<String> {
-    use std::io::BufRead;
-    eprintln!();
-    eprintln!("  Paste your {display_name} API key, then press enter:");
-    eprint!("  > ");
-    let stdin = std::io::stdin();
-    let mut line = String::new();
-    stdin
-        .lock()
-        .read_line(&mut line)
-        .context("reading API key from stdin")?;
-    let key = line.trim();
-    if key.is_empty() {
-        anyhow::bail!("no API key entered — aborting login");
-    }
-    Ok(key.to_string())
+pub(crate) async fn read_api_key(display_name: &str) -> Result<String> {
+    crate::prompt::secret(&format!("Paste your {display_name} API key")).await
 }
 
 /// `LoginUx` implementation that drives stderr + stdin. Used by the
@@ -1009,32 +992,11 @@ impl crate::gateway::providers::auth::login::LoginUx for StderrLoginUx {
     async fn prompt_pasted_redirect(
         &self,
     ) -> std::result::Result<String, crate::gateway::providers::auth::login::LoginError> {
-        // The login flow races this future against the loopback
-        // listener. If the listener wins we never read stdin, so a
-        // blocking read here would normally pin a thread for the whole
-        // OAuth round trip. Run the read on a blocking thread so
-        // the login can stop awaiting it when the listener finishes. An already
-        // started blocking stdin read cannot be interrupted by dropping this
-        // async future; that remains an application interaction limitation.
-        let pasted = tokio::task::spawn_blocking(|| {
-            use std::io::BufRead;
-            eprint!("  Paste redirect URL (or just the code): ");
-            let stdin = std::io::stdin();
-            let mut line = String::new();
-            stdin.lock().read_line(&mut line).map_err(|e| {
-                crate::gateway::providers::auth::login::LoginError::UserIo(format!(
-                    "reading pasted redirect: {e}"
-                ))
-            })?;
-            Ok::<_, crate::gateway::providers::auth::login::LoginError>(line)
-        })
-        .await
-        .map_err(|e| {
-            crate::gateway::providers::auth::login::LoginError::UserIo(format!(
-                "join error reading pasted redirect: {e}"
-            ))
-        })??;
-        Ok(pasted)
+        crate::prompt::secret("Paste redirect URL (or just the code)")
+            .await
+            .map_err(|error| {
+                crate::gateway::providers::auth::login::LoginError::UserIo(error.to_string())
+            })
     }
 }
 
@@ -1053,15 +1015,12 @@ pub async fn logout_provider(provider_id: &str) -> Result<usize> {
     Ok(removed)
 }
 
-// ===== skills (format + local reads) =====
+// ===== shared unmanaged reads and source scaffolding =====
 //
-// `add`, `remove`, `find`, and `update` were removed with the skills package
-// manager: installing skills is the ecosystem's job (`npx skills add`, the
-// Claude Code and Codex plugin marketplaces), not a router's. What remains
-// reads the installed-skills directory and scaffolds a `SKILL.md`. See
-// `crate::skills` for the reasoning.
+// Library/session consumers retain this discovery adapter. The product CLI's
+// managed install/list/show/update/uninstall path lives in crate::skills::cli.
 
-/// `bro skills list` — the skills under the chosen root.
+/// Compatibility discovery of skills under the chosen roots.
 ///
 /// One [action](crate::actions::skills), shared by the CLI report and local
 /// session consumers. It gains two things the old single `read_dir` could not
@@ -1356,42 +1315,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(feature = "tui"))]
-    #[tokio::test]
-    async fn missing_tui_rejects_method_choice_but_preserves_explicit_and_single_methods()
-    -> Result<()> {
-        let entry = crate::gateway::catalog::bundled::provider("openai-codex")?
-            .context("bundled Codex provider")?;
-        let methods = available_methods(&entry);
-        let error = choose_auth_method(&entry, &methods, &ProviderLoginOptions::default())
-            .await
-            .err()
-            .context("multiple methods must require an explicit choice")?;
-        assert!(error.to_string().contains("requires the tui feature"));
-
-        let chosen = choose_auth_method(
-            &entry,
-            &methods,
-            &ProviderLoginOptions {
-                no_browser: true,
-                ..Default::default()
-            },
-        )
-        .await?;
-        assert_eq!(chosen, AuthMethod::ImportFromCli);
-
-        let entry = crate::gateway::catalog::bundled::provider("claude-code")?
-            .context("bundled Claude Code provider")?;
-        let chosen = choose_auth_method(
-            &entry,
-            &available_methods(&entry),
-            &ProviderLoginOptions::default(),
-        )
-        .await?;
-        assert_eq!(chosen, AuthMethod::ClaudeCodeSession);
-        Ok(())
-    }
-
     #[tokio::test]
     async fn api_key_option_selects_api_key_method_without_prompting() -> Result<()> {
         // A `--api-key`/`--key-stdin`-supplied key drives the non-interactive
@@ -1577,11 +1500,6 @@ providers:
     }
 }
 
-/// Shared agent CLI options and negotiated capability data.
 pub mod agent_options;
-/// Shared agent action vocabulary.
-pub mod agents;
-/// Shared chat command resolution.
 pub mod chat;
-
 pub mod invocation;

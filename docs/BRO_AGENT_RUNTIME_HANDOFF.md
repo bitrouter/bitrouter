@@ -1,5 +1,12 @@
 # BRO core and harness migration boundary
 
+> **CLI-only G05 entry update (2026-10-19, local worktree).** Runtime, protocol,
+> permission and recovery requirements in this document remain authoritative.
+> First-party code/tui/chat/agents attach interfaces are removed; earlier UI
+> examples and source paths are historical. Use native Thread controls, headless
+> ACP commands or native harness launchers from the [current CLI reference](CLI.md).
+> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Updated: 2026-10-07. The explicit native managed entry below implements a bounded
 core/harness integration. The existing standalone runtime contract is
 specified in [BRO_AGENT_RUNTIME_SPEC.md](BRO_AGENT_RUNTIME_SPEC.md); validation
@@ -28,7 +35,7 @@ and A01–A23 remain attributable to those sources, not PR #945.
 | `tools.rs`, `service/workspace.rs` | Grant checks, bounded reads, exclusive effects, tracked process cleanup and exclusion markers |
 | `service/recovery.rs`, `ownership.rs`, `startup.rs` | Exact source/cursor validation, stopped-owner proof, conservative unknown-effect/accounting handling and complete discovery |
 | `service/observation.rs`, `thread.rs` | Post-commit public projection, bounded history and observer detachment without cancellation |
-| App local/HTTP/native clients | Local v17, HTTP v2, shared Thread/Turn operations and continuous native context |
+| App local/HTTP/native clients | Local v19, HTTP v2, shared Thread/Turn operations and continuous native context |
 
 Core identity domains cannot be assumed to alias Thread/Turn/Item without an
 explicit mapping. Legacy standalone Task APIs/conversion are removed; migration

@@ -36,6 +36,7 @@ impl Action {
 
     pub fn name(&self) -> &'static str {
         match self {
+            Self::SkillRead { .. } => "skill_read",
             Self::Context(
                 crate::storage::checkpoint::snapshot::context::action::ContextAction::Extract {
                     ..
@@ -128,6 +129,12 @@ pub fn apply(
         ));
     }
     let result = match action {
+        Action::SkillRead { .. } => {
+            return Err(reject(
+                ErrorCode::UnsupportedCapability,
+                "bound skill file reads require the native resource boundary",
+            ));
+        }
         Action::Context(action) => super::context_router::tools::apply(state, actor_id, action)?,
         Action::Spawn { task } => {
             return allocate(state, actor_id, task, Intent::Spawn, state_revision);

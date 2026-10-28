@@ -1,5 +1,13 @@
 # Codex style native-scrollback TUI implementation
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Status: **implemented; locally verified** · 2026-10-01
 
 Contract: [CODE_TUI_CODEX_NAVIGATION_SPEC.md](CODE_TUI_CODEX_NAVIGATION_SPEC.md).
@@ -10,9 +18,9 @@ Contract: [CODE_TUI_CODEX_NAVIGATION_SPEC.md](CODE_TUI_CODEX_NAVIGATION_SPEC.md)
 - Normal-buffer, read-only Agents navigation consumes existing supervisor
   snapshots. Left requires an empty composer and yields to input owners.
 - Local search/filter/metadata preview and stable run-ID selection live in
-  [agents_menu.rs](../crates/bitrouter-tui/src/agents_menu.rs). Menu input returns
+  [agents_menu.rs](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/agents_menu.rs). Menu input returns
   no execution, attachment or permission effect.
-- [CodeView](../crates/bitrouter-tui/src/code.rs) holds the foreground document
+- [CodeView](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/code.rs) holds the foreground document
   projection while the menu is open. The journal continues receiving updates;
   returning flushes through the existing native writer.
 - Composer band and compact footer replace the persistent background strip.

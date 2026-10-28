@@ -389,3 +389,26 @@ mod tests {
         }
     }
 }
+
+pub(crate) fn validate_aggregate_member(
+    key: &str,
+    aggregate: bool,
+    prefix: &str,
+    seen: &mut HashMap<String, String>,
+) -> Result<(), String> {
+    if !aggregate {
+        return Ok(());
+    }
+    if !crate::skills::protocol::is_valid_gateway_label(key) {
+        return Err(format!(
+            "mcp server routing key '{key}' is not a safe aggregate label; use one non-empty ASCII URI segment containing only lowercase letters, digits, '-', '.', '_', or '~'"
+        ));
+    }
+    if let Some(other) = seen.get(prefix) {
+        return Err(format!(
+            "mcp aggregate: servers '{other}' and '{key}' share tool_prefix '{prefix}' — prefixes must be unique among aggregate members"
+        ));
+    }
+    seen.insert(prefix.to_owned(), key.to_owned());
+    Ok(())
+}

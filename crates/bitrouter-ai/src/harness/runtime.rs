@@ -12,6 +12,8 @@ pub struct RuntimeCapabilities {
     pub limits: RuntimeLimits,
     #[serde(default)]
     pub execution_ownership: Option<crate::harness::runtime::OwnerClaim>,
+    #[serde(default)]
+    pub skill_constraints: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

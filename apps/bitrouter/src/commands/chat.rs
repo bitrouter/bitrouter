@@ -1,17 +1,18 @@
-//! Shared slash-command vocabulary and resolution for CLI and TUI.
+//! Session command descriptors and pure prompt-template resolution.
+//! Applications validate and construct configured templates; resolution executes no action.
 
-/// One of BitRouter's own slash commands, as the reducer needs to know it.
+/// One of BitRouter's own slash commands, as the session client needs to know it.
 ///
-/// Built by the app from the `ACTIONS` rows that carry a `tui_command`; the
-/// reducer never sees the table, so it cannot offer a command the table does
-/// not have. The command resolver receives the offered set as data and does
-/// not depend on terminal rendering or service execution.
+/// Built by the app from the `ACTIONS` rows that carry a `session_command`; the
+/// session client never sees the table, so it cannot offer a command the table does
+/// not have. That is the whole of the coupling: this module reads no application configuration, so the set of commands is data handed in, exactly as
+/// `routable` was.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
     /// The words after the slash, space-separated: `"status"`, `"route reset"`.
     pub name: &'static str,
-    /// The `ACTIONS` row id, matched by the reducer only for the ids in
-    /// [`REDUCER_OWNED`].
+    /// The `ACTIONS` row id, matched by the session client only for the ids in
+    /// [`CLIENT_OWNED`].
     pub action: &'static str,
     /// One line for `/commands`.
     pub summary: &'static str,
@@ -23,7 +24,7 @@ pub struct Command {
 
 /// A user-authored command that expands to a prompt.
 ///
-/// Plain data: the reducer substitutes and sends. It never runs anything, which
+/// Plain data: the session client substitutes and sends. It never runs anything, which
 /// is why this registry can be open — the config is the user's, unreviewed —
 /// while the commands that reach BitRouter's own ports stay a closed, guarded
 /// table.
@@ -41,21 +42,20 @@ pub struct PromptCommand {
     pub template: String,
 }
 
-/// The rows the reducer dispatches itself rather than handing to the app,
-/// because each needs reducer-owned state — the journal's command list, or the
-/// picker's phase.
+/// Commands handled by the session client rather than an application action port.
+/// Their presentation remains the caller's responsibility.
 ///
-/// A guard asserts every entry is a row id that carries a `tui_command`.
-pub const REDUCER_OWNED: &[&str] = &["commands", "route_set", "route_reset"];
+/// A guard asserts every entry is a row id that carries a `session_command`.
+pub const CLIENT_OWNED: &[&str] = &["commands", "route_set", "route_reset"];
 
 /// Names that mean another command. A guard asserts no alias is itself a
-/// `tui_command`, so an alias can never shadow a real name.
+/// `session_command`, so an alias can never shadow a real name.
 pub const ALIASES: &[(&str, &str)] = &[("help", "commands")];
 
 /// What a submitted line turned out to be.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Resolution {
-    /// A BitRouter command the reducer runs itself.
+    /// A BitRouter command the session client runs itself.
     Owned {
         /// The `ACTIONS` row id.
         action: &'static str,
@@ -108,9 +108,9 @@ pub fn resolve(commands: &[Command], prompt_commands: &[PromptCommand], line: &s
                 return Resolution::Unavailable(reason);
             }
             let args = words[take..].iter().map(|word| word.to_string()).collect();
-            // The reducer knows three verbs by name; everything else is an
+            // The session client knows three verbs by name; everything else is an
             // opaque id the app resolves against the same ports the CLI uses.
-            return if REDUCER_OWNED.contains(&command.action) {
+            return if CLIENT_OWNED.contains(&command.action) {
                 Resolution::Owned {
                     action: command.action,
                     args,
@@ -142,7 +142,6 @@ pub fn resolve(commands: &[Command], prompt_commands: &[PromptCommand], line: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn commands_for(routable: bool) -> Vec<Command> {
         let unavailable = (!routable).then_some("this session cannot be rerouted");
         vec![
@@ -180,6 +179,9 @@ mod tests {
         }
     }
 
+    /// Precedence, stated once and asserted here: the longest BitRouter name
+    /// wins, an alias reaches its target, an unmet requirement answers with its
+    /// reason, and anything else is the agent's business untouched.
     #[test]
     fn the_resolver_reads_the_longest_name_first_then_aliases_then_the_agent() {
         let offered = commands_for(true);
@@ -226,12 +228,13 @@ mod tests {
             }
         );
         // A listed-but-unrunnable command answers with its reason.
-        assert!(matches!(
-            resolve(&commands_for(false), &[], "/route"),
-            Resolution::Unavailable(reason) if reason.contains("cannot be rerouted")
-        ));
+        assert!(
+            matches!(resolve(&commands_for(false), &[], "/route"), Resolution::Unavailable(reason) if reason.contains("cannot be rerouted"))
+        );
     }
 
+    /// A config command expands and is sent as a turn; a BitRouter name still
+    /// wins, even against a config command that claims it.
     #[test]
     fn a_prompt_command_expands_and_never_outranks_a_bitrouter_name() {
         let offered = commands_for(true);

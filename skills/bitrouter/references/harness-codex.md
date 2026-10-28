@@ -12,8 +12,8 @@ to native attempt records while guarded trajectory IDs remain owner-opaque.
 
 Codex has two deliberate BitRouter facets:
 
-- `bro code codex` drives the built-in `codex-acp` adapter inside
-  BitRouter's full-screen ACP lifecycle UI.
+- `bro run codex` drives the maintained ACP adapter for one headless turn;
+  `--background` gives controller ownership to the daemon.
 - `bro codex` launches Codex's own native interface with reversible
   one-shot configuration overrides.
 
@@ -27,8 +27,22 @@ bro init --yes --harness codex --after exit
 
 ## ACP session
 
+For daemon skill allocation, use `bro run codex "review changes" --background
+--skill project:DIRECTORY_ID` (one command). Obtain directory IDs with
+`bro skills list`; repeat `--skill` or `--exclude-skill` with project/global IDs.
+The daemon sends verified local root instructions as ACP text, bound to the
+directory manifest, content fingerprint, path and input identity. Only explicit
+includes are delivered; no decision backend is called. Acquisition belongs to
+`npx skills`.
+Inspect `agents show RUN` for negotiated delivery capability and original facts.
+This is prompt delivery; native activation, protected supporting-file access and
+vendor token/history admission are not verified. Old skill text may remain in
+agent history after a later input excludes it. MCP-origin required entries,
+required skills on native slash commands, and non-background allocation are
+unsupported. Existing ACP permissions and controls remain independent. Local
+fixtures are verified separately from real Codex sessions, which remain unverified.
+
 ```bash
-bro code codex
 bro run codex "summarize this repo"
 bro acp serve codex
 ```
@@ -47,7 +61,7 @@ Generic API calls still require an explicit subscription route; canonical ids,
 provider-qualified routes, presets, and user-defined virtual models retain
 their normal routing behavior. A daemon reload updates this mapping too.
 
-`init --model ID` saves the default model. `code codex --model ID` overrides it
+`init --model ID` saves the default model. `run codex PROMPT --model ID` overrides it
 for one session. No vendor CLI config file is rewritten.
 
 ## Native interface
@@ -82,7 +96,7 @@ diagnostics live under the BitRouter home in `logs/session-*.log`.
 
 ## BRO native tools with a Codex subscription
 
-`bro code` (without an agent ID) and `bro task run` use BRO's native harness.
+`bro threads` and `bro task run` use BRO's native harness.
 With automatic context routing, the native harness permits a portable execution
 view when a model switch rejects authenticated Responses reasoning. Core retains
 the original source and public messages/tool pairs, omits Responses reasoning
@@ -94,7 +108,7 @@ After importing an existing subscription login, the shortest startup is:
 
 ```bash
 bro providers login openai-codex --import-existing
-bro code
+bro task run "Inspect this workspace" --read-only
 ```
 
 The native default is `bitrouter/auto`, using the policy shipped with the binary.
@@ -107,7 +121,7 @@ follows the selected model. A decision backend is optional; see
 To pin a model or run a headless task:
 
 ```bash
-bro code --model openai-codex:openai/gpt-6.1-sol --workspace PATH
+bro threads create --model openai-codex:openai/gpt-6.1-sol --workspace PATH
 bro task run "Inspect this workspace" --read-only --workspace PATH
 ```
 
