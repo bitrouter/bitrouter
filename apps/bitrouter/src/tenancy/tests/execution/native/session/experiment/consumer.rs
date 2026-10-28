@@ -79,15 +79,65 @@ async fn actual_native_assignment_receipt_ack_freeze_and_cohort_survive_key_rota
 // both arms first appear. No caller chooses IDs, redraws or replaces a failure.
 #[tokio::test]
 async fn native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort() -> Result<()> {
-    tokio::time::timeout(std::time::Duration::from_secs(180), async {
-        let server = upstream().await?;
-        let directory = tempfile::tempdir()?;
+    #[derive(Clone, Copy, Debug)]
+    enum Phase {
+        Setup,
+        Fixture,
+        Open,
+        Run,
+        Reconcile,
+        Freeze,
+        Cohort,
+        Close,
+        Requests,
+        Counters,
+        Shutdown,
+    }
+
+    struct Progress {
+        phase: Phase,
+        phase_started: std::time::Instant,
+        index: Option<usize>,
+        reconciled: usize,
+        closed: usize,
+        last_completed_unit_ms: u128,
+        prior_failure_phase: Option<Phase>,
+    }
+
+    impl Progress {
+        fn enter(&mut self, phase: Phase) {
+            self.phase = phase;
+            self.phase_started = std::time::Instant::now();
+        }
+    }
+
+    // This record survives cancellation of the aggregate future without querying
+    // Core or the actor after expiry. Last-unit time is present only if closed > 0.
+    let started = std::time::Instant::now();
+    let mut progress = Progress {
+        phase: Phase::Setup,
+        phase_started: started,
+        index: None,
+        reconciled: 0,
+        closed: 0,
+        last_completed_unit_ms: 0,
+        prior_failure_phase: None,
+    };
+    let mut control = 0;
+    let mut challenger = 0;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(180), async {
+        let server = upstream().await.context("mixed-arm upstream setup")?;
+        let directory = tempfile::tempdir().context("mixed-arm temporary directory")?;
         let url = format!("{}/v1", server.uri());
-        let (fixture, headers, _) = fixture(directory.path(), &url, 500_000, 128).await?;
+        progress.enter(Phase::Fixture);
+        let (fixture, headers, _) = fixture(directory.path(), &url, 500_000, 128)
+            .await
+            .context("mixed-arm fixture setup")?;
         let checked = async {
-            let mut control = 0;
-            let mut challenger = 0;
             for index in 0..128 {
+                let unit_started = std::time::Instant::now();
+                progress.index = Some(index);
+                progress.enter(Phase::Open);
                 let mut session = open(
                     &fixture,
                     &headers,
@@ -95,39 +145,60 @@ async fn native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_coho
                     directory.path(),
                     &format!("campaign-{index}"),
                 )
-                .await?;
+                .await
+                .context("mixed-arm open")?;
+                progress.enter(Phase::Run);
                 let state = tokio::time::timeout(
                     TIMEOUT,
                     session.run(task(), Arc::new(Approval), CancellationToken::new()),
                 )
-                .await??;
+                .await
+                .context("mixed-arm run timeout")?
+                .context("mixed-arm run")?;
                 let run = state.run.as_ref().context("campaign run")?;
                 ensure!(
                     run.status == crate::storage::checkpoint::snapshot::RunStatus::Completed,
                     "campaign run {index} incomplete"
                 );
-                match chain(&fixture, &server, &run.run_id).await? {
+                progress.enter(Phase::Reconcile);
+                match chain(&fixture, &server, &run.run_id)
+                    .await
+                    .context("mixed-arm reconcile")?
+                {
                     ExperimentArm::Control => control += 1,
                     ExperimentArm::Challenger => challenger += 1,
                 }
+                progress.reconciled += 1;
                 if index == 127 {
                     ensure!(
                         control > 0 && challenger > 0,
                         "bounded campaign failed to observe both arms"
                     );
-                    let snapshot = freeze(&fixture, &headers).await?;
+                    progress.enter(Phase::Freeze);
+                    let snapshot = freeze(&fixture, &headers)
+                        .await
+                        .context("mixed-arm freeze")?;
                     ensure!(snapshot.entries.len() == 128);
+                    progress.enter(Phase::Cohort);
                     let report = session
                         .experiment_cohort(MODEL, &snapshot.evidence_root)
-                        .await?;
+                        .await
+                        .context("mixed-arm cohort")?;
                     ensure!(
                         report.control.observed == control
                             && report.challenger.observed == challenger
                     );
                     ensure!(report.verdict == CohortGateVerdict::InsufficientEvidence);
                 }
-                tokio::time::timeout(TIMEOUT, session.close()).await??;
+                progress.enter(Phase::Close);
+                tokio::time::timeout(TIMEOUT, session.close())
+                    .await
+                    .context("mixed-arm close timeout")?
+                    .context("mixed-arm close")?;
+                progress.closed += 1;
+                progress.last_completed_unit_ms = unit_started.elapsed().as_millis();
             }
+            progress.enter(Phase::Requests);
             ensure!(
                 server
                     .received_requests()
@@ -136,7 +207,10 @@ async fn native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_coho
                     .len()
                     == 128
             );
-            let counters = records(&fixture, "native_experiment_counter_v1").await?;
+            progress.enter(Phase::Counters);
+            let counters = records(&fixture, "native_experiment_counter_v1")
+                .await
+                .context("mixed-arm final counters")?;
             ensure!(
                 counters.len() == 1
                     && counters[0]["accepted"] == 128
@@ -145,10 +219,37 @@ async fn native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_coho
             Ok(())
         }
         .await;
+        progress.prior_failure_phase = checked.is_err().then_some(progress.phase);
+        progress.enter(Phase::Shutdown);
         let stopped = tokio::time::timeout(TIMEOUT, fixture.service.shutdown()).await;
         checked?;
-        stopped??;
+        stopped
+            .context("mixed-arm shutdown timeout")?
+            .context("mixed-arm shutdown")?;
         Ok(())
     })
-    .await?
+    .await;
+    if !matches!(&result, Ok(Ok(()))) {
+        // An outer timeout may have dropped the body before or during shutdown;
+        // this summary is observation only and does not establish a clean drain.
+        eprintln!(
+            "mixed-arm campaign progress: boundary={}, phase={:?}, index={:?}, reconciled={}, closed={}, control={}, challenger={}, last_completed_unit_ms={}, phase_elapsed_ms={}, total_elapsed_ms={}, prior_failure_phase={:?}",
+            if result.is_err() {
+                "Aggregate"
+            } else {
+                "Inner"
+            },
+            progress.phase,
+            progress.index,
+            progress.reconciled,
+            progress.closed,
+            control,
+            challenger,
+            progress.last_completed_unit_ms,
+            progress.phase_started.elapsed().as_millis(),
+            started.elapsed().as_millis(),
+            progress.prior_failure_phase,
+        );
+    }
+    result.context("mixed-arm aggregate campaign timeout (180s)")?
 }

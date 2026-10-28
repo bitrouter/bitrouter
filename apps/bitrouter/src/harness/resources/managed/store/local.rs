@@ -24,6 +24,9 @@ use bitrouter_ai::core::protocol::{
 };
 use bitrouter_ai::harness::agent::ToolMode;
 
+#[cfg(test)]
+mod timing;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(in crate::harness::resources::managed) struct StoredArtifact {
     pub(super) reference: ArtifactRef,
@@ -273,6 +276,10 @@ impl NativePort {
         state: &mut DurableState,
         mut next: Journal,
     ) -> Result<(), CoreError> {
+        #[cfg(test)]
+        let mut timing = timing::Scope::new(timing::Operation::NativePersist);
+        #[cfg(test)]
+        timing.revisions(state.journal.head.state_revision, state.revision);
         self.healthy()?;
         if let Some(checked) = self.recovery.as_ref().filter(|checked| !checked.retired()) {
             super::recovery::apply_links(&mut next, checked)
@@ -286,6 +293,8 @@ impl NativePort {
                 )
                 .map_err(|_| error("native recovery byte bound"))?;
         }
+        #[cfg(test)]
+        timing.mark_persist(timing::PersistStage::Recovery);
         let bytes = if self.owned.is_some() {
             crate::managed_store::owned::encode(&next)
                 .map_err(|_| error("native journal exceeds storage allowance"))?
@@ -299,14 +308,22 @@ impl NativePort {
             .revision
             .checked_add(1)
             .ok_or_else(|| error("native store revision exhausted"))?;
+        #[cfg(test)]
+        timing.mark_persist(timing::PersistStage::Encode);
         if let Err(error) = self.store.save(state.revision, bytes).await {
             if error.commit_status != bitrouter_ai::core::protocol::CommitStatus::NotCommitted {
                 self.failed.store(true, Ordering::SeqCst);
             }
             return Err(error);
         }
+        #[cfg(test)]
+        timing.mark_persist(timing::PersistStage::StoreSave);
         state.revision = revision;
         state.journal = next;
+        #[cfg(test)]
+        timing.mark_persist(timing::PersistStage::Adopt);
+        #[cfg(test)]
+        timing.succeeded();
         Ok(())
     }
 
@@ -509,7 +526,13 @@ impl HarnessPort for NativePort {
     }
 
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
+        #[cfg(test)]
+        let mut timing = timing::Scope::new(timing::Operation::NativeCommit);
         let mut state = self.state.lock().await;
+        #[cfg(test)]
+        timing.revisions(state.journal.head.state_revision, state.revision);
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::StateLock);
         self.healthy()?;
         let journal = &state.journal;
         let available = journal
@@ -532,13 +555,19 @@ impl HarnessPort for NativePort {
         for reference in &payload.checkpoint.artifact_refs {
             journal.require_artifact(reference, &mut retained_artifacts)?;
         }
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::AppendValidation);
         if retained.is_some() {
             if journal.checkpoint.as_ref() != Some(&batch) {
                 return Err(error("checkpoint retry changed original bytes"));
             }
+            #[cfg(test)]
+            timing.replayed();
             return Ok(ack);
         }
         let choices = super::choice::apply(journal, &payload, self.owned.as_deref())?;
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::ChoiceApply);
         let mut next = journal.clone();
         next.owned_choices = choices;
         next.fences.extend(payload.tool_start_fences.clone());
@@ -549,7 +578,11 @@ impl HarnessPort for NativePort {
         // closure survives; superseded archives can be reclaimed after commit.
         next.artifacts
             .retain(|id, _| retained_artifacts.contains(id));
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::Assemble);
         self.persist(&mut state, next).await?;
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::Persist);
         #[cfg(all(test, unix, feature = "core", feature = "harness"))]
         if let Some(binding) = &self.owned {
             use crate::tenancy::hosts::HostBoundary;
@@ -594,6 +627,10 @@ impl HarnessPort for NativePort {
                 cancel.cancel();
             }
         }
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::AckTail);
+        #[cfg(test)]
+        timing.succeeded();
         Ok(ack)
     }
 
