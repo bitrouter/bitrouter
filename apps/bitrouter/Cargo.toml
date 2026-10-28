@@ -317,3 +317,8 @@ required-features = ["core", "harness"]
 name = "owned_capture_handler"
 crate-type = ["lib"]
 required-features = ["core", "harness"]
+
+[[example]]
+name = "owned_native_experiment"
+crate-type = ["lib"]
+required-features = ["core", "harness"]

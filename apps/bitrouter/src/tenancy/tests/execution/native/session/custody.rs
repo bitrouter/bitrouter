@@ -46,7 +46,7 @@ fn child_pid(workspace: &Path) -> Result<rustix::process::Pid> {
         .context("invalid MCP fixture PID")
 }
 
-async fn no_clean_drain(fixture: &Fixture) -> Result<()> {
+pub(super) async fn no_clean_drain(fixture: &Fixture) -> Result<()> {
     ensure!(fixture.service.cleanup.disposition() == Disposition::Ambiguous);
     let stop = fixture.service.host_stop();
     tokio::time::pause();
@@ -81,6 +81,9 @@ async fn no_clean_drain(fixture: &Fixture) -> Result<()> {
 }
 
 async fn exercise(root: &Path, mode: &str) -> Result<()> {
+    if mode.starts_with("choice-") {
+        return super::choice::custody::exercise(root, mode).await;
+    }
     if mode.starts_with("journal-") {
         return journal::exercise(root, mode).await;
     }
@@ -352,7 +355,7 @@ async fn native36_real_child_and_file_owner_follow_actual_cleanup_disposition() 
     Ok(())
 }
 
-async fn isolated(mode: &str) -> Result<()> {
+pub(super) async fn isolated(mode: &str) -> Result<()> {
     let root = tempfile::tempdir()?;
     let mut child = tokio::process::Command::new(std::env::current_exe()?)
         .args([
@@ -398,7 +401,11 @@ async fn isolated(mode: &str) -> Result<()> {
     let owner = crate::tenancy::ownership::acquire_path(&root.path().join("owned.db"), false);
     if matches!(
         mode,
-        "dml-rollback" | "revoked-before-spawn" | "http-confirmed" | "journal-exact"
+        "dml-rollback"
+            | "revoked-before-spawn"
+            | "http-confirmed"
+            | "journal-exact"
+            | "choice-ack-exact"
     ) {
         drop(owner?);
     } else {
@@ -412,7 +419,10 @@ async fn isolated(mode: &str) -> Result<()> {
             ),
             "file probe failed for a reason other than retained ownership"
         );
-        if !mode.starts_with("http-") && !mode.starts_with("journal-") {
+        if !mode.starts_with("http-")
+            && !mode.starts_with("journal-")
+            && !mode.starts_with("choice-")
+        {
             let pid = child_pid(&root.path().join("workspace"))?;
             if mode == "discovery-cleanup-unknown" {
                 ensure!(rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH));
@@ -450,6 +460,26 @@ async fn child_diagnostics(task: AbortOnDropHandle<std::io::Result<Vec<u8>>>) ->
         Ok(Ok(Ok(bytes))) => {
             let text = String::from_utf8_lossy(&bytes);
             let category = [
+                (
+                    "running.await.is_err()",
+                    "native waiter completed before abort",
+                ),
+                (
+                    "retained Core owner was discarded",
+                    "retained Core owner missing",
+                ),
+                (
+                    "fence.code == bitrouter_ai::core::protocol::ErrorCode::Busy",
+                    "retained Core fence classification",
+                ),
+                (
+                    "bound.fixture.service.host_slots_for_test() == 0",
+                    "Choice host slot retention assertion",
+                ),
+                (
+                    "persisted[\"owned_choices\"][id][\"outcome_digest\"].is_null()",
+                    "Choice failed commit changed durable outcome",
+                ),
                 (
                     "no such table: tenancy_installation",
                     "missing tenancy installation table",

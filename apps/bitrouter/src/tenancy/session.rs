@@ -1,4 +1,6 @@
 //! Native journal jobs on the existing authority writer.
+pub(crate) mod assessment;
+pub(crate) mod recovery;
 use bitrouter_ai::tenancy::operation::ErrorCode;
 use std::{sync::Arc, time::Duration};
 use tokio::sync::{OwnedSemaphorePermit, oneshot};
@@ -14,17 +16,24 @@ pub(super) const WORK: Duration = Duration::from_secs(5);
 
 pub(super) enum Request {
     Load(Arc<Authority>),
-    Reconcile(Arc<Binding>),
+    Assessment(Box<assessment::Request>),
+    Reconcile(Arc<Binding>, Option<Arc<recovery::CheckedRecovery>>),
     Save {
         binding: Arc<Binding>,
         expected: u64,
         bytes: Vec<u8>,
         cleanup: bool,
+        metadata: Option<recovery::Metadata>,
+        recovery: Option<Arc<recovery::CheckedRecovery>>,
     },
 }
 pub(super) enum Reply {
     Loaded(Option<Box<Loaded>>),
     Saved,
+    Assessment {
+        value: Box<assessment::Reply>,
+        wrote: bool,
+    },
 }
 pub(super) struct Outcome {
     pub result: Result<Reply, Failure>,
@@ -94,16 +103,20 @@ impl Service {
     ) -> Result<Option<Loaded>, NativeFailure> {
         match self.native_journal(Request::Load(authority)).await? {
             Reply::Loaded(value) => Ok(value.map(|loaded| *loaded)),
-            Reply::Saved => Err(self.unavailable().into()),
+            Reply::Saved | Reply::Assessment { .. } => Err(self.unavailable().into()),
         }
     }
     pub(crate) async fn reconcile_native_journal(
         &self,
         binding: Arc<Binding>,
+        recovery: Option<Arc<recovery::CheckedRecovery>>,
     ) -> Result<Option<Loaded>, NativeFailure> {
-        match self.native_journal(Request::Reconcile(binding)).await? {
+        match self
+            .native_journal(Request::Reconcile(binding, recovery))
+            .await?
+        {
             Reply::Loaded(value) => Ok(value.map(|loaded| *loaded)),
-            Reply::Saved => Err(self.unavailable().into()),
+            Reply::Saved | Reply::Assessment { .. } => Err(self.unavailable().into()),
         }
     }
     pub(crate) async fn save_native_journal(
@@ -112,6 +125,8 @@ impl Service {
         expected: u64,
         bytes: Vec<u8>,
         cleanup: bool,
+        metadata: Option<recovery::Metadata>,
+        recovery: Option<Arc<recovery::CheckedRecovery>>,
     ) -> Result<(), NativeFailure> {
         match self
             .native_journal(Request::Save {
@@ -119,21 +134,36 @@ impl Service {
                 expected,
                 bytes,
                 cleanup,
+                metadata,
+                recovery,
             })
             .await?
         {
             Reply::Saved => Ok(()),
-            Reply::Loaded(_) => Err(self.unavailable().into()),
+            Reply::Loaded(_) | Reply::Assessment { .. } => Err(self.unavailable().into()),
+        }
+    }
+    pub(crate) async fn native_assessment(
+        &self,
+        request: assessment::Request,
+    ) -> Result<assessment::Reply, NativeFailure> {
+        match self
+            .native_journal(Request::Assessment(Box::new(request)))
+            .await?
+        {
+            Reply::Assessment { value, .. } => Ok(*value),
+            _ => Err(self.unavailable().into()),
         }
     }
     async fn native_journal(&self, request: Request) -> Result<Reply, NativeFailure> {
         let cleanup = matches!(
             &request,
-            Request::Save { cleanup: true, .. } | Request::Reconcile(_)
+            Request::Save { cleanup: true, .. } | Request::Reconcile(_, _)
         );
         let authority = match &request {
             Request::Load(authority) => authority.as_ref(),
-            Request::Save { binding, .. } | Request::Reconcile(binding) => {
+            Request::Assessment(request) => request.binding.authority().as_ref(),
+            Request::Save { binding, .. } | Request::Reconcile(binding, _) => {
                 binding.authority().as_ref()
             }
         };
@@ -143,7 +173,13 @@ impl Service {
         if !cleanup {
             authority.check()?;
         }
-        let deadline = tokio::time::Instant::now() + WORK;
+        let deadline = match &request {
+            Request::Assessment(request) => {
+                request.check()?;
+                request.deadline
+            }
+            _ => tokio::time::Instant::now() + WORK,
+        };
         let read = self
             .reads
             .clone()
@@ -164,6 +200,9 @@ impl Service {
             }
             if !cleanup {
                 authority.check()?;
+            }
+            if let Request::Assessment(request) = &request {
+                request.check()?;
             }
             permit.send(actor::Job::Native(Box::new(Job {
                 request,

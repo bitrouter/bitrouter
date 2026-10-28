@@ -159,9 +159,15 @@ impl Write for Size {
 }
 
 pub(crate) fn json(value: &impl Serialize, maximum: usize) -> Result<String> {
-    let mut size = Size { bytes: 0, maximum };
-    serde_json::to_writer(&mut size, value)?;
-    let mut bytes = Vec::with_capacity(size.bytes);
+    let length = json_len(value, maximum)?;
+    let mut bytes = Vec::with_capacity(length);
     serde_json::to_writer(&mut bytes, value)?;
     Ok(String::from_utf8(bytes)?)
+}
+
+/// Count bounded serialized bytes without allocating a copy of the payload.
+pub(crate) fn json_len(value: &impl Serialize, maximum: usize) -> Result<usize> {
+    let mut size = Size { bytes: 0, maximum };
+    serde_json::to_writer(&mut size, value)?;
+    Ok(size.bytes)
 }

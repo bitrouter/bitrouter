@@ -15,6 +15,9 @@
 //! never depends back on this product host; `main.rs` is the CLI entry point.
 
 #![forbid(unsafe_code)]
+// Owned sessions retain MCP resources through Core's continuation owners. The
+// complete Send/Sync proof exceeds rustc's default trait-query recursion depth.
+#![recursion_limit = "256"]
 
 #[cfg(feature = "harness")]
 pub mod acp_cli;
@@ -73,6 +76,7 @@ pub mod metering;
 pub mod native_acp;
 pub mod thread_cli;
 
+pub mod offline;
 pub mod onboarding;
 #[cfg(feature = "core")]
 pub mod orchestrator_api;

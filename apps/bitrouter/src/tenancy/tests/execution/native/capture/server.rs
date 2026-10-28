@@ -6,7 +6,7 @@ use bitrouter_ai::tenancy::identity::{BindingId, RevisionId, TenantId};
 use chrono::Utc;
 use sea_orm::DatabaseConnection;
 
-mod database;
+pub(super) mod database;
 mod observations;
 mod replay;
 

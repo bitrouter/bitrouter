@@ -23,7 +23,29 @@ use crate::gateway::{
 };
 
 mod bounds;
+mod operation;
 mod persistence;
+
+#[tokio::test]
+async fn registry_requirements_are_runtime_only_for_owned_routes() -> TestResult<()> {
+    let prefs = RoutingPrefs {
+        registry_requirements: Some(Default::default()),
+        ..Default::default()
+    };
+    ensure!(Budget::new().prefs(&RoutingPrefs::default()).is_ok());
+    ensure!(matches!(
+        Budget::new().prefs(&prefs),
+        Err(Unavailable::Unsupported)
+    ));
+    let view = view(envelope(&basic("visible")?, None)?)?;
+    let route = checked(view.select_native("visible", ModelOperation::Generation))?;
+    let targets = route
+        .route_chain("visible", &prefs, &CallerContext::local())
+        .await?;
+    ensure!(!targets.is_empty());
+    ensure!(targets.iter().all(|target| target.registry.is_none()));
+    Ok(())
+}
 
 fn checked<T>(result: std::result::Result<T, ErrorCode>) -> TestResult<T> {
     result.map_err(|code| anyhow::anyhow!("unexpected native selection error: {code:?}"))
@@ -67,11 +89,14 @@ fn input(
     Ok(Import {
         reference: reference(ResourceKind::Route, name)?,
         definition: Definition::Route {
+            assessment: None,
+            block: None,
             routing: source,
             selector: selector.into(),
             policy: None,
             credentials,
             exploration: Vec::new(),
+            core_choice: None,
         },
     })
 }
@@ -101,6 +126,7 @@ fn envelope(input: &Import, policy: Option<Artifact>) -> TestResult<Envelope> {
     document.policy = input.definition.policy_reference().cloned();
     let routes = checked(compiler::configuration_routes(&document, &artifacts))?;
     Ok(Envelope {
+        format: Envelope::format(&artifacts),
         document,
         routes,
         artifacts,

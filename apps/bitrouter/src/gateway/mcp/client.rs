@@ -39,6 +39,12 @@ pub(crate) struct Discovery {
     cancel: CancellationToken,
 }
 
+/// Configured connections and the subset authorized to expose tools.
+pub(crate) struct ConnectionCatalog<'a> {
+    pub servers: &'a [McpServerConfig],
+    pub tool_servers: &'a BTreeSet<String>,
+}
+
 impl Discovery {
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(crate) fn native(
@@ -245,8 +251,10 @@ impl BoundedMcpClient {
         clients
             .connect_in_place(
                 workspace,
-                servers,
-                tool_servers,
+                ConnectionCatalog {
+                    servers,
+                    tool_servers,
+                },
                 version,
                 cancel,
                 max_duration,
@@ -261,13 +269,16 @@ impl BoundedMcpClient {
     pub(crate) async fn connect_in_place(
         &mut self,
         workspace: &Path,
-        servers: &[McpServerConfig],
-        tool_servers: &BTreeSet<String>,
+        catalog: ConnectionCatalog<'_>,
         version: ProtocolVersion,
         cancel: &CancellationToken,
         max_duration: Duration,
         discovery: &Discovery,
     ) -> Result<(), ConnectError> {
+        let ConnectionCatalog {
+            servers,
+            tool_servers,
+        } = catalog;
         if !self.connections.is_empty() || !self.cleanup.is_empty() {
             return Err(reject("MCP discovery owner was already used").into());
         }

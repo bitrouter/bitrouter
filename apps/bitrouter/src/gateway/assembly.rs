@@ -167,7 +167,7 @@ impl App {
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(crate) async fn execute_native_owned(
         &self,
-        binding: &crate::tenancy::execution::session::Binding,
+        step: &crate::tenancy::execution::session::StepBinding,
         prompt: bitrouter_ai::types::Prompt,
         headers: http::HeaderMap,
         control: std::sync::Arc<dyn crate::gateway::pipeline::native::NativeExecutionControl>,
@@ -177,7 +177,7 @@ impl App {
             .as_ref()
             .ok_or_else(|| crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
         service
-            .execute_session_native(binding, prompt, headers, control)
+            .execute_session_native(step, prompt, headers, control)
             .await
     }
 

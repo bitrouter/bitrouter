@@ -6,6 +6,8 @@
 //! may proceed while that tenant is full. Authority must be rechecked by the caller
 //! after acquisition and before every provider send.
 
+#[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
+mod observation_tests;
 #[cfg(test)]
 mod tests;
 
@@ -55,6 +57,8 @@ pub(super) struct Lease {
 struct State {
     closed: bool,
     active: usize,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    learning: usize,
     ingress: usize,
     ingress_bytes: usize,
     tenants: BTreeMap<TenantId, Counts>,
@@ -64,6 +68,8 @@ struct State {
 
 #[derive(Default)]
 struct Counts {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    learning: usize,
     active: usize,
     queued: usize,
 }
@@ -99,7 +105,120 @@ impl Drop for Ingress {
         });
     }
 }
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) struct Repair {
+    admission: Arc<Admission>,
+    tenant: TenantId,
+    charged: u64,
+    entries: Vec<(
+        bitrouter_ai::tenancy::identity::ExecutionId,
+        chrono::DateTime<chrono::Utc>,
+    )>,
+    finished: bool,
+}
+#[cfg(all(feature = "core", feature = "harness"))]
+impl Repair {
+    pub(in crate::tenancy) fn finish(&mut self, committed: bool) -> Result<(), ErrorCode> {
+        if self.finished {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        self.admission.update(|state| {
+            let result = state.receipts.finish_repair(
+                &self.tenant,
+                self.charged,
+                self.entries.len(),
+                committed.then_some(self.entries.as_slice()),
+            );
+            if result.is_err() {
+                state.receipts.fenced = true;
+            }
+            result
+        })?;
+        self.finished = true;
+        Ok(())
+    }
+}
+// No Drop release: an unacknowledged consuming COMMIT retains its charge in H
+// custody. Only confirmed rollback/commit calls finish; startup inventories a
+// genuinely new exclusive owner's durable rows.
 impl Admission {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn reserve_repair(
+        self: &Arc<Self>,
+        tenant: &TenantId,
+        bytes: u64,
+        entries: Vec<(
+            bitrouter_ai::tenancy::identity::ExecutionId,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+    ) -> Result<Repair, ErrorCode> {
+        self.update(|state| {
+            if state.closed {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            let charged = state
+                .receipts
+                .reserve_repair(tenant, bytes, entries.len())?;
+            Ok(Repair {
+                admission: self.clone(),
+                tenant: tenant.clone(),
+                charged,
+                entries,
+                finished: false,
+            })
+        })
+    }
+
+    /// Pure observation: neither poison recovery, queue expiry nor waiter wakes.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub(super) fn observed_capacity(
+        &self,
+    ) -> Result<
+        crate::telemetry::receipt_latency::capacity::Snapshot,
+        crate::telemetry::receipt_latency::capacity::ReadError,
+    > {
+        use crate::telemetry::receipt_latency::capacity::{ReadError, Snapshot};
+        let state = self.state.try_lock().map_err(|_| ReadError::Unavailable)?;
+        let active = u64::try_from(state.active).map_err(|_| ReadError::Invalid)?;
+        let (completion_reserved, accounted, potential_unknown, live_unknown) =
+            state.receipts.observed(active).ok_or(ReadError::Invalid)?;
+        Snapshot {
+            completion_reserved,
+            accounted,
+            potential_unknown,
+            live_unknown,
+            ingress_reserved: u64::try_from(state.ingress_bytes).map_err(|_| ReadError::Invalid)?,
+            active,
+            queued: u64::try_from(state.queue.len()).map_err(|_| ReadError::Invalid)?,
+            ingress: u64::try_from(state.ingress).map_err(|_| ReadError::Invalid)?,
+            closed: state.closed,
+            fenced: state.receipts.fenced,
+        }
+        .validate()
+    }
+
+    /// Schedule a real callback under the actual mutex, without changing state.
+    #[cfg(all(test, feature = "otel-http"))]
+    pub(super) fn with_observation_lock_for_test<T>(
+        &self,
+        collect: impl FnOnce() -> T,
+    ) -> Result<T, crate::telemetry::receipt_latency::capacity::ReadError> {
+        let _held = self
+            .state
+            .try_lock()
+            .map_err(|_| crate::telemetry::receipt_latency::capacity::ReadError::Unavailable)?;
+        Ok(collect())
+    }
+
+    /// Explicit age input for the real restored accounting; no inventory mutation.
+    #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
+    pub(super) fn escalate_receipts_at_for_test(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> usize {
+        self.update(|state| state.receipts.escalate(now))
+    }
+
     /// Reserve bytes before reading or parsing. A declared length is a hard
     /// per-request ceiling; chunked bodies reserve the entire 16 MiB maximum.
     pub(super) fn ingress(self: &Arc<Self>, bytes: usize) -> Result<Ingress, ErrorCode> {
@@ -310,6 +429,42 @@ impl Admission {
         })
     }
 
+    /// A nested paid Choice must never wait behind its own admitted parent.
+    /// Reuse the same atomic active/receipt reservation and FIFO policy.
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(super) fn try_acquire(
+        self: &Arc<Self>,
+        tenant: &TenantId,
+        limits: &Limits,
+        deadline: Instant,
+    ) -> Result<Lease, ErrorCode> {
+        let limit = usize::from(limits.active_executions).min(self.profile.tenant_active);
+        self.update(|state| {
+            if state.closed {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            let (active, queued) = state
+                .tenants
+                .get(tenant)
+                .map_or((0, 0), |counts| (counts.active, counts.queued));
+            if Instant::now() >= deadline
+                || !state.receipts.ready(tenant)
+                || active >= limit
+                || state.active >= self.profile.instance_active
+                || queued != 0
+                || state.next_eligible(self.profile).is_some()
+            {
+                return Err(ErrorCode::CapacityExceeded);
+            }
+            state.reserve(tenant)?;
+            Ok(Lease {
+                admission: self.clone(),
+                tenant: tenant.clone(),
+                completion: std::sync::atomic::AtomicBool::new(true),
+            })
+        })
+    }
+
     /// Reject new and queued acquisitions, waking all queued callers immediately.
     /// Existing leases remain valid until their owners release them.
     pub fn close(&self) {
@@ -325,7 +480,7 @@ impl Admission {
             // Register before observing counters: a release between the check
             // and await must wake every drain waiter, not just one of them.
             notified.as_mut().enable();
-            if self.update(|state| state.active == 0 && state.queue.is_empty()) {
+            if self.update(|state| state.drained()) {
                 return;
             }
             notified.await;
@@ -358,7 +513,7 @@ impl Admission {
             } else if let Some(waiter) = state.next_eligible(self.profile) {
                 wake.push(waiter.clone());
             }
-            let drained = state.active == 0 && state.queue.is_empty();
+            let drained = state.drained();
             (result, wake, drained)
         };
         for waiter in wake {
@@ -380,11 +535,7 @@ impl State {
     }
 
     fn idle(&mut self, tenant: &TenantId) {
-        if self
-            .tenants
-            .get(tenant)
-            .is_some_and(|counts| counts.active == 0 && counts.queued == 0)
-        {
+        if self.tenants.get(tenant).is_some_and(|counts| counts.idle()) {
             self.tenants.remove(tenant);
         }
     }
@@ -486,5 +637,152 @@ impl Lease {
             }
             result
         })
+    }
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) struct LearningLease {
+    admission: Arc<Admission>,
+    tenant: TenantId,
+}
+#[cfg(all(feature = "core", feature = "harness"))]
+impl Drop for LearningLease {
+    fn drop(&mut self) {
+        self.admission.update(|state| {
+            state.learning = state.learning.saturating_sub(1);
+            if let Some(counts) = state.tenants.get_mut(&self.tenant) {
+                counts.learning = counts.learning.saturating_sub(1);
+            }
+            state.idle(&self.tenant);
+        });
+    }
+}
+#[cfg(all(feature = "core", feature = "harness"))]
+impl Admission {
+    pub(in crate::tenancy) fn learning(
+        self: &Arc<Self>,
+        tenant: &TenantId,
+        maximum: u32,
+    ) -> Result<LearningLease, ErrorCode> {
+        self.update(|state| {
+            if state.closed {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            let limit = usize::try_from(maximum.min(2)).map_err(|_| ErrorCode::CapacityExceeded)?;
+            if state.learning >= 8
+                || state
+                    .tenants
+                    .get(tenant)
+                    .map_or(0, |counts| counts.learning)
+                    >= limit
+            {
+                return Err(ErrorCode::CapacityExceeded);
+            }
+            state.learning += 1;
+            state.tenants.entry(tenant.clone()).or_default().learning += 1;
+            Ok(LearningLease {
+                admission: self.clone(),
+                tenant: tenant.clone(),
+            })
+        })
+    }
+}
+impl Counts {
+    fn idle(&self) -> bool {
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if self.learning != 0 {
+            return false;
+        }
+        self.active == 0 && self.queued == 0
+    }
+}
+impl State {
+    fn drained(&self) -> bool {
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if self.learning != 0 {
+            return false;
+        }
+        self.active == 0 && self.queue.is_empty()
+    }
+}
+
+#[cfg(all(test, feature = "core", feature = "harness"))]
+mod learning_tests {
+    use super::*;
+    #[tokio::test]
+    async fn learning_capacity_is_shared_finite_and_retained_through_close() -> anyhow::Result<()> {
+        let admission = Admission::new();
+        let mut leases = Vec::new();
+        for index in 0..4 {
+            let tenant: TenantId = format!("tenant-{index}").try_into()?;
+            for _ in 0..2 {
+                leases.push(
+                    admission
+                        .learning(&tenant, 8)
+                        .map_err(|code| anyhow::anyhow!("capacity: {code:?}"))?,
+                );
+            }
+            assert!(matches!(
+                admission.learning(&tenant, 8),
+                Err(ErrorCode::CapacityExceeded)
+            ));
+        }
+        let extra = "extra".try_into()?;
+        assert!(matches!(
+            admission.learning(&extra, 8),
+            Err(ErrorCode::CapacityExceeded)
+        ));
+        assert!(matches!(
+            admission.learning(&extra, 0),
+            Err(ErrorCode::CapacityExceeded)
+        ));
+        admission.close();
+        assert!(matches!(
+            admission.learning(&extra, 1),
+            Err(ErrorCode::AuthorityUnavailable)
+        ));
+        assert_eq!(admission.lock().learning, 8);
+        drop(leases);
+        admission.wait_drained().await;
+        assert!(admission.lock().tenants.is_empty());
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "core", feature = "harness"))]
+mod repair_tests {
+    use super::*;
+    use anyhow::{Result, ensure};
+    #[test]
+    fn repair_reservations_share_receipt_limits_without_execution_capacity() -> Result<()> {
+        let admission = Admission::new();
+        let tenant: TenantId = "repair-tenant".try_into()?;
+        let entries = (0..100)
+            .map(|n| Ok((format!("execution-{n}").try_into()?, chrono::Utc::now())))
+            .collect::<Result<Vec<_>>>()?;
+        let mut repair = admission
+            .reserve_repair(&tenant, 1000, entries)
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        {
+            let state = admission.lock();
+            ensure!(state.active == 0 && state.ingress == 0 && state.queue.is_empty());
+            ensure!(!state.receipts.ready(&tenant));
+        }
+        let extra = vec![("extra".try_into()?, chrono::Utc::now())];
+        ensure!(admission.reserve_repair(&tenant, 1, extra).is_err());
+        repair.finish(false).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        ensure!(admission.lock().receipts.ready(&tenant));
+        let mut repair = admission
+            .reserve_repair(
+                &tenant,
+                25,
+                vec![("durable".try_into()?, chrono::Utc::now())],
+            )
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        repair.finish(true).map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        ensure!(repair.finish(true).is_err());
+        let state = admission.lock();
+        ensure!(state.receipts.bytes == 25 + 16 * 1024 && state.active == 0);
+        Ok(())
     }
 }

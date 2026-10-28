@@ -342,14 +342,40 @@ establish a per-token monetary charge.
 
 ## Native managed tasks
 
-The local Rust `NativeSession::open_authenticated` facade binds an in-process
-host to checked tenancy credentials and one retained execution revision. Its
-journal is scoped to the authenticated tenant and stable principal; each model
+With `core` and `harness`, the local Rust `NativeSession::open_authenticated`
+facade binds an in-process host to checked tenancy credentials and one retained
+execution revision. Require all three
+[tenant dispatch capabilities](remote-administration.md) and an exact current
+execution binding before opening the host. Its journal is scoped to the authenticated tenant and stable principal; each model
 step obtains separate execution admission. Close or cancellation retains the
-host until checkpoint, tool and workspace cleanup is confirmed. This additive
-facade adds no CLI, HTTP or SDK session contract. Tenant production dispatch
-remains gated, and the existing managed CLI and HTTP entrypoints retain their
-Legacy fences.
+host until checkpoint, tool and workspace cleanup is confirmed. This facade
+adds no CLI, HTTP or SDK session contract. Enabling tenant dispatch does
+not convert the existing managed CLI or HTTP entrypoints into owned sessions;
+their Legacy fences remain.
+
+The authenticated facade also contains a bounded stopped-owner
+reconciliation branch for an actual fresh exclusive Unix/file-SQLite owner.
+It requires a persisted direct-HTTP, tool-free, Learning-Off profile and exact
+original Choice/receipt evidence; OAuth/Count work and unproved capture/tool
+cleanup remain excluded. It records missing evidence as Unknown and stops the
+old run before allowing an explicit new Run. Never delete an active workspace
+marker, reinterpret a completed child receipt as a Decisions answer, or treat
+this branch as general crash recovery. Available dispatch capabilities do not
+prove that an old owner or workspace is safe to recover. The managed CLI behavior
+below is unchanged.
+
+With both `core` and `harness`, an explicitly imported `choice_v1` child binding
+on the retained Generation route enables the existing `context_views_v1` planner
+for that authenticated local facade. The hidden Decisions child has its own
+fail-fast admission and receipt; capacity must cover the parent plus child.
+Intent and outcome ACKs remain in the same native journal. No host decision
+configuration, CLI option or HTTP session binding supplies this authority.
+Unbound routes retain complete context without calling a host decision model.
+Skill-bound evidence remains complete even when an owned Choice selects other
+context; its source and consent cannot be replaced by a decision answer.
+The child binding does
+not grant dispatch authority; parent and child still require current grants
+and their own admission capacity.
 
 The authenticated native Generation profile can count provider input tokens on
 one retained Responses target with static credentials. The optional reduced
@@ -460,7 +486,9 @@ reject work sooner when cleanup reservations cannot fit those bounds.
 Native managed hosts expose existing local directory candidates to Core after
 Turn acceptance. Core selects only explicit includes and persists directory
 manifests, bounded choices and verified instructions in the original WorkUnit
-before model preparation. No skill or context decision backend is called.
+before model preparation. Skill selection calls no decision backend. Ordinary
+context preparation also keeps complete evidence; only the explicitly bound
+owned Choice profile above permits a paid context decision.
 Library callers can set
 `TaskInput.routing.skills` include/exclude selectors; generic
 `TaskInput.required_materials` retains its evidence semantics. AGENTS.md stays
@@ -508,3 +536,76 @@ Core prepares failed tool results as explicit JSON error envelopes for models
 whose wire lacks a tool-error flag, while durable history retains typed outcomes.
 Context rebuild keeps the admitted route and price snapshot and rechecks
 credentials and required context before another provider call.
+
+
+### Explicit owned learner registration
+
+With local tenancy, `core` and `harness`, an operator may set
+`tenancy.learning_registrations` to a local JSON file. The ordinary Service
+initializes H and cryptography first, then authenticates this file before
+listeners and the daemon's single evolution scheduler are exposed. Omission
+creates no registrations and does not delete previously authorized durable
+schedules. The daemon selects owned or Legacy scheduling according to tenancy;
+a closed NativeSession is not needed to resume a durable owned schedule.
+
+The file has `format: 1` and at most 32 `registrations`. Each entry has a
+`credential_env` naming the environment variable holding a tenant API credential,
+and a `registration` containing `installation`, `tenant`, `id`, `operation_id`,
+`expected_authority_revision`, `expected_active_revision`,
+`expected_schedule_revision` (null for a new registration), `route` (a qualified
+ResourceRef), `evidence_root` (the actual frozen Eval root), and `enabled`.
+Use references/revisions returned by existing resource import and configuration
+operations. The file supplies no permissions, scopes, expiry, numerical inputs,
+or provider credentials. It stores no API token.
+
+Registration requires current whole-tenant ResourceRead and ResourceDraft, with
+coverage of the retained configuration's complete dependencies. Each wake uses
+the original credential ID/revision and immutable grant ceiling. Rotation,
+revocation, expiry, an obsolete active revision, and unsupported source ownership
+stop new work. A replacement credential requires an explicit registration CAS.
+An `enabled: false` update disables an existing selection; it is still authorized
+through the same ordinary operation path. Registration operation IDs retain the
+ordinary expiry/replay rules; remove an already-applied startup file when it is
+no longer needed.
+
+For the first native history profile, the owned worker consumes real completed
+native experiment evidence and creates an immutable Checkpoint, Policy, all
+affected Route revisions, and a ConfigurationRevision. It logs the ordinary
+operation and configuration IDs. Activation and rollback use the existing
+configuration operation with current permission and active/authority revision
+CAS. Publication does not activate. Operational evidence can justify a bounded
+Retreat; it does not become conclusive Human or paid assessment evidence.
+
+
+### Explicit Human review of a native experiment run
+
+With `core`, `harness` and an authenticated retained Explore experiment profile,
+the local `NativeSession` facade exposes `review_run()`,
+`submit_assessment(RubricSubmission)` and `retract_assessment(RevisionInput)`.
+The existing `owned_native_experiment` embedding example shows a Human callback
+receiving the checked review and returning the existing structured rubric. The
+server normalizes author identity from the authenticated stable principal.
+Review requires current whole-tenant ResourceRead; submission and retraction also
+require EvaluationSubmit, original scope ceilings and an explicit current-head
+CAS. Caller fields never supply a grant. There is no new HTTP operation.
+
+The review uses `recorded-native-quality-evidence-v1`, with citations to actual
+recorded task, final answer and tool facts. This version is distinct from ACP
+evidence. It requires a complete acknowledged journal, artifacts, native
+experiment Unit/Step edges, execution receipts and delivered trajectory/Eval
+publication. An explicit selected Human judgement can contribute quality to
+cohort acquisition and retained learned checkpoints; original operational Eval
+rows remain Inconclusive and their frozen root is unchanged. Retraction removes
+the selected judgement without reviving a prior revision.
+
+This source profile is current-run-only: it refuses an archived/recovered run or
+a run whose original model epoch is no longer the inspectable journal epoch. A
+later run cannot retarget earlier citations or assessment rows. Keep the source
+run inspectable through the existing owned learner acquisition. Closing its
+original owner normally is supported; reopening/changing its run is not a way to
+reuse evidence. Manual work shares 4096 rows, 32 MiB and its original 5 s deadline;
+learner acquisition shares 4096 rows and 8 MiB. Human review never starts a paid
+judge or activates a policy. Paid assessment is a separate explicit
+`assess_run(checkpoint, expected_revision)` call requiring a retained assessment
+profile and current grants. New logical jobs consume the immutable revision's
+cumulative job allowance; capability discovery does not start an assessment.

@@ -72,6 +72,10 @@ impl PreRequestHook for Entry {
                 .0
                 .reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));
         }
+        #[cfg(all(feature = "core", feature = "harness"))]
+        self.0.choice_gate()?;
+        #[cfg(all(feature = "core", feature = "harness"))]
+        self.0.select_block(ctx).await?;
         ctx.set_caller(self.0.caller());
         #[cfg(feature = "core")]
         if let Some(observation) = self.0.observation.get() {
@@ -117,6 +121,10 @@ impl TenantExecution {
             .routing_table(self.route.clone())
             .executor(self.service.executor.clone())
             .pre_resolution_hook_for(Entry(self.clone()), OperationScope::Both);
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if self.route.block_profile().is_some() {
+            builder.routing_table(self.block_table());
+        }
         let http_continuation = crate::continuation::ContinuationRuntime::for_tenant(
             self.service.http_registry.clone(),
             self.clone(),
@@ -132,9 +140,15 @@ impl TenantExecution {
             if !self.route.dependencies().contains(policy.reference()) || policy.name().is_empty() {
                 return Err(self.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden));
             }
-            // Signed experiments still need qualified tenant exploration admission
-            // and budget accounting. Fence only the selected named policy, in every
-            // learning mode, without rewriting its retained artifact or digest.
+            // A selected experimental policy needs the actual committed native
+            // assignment. Bare native/HTTP and paid children have no such witness.
+            #[cfg(all(feature = "core", feature = "harness"))]
+            let enrolled = self
+                .experiment_for_routing()
+                .map_err(|code| self.reject(code))?
+                .is_some();
+            #[cfg(not(all(feature = "core", feature = "harness")))]
+            let enrolled = false;
             if policy
                 .document()
                 .policies
@@ -142,6 +156,7 @@ impl TenantExecution {
                 .and_then(|definition| definition.optimization.as_ref())
                 .and_then(|optimization| optimization.active.as_ref())
                 .is_some()
+                && !enrolled
             {
                 return Err(
                     self.reject(bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)

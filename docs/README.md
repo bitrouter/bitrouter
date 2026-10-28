@@ -22,8 +22,10 @@ the CLI-only contract and implementation record define the current product.
   [owned execution receipts](RESOURCE_TENANCY_RECEIPTS.md),
   [authenticated native harness](RESOURCE_TENANCY_NATIVE_HARNESS_PROFILE.md), and
   [owned OAuth and input counting](RESOURCE_TENANCY_AUXILIARY_PROFILE.md) — single-instance
-  authority and owned runtime integration in progress; production dispatch and
-  strict-receipt capabilities remain disabled pending qualification.
+  Unix SQLite authority with opt-in tenancy and learning. Dispatch and strict
+  receipts follow the owning Service's live eligibility fences. Source-pinned
+  local checks do not establish final aggregate, platform or performance acceptance;
+  see [remaining qualification](RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
 
 - [Gateway multi-instance contract](GATEWAY_MULTI_INSTANCE_SPEC.md),
   [progress ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md), and

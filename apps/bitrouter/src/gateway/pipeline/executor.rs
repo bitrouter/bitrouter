@@ -1516,6 +1516,16 @@ impl HttpExecutor {
             target,
             shared::has_admission(ctx) || tenancy::has_execution(ctx),
         );
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let choice_gate = tenancy::execution(ctx)
+            .map(|execution| execution.choice_gate())
+            .transpose()?
+            .flatten();
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let cancellation = choice_gate
+            .as_ref()
+            .map_or_else(CancellationToken::new, |gate| gate.cancellation());
+        #[cfg(not(all(feature = "core", feature = "harness")))]
         let cancellation = CancellationToken::new();
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -1552,13 +1562,22 @@ impl HttpExecutor {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
-            let _tenant_attempt = tenancy::admit_send(
-                tenant_binding.as_ref(),
-                &mut tenant_attempt,
-                &mut request,
-                target,
-                ctx,
-            )?;
+            let mut arm = || {
+                tenancy::admit_send(
+                    tenant_binding.as_ref(),
+                    &mut tenant_attempt,
+                    &mut request,
+                    target,
+                    ctx,
+                )
+            };
+            #[cfg(all(feature = "core", feature = "harness"))]
+            let _tenant_attempt = match &choice_gate {
+                Some(gate) => gate.arm(&body, &target.service_id, arm).await?,
+                None => arm()?,
+            };
+            #[cfg(not(all(feature = "core", feature = "harness")))]
+            let _tenant_attempt = arm()?;
             if let Some(attempts) =
                 ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>()
             {

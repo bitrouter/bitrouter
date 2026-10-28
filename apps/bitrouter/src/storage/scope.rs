@@ -7,7 +7,6 @@
 use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::identity::{InstallationId, PrincipalId, TenantId};
 use sea_orm::sea_query::{Condition, Expr, IntoColumnRef};
-use sha2::{Digest, Sha256};
 
 use crate::tenancy::execution::TenantExecution;
 
@@ -55,6 +54,22 @@ pub(crate) enum KeyDomain {
     CaptureCheckpoint,
     #[cfg(all(feature = "core", feature = "harness"))]
     CaptureSchedule,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    NativeExperimentCounter,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    NativeExperimentUnit,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    NativeExperimentStep,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    NativeExperimentPending,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    LearningBudget,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    LearningJob,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    LearningPending,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    AssessmentRevision,
     TrajectoryEpisode,
     TrajectoryRequest,
     TrajectoryEvent,
@@ -79,6 +94,22 @@ impl KeyDomain {
             Self::CaptureCheckpoint => "capture.checkpoint",
             #[cfg(all(feature = "core", feature = "harness"))]
             Self::CaptureSchedule => "capture.schedule",
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::NativeExperimentCounter => "native.experiment.counter",
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::NativeExperimentUnit => "native.experiment.unit",
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::NativeExperimentStep => "native.experiment.step",
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::NativeExperimentPending => "native.experiment.pending",
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::LearningBudget => "learning.budget",
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::LearningJob => "learning.job",
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::LearningPending => super::partition::LEARNING_PENDING,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::AssessmentRevision => "learning.assessment",
             Self::TrajectoryEpisode => "trajectory.episode",
             Self::TrajectoryRequest => "trajectory.request",
             Self::TrajectoryEvent => "trajectory.event",
@@ -88,12 +119,40 @@ impl KeyDomain {
 }
 
 impl Scope {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn for_learner(
+        identity: &crate::tenancy::learner::identity::ReadIdentity,
+    ) -> (Self, Provenance) {
+        let (installation, tenant, principal) = identity.storage_identity();
+        (
+            Self(Namespace::Tenant {
+                installation: installation.clone(),
+                tenant: tenant.clone(),
+            }),
+            Provenance(Some(principal.clone())),
+        )
+    }
+
     pub(crate) fn legacy() -> Self {
         Self(Namespace::Legacy)
     }
 
     pub(crate) fn for_execution(execution: &TenantExecution) -> (Self, Provenance) {
         let (installation, tenant, principal) = execution.storage_identity();
+        (
+            Self(Namespace::Tenant {
+                installation: installation.clone(),
+                tenant: tenant.clone(),
+            }),
+            Provenance(Some(principal.clone())),
+        )
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn for_receipt(
+        owner: &crate::tenancy::receipts::owner::Owner,
+    ) -> (Self, Provenance) {
+        let (installation, tenant, principal) = owner.storage_identity();
         (
             Self(Namespace::Tenant {
                 installation: installation.clone(),
@@ -134,6 +193,20 @@ impl Scope {
         authority: &crate::tenancy::execution::host::Authority,
     ) -> (Self, Provenance) {
         let (installation, tenant, principal) = authority.identity();
+        (
+            Self(Namespace::Tenant {
+                installation: installation.clone(),
+                tenant: tenant.clone(),
+            }),
+            Provenance(Some(principal.clone())),
+        )
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn for_paid_recovery(
+        identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
+    ) -> (Self, Provenance) {
+        let (installation, tenant, principal) = identity.storage_identity();
         (
             Self(Namespace::Tenant {
                 installation: installation.clone(),
@@ -225,16 +298,7 @@ impl Scope {
         else {
             return Ok(legacy_key.to_owned());
         };
-        let mut digest = Sha256::new();
-        digest.update(b"bitrouter.store.key\0\x01");
-        for part in [domain.token(), installation.as_str(), tenant.as_str()] {
-            frame(&mut digest, part)?;
-        }
-        digest.update(u32::try_from(logical_parts.len())?.to_be_bytes());
-        for part in logical_parts {
-            frame(&mut digest, part)?;
-        }
-        Ok(hex::encode(digest.finalize()))
+        physical_key_for_namespace(installation, tenant, domain, logical_parts)
     }
 
     /// Snapshot roots commit the namespace, independently of physical indexing.
@@ -264,6 +328,16 @@ impl Scope {
     }
 }
 
+/// Inert key encoding shared with the offline converter. No authority is created.
+pub(crate) fn physical_key_for_namespace(
+    installation: &InstallationId,
+    tenant: &TenantId,
+    domain: KeyDomain,
+    logical_parts: &[&str],
+) -> Result<String> {
+    super::partition::tenant_key(installation, tenant, domain.token(), logical_parts)
+}
+
 impl Provenance {
     pub(crate) fn legacy() -> Self {
         Self(None)
@@ -271,12 +345,6 @@ impl Provenance {
     pub(crate) fn creator(&self) -> Option<&PrincipalId> {
         self.0.as_ref()
     }
-}
-
-fn frame(digest: &mut Sha256, part: &str) -> Result<()> {
-    digest.update(u32::try_from(part.len())?.to_be_bytes());
-    digest.update(part.as_bytes());
-    Ok(())
 }
 
 #[cfg(test)]

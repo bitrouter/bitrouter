@@ -6,6 +6,13 @@ mod continuation;
 mod custody;
 #[cfg(feature = "core")]
 mod eval;
+#[cfg(all(feature = "core", feature = "harness"))]
+mod experiment;
+#[cfg(all(feature = "core", feature = "harness"))]
+mod learner;
+#[cfg(all(feature = "core", feature = "harness"))]
+mod learning;
+mod learning_startup;
 mod oauth;
 mod receipts;
 #[cfg(all(feature = "core", feature = "harness"))]
@@ -46,6 +53,14 @@ pub(super) struct Message {
 }
 
 pub(super) enum Job {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    Learner(Box<super::learner::queue::Job>),
+    #[cfg(all(feature = "core", feature = "harness"))]
+    Experiment(Box<super::experiment::queue::Job>),
+    #[cfg(all(feature = "core", feature = "harness"))]
+    ExperimentRead(Box<crate::tenancy::experiment::queue::ReadJob>),
+    #[cfg(all(feature = "core", feature = "harness"))]
+    Learning(Box<super::learning::queue::Job>),
     #[cfg(all(feature = "core", feature = "harness"))]
     Capture(Box<super::capture::queue::Job>),
     #[cfg(all(feature = "core", feature = "harness"))]
@@ -96,7 +111,15 @@ impl Drop for Liveness {
     }
 }
 
+/// Acknowledged bootstrap result, captured before actor maintenance starts.
+pub(super) struct Initialized {
+    pub crypto: Option<super::continuation::PinnedCrypto>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub capacity: Option<crate::telemetry::receipt_latency::capacity::Snapshot>,
+}
+
 pub(super) struct Worker {
+    pub startup: Option<Arc<super::origin::StartupOwner>>,
     pub oauth: Arc<super::oauth::State>,
     pub db: DatabaseConnection,
     pub snapshot: Arc<RwLock<Arc<Snapshot>>>,
@@ -106,6 +129,8 @@ pub(super) struct Worker {
     pub resources: Arc<super::resources::Resources>,
     pub proof: Arc<Proof>,
     pub admission: Arc<super::admission::Admission>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub observe_capacity: bool,
     pub http_continuation: Arc<crate::continuation::tenant::state::State>,
     #[cfg(feature = "core")]
     pub eval: Arc<super::eval::State>,

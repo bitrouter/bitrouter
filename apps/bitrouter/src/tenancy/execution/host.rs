@@ -33,6 +33,9 @@ impl Service {
         headers: &http::HeaderMap,
     ) -> Result<Arc<Authority>, Failure> {
         super::native::bounded_headers(headers)?;
+        if headers.contains_key(super::BLOCK_LINK_HEADER) {
+            return Err(ErrorCode::InvalidRequest.into());
+        }
         let identity = self.submission(headers)?;
         let (credential_scope, binding_scope) = self
             .with_dispatch_authority(&identity, |state| {
@@ -53,6 +56,51 @@ impl Service {
 }
 
 impl Authority {
+    pub(in crate::tenancy) async fn admit_assessment(
+        &self,
+        binding: crate::tenancy::learning::source::Binding,
+        reference: &ResourceRef,
+    ) -> Result<Arc<super::TenantExecution>, Failure> {
+        let execution = self
+            .service
+            .admit_selected_execution(self.submission(), true, |revision| {
+                let route = revision.select_native(
+                    reference.resource_id.as_str(),
+                    bitrouter_ai::types::ModelOperation::Generation,
+                )?;
+                if route.reference() != reference {
+                    return Err(ErrorCode::Forbidden);
+                }
+                Ok(route)
+            })
+            .await?;
+        self.with_authority(execution.route.dependencies(), |effective| {
+            if !effective.permits(bitrouter_ai::tenancy::authority::Permission::EvaluationSubmit) {
+                return Err(ErrorCode::Forbidden);
+            }
+            Ok(())
+        })
+        .map_err(Failure::from)?;
+        execution
+            .assessment
+            .set(binding)
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        execution.revalidate().map_err(Failure::from)?;
+        Ok(execution)
+    }
+
+    pub(in crate::tenancy) fn credential_id(&self) -> &str {
+        self.identity.credential.as_str()
+    }
+    pub(in crate::tenancy) fn matches_submission(&self, request: &Submission) -> bool {
+        self.identity.tenant == request.tenant
+            && self.identity.principal == request.principal
+            && self.identity.credential == request.credential
+            && self.identity.binding.installation_id == request.binding.installation_id
+            && self.identity.binding.instance_id == request.binding.instance_id
+            && self.identity.binding.execution_revision == request.binding.execution_revision
+    }
+
     pub(crate) fn service(&self) -> &Service {
         &self.service
     }
@@ -90,6 +138,7 @@ impl Authority {
             binding: self.identity.binding.clone(),
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
             session_closed: None,
+            block: None,
         }
     }
 
@@ -120,16 +169,26 @@ impl Authority {
     ) -> Result<T, ErrorCode> {
         let submission = self.submission();
         self.service.with_dispatch_authority(&submission, |state| {
-            for reference in dependencies {
-                if !covers_key(&self.credential_scope, &submission.tenant, &reference.key())
-                    || !covers_key(&self.binding_scope, &submission.tenant, &reference.key())
-                {
-                    return Err(ErrorCode::Forbidden);
-                }
-            }
-            super::authorize_route(state, &submission, dependencies)?;
-            let effective = state.effective(&submission.caller, &submission.tenant, Utc::now())?;
-            work(&effective)
+            self.in_snapshot(state, dependencies, work)
         })
+    }
+
+    pub(in crate::tenancy) fn in_snapshot<T>(
+        &self,
+        state: &crate::tenancy::model::Snapshot,
+        dependencies: &[ResourceRef],
+        work: impl FnOnce(&Effective<'_>) -> Result<T, ErrorCode>,
+    ) -> Result<T, ErrorCode> {
+        let submission = self.submission();
+        for reference in dependencies {
+            if !covers_key(&self.credential_scope, &submission.tenant, &reference.key())
+                || !covers_key(&self.binding_scope, &submission.tenant, &reference.key())
+            {
+                return Err(ErrorCode::Forbidden);
+            }
+        }
+        super::authorize_route(state, &submission, dependencies)?;
+        let effective = state.effective(&submission.caller, &submission.tenant, Utc::now())?;
+        work(&effective)
     }
 }

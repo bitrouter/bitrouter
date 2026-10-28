@@ -44,18 +44,26 @@ impl Service {
             .admit_native_execution(submission, &prompt.model)
             .await
             .map_err(native_failure)?;
-        self.execute_admitted_native(prompt, headers, control, execution)
-            .await
+        self.execute_admitted_native(
+            prompt,
+            headers,
+            control,
+            execution,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            None,
+        )
+        .await
     }
 
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(crate) async fn execute_session_native(
         &self,
-        binding: &super::session::Binding,
+        step: &super::session::StepBinding,
         prompt: Prompt,
         headers: HeaderMap,
         control: Arc<dyn NativeExecutionControl>,
     ) -> Result<PipelineResponse> {
+        let binding = step.binding();
         if !binding.belongs_to(self) {
             return Err(native_failure(ErrorCode::CapabilityMismatch.into()));
         }
@@ -78,18 +86,25 @@ impl Service {
             return Err(native_failure(ErrorCode::InvalidRequest.into()));
         }
         let execution = binding.admit(&prompt.model).await.map_err(native_failure)?;
-        self.execute_admitted_native(prompt, headers, control, execution)
+        self.execute_admitted_native(prompt, headers, control, execution, Some(step))
             .await
     }
 
-    async fn execute_admitted_native(
+    pub(in crate::tenancy) async fn execute_admitted_native(
         &self,
         prompt: Prompt,
         headers: HeaderMap,
         control: Arc<dyn NativeExecutionControl>,
         execution: Arc<super::TenantExecution>,
+        #[cfg(all(feature = "core", feature = "harness"))] step: Option<
+            &super::session::StepBinding,
+        >,
     ) -> Result<PipelineResponse> {
         let outcome = async {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            if let Some(step) = step {
+                execution.enroll_experiment(step).await?;
+            }
             if let Err(code) = execution.prepare_count_profile(&prompt) {
                 let error = execution.reject(code);
                 execution
@@ -107,10 +122,19 @@ impl Service {
             // retained selection mode cannot be supplied through public headers.
             request.inbound_protocol = None;
             execution.attach(pipeline.clone(), &mut request)?;
+            let tasks = pipeline
+                .owned_tasks()
+                .cloned()
+                .ok_or(BitrouterError::UpstreamUnavailable)?;
+            #[cfg(all(feature = "core", feature = "harness"))]
+            if let Some(step) = step {
+                step.attach_parent(&execution, tasks.clone())
+                    .map_err(native_failure)?;
+            }
             pipeline
                 .execute_native_controlled(
                     request,
-                    Arc::new(control::Bounded::new(execution.clone(), control)),
+                    Arc::new(control::Bounded::new(execution.clone(), control, tasks)),
                 )
                 .await
         }

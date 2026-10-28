@@ -187,7 +187,7 @@ async fn capture_missed_child_cleanup_keeps_owner_even_after_the_same_child_is_r
     isolated("reaper-held").await
 }
 
-async fn diagnostics(reader: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u8>> {
+pub(super) async fn diagnostics(reader: impl tokio::io::AsyncRead + Unpin) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     reader.take(8193).read_to_end(&mut bytes).await?;
     ensure!(
@@ -319,7 +319,7 @@ async fn isolated(mode: &str) -> Result<()> {
     Ok(())
 }
 
-async fn reap_runtime(process: &mut tokio::process::Child) -> Result<()> {
+pub(super) async fn reap_runtime(process: &mut tokio::process::Child) -> Result<()> {
     let first = match tokio::time::timeout(Duration::from_secs(5), process.wait()).await {
         Ok(Ok(status)) => {
             ensure!(status.success(), "fault child failed: {status}");
@@ -346,7 +346,7 @@ async fn reap_runtime(process: &mut tokio::process::Child) -> Result<()> {
     anyhow::bail!("{}", failures.join("; "))
 }
 
-async fn cleanup_peer(marker: &Path) -> Result<()> {
+pub(super) async fn cleanup_peer(marker: &Path) -> Result<()> {
     if !marker.exists() {
         return Ok(());
     }

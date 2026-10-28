@@ -2219,6 +2219,14 @@
           "description": "Opt in to the tenant control service. Existing local startup stays unchanged.",
           "type": "boolean"
         },
+        "learning_registrations": {
+          "default": null,
+          "description": "Optional local learning registration manifest, authenticated after H bootstrap.\nOmission preserves startup behavior and does not erase durable schedules.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "resource_import": {
           "default": null,
           "description": "Privileged JSON manifest imported before listeners open. Relative paths\nare relative to the server process's working directory, never a tenant.",

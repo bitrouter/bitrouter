@@ -1,10 +1,11 @@
 # Owned HTTP continuation profile
 
 This describes the HTTP continuation consumer of the existing tenant authority
-and gateway pipeline. Production dispatch, revision-bound dispatch and
-strict-receipt capability flags remain false. See
-[the implementation tracker](RESOURCE_TENANCY_IMPLEMENTATION.md) for this
-consumer's acceptance evidence and the remaining delivery stages.
+and gateway pipeline. Dispatch and strict receipts follow the supported opt-in,
+single-instance Unix SQLite [Service eligibility](RESOURCE_TENANCY_IMPLEMENTATION.md#current-local-dispatch-eligibility).
+The [implementation tracker](RESOURCE_TENANCY_IMPLEMENTATION.md) records this
+consumer's source-pinned local evidence; final aggregate, platform and performance
+acceptance remain subject to its [remaining gates](RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
 
 ## Ownership and request binding
 

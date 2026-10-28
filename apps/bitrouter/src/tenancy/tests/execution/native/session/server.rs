@@ -6,7 +6,7 @@ use crate::tenancy::{
 };
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
 
-async fn connect() -> Result<DatabaseConnection> {
+pub(super) async fn connect() -> Result<DatabaseConnection> {
     let source = std::env::var("BITROUTER_TEST_NATIVE_DATABASE_URL")
         .context("set a dedicated empty PG/MySQL database URL")?;
     let target = url::Url::parse(&source)?;

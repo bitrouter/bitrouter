@@ -69,6 +69,96 @@ async fn rows(fixture: &Fixture) -> Result<i64> {
 }
 
 #[tokio::test]
+async fn owned_proxy_rejects_split_driver_calls_without_poisoning_owned_run() -> Result<()> {
+    let mut provider = Provider::start(false).await?;
+    let directory = tempfile::tempdir()?;
+    let workspace = directory.path().join("workspace");
+    std::fs::create_dir(&workspace)?;
+    let (fixture, route) = file_fixture(&provider, directory.path()).await?;
+    let checked = tokio::time::timeout(TIMEOUT, async {
+        let (headers, _) = ready(&fixture, &route).await?;
+        let app = Arc::new(
+            host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
+                .with_tenancy(fixture.service.clone()),
+        );
+        let mut session = NativeSession::open_authenticated(
+            app,
+            headers,
+            "split-driver",
+            &workspace,
+            ToolMode::ReadOnly,
+            &HarnessConfig::default(),
+        )
+        .await?;
+        let head = session.core().head().await;
+        let before = fixture
+            .db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT revision, payload FROM bro_managed_sessions",
+            ))
+            .await?
+            .context("opened journal")?;
+
+        let denied = session
+            .start("split-input", input())
+            .await
+            .err()
+            .context("owned proxy accepted direct start")?;
+        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(denied.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted);
+        let denied = session
+            .drive(Arc::new(Approval), CancellationToken::new())
+            .await
+            .err()
+            .context("owned proxy accepted direct drive")?;
+        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope);
+        ensure!(denied.commit_status == bitrouter_ai::core::protocol::CommitStatus::NotCommitted);
+        ensure!(session.core().head().await == head);
+        ensure!(session.core().operation("split-input").await.is_none());
+        ensure!(provider.calls() == 0);
+        let after = fixture
+            .db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT revision, payload FROM bro_managed_sessions",
+            ))
+            .await?
+            .context("journal after rejected split calls")?;
+        ensure!(before.try_get::<i64>("", "revision")? == after.try_get::<i64>("", "revision")?);
+        ensure!(
+            before.try_get::<String>("", "payload")? == after.try_get::<String>("", "payload")?
+        );
+
+        // Use the same handle: rejecting the CLI split API must leave its real
+        // owner usable, with no queued input or damaged receiver to recover.
+        let state = session
+            .run(input(), Arc::new(Approval), CancellationToken::new())
+            .await?;
+        ensure!(state.run.as_ref().is_some_and(|run| {
+            run.status == crate::storage::checkpoint::snapshot::RunStatus::Completed
+        }));
+        let observed = provider.receive().await?;
+        ensure!(observed.body["model"] == "model-a");
+        ensure!(
+            observed
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                == Some("Bearer owned-upstream-secret")
+        );
+        session.close().await?;
+        ensure!(provider.calls() == 1 && rows(&fixture).await? == 1);
+        ensure!(fixture.service.host_slots_for_test() == 1);
+        Ok(())
+    })
+    .await
+    .context("owned split-driver deadline")
+    .and_then(|outcome| outcome);
+    finish(&fixture, provider, checked).await
+}
+
+#[tokio::test]
 async fn native_host_uses_credential_and_current_binding_permission_intersection() -> Result<()> {
     for (name, role, permissions, allowed) in [
         (

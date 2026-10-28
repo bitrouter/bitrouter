@@ -36,7 +36,7 @@ It is not a personal usage scope. Inference `server.skip_auth` has no effect.
 `control:read` or `control:reload`; use a dedicated credential when only tenant
 management is needed. The optional `tenancy.enabled: true` service requires
 authenticated ingress, this explicit operator grant, local gateway state and a
-literal SQLite file URL. Its initial owning-process profile is qualified on Unix;
+literal SQLite file URL. This profile supports one owning process on Unix;
 shared databases, memory databases, encoded paths and the host coding-task API
 are rejected. Enabling or disabling tenancy requires restart. Once provisioned,
 the store cannot be reopened by ordinary local database commands with tenancy
@@ -59,8 +59,10 @@ at startup; relative paths use the server process working directory. Set
 32-byte key. Import requires that key, and retained resources require the same
 key on later restarts even after removing the import path. These settings are
 restart-only. Never treat a replacement key as automatic rotation. The importer
-accepts explicit route/policy definitions and static API-key credential slots;
-OAuth/ambient backends and native request checks are not yet supported. Definitions
+accepts explicit route/policy definitions, static API-key credential slots, and
+explicit Claude Code OAuth seeds pinned to the known Anthropic registration
+under the [owned OAuth profile](../../../docs/RESOURCE_TENANCY_AUXILIARY_PROFILE.md).
+Ambient credential backends and native request checks remain unsupported. Definitions
 are retained as authenticated ciphertext, and a changed definition requires a
 new qualified resource revision. Importing resources does not grant tenant access
 or activate a configuration. Never put resource-import definitions or secret key
@@ -70,10 +72,23 @@ Use the HTTP `TenancyClient` for tenant management or the `bro tenancy`
 configuration adapter below. The tenant-operation namespace
 is `/control/v1/tenancy/operations/{operation_id}`, separate from host reload
 operations. Retain operation IDs after a lost response; credential secrets are
-returned only once. Authority-only servers keep dispatch, revision binding and
-strict receipts disabled, and inference is fenced until those runtime stages are
-implemented. Do not send tenant inference based solely on successful credential
-issuance or configuration administration.
+returned only once. Tenancy is disabled by default. In the supported enabled
+profile, `dispatch_enabled`, `revision_bound_dispatch` and `strict_receipts`
+reflect the owning service's current eligibility. Shutdown, saturation or a
+storage/admission fence prevents new dispatch; unavailable authority can also
+prevent discovery. Require all three flags before strict inference. True flags
+neither reserve execution capacity nor grant access to a route or credential.
+
+Use `TenantCapabilities::bind` with an explicitly selected retained execution
+revision and correlation ID, and send its seven binding headers with the issued
+tenant credential. An installation operator token does not authorize inference.
+The service rechecks the exact installation, instance and capability revision,
+current grants, retained resources and request limits before starting work.
+After a restart, discover the new instance descriptor for a new submission;
+do not reuse the old binding. If a response is uncertain, retain any returned
+execution ID and the original correlation ID, then query receipts with current
+read authority. Correlation is not an idempotency key: do not automatically
+refresh the binding and resend the inference request.
 
 Controlled native turns use the same tenant credential and dispatch binding as
 HTTP turns. Caller labels, host inspection credentials and local harness metadata

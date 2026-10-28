@@ -139,6 +139,12 @@ pub(crate) struct HarnessResources {
     library: Option<Arc<dyn crate::skills::library::SkillDirectory>>,
 }
 
+/// Retained connection custody and authority for one discovery pass.
+pub(super) struct DiscoveryOwner<'a> {
+    mcp: Arc<Mutex<mcp::McpConnections>>,
+    discovery: &'a Discovery,
+}
+
 // New skill discovery must obey the same per-poll authority fence as MCP
 // connection discovery. Constructing an async future alone does not perform I/O.
 async fn discover_with_authority<F: std::future::Future>(
@@ -169,8 +175,10 @@ impl HarnessResources {
             mode,
             cancel,
             max_duration,
-            Arc::new(Mutex::new(mcp::McpConnections::default())),
-            &Discovery::default(),
+            DiscoveryOwner {
+                mcp: Arc::new(Mutex::new(mcp::McpConnections::default())),
+                discovery: &Discovery::default(),
+            },
         )
         .await
     }
@@ -182,9 +190,9 @@ impl HarnessResources {
         mode: ToolMode,
         cancel: &CancellationToken,
         max_duration: Duration,
-        mcp: Arc<Mutex<mcp::McpConnections>>,
-        discovery: &Discovery,
+        owner: DiscoveryOwner<'_>,
     ) -> Result<Self, ResourceError> {
+        let DiscoveryOwner { mcp, discovery } = owner;
         let started = std::time::Instant::now();
         let mut roots = vec![workspace.to_path_buf()];
         roots.extend(config.skill_roots.clone());
@@ -233,8 +241,10 @@ impl HarnessResources {
         connections
             .connect_in_place(
                 workspace,
-                &servers,
-                &tool_servers,
+                crate::gateway::mcp::client::ConnectionCatalog {
+                    servers: &servers,
+                    tool_servers: &tool_servers,
+                },
                 config.protocol.clone(),
                 cancel,
                 max_duration.saturating_sub(started.elapsed()),

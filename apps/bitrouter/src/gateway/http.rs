@@ -1473,11 +1473,13 @@ async fn execute_input(
 pub(crate) async fn handle_tenant(
     service: &crate::tenancy::Service,
     submission: crate::tenancy::execution::Submission,
-    headers: HeaderMap,
+    mut headers: HeaderMap,
     inbound: ApiProtocol,
     input: PipelineInput,
     ingress: impl Send,
 ) -> Response {
+    // The opaque capture capability is never observed or converted upstream.
+    headers.remove(crate::tenancy::execution::BLOCK_LINK_HEADER);
     let raw_model = match &input {
         PipelineInput::Generation(prompt) => &prompt.model,
         PipelineInput::Decisions(request) => &request.model,

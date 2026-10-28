@@ -35,6 +35,35 @@ pub async fn connect(url: &str) -> Result<DatabaseConnection> {
     connect_inner(url, None).await
 }
 
+/// A real connector result, never constructed from independently supplied
+/// pool and ownership arguments. The application can borrow its pool for
+/// assembly/migrations; only one Service consumes the acquisition claim.
+pub(crate) struct OwnedDatabase {
+    db: DatabaseConnection,
+    owner: crate::tenancy::ownership::Lease,
+}
+impl OwnedDatabase {
+    pub(crate) fn database(&self) -> &DatabaseConnection {
+        &self.db
+    }
+    pub(crate) fn claim(
+        self,
+    ) -> anyhow::Result<(
+        DatabaseConnection,
+        crate::tenancy::ownership::Lease,
+        crate::tenancy::ownership::Claim,
+    )> {
+        let claim = self.owner.claim()?;
+        Ok((self.db, self.owner, claim))
+    }
+}
+pub(crate) async fn connect_owned_tenancy(url: &str) -> anyhow::Result<OwnedDatabase> {
+    let owner = crate::tenancy::ownership::acquire(url)?;
+    anyhow::ensure!(owner.exclusive(), "exclusive file owner required");
+    let db = connect_tenancy(url, &owner).await?;
+    Ok(OwnedDatabase { db, owner })
+}
+
 pub(crate) async fn connect_tenancy(
     url: &str,
     owner: &crate::tenancy::ownership::Lease,

@@ -838,7 +838,11 @@ impl Pipeline {
             let (sender, mut receiver) = crate::tenancy::receipts::output::channel(&receipt)?;
             tasks.spawn_execution(async move {
                 let result={let preparing=self.execute_prepared(req,#[cfg(feature="server-tools")]run_server_tools,control);
-                    tokio::select!{biased;()=receipt.cancelled.cancelled()=>Err(BitrouterError::UpstreamUnavailable),result=preparing=>result}};
+                    tokio::select!{biased;()=receipt.cancelled.cancelled()=>{
+                        #[cfg(test)]
+                        eprintln!("headroom execution boundary: stage=PreparedExecution, reason=ReceiptCancelled, original_deadline_elapsed={}", execution.remaining().is_zero());
+                        Err(BitrouterError::UpstreamUnavailable)
+                    },result=preparing=>result}};
                 let result=match result {Ok(prepared)=>Ok(prepared),Err(error)=>{
                     match execution.terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed).await {Ok(())=>Err(error),Err(error)=>Err(error)}
                 }};

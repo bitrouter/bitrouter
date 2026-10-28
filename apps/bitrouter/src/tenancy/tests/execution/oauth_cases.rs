@@ -28,6 +28,8 @@ use tokio_util::task::AbortOnDropHandle;
 
 mod accounting;
 #[cfg(unix)]
+mod audit;
+#[cfg(unix)]
 mod custody;
 mod faults;
 mod namespace;

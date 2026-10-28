@@ -200,7 +200,10 @@ impl Worker {
 
 /// The checkpoint itself samples the deadline. Classify its result using the
 /// confirmed transaction outcome instead of taking an earlier clock sample.
-fn finish_checkpoint(proof: &Proof, checked: Result<(), ErrorCode>) -> Result<(), Failure> {
+pub(super) fn finish_checkpoint(
+    proof: &Proof,
+    checked: Result<(), ErrorCode>,
+) -> Result<(), Failure> {
     match checked {
         Err(ErrorCode::CapacityExceeded) if proof.disposition() == Disposition::Committed => {
             proof.fenced();

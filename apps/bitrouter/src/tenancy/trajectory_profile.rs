@@ -24,21 +24,28 @@ pub(crate) fn retained_guarded(
         .policies
         .get(selected)
         .context("selected retained policy missing")?;
+    let active = policy
+        .optimization
+        .as_ref()
+        .and_then(|value| value.active.as_ref());
     let Some(guard) = &policy.progress_guard else {
+        ensure!(
+            active.is_none(),
+            "owned experiment requires the retained progress guard"
+        );
         return Ok(false);
     };
     ensure!(
         config.trajectory.enabled,
         "selected guard requires retained trajectory enablement"
     );
-    ensure!(
-        policy
-            .optimization
-            .as_ref()
-            .and_then(|o| o.active.as_ref())
-            .is_none(),
-        "owned active experiment is not qualified"
-    );
+    if let Some(active) = active {
+        ensure!(
+            guard.protected_tiers.contains(&active.champion_tier)
+                && guard.protected_tiers.contains(&active.challenger_tier),
+            "both owned experiment arms must be protected"
+        );
+    }
     ensure!(
         guard.max_episode_cost_micro_usd.is_none(),
         "owned trajectory cost guard is not qualified"

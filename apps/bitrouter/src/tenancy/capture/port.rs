@@ -14,10 +14,13 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, oneshot};
+use tokio::time::Instant;
 
 struct Pending {
     input: Request,
+    deadline: Instant,
     receive: Option<oneshot::Receiver<Outcome>>,
 }
 struct State {
@@ -65,12 +68,14 @@ impl Port {
     }
     pub(crate) async fn create(&self) -> Result<()> {
         let mut state = self.state.lock().await;
+        self.reconcile_predecessor(&mut state).await?;
         self.call(&mut state, Request::Create(chrono::Utc::now().to_rfc3339()))
             .await?;
         Ok(())
     }
     pub(crate) async fn initialized(&self) -> Result<()> {
         let mut state = self.state.lock().await;
+        self.reconcile_predecessor(&mut state).await?;
         ensure!(state.bootstrap == 2, "owned provider bootstrap incomplete");
         self.binding
             .check()
@@ -87,6 +92,7 @@ impl Port {
         // Initialization never loads history. All other unknown methods, including
         // list/load/fork/resume, fail before the capture-skipping forwarding branch.
         let mut state = self.state.lock().await;
+        self.reconcile_predecessor(&mut state).await?;
         let terminal_notification = matches!(
             (direction, method),
             (CaptureDirection::Agent, "session/update")
@@ -158,32 +164,43 @@ impl Port {
         &self,
         native: &str,
     ) -> Result<Option<crate::acp_trajectory::checkpoint::owned::Summary>> {
+        let mut state = self.state.lock().await;
+        self.reconcile_predecessor(&mut state).await?;
         self.binding
             .check()
             .map_err(|_| anyhow::anyhow!("capture authority rejected"))?;
-        let mut state = self.state.lock().await;
         ensure!(
             !state.failed && state.current.sessions.contains_key(native),
             "owned session association unavailable"
         );
-        match self
+        let summary = match self
             .call(&mut state, Request::Freeze(native.to_owned()))
             .await?
         {
-            Reply::Frozen(summary) => Ok(summary),
+            Reply::Frozen(summary) => summary,
             _ => anyhow::bail!("capture checkpoint reply mismatch"),
+        };
+        drop(state);
+        if let Some(summary) = &summary
+            && self.binding.assessment().is_some()
+        {
+            crate::tenancy::learning::checkpoint(self.binding.clone(), native, summary).await?;
         }
+        Ok(summary)
     }
     async fn call(&self, state: &mut State, input: Request) -> Result<Reply> {
         ensure!(
             state.pending.is_none(),
             "capture pending append must be reconciled by its owner"
         );
+        let human = matches!(&input, Request::Human(_));
+        let deadline = Instant::now() + Duration::from_secs(5);
         state.pending = Some(Pending {
             input: input.clone(),
+            deadline,
             receive: None,
         });
-        match self.binding.enqueue(input).await {
+        match self.binding.enqueue_before(input, deadline).await {
             Ok(receive) => {
                 state
                     .pending
@@ -191,14 +208,70 @@ impl Port {
                     .context("capture pending input disappeared")?
                     .receive = Some(receive)
             }
-            Err(_) => {
+            Err(error) => {
                 state.pending = None;
-                state.failed = true;
-                anyhow::bail!("capture queue rejected");
+                if !human {
+                    state.failed = true;
+                }
+                return Err(crate::storage::operation_budget::Error::Rejected(error.0.code).into());
             }
         }
         self.settle(state).await
     }
+    async fn reconcile_predecessor(&self, state: &mut State) -> Result<()> {
+        ensure!(!state.ambiguous, "capture SQL cleanup unconfirmed");
+        let Some(pending) = &state.pending else {
+            return Ok(());
+        };
+        let human = matches!(&pending.input, Request::Human(_));
+        if human && pending.receive.is_none() {
+            // enqueue cannot yield after send: no receiver means this Human
+            // request was never admitted. Ordinary capture keeps its policy.
+            state.pending = None;
+            return Ok(());
+        }
+        let result = self.settle(state).await;
+        if human && state.pending.is_none() && !state.failed && !state.ambiguous {
+            // A previous caller's known result is not this callback's reply.
+            drop(result);
+            return Ok(());
+        }
+        result.map(|_| ())
+    }
+
+    pub(crate) async fn human(
+        &self,
+        native: &str,
+        input: super::human::Input,
+    ) -> Result<super::human::Reply> {
+        let request = Arc::new(super::human::Request::new(
+            native,
+            input,
+            self.binding.association(),
+        )?);
+        let mut state = self.state.try_lock().map_err(|_| {
+            crate::storage::operation_budget::Error::Rejected(
+                bitrouter_ai::tenancy::operation::ErrorCode::CapacityExceeded,
+            )
+        })?;
+        self.reconcile_predecessor(&mut state).await?;
+        self.binding
+            .check()
+            .map_err(|error| crate::storage::operation_budget::Error::Rejected(error.0.code))?;
+        ensure!(
+            !state.failed && !state.ambiguous && !state.current.closed,
+            "controlled capture is closing"
+        );
+        let reply = self.call(&mut state, Request::Human(request)).await?;
+        self.binding
+            .check()
+            .map_err(|error| crate::storage::operation_budget::Error::Rejected(error.0.code))?;
+        match reply {
+            Reply::Human(reply, _) => Ok(*reply),
+            _ => anyhow::bail!("human reply mismatch"),
+        }
+    }
+
     async fn settle(&self, state: &mut State) -> Result<Reply> {
         ensure!(!state.ambiguous, "capture SQL cleanup unconfirmed");
         let pending = state
@@ -206,23 +279,46 @@ impl Port {
             .as_mut()
             .context("capture pending operation missing")?;
         let Some(receive) = &mut pending.receive else {
-            // Enqueue cannot yield after sending. No receiver means no admitted
-            // job; the owner still records an interrupted capture on teardown.
             state.pending = None;
             state.failed = true;
             anyhow::bail!("capture enqueue was interrupted");
         };
-        // Keep the receiver in Pending across cancellation, then retire it
-        // synchronously once it resolves. Unknown custody remains sticky, but
-        // a completed oneshot must never be polled again during finish.
-        let received = receive.await;
-        pending.receive = None;
+        // Consume an already-ready result even at the original deadline. No
+        // new callback can renew the actor's operation or H cleanup deadline.
+        let (received, completed) = match receive.try_recv() {
+            Ok(outcome) => (Ok(outcome), true),
+            Err(oneshot::error::TryRecvError::Closed) => (Err(()), true),
+            Err(oneshot::error::TryRecvError::Empty)
+                if !matches!(&pending.input, Request::Human(_)) =>
+            {
+                (receive.await.map_err(|_| ()), true)
+            }
+            Err(oneshot::error::TryRecvError::Empty) => {
+                match tokio::time::timeout_at(
+                    pending.deadline + crate::tenancy::transaction::CLEANUP_TIMEOUT,
+                    receive,
+                )
+                .await
+                {
+                    Ok(result) => (result.map_err(|_| ()), true),
+                    Err(_) => (Err(()), false),
+                }
+            }
+        };
+        // A canceled wait keeps the same receiver and original deadline. A
+        // resolved receiver is retired before any fallible outcome handling;
+        // the exact Pending input still survives ambiguous custody. Timeout
+        // retains the unresolved receiver, but the sticky guard forbids repoll.
+        if completed {
+            pending.receive = None;
+        }
         let outcome = match received {
             Ok(outcome) => outcome,
-            Err(_) => {
+            Err(()) => {
+                // Port custody is unconfirmed; this does not set H's SQL phase.
                 state.ambiguous = true;
                 self.binding.service().host_cleanup_unknown();
-                anyhow::bail!("capture actor outcome lost");
+                anyhow::bail!("capture actor completion unconfirmed");
             }
         };
         if matches!(
@@ -232,6 +328,39 @@ impl Port {
             state.ambiguous = true;
             self.binding.service().host_cleanup_unknown();
             anyhow::bail!("capture transaction outcome is ambiguous");
+        }
+        if let Request::Human(request) = &pending.input {
+            if let Ok(reply) = &outcome.result
+                && !matches!(reply, Reply::Human(value, wrote) if request.matches(value)
+                    && outcome.disposition == if *wrote { Disposition::Committed } else { Disposition::RolledBack })
+            {
+                state.ambiguous = true;
+                self.binding.service().host_cleanup_unknown();
+                anyhow::bail!("human actor reply does not match its request");
+            }
+            let ordinary = outcome.result.as_ref().err().is_none_or(|error| {
+                use bitrouter_ai::tenancy::operation::ErrorCode;
+                matches!(
+                    error.0.code,
+                    ErrorCode::InvalidRequest
+                        | ErrorCode::NotFound
+                        | ErrorCode::RevisionConflict
+                        | ErrorCode::CapacityExceeded
+                        | ErrorCode::PayloadTooLarge
+                        | ErrorCode::Unauthorized
+                        | ErrorCode::Forbidden
+                        | ErrorCode::TenantInactive
+                        | ErrorCode::AuthorityUnavailable
+                        | ErrorCode::CapabilityMismatch
+                )
+            });
+            state.pending = None;
+            if !ordinary {
+                state.failed = true;
+            }
+            return outcome.result.map_err(|error| {
+                crate::storage::operation_budget::Error::Rejected(error.0.code).into()
+            });
         }
         if outcome.disposition == Disposition::Committed {
             match &pending.input {
@@ -245,6 +374,8 @@ impl Port {
                     }
                 },
                 Request::Freeze(_) => {}
+                Request::Human(_) => anyhow::bail!("unexpected human capture transition"),
+                Request::Block(_) => anyhow::bail!("HTTP Block intent cannot be a capture append"),
             }
         }
         state.pending = None;
@@ -260,10 +391,14 @@ impl Port {
     /// receiver remains in this port even when a proxy callback was dropped.
     pub(crate) async fn finish(&self) -> Result<()> {
         let mut state = self.state.lock().await;
-        if state.pending.is_some() {
-            let _outcome = self.settle(&mut state).await;
+        // Preserve ordinary capture's owner-bound disconnect after a known
+        // rejection; unknown H/custody still prevents any new append.
+        let predecessor = self.reconcile_predecessor(&mut state).await;
+        if state.pending.is_some() || state.ambiguous {
+            predecessor?;
+            anyhow::bail!("capture SQL cleanup unconfirmed");
         }
-        ensure!(!state.ambiguous, "capture SQL cleanup unconfirmed");
+        drop(predecessor);
         if state.created && !state.current.closed {
             let append = Arc::new(Append::new(
                 state.current.head + 1,
@@ -295,6 +430,7 @@ impl CapturePort for Port {
     async fn record(&self, mut event: CaptureEvent) -> Result<(), CaptureError> {
         let result: Result<()> = async {
             let mut state = self.state.lock().await;
+            self.reconcile_predecessor(&mut state).await?;
             ensure!(!state.failed, "capture connection is incomplete");
             if event.kind == CaptureKind::Disconnected && self.binding.ingress_rejected() {
                 event.payload = serde_json::json!({"clean": false});

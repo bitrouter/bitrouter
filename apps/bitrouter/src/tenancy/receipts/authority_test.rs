@@ -42,3 +42,38 @@ impl Service {
         }
     }
 }
+
+#[cfg(all(unix, feature = "core", feature = "harness"))]
+impl Service {
+    pub(in crate::tenancy) fn hold_choice_final_gate_for_test(
+        &self,
+    ) -> anyhow::Result<Arc<CredentialGate>> {
+        let mut slot = self
+            .choice_final_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Choice test gate poisoned"))?;
+        anyhow::ensure!(slot.is_none(), "Choice test gate already installed");
+        let gate = Arc::new(CredentialGate::default());
+        *slot = Some(gate.clone());
+        Ok(gate)
+    }
+    pub(in crate::tenancy) async fn choice_final_gate_for_test(
+        &self,
+        child: &ExecutionId,
+    ) -> anyhow::Result<()> {
+        let gate = self
+            .choice_final_gate
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Choice test gate poisoned"))?
+            .take();
+        if let Some(gate) = gate {
+            anyhow::ensure!(
+                gate.execution.set(child.clone()).is_ok(),
+                "Choice test gate consumed twice"
+            );
+            gate.entered.notify_one();
+            gate.release.cancelled().await;
+        }
+        Ok(())
+    }
+}

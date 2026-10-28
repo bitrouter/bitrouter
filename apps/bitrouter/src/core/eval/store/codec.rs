@@ -49,7 +49,17 @@ columns!(
     "frozen_at"
 );
 
-impl EvalStore {
+/// Pure row decoder; constructing it grants no authority or database access.
+pub(super) struct Decoder<'a> {
+    pub(super) scope: &'a Scope,
+}
+impl Decoder<'_> {
+    fn key(&self, domain: KeyDomain, logical: &str) -> Result<String> {
+        self.scope.physical_key(domain, logical, &[logical])
+    }
+    fn owner(&self, legacy: &str) -> Result<String> {
+        self.scope.physical_key(KeyDomain::Owner, legacy, &[])
+    }
     fn check_owner(&self, owner: &str) -> Result<()> {
         validate_owner(owner)?;
         if !self.scope.is_legacy() {
@@ -138,6 +148,12 @@ impl EvalStore {
     }
 
     pub(super) fn decode_snapshot(&self, row: &snapshot_entity::Model) -> Result<EvalSnapshot> {
+        let snapshot = self.snapshot_projection(row)?;
+        self.verify_manifest(&snapshot, Some(&row.owner_user_id))?;
+        Ok(snapshot)
+    }
+
+    pub(super) fn snapshot_projection(&self, row: &snapshot_entity::Model) -> Result<EvalSnapshot> {
         self.scope.validate_metadata(MetadataRef {
             installation: row.installation_id.as_deref(),
             tenant: row.tenant_id.as_deref(),
@@ -152,7 +168,82 @@ impl EvalStore {
                 && i32::try_from(snapshot.entries.len()).ok() == Some(row.result_count),
             "stored eval snapshot indexed content mismatch"
         );
-        self.verify_manifest(&snapshot, Some(&row.owner_user_id))?;
         Ok(snapshot)
+    }
+}
+
+impl Decoder<'_> {
+    pub(super) fn snapshot_root(
+        &self,
+        owner: Option<&str>,
+        frozen_at: &str,
+        entries: &[EvalSnapshotEntry],
+    ) -> Result<String> {
+        match self.scope.snapshot_namespace() {
+            Some((installation, tenant)) => canonical_digest(&(
+                "bitrouter.eval.snapshot.tenant.v1",
+                installation,
+                tenant,
+                frozen_at,
+                entries,
+            )),
+            None => canonical_digest(&(owner.unwrap_or("*"), frozen_at, entries)),
+        }
+    }
+
+    pub(super) fn manifest_shape(&self, snapshot: &EvalSnapshot) -> Result<()> {
+        chrono::DateTime::parse_from_rfc3339(&snapshot.frozen_at)
+            .context("snapshot frozen_at must be RFC3339")?;
+        if !self.scope.is_legacy() {
+            ensure!(
+                snapshot.entries.len() <= io::MAX_ROWS,
+                "tenant eval snapshot exceeds row bound"
+            );
+            ensure!(
+                snapshot
+                    .entries
+                    .windows(2)
+                    .all(|pair| pair[0].result_id < pair[1].result_id),
+                "tenant eval snapshot entries must be sorted and unique"
+            );
+            io::json_size(snapshot, io::MAX_BYTES)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn verify_manifest(
+        &self,
+        snapshot: &EvalSnapshot,
+        owner: Option<&str>,
+    ) -> Result<()> {
+        self.manifest_shape(snapshot)?;
+        ensure!(
+            self.snapshot_root(owner, &snapshot.frozen_at, &snapshot.entries)?
+                == snapshot.evidence_root,
+            "eval snapshot manifest does not match its namespace and evidence root"
+        );
+        Ok(())
+    }
+}
+
+impl EvalStore {
+    pub(super) fn decode_subject(&self, row: &subject_entity::Model) -> Result<EvalSubject> {
+        Decoder { scope: &self.scope }.decode_subject(row)
+    }
+    pub(super) fn decode_result(
+        &self,
+        row: &result_entity::Model,
+    ) -> Result<StoredEvaluationResult> {
+        Decoder { scope: &self.scope }.decode_result(row)
+    }
+    pub(super) fn decode_admission(
+        &self,
+        row: &admission_entity::Model,
+        logical_result: &str,
+    ) -> Result<AdmissionEvent> {
+        Decoder { scope: &self.scope }.decode_admission(row, logical_result)
+    }
+    pub(super) fn decode_snapshot(&self, row: &snapshot_entity::Model) -> Result<EvalSnapshot> {
+        Decoder { scope: &self.scope }.decode_snapshot(row)
     }
 }

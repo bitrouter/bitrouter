@@ -4,7 +4,13 @@ use async_trait::async_trait;
 use bitrouter_ai::core::protocol::CoreError;
 
 #[cfg(feature = "core")]
+pub(crate) mod choice;
+#[cfg(feature = "core")]
 pub(super) mod local;
+#[cfg(feature = "core")]
+pub(crate) mod model;
+#[cfg(feature = "core")]
+mod model_capacity;
 
 pub const MAX_STORE_BYTES: usize = crate::storage::checkpoint::MAX_NATIVE_STORE_BYTES;
 
@@ -16,3 +22,6 @@ pub trait NativeStore: Send + Sync {
     async fn load(&self) -> Result<Option<(u64, Vec<u8>)>, CoreError>;
     async fn save(&self, expected_revision: u64, bytes: Vec<u8>) -> Result<(), CoreError>;
 }
+
+#[cfg(feature = "core")]
+pub(crate) mod recovery;

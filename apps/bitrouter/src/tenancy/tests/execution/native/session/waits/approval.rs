@@ -99,152 +99,175 @@ async fn native36_approval_wait_rechecks_revocation_and_scope_before_real_mcp_ca
         let gate = fixture.service.hold_host(HostBoundary::Transport)?;
         let approval = Arc::new(HeldApproval::default());
         let release_on_failure = approval.release.clone().drop_guard();
-        let checked =
-            tokio::time::timeout(Duration::from_secs(25), async {
-                let (headers, key) = ready(&fixture, &route).await?;
-                let app = Arc::new(
-                    host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
-                        .with_tenancy(fixture.service.clone()),
-                );
-                let config = endpoint.config();
-                let opener = AbortOnDropHandle::new(tokio::spawn(async move {
-                    NativeSession::open_authenticated(
-                        app,
-                        headers,
-                        "tool-wait",
-                        &workspace,
-                        ToolMode::Coding,
-                        &config,
-                    )
-                    .await
-                }));
-                let weak = observe(&gate).await?;
-                let mut session = opener.await??;
-                ensure!(endpoint.wire.pages.load(Ordering::SeqCst) == 1);
-                let core = session.core().clone();
-                let held = approval.clone();
-                let running = AbortOnDropHandle::new(tokio::spawn(async move {
-                    let outcome = session.run(input(), held, CancellationToken::new()).await;
-                    (session, outcome)
-                }));
-                approval.entered.notified().await;
-                let command = approval
-                    .command
-                    .lock()
-                    .await
-                    .clone()
-                    .context("actual tool approval")?;
-                ensure!(command.tool == "retained__echo");
-                let snapshot = core.snapshot().await;
-                let invocation = snapshot
-                    .agents
+        let checked = tokio::time::timeout(Duration::from_secs(25), async {
+            let (headers, key) = ready(&fixture, &route).await?;
+            let app = Arc::new(
+                host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
+                    .with_tenancy(fixture.service.clone()),
+            );
+            let config = endpoint.config();
+            let opener = AbortOnDropHandle::new(tokio::spawn(async move {
+                NativeSession::open_authenticated(
+                    app,
+                    headers,
+                    "tool-wait",
+                    &workspace,
+                    ToolMode::Coding,
+                    &config,
+                )
+                .await
+            }));
+            let weak = observe(&gate).await?;
+            let mut session = opener.await??;
+            ensure!(endpoint.wire.pages.load(Ordering::SeqCst) == 1);
+            let core = session.core().clone();
+            let held = approval.clone();
+            let running = AbortOnDropHandle::new(tokio::spawn(async move {
+                let outcome = session.run(input(), held, CancellationToken::new()).await;
+                (session, outcome)
+            }));
+            approval.entered.notified().await;
+            let command = approval
+                .command
+                .lock()
+                .await
+                .clone()
+                .context("actual tool approval")?;
+            ensure!(command.tool == "retained__echo");
+            let snapshot = core.snapshot().await;
+            let invocation = snapshot
+                .agents
+                .values()
+                .filter_map(|agent| agent.turn.as_ref())
+                .flat_map(|turn| &turn.invocations)
+                .find(|call| call.dispatch == command)
+                .context("durable pending invocation")?;
+            ensure!(invocation.result.is_none());
+            ensure!(
+                invocation
+                    .tool_observations
                     .values()
-                    .filter_map(|agent| agent.turn.as_ref())
-                    .flat_map(|turn| &turn.invocations)
-                    .find(|call| call.dispatch == command)
-                    .context("durable pending invocation")?;
-                ensure!(invocation.result.is_none());
+                    .any(|observation| observation.status == ToolStatus::WaitingApproval)
+            );
+            let before = saved(&fixture).await?;
+            let started = &before["journal"]["starts"][&command.invocation_id];
+            ensure!(started["command"] == serde_json::to_value(&command)?);
+            ensure!(started["started"] == false && started["result"].is_null());
+            ensure!(provider.calls() == 1 && endpoint.wire.calls.load(Ordering::SeqCst) == 0);
+            ensure!(!joined(&gate)? && fixture.service.host_slots_for_test() == 0);
+            let request = provider.receive().await?;
+            ensure!(request.body["model"] == "model-a");
+            ensure!(
+                request
+                    .headers
+                    .get("authorization")
+                    .is_some_and(|h| h == "Bearer owned-upstream-secret")
+            );
+            if change != "allowed" {
+                change_authority(&fixture, &key, &route, change).await?;
+            }
+            // A weak witness cannot keep the production worker alive through
+            // revocation. Retain it for the final joined-state observation only now.
+            let observed = weak.upgrade().context("approval wait lost its MCP owner")?;
+            ensure!(
+                Arc::strong_count(&observed) > 1,
+                "test became the sole MCP owner"
+            );
+            ensure!(fixture.service.host_slots_for_test() == 0);
+            ensure!(
+                !joined(&gate)?,
+                "authority mutation discarded a live MCP worker"
+            );
+            // Return true deliberately: denial must come from current authority
+            // at the actual dispatch gate, not from the approval fixture.
+            approval.release.cancel();
+            let (session, outcome) = running.await?;
+            if change == "allowed" {
+                let completed = outcome?;
                 ensure!(
-                    invocation
-                        .tool_observations
-                        .values()
-                        .any(|observation| observation.status == ToolStatus::WaitingApproval)
+                    completed.run.as_ref().is_some_and(|run| run.status
+                        == crate::storage::checkpoint::snapshot::RunStatus::Completed)
                 );
-                let before = saved(&fixture).await?;
-                let started = &before["journal"]["starts"][&command.invocation_id];
-                ensure!(started["command"] == serde_json::to_value(&command)?);
-                ensure!(started["started"] == false && started["result"].is_null());
-                ensure!(provider.calls() == 1 && endpoint.wire.calls.load(Ordering::SeqCst) == 0);
-                ensure!(!joined(&gate)? && fixture.service.host_slots_for_test() == 0);
-                let request = provider.receive().await?;
-                ensure!(request.body["model"] == "model-a");
+                ensure!(endpoint.wire.calls.load(Ordering::SeqCst) == 1 && provider.calls() == 2);
+                provider.receive().await?;
+            } else {
+                let error = outcome
+                    .err()
+                    .context("changed authority admitted another model step")?;
                 ensure!(
-                    request
-                        .headers
-                        .get("authorization")
-                        .is_some_and(|h| h == "Bearer owned-upstream-secret")
+                    error.code == bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope
+                        && error.commit_status
+                            == bitrouter_ai::core::protocol::CommitStatus::NotCommitted,
+                    "{change}: unexpected post-approval failure: {error:?}"
                 );
-                if change != "allowed" {
-                    change_authority(&fixture, &key, &route, change).await?;
-                }
-                // A weak witness cannot keep the production worker alive through
-                // revocation. Retain it for the final joined-state observation only now.
-                let observed = weak.upgrade().context("approval wait lost its MCP owner")?;
+                let stopped = core.snapshot().await;
+                let turn = stopped
+                    .agents
+                    .get(&stopped.agent_id)
+                    .and_then(|agent| agent.turn.as_ref())
+                    .context("stopped native turn")?;
+                ensure!(turn.steps.len() == 2, "{change}: changed model step count");
+                let completed = &turn.steps[0];
                 ensure!(
-                    Arc::strong_count(&observed) > 1,
-                    "test became the sole MCP owner"
+                    completed.settled
+                        && completed.attempts.len() == 1
+                        && completed.attempts[0].receipt.is_some(),
+                    "{change}: original model outcome was not retained"
                 );
-                ensure!(fixture.service.host_slots_for_test() == 0);
+                let refused = &turn.steps[1];
                 ensure!(
-                    !joined(&gate)?,
-                    "authority mutation discarded a live MCP worker"
+                    refused.settled
+                        && refused.attempts.is_empty()
+                        && refused.preparation_work.is_empty()
+                        && refused.input_counts.is_empty()
+                        && refused.context_validation.is_none(),
+                    "{change}: rejected origin left unresolved or admitted model work"
                 );
-                // Return true deliberately: denial must come from current authority
-                // at the actual dispatch gate, not from the approval fixture.
-                approval.release.cancel();
-                let (session, outcome) = running.await?;
-                if change == "allowed" {
-                    let completed = outcome?;
-                    ensure!(completed.run.as_ref().is_some_and(|run| run.status
-                        == crate::storage::checkpoint::snapshot::RunStatus::Completed));
-                    ensure!(
-                        endpoint.wire.calls.load(Ordering::SeqCst) == 1 && provider.calls() == 2
-                    );
-                    provider.receive().await?;
-                } else {
-                    if let Err(error) = outcome {
-                        ensure!(
-                            matches!(error.code,
-                        bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope
-                            | bitrouter_ai::core::protocol::ErrorCode::CheckpointUnavailable),
-                            "unexpected post-approval failure: {error:?}"
-                        );
+                ensure!(
+                    endpoint.wire.calls.load(Ordering::SeqCst) == 0,
+                    "{change}: a stale affirmative approval sent tools/call"
+                );
+                ensure!(
+                    provider.calls() == 1,
+                    "{change}: a later model step escaped authorization"
+                );
+            }
+            session.close().await?;
+            let after = saved(&fixture).await?;
+            let retained = &after["journal"]["starts"][&command.invocation_id];
+            ensure!(retained["command"] == serde_json::to_value(&command)?);
+            let result: ToolResult = serde_json::from_value(retained["result"].clone())?;
+            ensure!(
+                result.invocation_id == command.invocation_id
+                    && result.attempt_id == command.attempt_id
+            );
+            ensure!(
+                result.status
+                    == if change == "allowed" {
+                        ToolOutcome::Succeeded
+                    } else {
+                        ToolOutcome::NotExecuted
                     }
-                    ensure!(
-                        endpoint.wire.calls.load(Ordering::SeqCst) == 0,
-                        "{change}: a stale affirmative approval sent tools/call"
-                    );
-                    ensure!(
-                        provider.calls() == 1,
-                        "{change}: a later model step escaped authorization"
-                    );
-                }
-                session.close().await?;
-                let after = saved(&fixture).await?;
-                let retained = &after["journal"]["starts"][&command.invocation_id];
-                ensure!(retained["command"] == serde_json::to_value(&command)?);
-                let result: ToolResult = serde_json::from_value(retained["result"].clone())?;
-                ensure!(
-                    result.invocation_id == command.invocation_id
-                        && result.attempt_id == command.attempt_id
-                );
-                ensure!(
-                    result.status
-                        == if change == "allowed" {
-                            ToolOutcome::Succeeded
-                        } else {
-                            ToolOutcome::NotExecuted
-                        }
-                );
-                ensure!(
-                    after["journal"]["released"] == true,
-                    "admitted cleanup failed after authority changed"
-                );
-                ensure!(joined(&gate)? && fixture.service.host_slots_for_test() == 1);
-                ensure!(fixture.service.current().is_ok());
-                drop(observed);
-                ensure!(
-                    gate.mcp
-                        .get()
-                        .context("owner observer")?
-                        .upgrade()
-                        .is_none()
-                );
-                Ok(())
-            })
-            .await
-            .context("native tool approval deadline")
-            .and_then(|outcome| outcome);
+            );
+            ensure!(
+                after["journal"]["released"] == true,
+                "admitted cleanup failed after authority changed"
+            );
+            ensure!(joined(&gate)? && fixture.service.host_slots_for_test() == 1);
+            ensure!(fixture.service.current().is_ok());
+            drop(observed);
+            ensure!(
+                gate.mcp
+                    .get()
+                    .context("owner observer")?
+                    .upgrade()
+                    .is_none()
+            );
+            Ok(())
+        })
+        .await
+        .context("native tool approval deadline")
+        .and_then(|outcome| outcome);
         drop(release_on_failure);
         gate.release();
         let stopped = endpoint.finish().await;

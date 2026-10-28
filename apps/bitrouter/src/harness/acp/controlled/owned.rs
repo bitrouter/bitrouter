@@ -39,6 +39,8 @@ pub(super) struct Handle {
     stop: CancellationToken,
     finished: watch::Receiver<bool>,
     client: AcpClient,
+    port: Arc<Port>,
+    sessions: Arc<std::sync::Mutex<BTreeSet<String>>>,
     #[cfg(all(test, unix))]
     pub(super) ingress: Arc<crate::harness::acp::up::owned::ingress::Statistics>,
 }
@@ -99,6 +101,68 @@ impl Handle {
         match self.request(Input::Checkpoint(native.to_owned())).await? {
             Reply::Checkpoint(value) => Ok(value),
             _ => anyhow::bail!("controlled checkpoint reply mismatch"),
+        }
+    }
+    async fn human(
+        &self,
+        native: &str,
+        input: crate::tenancy::capture::human::Input,
+    ) -> Result<crate::tenancy::capture::human::Reply> {
+        ensure!(
+            !native.is_empty() && native.len() <= 256,
+            "controlled native ID exceeds bound"
+        );
+        ensure!(
+            !self.stop.is_cancelled() && !*self.finished.borrow(),
+            "controlled session is closing"
+        );
+        ensure!(
+            self.sessions
+                .lock()
+                .map_err(|_| anyhow::anyhow!("session membership unavailable"))?
+                .contains(native),
+            "native session is not associated with this controller"
+        );
+        self.port.human(native, input).await
+    }
+    pub(super) async fn review_checkpoint(
+        &self,
+        native: &str,
+        checkpoint: Option<&str>,
+    ) -> Result<super::CheckpointReview> {
+        ensure!(
+            checkpoint.is_none_or(|id| !id.is_empty() && id.len() <= 256),
+            "controlled checkpoint ID exceeds bound"
+        );
+        use crate::tenancy::capture::human::{Input, Reply};
+        match self
+            .human(native, Input::Review(checkpoint.map(str::to_owned)))
+            .await?
+        {
+            Reply::Review(value) => Ok(*value),
+            _ => anyhow::bail!("controlled human reply mismatch"),
+        }
+    }
+    pub(super) async fn submit_assessment(
+        &self,
+        native: &str,
+        input: crate::core::evolution::scoring::RubricSubmission,
+    ) -> Result<crate::core::evolution::scoring::ScoringReceipt> {
+        use crate::tenancy::capture::human::{Input, Reply};
+        match self.human(native, Input::Submit(input)).await? {
+            Reply::Submitted(value) => Ok(value),
+            _ => anyhow::bail!("controlled human reply mismatch"),
+        }
+    }
+    pub(super) async fn retract_assessment(
+        &self,
+        native: &str,
+        input: crate::acp_trajectory::checkpoint::types::RevisionInput,
+    ) -> Result<crate::acp_trajectory::checkpoint::types::AssessmentRevision> {
+        use crate::tenancy::capture::human::{Input, Reply};
+        match self.human(native, Input::Retract(input)).await? {
+            Reply::Retracted(value) => Ok(value),
+            _ => anyhow::bail!("controlled human reply mismatch"),
         }
     }
     pub(super) async fn shutdown(&self) -> Result<()> {
@@ -175,6 +239,11 @@ pub(super) async fn open(
     let slot = service
         .host_slot(prepared.binding.authority())
         .map_err(|_| anyhow::anyhow!("controlled host slot unavailable"))?;
+    if prepared.binding.block_profile().is_some() {
+        service
+            .register_capture(&slot, &prepared.binding)
+            .map_err(|_| anyhow::anyhow!("controlled Block binding unavailable"))?;
+    }
     let finished = slot.finished();
     let waiting = stop.clone().drop_guard();
     let (commands, receiver) = mpsc::channel(1);
@@ -259,6 +328,7 @@ async fn serve(custody: &mut Custody, input: OwnerInput) -> Result<()> {
         mut receiver,
         reply,
     } = input;
+    let sessions = Arc::new(std::sync::Mutex::new(BTreeSet::new()));
     let opened = async {
         custody.binding.check().map_err(|_| anyhow::anyhow!("controlled authority unavailable"))?;
         ensure!(!stop.is_cancelled(), "controlled opener cancelled");
@@ -280,14 +350,13 @@ async fn serve(custody: &mut Custody, input: OwnerInput) -> Result<()> {
         custody.port.initialized().await?;
         custody.binding.check().map_err(|_| anyhow::anyhow!("controlled authority unavailable"))?;
         ensure!(!stop.is_cancelled(), "controlled opener cancelled");
-        Ok::<_, anyhow::Error>(ControlledSession { handle: Handle { commands, capacity: Arc::new(Semaphore::new(1)), stop: stop.clone(), finished, client: connected, #[cfg(all(test, unix))] ingress: custody.process.ingress.clone() } })
+        Ok::<_, anyhow::Error>(ControlledSession { handle: Handle { commands, capacity: Arc::new(Semaphore::new(1)), stop: stop.clone(), finished, client: connected, port: custody.port.clone(), sessions: sessions.clone(), #[cfg(all(test, unix))] ingress: custody.process.ingress.clone() } })
     }.await;
     let ready = opened.is_ok();
     if reply.send(opened).is_err() {
         stop.cancel();
     }
     if ready {
-        let mut sessions = BTreeSet::new();
         loop {
             let command = tokio::select! { biased; () = stop.cancelled() => break, command = receiver.recv() => command };
             let Some(command) = command else {
@@ -298,7 +367,7 @@ async fn serve(custody: &mut Custody, input: OwnerInput) -> Result<()> {
                 reply,
                 _capacity,
             } = command;
-            let work = operation(custody, &launch, input, &mut sessions);
+            let work = operation(custody, &launch, input, &sessions);
             tokio::pin!(work);
             let result = tokio::select! {
                 biased;
@@ -362,6 +431,14 @@ async fn serve(custody: &mut Custody, input: OwnerInput) -> Result<()> {
         }
     }
     custody.port.finish().await?;
+    // This proof is created only after the actual client/controller/reaper joins
+    // AND the original Port settlement. Protocol closed strings cannot mint it.
+    if launch.options.mcp_servers.is_empty() {
+        crate::tenancy::capture::retain_stopped(super::CleanupProof {
+            binding: custody.binding.clone(),
+        })
+        .await?;
+    }
     Ok(())
 }
 
@@ -369,7 +446,7 @@ async fn operation(
     custody: &mut Custody,
     launch: &LocalControllerLaunch,
     input: Input,
-    sessions: &mut BTreeSet<String>,
+    sessions: &std::sync::Mutex<BTreeSet<String>>,
 ) -> Result<Reply> {
     custody
         .binding
@@ -381,7 +458,14 @@ async fn operation(
         .context("controlled client unavailable")?;
     let result = match input {
         Input::New(cwd) => {
-            ensure!(sessions.len() < 16, "controlled session limit reached");
+            ensure!(
+                sessions
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("session membership unavailable"))?
+                    .len()
+                    < 16,
+                "controlled session limit reached"
+            );
             let ids = client
                 .new_session(cwd, launch.options.mcp_servers.clone())
                 .await?;
@@ -418,15 +502,25 @@ async fn operation(
             client
                 .set_session_config_option(&ids.acp_session_id, "model", custody.binding.model())
                 .await?;
+            custody
+                .binding
+                .check()
+                .map_err(|_| anyhow::anyhow!("controlled authority rejected"))?;
             ensure!(
-                sessions.insert(ids.acp_session_id.clone()),
+                sessions
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("session membership unavailable"))?
+                    .insert(ids.acp_session_id.clone()),
                 "harness reused a native ID"
             );
             Reply::New(ids.acp_session_id)
         }
         Input::Prompt(native, text) => {
             ensure!(
-                sessions.contains(&native),
+                sessions
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("session membership unavailable"))?
+                    .contains(&native),
                 "native session is not associated with this controller"
             );
             client.prompt(&native, &text).await?;
@@ -434,7 +528,10 @@ async fn operation(
         }
         Input::Checkpoint(native) => {
             ensure!(
-                sessions.contains(&native),
+                sessions
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("session membership unavailable"))?
+                    .contains(&native),
                 "native session is not associated with this controller"
             );
             Reply::Checkpoint(custody.port.checkpoint(&native).await?.map(|value| {

@@ -1,10 +1,14 @@
 //! Positive ownership through the persistent harness and the actual App pipeline.
 use super::*;
 mod authority;
+#[cfg(unix)]
+mod callbacks;
+pub(super) mod choice;
 mod consumer;
 #[cfg(unix)]
 mod custody;
 mod discovery;
+mod experiment;
 mod input_count;
 mod server;
 mod waits;

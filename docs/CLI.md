@@ -580,14 +580,12 @@ local `--config` and `--socket` flags before opening local configuration,
 environment, or metering state.
 
 Remote read actions are `status`, `requests`, `models`, `route`, `providers
-list`, `observe status`, `policy status`, `policy show`, and `agents list`, as
-well as the operations-only `code` surface. A remote policy command defaults to
-`--view active`; local policy reads default to `--view disk`. Code requests the
-active policy explicitly and opens named policy detail through a temporary
-picker and inspector.
+list`, `observe status`, `policy status`, `policy show`, and `agents list`.
+A remote policy command defaults to `--view active`; local policy reads default
+to `--view disk`.
 
 `agents list` is a catalog read only. `agents list --remote`, agent checks and
-launches, ACP sessions, native harness UIs, and `code <agent>` stay local. The
+launches, ACP sessions, and native execution commands stay local. The
 remote host mutation is the explicit `reload` action; it reloads server-owned
 files and never uploads config or forwards the client's environment. The separate
 `tenancy` command group prepares and activates typed tenant configuration through
@@ -601,7 +599,8 @@ reports, which use the redacted typed read contracts.
 
 ## Tenant configuration over HTTP
 
-`bro tenancy` is available in the base gateway build. It is a client adapter;
+The HTTP subcommands of `bro tenancy` are available in the base gateway build.
+They are client adapters;
 the server must implement the selected tenancy operation. Choose either a named
 context or an explicit `--endpoint URL --token-env NAME` pair on each remote
 command. Mixing them is an error. There is no default target, local daemon
@@ -2641,3 +2640,125 @@ Skills discovery supplies metadata and versions without prompt injection.
 See [BRO harness resources](BRO_HARNESS_RESOURCES.md).
 
 `bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).
+
+
+## Offline DB evidence (Unix SQLite only)
+
+`bro tenancy offline` operates on explicitly supplied local paths. It does not
+load host configuration, discover a daemon, contact HTTP, migrate a source, or
+bootstrap an installation. Stop all source writers before capture. The existing
+canonical exclusive DB ownership lock refuses participating live writers,
+including symlink aliases; hard-linked DB files are rejected. Old/external
+writers that do not participate in this lock still require an external fence.
+
+```sh
+bro tenancy offline snapshot --database /absolute/state/bitrouter.db --bundle /absolute/new-db-evidence
+bro tenancy offline inventory --bundle /absolute/new-db-evidence
+bro tenancy offline verify --bundle /absolute/new-db-evidence --evidence-digest <digest-from-snapshot>
+```
+
+The bundle path must not exist. Preserve the returned `evidence_digest` outside
+the bundle and pass its exact64 lowercase hexadecimal characters to `verify`.
+Inventory recomputes the actual contents but does not authenticate the origin of
+a self-contained bundle. Verification compares the supplied evidence anchor,
+private profile, file digest and actual typed SQL inventory. Neither operation
+grants execution, migration, owner assignment or recovery authority.
+
+The snapshot, inventory and verify results have `scope: sqlite_database_only`, `complete: false` and
+`cutover_ready: false`. This is **not a full backup** or an M0 MigrationManifest.
+External OAuth files, workspace/harness state and external-effect outcomes are
+unassessed, excluded and unfenced. Source build/commit are honestly null; the
+report separately identifies the inspecting binary. Missing installation or
+ledger is recorded as null, never created or represented as an empty ledger.
+No configuration input is accepted; `--config`, remote endpoint/token flags and
+`--context` are rejected. If a deployment selects external state, this profile
+cannot qualify that deployment for cutover; preserve it separately under a
+qualified operator procedure. Never use a newly introduced sidecar as evidence
+that an old OAuth writer has stopped.
+
+The new directory is0700; `snapshot.sqlite`, `inventory.key`, `evidence.json`
+and `READY` are0600. The SQLite copy and inventory key are sensitive; reports
+contain metadata, counts and keyed digests, not raw records/SQL definitions or
+secrets. Keep the whole secured bundle together. A failed or interrupted command before publication
+leaves `INCOMPLETE`; inventory/verify refuse it. Do not remove that marker or
+resume the output. Inspect/quarantine it and select a new directory for retry.
+
+The private v1 profile bounds logical/file DB size to512MiB,256 tables,2048 schema
+objects,128 columns/table,1MiB/schema SQL,16MiB/cell,32MiB/row,256MiB inspected
+values/schema bytes,1,000,000 rows and2MiB evidence JSON. Exceeding a bound fails
+without truncating counts. Virtual/shadow tables and generated/hidden columns
+are unsupported. Ordinary views/triggers are hashed as schema, never executed.
+Inventory frames SQLite null/integer/real/text/blob distinctly, preserves
+duplicates, and hashes the sorted multiset of keyed row digests. Text/blob bytes
+are not parsed as JSON. This is typed SQL-value preservation, not physical-page
+or hidden-rowid preservation; SQLite VACUUM may change physical layout.
+
+Transfer, new credentials, OAuth transfer, operation-capacity recovery and
+034/035/036-specific recovery are outside snapshot, inventory and verify. A
+successful exit only means the requested **partial DB evidence** operation completed.
+
+The offline inspector qualifies source definitions before integrity checking or
+copying. Views/triggers, expression/partial indexes and executable schema
+expressions outside its bounded literal/comparison profile are refused. Existing
+BitRouter continuation CHECK constraints remain supported. Per-connection VM
+work is bounded; a cancelled operation retains its source owner through actual
+driver cleanup. Unconfirmed connection initialization or close retains the
+canonical source fence until process exit; it is not a successful snapshot.
+
+### Read-only retired receipt audit
+
+`bro tenancy offline audit --archive DIRECTORY --projection NEW_DIRECTORY --evidence-digest SHA256 --control-config FILE --listen 127.0.0.1:PORT` serves only the existing authenticated receipt GET/page routes for the archive's original installation. The explicit control file is bounded JSON with a `credentials` array of existing `id`, `token_env` and `scopes` entries; each requires `control:tenancy`. Bearer values are read only from those named environment variables, never command arguments. Example:
+
+```json
+{"credentials":[{"id":"archive-auditor","token_env":"ARCHIVE_CONTROL_TOKEN","scopes":["control:tenancy"]}]}
+```
+
+Use a private mode0600 control file and a mode0700 verified M4a bundle. The projection must be a new directory outside that bundle; its verified DB copy and canonical ownership sidecar do not alter the archive. Only Unix local SQLite with the exact supported current migration ledger and bounded schema/inventory is accepted. No source migration, missing-identity initialization, configuration loading, maintenance, credential refresh, provider call or command route runs. `--context`, endpoint/token flags and ambient host configuration are not audit inputs. The listener must be loopback; HTTP/2 follows the existing optional `http2` feature.
+
+Every receipt request supplies `Authorization: Bearer ...` and the mandatory old `Bitrouter-Installation-Id`. Responses use `Cache-Control: no-store`. The first profile authenticates only the explicitly configured installation-operator control credentials; archived tenant ingress tokens are not audit credentials. Unknown receipt IDs are 404; wrong installation is a typed mismatch. Other management, inference, capability discovery and mutation routes are absent.
+
+The running command emits one nonsecret readiness report containing the bound address, old installation and evidence digest. SIGINT/SIGTERM stops admission and retains each accepted read until its actual rollback and worker close are acknowledged. A dropped HTTP/CLI waiter cannot release the SQL owner. Unconfirmed bootstrap/close retains the canonical lease until process exit; elapsed time is not a cleanup witness. Limits: 32 sockets with a 60-second maximum connection lifetime, eight reads including queued/reply-held work, five-second read budget, up to 100 IDs/page and 8 MiB encoded response bytes. Reply buffers retain their read slot through transport clones and slices. Preparation observation is bounded to 120 seconds; cleanup observation is bounded to 30 seconds without aborting the owner.
+
+The bundle remains `sqlite_database_only`, `complete=false`, `cutover_ready=false`. This command is receipt audit, not recovery verification, new-installation provisioning or a full backup. External credentials/workspace state and unknown upstream effects remain unassessed. Operators must maintain retirement of the source writers; a new sidecar does not fence arbitrary old binaries. Requalify corrected M4a and the final archive consumer before shipping this profile.
+
+#### Offline mapping review
+
+`bro tenancy offline map --bundle DIRECTORY --evidence-digest SHA256 --manifest FILE --report NEW_DIRECTORY` validates the frozen M0 MigrationManifest and binds its source snapshot to a verified DB-only bundle. Inputs must be private regular files; no named context, host config or network lookup is used. This local profile accepts at most 8 MiB, 4096 mappings, 4096 merge approvals and 16 examples per mapping. Each declared disposition total must fit an exact JSON integer.
+
+The new secured report directory records the original manifest and nonsecret validation summary. Duplicate mapping keys, missing or extraneous merge approvals, unresolved owners with grants, foreign observed installations and wrong snapshot digests fail. Same text in different owner namespaces remains distinct. The RECORDED marker only seals this review packet; it is never bundle READY or an execution capability.
+
+Counts and evidence inside the manifest remain operator claims. The command does **not** authenticate external ownership/producer evidence, count per-owner source records, backfill rows, provision a target or retire writers. Missing installation identity remains explicitly unobserved. All completion/cutover flags stay false. Historical family codecs, explicit quarantine/backfill and operational cutover/rollback verification are still required.
+
+### Bounded Legacy Eval import (Core, Unix SQLite)
+
+`bro tenancy offline eval-inventory --bundle DIRECTORY --evidence-digest SHA256 --source-kind local_user --report NEW_DIRECTORY` validates the four-table Legacy Eval graph and records exact keyed owner partitions. `shared_user` and `native_owner` are explicit alternative source namespaces, never inferred from owner names. Wildcard snapshots are unresolved quarantine.
+
+`bro tenancy offline eval-backfill --plan FILE --plan-digest SHA256 --report NEW_DIRECTORY` consumes an independently anchored private `bitrouter.offline.eval-backfill.v1` plan. It requires a stopped, freshly Service-provisioned destination with migration038 already applied, actual current tenant-wide admin bindings, and exact fresh provisioning history. It performs no provisioning, schema migration or counter reset. Inputs use explicit absolute paths; there is no context lookup or network call. See [the private-format profile](RESOURCE_TENANCY_EVAL_IMPORT.md) for plan fields and the required operator trust boundary.
+
+The complete source/target inventory is limited to 4096 rows, 32 MiB typed values and 1 MiB per cell; the transformed target must also fit those bounds. An 8 MiB M0 mapping manifest must match every Eval partition. Only selected Eval rows are inserted into an empty destination graph. All other source tables and unresolved/quarantined Eval partitions remain in external immutable evidence. Snapshot IDs, original root and manifest bytes are preserved through exact private versioned provenance; ordinary owned readers require that record to validate an imported Legacy root. No tenant authority is derived from source metadata.
+
+Success publishes a secured `RECORDED` packet only after explicit COMMIT, exact full-content verification and actual SQLite worker close. It remains `complete=false` and `cutover_ready=false`. A failed/abandoned reply may follow a committed import; retain any `INCOMPLETE` packet and keep the destination stopped for explicit reconciliation. Do not retry under another plan or merge history. Unknown SQL outcome/cleanup retains the canonical file fence until process exit. External writer retirement, target restart/readback, ingress release and compatible rollback are separate M4 gates. Production dispatch and strict-receipt flags are unchanged.
+
+### Fresh installation recovery verification (Unix SQLite)
+
+`bro tenancy offline recover --plan FILE --report NEW_DIRECTORY` verifies an
+anchored retired archive against an already stopped, freshly provisioned target.
+The private plan names the actual new installation, complete provisioning results,
+approved static definitions, selected external files, and anchored operator
+retirement evidence. All paths are explicit; no ambient configuration or daemon
+discovery supplies inputs. The report directory must be new.
+
+Use normal Service/API/SDK operations to provision the target and fresh ingress
+credentials first. This command reads the existing records and authenticates the
+static resource/configuration closure with the explicitly named wrapping-key
+environment variable. It does not provision, migrate, transfer keys/history,
+retry uncertain effects, or release ingress. The original source namespace and
+operation counters remain in the archive. See [the recovery profile](RESOURCE_TENANCY_RECOVERY.md)
+for private plan fields, file and work limits, and the supported static closure.
+
+The secured report retains `complete=false`, `cutover_ready=false`,
+`external_writers_independently_excluded=false`, `history_transferred=false`,
+and `upstream_effects_resolved=false`. Matching retirement evidence is an operator
+attestation, not proof of process exit. Keep source retirement and target ingress
+fences in place. `VERIFIED` authenticates report bytes only and requires an absent
+`INCOMPLETE` marker; it does not authorize runtime work.

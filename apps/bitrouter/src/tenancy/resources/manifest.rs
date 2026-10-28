@@ -37,12 +37,23 @@ pub(super) enum Definition {
         credentials: Vec<CredentialBinding>,
         #[serde(default)]
         exploration: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        core_choice: Option<Box<super::core_choice::Profile>>,
+        /// Explicit paid assessment; absent preserves every compiler-v1 byte.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        assessment: Option<AssessmentProfile>,
+        /// Explicit ACP Block experiment; absent retains the old import bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        block: Option<Box<super::block::Profile>>,
     },
     Policy {
         document: PolicyLock,
         name: String,
         #[serde(default)]
         dependencies: Vec<ResourceRef>,
+    },
+    Checkpoint {
+        evidence: super::checkpoint::Evidence,
     },
     Credential {
         credential: Credential,
@@ -54,6 +65,19 @@ pub(super) enum Definition {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         oauth: Option<crate::tenancy::oauth::profile::Profile>,
     },
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AssessmentProfile {
+    pub profile: AssessmentVersion,
+    pub route: ResourceRef,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(super) enum AssessmentVersion {
+    #[serde(rename = "assessment_v1")]
+    V1,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -81,8 +105,22 @@ impl Import {
                 selector,
                 credentials,
                 exploration,
+                core_choice,
+                assessment,
+                block,
+                policy,
                 ..
             } => {
+                if let Some(profile) = block {
+                    profile.validate(selector)?;
+                    ensure!(
+                        policy.is_none() && core_choice.is_none() && exploration.is_empty(),
+                        "Block route requires two static arms without policy or CoreChoice"
+                    );
+                }
+                if let Some(profile) = core_choice {
+                    profile.validate(&self.reference)?;
+                }
                 ensure!(
                     !selector.is_empty() && selector.len() <= 512,
                     "invalid route selector"
@@ -107,6 +145,16 @@ impl Import {
                     exploration.iter().all(|s| !s.is_empty() && s.len() <= 512),
                     "invalid exploration selector"
                 );
+                if let Some(profile) = assessment {
+                    ensure!(
+                        profile.route.resource_kind == ResourceKind::Route
+                            && profile.route != self.reference
+                            && (profile.route.owner_kind != OwnerKind::Tenant
+                                || (self.reference.owner_kind == OwnerKind::Tenant
+                                    && profile.route.owner_id == self.reference.owner_id)),
+                        "invalid assessment route binding"
+                    );
+                }
                 ResourceKind::Route
             }
             Definition::Policy {
@@ -133,6 +181,10 @@ impl Import {
                     "invalid policy dependency kind"
                 );
                 ResourceKind::Policy
+            }
+            Definition::Checkpoint { evidence } => {
+                evidence.validate(&self.reference)?;
+                ResourceKind::Checkpoint
             }
             Definition::Credential {
                 credential,
@@ -184,6 +236,18 @@ impl Import {
 }
 
 impl Definition {
+    pub(super) fn requires_envelope_v2(&self) -> bool {
+        match self {
+            Self::Route {
+                core_choice,
+                assessment,
+                block,
+                ..
+            } => core_choice.is_some() || assessment.is_some() || block.is_some(),
+            _ => false,
+        }
+    }
+
     pub fn policy_reference(&self) -> Option<&ResourceRef> {
         match self {
             Self::Route { policy, .. } => policy.as_ref(),
@@ -196,13 +260,16 @@ impl Definition {
             Self::Route {
                 policy,
                 credentials,
+                core_choice,
                 ..
             } => policy
                 .iter()
                 .cloned()
                 .chain(credentials.iter().map(|binding| binding.credential.clone()))
+                .chain(core_choice.iter().map(|profile| profile.route.clone()))
                 .collect(),
             Self::Policy { dependencies, .. } => dependencies.clone(),
+            Self::Checkpoint { evidence } => evidence.dependencies(),
             Self::Credential { .. } => Vec::new(),
         };
         let mut seen = HashSet::new();

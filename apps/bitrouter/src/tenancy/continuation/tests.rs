@@ -98,6 +98,7 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
         let proof = Proof::new(live.clone());
         let gate = proof.hold(phase);
         let worker = Worker {
+            startup: None,
             oauth: Arc::new(crate::tenancy::oauth::State::default()),
             db: db.clone(),
             snapshot: Arc::new(RwLock::new(Arc::new(initial))),
@@ -107,6 +108,8 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
             resources,
             proof: proof.clone(),
             admission: crate::tenancy::admission::Admission::new(),
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+            observe_capacity: false,
             http_continuation: crate::continuation::tenant::state::State::new(
                 &crate::config::ContinuationConfig::default(),
                 uuid::Uuid::new_v4().to_string(),
@@ -140,13 +143,12 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
         tokio::time::timeout(Duration::from_secs(5), task).await??;
         proof.ensure_clean()?;
         let committed = phase != Phase::RollingBack;
+        // Successful key bootstrap is followed by a read-only learning-readiness
+        // transaction. Its acknowledged rollback is the final proof disposition;
+        // the durable epoch below witnesses the preceding bootstrap commit.
         ensure!(
-            proof.disposition()
-                == if committed {
-                    Disposition::Committed
-                } else {
-                    Disposition::RolledBack
-                }
+            proof.disposition() == Disposition::RolledBack,
+            "startup left an unsettled final transaction for {phase:?}"
         );
         ensure!(has_epoch(&db).await? == committed);
         ensure!(

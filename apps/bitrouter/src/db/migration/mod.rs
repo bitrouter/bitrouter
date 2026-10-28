@@ -48,8 +48,16 @@ mod m20240101_000034_continuation_storage_scope;
 mod m20240101_000035_execution_receipts;
 mod m20240101_000036_native_harness_scope;
 mod m20240101_000037_owned_oauth;
+mod m20240101_000038_eval_import_provenance;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
+
+/// Read-only compatibility gate for the retired SQLite receipt reader.
+pub(crate) async fn validate_receipt_archive(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000035_execution_receipts::validate_archive(db).await
+}
 
 /// The bitrouter schema migrator — owns the ordered list of every
 /// migration the binary ships.
@@ -95,6 +103,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000035_execution_receipts::Migration),
             Box::new(m20240101_000036_native_harness_scope::Migration),
             Box::new(m20240101_000037_owned_oauth::Migration),
+            Box::new(m20240101_000038_eval_import_provenance::Migration),
         ]
     }
 }

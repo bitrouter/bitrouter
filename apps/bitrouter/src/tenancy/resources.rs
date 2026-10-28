@@ -14,10 +14,16 @@
 //! and candidates later filtered by protocol/preferences). These import quotas
 //! do not claim runtime execution or OAuth qualification.
 
+pub(crate) mod block;
+mod checkpoint;
 mod compiler;
+mod core_choice;
 pub(crate) mod execution;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) mod learned;
 mod manifest;
 mod oauth;
+mod recovery;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -52,7 +58,7 @@ const MAX_RESOURCES: usize = 256;
 const MAX_CLOSURE: usize = 4096;
 
 /// One installation's explicitly supplied wrapping key. No default is generated.
-pub(crate) struct Resources {
+pub(super) struct Resources {
     installation: InstallationId,
     key: Option<DeploymentKey>,
 }
@@ -67,9 +73,49 @@ pub(crate) struct CompiledConfiguration {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Envelope {
+    #[serde(default = "Envelope::v1", skip_serializing_if = "Envelope::is_v1")]
+    format: u32,
     document: Configuration,
     routes: Vec<compiler::RouteEnvelope>,
     artifacts: Vec<Artifact>,
+}
+
+impl Envelope {
+    fn v1() -> u32 {
+        1
+    }
+
+    fn is_v1(format: &u32) -> bool {
+        *format == 1
+    }
+
+    fn format(artifacts: &[Artifact]) -> u32 {
+        if artifacts
+            .iter()
+            .any(|artifact| matches!(artifact.definition, Definition::Checkpoint { .. }))
+        {
+            return 3;
+        }
+        if artifacts
+            .iter()
+            .any(|artifact| artifact.definition.requires_envelope_v2())
+        {
+            2
+        } else {
+            1
+        }
+    }
+
+    fn validate_format(&self) -> Result<()> {
+        // Format 1 is deliberately omitted: historical plaintext, AAD and
+        // compiler identifiers stay exact. Old deny-unknown-fields readers
+        // reject format 2, whose independent profiles may coexist.
+        ensure!(
+            self.format == Self::format(&self.artifacts),
+            "unsupported retained profile format"
+        );
+        Ok(())
+    }
 }
 
 /// Distinguish bounded execution projection failures from invalid compositions
@@ -138,6 +184,25 @@ impl Resources {
             stored.authority_revision,
             validated,
         )
+    }
+
+    /// Same authenticated decoder, charging the original borrowed bootstrap
+    /// operation before each target/native expansion. It grants no authority.
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn open_paid_recovery(
+        &self,
+        stored: &super::configuration_store::StoredConfiguration,
+        budget: &crate::storage::operation_budget::OperationBudget<'_>,
+    ) -> Result<execution::RetainedExecutionRevision> {
+        let validated = validation::compiled_with_operation(self, stored, Some(budget))?;
+        execution::RetainedExecutionRevision::new(
+            self.installation.clone(),
+            stored.revision.tenant_id.clone(),
+            stored.revision.revision_id.clone(),
+            stored.authority_revision,
+            validated,
+        )
+        .map_err(|_| anyhow::anyhow!("paid retained identifier normalization failed"))
     }
 
     /// Read one exact separately owned static credential slot. No ambient
@@ -389,16 +454,18 @@ impl Resources {
         }
         // Validate the complete dependency graph before the import becomes visible.
         for resource in &manifest.resources {
-            self.closure(db, std::slice::from_ref(&resource.reference))
+            let closure = self
+                .closure(db, std::slice::from_ref(&resource.reference))
                 .await
                 .map_err(|_| anyhow::anyhow!("imported resource dependency unavailable"))?;
+            core_choice::validate_graph(&closure, &[], true)?;
         }
         Ok(())
     }
 
     pub(crate) async fn compile(
         &self,
-        db: &DatabaseConnection,
+        db: &impl ConnectionTrait,
         tenant: &TenantId,
         revision: &RevisionId,
         document: &Configuration,
@@ -452,11 +519,12 @@ impl Resources {
             // No retained definitions, keys or dispatch namespace exist in this case.
             json!({"kind": "empty", "binding": binding})
         } else {
-            let artifacts = artifacts
+            let artifacts: Vec<_> = artifacts
                 .into_iter()
                 .filter(|artifact| !matches!(artifact.definition, Definition::Credential { .. }))
                 .collect();
             let envelope = Envelope {
+                format: Envelope::format(&artifacts),
                 document: document.clone(),
                 routes,
                 artifacts,
@@ -486,6 +554,110 @@ impl Resources {
             dependencies,
             compiler_version: COMPILER_VERSION.into(),
         })
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) async fn recovery_static_credentials(
+        &self,
+        db: &impl ConnectionTrait,
+        references: &[ResourceRef],
+        budget: &super::session::recovery::Budget,
+        check: &(dyn Fn() -> Result<()> + Sync),
+    ) -> Result<()> {
+        for reference in references.iter().filter(|r| {
+            r.resource_kind == bitrouter_ai::tenancy::authority::ResourceKind::Credential
+        }) {
+            check()?;
+            // The existing artifact decoder caps the encrypted row before transfer.
+            // Reserve its maximum transfer/decode allowance before calling it.
+            budget.charge(
+                1,
+                MAX_ARTIFACT_BYTES
+                    .checked_mul(2)
+                    .ok_or_else(|| anyhow::anyhow!("artifact budget overflow"))?,
+            )?;
+            let artifact = self
+                .load(db, reference)
+                .await
+                .map_err(|_| anyhow::anyhow!("recovery credential unavailable"))?;
+            check()?;
+            ensure!(
+                matches!(
+                    artifact.definition,
+                    manifest::Definition::Credential {
+                        credential:
+                            crate::gateway::providers::auth::credentials::Credential::ApiKey { .. },
+                        oauth: None,
+                        oauth_generation: 0,
+                    }
+                ),
+                "recovery requires immutable static credentials"
+            );
+        }
+        Ok(())
+    }
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) async fn recovery_static_profile(
+        &self,
+        db: &impl ConnectionTrait,
+        references: &[ResourceRef],
+        check: &(dyn Fn() -> Result<()> + Sync),
+    ) -> Result<bool> {
+        for reference in references.iter().filter(|r| {
+            r.resource_kind == bitrouter_ai::tenancy::authority::ResourceKind::Credential
+        }) {
+            check()?;
+            let artifact = self
+                .load(db, reference)
+                .await
+                .map_err(|_| anyhow::anyhow!("native credential profile unavailable"))?;
+            check()?;
+            if !matches!(
+                artifact.definition,
+                manifest::Definition::Credential {
+                    credential: crate::gateway::providers::auth::credentials::Credential::ApiKey { .. },
+                    oauth: None,
+                    oauth_generation: 0,
+                }
+            ) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) async fn paid_recovery_static(
+        &self,
+        db: &impl ConnectionTrait,
+        reference: &ResourceRef,
+        budget: &crate::storage::operation_budget::OperationBudget<'_>,
+    ) -> Result<()> {
+        // Charge the existing authenticated decoder's maximum before transfer.
+        budget.charge(
+            1,
+            MAX_ARTIFACT_BYTES
+                .checked_mul(2)
+                .ok_or_else(|| anyhow::anyhow!("paid credential bound"))?,
+        )?;
+        let artifact = self
+            .load(db, reference)
+            .await
+            .map_err(|_| anyhow::anyhow!("paid retained credential unavailable"))?;
+        budget.check()?;
+        ensure!(
+            artifact.reference == *reference
+                && matches!(
+                    artifact.definition,
+                    manifest::Definition::Credential {
+                        credential:
+                            crate::gateway::providers::auth::credentials::Credential::ApiKey { .. },
+                        oauth: None,
+                        oauth_generation: 0,
+                    }
+                ),
+            "paid recovery requires immutable static credential"
+        );
+        Ok(())
     }
 
     async fn load(

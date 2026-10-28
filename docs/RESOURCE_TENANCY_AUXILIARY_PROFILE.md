@@ -2,8 +2,10 @@
 
 These consumers extend the existing execution owner and authority transaction
 actor. They add no public endpoint, public authority type, service or Cargo
-feature. Production tenant dispatch, revision-bound dispatch and strict receipts
-remain disabled until the remaining implementation and qualification gates pass.
+feature. Dispatch and strict receipts follow the supported opt-in, single-instance
+Unix SQLite [Service eligibility](RESOURCE_TENANCY_IMPLEMENTATION.md#current-local-dispatch-eligibility).
+Source-pinned local evidence does not establish final aggregate, platform or
+performance acceptance; see [remaining qualification](RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
 
 ## OAuth credential lineage
 

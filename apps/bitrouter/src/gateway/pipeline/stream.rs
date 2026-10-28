@@ -306,7 +306,7 @@ impl UsagePricing {
             .map_or(&self.base, |tier| &tier.bracket)
     }
 
-    fn nominal_cost(&self, usage: &Usage) -> Option<num_rational::BigRational> {
+    pub(crate) fn nominal_cost(&self, usage: &Usage) -> Option<num_rational::BigRational> {
         if usage.web_search_count > 0 {
             return None;
         }

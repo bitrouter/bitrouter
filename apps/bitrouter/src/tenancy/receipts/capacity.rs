@@ -33,6 +33,12 @@ pub(in crate::tenancy) struct Accounting {
     pub free: u64,
     pub bytes: u64,
     reserved: u64,
+    // Decompose the shared reservation without allocating execution slots for
+    // stopped-native repair. These charges remain subject to the same limits.
+    #[cfg(all(feature = "core", feature = "harness"))]
+    repair_reserved: u64,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    repair_potential: usize,
     unknown: BTreeMap<(TenantId, ExecutionId), Unknown>,
     potential_unknown: BTreeMap<TenantId, usize>,
 }
@@ -44,6 +50,10 @@ impl Default for Accounting {
             free: u64::MAX,
             bytes: 0,
             reserved: 0,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            repair_reserved: 0,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            repair_potential: 0,
             unknown: BTreeMap::new(),
             potential_unknown: BTreeMap::new(),
         }
@@ -51,6 +61,168 @@ impl Default for Accounting {
 }
 
 impl Accounting {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn reserve_repair(
+        &mut self,
+        tenant: &TenantId,
+        bytes: u64,
+        rows: usize,
+    ) -> Result<u64, ErrorCode> {
+        let charged = u64::try_from(rows)
+            .ok()
+            .and_then(|n| n.checked_mul(ROW_OVERHEAD))
+            .and_then(|n| n.checked_add(bytes))
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        let potential = self
+            .potential_unknown
+            .values()
+            .try_fold(0usize, |a, n| a.checked_add(*n))
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        let instance = self
+            .unknown
+            .len()
+            .checked_add(potential)
+            .and_then(|n| n.checked_add(rows));
+        let tenant_count = self
+            .unknown
+            .keys()
+            .filter(|(key, _)| key == tenant)
+            .count()
+            .checked_add(self.potential_unknown.get(tenant).copied().unwrap_or(0))
+            .and_then(|n| n.checked_add(rows));
+        if self.fenced
+            || self.free < ADMISSION_FLOOR
+            || self
+                .reserved
+                .checked_add(charged)
+                .and_then(|n| n.checked_add(MAINTENANCE_FLOOR))
+                .is_none_or(|n| n > self.free)
+            || self
+                .bytes
+                .checked_add(self.reserved)
+                .and_then(|n| n.checked_add(charged))
+                .is_none_or(|n| n > HIGH_WATER)
+            || instance.is_none_or(|n| n > UNKNOWN_INSTANCE)
+            || tenant_count.is_none_or(|n| n > UNKNOWN_TENANT)
+        {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        let repair_reserved = self
+            .repair_reserved
+            .checked_add(charged)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        let repair_potential = self
+            .repair_potential
+            .checked_add(rows)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        self.reserved += charged;
+        self.repair_reserved = repair_reserved;
+        self.repair_potential = repair_potential;
+        *self.potential_unknown.entry(tenant.clone()).or_default() += rows;
+        Ok(charged)
+    }
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn finish_repair(
+        &mut self,
+        tenant: &TenantId,
+        charged: u64,
+        rows: usize,
+        committed: Option<&[(ExecutionId, chrono::DateTime<chrono::Utc>)]>,
+    ) -> Result<(), ErrorCode> {
+        let reserved = self
+            .reserved
+            .checked_sub(charged)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let repair_reserved = self
+            .repair_reserved
+            .checked_sub(charged)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let repair_potential = self
+            .repair_potential
+            .checked_sub(rows)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let pending = self
+            .potential_unknown
+            .get(tenant)
+            .copied()
+            .unwrap_or(0)
+            .checked_sub(rows)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let bytes = if let Some(entries) = committed {
+            if entries.len() != rows
+                || entries
+                    .iter()
+                    .any(|(id, _)| self.unknown.contains_key(&(tenant.clone(), id.clone())))
+            {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            self.bytes
+                .checked_add(charged)
+                .ok_or(ErrorCode::AuthorityUnavailable)?
+        } else {
+            self.bytes
+        };
+        self.reserved = reserved;
+        self.repair_reserved = repair_reserved;
+        self.repair_potential = repair_potential;
+        self.bytes = bytes;
+        if pending == 0 {
+            self.potential_unknown.remove(tenant);
+        } else {
+            self.potential_unknown.insert(tenant.clone(), pending);
+        }
+        if let Some(entries) = committed {
+            for (id, at) in entries {
+                self.unknown.insert(
+                    (tenant.clone(), id.clone()),
+                    Unknown {
+                        due: *at + chrono::Duration::minutes(15),
+                        escalated: false,
+                    },
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Fixed aggregate under the caller's existing admission guard; no clock or mutation.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub(in crate::tenancy) fn observed(&self, active: u64) -> Option<(u64, u64, u64, u64)> {
+        if self.potential_unknown.len() > 128 {
+            return None;
+        }
+        let potential = self
+            .potential_unknown
+            .values()
+            .try_fold(0u64, |total, n| total.checked_add(u64::try_from(*n).ok()?))?;
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let (repair_reserved, repair_potential) = (
+            self.repair_reserved,
+            u64::try_from(self.repair_potential).ok()?,
+        );
+        #[cfg(not(all(feature = "core", feature = "harness")))]
+        let (repair_reserved, repair_potential) = (0u64, 0u64);
+        let executions = potential.checked_sub(repair_potential)?;
+        // Ordinary leases reserve 4 MiB each. Repair reserves exact candidate
+        // bytes + row overhead and consumes no active execution lease.
+        if executions > active
+            || executions
+                .checked_mul(RESERVATION)?
+                .checked_add(repair_reserved)?
+                != self.reserved
+            || repair_potential.checked_mul(ROW_OVERHEAD)? > repair_reserved
+            || (repair_potential == 0 && repair_reserved != 0)
+        {
+            return None;
+        }
+        Some((
+            self.reserved,
+            self.bytes,
+            potential,
+            u64::try_from(self.unknown.len()).ok()?,
+        ))
+    }
+
     #[cfg(all(test, unix))]
     pub(in crate::tenancy) fn snapshot_for_test(&self) -> (u64, u64, bool) {
         (self.reserved, self.free, self.fenced)
@@ -59,6 +231,10 @@ impl Accounting {
     /// Initialization precedes publication of the Service and any execution.
     pub fn initialize(&mut self, inventory: Inventory, free: u64) -> Result<(), ErrorCode> {
         if self.reserved != 0 || !self.potential_unknown.is_empty() {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if self.repair_reserved != 0 || self.repair_potential != 0 {
             return Err(ErrorCode::AuthorityUnavailable);
         }
         self.bytes = inventory
@@ -229,5 +405,12 @@ pub(in crate::tenancy) fn free_space(volume: Option<&std::path::Path>) -> anyhow
     }
 }
 
+#[cfg(all(
+    test,
+    feature = "core",
+    feature = "harness",
+    any(feature = "otel-http", feature = "otel-grpc")
+))]
+mod observation_tests;
 #[cfg(test)]
 mod tests;

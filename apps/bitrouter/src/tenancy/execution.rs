@@ -35,9 +35,15 @@ use crate::gateway::{
     caller::CallerContext, pipeline::types::RoutingTarget, providers::auth::credentials::Credential,
 };
 
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) mod block;
 pub(super) mod cached;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod choice;
 mod continuation;
 mod count;
+#[cfg(all(feature = "core", feature = "harness"))]
+mod experiment;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod host;
 pub(crate) mod http_continuation;
@@ -45,6 +51,7 @@ pub(crate) mod lifecycle;
 mod native;
 mod oauth;
 mod profile;
+pub(crate) const BLOCK_LINK_HEADER: &str = "bitrouter-capture-link";
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod session;
 #[cfg(test)]
@@ -52,6 +59,7 @@ mod tests;
 
 /// Authenticated ingress identity. The tenant and principal come only from the
 /// current credential record, never from caller-controlled headers or JSON.
+#[derive(Clone)]
 pub(crate) struct Submission {
     caller: Caller,
     tenant: TenantId,
@@ -61,6 +69,8 @@ pub(crate) struct Submission {
     deadline: tokio::time::Instant,
     #[cfg(all(feature = "core", feature = "harness"))]
     session_closed: Option<Arc<AtomicBool>>,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    block: Option<Arc<super::capture::Binding>>,
 }
 
 impl Submission {
@@ -80,10 +90,16 @@ impl Submission {
 /// One invocation, shared with detached execution, stream draining and delivery.
 /// No Clone implementation can duplicate the lease or attempt counter.
 pub(crate) struct TenantExecution {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    experiment: std::sync::OnceLock<Arc<super::experiment::Witness>>,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    assessment: std::sync::OnceLock<super::learning::source::Binding>,
     service: Service,
     submission: Submission,
     id: ExecutionId,
     route: Arc<RetainedRoute>,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    block: std::sync::OnceLock<Arc<block::Witness>>,
     #[cfg(feature = "core")]
     learning: bitrouter_ai::tenancy::configuration::Learning,
     journal: std::sync::OnceLock<Arc<super::receipts::journal::Journal>>,
@@ -94,6 +110,8 @@ pub(crate) struct TenantExecution {
     continuation: Option<Arc<continuation::Policy>>,
     receipt: std::sync::OnceLock<Arc<super::receipts::owner::Owner>>,
     receipt_ticket: std::sync::OnceLock<lifecycle::AdmissionTicket>,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    choice: Option<std::sync::OnceLock<Arc<crate::core::session::choice::SendGate>>>,
 }
 
 pub(crate) struct OwnedCredential {
@@ -103,12 +121,13 @@ pub(crate) struct OwnedCredential {
 
 impl Service {
     pub(super) fn dispatch_ready(&self, state: &Snapshot) -> bool {
-        // Positive dispatch exists only in unit/integration fixtures until the
-        // strict receipt and ownership stages are implemented and qualified.
+        // Production construction consumes the exclusive owned database and
+        // completes bootstrap before publication. Unix eligibility still requires
+        // every live authority, storage and admission fence below.
         #[cfg(test)]
         let qualified = self.dispatch_test_ready.load(Ordering::Acquire);
         #[cfg(not(test))]
-        let qualified = false;
+        let qualified = cfg!(unix);
         qualified
             && !state.saturated
             && !self.stop.is_cancelled()
@@ -160,6 +179,10 @@ impl Service {
         {
             return Err(ErrorCode::CapabilityMismatch);
         }
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if let Some(binding) = &submission.block {
+            binding.block_in(state)?;
+        }
         let effective = state.effective(&submission.caller, &submission.tenant, Utc::now())?;
         if effective.credential.principal != submission.principal
             || effective.credential.id != submission.credential
@@ -194,6 +217,10 @@ impl Service {
         let credential = state
             .credential(&caller, Utc::now())
             .map_err(Failure::from)?;
+        #[cfg(not(all(feature = "core", feature = "harness")))]
+        if headers.contains_key(BLOCK_LINK_HEADER) {
+            return Err(ErrorCode::CapabilityMismatch.into());
+        }
         let submission = Submission {
             caller,
             tenant: credential.tenant.clone(),
@@ -203,9 +230,21 @@ impl Service {
             deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
             #[cfg(all(feature = "core", feature = "harness"))]
             session_closed: None,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            block: one_header(headers, BLOCK_LINK_HEADER)?
+                .map(|link| self.linked_capture(link))
+                .transpose()?,
         };
         self.with_dispatch_authority(&submission, |_| Ok(()))
             .map_err(Failure::from)?;
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if submission
+            .block
+            .as_ref()
+            .is_some_and(|binding| !binding.authority().matches_submission(&submission))
+        {
+            return Err(ErrorCode::Forbidden.into());
+        }
         Ok(submission)
     }
 
@@ -215,8 +254,10 @@ impl Service {
         raw_model: &str,
         inbound: &ApiProtocol,
     ) -> Result<Arc<TenantExecution>, Failure> {
-        self.admit_selected_execution(submission, |revision| revision.select(raw_model, inbound))
-            .await
+        self.admit_selected_execution(submission, false, |revision| {
+            revision.select(raw_model, inbound)
+        })
+        .await
     }
 
     async fn admit_native_execution(
@@ -224,7 +265,7 @@ impl Service {
         submission: Submission,
         raw_model: &str,
     ) -> Result<Arc<TenantExecution>, Failure> {
-        self.admit_selected_execution(submission, |revision| {
+        self.admit_selected_execution(submission, false, |revision| {
             revision.select_native(raw_model, bitrouter_ai::types::ModelOperation::Generation)
         })
         .await
@@ -233,6 +274,7 @@ impl Service {
     async fn admit_selected_execution(
         &self,
         submission: Submission,
+        fail_fast: bool,
         select: impl FnOnce(
             &super::cache::Pin<RetainedExecutionRevision>,
         ) -> Result<Arc<RetainedRoute>, ErrorCode>,
@@ -245,8 +287,20 @@ impl Service {
             authorize_route(state, &submission, route.dependencies())
         })
         .map_err(Failure::from)?;
-        let limits = revision.document().limits.clone();
+        let mut limits = revision.document().limits.clone();
+        if fail_fast {
+            limits.queued_work = 0;
+        }
         route.require_capabilities().map_err(Failure::from)?;
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if route.block_profile().is_some() != submission.block.is_some()
+            || submission
+                .block
+                .as_ref()
+                .is_some_and(|binding| binding.block_route() != Some(route.reference()))
+        {
+            return Err(ErrorCode::Forbidden.into());
+        }
         #[cfg(feature = "core")]
         let learning = revision.document().learning.clone();
         drop(revision);
@@ -258,6 +312,25 @@ impl Service {
             .acquire_until(&submission.tenant, &limits, submission.deadline)
             .await
             .map_err(Failure::from)?;
+        self.finish_admission(
+            submission,
+            route,
+            lease,
+            #[cfg(feature = "core")]
+            learning,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            false,
+        )
+    }
+
+    fn finish_admission(
+        &self,
+        submission: Submission,
+        route: Arc<RetainedRoute>,
+        lease: super::admission::Lease,
+        #[cfg(feature = "core")] learning: bitrouter_ai::tenancy::configuration::Learning,
+        #[cfg(all(feature = "core", feature = "harness"))] choice: bool,
+    ) -> Result<Arc<TenantExecution>, Failure> {
         // Waiting for capacity never extends a token/binding lifetime. The
         // exact submitted revision remains pinned even after activation changes.
         self.with_dispatch_authority(&submission, |state| {
@@ -277,11 +350,17 @@ impl Service {
             ))
         });
         let execution = Arc::new(TenantExecution {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            experiment: std::sync::OnceLock::new(),
+            #[cfg(all(feature = "core", feature = "harness"))]
+            assessment: std::sync::OnceLock::new(),
             service: self.clone(),
             submission,
             id,
             continuation,
             route,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            block: std::sync::OnceLock::new(),
             #[cfg(feature = "core")]
             learning,
             journal: std::sync::OnceLock::new(),
@@ -291,6 +370,8 @@ impl Service {
             observation: std::sync::OnceLock::new(),
             receipt: std::sync::OnceLock::new(),
             receipt_ticket: std::sync::OnceLock::new(),
+            #[cfg(all(feature = "core", feature = "harness"))]
+            choice: choice.then(std::sync::OnceLock::new),
         });
         execution
             .journal
@@ -310,7 +391,11 @@ impl Service {
             Arc::new(lease),
             self.admission.clone(),
             self.cleanup.clone(),
-            execution.submission.deadline,
+            (
+                execution.submission.deadline,
+                self.receipt_observer
+                    .timing(&execution.submission.binding.correlation_id),
+            ),
         );
         let ticket = self
             .pipelines
@@ -318,12 +403,13 @@ impl Service {
             .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
         execution
             .receipt
-            .set(receipt)
+            .set(receipt.clone())
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
         execution
             .receipt_ticket
             .set(ticket)
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        receipt.observation.admitted();
         Ok(execution)
     }
 }
@@ -485,6 +571,14 @@ impl TenantExecution {
                 if let Some(code) = *rejection {
                     return Err(code);
                 }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                if let Some(binding) = &self.submission.block {
+                    binding.block_in(state)?;
+                }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                if let Some(binding) = self.assessment.get() {
+                    binding.assessment_in(state)?;
+                }
                 authorize_route(state, &self.submission, self.route.dependencies())
             })
     }
@@ -561,7 +655,17 @@ impl TenantExecution {
                 if let Some(code) = *rejection {
                     return Err(code);
                 }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                if let Some(binding) = &self.submission.block {
+                    binding.block_in(state)?;
+                }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                if let Some(binding) = self.assessment.get() {
+                    binding.assessment_in(state)?;
+                }
                 authorize_route(state, &self.submission, self.route.dependencies())?;
+                #[cfg(all(feature = "core", feature = "harness"))]
+                self.block_send(target)?;
                 self.validate_oauth_model(target, oauth)?;
                 self.verify_count_send(target, counted)?;
                 permit

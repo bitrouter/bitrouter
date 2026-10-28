@@ -42,6 +42,28 @@ impl Association {
         native: &str,
         budget: &OperationBudget<'_>,
     ) -> Result<Option<Prefix>> {
+        self.prefix_in(tx, native, budget, false).await
+    }
+
+    /// Bounded data audit for the initial paid recovery profile. No tool or
+    /// opaque extension effect may be inferred stopped from a process ID.
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) async fn stopped_prefix_without_tools_in(
+        &self,
+        tx: &DatabaseTransaction,
+        native: &str,
+        budget: &OperationBudget<'_>,
+    ) -> Result<Option<Prefix>> {
+        self.prefix_in(tx, native, budget, true).await
+    }
+
+    async fn prefix_in(
+        &self,
+        tx: &DatabaseTransaction,
+        native: &str,
+        budget: &OperationBudget<'_>,
+        without_tools: bool,
+    ) -> Result<Option<Prefix>> {
         budget.check()?;
         if self.descriptor().mode == bitrouter_ai::tenancy::configuration::LearningMode::Off {
             return Ok(None);
@@ -84,6 +106,12 @@ impl Association {
                 append.bytes == row.event_json,
                 "capture event encoding changed"
             );
+            if without_tools {
+                ensure!(
+                    without_tool_effect(&append.event),
+                    "paid recovery has an uncovered tool or extension effect"
+                );
+            }
             let (next, observed, created) = state.next(&append)?;
             let expected_key = observed
                 .as_deref()
@@ -96,23 +124,7 @@ impl Association {
                 row.session_key == expected_key && row.session_sequence == expected_head,
                 "capture event session closure mismatch"
             );
-            let reference = EventReference {
-                connection_id: row.connection_id,
-                sequence: row.sequence,
-                session_sequence: row.session_sequence,
-                digest: hex::encode(Sha256::digest(
-                    io::json(
-                        &(
-                            &row.event_json,
-                            &row.captured_at,
-                            &row.session_key,
-                            row.session_sequence,
-                        ),
-                        MAX_CAPTURE_BYTES,
-                    )?
-                    .as_bytes(),
-                )),
-            };
+            let reference = reference(&row)?;
             if append.event.kind == CaptureKind::Request && append.event.method == "session/new" {
                 let call = append
                     .event
@@ -147,6 +159,10 @@ impl Association {
             }
             state = next;
         }
+        // connection_in already verifies this local-ACK digest against the
+        // complete state without the marker. Event replay has no cleanup event;
+        // retain only that validated annotation before comparing every field.
+        state.local_cleanup = current.local_cleanup.clone();
         ensure!(
             state == current,
             "capture durable correlation closure changed"
@@ -174,5 +190,66 @@ impl Association {
             setup,
             boundary_at,
         }))
+    }
+}
+
+/// One digest implementation for capture freeze and owned assessment readback.
+pub(crate) fn reference(row: &events::Model) -> Result<EventReference> {
+    Ok(EventReference {
+        connection_id: row.connection_id.clone(),
+        sequence: row.sequence,
+        session_sequence: row.session_sequence,
+        digest: hex::encode(Sha256::digest(
+            io::json(
+                &(
+                    &row.event_json,
+                    &row.captured_at,
+                    &row.session_key,
+                    row.session_sequence,
+                ),
+                MAX_CAPTURE_BYTES,
+            )?
+            .as_bytes(),
+        )),
+    })
+}
+
+fn without_tool_effect(event: &crate::storage::capture::CaptureEvent) -> bool {
+    use crate::storage::capture::CaptureDirection;
+    match event.kind {
+        CaptureKind::Connected | CaptureKind::Disconnected => true,
+        CaptureKind::Request | CaptureKind::Response => {
+            matches!(
+                event.method.as_str(),
+                "initialize"
+                    | "providers/set"
+                    | "providers/list"
+                    | "session/new"
+                    | "session/set_model"
+                    | "session/set_config_option"
+                    | "session/prompt"
+            ) && ((event.kind == CaptureKind::Request
+                && event.direction == CaptureDirection::Client)
+                || (event.kind == CaptureKind::Response
+                    && event.direction == CaptureDirection::Agent))
+        }
+        CaptureKind::Notification => {
+            (event.method == "session/cancel" && event.direction == CaptureDirection::Client)
+                || (event.method == "session/update"
+                    && event.direction == CaptureDirection::Agent
+                    && event
+                        .payload
+                        .get("update")
+                        .and_then(|update| update.get("sessionUpdate"))
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|kind| {
+                            matches!(
+                                kind,
+                                "agent_message_chunk"
+                                    | "agent_thought_chunk"
+                                    | "user_message_chunk"
+                            )
+                        }))
+        }
     }
 }

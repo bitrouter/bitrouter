@@ -266,6 +266,26 @@ pub(super) async fn commit(
     operation: &Operation,
     control: &Control,
 ) -> Result<()> {
+    let txn = control.begin(db).await?;
+    let result = write_in(&txn, state, changes, operation).await;
+    match result {
+        Ok(()) => control.commit(txn).await,
+        Err(error) => {
+            control.rollback(txn).await?;
+            Err(error)
+        }
+    }
+}
+
+/// Borrow the original H transaction for a resource/registration participant.
+/// Operation retention, installation counters and configuration changes remain
+/// one atomic write, with the original actor owning COMMIT and its outcome.
+pub(super) async fn write_in(
+    tx: &DatabaseTransaction,
+    state: &Snapshot,
+    changes: &[Change],
+    operation: &Operation,
+) -> Result<()> {
     let (class, tenant) = match &operation.context {
         ReadContext::Installation => (AuthorityClass::Installation, None),
         ReadContext::Tenant { tenant, .. } => (AuthorityClass::Tenant, Some(tenant.as_str())),
@@ -307,16 +327,8 @@ pub(super) async fn commit(
             ]
             .map(|value: Value| value.into()),
         )?;
-    let statement = db.get_database_backend().build(&statement);
-    let txn = control.begin(db).await?;
-    let result = write_transaction(&txn, state, changes, statement).await;
-    match result {
-        Ok(()) => control.commit(txn).await,
-        Err(error) => {
-            control.rollback(txn).await?;
-            Err(error)
-        }
-    }
+    let statement = tx.get_database_backend().build(&statement);
+    write_transaction(tx, state, changes, statement).await
 }
 
 async fn write_transaction(
@@ -352,27 +364,38 @@ pub(super) async fn operation(
     else {
         return Ok(None);
     };
+    operation_from(&row, principal, id).map(Some)
+}
+
+/// Shared by ordinary operation reads and the stopped-target verifier, under
+/// their existing connection owner. Recovery must decode every field that a
+/// later operation lookup or idempotent command replay will consume.
+pub(super) fn operation_from(
+    row: &QueryResult,
+    principal: &PrincipalId,
+    id: &OperationId,
+) -> Result<Operation> {
     ensure!(
         row.try_get::<i32>("", "hash_version")? == 1,
         "unsupported command hash version"
     );
-    let result: OperationResult = json_from(&row, "result_json")?;
+    let result: OperationResult = json_from(row, "result_json")?;
     result.validate()?;
-    let response: StoredResponse = json_from(&row, "response_json")?;
+    let response: StoredResponse = json_from(row, "response_json")?;
     ensure!(
         !matches!(&response, StoredResponse::Issued(issued) if issued.secret.is_some()),
         "unexpected persisted issuance secret"
     );
-    Ok(Some(Operation {
+    Ok(Operation {
         principal: principal.clone(),
         id: id.clone(),
-        context: json_from(&row, "read_context_json")?,
-        digest: string(&row, "command_digest")?,
+        context: json_from(row, "read_context_json")?,
+        digest: string(row, "command_digest")?,
         result,
         response,
-        created_at: DateTime::parse_from_rfc3339(&string(&row, "created_at")?)?.with_timezone(&Utc),
+        created_at: DateTime::parse_from_rfc3339(&string(row, "created_at")?)?.with_timezone(&Utc),
         safety: row.try_get("", "safety")?,
-    }))
+    })
 }
 
 fn credential_from(row: &QueryResult) -> Result<Credential> {
@@ -450,7 +473,7 @@ async fn credential_view_in(
     Ok((revision, credential))
 }
 
-async fn rows(db: &DatabaseConnection, table: &str, max: u64) -> Result<Vec<QueryResult>> {
+async fn rows(db: &impl ConnectionTrait, table: &str, max: u64) -> Result<Vec<QueryResult>> {
     let query = Query::select()
         .column(Asterisk)
         .from(Alias::new(table))
@@ -468,32 +491,8 @@ async fn rows(db: &DatabaseConnection, table: &str, max: u64) -> Result<Vec<Quer
 
 pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<Snapshot> {
     let persisted = rows(db, "tenancy_installation", 1).await?;
-    let mut state = if let Some(row) = persisted.first() {
-        ensure!(
-            row.try_get::<i32>("", "singleton")? == 1
-                && row.try_get::<i32>("", "schema_version")? == 1,
-            "unsupported authority store identity"
-        );
-        let operations = u32::try_from(row.try_get::<i32>("", "operation_ids")?)?;
-        let safety = u32::try_from(row.try_get::<i32>("", "safety_operation_ids")?)?;
-        ensure!(
-            operations <= ORDINARY_OPERATIONS && safety <= SAFETY_OPERATIONS,
-            "invalid operation counters"
-        );
-        Snapshot {
-            installation: string(row, "installation_id")?.try_into()?,
-            revision: u64::try_from(row.try_get::<i64>("", "authority_revision")?)?.try_into()?,
-            operation_ids: operations,
-            safety_operation_ids: safety,
-            saturated: row.try_get("", "saturated")?,
-            created_at: string(row, "created_at")?,
-            tenants: Default::default(),
-            principals: Default::default(),
-            bindings: Default::default(),
-            credentials: Default::default(),
-            credential_hashes: Default::default(),
-            active_configurations: Default::default(),
-        }
+    let state = if let Some(row) = persisted.first() {
+        existing_identity(row)?
     } else {
         // An absent singleton with existing authority records is an incomplete
         // cutover, never an invitation to assign a new installation identity.
@@ -534,6 +533,53 @@ pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<
         installation(db, &state).await?;
         state
     };
+    load_records(db, state, now).await
+}
+
+/// Decode existing authority only; missing identity is never initialized.
+pub(super) async fn load_existing(
+    db: &impl ConnectionTrait,
+    now: DateTime<Utc>,
+) -> Result<Snapshot> {
+    let persisted = rows(db, "tenancy_installation", 1).await?;
+    let row = persisted
+        .first()
+        .context("archive authority identity missing")?;
+    load_records(db, existing_identity(row)?, now).await
+}
+
+fn existing_identity(row: &QueryResult) -> Result<Snapshot> {
+    ensure!(
+        row.try_get::<i32>("", "singleton")? == 1 && row.try_get::<i32>("", "schema_version")? == 1,
+        "unsupported authority store identity"
+    );
+    let operations = u32::try_from(row.try_get::<i32>("", "operation_ids")?)?;
+    let safety = u32::try_from(row.try_get::<i32>("", "safety_operation_ids")?)?;
+    ensure!(
+        operations <= ORDINARY_OPERATIONS && safety <= SAFETY_OPERATIONS,
+        "invalid operation counters"
+    );
+    Ok(Snapshot {
+        installation: string(row, "installation_id")?.try_into()?,
+        revision: u64::try_from(row.try_get::<i64>("", "authority_revision")?)?.try_into()?,
+        operation_ids: operations,
+        safety_operation_ids: safety,
+        saturated: row.try_get("", "saturated")?,
+        created_at: string(row, "created_at")?,
+        tenants: Default::default(),
+        principals: Default::default(),
+        bindings: Default::default(),
+        credentials: Default::default(),
+        credential_hashes: Default::default(),
+        active_configurations: Default::default(),
+    })
+}
+
+async fn load_records(
+    db: &impl ConnectionTrait,
+    mut state: Snapshot,
+    now: DateTime<Utc>,
+) -> Result<Snapshot> {
     ensure!(
         state.operation_ids < ORDINARY_OPERATIONS || state.saturated,
         "missing saturation latch"

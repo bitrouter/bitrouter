@@ -34,11 +34,21 @@ pub(in crate::tenancy) struct Candidate {
     pub receipt: ExecutionReceipt,
     json: String,
     private_json: String,
-    pub(super) digest: String,
+    pub(in crate::tenancy) digest: String,
     pub(super) auxiliary: Option<super::auxiliary_store::Evidence>,
 }
 
 impl Candidate {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn learning_digest(&self) -> &str {
+        &self.digest
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn experiment_disposition(&self) -> Result<(&str, DispatchState)> {
+        let disposition: Disposition = serde_json::from_str(&self.private_json)?;
+        Ok((&self.digest, disposition.dispatch))
+    }
     pub fn new(receipt: ExecutionReceipt, disposition: Disposition) -> Result<Self> {
         receipt.validate()?;
         ensure!(
@@ -99,6 +109,10 @@ impl Candidate {
         self.digest = digest(&self.json, &self.private_json);
         self.auxiliary = Some(evidence);
         Ok(self)
+    }
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn has_auxiliary(&self) -> bool {
+        self.auxiliary.is_some()
     }
     pub fn auxiliary_unclean(&self) -> bool {
         self.auxiliary.as_ref().is_some_and(|aux| aux.unclean())
@@ -165,7 +179,14 @@ fn oversized(backend: DatabaseBackend) -> String {
     .collect::<Vec<_>>()
     .join(" OR ")
 }
-async fn row(db: &impl ConnectionTrait, mut query: SelectStatement) -> Result<Option<QueryResult>> {
+async fn row(db: &impl ConnectionTrait, query: SelectStatement) -> Result<Option<QueryResult>> {
+    bounded_row(db, query, None).await
+}
+async fn bounded_row(
+    db: &impl ConnectionTrait,
+    mut query: SelectStatement,
+    budget: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+) -> Result<Option<QueryResult>> {
     let backend = db.get_database_backend();
     // Bound stored TEXT before transferring it; a corrupt cell is never materialized.
     let length = oversized(backend);
@@ -179,8 +200,47 @@ async fn row(db: &impl ConnectionTrait, mut query: SelectStatement) -> Result<Op
         db.query_one(backend.build(&oversized)).await?.is_none(),
         "stored receipt byte bound"
     );
+    if let Some(budget) = budget {
+        budget.check()?;
+        let lengths = [
+            "receipt_json",
+            "disposition_json",
+            "installation_id",
+            "tenant_id",
+            "execution_id",
+            "principal_id",
+            "correlation_id",
+            "content_digest",
+            "recorded_at",
+        ]
+        .into_iter()
+        .map(|name| octets(backend, name))
+        .collect::<Vec<_>>()
+        .join(" + ");
+        let cast = if backend == DatabaseBackend::MySql {
+            "SIGNED"
+        } else {
+            "BIGINT"
+        };
+        let mut size = query.clone();
+        size.expr_as(
+            Expr::cust(format!("CAST(({lengths} + 256) AS {cast})")),
+            Alias::new("receipt_bytes"),
+        )
+        .limit(1);
+        budget.charge(1, 256)?;
+        let Some(metadata) = db.query_one(backend.build(&size)).await? else {
+            return Ok(None);
+        };
+        let bytes = usize::try_from(metadata.try_get::<i64>("", "receipt_bytes")?)?;
+        budget.charge(1, bytes)?;
+    }
     query.column(Asterisk).limit(1);
-    Ok(db.query_one(backend.build(&query)).await?)
+    let value = db.query_one(backend.build(&query)).await?;
+    if let Some(budget) = budget {
+        budget.check()?;
+    }
+    Ok(value)
 }
 
 fn decode(
@@ -243,7 +303,7 @@ pub(in crate::tenancy) async fn lookup(
 
 /// Inventory and pending-work reconciliation use the same bounded integrity
 /// checks as a point read; stored digest projections alone are not evidence.
-pub(super) async fn lookup_candidate(
+pub(in crate::tenancy) async fn lookup_candidate(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
     tenant: &TenantId,
@@ -352,7 +412,7 @@ pub(in crate::tenancy) async fn insert(
 /// Caller supplies one stable read transaction and rechecks current permission
 /// after it. Multiplicity is query-wide, independent of cursor and page size.
 pub(in crate::tenancy) async fn page(
-    db: &DatabaseTransaction,
+    db: &impl ConnectionTrait,
     installation: &InstallationId,
     tenant: &TenantId,
     correlation: &CorrelationId,
@@ -556,4 +616,179 @@ pub(in crate::tenancy) async fn inventory(
         rows: count,
         unknown,
     })
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) async fn recovery_lookup(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+    budget: &crate::tenancy::session::recovery::Budget,
+) -> Result<Option<Candidate>> {
+    ensure!(
+        db.get_database_backend() == DatabaseBackend::Sqlite,
+        "native recovery requires SQLite"
+    );
+    let mut invalid = point(installation, tenant, id);
+    invalid.expr(Expr::val(1)).and_where(Expr::cust(
+        "typeof(byte_count)!='integer' OR typeof(unknown_outcome)!='integer' OR unknown_outcome NOT IN (0,1) OR typeof(receipt_json)!='text' OR typeof(disposition_json)!='text'"
+    )).limit(1);
+    ensure!(
+        db.query_one(db.get_database_backend().build(&invalid))
+            .await?
+            .is_none(),
+        "invalid receipt recovery SQL types"
+    );
+    budget.charge(0, 1024)?;
+    let mut metadata = point(installation, tenant, id);
+    metadata
+        .expr_as(
+            Expr::cust("CASE WHEN typeof(byte_count)='integer' THEN byte_count ELSE NULL END"),
+            Alias::new("byte_count"),
+        )
+        .expr_as(
+            Expr::cust(format!(
+                "CAST({} + {} AS BIGINT)",
+                octets(db.get_database_backend(), "receipt_json"),
+                octets(db.get_database_backend(), "disposition_json")
+            )),
+            Alias::new("actual"),
+        )
+        .limit(1);
+    let metadata_row = db
+        .query_one(db.get_database_backend().build(&metadata))
+        .await?;
+    if let Some(row) = metadata_row {
+        let bytes: i64 = row.try_get("", "byte_count")?;
+        let actual: i64 = row.try_get("", "actual")?;
+        ensure!(
+            bytes == actual && bytes >= 0 && bytes as u64 <= (MAX_RECEIPT + MAX_DISPOSITION) as u64,
+            "receipt recovery length"
+        );
+        budget.charge(
+            1,
+            usize::try_from(bytes)?
+                .checked_mul(3)
+                .context("receipt recovery allocation bound")?,
+        )?;
+    } else {
+        budget.charge(1, 0)?;
+    }
+    // This first profile has no auxiliary recovery proof. Check presence without
+    // materializing O1/C1 evidence outside the shared operation byte budget.
+    let auxiliary = Query::select()
+        .expr(Expr::val(1))
+        .from(Alias::new("tenancy_receipt_auxiliary"))
+        .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
+        .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
+        .and_where(Expr::col(Alias::new("execution_id")).eq(id.as_str()))
+        .limit(1)
+        .to_owned();
+    ensure!(
+        db.query_one(db.get_database_backend().build(&auxiliary))
+            .await?
+            .is_none(),
+        "auxiliary receipt work has no stopped recovery proof"
+    );
+    let Some(row) = row(db, point(installation, tenant, id)).await? else {
+        return Ok(None);
+    };
+    let candidate = decode(row, installation, tenant, id)?;
+    let disposition: Disposition = serde_json::from_str(&candidate.private_json)?;
+    ensure!(
+        disposition.auxiliary_digest.is_none(),
+        "auxiliary receipt link has no recovery proof"
+    );
+    Ok(Some(candidate))
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) fn reserve_experiment_write(
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+) -> Result<()> {
+    // The existing insert performs at most two bounded point loads and one
+    // immutable write. Each decode may validate one bounded auxiliary row;
+    // auxiliary insertion additionally writes and compares that same body.
+    // Reserve the full transfer envelope before the first I/O, so the original
+    // receipt and experiment participant cannot each claim a fresh allowance.
+    let receipt = MAX_RECEIPT + MAX_DISPOSITION + 4096;
+    let auxiliary = super::auxiliary::MAX_BYTES + 4096;
+    budget.charge(16, 3 * receipt + 4 * auxiliary)?;
+    Ok(())
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) async fn native_candidate_in(
+    tx: &DatabaseTransaction,
+    authority: &crate::tenancy::execution::session::Authority,
+    id: &ExecutionId,
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+) -> Result<Option<Candidate>> {
+    let (installation, tenant, _) = authority.storage_identity();
+    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) async fn learner_candidate_in(
+    tx: &sea_orm::DatabaseTransaction,
+    identity: &crate::tenancy::learner::identity::ReadIdentity,
+    id: &ExecutionId,
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+) -> Result<Option<Candidate>> {
+    identity
+        .check(&[])
+        .map_err(crate::storage::operation_budget::Error::Rejected)?;
+    let (installation, tenant, _) = identity.storage_identity();
+    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) async fn paid_recovery_candidate_in(
+    tx: &DatabaseTransaction,
+    identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
+    id: &ExecutionId,
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+) -> Result<Option<Candidate>> {
+    let (installation, tenant, _) = identity.storage_identity();
+    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
+}
+
+/// The live original capture authority supplies the namespace; an imported
+/// descriptor or an opaque-link string can never invoke this reader by itself.
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) async fn block_candidate_in(
+    tx: &DatabaseTransaction,
+    binding: &crate::tenancy::capture::Binding,
+    id: &ExecutionId,
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+) -> Result<Option<Candidate>> {
+    binding
+        .check()
+        .map_err(|failure| crate::storage::operation_budget::Error::Rejected(failure.0.code))?;
+    let (installation, tenant, _) = binding.authority().identity();
+    native_namespace_candidate_in(tx, installation, tenant, id, budget).await
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+async fn native_namespace_candidate_in(
+    tx: &sea_orm::DatabaseTransaction,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+) -> Result<Option<Candidate>> {
+    let Some(row) = bounded_row(tx, point(installation, tenant, id), Some(budget)).await? else {
+        return Ok(None);
+    };
+    let mut candidate = decode(row, installation, tenant, id)?;
+    // The auxiliary query preflights its fixed-size cells. Reserve its full
+    // allowance on this same budget before issuing it; static experiment routes
+    // are expected to have no auxiliary body, but corruption is still checked.
+    budget.charge(1, super::auxiliary::MAX_BYTES + 4096)?;
+    let disposition: Disposition = serde_json::from_str(&candidate.private_json)?;
+    super::auxiliary_store::validate(tx, &mut candidate, disposition.auxiliary_digest.as_deref())
+        .await?;
+    budget.check()?;
+    Ok(Some(candidate))
 }

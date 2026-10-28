@@ -68,37 +68,50 @@ pub(super) fn identifiers(value: &mut RetainedExecutionRevision) -> Result<()> {
     for route in routes.values_mut() {
         // The decoder creates each RouteData exactly once, before publishing
         // any view. Failure means the normalization boundary was bypassed.
-        let RouteData {
-            reference: root,
-            dependencies,
-            selector: _,
-            overrides: _,
-            policy,
-            chains: _,
-            native: _, // Only selector strings and indices; no additional opaque IDs.
-            candidates,
-        } = Arc::get_mut(route).ok_or(ErrorCode::AuthorityUnavailable)?;
-        reference(root)?;
-        for dependency in dependencies {
-            reference(dependency)?;
-        }
-        if let Some(RetainedPolicy {
-            reference: policy,
-            name: _,
-            document: _,
-            routing_source: _,
-        }) = policy
-        {
-            reference(policy)?;
-        }
-        for Candidate {
-            target: _,
-            projection: _,
-            credential,
-        } in candidates
-        {
-            reference(credential)?;
-        }
+        route_data(Arc::get_mut(route).ok_or(ErrorCode::AuthorityUnavailable)?)?;
+    }
+    Ok(())
+}
+
+pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
+    let RouteData {
+        reference: root,
+        assessment,
+        block_pricing: _,
+        block: _, // Contains no opaque tenancy identifier.
+
+        dependencies,
+        selector: _,
+        overrides: _,
+        policy,
+        chains: _,
+        native: _, // Only selector strings and indices; no additional opaque IDs.
+        candidates,
+        choice: _, // Already normalized before the hidden child was shared.
+    } = value;
+    reference(root)?;
+    if let Some(assessment) = assessment {
+        reference(assessment)?;
+    }
+    for dependency in dependencies {
+        reference(dependency)?;
+    }
+    if let Some(RetainedPolicy {
+        reference: policy,
+        name: _,
+        document: _,
+        routing_source: _,
+    }) = policy
+    {
+        reference(policy)?;
+    }
+    for Candidate {
+        target: _,
+        projection: _,
+        credential,
+    } in candidates
+    {
+        reference(credential)?;
     }
     Ok(())
 }

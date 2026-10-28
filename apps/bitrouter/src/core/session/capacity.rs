@@ -164,6 +164,15 @@ pub(super) fn check(
     host: &Limits,
     grant: &OwnershipGrant,
 ) -> Result<(), CoreError> {
+    projected_bytes(state, proposed, host, grant).map(|_| ())
+}
+
+pub(super) fn projected_bytes(
+    state: &SessionSnapshot,
+    proposed: &CheckpointPayload,
+    host: &Limits,
+    grant: &OwnershipGrant,
+) -> Result<u64, CoreError> {
     let mut limits = host.clone();
     if let Some(run) = &state.run {
         limits.checkpoint_bytes = limits.checkpoint_bytes.min(run.limits.checkpoint_bytes);
@@ -379,9 +388,18 @@ pub(super) fn check(
         batch_id: Some("x".repeat(128)),
         payload_sha256: Some("0".repeat(64)),
     };
+    let gap = crate::storage::checkpoint::snapshot::ActivityGap {
+        durable_head: head.clone(),
+        known_active_ms: u64::MAX,
+    };
+    if open && let Some(run) = original_run {
+        projected
+            .activity_gaps
+            .insert(run.run_id.clone(), gap.clone());
+    }
     let handoff = original_run.map(|run| RunActivityReconciliation {
         run_id: run.run_id.clone(),
-        durable_head: head,
+        durable_head: head.clone(),
         active_ms: u64::MAX,
     });
     let unresolved = state
@@ -391,7 +409,7 @@ pub(super) fn check(
         .flat_map(|turn| &turn.invocations)
         .filter(|call| unfinished(call))
         .collect::<Vec<_>>();
-    event_payloads.push(json!({"previous_owner_stopped":false,"workspace_changed":false,"active_time":handoff,"tool_observations":[],"interrupted_steps":state.agents.values().filter_map(|agent| agent.turn.as_ref()).flat_map(|turn| &turn.steps).map(|step| &step.step_id).collect::<Vec<_>>()}));
+    event_payloads.push(json!({"previous_owner_stopped":false,"workspace_changed":false,"active_time":handoff,"activity_gap":gap,"tool_observations":[],"interrupted_steps":state.agents.values().filter_map(|agent| agent.turn.as_ref()).flat_map(|turn| &turn.steps).map(|step| &step.step_id).collect::<Vec<_>>()}));
     event_payloads.push(json!({"invocation_ids":unresolved.iter().map(|call| &call.dispatch.invocation_id).collect::<Vec<_>>(),"reason":"x".repeat(128)}));
     let event_bytes = event_payloads
         .iter()
@@ -433,7 +451,8 @@ pub(super) fn check(
         sum(sum(bytes, event_bytes)?, reserve.event_extra)?,
         reserve.extra,
     )?;
-    crate::storage::checkpoint::check_projected_size(&payload.identity, bytes, &limits)
+    crate::storage::checkpoint::check_projected_size(&payload.identity, bytes, &limits)?;
+    Ok(bytes)
 }
 
 #[cfg(test)]

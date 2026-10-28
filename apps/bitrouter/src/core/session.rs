@@ -70,8 +70,14 @@ mod artifact_storage;
 mod auxiliary_output;
 mod budget;
 mod capacity;
+#[cfg(feature = "harness")]
+pub(crate) mod choice;
 mod context_decisions;
+#[cfg(test)]
+mod headroom_trace;
 mod model_output;
+#[cfg(feature = "harness")]
+pub(crate) mod native_capacity;
 mod owned;
 mod pairing;
 mod preparation_work;
@@ -285,6 +291,8 @@ struct Shared {
     request_headers: http::HeaderMap,
     #[cfg(feature = "harness")]
     owned: Option<Arc<crate::tenancy::execution::session::Binding>>,
+    #[cfg(feature = "harness")]
+    owned_journal: Option<crate::harness::resources::managed::store::choice::JournalView>,
     harness: Arc<dyn HarnessPort>,
     limits: Limits,
     capabilities: Capabilities,
@@ -367,6 +375,8 @@ impl CoreSession {
                 harness,
                 #[cfg(feature = "harness")]
                 owned: None,
+                #[cfg(feature = "harness")]
+                owned_journal: None,
             },
             register,
         )
@@ -391,6 +401,8 @@ impl CoreSession {
             harness,
             #[cfg(feature = "harness")]
             owned,
+            #[cfg(feature = "harness")]
+            owned_journal,
         } = host;
         binding.grant.validate()?;
         binding.manifest.validate(capabilities, &binding.limits)?;
@@ -430,6 +442,7 @@ impl CoreSession {
             waits: BTreeMap::new(),
             signals: SignalState::default(),
             run: None,
+            activity_gaps: BTreeMap::new(),
             operations: BTreeMap::new(),
             allocations: BTreeMap::new(),
             context_store: Default::default(),
@@ -481,6 +494,8 @@ impl CoreSession {
                 request_headers,
                 #[cfg(feature = "harness")]
                 owned,
+                #[cfg(feature = "harness")]
+                owned_journal,
                 harness,
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
@@ -1162,26 +1177,38 @@ impl CoreSession {
                         // already admitted still owns a slot until its outcome.
                         // Finalization alone cannot issue new execution and
                         // therefore does not reserve a model slot.
-                        if turn.steps.last().is_some_and(|step| {
-                            (!step.settled
-                                && !steering::has_pending(&live.state, &control.agent_id))
-                                || step
-                                    .preparation_work
-                                    .iter()
-                                    .any(|work| work.report.is_none())
-                                || step.input_counts.iter().any(|count| count.report.is_none())
-                                || step
-                                    .context_validation
-                                    .as_ref()
-                                    .is_some_and(|validation| validation.report.is_none())
-                                || step.attempts.iter().any(|attempt| {
-                                    attempt.receipt.is_none()
-                                        || attempt
-                                            .provider_work
-                                            .iter()
-                                            .any(|work| work.report.is_none())
-                                })
-                        }) {
+                        #[cfg(feature = "harness")]
+                        let owned_choice = control.owned_step.is_some()
+                            && live.state.context_store.decisions.values().any(|entry| {
+                                entry.agent_id == control.agent_id
+                                    && entry.run_id == control.run_id
+                                    && entry.task_id == control.agent_turn_id
+                                    && entry.outcome.is_none()
+                            });
+                        #[cfg(not(feature = "harness"))]
+                        let owned_choice = false;
+                        if owned_choice
+                            || turn.steps.last().is_some_and(|step| {
+                                (!step.settled
+                                    && !steering::has_pending(&live.state, &control.agent_id))
+                                    || step
+                                        .preparation_work
+                                        .iter()
+                                        .any(|work| work.report.is_none())
+                                    || step.input_counts.iter().any(|count| count.report.is_none())
+                                    || step
+                                        .context_validation
+                                        .as_ref()
+                                        .is_some_and(|validation| validation.report.is_none())
+                                    || step.attempts.iter().any(|attempt| {
+                                        attempt.receipt.is_none()
+                                            || attempt
+                                                .provider_work
+                                                .iter()
+                                                .any(|work| work.report.is_none())
+                                    })
+                            })
+                        {
                             occupied.insert(control.agent_id.clone());
                         }
                     }
@@ -2517,7 +2544,23 @@ impl CoreSession {
             Ok(json!({"step_id":step_id}))
         })
         .await?;
+        #[cfg(feature = "harness")]
+        let owned_step = match self.owned_model_step(agent_id, &step_id).await {
+            Ok(binding) => binding,
+            Err(error) => {
+                // The preparing ACK precedes this read-only origin check. No
+                // execution control or provider work exists yet; a known local
+                // rejection must settle that empty step through the original ACK
+                // path instead of looking like an abandoned model driver.
+                if error.commit_status == CommitStatus::NotCommitted {
+                    self.fail(agent_id, &error.message).await?;
+                }
+                return Err(error);
+            }
+        };
         let control = Arc::new(StepControl {
+            #[cfg(feature = "harness")]
+            owned_step,
             canonical_output_bytes: model_output::allowance(&run.limits)?,
             provider_response_bytes: run
                 .limits
@@ -2671,6 +2714,8 @@ impl CoreSession {
                 if self.can_progress().await {
                     self.fail(agent_id, &error.to_string()).await?;
                 } else {
+                    #[cfg(test)]
+                    eprintln!("headroom model error masked: code={}", error.error_code());
                     return Err(reject(
                         ErrorCode::CheckpointUnavailable,
                         "model outcome awaits durable reconciliation",
@@ -2756,7 +2801,7 @@ impl CoreSession {
             let remaining_tools = budget::remaining_tools(state);
             // A text-only or interrupted output does not need a tool reply
             // envelope. Apply admission errors only to actual workspace calls.
-            let result_limits = tool_payloads::admit(state, &self.shared.limits, manifest.max_tool_output_bytes);
+            let result_limits = self.admitted_tool_result_limits(state, manifest.max_tool_output_bytes);
             let response_id = responses::active_id(state).map(str::to_owned);
             let outstanding = state.agents.values().filter_map(|agent| agent.turn.as_ref()).flat_map(|turn| &turn.invocations).filter(|call| call.result.is_none()).count();
             let agent = agent_mut(state, agent_id)?;
@@ -2973,7 +3018,7 @@ impl CoreSession {
             }
             let manifest = state.manifest.clone();
             let result_limits =
-                tool_payloads::admit(state, &self.shared.limits, manifest.max_tool_output_bytes)?;
+                self.admitted_tool_result_limits(state, manifest.max_tool_output_bytes)?;
             let response_id = responses::active_id(state).map(str::to_owned);
             let limit = active_run(state)?.limits.outstanding_tools as usize;
             let outstanding = state
@@ -3370,7 +3415,19 @@ impl CoreSession {
 
     async fn can_progress(&self) -> bool {
         let _commit = self.shared.commits.lock().await;
-        self.shared.live.lock().await.gate.can_dispatch()
+        let live = self.shared.live.lock().await;
+        #[cfg(test)]
+        if !live.gate.can_dispatch() {
+            eprintln!(
+                "headroom gate blocked: fence={}, pending={}, disconnected={}, provisional={}, reconnecting={}",
+                live.gate.dispatch_fence_for_test(),
+                live.gate.pending().is_some(),
+                live.disconnected.is_cancelled(),
+                !live.provisional_blocks.is_empty(),
+                live.reconnecting
+            );
+        }
+        live.gate.can_dispatch()
     }
 
     async fn block_dispatch(&self, operation_id: &str) {
@@ -3425,10 +3482,15 @@ impl CoreSession {
     where
         F: FnOnce(&mut SessionSnapshot, &DurableHead, bool) -> Result<Value, CoreError> + Send,
     {
-        self.transition_scoped(agent_id, None, kind, change).await
+        #[cfg(test)]
+        let mut trace = headroom_trace::Scope::new(kind);
+        let result = self.transition_scoped(agent_id, None, kind, change).await;
+        #[cfg(test)]
+        trace.returned(&result);
+        result
     }
 
-    fn prepare_checkpoint(
+    async fn prepare_checkpoint(
         &self,
         live: &LiveSession,
         next: &mut SessionSnapshot,
@@ -3512,6 +3574,24 @@ impl CoreSession {
         }
         artifact_storage::check(next, &prepared.state, &self.shared.limits)?;
         next.recovery_archive = prepared.state.recovery_archive.clone();
+        #[cfg(feature = "harness")]
+        if let (Some(binding), Some(journal)) = (&self.shared.owned, &self.shared.owned_journal)
+            && next
+                .run
+                .as_ref()
+                .is_some_and(|run| binding.authority().experimental_model(&run.input.model))
+        {
+            let projection = native_capacity::project(
+                next,
+                &prepared.state,
+                &proposed,
+                &self.shared.limits,
+                live.gate.grant(),
+            )?;
+            journal
+                .preflight_experiment(&projection, live.gate.head())
+                .await?;
+        }
         Ok((proposed, prepared))
     }
 
@@ -3550,7 +3630,8 @@ impl CoreSession {
             };
             let mut rejection = None;
             let mut superseded_blocks = BTreeSet::new();
-            let (proposed, prepared) = match self.prepare_checkpoint(&live, &mut next, event) {
+            let (proposed, prepared) = match self.prepare_checkpoint(&live, &mut next, event).await
+            {
                 Ok(prepared) => prepared,
                 Err(mut error)
                     if error.code == ErrorCode::LimitExceeded
@@ -3583,11 +3664,16 @@ impl CoreSession {
                         agent_id: Some(next.agent_id.clone()),
                         payload: encode(&failure)?,
                     };
-                    let prepared = match self.prepare_checkpoint(&live, &mut next, event) {
+                    let prepared = match self.prepare_checkpoint(&live, &mut next, event).await {
                         Ok(prepared) => prepared,
                         Err(error) => {
                             // A legacy/corrupt capacity promise must not
                             // leave scheduling enabled after cleanup fails.
+                            #[cfg(test)]
+                            eprintln!(
+                                "headroom capacity fallback failed: code={:?}, commit={:?}",
+                                error.code, error.commit_status
+                            );
                             live.gate.disconnect();
                             live.disconnected.cancel();
                             return Err(error);
@@ -3601,7 +3687,27 @@ impl CoreSession {
                 }
                 Err(error) => return Err(error),
             };
-            let batch = live.gate.propose(proposed)?.clone();
+            #[cfg(feature = "harness")]
+            if let Some(journal) = &self.shared.owned_journal {
+                let preflight = journal.preflight(&proposed, live.gate.head()).await;
+                #[cfg(test)]
+                if let Err(error) = &preflight {
+                    eprintln!(
+                        "headroom transition failed: stage=NativePreflight, code={:?}, commit={:?}",
+                        error.code, error.commit_status
+                    );
+                }
+                preflight?;
+            }
+            let proposed = live.gate.propose(proposed);
+            #[cfg(test)]
+            if let Err(error) = &proposed {
+                eprintln!(
+                    "headroom transition failed: stage=Propose, code={:?}, commit={:?}",
+                    error.code, error.commit_status
+                );
+            }
+            let batch = proposed?.clone();
             // Status/result receipt establishes a local observation time,
             // independent of the later durable ACK. Keep confirmed running
             // tools in the same union clock as concurrent model work.
@@ -3654,6 +3760,11 @@ impl CoreSession {
             Err(error) => Err(error),
         };
         result.map_err(|mut error| {
+            #[cfg(test)]
+            eprintln!(
+                "Core checkpoint ACK failed: transition={kind}, code={:?}, commit={:?}",
+                error.code, error.commit_status
+            );
             live.gate.disconnect();
             live.disconnected.cancel();
             // Once submitted, a batch may be durable even when its matching
@@ -3705,6 +3816,8 @@ fn cancellation_start_fences(
 }
 
 struct StepControl {
+    #[cfg(feature = "harness")]
+    owned_step: Option<Arc<crate::tenancy::execution::session::StepBinding>>,
     provider_response_bytes: u64,
     canonical_output_bytes: u64,
     validation_gate_time: super::activity::GateTime,
@@ -3751,10 +3864,30 @@ impl NativeExecutionControl for StepControl {
         prompt: &Prompt,
     ) -> crate::gateway::error::Result<Option<crate::gateway::routing::preparation::Prepared>> {
         let step_id = self.step_id.lock().await.clone();
+        // The isolated recovery companion drives the actual callback twice on
+        // one admitted step. Both calls retain normal intent/provider/H custody;
+        // no seeds, records or execution identity are manufactured by the test.
+        #[cfg(all(test, unix, feature = "harness"))]
+        if std::env::var("BITROUTER_TEST_STOPPED_NATIVE_MODE").as_deref() == Ok("shared-parent") {
+            let (first, second) = tokio::join!(
+                self.session
+                    .prepare_context(&self.agent_id, &step_id, prompt.clone(), self),
+                self.session
+                    .prepare_context(&self.agent_id, &step_id, prompt.clone(), self),
+            );
+            // Join both callbacks before reporting either failure. The process
+            // campaign normally terminates while both real providers are held.
+            second.map_err(sdk_error)?;
+            return first.map_err(sdk_error);
+        }
+        #[cfg(test)]
+        let mut trace = headroom_trace::Scope::new("prepare_routing");
         let result = self
             .session
             .prepare_context(&self.agent_id, &step_id, prompt.clone(), self)
             .await;
+        #[cfg(test)]
+        trace.returned(&result);
         if result
             .as_ref()
             .is_err_and(|error| error.code == ErrorCode::StaleRevision)

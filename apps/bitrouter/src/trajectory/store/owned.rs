@@ -18,6 +18,8 @@ use sea_orm::{
 mod codec;
 mod correlation;
 mod entities;
+#[cfg(feature = "harness")]
+mod experiment;
 pub(crate) mod headroom;
 pub(crate) mod io;
 #[cfg(test)]
@@ -49,6 +51,38 @@ impl super::TrajectoryStore {
 }
 
 impl OwnedStore {
+    #[cfg(feature = "harness")]
+    pub(crate) fn for_paid_recovery(
+        identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
+    ) -> Self {
+        let (scope, provenance) = Scope::for_paid_recovery(identity);
+        Self {
+            db: identity.database().clone(),
+            scope,
+            provenance,
+        }
+    }
+    #[cfg(feature = "harness")]
+    pub(crate) fn for_learner(identity: &crate::tenancy::learner::identity::ReadIdentity) -> Self {
+        let (scope, provenance) = Scope::for_learner(identity);
+        Self {
+            db: identity.database().clone(),
+            scope,
+            provenance,
+        }
+    }
+
+    #[cfg(feature = "harness")]
+    pub(crate) fn for_native_session(
+        authority: &crate::tenancy::execution::session::Authority,
+    ) -> Self {
+        let (scope, provenance) = Scope::for_session(authority);
+        Self {
+            db: authority.database().clone(),
+            scope,
+            provenance,
+        }
+    }
     /// The actor must open its H-owned transaction from this admitted DB handle.
     pub(crate) fn database(&self) -> &DatabaseConnection {
         &self.db

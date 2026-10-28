@@ -7,7 +7,7 @@ use std::time::Duration;
 
 const CLEANUP: Duration = Duration::from_secs(10);
 
-pub(super) struct Fixture {
+pub(in crate::tenancy::tests::execution::native::capture) struct Fixture {
     admin: DatabaseConnection,
     backend: DatabaseBackend,
     name: String,
@@ -17,7 +17,7 @@ pub(super) struct Fixture {
 }
 
 impl Fixture {
-    pub(super) async fn create() -> Result<Self> {
+    pub(in crate::tenancy::tests::execution::native::capture) async fn create() -> Result<Self> {
         let source = std::env::var("BITROUTER_TEST_DATABASE_URL")
             .context("set a dedicated PG/MySQL test URL with CREATE/DROP DATABASE privileges")?;
         let mut target = url::Url::parse(&source)?;
@@ -79,11 +79,16 @@ impl Fixture {
         })
     }
 
-    pub(super) fn retain(&mut self, service: &Service) {
+    pub(in crate::tenancy::tests::execution::native::capture) fn retain(
+        &mut self,
+        service: &Service,
+    ) {
         self.services.push(service.clone());
     }
 
-    pub(super) async fn connect(&mut self) -> Result<DatabaseConnection> {
+    pub(in crate::tenancy::tests::execution::native::capture) async fn connect(
+        &mut self,
+    ) -> Result<DatabaseConnection> {
         let db = connect(&self.url).await?;
         self.pools.push(db.clone());
         let sql = match self.backend {
@@ -120,7 +125,9 @@ impl Fixture {
 
     // This is test teardown after all campaign futures/registrations are dropped.
     // It deliberately does not claim a failed observation had a clean shutdown.
-    pub(super) async fn quiesce(&self) -> Result<()> {
+    pub(in crate::tenancy::tests::execution::native::capture) async fn quiesce(
+        &self,
+    ) -> Result<()> {
         let mut outcomes = Vec::new();
         for service in &self.services {
             outcomes.push(
@@ -141,7 +148,9 @@ impl Fixture {
         combine(Ok(()), outcomes)
     }
 
-    pub(super) async fn close_pools(&self) -> Result<()> {
+    pub(in crate::tenancy::tests::execution::native::capture) async fn close_pools(
+        &self,
+    ) -> Result<()> {
         self.quiesce().await?;
         let mut outcomes = Vec::new();
         for pool in &self.pools {
@@ -152,7 +161,11 @@ impl Fixture {
 
     /// Unknown consumer cleanup forbids physical DROP even if pool closure
     /// could succeed. No canceled COMMIT/rollback is manufactured in this test.
-    pub(super) async fn finish(self, outcome: Result<()>, consumers_clean: bool) -> Result<()> {
+    pub(in crate::tenancy::tests::execution::native::capture) async fn finish(
+        self,
+        outcome: Result<()>,
+        consumers_clean: bool,
+    ) -> Result<()> {
         let mut cleanup = Vec::new();
         let joined = self.quiesce().await;
         let mut closed = consumers_clean && joined.is_ok();
@@ -211,7 +224,9 @@ async fn connect(url: &str) -> Result<DatabaseConnection> {
         .context("fixture connection deadline exceeded")??)
 }
 
-pub(super) async fn close(db: &DatabaseConnection) -> Result<()> {
+pub(in crate::tenancy::tests::execution::native::capture) async fn close(
+    db: &DatabaseConnection,
+) -> Result<()> {
     tokio::time::timeout(CLEANUP, async {
         loop {
             db.close_by_ref().await?;

@@ -6,6 +6,30 @@ continues the existing service/crate, HTTP/2 and shared-concurrency refactors.
 All stages stay in the same stacked change. A checked stage requires runtime
 evidence and independent review; fixtures alone do not satisfy runtime gates.
 
+## Current local dispatch eligibility
+
+The supported opt-in Unix owning-process SQLite profile now advertises revision-
+bound dispatch and strict receipts when its existing live authority, storage and
+admission fences permit execution. Tenancy remains disabled by default. Startup
+must retain the exclusive database owner and complete initialization before
+publication; discovery grants no route or credential authority. Unsupported
+profiles and the existing stop, saturation and receipt fences remain unchanged.
+
+Independent source review found no P1/P2 in this enablement slice. The current
+source passed formatting and strict workspace/all-feature/all-target Clippy on
+Rust 1.97. An isolated all-feature build and four actual Cargo-built bro HTTP/SDK
+cases passed: H1 JSON with immediate durable receipt, restart and revocation;
+prior-knowledge h2c SSE with a durable receipt at DONE; retained configuration
+with source removal/wrong-key refusal; and owning-process lifecycle/restart.
+The tests preserve the original deadlines and run without retries. These results
+cover the all-feature local host; minimal feature profiles, final aggregate and
+platform/backend/artifact gates, and matched-artifact M5 remain pending.
+
+Historical stage records below describe their original candidates. Their earlier
+blanket-disabled capability statements are superseded by this current eligibility
+section; their recorded test evidence is not promoted to final qualification.
+External writer retirement remains required before a real legacy cutover.
+
 ## Delivery stages
 
 - [x] M0: frozen contracts, ownership inventory, migration example, adversarial
@@ -126,6 +150,13 @@ credential lookup or policy file supplies a missing reference. Reusable encrypti
 primitives moved inside the application; the existing shared-store wire format
 and its feature boundary remain unchanged. Compiler traversal, source expansion,
 resolved route envelopes and concurrent management reads have finite bounds.
+
+Compiler-v1 retains explicit targets and tariffs only. Registry v1 interface
+metadata, registry pricing and compiled registry requirements are rejected at
+the owned compilation, projection and retention boundaries; they are never
+silently discarded or resolved through the host catalog. Existing compiler-v1
+bytes remain unchanged. Block cost evidence compares exact nominal results
+before bounded upward rounding and still requires explicit used-cache tariffs.
 
 The base CLI adds `tenancy configuration validate/apply/read/activate/active`,
 `tenancy capabilities` and `tenancy operation`. Local validation checks typed
@@ -877,6 +908,25 @@ most 20 ms on the frozen local reference. Measurements use 15 s warmup, 60 s
 sampling and 30 s drain at concurrency 1/16/64/128. These are pending gates,
 not claims established by M0 smoke tests.
 
+## Owned paid-assessment slice under development
+
+The private slice follows the accepted budget interpretation in
+[M0](RESOURCE_TENANCY_M0.md#paid-assessment-budget-interpretation): cumulative
+accepted logical jobs per immutable configuration revision, no refund after
+durable acceptance, and a new budget for a new revision rather than a tenant
+spending limit. The budget period is immutable-revision cumulative.
+Observe requires an explicit imported evaluator binding and the checked native
+checkpoint action; it enables no automatic judge discovery or activation.
+
+The implementation boundary is a static retained Generation judge, the existing
+actor/H owner, execution admission/Registry/receipt, bounded assessment evidence
+and immutable assessment selection. Experiment assignment, candidate algorithms,
+automatic publication and the remaining inventory are separate work. Existing
+Legacy bytes and compiler-v1 inputs remain readable. No new public DTO, endpoint,
+permission or parallel registry is introduced. This paragraph records the
+authorized implementation boundary, not passing validation or feature completion;
+M2/M3 capability flags remain false.
+
 ## Boundaries
 
 Public DTOs stay in `bitrouter-ai`; HTTP transport stays in `bitrouter-sdk`;
@@ -887,3 +937,164 @@ default-on `http2` remain unchanged. No new runtime crate or external database
 is required. Identity-provider login, commercial policy and accounting remain
 external services. Single-instance operation is the acceptance target; distributed
 coordination is reserved without implementing it in this change.
+
+
+## Native conclusive assessment source
+
+The local authenticated NativeSession review/submit/retract path uses a distinct
+`recorded-native-quality-evidence-v1` projection. Its private CompletedRun decoder
+requires the normal full journal, ACK and artifact validation plus exact native
+experiment Unit/Step, execution receipt and delivered trajectory/Eval edges.
+It never constructs an ACP SessionIdentity or Checkpoint from native data.
+Assessment history reuses the existing scoped revision/head tables with a
+qualified native Unit parent and immutable versioned source edge. Current stable
+principal, grants, original scope ceilings, explicit head CAS and the existing H
+transaction owner apply to all actual facade calls.
+
+A current complete Human rubric supplies a separate checked quality contribution
+to cohort acquisition. Full credit maps to Pass, complete lower credit or a known
+severe violation to Fail, and incomplete quality to Inconclusive. This mapping
+is explicitly versioned and uses the existing full-credit workflow semantics.
+The original operational projection and frozen Eval root remain unchanged. The
+learner reacquires the source closure and effective assessment revision after
+computation; its retained checkpoint records real conclusive/unavailable counts
+and a separate effective-head digest. Existing measurement tuples for ACP-v2
+are unchanged; unsupported projection versions fail closed.
+
+This first source profile deliberately requires the current inspectable completed
+run and its original epoch. Closing the original owner can feed the existing
+stopped-source learner; replacing the run, reopening it at another epoch, or
+interpreting a recovery archive cannot silently retarget its judgement. Native
+paid assessment uses an explicit `NativeSession::assess_run(checkpoint,
+expected_revision)` call on the same authenticated owner. The retained experiment
+route must name a qualified static Generation evaluator; the selected subject
+and evaluator credentials must both be static, with no count, OAuth or recursive
+paid side effect. A caller-supplied evaluator, ambient judge discovery and
+non-experiment native source are unsupported by this slice.
+
+Durable acceptance pins the actual completed source in the original native
+binding, increments the immutable configuration revision's cumulative logical
+job counter, and reserves terminal history before any judge request. Version4
+paid records retain the native evidence packet separately from the bounded
+receipt seed; versions1/2/3 keep their existing serialization. The host polls the
+paid producer in its existing task, permits a Human correction while the judge
+is awaited, and prevents a new run from replacing the pinned source. Actual035
+receipt/output facts survive a lost head CAS; a Human head cannot be overwritten
+by the paid result. Known usage and accepted budget are never erased or refunded.
+
+A historical terminal audit checks the retained projection against its original
+immutable Unit/Step, receipt and publication closure. Recovery of an accepted
+unfinished job additionally requires actual native resource/journal close ACK,
+the exact old Registry stop-set and the existing single StartupOwner claim. A
+retained projection alone cannot authorize cleanup or execution. The startup H
+repairs known output as unselected or a missing terminal as strict Unknown and
+Interrupted, with no paid resend. The current-run rule for live review and
+contribution remains unchanged. This adds no table, writer, registry, permission,
+remote endpoint or automatic activation.
+
+Targeted local runtime qualification now covers the native assessment consumer,
+including original paid-future custody when a concurrent Human transaction
+becomes unknown. The original producer remains alive through its known provider
+result; revocation cannot grant a new send or discard accepted usage. The
+21-test paid/Human/callback/custody run passed with the normal test-thread stack.
+The earlier failing ownership regression is retained separately from this pass.
+
+A real four-run budget regression passed credential rotation, a newly created
+immutable revision, reactivation of the original revision and database reopen.
+The original revision remained spent; only the new revision admitted another
+logical job. Ten actual stopped-v4 recovery parents passed: nine independent
+negative changes to genuine accepted records each refused two fresh bootstraps
+without repairing rows or retaining the file lease, and the clean control
+preserved its original known receipt through two normal bootstraps. Corruptions
+cover owner metadata, native evidence, receipt digest, mirrored body, close ACK,
+cleanup epoch and Registry stop-set membership. Generic startup rejection is
+not claimed as proof of every internal validation branch.
+
+Three separately compiled gateway, core-only and harness-only libtests each
+passed both ACP and native paid startup campaigns. Every campaign uses an
+original physical database from the full producer, a clean inactive-draft
+control, explicit reduced-feature verification and a consumer ACK. Pending work
+is refused without changing its facts or resending provider requests; a missing
+test match cannot count as success. These six public parents now have dedicated
+Unix CI entrypoints. Local results do not imply successful CI on both platforms.
+
+Seven new-tool admission regressions passed, including actual experimental
+workspace reads, verification and ordinary-session compatibility. The one- and
+eight-outstanding-tool allowance cases each execute one actual tool; they do
+not claim eight concurrent tools. Separately, both full 8 MiB Choice receipt
+campaigns passed with application test optimization and unchanged debug
+assertions, product bounds and operation deadlines. The corrected two-pending
+campaign took about 18.9 minutes; its fixture observation wait is separate from
+the original H deadline.
+
+The actual 8 MiB Human-history boundary has targeted coverage. The cumulative
+32 MiB Human-read frontier remains unqualified: the measured eight-tool completed
+source plus the full permitted Human-only history is still below that ceiling.
+Reaching that exact maximum is not an independent required workload; the ceilings
+do not promise that every dimension can be saturated together. Final acceptance
+still requires the shared cumulative OperationBudget, checked charges before
+payload loading, next-read reservations before DML, and the actual 8 MiB history
+regression on the final candidate. This is not a proof of global unreachability.
+A fixed 31-small-tool diagnostic stopped during model selection after 22 actual
+provider requests. Its retained prefix necessarily needs at least 61,789 bytes
+for the next trajectory terminal reservation, beyond the unchanged 60 KiB cell
+limit. The exact runtime rejection site was not logged, so this source-derived
+bound is not a recorded throw-site claim. No completed source or Human-read
+boundary result was produced; the saved failure cannot be relabelled as one.
+No further probe, limit increase or fabricated source is proposed.
+
+After the internal message-layout and recovery-context lint corrections, strict
+workspace Clippy with all features and targets passed on Rust 1.97. All 51
+ordinary native experiment regressions then passed serially, including the
+current paid recovery, integrity, Human, authority and actual-tool consumers.
+Opt-in reduced/capacity campaigns retain their separately recorded results.
+Delivery stages remain open pending final qualification; current dispatch
+eligibility is described above.
+
+## Remaining acceptance
+
+The reviewed [ACP Block profile](RESOURCE_TENANCY_CAPTURE_PROFILE.md#explicit-retained-acp-block-profile)
+rebuilds effective Human/paid evidence, can withdraw unsupported adoption, and
+matches receipts using the original opaque configured-slot identities. Strict
+subject-token tariffs do not establish whole-family paid cost. The six tariff
+regressions and new target-matching regression passed, as did the existing opaque
+slot-projection test. The composition containing these corrections and native
+paid-repair tests also passed strict workspace, all-feature, all-target Clippy on
+Rust 1.97 and the actual application/fixture build. All seven native paid-repair
+parents subsequently passed on the same source: genuine missing035 producers,
+actual BEGIN/ROLLBACK/COMMIT failure, caught unwind, cancelled waiters, late known
+ACK and two fresh restarts retain the required owner/accounting proofs without
+provider resend. After the narrow tariff and fixture corrections, all sixteen
+exact Block parents and nine exact contract-conformance tests passed serially
+without retries on one frozen source, together with formatting and strict
+workspace, all-feature, all-target Clippy on Rust 1.97. Those finite consumer
+campaigns are closed; earlier failed runs remain failures. The reviewed Unix CI
+job now selects all sixteen Block and seven native-repair parents; installation
+of that workflow is not a remote CI or final platform pass.
+
+The remaining sequence is finite:
+
+1. Reconcile the final aggregate against the frozen evidence map for all ten
+   inventory families, sixteen operations and thirty-five scenarios. The map now
+   links the finite consumers to recorded evidence or explicit unsupported/
+   quarantine refusals; it is not itself a final runtime pass.
+2. Verify the final migration schemas, artifacts, CLI reports and archive
+   counts/digests. A real cutover additionally requires external writer-retirement
+   evidence; the offline verifier cannot establish it from attestations alone.
+3. Run final workspace, feature/platform, supported backend, artifact, docs,
+   distribution and contract gates on one composed candidate. Earlier targeted
+   results remain evidence for their pinned source, not the final aggregate.
+4. Complete the remaining minimal and HTTP/2 feature profiles for the supported
+   production path. The four actual all-feature compiled-host HTTP/SDK cases
+   passed as recorded above; test-only readiness is not production evidence.
+5. Execute the matched-artifact M5 campaign and final independent review/CI.
+   Unsupported profile intersections and arbitrary quota cross-products do not
+   add new requirements to this sequence.
+
+The external Node 24.10.0/pnpm 10.25.0 runner with the freshly rebuilt `38ddfd2`
+baseline pin passed build, typecheck and 462 checks (461 passed, one actual-Service
+opt-in test skipped). These are runner qualification results, not a benchmark or
+release result. The
+baseline is a new development-artifact rebuild, not recovered historical bytes;
+matching candidate artifacts, real capabilities, receipts/capacity/OTLP checks,
+observer overhead and the five paired performance rounds remain required.

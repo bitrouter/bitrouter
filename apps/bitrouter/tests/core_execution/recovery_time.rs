@@ -493,6 +493,53 @@ fn rewrite_last(
 }
 
 #[tokio::test]
+async fn retired_activity_gap_cannot_authorize_public_restoration() -> TestResult {
+    let source = super::recovery::completed_store().await?;
+    let harness =
+        super::recovery::harness_at(super::recovery::prefix(&source, "input.accepted")?).await;
+    let request = super::recovery::request(&*harness.store.lock().await, false)?;
+    let source_head = request.binding.durable_head.clone();
+    let evidence = request.active_time.as_ref().ok_or("activity")?;
+    let run_id = evidence.run_id.clone();
+    let gap = json!({"durable_head":source_head,"known_active_ms":evidence.active_ms});
+    let (session, _) = super::recovery::restore(request, harness.clone(), Vec::new()).await?;
+    session.disconnect().await;
+    let mut retained = harness.store.lock().await.clone();
+    // This synthetic durable input tests the public trust boundary, not proof
+    // of a stopped native process. The native process campaign supplies that.
+    rewrite_last(&mut retained, |payload| {
+        payload.checkpoint.state["activity_gaps"] = json!({run_id.clone():gap});
+        payload.checkpoint.state["run"]["activity_reconciliations"] = json!([]);
+        for event in &mut payload.events {
+            if event.kind == "session.restored" {
+                event.payload["active_time"] = serde_json::Value::Null;
+                event.payload["activity_gap"] = gap.clone();
+            }
+        }
+    })?;
+    for measurement in [false, true] {
+        let replacement = super::recovery::harness_at(retained.clone()).await;
+        let mut request = super::recovery::request(&*replacement.store.lock().await, true)?;
+        if !measurement {
+            request.active_time = None;
+        }
+        let error = super::recovery::restore(request, replacement.clone(), Vec::new())
+            .await
+            .err()
+            .ok_or("retired activity gap authorized public restoration")?;
+        let error = error.downcast_ref::<CoreError>().ok_or("core error")?;
+        assert_eq!(error.code, ErrorCode::RecoveryRequired);
+        assert_eq!(error.commit_status, CommitStatus::NotCommitted);
+        assert_eq!(
+            replacement.store.lock().await.batches.len(),
+            retained.batches.len()
+        );
+        assert!(replacement.sent.lock().await.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn recovery_time_rejects_erased_or_rewritten_clock_history_and_event() -> TestResult {
     let source = super::recovery::completed_store().await?;
     let harness =

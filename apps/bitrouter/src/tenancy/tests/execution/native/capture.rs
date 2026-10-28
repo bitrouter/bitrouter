@@ -1,9 +1,12 @@
 //! Real controller, child, mounted App and actor; never a fabricated capture proof.
 //! Build the Rust peer separately, then set BITROUTER_OWNED_CAPTURE_FIXTURE to it.
 #[cfg(unix)]
+mod block;
+#[cfg(unix)]
 mod faults;
 #[cfg(unix)]
 mod ingress;
+mod learning;
 #[cfg(all(
     unix,
     feature = "core",

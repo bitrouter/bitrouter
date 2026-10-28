@@ -74,6 +74,8 @@ impl TenantExecution {
             deadline,
             #[cfg(all(feature = "core", feature = "harness"))]
             session_closed,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            block,
         } = &self.submission;
         Ok(Access {
             submission: Submission {
@@ -85,6 +87,8 @@ impl TenantExecution {
                 deadline: *deadline,
                 #[cfg(all(feature = "core", feature = "harness"))]
                 session_closed: session_closed.clone(),
+                #[cfg(all(feature = "core", feature = "harness"))]
+                block: block.clone(),
             },
             route: self.route.clone(),
             owner: self.http_owner(),

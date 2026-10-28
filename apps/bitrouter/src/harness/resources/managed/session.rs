@@ -1,7 +1,8 @@
 //! One CoreSession drives the native harness. Workspace tools and approvals
 //! remain local, with their start ledger serialized against checkpoint fences.
 
-mod owned;
+pub mod assessment;
+pub(crate) mod owned;
 
 use crate::storage::checkpoint::CheckpointBatchExt;
 use std::path::{Path, PathBuf};
@@ -253,7 +254,7 @@ impl NativeSession {
                 .canonicalize()
                 .map_err(|err| error(err.to_string()))?,
         };
-        let (revision, previous) = match loaded {
+        let (mut revision, previous) = match loaded {
             Some((revision, bytes)) => {
                 if bytes.len() > MAX_STORE_BYTES {
                     return Err(error("native session exceeds storage bound"));
@@ -261,7 +262,10 @@ impl NativeSession {
                 let journal: Journal =
                     serde_json::from_slice(&bytes).map_err(|_| error("invalid native journal"))?;
                 if journal.format != 1
-                    || !journal.released
+                    || (!journal.released
+                        && opening
+                            .as_ref()
+                            .is_none_or(|opening| opening.store.recovery().is_none()))
                     || journal.workspace != workspace
                     || journal.mode != mode
                 {
@@ -298,17 +302,64 @@ impl NativeSession {
             grant.harness_id = opening.store.descriptor().harness.clone();
             grant.session_id = opening.store.descriptor().session.clone();
         }
+        if let Some(opening) = &mut opening {
+            if opening.store.recovery().is_some() && !config.servers.is_empty() {
+                return Err(CoreError::rejected(
+                    ErrorCode::RecoveryRequired,
+                    "stopped native recovery requires an empty MCP configuration",
+                ));
+            }
+            let binding = opening
+                .authority
+                .bind(opening.store.descriptor().clone(), grant.clone())?;
+            if let Some(checked) = opening.store.recovery() {
+                binding.begin_recovery(checked.clone())?;
+            }
+            opening.store.attach(binding.clone())?;
+            opening.binding = Some(binding);
+        }
         let owner = ExecutionOwner {
             server_instance_id: core_id,
             generation: epoch,
             stopped_at_ms: None,
         };
         let fence = Arc::new(
-            WorkspaceFence::acquire(&workspace, &owner, &grant.session_id)
-                .map_err(|err| error(err.to_string()))?,
+            match opening
+                .as_ref()
+                .and_then(|opening| opening.store.recovery())
+            {
+                Some(checked) => WorkspaceFence::reserve_stopped_native(&workspace, checked),
+                None => WorkspaceFence::acquire(&workspace, &owner, &grant.session_id),
+            }
+            .map_err(|err| error(err.to_string()))?,
         );
         if let Some(opening) = &mut opening {
             opening.workspace = Some(fence.clone());
+        }
+        if let Some(opening) = &mut opening
+            && opening.store.recovery().is_none()
+        {
+            opening.epoch_started = true;
+            let prior = previous
+                .as_ref()
+                .map(crate::managed_store::owned::encode)
+                .transpose()
+                .map_err(|_| error("native opening predecessor bound"))?;
+            let next_revision = opening
+                .store
+                .begin_epoch(
+                    revision,
+                    &grant,
+                    &workspace,
+                    mode,
+                    prior.as_deref(),
+                    config.servers.is_empty(),
+                )
+                .await?;
+            // Without a startup stamp, begin_epoch leaves the revision unchanged.
+            // Only its acknowledged marker write advances the durable revision.
+            opening.epoch_committed = next_revision != revision;
+            revision = next_revision;
         }
         #[cfg(test)]
         if let Some(opening) = &opening {
@@ -331,11 +382,14 @@ impl NativeSession {
                     config,
                     &caller,
                     opening.cancellation(),
-                    opening.mcp.clone(),
-                    &crate::gateway::mcp::client::Discovery::native(
-                        opening.authority.clone(),
-                        opening.cancellation().clone(),
-                    ),
+                    super::DiscoveryOwner {
+                        mcp: opening.mcp.clone(),
+                        discovery: &crate::gateway::mcp::client::Discovery::native(
+                            opening.authority.clone(),
+                            opening.cancellation().clone(),
+                        ),
+                    },
+                    opening.authority.has_choices(),
                 )
                 .await
             }
@@ -372,21 +426,28 @@ impl NativeSession {
             let (sender, receiver) = mpsc::channel(32);
             let port = if let Some(opening) = &mut opening {
                 let binding = opening
-                    .authority
-                    .bind(opening.store.descriptor().clone(), grant.clone())?;
-                opening.store.attach(binding.clone())?;
-                opening.binding = Some(binding.clone());
-                let port = Arc::new(NativePort::new_owned(
-                    revision,
-                    journal.clone(),
-                    store,
-                    sender,
-                    resources.clone(),
-                    binding,
-                ));
+                    .binding
+                    .clone()
+                    .ok_or_else(|| error("native binding missing"))?;
+                if let Some(previous) = &previous {
+                    super::store::choice::validate(previous, Some(&binding))?;
+                }
+                super::store::choice::validate(&journal, Some(&binding))?;
+                let port = Arc::new(
+                    NativePort::new_owned(
+                        revision,
+                        journal.clone(),
+                        store,
+                        sender,
+                        resources.clone(),
+                        binding,
+                    )
+                    .recovering(opening.store.recovery().cloned()),
+                );
                 opening.port = Some(port.clone());
                 port
             } else {
+                super::store::choice::validate(&journal, None)?;
                 Arc::new(NativePort::new(
                     revision,
                     journal.clone(),
@@ -400,15 +461,25 @@ impl NativeSession {
                 if let Some(opening) = &mut opening {
                     opening.epoch_started = true;
                 }
-                port.persist(&mut state, journal.clone()).await?;
-                if let Some(opening) = &mut opening {
-                    opening.epoch_committed = true;
+                if opening
+                    .as_ref()
+                    .is_none_or(|opening| opening.store.recovery().is_none())
+                {
+                    port.persist(&mut state, journal.clone()).await?;
                 }
+                if let Some(opening) = &mut opening {
+                    opening.epoch_committed = opening.store.recovery().is_none();
+                }
+            }
+            let mut operations = resources.manifest().required_features.clone();
+            let context_feature = crate::storage::checkpoint::snapshot::context::FEATURE;
+            if !operations.iter().any(|feature| feature == context_feature) {
+                operations.push(context_feature.into());
             }
             let caps = Capabilities {
                 version: VERSION,
                 core_instance_id: grant.core_instance_id.clone(),
-                operations: resources.manifest().required_features.clone(),
+                operations,
                 transports: vec!["in_process".into()],
                 unsupported_features: vec!["running_restore_handoff".into()],
                 limits: journal.limits.clone(),
@@ -427,6 +498,7 @@ impl NativeSession {
                     .binding
                     .clone()
                     .ok_or_else(|| error("native ownership missing"))?;
+                let choice_journal = super::store::choice::JournalView::new(&port, &opening.store);
                 let register = |core| {
                     opening.core = Some(core);
                     std::future::ready(Ok(()))
@@ -446,6 +518,7 @@ impl NativeSession {
                         app,
                         checked,
                         port.clone(),
+                        choice_journal,
                         register,
                     )
                     .await?
@@ -456,6 +529,7 @@ impl NativeSession {
                         app,
                         checked,
                         port.clone(),
+                        choice_journal,
                         register,
                     )
                     .await?
@@ -480,6 +554,25 @@ impl NativeSession {
             } else {
                 CoreSession::bind(binding, &caps, app, caller, port.clone()).await?
             };
+            if let Some(opening) = &mut opening
+                && let Some(checked) = opening.store.recovery().cloned()
+            {
+                opening.epoch_committed = checked.committed();
+                let bound = opening
+                    .binding
+                    .as_ref()
+                    .ok_or_else(|| error("native binding missing"))?;
+                fence
+                    .activate_stopped_native(&checked, bound.ownership_grant())
+                    .map_err(|err| error(err.to_string()))?;
+                opening.store.retire_recovery()?;
+                let mut state = port.state.lock().await;
+                let next = state.journal.clone();
+                port.persist(&mut state, next).await?;
+                checked
+                    .confirm_retired()
+                    .map_err(|_| error("native retirement acknowledgement missing"))?;
+            }
             let revision = core
                 .snapshot()
                 .await
@@ -519,6 +612,29 @@ impl NativeSession {
 
     pub fn core(&self) -> &CoreSession {
         &self.core
+    }
+
+    /// Assess one frozen Eval root against this authenticated handle's retained
+    /// experiment route. This local read starts no model work and takes no
+    /// execution lease. Current tenant-wide ResourceRead and the original
+    /// credential/binding ceilings are required through delivery.
+    ///
+    /// # Errors
+    /// Rejects Legacy, a busy owner, unsupported retained policy, unqualified
+    /// external evidence, revoked authority or an exceeded bounded read budget.
+    /// Built-in operational evidence does not imply a quality pass or promotion.
+    pub async fn experiment_cohort(
+        &self,
+        model: &str,
+        evidence_root: &str,
+    ) -> Result<crate::core::optimization::cohort::CohortAssessment, CoreError> {
+        let handle = self.owned_handle.as_ref().ok_or_else(|| {
+            CoreError::rejected(
+                ErrorCode::UnauthorizedScope,
+                "native cohort requires an authenticated session",
+            )
+        })?;
+        handle.cohort(model, evidence_root).await
     }
 
     pub async fn run(

@@ -1,6 +1,8 @@
 //! Passive checkpoint publication inside the existing authority transaction.
 //! Only bounded references/cursors are stored here; raw capture stays in harness.
 
+pub(crate) mod assessment;
+
 use crate::{
     harness::trajectory::owned::{
         Association,

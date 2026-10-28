@@ -1,4 +1,7 @@
 //! The built-in authority is obtainable only from an acknowledged trajectory start.
+#[cfg(feature = "harness")]
+mod native;
+
 use super::*;
 use crate::{
     storage::operation_budget::OperationBudget, tenancy::trajectory::StartProof,

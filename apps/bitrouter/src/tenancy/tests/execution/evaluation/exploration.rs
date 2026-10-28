@@ -3,7 +3,6 @@
 use super::*;
 use crate::{
     gateway::{
-        error::BitrouterError,
         observability::decision::PendingEvalDecisionStore,
         routing::{
             experiment_identity::{
@@ -20,10 +19,7 @@ use crate::{
         validate_document,
     },
 };
-use bitrouter_ai::{
-    routing::PolicyModelTarget,
-    tenancy::operation::{DispatchState, Error as TenancyError},
-};
+use bitrouter_ai::routing::PolicyModelTarget;
 
 const MODES: [LearningMode; 3] = [
     LearningMode::Off,
@@ -33,7 +29,6 @@ const MODES: [LearningMode; 3] = [
 
 #[derive(Clone, Copy, Debug)]
 enum Case {
-    SelectedExperiment,
     UnselectedExperiment,
     InertReference,
 }
@@ -41,10 +36,6 @@ enum Case {
 impl Case {
     fn binds_policy(self) -> bool {
         !matches!(self, Self::InertReference)
-    }
-
-    fn rejected(self) -> bool {
-        matches!(self, Self::SelectedExperiment)
     }
 }
 
@@ -171,7 +162,83 @@ fn document(case: Case) -> Result<PolicyLock> {
 #[tokio::test]
 async fn selected_active_experiment_is_fenced_in_every_learning_mode() -> Result<()> {
     for mode in MODES {
-        exercise(Case::SelectedExperiment, mode).await?;
+        let provider = wiremock::MockServer::start().await;
+        let url = format!("{}/v1", provider.uri());
+        let (fixture, mut route, slot) = provision_protocol(&url, "chat_completions").await?;
+        // The learning mode is a valid retained configuration choice. It cannot
+        // authorize an unguarded experiment in a subsequently imported route.
+        let mut input = fixture.configuration_input("experiment-mode")?;
+        input.document.routes = vec![route.clone()];
+        input.document.learning.mode = mode;
+        let configured = fixture
+            .service
+            .execute(
+                fixture.operator.clone(),
+                Command::Configuration(fixture.tenant.clone(), input),
+            )
+            .await
+            .map_err(failure)?;
+        let StoredResponse::Configuration(configured) = configured else {
+            anyhow::bail!("expected retained learning mode");
+        };
+        ensure!(configured.document.learning.mode == mode);
+        fixture.service.shutdown().await?;
+        let before = retained_bytes(&fixture).await?;
+        let document = signed_experiment("selected")?;
+        let routing = json!({
+            "providers":{"mock":{"api_base":url,"api_protocol":[{"*":"chat_completions"}],
+                "models":[{"id":"model-a"},{"id":"model-b"}]}},
+            "routers":{"observed":{"selection":{"kind":"policy","policy":"selected","base_model":"mock:model-a"}}}
+        });
+        let mut config: crate::config::Config = serde_json::from_value(routing.clone())?;
+        config.inherit_defaults = false;
+        // The signed artifact is valid for the ordinary runtime. The owned
+        // import boundary specifically requires a retained progress guard.
+        let ordinary = PolicyRuntime::from_document(
+            &config,
+            Some(document.clone()),
+            PendingEvalDecisionStore::default(),
+            None,
+        )?;
+        drop(ordinary);
+        ensure!(
+            crate::tenancy::trajectory_profile::retained_guarded(&config, &document, "selected")
+                .is_err()
+        );
+        let policy = ResourceRef {
+            owner_kind: OwnerKind::Tenant,
+            owner_id: fixture.tenant.as_str().try_into()?,
+            resource_kind: ResourceKind::Policy,
+            resource_id: "observed-policy".try_into()?,
+            revision_id: "r1".try_into()?,
+        };
+        route.revision_id = "r2".try_into()?;
+        let resources =
+            crate::tenancy::resources::Resources::with_key(fixture.installation.clone(), [29; 32])?;
+        let imported = resources.provision_bytes(&fixture.db, &serde_json::to_vec(&json!({
+            "format":1, "installation_id":fixture.installation, "resources":[
+                {"reference":policy,"definition":{"kind":"policy","name":"selected","document":document}},
+                {"reference":route,"definition":{"kind":"route","selector":"bitrouter/observed",
+                    "policy":policy,"routing":routing,
+                    "credentials":[{"provider":"mock","account":"default","credential":slot}]}}
+            ]
+        }))?).await;
+        let error = imported
+            .err()
+            .context("unguarded experiment import was accepted")?;
+        ensure!(error.to_string() == "invalid imported route closure");
+        ensure!(
+            retained_bytes(&fixture).await? == before,
+            "rejected {mode:?} import changed retained policy/route/configuration bytes"
+        );
+        ensure!(
+            provider
+                .received_requests()
+                .await
+                .context("provider recording")?
+                .is_empty(),
+            "rejected {mode:?} import sent provider work"
+        );
     }
     Ok(())
 }
@@ -249,8 +316,8 @@ async fn exercise(case: Case, mode: LearningMode) -> Result<()> {
             ensure!(policy.name() == "selected");
             ensure!(serde_json::to_vec(policy.document())? == document_bytes);
             ensure!(semantic_digest(policy.document())? == digest);
-            // The unchanged artifact is accepted by the ordinary runtime. The
-            // tenant fence, not an unrelated policy construction error, rejects it.
+            // The retained artifact remains valid for the ordinary runtime;
+            // its unselected experiment does not change the selected route.
             let config = policy
                 .configuration()
                 .map_err(|code| anyhow::anyhow!("policy configuration: {code:?}"))?;
@@ -284,25 +351,8 @@ async fn exercise(case: Case, mode: LearningMode) -> Result<()> {
                 "inert policy lost its ownership dependency"
             );
         }
-        if case.rejected() {
-            ensure!(matches!(
-                execution.pipeline(),
-                Err(BitrouterError::Forbidden(_))
-            ));
-            let failure = execution.failure().context("remembered tenant failure")?;
-            ensure!(failure.0.code == ErrorCode::CapabilityMismatch);
-            ensure!(failure.0.dispatch_state == DispatchState::NotStarted);
-            ensure!(failure.0.execution_id.as_ref() == Some(execution.id()));
-            let policy = execution
-                .route()
-                .policy()
-                .context("retained policy after refusal")?;
-            ensure!(serde_json::to_vec(policy.document())? == document_bytes);
-            ensure!(semantic_digest(policy.document())? == digest);
-        } else {
-            drop(execution.pipeline().context("construct static tenant pipeline")?);
-            ensure!(execution.failure().is_none());
-        }
+        drop(execution.pipeline().context("construct static tenant pipeline")?);
+        ensure!(execution.failure().is_none());
         drop(execution);
         tokio::time::timeout(TIMEOUT, fixture.service.admission.wait_drained())
             .await
@@ -327,27 +377,13 @@ async fn exercise(case: Case, mode: LearningMode) -> Result<()> {
             axum::body::to_bytes(response.into_body(), 1024 * 1024),
         )
         .await??;
-        if case.rejected() {
-            ensure!(
-                status == StatusCode::CONFLICT,
-                "expected typed capability refusal, got {status}"
-            );
-            let failure: TenancyError = serde_json::from_slice(&body)?;
-            ensure!(failure.code == ErrorCode::CapabilityMismatch);
-            ensure!(failure.dispatch_state == DispatchState::NotStarted);
-            ensure!(
-                failure.execution_id.is_some(),
-                "failure happened before execution admission"
-            );
-        } else {
-            ensure!(
-                status == StatusCode::OK,
-                "static execution failed: {status}; retained heap {heap_bytes} bytes; provider calls {}; body {}",
-                state.calls.load(Ordering::SeqCst),
-                String::from_utf8_lossy(&body)
-            );
-            ensure!(String::from_utf8_lossy(&body).contains("observed"));
-        }
+        ensure!(
+            status == StatusCode::OK,
+            "static execution failed: {status}; retained heap {heap_bytes} bytes; provider calls {}; body {}",
+            state.calls.load(Ordering::SeqCst),
+            String::from_utf8_lossy(&body)
+        );
+        ensure!(String::from_utf8_lossy(&body).contains("observed"));
         // HTTP response completion does not join the registry's background
         // drain. With active=1/queue=0, a second admission can legitimately fail
         // until that owner drops. Require automatic release before the warm
@@ -374,7 +410,7 @@ async fn exercise(case: Case, mode: LearningMode) -> Result<()> {
         tokio::time::timeout(TIMEOUT, fixture.service.pipelines.close_and_drain())
             .await
             .context("registry drain timed out")??;
-        ensure!(state.calls.load(Ordering::SeqCst) == usize::from(!case.rejected()));
+        ensure!(state.calls.load(Ordering::SeqCst) == 1);
         ensure!(
             retained_bytes(&fixture).await? == before,
             "execution rewrote retained bytes or digests"

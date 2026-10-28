@@ -570,25 +570,88 @@ version. Evaluator scores are not pooled when their contracts differ. See the
 
 ## Authenticated embedding capture
 
-The local Rust `harness::acp::controlled::ControlledSession::open_authenticated`
-facade uses an assembled App and its existing tenant inference listener. This is
-a capability-gated embedding entry, not a tenant CLI or session HTTP endpoint;
-production tenant dispatch and strict receipts remain unavailable. The embedding
-host supplies the original execution headers and a trusted agent launch descriptor.
+With `core` and `harness`, the local Rust
+`harness::acp::controlled::ControlledSession::open_authenticated` facade uses an
+assembled App and its existing tenant inference listener. Require all three
+[tenant dispatch capabilities](remote-administration.md) and supply the issued
+tenant credential, exact execution binding and a trusted agent launch descriptor.
+This is a local embedding entry, not a tenant CLI or session HTTP endpoint.
 Capture uses the same process/controller factory as ordinary ACP clients.
 
-The first profile requires explicit tenant-wide execution, evaluation submission,
-resource read and credential-use grants, one retained route, provider configuration
+This profile requires explicit tenant-wide execution, evaluation submission,
+resource read and credential-use grants, one retained subject route, provider configuration
 support and a confirmed `model` select option. It permits fresh native sessions;
 list/load/resume/fork/delete and selected active experiments are refused. The
 explicit launch environment is complete: ambient variables are cleared.
 
 Raw opted-in observations remain in harness capture. The checkpoint operation
 returns a bounded stopped-prefix reference in Observe/passive Explore; Off does
-no checkpoint discovery. There is no paid judge, automatic delegation, quota
-funding, selection or promotion. Dropping a handle requests stop while the shared
-Service owner retains child and capture cleanup. An unconfirmed shutdown is an
-error, not permission to launch a replacement. See the library embedding example
+no checkpoint discovery. With no imported assessment profile, this stays passive.
+An explicit operator-imported `assessment_v1` profile may select one exact static
+Generation judge as a second configuration root. Only the checked checkpoint call
+initiates that assessment under current evaluation, execution and credential grants;
+ordinary prompt/capture operations do not discover a judge. The original stopped
+evidence is bounded before sending through the owned native execution/receipt path.
+The allowance is cumulative accepted logical jobs per immutable
+configuration revision, not a tenant spending limit; durable acceptance is not
+refunded. Unresolved accepted jobs block readiness rather than replaying a provider.
+Assessment remains explicitly requested; it does not activate or promote a policy.
+Dropping a handle requests stop while the shared Service owner retains child and
+capture cleanup. An unconfirmed shutdown is an error, not permission to launch a
+replacement. See the library embedding example
 `apps/bitrouter/examples/owned_capture_handler.rs`.
 
 Owned passive capture bounds child stdout before SDK line accumulation/JSON/queues: 64 KiB per raw frame, 512 frames and 8 MiB cumulative wire input per connection, without refill. Exhaustion closes that same owned connection and leaves an interrupted capture; Legacy transport is unchanged. These input caps are separate from serialized observation bounds and do not constitute runtime memory qualification.
+
+
+### Explicit human review in the local embedding
+
+With core and harness enabled, the original authenticated ControlledSession also
+provides `review_checkpoint(native, checkpoint_id)`, `submit_assessment(native,
+RubricSubmission)` and `retract_assessment(native, RevisionInput)`. Review with
+None reads the latest already-frozen checkpoint; it does not freeze a prefix or
+start a judge. Use Some(id) for an exact historical checkpoint of that same live
+controller. These are local Rust methods, with no new CLI/HTTP/ACP command.
+
+The read model includes the fixed rubric, cited evidence, exact nullable expected
+head, bounded revision history, optional prefill and current watermark. An
+explicit human editor supplies the existing structured rubric; the server checks
+Human source and fills stable-principal attribution. Preserve the reviewed head
+and submission ID on retry. Retraction requires an explicit reason and writes a
+Human tombstone. It cannot delete or replace known paid output or usage.
+
+The example `owned_capture_handler` includes `review_and_submit`,
+`review_and_retract` and a borrowed concurrent checkpoint helper. Keep polling
+that checkpoint alongside UI/update/permission handling; a human CAS error must
+not cancel the paid call. Manual admission uses the same finite capture actor
+and pending slot. A canceled manual waiter is reconciled before the next ordinary
+ACP effect. Unknown cleanup still requires the original owner to remain alive.
+
+The owned manual path is independent of a paid evaluator profile. Where the
+separately installed explicit assessment profile accepts a paid job, it reserves
+one history row and1MiB before sending. Human history cannot consume that space.
+History is limited to128 revisions/8MiB, individual revisions to1MiB and a full
+review to16MiB under the existing1024-row/32MiB work budget. Capacity rejection
+never truncates history or refunds a paid logical job. These limits are not an
+RSS or runtime-performance guarantee. Cross-restart or fresh-credential adoption
+of an old controller is unsupported, even when tenant dispatch is available.
+
+
+### Explicit retained Block in authenticated capture
+
+An operator may import one `block_v1` profile with a retained ACP subject route
+and its two approved static selectors. Use that configuration in Explore mode
+through the existing authenticated ControlledSession and same-App listener; no
+new daemon endpoint, public authority constructor or manual correlation header is
+introduced. The actual opener installs the private provider link and retains the
+original capture owner. Do not copy that link to another controller or reuse it
+after close/restart. Each HTTP request still needs its own current execution and
+credential grants and the original pending ACP prompt.
+
+The committed scoped Block intent selects only approved retained targets. The
+original checked checkpoint/Human/paid paths supply judgement and receipt facts
+for the existing Block learner; a non-hit, stale head, missing usage or ambiguous
+cost stays inconclusive. No implicit host Block catalog or global session lookup
+is used. Passive capture without the explicit profile remains unchanged.
+The Block profile supplies no additional grant: the same live dispatch, current
+credential, retained-route and original-controller checks still apply.

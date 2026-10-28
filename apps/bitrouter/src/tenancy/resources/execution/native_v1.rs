@@ -59,16 +59,27 @@ impl NativeChains {
 /// Cumulative per-revision work. Failed route attempts consume their work too;
 /// exhaustion stops later attempts before parsing or allocating another source.
 /// This serialized/source-expansion quota is separate from retained heap weight.
-pub(super) struct Budget {
+pub(super) struct Budget<'a> {
+    operation: Option<&'a crate::storage::operation_budget::OperationBudget<'a>>,
+    rejected: Option<crate::storage::operation_budget::Error>,
     chains: usize,
     indices: usize,
     work: ByteBudget,
     exhausted: bool,
 }
 
-impl Budget {
+impl<'a> Budget<'a> {
+    #[cfg(test)]
     pub(super) fn new() -> Self {
+        Self::with_operation(None)
+    }
+
+    pub(super) fn with_operation(
+        operation: Option<&'a crate::storage::operation_budget::OperationBudget<'a>>,
+    ) -> Self {
         Self {
+            operation,
+            rejected: None,
             chains: MAX_CHAINS,
             indices: MAX_INDICES,
             work: ByteBudget::new(MAX_WORK_BYTES),
@@ -76,18 +87,67 @@ impl Budget {
         }
     }
 
+    pub(super) fn block_config(&mut self, source: &Value) -> anyhow::Result<Config> {
+        compiler::routing_config_observed(source, Some(&mut self.work), self.operation)
+            .map(|(config, _)| config)
+    }
+
+    pub(super) fn block_pricing_bytes(&mut self, bytes: usize) -> anyhow::Result<()> {
+        self.bytes(bytes)
+            .map_err(|_| anyhow::Error::new(ExecutionCapacityExceeded))
+    }
+
+    fn shared(&mut self, bytes: usize) -> Result<()> {
+        if let Some(operation) = self.operation
+            && let Err(error) = operation.charge(0, bytes)
+        {
+            self.rejected = Some(error);
+            return Err(Unavailable::Capacity);
+        }
+        Ok(())
+    }
+
+    /// A caller-level quota rejection cannot become a readable HTTP-only route.
+    pub(super) fn check_operation(&mut self) -> anyhow::Result<()> {
+        if let Some(error) = self.rejected.take() {
+            return Err(error.into());
+        }
+        if let Some(operation) = self.operation {
+            operation.check()?;
+        }
+        Ok(())
+    }
+
+    /// Target decoding has a separate 8 MiB content quota. Charge its exact
+    /// serialized content before the typed clone/projection is allocated.
+    pub(super) fn target(&self, value: &Value) -> anyhow::Result<()> {
+        if let Some(operation) = self.operation {
+            let mut measured = ByteBudget::new(super::super::MAX_ARTIFACT_BYTES);
+            measured.charge(value)?;
+            let bytes = super::super::MAX_ARTIFACT_BYTES - measured.remaining();
+            operation.charge(0, bytes.checked_mul(2).ok_or(ExecutionCapacityExceeded)?)?;
+        }
+        Ok(())
+    }
+
     fn bytes(&mut self, bytes: usize) -> Result<()> {
-        self.work = ByteBudget::new(
-            self.work
-                .remaining()
-                .checked_sub(bytes)
-                .ok_or(Unavailable::Capacity)?,
-        );
+        let remaining = self
+            .work
+            .remaining()
+            .checked_sub(bytes)
+            .ok_or(Unavailable::Capacity)?;
+        self.shared(bytes)?;
+        self.work = ByteBudget::new(remaining);
         Ok(())
     }
 
     fn value(&mut self, value: &impl Serialize) -> Result<()> {
-        self.work.charge(value).map_err(|_| Unavailable::Capacity)
+        let before = self.work.remaining();
+        let result = self.work.charge(value).map_err(|_| Unavailable::Capacity);
+        // Serialization itself is allocation-free. Even a failed local quota
+        // check consumes its measured prefix in the caller's cumulative work.
+        self.shared(before - self.work.remaining())?;
+        result
     }
 
     fn prefs(&mut self, prefs: &RoutingPrefs) -> Result<()> {
@@ -99,7 +159,13 @@ impl Budget {
             ignore,
             require_capabilities,
             inbound_protocol,
+            registry_requirements,
         } = prefs;
+        // These are compiled Stage-0 preferences, not request-time requirements.
+        // Compiler-v1 neither retains nor accounts for registry selection state.
+        if registry_requirements.is_some() {
+            return Err(Unavailable::Unsupported);
+        }
         self.value(&(
             operation,
             sort,
@@ -140,7 +206,7 @@ pub(super) fn derive(
     credentials: &[CredentialBinding],
     approved: &[Chain],
     candidates: &[Candidate],
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> NativeChains {
     if budget.exhausted {
         return NativeChains::Unavailable(Unavailable::Capacity);
@@ -164,7 +230,7 @@ fn derive_inner(
     credentials: &[CredentialBinding],
     approved: &[Chain],
     candidates: &[Candidate],
-    budget: &mut Budget,
+    budget: &mut Budget<'_>,
 ) -> Result<Vec<NativeChain>> {
     for (position, chain) in approved.iter().enumerate() {
         if !approved[..position].iter().any(|earlier| {
@@ -175,7 +241,16 @@ fn derive_inner(
         }
     }
     let (mut config, sizes) =
-        compiler::routing_config_bounded(source, Some(&mut budget.work)).map_err(classify)?;
+        match compiler::routing_config_observed(source, Some(&mut budget.work), budget.operation) {
+            Ok(value) => value,
+            Err(error) => match error.downcast::<crate::storage::operation_budget::Error>() {
+                Ok(error) => {
+                    budget.rejected = Some(error);
+                    return Err(Unavailable::Capacity);
+                }
+                Err(error) => return Err(classify(error)),
+            },
+        };
     // Match immutable compilation: never consume the process balance counter.
     for provider in config.providers.values_mut() {
         provider.account_strategy = AccountStrategy::Failover;
@@ -242,10 +317,7 @@ fn derive_inner(
                 })
                 .ok_or(Unavailable::Unsupported)?;
             let value = compiler::target_value(target).map_err(classify)?;
-            budget
-                .work
-                .charge(&value)
-                .map_err(|_| Unavailable::Capacity)?;
+            budget.value(&value)?;
             let (_, projection) = target::decode(value).map_err(classify)?;
             budget.bytes(projection.len())?;
             let index = candidates
@@ -332,7 +404,7 @@ fn named_source<'a>(config: &'a Config, name: &str) -> Result<Option<Stage0Sourc
     }
 }
 
-fn resolve_stage0(config: &Config, raw: &str, budget: &mut Budget) -> Result<PresetResolution> {
+fn resolve_stage0(config: &Config, raw: &str, budget: &mut Budget<'_>) -> Result<PresetResolution> {
     let (head, variant) = match raw.rsplit_once(':') {
         Some((head, name)) if config.variants.contains_key(name) => (head, Some(name)),
         _ => (raw, None),

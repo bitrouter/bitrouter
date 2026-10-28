@@ -74,6 +74,7 @@ pub(super) fn project(target: &RoutingTarget) -> Result<Vec<u8>> {
     // Deliberately exhaustive: adding any behavioral field must break this
     // projection at compile time rather than silently broadening membership.
     let RoutingTarget {
+        registry,
         provider_name,
         service_id,
         api_base,
@@ -91,6 +92,10 @@ pub(super) fn project(target: &RoutingTarget) -> Result<Vec<u8>> {
         auth_scheme,
         headers,
     } = target;
+    ensure!(
+        registry.is_none(),
+        "registry targets are not qualified by the owned manifest"
+    );
     ensure!(
         api_key.is_empty() && api_key_override.is_none() && api_base_override.is_none(),
         "retained target carries mutable credentials or endpoint overrides"
@@ -178,6 +183,8 @@ pub(super) fn decode(value: Value) -> Result<(RoutingTarget, Vec<u8>)> {
         })
         .collect::<Result<Vec<_>>>()?;
     let target = RoutingTarget {
+        // Compiler-v1 has no registry authority; preserve its exact wire shape.
+        registry: None,
         provider_name: decoded.provider,
         service_id: decoded.model,
         api_base: decoded.api_base,

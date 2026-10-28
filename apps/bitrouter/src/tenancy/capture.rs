@@ -1,4 +1,5 @@
 //! Private checked association for the authenticated local ACP host.
+pub(crate) mod human;
 pub(crate) mod port;
 pub(in crate::tenancy) mod queue;
 
@@ -32,6 +33,10 @@ pub(crate) struct Binding {
     ingress_rejected: AtomicBool,
     stop: tokio_util::sync::CancellationToken,
     model: String,
+    capture_head: std::sync::atomic::AtomicI64,
+    block_generation: std::sync::atomic::AtomicU64,
+    assessment: Option<super::learning::Profile>,
+    block: Option<Arc<super::resources::execution::RetainedRoute>>,
 }
 pub(crate) struct Prepared {
     pub(crate) binding: Arc<Binding>,
@@ -59,9 +64,7 @@ impl Service {
             return Err(ErrorCode::Forbidden.into());
         }
         let retained = authority.retained().await?;
-        let [route_ref] = retained.document().routes.as_slice() else {
-            return Err(ErrorCode::CapabilityMismatch.into());
-        };
+        let route_ref = retained.capture_model().map_err(Failure::from)?;
         let model = route_ref.resource_id.to_string();
         let (route, protocol) = [
             (ApiProtocol::ChatCompletions, LlmProtocol::OpenAi),
@@ -88,6 +91,16 @@ impl Service {
         }) {
             return Err(ErrorCode::CapabilityMismatch.into());
         }
+        let block = route.block_profile().map(|_| route.clone());
+        if route
+            .block_profile()
+            .is_some_and(|profile| profile.definition.source != source)
+            || (block.is_some()
+                && retained.document().learning.mode
+                    != bitrouter_ai::tenancy::configuration::LearningMode::Explore)
+        {
+            return Err(ErrorCode::CapabilityMismatch.into());
+        }
         let dependencies = route.dependencies().to_vec();
         if dependencies.is_empty() {
             return Err(ErrorCode::AuthorityUnavailable.into());
@@ -96,6 +109,29 @@ impl Service {
             .with_authority(&dependencies, capture_permissions)
             .map_err(Failure::from)?;
         let mode = retained.document().learning.mode;
+        let assessment = match (route.assessment_reference(), mode) {
+            (Some(reference), mode)
+                if mode != bitrouter_ai::tenancy::configuration::LearningMode::Off =>
+            {
+                let child = retained
+                    .select_native(
+                        reference.resource_id.as_str(),
+                        bitrouter_ai::types::ModelOperation::Generation,
+                    )
+                    .map_err(Failure::from)?;
+                if child.reference() != reference {
+                    return Err(ErrorCode::AuthorityUnavailable.into());
+                }
+                child.require_capabilities().map_err(Failure::from)?;
+                Some(super::learning::Profile {
+                    route: reference.clone(),
+                    dependencies: child.dependencies().to_vec(),
+                    maximum: retained.document().learning.max_evaluations,
+                    concurrent: u32::from(retained.document().limits.learning_jobs),
+                })
+            }
+            _ => None,
+        };
         // The listener is a trusted same-App embedding input, never a tenant URL.
         // Reject paths/credentials/query overrides and non-loopback destinations.
         let url =
@@ -133,7 +169,7 @@ impl Service {
             endpoint_headers.insert(name.to_owned(), value.to_owned());
         }
         let (scope, provenance) = Scope::for_host(&authority);
-        let association = Association::new(
+        let mut association = Association::new(
             scope,
             provenance,
             uuid::Uuid::new_v4().to_string(),
@@ -143,6 +179,19 @@ impl Service {
             mode,
         )
         .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+        if block.is_some() {
+            let nonce = hex::encode(rand::random::<[u8; 32]>());
+            let commitment = crate::storage::evolution::digest(&("owned-block-link-v1", &nonce))
+                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+            association = association
+                .with_block_link(crate::harness::trajectory::owned::ProviderLink {
+                    version: 1,
+                    commitment,
+                    credential: authority.credential_id().to_owned(),
+                })
+                .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+            endpoint_headers.insert(super::execution::BLOCK_LINK_HEADER.into(), nonce);
+        }
         drop((route, retained));
         let binding = Arc::new(Binding {
             authority,
@@ -152,6 +201,10 @@ impl Service {
             ingress_rejected: AtomicBool::new(false),
             stop,
             model,
+            capture_head: std::sync::atomic::AtomicI64::new(0),
+            block_generation: std::sync::atomic::AtomicU64::new(0),
+            assessment,
+            block,
         });
         binding.check()?;
         let base_url = if protocol == LlmProtocol::OpenAi {
@@ -188,6 +241,119 @@ fn capture_permissions(effective: &Effective<'_>) -> Result<(), ErrorCode> {
 }
 
 impl Binding {
+    pub(in crate::tenancy) fn block_generation(&self) -> u64 {
+        self.block_generation.load(Ordering::Acquire)
+    }
+    pub(in crate::tenancy) fn publish_block_generation(&self, generation: u64) {
+        self.block_generation.store(generation, Ordering::Release);
+    }
+    pub(in crate::tenancy) fn observed_head(&self, head: i64) {
+        self.capture_head.store(head, Ordering::Release);
+    }
+    pub(in crate::tenancy) fn current_head(&self) -> i64 {
+        self.capture_head.load(Ordering::Acquire)
+    }
+    pub(in crate::tenancy) fn block_route(&self) -> Option<&ResourceRef> {
+        self.block.as_ref().map(|route| route.reference())
+    }
+    pub(in crate::tenancy) fn block_receipt_target(
+        &self,
+        selector: &str,
+        target: &bitrouter_ai::tenancy::execution::Target,
+    ) -> bool {
+        self.block
+            .as_ref()
+            .is_some_and(|route| route.block_receipt_target(selector, target))
+    }
+    pub(in crate::tenancy) fn block_token_cost(
+        &self,
+        selector: &str,
+        attempt: &bitrouter_ai::tenancy::execution::Attempt,
+    ) -> Option<u64> {
+        self.block.as_ref()?.block_token_cost(selector, attempt)
+    }
+    pub(in crate::tenancy) fn begin_block_update(&self) -> Result<u64, Failure> {
+        let _guard = self
+            .service()
+            .snapshot
+            .write()
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        Ok(self.block_generation.swap(0, Ordering::AcqRel))
+    }
+    pub(in crate::tenancy) fn begin_observation(&self) -> Result<i64, Failure> {
+        let _guard = self
+            .service()
+            .snapshot
+            .write()
+            .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?;
+        Ok(self.capture_head.swap(-1, Ordering::AcqRel))
+    }
+    pub(crate) fn block_profile(&self) -> Option<&super::resources::block::Profile> {
+        self.block.as_ref().and_then(|route| route.block_profile())
+    }
+    pub(in crate::tenancy) fn matches_block_link(&self, link: &str) -> bool {
+        link.len() == 64
+            && link.bytes().all(|b| b.is_ascii_hexdigit())
+            && self
+                .association
+                .descriptor()
+                .block_link
+                .as_ref()
+                .is_some_and(|stored| {
+                    crate::storage::evolution::digest(&("owned-block-link-v1", link))
+                        .is_ok_and(|digest| digest == stored.commitment)
+                })
+    }
+    pub(in crate::tenancy) fn block_in(
+        &self,
+        state: &super::model::Snapshot,
+    ) -> Result<(), ErrorCode> {
+        if self.block.is_none()
+            || self.closing.load(Ordering::Acquire)
+            || self.ingress_rejected()
+            || self.stop.is_cancelled()
+            || self.service().host_stop().is_cancelled()
+        {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        self.authority
+            .in_snapshot(state, &self.dependencies, capture_permissions)
+    }
+    pub(in crate::tenancy) fn assessment(&self) -> Option<&super::learning::Profile> {
+        self.assessment.as_ref()
+    }
+    pub(in crate::tenancy) fn assessment_in(
+        &self,
+        state: &super::model::Snapshot,
+    ) -> Result<(), ErrorCode> {
+        if self.closing.load(Ordering::Acquire)
+            || self.stop.is_cancelled()
+            || self.service().host_stop().is_cancelled()
+        {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        let profile = self
+            .assessment
+            .as_ref()
+            .ok_or(ErrorCode::CapabilityMismatch)?;
+        self.authority
+            .in_snapshot(state, &self.dependencies, capture_permissions)?;
+        self.authority
+            .in_snapshot(state, &profile.dependencies, capture_permissions)
+    }
+    pub(in crate::tenancy) fn assessment_check(&self) -> Result<(), ErrorCode> {
+        self.check().map_err(|error| error.0.code)?;
+        let profile = self
+            .assessment
+            .as_ref()
+            .ok_or(ErrorCode::CapabilityMismatch)?;
+        if profile.maximum == 0 || profile.concurrent == 0 {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        self.authority
+            .with_authority(&profile.dependencies, capture_permissions)
+    }
+
     pub(crate) fn authority(&self) -> &Authority {
         &self.authority
     }
@@ -260,4 +426,16 @@ impl Binding {
     pub(in crate::tenancy) fn origin(&self, proof: &Arc<super::transaction::Proof>) -> bool {
         self.authority.origin(proof)
     }
+}
+
+/// Narrow actual-controller cleanup consumer; the proof has no public constructor.
+pub(crate) async fn retain_stopped(
+    proof: crate::harness::acp::controlled::CleanupProof,
+) -> anyhow::Result<()> {
+    if proof.binding().assessment().is_none() || proof.binding().service().startup.is_none() {
+        return Ok(());
+    }
+    super::learning::queue::capture_stopped(Arc::new(proof))
+        .await
+        .map_err(|_| anyhow::anyhow!("paid capture cleanup retention unconfirmed"))
 }

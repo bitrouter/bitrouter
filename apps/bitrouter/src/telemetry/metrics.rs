@@ -6,7 +6,9 @@
 //! because `Drop` would race the tokio runtime if the exporter still has
 //! in-flight work.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+
+mod receipt_latency;
 use std::time::Duration;
 
 use opentelemetry::KeyValue;
@@ -26,6 +28,7 @@ use crate::telemetry::processor_runtime::ProcessorRuntime;
 /// OpenTelemetry metrics with multi-tenant attribution.
 pub struct OtelMetrics {
     provider: SdkMeterProvider,
+    receipt_observer: OnceLock<super::receipt_latency::Sink>,
 
     request_counter: Counter<u64>,
     latency_histogram: Histogram<f64>,
@@ -119,6 +122,7 @@ impl OtelMetrics {
 
         Self {
             provider,
+            receipt_observer: OnceLock::new(),
             request_counter,
             latency_histogram,
             token_usage,
@@ -127,6 +131,30 @@ impl OtelMetrics {
             api_key_limiter,
             user_id_limiter,
         }
+    }
+
+    pub(super) fn receipt_observer(
+        &self,
+        config: &super::receipt_latency::Config,
+    ) -> super::receipt_latency::Sink {
+        if !config.enabled {
+            return super::receipt_latency::Sink::default();
+        }
+        self.receipt_observer
+            .get_or_init(|| {
+                let capacity = Arc::new(super::receipt_latency::capacity::Observation::default());
+                let instruments = receipt_latency::Instruments::new(
+                    &self.provider.meter("bitrouter"),
+                    capacity.clone(),
+                );
+                super::receipt_latency::Sink::new(config, Arc::new(instruments), capacity)
+            })
+            .clone()
+    }
+
+    #[cfg(all(test, feature = "otel-http"))]
+    pub(super) fn collect_receipts_for_test(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+        self.provider.force_flush()
     }
 
     /// Record a completed request.
@@ -337,7 +365,13 @@ mod tests {
                     .flat_map(|point| point.attributes().map(|kv| kv.key.to_string()))
                     .collect(),
             ),
-            MetricData::Gauge(_) => ("gauge", Vec::new()),
+            MetricData::Gauge(gauge) => (
+                "gauge",
+                gauge
+                    .data_points()
+                    .flat_map(|p| p.attributes().map(|kv| kv.key.to_string()))
+                    .collect(),
+            ),
             MetricData::ExponentialHistogram(_) => ("exponential_histogram", Vec::new()),
         }
     }
@@ -470,6 +504,31 @@ mod tests {
             )),
         );
         metrics.record_stream_part(&StreamPart::TextEnd { id: "0".into() });
+        // Schema conformance drives instruments only; real Service lifecycle coverage
+        // is in tenancy::tests::execution::receipts::latency.
+        let capacity =
+            Arc::new(crate::telemetry::receipt_latency::capacity::Observation::default());
+        let snapshot = crate::telemetry::receipt_latency::capacity::Snapshot {
+            completion_reserved: 0,
+            accounted: 0,
+            ingress_reserved: 0,
+            potential_unknown: 0,
+            live_unknown: 0,
+            active: 0,
+            queued: 0,
+            ingress: 0,
+            closed: false,
+            fenced: false,
+        };
+        assert!(capacity.bind(snapshot, move || Ok(snapshot)));
+        let receipt_instruments = super::receipt_latency::Instruments::new(
+            &metrics.provider.meter("bitrouter"),
+            capacity,
+        );
+        use crate::telemetry::receipt_latency::{Class, Phase, Recorder, ResultKind};
+        receipt_instruments.durable(1, Class::CompleteCompleted);
+        receipt_instruments.phase(1, Phase::SqlCommit, ResultKind::Acknowledged);
+        receipt_instruments.event("enabled", 1);
         let shutdown = metrics.shutdown(true);
         assert!(!shutdown.flush_failed && !shutdown.shutdown_failed);
 
@@ -499,6 +558,7 @@ mod tests {
             let declared_kind = match def.instrument {
                 Instrument::Counter => "counter",
                 Instrument::Histogram => "histogram",
+                Instrument::Gauge => "gauge",
             };
             assert_eq!(
                 metric.instrument, declared_kind,

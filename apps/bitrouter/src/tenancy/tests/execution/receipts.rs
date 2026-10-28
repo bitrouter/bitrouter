@@ -27,11 +27,16 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio_util::task::AbortOnDropHandle;
 
 mod attempts;
+#[cfg(unix)]
+pub(super) mod audit;
 mod authority;
 mod barrier;
+mod conformance;
 mod fault_campaign;
 mod ingress_overflow;
 mod ingress_socket;
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+pub(in crate::tenancy::tests::execution) mod latency;
 mod lifecycle;
 mod reads;
 mod wire;
@@ -113,6 +118,99 @@ impl Harness {
         gate: Option<Arc<Semaphore>>,
         additional_resources: bool,
     ) -> Result<Self> {
+        Self::with_observer(
+            protocol,
+            status,
+            body,
+            stream,
+            gate,
+            additional_resources,
+            crate::telemetry::receipt_latency::Sink::default(),
+        )
+        .await
+    }
+    async fn with_observer(
+        protocol: &str,
+        status: StatusCode,
+        body: String,
+        stream: bool,
+        gate: Option<Arc<Semaphore>>,
+        additional_resources: bool,
+        observer: crate::telemetry::receipt_latency::Sink,
+    ) -> Result<Self> {
+        Self::with_observed_storage(
+            protocol,
+            status,
+            body,
+            stream,
+            gate,
+            additional_resources,
+            (observer, None),
+        )
+        .await
+    }
+    async fn with_observed_storage(
+        protocol: &str,
+        status: StatusCode,
+        body: String,
+        stream: bool,
+        gate: Option<Arc<Semaphore>>,
+        additional_resources: bool,
+        observation: (
+            crate::telemetry::receipt_latency::Sink,
+            Option<&std::path::Path>,
+        ),
+    ) -> Result<Self> {
+        Self::with_storage(
+            protocol,
+            status,
+            body,
+            stream,
+            gate,
+            additional_resources,
+            (observation.0, observation.1, None),
+        )
+        .await
+    }
+    #[cfg(unix)]
+    async fn with_initial(
+        protocol: &str,
+        status: StatusCode,
+        body: String,
+        stream: bool,
+        gate: Option<Arc<Semaphore>>,
+        additional_resources: bool,
+        initial: Option<(Fixture, crate::tenancy::ownership::Lease)>,
+    ) -> Result<Self> {
+        Self::with_storage(
+            protocol,
+            status,
+            body,
+            stream,
+            gate,
+            additional_resources,
+            (
+                crate::telemetry::receipt_latency::Sink::default(),
+                None,
+                initial,
+            ),
+        )
+        .await
+    }
+    async fn with_storage(
+        protocol: &str,
+        status: StatusCode,
+        body: String,
+        stream: bool,
+        gate: Option<Arc<Semaphore>>,
+        additional_resources: bool,
+        observation: (
+            crate::telemetry::receipt_latency::Sink,
+            Option<&std::path::Path>,
+            Option<(Fixture, crate::tenancy::ownership::Lease)>,
+        ),
+    ) -> Result<Self> {
+        let (observer, storage_path, initial) = observation;
         let (path, request) = match protocol {
             "chat_completions" => (
                 "/v1/chat/completions",
@@ -152,9 +250,77 @@ impl Harness {
             AbortOnDropHandle::new(tokio::spawn(
                 async move { axum::serve(listener, router).await },
             ));
-        let (mut fixture, route, slot) = provision_protocol(&base, protocol).await?;
+        let owner = storage_path
+            .map(|path| crate::tenancy::ownership::acquire_path(path, true))
+            .transpose()?;
+        let (mut fixture, route, slot) = if let Some((fixture, owner)) = initial {
+            let (mut fixture, route, slot) =
+                super::provision_protocol_with_fixture(fixture, &base, protocol, &mut |_| {})
+                    .await?;
+            fixture.service.shutdown().await?;
+            fixture.service = crate::tenancy::Service::start_prepared(
+                fixture.db.clone(),
+                Some(owner),
+                Default::default(),
+                crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
+                Arc::new(crate::tenancy::resources::Resources::with_key(
+                    fixture.installation.clone(),
+                    [29; 32],
+                )?),
+            )
+            .await?;
+            (fixture, route, slot)
+        } else if observer.enabled() {
+            let fixture = if let Some(owner) = &owner {
+                let db = crate::db::connect_tenancy(
+                    &format!("sqlite://{}", owner.path.display()),
+                    owner,
+                )
+                .await?;
+                Fixture::with_database(db, Default::default(), &mut |_| {}).await?
+            } else {
+                Fixture::new().await?
+            };
+            super::provision_protocol_observed(
+                fixture,
+                &base,
+                protocol,
+                &mut |_| {},
+                (
+                    if additional_resources {
+                        crate::telemetry::receipt_latency::Sink::default()
+                    } else {
+                        observer.clone()
+                    },
+                    owner.clone(),
+                ),
+            )
+            .await?
+        } else {
+            provision_protocol(&base, protocol).await?
+        };
         if additional_resources {
             authority::provision_resources(&mut fixture, &route, &slot, &base).await?;
+            if observer.enabled() {
+                // The observer binds once to the actual serving admission owner.
+                // Resource provisioning above replaces its preparation Service.
+                fixture.service.shutdown().await?;
+                fixture.service = crate::tenancy::Service::start_resources_with_continuations(
+                    fixture.db.clone(),
+                    owner,
+                    Default::default(),
+                    crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
+                    fixture.service.resources.clone(),
+                    (
+                        None,
+                        &crate::config::ContinuationConfig::default(),
+                        None,
+                        observer,
+                    ),
+                    None,
+                )
+                .await?;
+            }
         }
         let revision = draft(&fixture, &route, "receipt-draft", 25).await?;
         let credential = fixture.issue("receipt-client").await?;

@@ -44,12 +44,12 @@ impl Worker {
         mut completions: mpsc::Receiver<Job>,
         stop: tokio_util::sync::CancellationToken,
         import: Option<Vec<u8>>,
-        initialized: tokio::sync::oneshot::Sender<
-            Result<Option<crate::tenancy::continuation::PinnedCrypto>, Failure>,
-        >,
+        initialized: tokio::sync::oneshot::Sender<Result<super::Initialized, Failure>>,
     ) {
         // The owning frame is outside every fallible transaction continuation.
         let _owner = &self.owner;
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let paid_recovery = crate::tenancy::learning::store::recovery::Bootstrap::default();
         let result = AssertUnwindSafe(async {
             let control = Control::new(self.proof.clone());
             let work = async {
@@ -71,9 +71,19 @@ impl Worker {
                 let volume = self.owner.as_ref().and_then(|owner| owner.path.parent());
                 let free = crate::tenancy::receipts::capacity::free_space(volume)
                     .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                #[cfg(all(feature = "core", feature = "harness"))]
+                paid_recovery
+                    .inventory(&inventory)
+                    .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
                 self.admission
                     .initialize_receipts(inventory, free)
                     .map_err(|code| self.unavailable(code))?;
+                self.learning_startup(
+                    &control,
+                    #[cfg(all(feature = "core", feature = "harness"))]
+                    &paid_recovery,
+                )
+                .await?;
                 Ok(crypto)
             };
             let result = self
@@ -85,6 +95,14 @@ impl Worker {
                     None,
                 )
                 .await;
+            #[cfg(all(feature = "core", feature = "harness"))]
+            let result = match paid_recovery.settle(self.proof.disposition()) {
+                Ok(()) => result,
+                Err(_) => {
+                    self.proof.quarantine();
+                    Err(self.unavailable(ErrorCode::StorageUnavailable))
+                }
+            };
             // The privileged manifest contains plaintext definitions. It is
             // bootstrap work, not actor state retained for the serving lifetime.
             drop(import);
@@ -94,6 +112,31 @@ impl Worker {
                 self.http_continuation
                     .initialize(crypto.as_ref().map(|key| key.http()))?;
                 Ok(crypto)
+            });
+            let result = result.and_then(|crypto| {
+                if let Some(startup) = &self.startup {
+                    startup
+                        .publish(&self.proof)
+                        .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?;
+                }
+                // Bootstrap/full-H settlement and receipt accounting are complete.
+                // No maintenance or request can contend with this initial copy.
+                // The ACK carries numeric data, never an Admission guard or owner.
+                #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+                let capacity = if self.observe_capacity {
+                    Some(
+                        self.admission
+                            .observed_capacity()
+                            .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?,
+                    )
+                } else {
+                    None
+                };
+                Ok(super::Initialized {
+                    crypto,
+                    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+                    capacity,
+                })
             });
             let ready = result.is_ok();
             // Cancellation drops only the waiter. This actor still owns BEGIN,
@@ -213,6 +256,7 @@ impl Worker {
                     drop((_permit, caller, request));
                 }
                 Job::Receipt(owner) => {
+                    owner.observation.dequeue();
                     let result = self
                         .supervise(
                             self.execute_receipt(&owner, &control),
@@ -224,6 +268,7 @@ impl Worker {
                             None,
                         )
                         .await;
+                    owner.observation.returned(result.is_err());
                     if result.is_err() && !owner.durable() {
                         owner.storage_failed(matches!(
                             self.proof.disposition(),
@@ -236,6 +281,111 @@ impl Worker {
                     // The registry retains the immutable candidate and its reservation
                     // after a confirmed rollback; an ambiguous actor never releases either.
                     drop(owner);
+                }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                Job::Learner(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_learner(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    // Keep the original work/read/learning owners outside the
+                    // supervised continuation until consuming COMMIT is known.
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    let crate::tenancy::learner::queue::Job {
+                        work, read, reply, ..
+                    } = *message;
+                    if reply.send(result).is_err() {
+                        tracing::debug!("owned learner waiter disconnected");
+                    }
+                    drop((work, read));
+                }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                Job::ExperimentRead(message) => {
+                    let result = self
+                        .supervise(
+                            self.read_experiment(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    let crate::tenancy::experiment::queue::ReadJob {
+                        binding,
+                        profile,
+                        root,
+                        reply,
+                        permit,
+                        command,
+                        ..
+                    } = *message;
+                    if reply.send(result).is_err() {
+                        tracing::debug!("native cohort completed without its response receiver");
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    drop((binding, profile, root, permit, command));
+                }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                Job::Experiment(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_experiment(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    let crate::tenancy::experiment::queue::Job {
+                        execution,
+                        origin,
+                        profile,
+                        permit,
+                        reply,
+                        ..
+                    } = *message;
+                    if reply.send(result).is_err() {
+                        tracing::debug!(
+                            "native experiment enrollment completed without a response receiver"
+                        );
+                    }
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    drop((execution, origin, profile, permit));
+                }
+                #[cfg(all(feature = "core", feature = "harness"))]
+                Job::Learning(message) => {
+                    let result = self
+                        .supervise(
+                            self.execute_learning(&message, &control),
+                            &control,
+                            message.deadline,
+                            Policy::OwnedEval,
+                            None,
+                        )
+                        .await;
+                    message.work.settled(self.proof.disposition());
+                    let crate::tenancy::learning::queue::Job {
+                        work,
+                        reply,
+                        _read: read,
+                        ..
+                    } = *message;
+                    let _ = reply.send(result);
+                    if self.proof.disposition() == Disposition::Ambiguous {
+                        self.quarantine(ordinary, safety, completions).await;
+                    }
+                    drop((work, read));
                 }
                 #[cfg(all(feature = "core", feature = "harness"))]
                 Job::Capture(message) => {
@@ -688,6 +838,44 @@ impl Job {
             Self::Receipt(owner) => owner.fail(ErrorCode::StorageUnavailable),
             Self::ReceiptRead(read) => {
                 let _ = read.reply.send(Err(ErrorCode::AuthorityUnavailable.into()));
+            }
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::Learner(message) => {
+                if message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                    .is_err()
+                {
+                    tracing::debug!("rejected learner waiter disconnected");
+                }
+            }
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::ExperimentRead(message) => {
+                if message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                    .is_err()
+                {
+                    tracing::debug!("rejected native cohort has no response receiver");
+                }
+            }
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::Experiment(message) => {
+                if message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()))
+                    .is_err()
+                {
+                    tracing::debug!("rejected native experiment had no response receiver");
+                }
+            }
+            #[cfg(all(feature = "core", feature = "harness"))]
+            Self::Learning(message) => {
+                // An already quarantined actor cannot attest the pending H phase.
+                message.work.settled(Disposition::Ambiguous);
+                let _ = message
+                    .reply
+                    .send(Err(ErrorCode::AuthorityUnavailable.into()));
             }
             #[cfg(all(feature = "core", feature = "harness"))]
             Self::Capture(message) => {

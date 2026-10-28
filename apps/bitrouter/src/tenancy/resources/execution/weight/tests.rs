@@ -16,8 +16,29 @@ use crate::{
     tenancy::cache::Cache,
 };
 
+mod registry;
+
 fn weight(value: &RetainedExecutionRevision) -> TestResult<usize> {
     retained_heap_bytes(value).map_err(|code| anyhow::anyhow!("weight failed: {code:?}"))
+}
+
+#[test]
+fn optional_assessment_reference_is_charged_without_selecting_the_route() -> TestResult<()> {
+    let mut value = revision()?;
+    insert(&mut value, "subject", route("subject", "private")?);
+    let before = weight(&value)?;
+    let assessment = reference(
+        ResourceKind::Route,
+        "judge-with-distinct-immutable-revision",
+    )?;
+    let expected = assessment.owner_id.as_str().len()
+        + assessment.resource_id.as_str().len()
+        + assessment.revision_id.as_str().len();
+    Arc::get_mut(value.routes.get_mut("subject").context("subject")?)
+        .context("unique route")?
+        .assessment = Some(assessment);
+    ensure!(weight(&value)? >= before + expected);
+    Ok(())
 }
 
 fn reference(kind: ResourceKind, name: &str) -> TestResult<ResourceRef> {
@@ -57,11 +78,15 @@ fn route(name: &str, header: &str) -> TestResult<RouteData> {
     }))?;
     let reference = reference(ResourceKind::Route, name)?;
     Ok(RouteData {
+        assessment: None,
+        block: None,
+        block_pricing: Vec::new(),
         dependencies: vec![reference.clone()],
         reference,
         selector: "fixture:model".into(),
         overrides: PromptOverrides::default(),
         policy: None,
+        choice: None,
         chains: vec![Chain {
             selector: "fixture:model".into(),
             inbound: ApiProtocol::ChatCompletions,
@@ -135,6 +160,7 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
         first.revision,
         first.authority_revision,
         super::super::ValidatedEnvelope {
+            learned_checkpoint: false,
             document: first.document,
             routes: first.routes,
         },
@@ -219,6 +245,7 @@ async fn assert_exported_target_detaches(native: bool) -> TestResult<()> {
         second.revision,
         second.authority_revision,
         super::super::ValidatedEnvelope {
+            learned_checkpoint: false,
             document: second.document,
             routes: second.routes,
         },
@@ -362,6 +389,7 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
     document.routes = vec![over_reserved_reference(ResourceKind::Route, "route")?];
     document.policy = Some(over_reserved_reference(ResourceKind::Policy, "policy")?);
     let mut data = route("route", "short")?;
+    data.assessment = Some(over_reserved_reference(ResourceKind::Route, "judge")?);
     data.reference = over_reserved_reference(ResourceKind::Route, "route")?;
     data.dependencies = vec![
         over_reserved_reference(ResourceKind::Route, "route")?,
@@ -383,6 +411,7 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         over_reserved_id("r1")?,
         1.try_into()?,
         super::super::ValidatedEnvelope {
+            learned_checkpoint: false,
             document,
             routes: HashMap::from([("route".into(), Arc::new(data))]),
         },
@@ -411,6 +440,9 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
     let data = Arc::try_unwrap(routes.remove("route").context("route")?)
         .map_err(|_| anyhow::anyhow!("unexpected shared route"))?;
     let RouteData {
+        assessment,
+        block_pricing: _,
+        block: _,
         reference,
         dependencies,
         selector: _,
@@ -419,8 +451,14 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
         chains: _,
         native: _,
         candidates,
+        choice: _,
     } = data;
     assert_compact_reference(reference, ResourceKind::Route, "route")?;
+    assert_compact_reference(
+        assessment.context("assessment ref")?,
+        ResourceKind::Route,
+        "judge",
+    )?;
     ensure!(dependencies.len() == 3);
     for (dependency, (kind, name)) in dependencies.into_iter().zip([
         (ResourceKind::Route, "route"),

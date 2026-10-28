@@ -187,7 +187,7 @@ pub(super) fn one_header<'a>(
     Ok(value)
 }
 
-fn caller(state: &AuthState, headers: &HeaderMap) -> Result<Caller, Failure> {
+pub(super) fn bearer(headers: &HeaderMap) -> Result<&str, Failure> {
     if headers.contains_key("x-api-key") {
         return Err(ErrorCode::InvalidRequest.into());
     }
@@ -203,13 +203,25 @@ fn caller(state: &AuthState, headers: &HeaderMap) -> Result<Caller, Failure> {
     {
         return Err(ErrorCode::Unauthorized.into());
     }
-    if let Some(operator) = state.operators.authenticate(token.as_bytes()) {
+    Ok(token)
+}
+
+pub(super) fn operator(operators: &ControlAuth, token: &str) -> Result<Option<Caller>, Failure> {
+    if let Some(operator) = operators.authenticate(token.as_bytes()) {
         if !operator.permits(ControlScope::Tenancy) {
             return Err(ErrorCode::Forbidden.into());
         }
-        return Ok(Caller::Installation(super::operator_principal(
+        return Ok(Some(Caller::Installation(super::operator_principal(
             operator.id(),
-        )?));
+        )?)));
+    }
+    Ok(None)
+}
+
+fn caller(state: &AuthState, headers: &HeaderMap) -> Result<Caller, Failure> {
+    let token = bearer(headers)?;
+    if let Some(caller) = operator(&state.operators, token)? {
+        return Ok(caller);
     }
     state.service.authenticate(token)
 }

@@ -3,9 +3,13 @@
 This additive local Rust profile connects `NativeSession::open_authenticated`
 to the existing App, CoreSession and persistent native harness. It requires
 both `core` and `harness`. It adds no HTTP endpoint, CLI option, SDK method or
-public tenancy Session resource. Production tenant dispatch and strict receipts
-remain disabled. The existing managed CLI, BRO stores and managed HTTP adapters
-retain their Legacy boundaries.
+public tenancy Session resource. Dispatch and strict receipts follow the supported
+opt-in, single-instance Unix SQLite
+[Service eligibility](RESOURCE_TENANCY_IMPLEMENTATION.md#current-local-dispatch-eligibility).
+The existing managed CLI, BRO stores and managed HTTP adapters retain their Legacy
+boundaries. Earlier slice qualification statements below retain their original
+scope; source-pinned local checks do not establish final aggregate, platform or
+performance acceptance. See [remaining qualification](RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
 
 ## Binding and execution
 
@@ -64,6 +68,14 @@ seconds; cancellation cleanup has a separate thirty-second bound. A missed
 cleanup deadline fences authority and retains the owner. An error, timeout or
 joined worker alone cannot establish cleanup.
 
+Asynchronous admission and outcome callbacks are descendants of the same
+registered execution task owner. Their request/outcome reply deadlines bound
+only the waiter; cancellation does not drop a pending Core checkpoint ACK. New
+preparation checks the original deadline and current authority before its first
+poll and after completion, so a late admission reply cannot authorize a send.
+Already owed outcomes keep their exact callback and original cleanup deadline.
+Unwind or an unresolved callback prevents clean drain and retains the owner.
+
 Authentication precedes journal and restore-artifact reads. Workspace discovery
 and the real Core handle stay in the owner frame before their fallible awaits.
 The actual MCP client, child and reaper ownership are retained before discovery
@@ -91,6 +103,67 @@ including unrelated objects. Remove those objects before downgrade; token matchi
 does not resolve SQLite dependencies. A fully completed downgrade remains a no-op.
 MySQL partial DDL resumes only after exact catalog validation.
 
+## Bounded stopped-owner reconciliation
+
+The authenticated facade has a private local Unix/file-SQLite reconciliation
+path for a narrowly checked direct-HTTP epoch. A connector-created pool bundle
+consumes one exclusive canonical acquisition claim across all lease clones.
+Ordinary raw-pool constructors, a new instance UUID, elapsed time and an empty
+new Registry do not create this proof. Normal bootstrap and current fixed-R1
+credential/resource checks must succeed before recovery is considered.
+
+A private V2 envelope records provenance and an immutable profile digest. An
+ineligible Opening marker is acknowledged before MCP discovery, including when
+reopening a released journal; it retains the complete prior journal. The first
+profile requires empty MCP configuration, no tool history, Learning Off, no paid
+assessment, and no OAuth/Count auxiliary work. Other unreleased native owners or
+owned capture history without a post-reaper proof prevent reconciliation. V1
+released rows keep their ordinary behavior; V1 unreleased rows are not upgraded
+by guessing their effect history.
+
+Real parent/child receipt seeds are written with the actual Choice intent ACK.
+An existing terminal remains byte-for-byte unchanged. A missing terminal receives
+one conservative Unknown fact using its original installation, tenant, principal,
+execution, correlation and R1: no invented attempt, quantity or target, Unknown
+provenance, and incomplete usage. A completed child receipt is not the missing
+Decisions answer. Core records Interrupted for an unacknowledged Choice outcome.
+Uncovered in-flight Generation and auxiliary work remain refused. A pending Choice
+may retain the exact completed built-in entry, inactive HTTP continuation and
+static selector-lookup sequence. All three records must name the same covered
+parent execution, with exact indices and matching successful outcome ACKs.
+Unfinished, reordered or additional preparation callbacks remain ineligible.
+
+The existing H writer commits missing terminals and the exact native row/ACK
+replacement atomically, within one cumulative 4096-row/32-MiB operation budget.
+It uses the existing receipt byte, free-space and Unknown limits, without an
+execution slot for a predecessor it did not admit. Ambiguous transactions retain
+the real pool, reservation and owner. A confirmed read of some receipt cannot
+replace unknown transaction cleanup or the exact whole-row ACK.
+
+Recovery reconciles and stops prior work: it does not resume model steps, replay
+outputs, run tools, or automatically activate queued roots. The prior workspace
+claim does not prove a complete activity clock. For a nonterminal predecessor,
+the first repair records `SessionSnapshot.activity_gaps[run_id]` with its exact
+durable head and known lower bound.
+The retained `active_ms` is a lower bound and no `RunActivityReconciliation` is
+invented. Repeated retirement preserves that same gap; ordinary restoration
+cannot resume it with a supplied clock value. The gap and first restore event
+agree, and history validation rejects erasure or rebasing. A terminal cancelled
+run keeps the uncertainty when reopened. A new root starts a fresh clock, while
+the bounded immutable gap map preserves the old run even in a native journal
+that stores only its latest checkpoint.
+The prior workspace claim stays reserved until the repair and stop transitions
+are acknowledged.
+Retirement metadata preserves the exact predecessor across a crash between the
+atomic repair and workspace activation. Only a later explicit new Run, with
+current authority and fresh admission, can send new work. This is not proof that
+a remote HTTP request stopped or incurred no cost, and it does not widen the
+Legacy CLI or remote managed-session contracts.
+
+This recovery addition still requires independent source review, compilation and
+real process/fault qualification. The preceding native-profile qualification
+does not qualify this new recovery branch; no capability flag is enabled.
+
 ## Qualification boundary
 
 Positive tests use the existing qualified tenant fixture flag and real provider
@@ -101,3 +174,65 @@ See [the implementation tracker](RESOURCE_TENANCY_IMPLEMENTATION.md) for counts
 and scope. These checks qualify this consumer, not production tenant dispatch.
 Owned capture, auxiliary provider work, paid learning, broader recovery and final
 performance remain separate gates; all production dispatch capabilities stay false.
+
+## Owned context Choice profile
+
+Ordinary Core execution retains complete context and does not invoke a host
+decision model. Only a sealed owned Choice profile enables the bounded candidate
+planner below. Skill-bound evidence always stays complete, with its original
+provenance; a Choice answer cannot authorize its omission or substitution.
+
+The first owned Choice composition requires both `core` and `harness`. It is
+consumed by the authenticated local Rust NativeSession facade through the existing
+`context_views_v1` planner. It does not qualify all Core adapters, managed HTTP,
+BRO/CLI entrypoints, or production tenant dispatch.
+
+An operator-imported Generation Route may carry `core_choice` with
+`profile: "choice_v1"`, an exact five-field child Route reference, and the existing
+materialized DecisionPolicy. The child is a hidden dependency: one canonical
+Decisions target, one static API-key credential, no child policy, exploration or
+recursive profile. It must not also be an exposed configuration root. Authenticated
+open checks the full retained closure before journal or artifact reads. The
+profile and its child remain fixed at R1 through children, wakeups and reconnect;
+active configuration changes cannot replace them. An absent profile retains
+conservative preparation and does not enable the ambient host DecisionRuntime.
+
+The policy allows at most 32 optional candidates, 2048 bytes per excerpt, 128 KiB
+per translated request, a 16 MiB context target and 256 recent groups. Both the
+planner request and the actual JSON-escaped native Decisions request must fit.
+Stable tail reduction removes optional candidates until both fit; unjudged source
+stays in full. If the routing-only request does not fit, no paid child is admitted.
+Rubric names, text, null descriptions and string labels are preserved. Required
+instructions, opaque continuity and atomic tool groups retain their existing
+protections. A rejected answer cannot authorize omission, and original provider
+usage is not replaced with a zero or a successful Core interpretation.
+
+Each paid Choice obtains a fresh execution, ordinary admission slot and 035
+receipt, separately from the Generation step already holding its slot. Admission
+is fail-fast and never self-queues: a capacity of one rejects that preparation;
+two permits a single parent and its child when no other reservations compete.
+Choice uses the existing run decision bound; it does not consume a learning
+`max_evaluations` unit. It is not a Generation model attempt or input counter.
+Current authority, the source revision, Core grant, steering and run budget are
+checked at the actual send gate after credential waits.
+
+The same native journal stores exact parent/child references and execution IDs,
+the translated request commitment, intent and outcome commitments. There is no
+second journal, session registry or idle execution lease. A receipt ACK and a Core
+outcome ACK are independent obligations. Cancellation or revocation stops new
+work while admitted outcome delivery and cleanup remain possible. The existing
+parent task set retains the driver and original control through both ACKs.
+Unknown COMMIT, unwind or a missed cleanup deadline fences authority and retains
+the actual owner. Lost ACK reconciliation checks the complete retained journal
+and submitted outcome, never only the checkpoint head, and does not resend work.
+The journal admits at most 4096 Choice links, 8 KiB per link and 8 MiB total links;
+receipt validation shares an 8 MiB cumulative read budget with a 1 MiB per-receipt
+ceiling before typed cloning.
+
+The retained envelope's private format discriminator is 2 when an authenticated
+optional route composition is present. The compiler identifier and seal AAD stay
+unchanged. Absent composition fields retain the exact v1 serialized spelling;
+older readers reject the new authenticated tag instead of silently ignoring it.
+Independent imported assessment and Choice profiles occupy separate fields and
+must retain separate route and credential proofs when composed. Their joint
+consumer qualification is a separate integration gate.

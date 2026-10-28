@@ -14,7 +14,7 @@ use bitrouter_ai::types::{Tool, ToolResultOutput};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::{HarnessConfig, HarnessResources, ResourceError, instructions};
+use super::{DiscoveryOwner, HarnessConfig, HarnessResources, ResourceError, instructions};
 use crate::harness::tools::WorkspaceTools;
 use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::protocol::{
@@ -78,10 +78,13 @@ impl NativeResources {
             config,
             caller,
             cancel,
-            std::sync::Arc::new(tokio::sync::Mutex::new(
-                super::mcp::McpConnections::default(),
-            )),
-            &Discovery::default(),
+            DiscoveryOwner {
+                mcp: std::sync::Arc::new(tokio::sync::Mutex::new(
+                    super::mcp::McpConnections::default(),
+                )),
+                discovery: &Discovery::default(),
+            },
+            false,
         )
         .await
     }
@@ -92,9 +95,10 @@ impl NativeResources {
         config: &HarnessConfig,
         caller: &crate::gateway::caller::CallerContext,
         cancel: &CancellationToken,
-        mcp: std::sync::Arc<tokio::sync::Mutex<super::mcp::McpConnections>>,
-        discovery: &Discovery,
+        owner: DiscoveryOwner<'_>,
+        context_views: bool,
     ) -> Result<Self, ResourceError> {
+        let DiscoveryOwner { mcp, discovery } = owner;
         let tools = discovery
             .with(|| WorkspaceTools::new(workspace, mode))?
             .map_err(|error| error.to_string())?;
@@ -115,8 +119,7 @@ impl NativeResources {
             mode,
             cancel,
             Duration::from_secs(30),
-            mcp,
-            discovery,
+            DiscoveryOwner { mcp, discovery },
         )
         .await?;
         let prepared = Self::prepare(
@@ -124,6 +127,7 @@ impl NativeResources {
             &resources,
             &startup,
             config.library.is_some() || !config.skills.mcp_sources.is_empty(),
+            context_views,
         );
         match prepared {
             Ok(signals) => Ok(Self {
@@ -149,6 +153,7 @@ impl NativeResources {
         resources: &HarnessResources,
         startup: &instructions::InstructionSnapshot,
         native_skills: bool,
+        context_views: bool,
     ) -> Result<SignalUpdate, String> {
         let mut declarations = Vec::new();
         for tool in tools.declarations() {
@@ -194,14 +199,18 @@ impl NativeResources {
             max_tool_output_bytes: 512 * 1024,
             artifact_quota_bytes: 32 * 1024 * 1024,
             max_artifact_chunk_bytes: 32 * 1024,
-            required_features: if native_skills {
-                vec![
-                    crate::storage::checkpoint::snapshot::context::FEATURE.into(),
-                    crate::storage::skills::FEATURE.into(),
-                    crate::storage::skills::FILES_FEATURE.into(),
-                ]
-            } else {
-                vec![]
+            required_features: {
+                let mut features = Vec::new();
+                if context_views || native_skills {
+                    features.push(crate::storage::checkpoint::snapshot::context::FEATURE.into());
+                }
+                if native_skills {
+                    features.extend([
+                        crate::storage::skills::FEATURE.into(),
+                        crate::storage::skills::FILES_FEATURE.into(),
+                    ]);
+                }
+                features
             },
         };
         let mut materials: Vec<_> = resources

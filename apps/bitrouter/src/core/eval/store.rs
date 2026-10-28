@@ -14,7 +14,9 @@ use sea_orm::{
 use serde::{Deserialize, Serialize};
 
 mod codec;
+mod imported;
 mod io;
+pub(crate) mod migration;
 mod owned;
 #[cfg(test)]
 mod owned_tests;
@@ -110,6 +112,27 @@ pub struct EvalStore {
 }
 
 impl EvalStore {
+    #[cfg(feature = "harness")]
+    pub(crate) fn for_paid_recovery(
+        identity: &crate::tenancy::learning::recovery::RecoveryIdentity,
+    ) -> Self {
+        let (scope, provenance) = Scope::for_paid_recovery(identity);
+        Self {
+            db: identity.database().clone(),
+            scope,
+            provenance,
+        }
+    }
+    #[cfg(feature = "harness")]
+    pub(crate) fn for_learner(identity: &crate::tenancy::learner::identity::ReadIdentity) -> Self {
+        let (scope, provenance) = Scope::for_learner(identity);
+        Self {
+            db: identity.database().clone(),
+            scope,
+            provenance,
+        }
+    }
+
     pub fn new(db: DatabaseConnection) -> Self {
         Self {
             db,
@@ -134,6 +157,18 @@ impl EvalStore {
         let (scope, provenance) = Scope::for_eval(identity);
         Self {
             db: identity.database().clone(),
+            scope,
+            provenance,
+        }
+    }
+
+    #[cfg(feature = "harness")]
+    pub(crate) fn for_native_session(
+        authority: &crate::tenancy::execution::session::Authority,
+    ) -> Self {
+        let (scope, provenance) = Scope::for_session(authority);
+        Self {
+            db: authority.database().clone(),
             scope,
             provenance,
         }

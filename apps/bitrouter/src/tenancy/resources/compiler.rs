@@ -63,6 +63,9 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
         policy: policy_ref,
         credentials,
         exploration,
+        core_choice: _,
+        assessment: _,
+        block,
     } = &import.definition
     else {
         anyhow::bail!("route definition required");
@@ -126,6 +129,10 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
         _ => anyhow::bail!("route requires its exact qualified policy"),
     };
     selections.extend(exploration.iter().cloned());
+    if let Some(profile) = block {
+        profile.validate(selector)?;
+        selections.push(profile.challenger()?.to_owned());
+    }
     let mut unique = HashSet::new();
     selections.retain(|selector| unique.insert(selector.clone()));
     ensure!(
@@ -169,6 +176,12 @@ pub(super) fn prepare_route(import: &Import, policy: Option<&Artifact>) -> Resul
                 selected.policy.is_none() && selected.request_checks.is_empty(),
                 "nested policy or native checker selection is not qualified"
             );
+            if block.is_some() {
+                ensure!(
+                    selected.overrides.is_empty(),
+                    "Block arm overrides are not qualified"
+                );
+            }
             Some(selected)
         };
         let (clean, prefs) = match &selected {
@@ -250,12 +263,18 @@ pub(super) fn routing_config(source: &Value) -> Result<(Config, HashMap<String, 
 // cloning source/ancestry. The wire compiler keeps its existing independent cap.
 pub(super) fn routing_config_bounded(
     source: &Value,
-    mut work: Option<&mut ByteBudget>,
+    work: Option<&mut ByteBudget>,
 ) -> Result<(Config, HashMap<String, usize>)> {
-    if let Some(work) = work.as_deref_mut() {
-        work.charge(source)
-            .map_err(|_| super::ExecutionCapacityExceeded)?;
-    }
+    routing_config_observed(source, work, None)
+}
+
+// Same parser and local quotas; startup may also charge its shared H budget.
+pub(super) fn routing_config_observed(
+    source: &Value,
+    mut work: Option<&mut ByteBudget>,
+    operation: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+) -> Result<(Config, HashMap<String, usize>)> {
+    charge_routing_value(work.as_deref_mut(), operation, source)?;
     bounded_bytes(source, super::MAX_ARTIFACT_BYTES)?;
     let fields = source
         .as_object()
@@ -294,10 +313,7 @@ pub(super) fn routing_config_bounded(
             let provider = providers
                 .get(current)
                 .context("unresolved provider derivation")?;
-            if let Some(work) = work.as_deref_mut() {
-                work.charge(&(current, provider))
-                    .map_err(|_| super::ExecutionCapacityExceeded)?;
-            }
+            charge_routing_value(work.as_deref_mut(), operation, &(current, provider))?;
             // Charge all ancestors before parse_resolved clones inherited fields.
             // Explicit overrides still count, keeping the preflight conservative.
             expanded
@@ -434,6 +450,10 @@ pub(super) fn resolution_capacity(
 
 pub(super) fn target_value(target: &RoutingTarget) -> Result<Value> {
     ensure!(
+        target.registry.is_none(),
+        "registry targets are not qualified by the owned manifest"
+    );
+    ensure!(
         !matches!(target.api_protocol, ApiProtocol::Custom(_)),
         "custom protocol imports are not qualified"
     );
@@ -499,4 +519,22 @@ pub(super) fn configuration_routes(
         routes.push(envelope);
     }
     Ok(routes)
+}
+
+// Counting serializes into a bounded counter, not an allocated buffer. Charge
+// each actual source/ancestor copy before parse_resolved expands its data.
+fn charge_routing_value(
+    work: Option<&mut ByteBudget>,
+    operation: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+    value: &impl serde::Serialize,
+) -> Result<()> {
+    if let Some(work) = work {
+        let before = work.remaining();
+        let counted = work.charge(value);
+        if let Some(operation) = operation {
+            operation.charge(0, before - work.remaining())?;
+        }
+        counted.map_err(|_| super::ExecutionCapacityExceeded)?;
+    }
+    Ok(())
 }

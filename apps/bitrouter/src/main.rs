@@ -239,7 +239,7 @@ enum Command {
         #[command(subcommand)]
         action: SharedAction,
     },
-    /// Manage tenant configuration through an explicit protected HTTP endpoint.
+    /// Manage tenant configuration over explicit HTTP or inspect local DB evidence.
     Tenancy {
         #[command(subcommand)]
         action: tenancy::Action,

@@ -278,8 +278,25 @@ impl Control {
     }
 
     pub async fn commit(&self, transaction: DatabaseTransaction) -> Result<()> {
+        self.commit_observed(transaction, None).await
+    }
+
+    pub(crate) async fn commit_observed(
+        &self,
+        transaction: DatabaseTransaction,
+        observation: Option<&crate::telemetry::receipt_latency::Timing>,
+    ) -> Result<()> {
         self.enter(Phase::Committing).await;
+        // The phase gate precedes SQL. Time only the original consuming await.
+        let span = observation
+            .map(|o| o.span(crate::telemetry::receipt_latency::Phase::SqlCommit))
+            .unwrap_or_default();
         let result = transaction.commit().await;
+        let observation = span.stop(if result.is_ok() {
+            crate::telemetry::receipt_latency::ResultKind::Acknowledged
+        } else {
+            crate::telemetry::receipt_latency::ResultKind::Unconfirmed
+        });
         // Both consuming methods clear `open` only on Ok. On Err, Drop merely
         // queues rollback; its completion is not acknowledged to this caller.
         // https://docs.rs/sea-orm/1.1.20/src/sea_orm/database/transaction.rs.html
@@ -288,6 +305,7 @@ impl Control {
         } else {
             Disposition::Ambiguous
         });
+        observation.record();
         result.map_err(Into::into)
     }
 

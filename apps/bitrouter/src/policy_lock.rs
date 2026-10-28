@@ -3056,6 +3056,32 @@ impl ModelSelector for PolicyRuntime {
             })?;
             let input_model = ctx.model().to_string();
             let input_effort = ctx.require_generation_prompt()?.params.reasoning_effort;
+            #[cfg(all(feature = "core", feature = "harness"))]
+            let experiment = ctx
+                .extension::<crate::tenancy::execution::TenantExecution>()
+                .map(|execution| {
+                    execution
+                        .experiment_for_routing()
+                        .map_err(|code| execution.reject(code))
+                })
+                .transpose()?
+                .flatten();
+            #[cfg(all(feature = "core", feature = "harness"))]
+            let mut decision = match experiment.as_deref() {
+                Some(witness) => router.decision_for_owned_experiment(
+                    ctx.require_generation_prompt()?,
+                    ctx.headers(),
+                    assessment,
+                    witness,
+                )?,
+                None => router.decision_for_routing(
+                    ctx.require_generation_prompt()?,
+                    ctx.headers(),
+                    assessment,
+                    true,
+                ),
+            };
+            #[cfg(not(all(feature = "core", feature = "harness")))]
             let mut decision = router.decision_for_routing(
                 ctx.require_generation_prompt()?,
                 ctx.headers(),

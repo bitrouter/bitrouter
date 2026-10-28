@@ -33,6 +33,14 @@ pub(super) fn compiled(
     resources: &Resources,
     stored: &StoredConfiguration,
 ) -> Result<super::execution::ValidatedEnvelope> {
+    compiled_with_operation(resources, stored, None)
+}
+
+pub(super) fn compiled_with_operation(
+    resources: &Resources,
+    stored: &StoredConfiguration,
+    operation: Option<&crate::storage::operation_budget::OperationBudget<'_>>,
+) -> Result<super::execution::ValidatedEnvelope> {
     let revision = &stored.revision;
     ByteBudget::new(MAX_ARTIFACT_BYTES).charge(&revision.document)?;
     revision.validate()?;
@@ -103,6 +111,7 @@ pub(super) fn compiled(
                 "empty configuration binding mismatch"
             );
             Envelope {
+                format: 1,
                 document: document.clone(),
                 routes: Vec::new(),
                 artifacts: Vec::new(),
@@ -157,7 +166,7 @@ pub(super) fn compiled(
                         );
                         route_shape(route, &dependencies)?;
                     }
-                    (Definition::Policy { .. }, None) => {}
+                    (Definition::Policy { .. } | Definition::Checkpoint { .. }, None) => {}
                     _ => anyhow::bail!("invalid compiled artifact kind or shape"),
                 }
             }
@@ -208,7 +217,18 @@ pub(super) fn compiled(
                     let Definition::Policy { document, .. } = &policy.definition else {
                         anyhow::bail!("retained policy kind")
                     };
-                    let (config, _) = compiler::routing_config(routing)?;
+                    let (config, _) = if let Some(operation) = operation {
+                        // Guard validation also expands provider ancestry. Its
+                        // real copies participate in the same startup budget.
+                        let mut work = ByteBudget::new(8 * 1024 * 1024);
+                        compiler::routing_config_observed(
+                            routing,
+                            Some(&mut work),
+                            Some(operation),
+                        )?
+                    } else {
+                        compiler::routing_config(routing)?
+                    };
                     crate::tenancy::trajectory_profile::retained_guarded(&config, document, name)?;
                 }
             }
@@ -221,7 +241,7 @@ pub(super) fn compiled(
             envelope
         }
     };
-    super::execution::validate(envelope)
+    super::execution::validate_with_operation(envelope, operation)
 }
 
 fn route_shape(route: &RouteEnvelope, dependencies: &HashSet<&ResourceRef>) -> Result<()> {

@@ -122,7 +122,7 @@ impl TargetStamp {
 
 /// Pure mapping over private exact retained references. It supplies opaque
 /// configured-slot IDs, not new authentication or provider account assertions.
-fn project_target(
+pub(in crate::tenancy) fn project_target(
     installation: &InstallationId,
     route: &ResourceRef,
     credential: &ResourceRef,

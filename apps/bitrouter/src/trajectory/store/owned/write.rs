@@ -87,6 +87,7 @@ impl OwnedStore {
         &self,
         tx: &DatabaseTransaction,
         request: &old_request::Model,
+        publish_prefix: bool,
         budget: &mut io::Budget<'_>,
     ) -> Result<()> {
         let row = self.encode_request(request, &self.provenance)?;
@@ -102,8 +103,11 @@ impl OwnedStore {
             .await?
             .context("trajectory request physical-key collision")?;
         ensure!(winner == *request, "immutable trajectory request conflict");
-        self.record_prefix(tx, &request.full_input_digest, &request.episode_id, budget)
-            .await
+        if publish_prefix {
+            self.record_prefix(tx, &request.full_input_digest, &request.episode_id, budget)
+                .await?;
+        }
+        Ok(())
     }
     async fn record_prefix(
         &self,
@@ -166,10 +170,11 @@ impl OwnedStore {
     }
 
     /// Append a validated start to a known/new scoped episode. No commit is performed.
-    pub(crate) async fn begin_in(
+    pub(super) async fn begin_with_prefix_in(
         &self,
         tx: &DatabaseTransaction,
         input: &BeginRequest,
+        publish_prefix: bool,
         budget: &mut io::Budget<'_>,
     ) -> Result<()> {
         super::super::validate_begin(&self.owner()?, input)?;
@@ -248,6 +253,7 @@ impl OwnedStore {
                 protocol: input.protocol.clone(),
                 status: "started".into(),
             },
+            publish_prefix,
             budget,
         )
         .await

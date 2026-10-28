@@ -415,6 +415,7 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
 
 fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -> Result<()> {
     config.tenancy.validate(config)?;
+    crate::telemetry::receipt_latency::Config::read(config)?;
     config
         .gateway_state
         .validate(&config.database.url, config.server.skip_auth)?;
@@ -665,6 +666,7 @@ async fn assemble_app(
     let config = &effective_config;
     validate_host_configuration_inner(config, !is_shared)?;
     config.validate_router_config()?;
+    let receipt_observation_config = crate::telemetry::receipt_latency::Config::read(config)?;
     let decision_runtime = config
         .decision_model
         .as_ref()
@@ -721,16 +723,16 @@ async fn assemble_app(
     let shared_db = shared.map(|inputs| inputs.continuation.database().clone());
     #[cfg(not(feature = "multi-instance"))]
     let shared_db: Option<DatabaseConnection> = None;
-    let tenancy_owner = config
-        .tenancy
-        .enabled
-        .then(|| crate::tenancy::ownership::acquire(&config.database.url))
-        .transpose()?;
+    let tenancy_database = if config.tenancy.enabled {
+        Some(crate::db::connect_owned_tenancy(&config.database.url).await?)
+    } else {
+        None
+    };
     let db = match shared_db {
         Some(database) => database,
         None => {
-            let database = match &tenancy_owner {
-                Some(owner) => crate::db::connect_tenancy(&config.database.url, owner).await,
+            let database = match &tenancy_database {
+                Some(database) => Ok(database.database().clone()),
                 None => crate::db::connect(&config.database.url).await,
             }
             .context("connecting to database")?;
@@ -740,7 +742,7 @@ async fn assemble_app(
             database
         }
     };
-    let tenancy_enabled = tenancy_owner.is_some();
+    let tenancy_enabled = tenancy_database.is_some();
     #[cfg(feature = "harness")]
     let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
@@ -981,6 +983,23 @@ async fn assemble_app(
                 None => (None, None),
             },
         };
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    let receipt_observer = if receipt_observation_config.enabled {
+        otel_exporter
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("receipt latency exporter initialization failed"))?
+            .receipt_observer(&receipt_observation_config)?
+    } else {
+        crate::telemetry::receipt_latency::Sink::default()
+    };
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    let receipt_observer = {
+        anyhow::ensure!(
+            !receipt_observation_config.enabled,
+            "receipt latency requires an OTLP transport"
+        );
+        crate::telemetry::receipt_latency::Sink::default()
+    };
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let default_observe: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
         Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
@@ -1545,11 +1564,19 @@ async fn assemble_app(
 
     // Start the authority actor only after every other fallible assembly step.
     // Failed startup must not leave a detached owner behind during a retry.
-    let tenancy = match tenancy_owner {
-        Some(owner) => Some(
-            crate::tenancy::Service::open_profile(
-                db.clone(),
-                Some(owner),
+    let tenancy = match tenancy_database {
+        Some(database) if receipt_observer.enabled() => Some(
+            crate::tenancy::Service::open_owned_profile_observed(
+                database,
+                &config.tenancy,
+                &config.continuation,
+                receipt_observer,
+            )
+            .await?,
+        ),
+        Some(database) => Some(
+            crate::tenancy::Service::open_owned_profile(
+                database,
                 &config.tenancy,
                 &config.continuation,
             )

@@ -16,6 +16,15 @@ pub(crate) struct Pending {
     pub(crate) direction: Direction,
     pub(crate) session: Option<String>,
 }
+/// Data written only after actual local-owner cleanup; not a live capability.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LocalCleanup {
+    pub(crate) version: u32,
+    pub(crate) origin_json: String,
+    pub(crate) head: i64,
+    pub(crate) metadata_digest: String,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct State {
@@ -28,6 +37,8 @@ pub(crate) struct State {
     pub(crate) calls: BTreeMap<u64, Pending>,
     pub(crate) sessions: BTreeMap<String, i64>,
     pub(crate) pinned: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) local_cleanup: Option<LocalCleanup>,
 }
 
 impl State {
@@ -42,6 +53,7 @@ impl State {
             calls: BTreeMap::new(),
             sessions: BTreeMap::new(),
             pinned: BTreeSet::new(),
+            local_cleanup: None,
         }
     }
     pub(crate) fn state_name(&self) -> &'static str {
@@ -106,6 +118,24 @@ impl State {
                     "capture pending session is absent"
                 );
             }
+        }
+        if let Some(cleanup) = &self.local_cleanup {
+            ensure!(
+                self.closed
+                    && cleanup.version == 3
+                    && cleanup.head == self.head
+                    && !cleanup.origin_json.is_empty()
+                    && cleanup.origin_json.len() <= 256,
+                "capture cleanup marker shape mismatch"
+            );
+            // Full actual-origin decoding belongs to the stopped-owner consumer.
+            // Ordinary capture only verifies the bounded immutable state link.
+            let mut original = self.clone();
+            original.local_cleanup = None;
+            ensure!(
+                crate::storage::evolution::digest(&original)? == cleanup.metadata_digest,
+                "capture cleanup state digest mismatch"
+            );
         }
         Ok(())
     }

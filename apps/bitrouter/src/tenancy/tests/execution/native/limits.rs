@@ -188,7 +188,7 @@ impl Drop for Paused {
 }
 
 #[tokio::test]
-async fn stalled_callback_deadlines_release_detached_execution_and_cleanup_leases() -> Result<()> {
+async fn stalled_callback_deadlines_retain_work_until_the_same_callback_finishes() -> Result<()> {
     for hold in [
         Hold::Plan,
         Hold::AuthenticationOutcome,
@@ -259,6 +259,23 @@ async fn stalled_callback_deadlines_release_detached_execution_and_cleanup_lease
                     .with_context(|| {
                         format!("callback result: {stage}, disconnect={disconnect}")
                     })?;
+                // The caller has a bounded failure, but the original callback
+                // still owns work. Deadline expiry cannot prove its ACK/cleanup.
+                ensure!(
+                    fixture
+                        .service
+                        .admission
+                        .wait_drained()
+                        .now_or_never()
+                        .is_none(),
+                    "held callback released its execution lease: {stage}"
+                );
+                ensure!(
+                    !gate.release.is_cancelled(),
+                    "fixture released the callback before the retention check"
+                );
+                ensure!(provider.calls() == usize::from(hold == Hold::Outcome));
+                gate.release.cancel();
                 tokio::time::timeout(
                     Duration::from_secs(2),
                     fixture.service.admission.wait_drained(),
@@ -286,10 +303,7 @@ async fn stalled_callback_deadlines_release_detached_execution_and_cleanup_lease
                         "callback error: {stage}, disconnect={disconnect}: {error:?}"
                     );
                 }
-                ensure!(
-                    !gate.release.is_cancelled(),
-                    "fixture released the hung callback"
-                );
+                ensure!(gate.release.is_cancelled());
                 ensure!(provider.calls() == usize::from(hold == Hold::Outcome));
                 let attempts = observed.attempts.lock().await;
                 if hold == Hold::Outcome {

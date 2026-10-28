@@ -2,6 +2,7 @@
 
 mod actor;
 mod admission;
+pub(crate) mod audit;
 mod authority;
 mod cache;
 #[cfg(all(feature = "core", feature = "harness"))]
@@ -15,14 +16,21 @@ mod error;
 pub(crate) mod eval;
 pub(crate) mod execution;
 #[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod experiment;
+#[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod hosts;
 pub(crate) mod http;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod learner;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod learning;
 mod model;
 mod mutation;
 pub(crate) mod oauth;
+pub(crate) mod origin;
 pub(crate) mod ownership;
 pub(crate) mod receipts;
-mod resources;
+pub(crate) mod resources;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod session;
 mod store;
@@ -71,8 +79,22 @@ struct BootstrapGate {
     attached: oneshot::Sender<(Arc<transaction::Proof>, Arc<transaction::Gate>)>,
 }
 
+// Per-startup scheduling only, with the real connector/Worker/Admission. No
+// global hook, replacement snapshot, or alternate transaction implementation.
+#[cfg(test)]
+struct StartupTest {
+    bootstrap: Option<BootstrapGate>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    bind: Option<CapacityBindTest>,
+}
+#[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
+type CapacityBindTest =
+    Box<dyn FnOnce(&Service, &dyn Fn() -> anyhow::Result<()>) -> anyhow::Result<()> + Send>;
+
 #[derive(Clone)]
 pub(crate) struct Service {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    startup: Option<Arc<origin::StartupOwner>>,
     oauth: Arc<oauth::State>,
     db: DatabaseConnection,
     snapshot: Arc<RwLock<Arc<Snapshot>>>,
@@ -82,11 +104,16 @@ pub(crate) struct Service {
     safety: mpsc::Sender<Job>,
     completions: mpsc::Sender<Job>,
     receipt_volume: Option<std::path::PathBuf>,
+    receipt_observer: crate::telemetry::receipt_latency::Sink,
     stop: CancellationToken,
     accepting: Arc<std::sync::Mutex<bool>>,
     cleanup: Arc<transaction::Proof>,
     #[cfg(all(feature = "core", feature = "harness"))]
     hosts: Arc<hosts::Hosts>,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    learning_worker: Arc<AtomicBool>,
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+    learner_test: Arc<learner::testing::Hooks>,
     #[cfg(feature = "core")]
     eval: Arc<eval::State>,
     reads: Arc<Semaphore>,
@@ -103,10 +130,66 @@ pub(crate) struct Service {
     #[cfg(test)]
     receipt_credential_gate:
         Arc<std::sync::Mutex<Option<Arc<receipts::authority_test::CredentialGate>>>>,
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+    choice_final_gate: Arc<std::sync::Mutex<Option<Arc<receipts::authority_test::CredentialGate>>>>,
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+    paid_finish_gate: Arc<std::sync::Mutex<Option<Arc<receipts::authority_test::CredentialGate>>>>,
     completion: Shared<BoxFuture<'static, Result<(), Arc<tokio::task::JoinError>>>>,
 }
 
 impl Service {
+    pub(crate) async fn open_owned_profile(
+        database: crate::db::OwnedDatabase,
+        config: &crate::config::tenancy::TenancyConfig,
+        continuations: &crate::config::ContinuationConfig,
+    ) -> anyhow::Result<Self> {
+        Self::open_owned_profile_observed(
+            database,
+            config,
+            continuations,
+            crate::telemetry::receipt_latency::Sink::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn open_owned_profile_observed(
+        database: crate::db::OwnedDatabase,
+        config: &crate::config::tenancy::TenancyConfig,
+        continuations: &crate::config::ContinuationConfig,
+        observer: crate::telemetry::receipt_latency::Sink,
+    ) -> anyhow::Result<Self> {
+        Self::open_owned_profile_observed_startup(
+            database,
+            config,
+            continuations,
+            observer,
+            #[cfg(test)]
+            None,
+        )
+        .await
+    }
+
+    async fn open_owned_profile_observed_startup(
+        database: crate::db::OwnedDatabase,
+        config: &crate::config::tenancy::TenancyConfig,
+        continuations: &crate::config::ContinuationConfig,
+        observer: crate::telemetry::receipt_latency::Sink,
+        #[cfg(test)] startup_test: Option<StartupTest>,
+    ) -> anyhow::Result<Self> {
+        let (db, owner, claim) = database.claim()?;
+        Self::open_configured_origin(
+            db,
+            Some(owner),
+            actor::OperationLimits::default(),
+            config,
+            continuations,
+            (Some(claim), observer),
+            #[cfg(test)]
+            startup_test,
+        )
+        .await
+    }
+
     #[cfg(test)]
     pub(crate) async fn open(
         db: DatabaseConnection,
@@ -115,6 +198,7 @@ impl Service {
         Self::open_with_limits(db, owner, actor::OperationLimits::default()).await
     }
 
+    #[cfg(test)]
     pub(crate) async fn open_profile(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
@@ -127,8 +211,13 @@ impl Service {
             actor::OperationLimits::default(),
             config,
             continuations,
+            crate::telemetry::receipt_latency::Sink::default(),
         )
         .await
+    }
+
+    pub(crate) fn receipt_observer(&self) -> crate::telemetry::receipt_latency::Sink {
+        self.receipt_observer.clone()
     }
 
     #[cfg(test)]
@@ -143,17 +232,45 @@ impl Service {
             limits,
             &crate::config::tenancy::TenancyConfig::default(),
             &crate::config::ContinuationConfig::default(),
+            crate::telemetry::receipt_latency::Sink::default(),
         )
         .await
     }
 
+    #[cfg(test)]
     async fn open_configured(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,
         limits: actor::OperationLimits,
         config: &crate::config::tenancy::TenancyConfig,
         continuations: &crate::config::ContinuationConfig,
+        receipt_observer: crate::telemetry::receipt_latency::Sink,
     ) -> anyhow::Result<Self> {
+        Self::open_configured_origin(
+            db,
+            owner,
+            limits,
+            config,
+            continuations,
+            (None, receipt_observer),
+            None,
+        )
+        .await
+    }
+
+    async fn open_configured_origin(
+        db: DatabaseConnection,
+        owner: Option<ownership::Lease>,
+        limits: actor::OperationLimits,
+        config: &crate::config::tenancy::TenancyConfig,
+        continuations: &crate::config::ContinuationConfig,
+        origin: (
+            Option<ownership::Claim>,
+            crate::telemetry::receipt_latency::Sink,
+        ),
+        #[cfg(test)] startup_test: Option<StartupTest>,
+    ) -> anyhow::Result<Self> {
+        let (claim, receipt_observer) = origin;
         let initial = store::load(&db, Utc::now()).await?;
         let resources = Arc::new(resources::Resources::load_key(
             &initial.installation,
@@ -166,11 +283,22 @@ impl Service {
             limits,
             initial,
             resources,
-            (import, continuations),
+            (import, continuations, claim, receipt_observer),
             #[cfg(test)]
-            None,
+            startup_test,
         )
         .await?;
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if let Err(error) =
+            learner::registration::initialize(&service, config.learning_registrations.as_deref())
+                .await
+        {
+            // H bootstrap and crypto succeeded. Failure must drain this actual
+            // Service before returning, before any listener or worker exposure.
+            let stopped = service.shutdown().await;
+            stopped?;
+            return Err(error);
+        }
         if service.http_continuation.state.enabled() {
             service.http_registry.start_reconciler();
         }
@@ -207,8 +335,17 @@ impl Service {
             limits,
             initial,
             resources,
-            (import, &crate::config::ContinuationConfig::default()),
-            bootstrap_gate,
+            (
+                import,
+                &crate::config::ContinuationConfig::default(),
+                None,
+                crate::telemetry::receipt_latency::Sink::default(),
+            ),
+            bootstrap_gate.map(|bootstrap| StartupTest {
+                bootstrap: Some(bootstrap),
+                #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+                bind: None,
+            }),
         )
         .await
     }
@@ -219,10 +356,15 @@ impl Service {
         limits: actor::OperationLimits,
         initial: Snapshot,
         resources: Arc<resources::Resources>,
-        provisioning: (Option<Vec<u8>>, &crate::config::ContinuationConfig),
-        #[cfg(test)] bootstrap_gate: Option<BootstrapGate>,
+        provisioning: (
+            Option<Vec<u8>>,
+            &crate::config::ContinuationConfig,
+            Option<ownership::Claim>,
+            crate::telemetry::receipt_latency::Sink,
+        ),
+        #[cfg(test)] mut startup_test: Option<StartupTest>,
     ) -> anyhow::Result<Self> {
-        let (import, continuations) = provisioning;
+        let (import, continuations, claim, receipt_observer) = provisioning;
         // Construct fallible transport state before spawning the owning actor.
         // Tenant profiles share connection pools, never host credential plugins.
         let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::with_defaults()?);
@@ -232,7 +374,7 @@ impl Service {
         let live = Arc::new(AtomicBool::new(true));
         let cleanup = transaction::Proof::new(live.clone());
         #[cfg(test)]
-        if let Some(bootstrap_gate) = bootstrap_gate {
+        if let Some(bootstrap_gate) = startup_test.as_mut().and_then(|test| test.bootstrap.take()) {
             let gate = cleanup.hold(bootstrap_gate.phase);
             bootstrap_gate
                 .attached
@@ -240,6 +382,8 @@ impl Service {
                 .map_err(|_| anyhow::anyhow!("bootstrap test gate receiver unavailable"))?;
         }
         let instance: InstanceId = uuid::Uuid::new_v4().to_string().try_into()?;
+        let startup =
+            claim.map(|claim| origin::StartupOwner::new(claim, instance.clone(), cleanup.clone()));
         // Ordinary traffic cannot occupy the queue reserved for installation
         // revokes and stop transitions. Neither queue waits for free capacity.
         let (commands, receiver) = mpsc::channel(16);
@@ -283,6 +427,7 @@ impl Service {
         let http_registry =
             crate::continuation::ContinuationRegistry::for_tenant(http_continuation.clone())?;
         let worker = Worker {
+            startup: startup.clone(),
             oauth: oauth.clone(),
             db: db.clone(),
             snapshot: snapshot.clone(),
@@ -292,6 +437,8 @@ impl Service {
             resources: resources.clone(),
             proof: cleanup.clone(),
             admission: admission.clone(),
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+            observe_capacity: receipt_observer.enabled(),
             http_continuation: http_state,
             #[cfg(feature = "core")]
             eval: eval.clone(),
@@ -312,6 +459,8 @@ impl Service {
             .boxed()
             .shared();
         let mut service = Self {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            startup,
             oauth,
             db,
             snapshot,
@@ -321,6 +470,7 @@ impl Service {
             safety,
             completions,
             receipt_volume,
+            receipt_observer,
             stop,
             accepting,
             #[cfg(feature = "core")]
@@ -328,6 +478,10 @@ impl Service {
             cleanup,
             #[cfg(all(feature = "core", feature = "harness"))]
             hosts: Arc::new(hosts::Hosts::new()),
+            #[cfg(all(feature = "core", feature = "harness"))]
+            learning_worker: Arc::new(AtomicBool::new(false)),
+            #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+            learner_test: Arc::default(),
             reads,
             resources,
             native_continuation: None,
@@ -339,13 +493,36 @@ impl Service {
             pipelines: execution::lifecycle::Registry::new(),
             #[cfg(test)]
             dispatch_test_ready: Arc::new(AtomicBool::new(false)),
+            #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+            choice_final_gate: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+            paid_finish_gate: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
             receipt_credential_gate: Arc::default(),
             completion,
         };
         match initialization.await {
-            Ok(Ok(crypto)) => {
-                service.native_continuation = crypto;
+            Ok(Ok(initialized)) => {
+                service.native_continuation = initialized.crypto;
+                // Bind the Worker's post-bootstrap copy; maintenance may already
+                // hold Admission here. SDK callbacks still use pure try_lock.
+                let bind = || {
+                    service.bind_receipt_capacity(
+                        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+                        initialized.capacity,
+                    )
+                };
+                #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
+                let bound = match startup_test.and_then(|test| test.bind) {
+                    Some(hook) => hook(&service, &bind),
+                    None => bind(),
+                };
+                #[cfg(not(all(test, any(feature = "otel-http", feature = "otel-grpc"))))]
+                let bound = bind();
+                if let Err(error) = bound {
+                    service.shutdown().await?;
+                    return Err(error);
+                }
                 Ok(service)
             }
             _ => {
@@ -353,6 +530,31 @@ impl Service {
                 anyhow::bail!("native continuation key initialization failed")
             }
         }
+    }
+
+    fn bind_receipt_capacity(
+        &self,
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))] initial: Option<
+            crate::telemetry::receipt_latency::capacity::Snapshot,
+        >,
+    ) -> anyhow::Result<()> {
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+        if self.receipt_observer.enabled() {
+            use crate::telemetry::receipt_latency::capacity::ReadError;
+            let initial = initial
+                .ok_or_else(|| anyhow::anyhow!("receipt capacity bootstrap snapshot missing"))?;
+            let source = Arc::downgrade(&self.admission);
+            anyhow::ensure!(
+                self.receipt_observer.bind_capacity(initial, move || {
+                    source
+                        .upgrade()
+                        .ok_or(ReadError::Unavailable)?
+                        .observed_capacity()
+                }),
+                "receipt capacity observation already bound or sealed"
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn continuation_registry(&self) -> &crate::continuation::ContinuationRegistry {
@@ -384,6 +586,18 @@ impl Service {
                 .map_err(|_| {
                     anyhow::anyhow!("native host cleanup did not drain; owner retained")
                 })??;
+            #[cfg(all(feature = "core", feature = "harness"))]
+            if self.startup.is_some() {
+                // Optional recovery evidence never substitutes for ordinary
+                // shutdown. Unsupported coverage leaves no stamp and the
+                // unchanged full drain below still decides cleanup success.
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                if let Ok(Some(proof)) = self.pipelines.paid_stop_set(deadline).await {
+                    crate::tenancy::learning::queue::stop_set(proof, deadline)
+                        .await
+                        .map_err(|_| anyhow::anyhow!("paid stop-set retention unconfirmed"))?;
+                }
+            }
             tokio::time::timeout(Duration::from_secs(30), self.pipelines.close_and_drain())
                 .await
                 .map_err(|_| {
@@ -490,8 +704,8 @@ impl Service {
     fn capabilities(&self, caller: &Caller) -> Result<TenantCapabilities, Failure> {
         let state = self.current()?;
         state.principal(caller, Utc::now()).map_err(Failure::from)?;
-        // No tenant inference is advertised until immutable dispatch and durable
-        // strict receipts have been integrated and qualified together.
+        // All three guarantees derive from the same current eligibility fences;
+        // discovery does not grant authority over any selected retained route.
         let dispatch_ready = self.dispatch_ready(&state);
         Ok(TenantCapabilities {
             contract_version: 1,
@@ -533,7 +747,12 @@ impl Service {
     fn enqueue(&self, job: Job, safety: bool) -> Result<(), Failure> {
         let operation = match &job {
             #[cfg(all(feature = "core", feature = "harness"))]
-            Job::Native(_) | Job::Capture(_) => None,
+            Job::Native(_)
+            | Job::Capture(_)
+            | Job::Learning(_)
+            | Job::Experiment(_)
+            | Job::ExperimentRead(_)
+            | Job::Learner(_) => None,
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::OAuth(_)
             | Job::Credential(_)

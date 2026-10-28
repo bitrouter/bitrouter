@@ -141,6 +141,16 @@ async fn disconnect_during_commit_keeps_writer_registry_and_reservation_until_se
 #[tokio::test]
 async fn confirmed_receipt_rollback_returns_unavailable_and_reconciles_identical_evidence_without_inference()
 -> Result<()> {
+    reconcile_receipt_rollback(true).await
+}
+
+#[tokio::test]
+async fn first_shutdown_reconciles_confirmed_receipt_rollback_without_an_earlier_waiter()
+-> Result<()> {
+    reconcile_receipt_rollback(false).await
+}
+
+async fn reconcile_receipt_rollback(first_shutdown_refused: bool) -> Result<()> {
     let harness = Harness::new(
         "chat_completions",
         StatusCode::OK,
@@ -176,12 +186,15 @@ async fn confirmed_receipt_rollback_returns_unavailable_and_reconciles_identical
     ensure!(!rejected.status().is_success());
     let _ = rejected.bytes().await?;
     ensure!(harness.calls.load(Ordering::SeqCst) == 1);
-    // First cleanup fails visibly while the same test-owned constraint remains.
-    ensure!(
-        tokio::time::timeout(TIMEOUT, harness.fixture.service.shutdown())
-            .await?
-            .is_err()
-    );
+    // Cover both an already-observed failure and a fresh shutdown waiter.
+    // The latter must join the original drain before deciding to reconcile.
+    if first_shutdown_refused {
+        ensure!(
+            tokio::time::timeout(TIMEOUT, harness.fixture.service.shutdown())
+                .await?
+                .is_err()
+        );
+    }
     harness
         .fixture
         .db

@@ -52,10 +52,50 @@ impl Worker {
             .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
         let result = async {
             check().map_err(Failure::from)?;
+            #[cfg(feature = "harness")]
+            let bound = match job.execution.experiment() {
+                Some(witness) => Some(
+                    crate::tenancy::experiment::store::bound::begin(
+                        &tx,
+                        &job.execution,
+                        witness,
+                        &job.input,
+                        &shared,
+                    )
+                    .await
+                    .map_err(|error| self.trajectory_error(error))?,
+                ),
+                None => None,
+            };
+            #[cfg(feature = "harness")]
+            let result = match bound {
+                Some(bound) => {
+                    store
+                        .begin_bound_experiment_in(
+                            &tx,
+                            &bound,
+                            &job.input,
+                            job.reservation,
+                            &mut budget,
+                        )
+                        .await
+                }
+                None => {
+                    store
+                        .correlate_and_begin_reserved_in(
+                            &tx,
+                            &job.input,
+                            job.reservation,
+                            &mut budget,
+                        )
+                        .await
+                }
+            };
+            #[cfg(not(feature = "harness"))]
             let result = store
                 .correlate_and_begin_reserved_in(&tx, &job.input, job.reservation, &mut budget)
-                .await
-                .map_err(|e| self.trajectory_error(e))?;
+                .await;
+            let result = result.map_err(|error| self.trajectory_error(error))?;
             check().map_err(Failure::from)?;
             Ok::<_, Failure>(result)
         }
@@ -162,6 +202,16 @@ impl Worker {
                 }
             }
             check().map_err(Failure::from)?;
+            #[cfg(feature = "harness")]
+            crate::tenancy::experiment::store::terminal::trajectory(
+                &tx,
+                &job.execution,
+                &settlement,
+                existing,
+                &shared,
+            )
+            .await
+            .map_err(|error| self.trajectory_error(error))?;
             Ok::<_, Failure>(!existing)
         }
         .await;

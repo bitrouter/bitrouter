@@ -19,7 +19,12 @@ async fn send(value: Value) -> Result<()> {
     Ok(())
 }
 fn options(model: &str) -> Value {
-    json!([{"id":"model","name":"Model","type":"select","currentValue":model,"options":[{"value":"provider:literal-route","name":"Retained route"}]}])
+    // Capture selects the retained route resource ID, not its upstream selector.
+    // Advertise only the two explicit routes used by these process fixtures.
+    json!([{"id":"model","name":"Model","type":"select","currentValue":model,"options":[
+        {"value":"provider:literal-route","name":"Retained route"},
+        {"value":"literal:subject","name":"Retained assessment subject"}
+    ]}])
 }
 
 #[cfg(unix)]
@@ -80,6 +85,7 @@ async fn main() -> Result<()> {
     let mut endpoint: Option<Value> = None;
     let mut model = "unselected".to_owned();
     let mut sessions = 0;
+    let mut local_first_prompt = std::env::var_os("CAPTURE_FIXTURE_LOCAL_FIRST_PROMPT").is_some();
     while let Some(line) = input.next_line().await? {
         ensure!(line.len() <= 1024 * 1024, "fixture frame exceeds bound");
         let message: Value = serde_json::from_str(&line)?;
@@ -118,6 +124,13 @@ async fn main() -> Result<()> {
                     send(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"fixture provider initialization rejected"}})).await?;
                     continue;
                 }
+                // Explicit test-only handoff observation. This is the exact
+                // configured endpoint received by the real Rust ACP peer.
+                if let Some(path) = std::env::var_os("CAPTURE_FIXTURE_ENDPOINT_MARKER") {
+                    let bytes = serde_json::to_vec(params)?;
+                    ensure!(bytes.len() <= 64 * 1024, "fixture endpoint bound");
+                    tokio::fs::write(path, bytes).await?;
+                }
                 endpoint = Some(params.clone());
                 json!({})
             }
@@ -138,9 +151,26 @@ async fn main() -> Result<()> {
                 json!({"configOptions":options(&model)})
             }
             "session/prompt" => {
+                // An actual local-only first turn supplies preexisting-session
+                // evidence without manufacturing capture rows or provider facts.
+                if std::mem::take(&mut local_first_prompt) {
+                    send(json!({"jsonrpc":"2.0","id":id,"result":{"stopReason":"end_turn"}}))
+                        .await?;
+                    continue;
+                }
                 #[cfg(unix)]
                 if let Ok(mode) = std::env::var("CAPTURE_FIXTURE_INGRESS_ATTACK") {
                     raw_ingress_attack(&mode, &params["sessionId"]).await?;
+                }
+                #[cfg(unix)]
+                if let Ok(socket) = std::env::var("CAPTURE_FIXTURE_BLOCK_GATE") {
+                    // The real ACP prompt append has already returned before
+                    // this peer can issue HTTP. Parent now targets Block H,
+                    // without holding an earlier capture append transaction.
+                    let mut gate = tokio::net::UnixStream::connect(socket).await?;
+                    gate.write_all(b"ready").await?;
+                    let mut release = [0; 1];
+                    tokio::io::AsyncReadExt::read_exact(&mut gate, &mut release).await?;
                 }
                 let configured = endpoint.as_ref().context("provider not configured")?;
                 let base = configured

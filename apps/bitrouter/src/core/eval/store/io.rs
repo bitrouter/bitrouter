@@ -16,6 +16,7 @@ use super::{ErrorCode, EvalStore, OwnedError};
 pub(super) struct Capacity(&'static str);
 
 pub(super) const MAX_ROWS: usize = 4096;
+pub(super) const MAX_OWNED_ROWS: usize = 1024;
 pub(super) const MAX_BYTES: usize = 32 * 1024 * 1024;
 
 /// Bounds serialized SQL cells across one operation, not decoded allocator overhead.
@@ -44,7 +45,7 @@ impl<'a> Budget<'a> {
             shared: None,
             tenant: !store.scope.is_legacy(),
             bytes: 0,
-            rows: 1024,
+            rows: MAX_OWNED_ROWS,
             check: Some(check),
         }
     }
@@ -92,6 +93,7 @@ impl<'a> Budget<'a> {
 }
 
 pub(super) trait Columns {
+    const MAXIMUM_BYTES: usize = MAX_BYTES;
     const NAMES: &'static [&'static str];
 }
 
@@ -173,7 +175,11 @@ where
         budget.check()?;
         let rows: i64 = row.try_get("", "row_count")?;
         let bytes: Option<i64> = row.try_get("", "cell_bytes")?;
-        budget.charge(usize::try_from(rows)?, usize::try_from(bytes.unwrap_or(0))?)?;
+        let bytes = usize::try_from(bytes.unwrap_or(0))?;
+        if bytes > E::Model::MAXIMUM_BYTES {
+            return Err(Capacity("projection byte").into());
+        }
+        budget.charge(usize::try_from(rows)?, bytes)?;
     }
     budget.check()?;
     let rows = query.all(db).await?;

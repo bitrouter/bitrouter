@@ -1,9 +1,12 @@
 # Authenticated local passive capture profile
 
-This source slice provides a local Rust embedding entry through
-`harness::acp::controlled::ControlledSession::open_authenticated`. Production tenant
-dispatch and strict receipts remain unavailable. This document describes the
-implemented path behind that capability gate, not a qualification or full M2 claim.
+This profile provides a local Rust embedding entry through
+`harness::acp::controlled::ControlledSession::open_authenticated`. Dispatch and
+strict receipts follow the supported opt-in, single-instance Unix SQLite
+[Service eligibility](RESOURCE_TENANCY_IMPLEMENTATION.md#current-local-dispatch-eligibility).
+Earlier slice qualification statements below retain their original scope.
+Source-pinned local checks do not establish full M2, final aggregate, platform or
+performance acceptance; see [remaining qualification](RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
 
 The embedding host already owns the assembled App, its inference listener, original
 authenticated execution headers and a trusted ACP launch descriptor. The library
@@ -123,7 +126,82 @@ choose which closure is required; malformed evidence is rejected read-only.
 
 There is no judge dispatch, cost coverage claim, assessment selection, quota funding,
 automatic delegation, activation or promotion here. `max_evaluations` is not reset
-or consumed by passive observation. Those paid behaviors remain later design/work.
+or consumed by passive observation. Those paid behaviors are not part of passive observation.
+
+The separate explicit paid-assessment profile can select a static Generation
+judge as an additional immutable configuration root. Only a checked checkpoint
+call with that retained profile initiates its own bounded logical job and native
+execution; ordinary capture does not discover work. The implementation reuses
+this actor, the execution/receipt Registry and033's scoped tables. Current grants
+are rechecked before send and assessment selection. Admitted usage and facts can
+finalize after revocation without authorizing another attempt or a new selection.
+See the revision-cumulative allowance in RESOURCE_TENANCY_M0.md and
+RESOURCE_TENANCY_IMPLEMENTATION.md. Interrupted accepted jobs fail startup closed;
+no row alone reconstructs authority or proves that a provider was unsent. This
+source extension does not enable the full M2/M3 capability flags, and its private
+unrun test sources are not qualification evidence.
+
+## Explicit retained ACP Block profile
+
+An explicit operator-imported `block_v1` route profile adds one bounded static
+Block to this same authenticated ACP consumer in Explore mode. Without that
+profile, the passive behavior above is unchanged. The two approved selectors,
+credential references, measurement contract and numerical policy are retained
+with the immutable configuration; no ambient Block catalog is adopted.
+
+The real opener attaches a private opaque provider link. The existing host slot
+keeps a weak association with its original live capture Binding. The HTTP caller
+must match that opener's tenant, stable principal, original credential and pinned
+configuration. A stored open connection or copied link cannot reconstruct this
+capability after close or process death. The request retains the original Binding
+through admission, original H selection and final send. It acquires no second
+host slot and strips the private link before provider conversion.
+
+A real pending ACP prompt with its fixed model selected is required. Original H
+validates the complete capture edge before committing enrollment and RouteIntent
+with the existing Block algorithm. Missing/ambiguous pending prompts, continuation
+overrides or a stale original source are explicit refusals. Prior local work
+keeps the preexisting-session baseline. A rule non-hit keeps an honest baseline
+intent and supplies no conclusive trial score.
+
+At an actual stopped checkpoint or a later selection, the same H writer rebuilds
+the cohort from scoped capture, the effective checked Human/paid revision and
+original 035 receipts. Selected paid feedback must match its original job,
+accepted input, output, receipt digests and consumed history reservation in the
+same transaction and cumulative budget. A stale or retracted judgement cannot
+retain its old positive score. Changed evidence can withdraw unsupported adoption;
+monitoring rollback retains priority and a rolled-back control stays terminal.
+
+Receipt membership and tariff matching reuse the journal's opaque account and
+credential-slot projection from the original retained installation, route and
+credential. All five Target fields must match; an unpinned route supplies neither
+membership nor known cost. Namespace, execution/revision and current-authority
+checks remain separate. Subject-token cost is known only for eligible plain-text,
+tool-free input with complete provider usage and unambiguous retained tariffs.
+Nonzero cache buckets need explicit valid rates, including rates inherited from
+the base tariff; explicit zero rates are valid, while unused buckets need
+no rate. Missing dimensions, ambiguous tariffs or auxiliary work remain unknown.
+If the profile permits paid assessment, whole-family cost stays unknown even
+when its judge loses the Human-head CAS; missing or unselected paid work is not
+free work. This is not settlement, a tenant spending limit or a new allowance.
+The numerical learner can update this Block's scoped control only; it cannot
+activate another configuration. Ordinary profiles remain unchanged; dispatch
+eligibility follows the same current Service fences.
+
+The first source profile is limited to one Block/two selectors, 64 enrollments,
+512 intents and the existing cumulative H row/byte/time budgets. Native operational
+experiment units are a separate producer and cannot substitute for ACP evidence.
+Independent source review covers these corrections. The six tariff tests, new
+target-matching test and existing opaque slot-projection test passed; strict
+all-feature/all-target Clippy and the actual application/fixture build also
+passed. After the narrow tariff and fixture corrections, all sixteen exact Block
+parents passed serially without retries, alongside nine exact conformance tests,
+formatting and strict workspace, all-feature, all-target Clippy on Rust 1.97.
+The reviewed Unix CI job selects these sixteen parents and the seven separately
+passed native-repair parents. This closes the finite local Block campaign, not
+remote CI, final platform/feature checks or performance. Actual local host
+acceptance is recorded separately. See
+[remaining acceptance](RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
 
 ## Source tests and qualification boundary
 

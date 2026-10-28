@@ -4,8 +4,15 @@
 //! It does not create a wire API or turn a caller-supplied ID into authority.
 use anyhow::{Context, Result};
 use bitrouter::{
+    acp_trajectory::checkpoint::types::{AssessmentRevision, AssessmentSource, RevisionInput},
+    core::evolution::{
+        rubric::RubricEvaluation,
+        scoring::{RubricSubmission, ScoringReceipt},
+    },
     gateway::assembly::App,
-    harness::acp::controlled::{CheckpointSummary, ControlledSession, LocalControllerLaunch},
+    harness::acp::controlled::{
+        CheckpointReview, CheckpointSummary, ControlledSession, LocalControllerLaunch,
+    },
 };
 use futures::StreamExt;
 use std::{path::PathBuf, sync::Arc};
@@ -58,4 +65,89 @@ pub async fn capture_turn(
         .await
         .context("controller cleanup is unconfirmed")?;
     result
+}
+
+/// Handle an explicit edit from the embedding's human UI. The detached view
+/// holds no database transaction while the user edits. Keep the reviewed head
+/// on conflict; silently refreshing it would overwrite a concurrent correction.
+pub async fn review_and_submit<F, Fut>(
+    session: &ControlledSession,
+    native: &str,
+    checkpoint: Option<&str>,
+    submission_id: String,
+    edit: F,
+) -> Result<ScoringReceipt>
+where
+    F: FnOnce(CheckpointReview) -> Fut,
+    Fut: std::future::Future<Output = Result<RubricEvaluation>>,
+{
+    let view = session.review_checkpoint(native, checkpoint).await?;
+    let checkpoint_id = view.checkpoint.checkpoint_id.clone();
+    let expected_revision = view.scoring.expected_revision.clone();
+    let evaluation = edit(view).await?;
+    session
+        .submit_assessment(
+            native,
+            RubricSubmission {
+                submission_id,
+                checkpoint_id,
+                expected_revision,
+                source: AssessmentSource::Human,
+                evaluator_id: String::new(),
+                evaluator_version: String::new(),
+                evaluation,
+            },
+        )
+        .await
+}
+
+/// Retraction is a new immutable Human revision, not deletion of a paid result.
+/// Keep this submission ID for retry after a lost reply. Attribution is filled
+/// by the server from this original authenticated controller's principal.
+pub async fn review_and_retract<F, Fut>(
+    session: &ControlledSession,
+    native: &str,
+    checkpoint: Option<&str>,
+    submission_id: String,
+    confirm: F,
+) -> Result<AssessmentRevision>
+where
+    F: FnOnce(CheckpointReview) -> Fut,
+    Fut: std::future::Future<Output = Result<String>>,
+{
+    let view = session.review_checkpoint(native, checkpoint).await?;
+    let checkpoint_id = view.checkpoint.checkpoint_id.clone();
+    let expected_revision = view.scoring.expected_revision.clone();
+    let reason = confirm(view).await?;
+    session
+        .retract_assessment(
+            native,
+            RevisionInput {
+                submission_id,
+                checkpoint_id,
+                expected_revision,
+                source: AssessmentSource::Human,
+                evaluator_id: String::new(),
+                evaluator_version: String::new(),
+                assessment: None,
+                reason,
+            },
+        )
+        .await
+}
+
+/// Poll an explicitly initiated checkpoint alongside the host's manual action.
+/// The action should await a real UI command before opening an already-frozen
+/// review; None does not freeze or wait for a checkpoint. Both results survive a
+/// human CAS error. The caller keeps its existing updates/permission event loop
+/// running and joins `session.shutdown()` after dropping these borrowed futures.
+pub async fn checkpoint_with_manual_action<T, F>(
+    session: &ControlledSession,
+    native: &str,
+    action: F,
+) -> (Result<Option<CheckpointSummary>>, Result<T>)
+where
+    F: std::future::Future<Output = Result<T>>,
+{
+    tokio::join!(session.checkpoint(native), action)
 }

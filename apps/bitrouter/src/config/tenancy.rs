@@ -14,6 +14,9 @@ pub struct TenancyConfig {
     /// Privileged JSON manifest imported before listeners open. Relative paths
     /// are relative to the server process's working directory, never a tenant.
     pub resource_import: Option<PathBuf>,
+    /// Optional local learning registration manifest, authenticated after H bootstrap.
+    /// Omission preserves startup behavior and does not erase durable schedules.
+    pub learning_registrations: Option<PathBuf>,
     /// Operator environment variable containing a stable base64 32-byte key.
     /// The secret itself is never part of configuration or resource reports.
     pub wrapping_key_env: Option<String>,
@@ -27,7 +30,10 @@ impl TenancyConfig {
     /// non-file SQLite configurations and unsupported local ownership platforms.
     pub fn validate(&self, config: &super::Config) -> Result<()> {
         ensure!(
-            self.enabled || (self.resource_import.is_none() && self.wrapping_key_env.is_none()),
+            self.enabled
+                || (self.resource_import.is_none()
+                    && self.wrapping_key_env.is_none()
+                    && self.learning_registrations.is_none()),
             "tenancy resource provisioning requires tenancy.enabled"
         );
         ensure!(
@@ -50,6 +56,16 @@ impl TenancyConfig {
                             || (index > 0 && byte.is_ascii_digit())
                     }),
                 "invalid tenancy wrapping key environment name"
+            );
+        }
+        if let Some(path) = &self.learning_registrations {
+            ensure!(
+                !path.as_os_str().is_empty(),
+                "learning registration path is empty"
+            );
+            ensure!(
+                cfg!(all(feature = "core", feature = "harness")),
+                "owned learning requires core and harness"
             );
         }
         if !self.enabled {

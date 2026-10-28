@@ -18,6 +18,8 @@ use futures::{
 };
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) mod paid;
 const MAX_ACTIVE: usize = 128;
 #[derive(Clone)]
 enum Completion {
@@ -44,6 +46,8 @@ struct Entry {
     changed: tokio::sync::Notify,
     task: Mutex<Option<DrainTask>>,
     receipt: Option<Arc<Owner>>,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    effects_stopped: std::sync::atomic::AtomicBool,
 }
 #[derive(Default)]
 struct State {
@@ -104,6 +108,8 @@ impl Registry {
             changed: tokio::sync::Notify::new(),
             task: Mutex::new(None),
             receipt: Some(receipt),
+            #[cfg(all(feature = "core", feature = "harness"))]
+            effects_stopped: std::sync::atomic::AtomicBool::new(false),
         });
         state.entries.insert(entry.id.clone(), entry.clone());
         *entry
@@ -167,6 +173,8 @@ impl Registry {
                     changed: tokio::sync::Notify::new(),
                     task: Mutex::new(None),
                     receipt: None,
+                    #[cfg(all(feature = "core", feature = "harness"))]
+                    effects_stopped: std::sync::atomic::AtomicBool::new(false),
                 })
             }
         };
@@ -219,36 +227,23 @@ impl Registry {
             .map_err(|_| BitrouterError::internal("execution drain requires a runtime"))?;
         let mut failure = None;
         for entry in entries {
-            let task = {
-                let mut task = entry
-                    .task
-                    .lock()
-                    .map_err(|_| BitrouterError::internal("execution drain unavailable"))?;
-                if task
-                    .as_ref()
-                    .is_some_and(|task| matches!(task.peek(), Some(Completion::Retryable(_))))
-                {
-                    if let Some(receipt) = &entry.receipt {
-                        receipt.reconcile().map_err(|_| {
-                            BitrouterError::internal("receipt reconciliation failed")
-                        })?;
-                    }
-                    *task = Some(start_drain(&runtime, entry.clone()));
-                }
-                task.clone()
-                    .ok_or_else(|| BitrouterError::internal("execution drain missing"))?
-            };
+            let task = entry
+                .task
+                .lock()
+                .map_err(|_| BitrouterError::internal("execution drain unavailable"))?
+                .clone()
+                .ok_or_else(|| BitrouterError::internal("execution drain missing"))?;
             let completion = task.await;
-            // The spawned drain may have failed before a late commit, while
-            // this shared join future had never been polled. Recheck durable
-            // ownership after joining that stale result, then run cleanup once
-            // more. Pipeline/finalizer failures still have to pass their drain.
-            let completion = if matches!(completion, Completion::Retryable(_))
-                && entry
-                    .receipt
-                    .as_ref()
-                    .is_some_and(|receipt| receipt.durable())
-            {
+            // A Shared join has no cached result until it has been polled,
+            // even when the spawned drain already failed. Observe that result
+            // before retrying once. Reconciliation queues only the immutable
+            // receipt after confirmed rollback; a late commit needs only drain.
+            let completion = if matches!(completion, Completion::Retryable(_)) {
+                if let Some(receipt) = &entry.receipt {
+                    receipt
+                        .reconcile()
+                        .map_err(|_| BitrouterError::internal("receipt reconciliation failed"))?;
+                }
                 let retry = start_drain(&runtime, entry.clone());
                 *entry
                     .task
@@ -271,6 +266,35 @@ impl Registry {
             None => Ok(()),
         }
     }
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+    pub(crate) fn callback_owner_for_test(
+        &self,
+        id: &ExecutionId,
+    ) -> Result<(Arc<Owner>, Arc<OwnedTasks>)> {
+        let state = self.state();
+        let entry = state
+            .entries
+            .get(id)
+            .ok_or_else(|| BitrouterError::internal("test execution is absent"))?;
+        let receipt = entry
+            .receipt
+            .clone()
+            .ok_or_else(|| BitrouterError::internal("test receipt is absent"))?;
+        let attachment = entry
+            .attachment
+            .lock()
+            .map_err(|_| BitrouterError::internal("test attachment unavailable"))?;
+        let Attachment::Attached(attached) = &*attachment else {
+            return Err(BitrouterError::internal("test pipeline is not attached"));
+        };
+        let tasks = attached
+            .pipeline
+            .owned_tasks()
+            .cloned()
+            .ok_or_else(|| BitrouterError::internal("test task owner is absent"))?;
+        Ok((receipt, tasks))
+    }
+
     fn completed(&self, entry: &Arc<Entry>) {
         let removed = {
             let mut state = self.state();
@@ -312,6 +336,8 @@ impl Entry {
             match tokio::time::timeout_at(receipt.deadline, self.attached()).await {
                 Ok(result) => result,
                 Err(_) => {
+                    #[cfg(test)]
+                    eprintln!("headroom execution deadline: phase=attachment");
                     receipt.cancel();
                     match self.attachment.lock() {
                         Ok(mut state) => match &*state {
@@ -346,7 +372,9 @@ impl Entry {
                 tokio::select! {
                     result=&mut draining=>result,
                     ()=tokio::time::sleep_until(receipt.deadline)=>{
-                        receipt.cancel();
+                        #[cfg(test)]
+                    eprintln!("headroom execution deadline: phase=drain");
+                    receipt.cancel();
                         match tokio::time::timeout_at(receipt.cleanup_deadline(),&mut draining).await {
                             Ok(result)=>result,
                             Err(_)=>{receipt.fail(ErrorCode::StorageUnavailable);return Completion::Failed(BitrouterError::internal("execution cleanup deadline elapsed; ownership retained"));}
@@ -374,11 +402,28 @@ impl Entry {
                 return Completion::Failed(error);
             }
         }
+        // This marker follows the actual pipeline/finalizer/observation joins.
+        // A later receipt/learning failure cannot undo those local joins, but it
+        // also cannot manufacture their proof when an earlier drain failed.
+        #[cfg(all(feature = "core", feature = "harness"))]
+        {
+            self.effects_stopped
+                .store(true, std::sync::atomic::Ordering::Release);
+            self.changed.notify_waiters();
+        }
         if let Some(receipt) = &self.receipt
             && receipt.finish_or_join(Outcome::Cancelled).await.is_err()
         {
             return Completion::Retryable(BitrouterError::internal(
                 "durable receipt unavailable; ownership retained",
+            ));
+        }
+        #[cfg(all(feature = "core", feature = "harness"))]
+        if let Some(receipt) = &self.receipt
+            && receipt.drain_learning().await.is_err()
+        {
+            return Completion::Retryable(BitrouterError::internal(
+                "assessment completion unconfirmed; ownership retained",
             ));
         }
         if let Some(receipt) = &self.receipt
@@ -512,6 +557,7 @@ mod tests {
                 api_base_override: None,
                 auth_scheme: Default::default(),
                 headers: vec![],
+                registry: None,
             }],
         );
         let mut builder = PipelineBuilder::new();

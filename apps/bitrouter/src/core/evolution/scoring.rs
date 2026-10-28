@@ -58,9 +58,21 @@ pub fn measurement_contract(
     evaluator_id: &str,
     evaluator_version: &str,
 ) -> Result<String> {
+    measurement_contract_for(EVIDENCE_VERSION, source, evaluator_id, evaluator_version)
+}
+
+/// Projection identity is part of the measurement, even when rubric math agrees.
+/// The existing ACP entry point retains its exact tuple and digest bytes.
+pub(crate) fn measurement_contract_for(
+    projection: &str,
+    source: AssessmentSource,
+    evaluator_id: &str,
+    evaluator_version: &str,
+) -> Result<String> {
+    super::evidence::validate_projection(projection)?;
     digest(&(
         RUBRIC_VERSION,
-        EVIDENCE_VERSION,
+        projection,
         library(),
         source,
         evaluator_id,
@@ -170,5 +182,61 @@ pub async fn command(
                 submit(store, identity, input).await?,
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+
+    #[test]
+    fn acp_measurement_keeps_its_persisted_tuple_and_unknown_projection_is_refused() -> Result<()> {
+        let expected = digest(&(
+            RUBRIC_VERSION,
+            "recorded-acp-quality-evidence-v2",
+            library(),
+            AssessmentSource::Human,
+            "stable-reviewer",
+            "review-v1",
+        ))?;
+        assert_eq!(
+            measurement_contract(AssessmentSource::Human, "stable-reviewer", "review-v1")?,
+            expected
+        );
+        assert!(
+            measurement_contract_for(
+                "recorded-native-quality-evidence-v999",
+                AssessmentSource::Human,
+                "stable-reviewer",
+                "review-v1"
+            )
+            .is_err()
+        );
+        assert!(
+            measurement_contract_for(
+                "recorded-acp-quality-evidence-v1",
+                AssessmentSource::Human,
+                "stable-reviewer",
+                "review-v1"
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "harness")]
+    #[test]
+    fn native_measurement_cannot_alias_acp_with_identical_author_and_rubric() -> Result<()> {
+        let native = measurement_contract_for(
+            super::super::evidence::NATIVE_EVIDENCE_VERSION,
+            AssessmentSource::Human,
+            "stable-reviewer",
+            "review-v1",
+        )?;
+        assert_ne!(
+            native,
+            measurement_contract(AssessmentSource::Human, "stable-reviewer", "review-v1")?
+        );
+        Ok(())
     }
 }

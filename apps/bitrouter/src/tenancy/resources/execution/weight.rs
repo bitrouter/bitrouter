@@ -305,9 +305,108 @@ impl Weight {
         Ok(())
     }
 
+    fn block(&mut self, value: &super::super::block::Profile) -> Result<()> {
+        use crate::gateway::routing::blocks::{
+            allocation::BanditConfig,
+            control::{BlockDefinition, BlockRule},
+        };
+        let super::super::block::Profile {
+            profile: _,
+            definition,
+        } = value;
+        self.add(size_of::<super::super::block::Profile>())?;
+        let BlockDefinition {
+            block_id,
+            source,
+            rationale,
+            rules,
+            independence_rationale,
+            dependencies,
+            measurement_contract,
+            batch_sessions: _,
+            bandit,
+        } = definition;
+        for value in [
+            block_id,
+            source,
+            rationale,
+            independence_rationale,
+            measurement_contract,
+        ] {
+            self.string(value)?;
+        }
+        self.vector(rules)?;
+        for BlockRule {
+            selector,
+            fingerprint,
+            baseline_route,
+            challenger_route,
+        } in rules
+        {
+            self.string(selector)?;
+            self.optional_string(fingerprint)?;
+            self.string(baseline_route)?;
+            self.string(challenger_route)?;
+        }
+        self.tree(dependencies)?;
+        for (key, value) in dependencies {
+            self.string(key)?;
+            self.string(value)?;
+        }
+        let BanditConfig {
+            prior_version,
+            baseline,
+            challenger,
+            minimum_quality_ppm: _,
+            noninferiority_margin_ppm: _,
+            maximum_latency_increase_ppm: _,
+            promotion_probability_ppm: _,
+            minimum_families_per_arm: _,
+            initial_exposure_ppm: _,
+            maximum_exposure_ppm: _,
+            minimum_exposure_ppm: _,
+            maximum_pending_challenger: _,
+            maximum_challenger_sessions: _,
+            posterior_draws: _,
+            recent_guard_families: _,
+            recent_guard_minimum_families: _,
+        } = bandit;
+        self.string(prior_version)?;
+        // Both prior trees are inline scalar structures, already charged by `Box<Profile>`.
+        for prior in [baseline, challenger] {
+            let crate::gateway::routing::blocks::allocation::ArmPrior {
+                quality,
+                log_cost,
+                log_latency,
+            } = prior;
+            for value in [quality, log_cost, log_latency] {
+                let crate::gateway::routing::blocks::allocation::MeanPrior {
+                    mean: _,
+                    strength: _,
+                    observation_variance: _,
+                } = value;
+            }
+        }
+        Ok(())
+    }
+
+    // The options are inline scalars. Exhaustive shape checks make new heap fields visible.
+    fn price_bracket(value: &crate::gateway::pipeline::stream::UsagePricingBracket) {
+        let crate::gateway::pipeline::stream::UsagePricingBracket {
+            input_micro_usd_per_token: _,
+            cache_read_micro_usd_per_token: _,
+            cache_write_micro_usd_per_token: _,
+            output_micro_usd_per_token: _,
+            reasoning_output_micro_usd_per_token: _,
+        } = value;
+    }
+
     fn route(&mut self, value: &RouteData) -> Result<()> {
         let RouteData {
             reference,
+            assessment,
+            block,
+            block_pricing,
             dependencies,
             selector,
             overrides,
@@ -315,8 +414,45 @@ impl Weight {
             chains,
             native,
             candidates,
+            choice,
         } = value;
+        if let Some(choice) = choice {
+            self.string(&choice.digest)?;
+            // DecisionPolicy has only inline scalar fields. Shared child data
+            // and its descendants are charged once per retained root.
+            if self.arc(&choice.route, 0)? {
+                self.route(&choice.route)?;
+            }
+        }
+        if let Some(block) = block {
+            self.block(block)?;
+        }
+        self.vector(block_pricing)?;
+        for pricing in block_pricing.iter().flatten() {
+            let crate::gateway::pipeline::stream::UsagePricing {
+                registry_price,
+                base,
+                context_tiers,
+            } = pricing;
+            // Registry JSON has a different heap representation and is not
+            // admitted by compiler-v1. Never retain it without accounting.
+            if registry_price.is_some() {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            Self::price_bracket(base);
+            self.vector(context_tiers)?;
+            for crate::gateway::pipeline::stream::UsagePricingTier {
+                above_input_tokens: _,
+                bracket,
+            } in context_tiers
+            {
+                Self::price_bracket(bracket);
+            }
+        }
         self.reference(reference)?;
+        if let Some(assessment) = assessment {
+            self.reference(assessment)?;
+        }
         self.vector(dependencies)?;
         for reference in dependencies {
             self.reference(reference)?;
@@ -401,6 +537,7 @@ impl Weight {
 
     fn target(&mut self, value: &RoutingTarget) -> Result<()> {
         let RoutingTarget {
+            registry,
             provider_name,
             service_id,
             api_base,
@@ -418,6 +555,10 @@ impl Weight {
             auth_scheme: _,
             headers,
         } = value;
+        // No SelectedInterface Arc is allowed to escape the owned codec.
+        if registry.is_some() {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
         for value in [provider_name, service_id, api_base, api_key] {
             self.string(value)?;
         }

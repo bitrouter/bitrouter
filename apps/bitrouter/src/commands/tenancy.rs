@@ -1,6 +1,7 @@
-//! Binary-only adapter for explicit resource configuration commands over HTTP.
+//! Binary-only adapters for explicit HTTP configuration and local DB evidence.
 //! Local validation reads only the supplied JSON file. Remote operations never
 //! load a service configuration, open a database, or discover a local daemon.
+//! The separate offline branch consumes literal local paths without HTTP.
 
 use std::path::{Path, PathBuf};
 
@@ -17,6 +18,9 @@ use bitrouter_sdk::tenancy::{TenancyClient, TenancyOptions};
 use clap::{Args, Subcommand};
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncReadExt as _;
+
+#[path = "tenancy/offline.rs"]
+mod offline;
 
 #[path = "tenancy/report.rs"]
 mod report;
@@ -48,6 +52,11 @@ pub(super) struct TenantRead {
 
 #[derive(Subcommand)]
 pub(super) enum Action {
+    /// Inspect a stopped local SQLite DB; no external state or cutover qualification.
+    Offline {
+        #[command(subcommand)]
+        action: offline::Action,
+    },
     /// Discover tenancy capabilities; this does not authorize dispatch.
     Capabilities {
         #[command(flatten)]
@@ -116,6 +125,9 @@ fn parse_id<T: TryFrom<String>>(value: &str) -> std::result::Result<T, String> {
 }
 
 pub(super) async fn run(action: &Action, context: Option<&str>, output: &Output) -> Result<()> {
+    if let Action::Offline { action } = action {
+        return offline::run(action, context, output).await;
+    }
     let completion = execute(action, context, |name| std::env::var(name).ok()).await?;
     output.emit(&completion.report).with_context(|| {
         completion.recovery.as_ref().map_or_else(
@@ -142,6 +154,7 @@ async fn execute(
     lookup: impl Fn(&str) -> Option<String>,
 ) -> Result<Completion> {
     let target = match action {
+        Action::Offline { .. } => anyhow::bail!("offline commands require the local path adapter"),
         Action::Configuration {
             action: ConfigurationAction::Validate { input },
         } => {
@@ -220,6 +233,7 @@ fn resolve_target(target: &Target, context: Option<&str>) -> Result<RemoteContex
 
 async fn execute_remote(action: &Action, client: &TenancyClient) -> Result<Completion> {
     let report = match action {
+        Action::Offline { .. } => anyhow::bail!("offline commands cannot use an HTTP client"),
         Action::Capabilities { .. } => Report::Capabilities(
             client
                 .capabilities()

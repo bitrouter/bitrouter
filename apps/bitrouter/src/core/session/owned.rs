@@ -8,6 +8,8 @@ pub(super) struct Host {
     pub harness: Arc<dyn HarnessPort>,
     #[cfg(feature = "harness")]
     pub owned: Option<Arc<crate::tenancy::execution::session::Binding>>,
+    #[cfg(feature = "harness")]
+    pub owned_journal: Option<crate::harness::resources::managed::store::choice::JournalView>,
 }
 
 impl Host {
@@ -25,7 +27,7 @@ impl Host {
                 ));
             }
             binding.grant(grant)?;
-            return binding.check();
+            return binding.check_restore();
         }
         let _ = grant;
         self.app.require_legacy_core()
@@ -33,6 +35,25 @@ impl Host {
 }
 
 impl CoreSession {
+    #[cfg(feature = "harness")]
+    pub(super) async fn owned_model_step(
+        &self,
+        agent: &str,
+        step: &str,
+    ) -> Result<Option<Arc<crate::tenancy::execution::session::StepBinding>>, CoreError> {
+        let Some(binding) = &self.shared.owned else {
+            return Ok(None);
+        };
+        let journal = self.shared.owned_journal.as_ref().ok_or_else(|| {
+            reject(
+                ErrorCode::CheckpointUnavailable,
+                "native journal view is unavailable",
+            )
+        })?;
+        let origin = journal.checked_model_step(binding, agent, step).await?;
+        binding.step(origin).map(Some)
+    }
+
     pub(super) fn check_owned(&self) -> Result<(), CoreError> {
         #[cfg(feature = "harness")]
         if let Some(binding) = &self.shared.owned {
@@ -50,14 +71,18 @@ impl CoreSession {
         &self,
         prompt: Prompt,
         headers: http::HeaderMap,
-        control: Arc<dyn NativeExecutionControl>,
+        control: Arc<StepControl>,
     ) -> crate::gateway::error::Result<crate::gateway::pipeline::types::PipelineResponse> {
         #[cfg(feature = "harness")]
-        if let Some(binding) = &self.shared.owned {
+        if self.shared.owned.is_some() {
+            let step = control
+                .owned_step
+                .clone()
+                .ok_or(crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
             return self
                 .shared
                 .app
-                .execute_native_owned(binding, prompt, headers, control)
+                .execute_native_owned(&step, prompt, headers, control)
                 .await;
         }
         self.shared
@@ -93,6 +118,7 @@ impl CoreSession {
         app: Arc<App>,
         binding: Arc<crate::tenancy::execution::session::Binding>,
         harness: Arc<dyn HarnessPort>,
+        owned_journal: crate::harness::resources::managed::store::choice::JournalView,
         register: Register,
     ) -> Result<Self, CoreError>
     where
@@ -109,6 +135,7 @@ impl CoreSession {
                 request_headers: http::HeaderMap::new(),
                 harness,
                 owned: Some(binding),
+                owned_journal: Some(owned_journal),
             },
             register,
         )
@@ -122,6 +149,7 @@ impl CoreSession {
         app: Arc<App>,
         binding: Arc<crate::tenancy::execution::session::Binding>,
         harness: Arc<dyn HarnessPort>,
+        owned_journal: crate::harness::resources::managed::store::choice::JournalView,
         register: Register,
     ) -> Result<Self, CoreError>
     where
@@ -138,6 +166,7 @@ impl CoreSession {
                 request_headers: http::HeaderMap::new(),
                 harness,
                 owned: Some(binding),
+                owned_journal: Some(owned_journal),
             },
             register,
         )

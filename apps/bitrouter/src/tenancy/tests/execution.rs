@@ -38,11 +38,32 @@ async fn provision_protocol(
 }
 
 async fn provision_protocol_with_fixture(
-    mut fixture: Fixture,
+    fixture: Fixture,
     url: &str,
     protocol: &str,
     started: &mut impl FnMut(&Service),
 ) -> Result<(Fixture, ResourceRef, ResourceRef)> {
+    provision_protocol_observed(
+        fixture,
+        url,
+        protocol,
+        started,
+        (crate::telemetry::receipt_latency::Sink::default(), None),
+    )
+    .await
+}
+
+async fn provision_protocol_observed(
+    mut fixture: Fixture,
+    url: &str,
+    protocol: &str,
+    started: &mut impl FnMut(&Service),
+    observation: (
+        crate::telemetry::receipt_latency::Sink,
+        Option<crate::tenancy::ownership::Lease>,
+    ),
+) -> Result<(Fixture, ResourceRef, ResourceRef)> {
+    let (observer, owner) = observation;
     fixture.service.shutdown().await?;
     let resources =
         super::super::resources::Resources::with_key(fixture.installation.clone(), [29; 32])?;
@@ -69,12 +90,19 @@ async fn provision_protocol_with_fixture(
         ]
     }))?).await?;
     let snapshot = super::super::store::load(&fixture.db, Utc::now()).await?;
-    fixture.service = Service::start_prepared(
+    fixture.service = Service::start_resources_with_continuations(
         fixture.db.clone(),
-        None,
+        owner,
         super::super::actor::OperationLimits::default(),
         snapshot,
         Arc::new(resources),
+        (
+            None,
+            &crate::config::ContinuationConfig::default(),
+            None,
+            observer,
+        ),
+        None,
     )
     .await?;
     started(&fixture.service);

@@ -26,6 +26,43 @@ impl OwnedStore {
         reservation: headroom::Reservation,
         budget: &mut io::Budget<'_>,
     ) -> Result<CorrelateAndBeginResult> {
+        self.begin_correlated_in(tx, input, reservation, None, budget)
+            .await
+    }
+
+    #[cfg(feature = "harness")]
+    pub(crate) async fn begin_bound_experiment_in(
+        &self,
+        tx: &DatabaseTransaction,
+        bound: &crate::tenancy::experiment::BoundEpisode,
+        input: &CorrelateAndBegin,
+        reservation: headroom::Reservation,
+        budget: &mut io::Budget<'_>,
+    ) -> Result<CorrelateAndBeginResult> {
+        ensure!(
+            input.new_episode_id == bound.episode(),
+            "bound native episode changed"
+        );
+        let result = self
+            .begin_correlated_in(tx, input, reservation, Some(bound.episode()), budget)
+            .await?;
+        bound.check_selected(
+            result
+                .guarded_route
+                .as_ref()
+                .and_then(|route| route.intent.selected_tier.as_deref()),
+        )?;
+        Ok(result)
+    }
+
+    async fn begin_correlated_in(
+        &self,
+        tx: &DatabaseTransaction,
+        input: &CorrelateAndBegin,
+        reservation: headroom::Reservation,
+        bound: Option<&str>,
+        budget: &mut io::Budget<'_>,
+    ) -> Result<CorrelateAndBeginResult> {
         let owner = self.owner()?;
         super::super::validate_correlation_input(&owner, input)?;
         ensure!(
@@ -37,6 +74,10 @@ impl OwnedStore {
             "owned native parent requires a qualified continuation proof"
         );
         if let Some((request, _)) = self.request_row(tx, &input.request_id, budget).await? {
+            ensure!(
+                bound.is_none_or(|episode| request.episode_id == episode),
+                "native request replay belongs to another bound episode"
+            );
             let (_, events) = self.history(tx, &request.episode_id, budget).await?;
             self.validate_request_edges(&request, &events)?;
             let start = events
@@ -49,9 +90,20 @@ impl OwnedStore {
             );
             return super::super::exact_retry_from_history(&owner, &request, input, &events, start);
         }
-        let mut resolved = None;
+        let mut resolved = match bound {
+            Some(episode) => {
+                ensure!(
+                    input.ancestor_prefix_digests.is_empty(),
+                    "bound native history cannot consume prefix aliases"
+                );
+                self.episode_row(tx, episode, budget)
+                    .await?
+                    .map(|(row, _)| row)
+            }
+            None => None,
+        };
         let mut conflict = false;
-        if !input.ancestor_prefix_digests.is_empty() {
+        if bound.is_none() && !input.ancestor_prefix_digests.is_empty() {
             let digests: std::collections::BTreeSet<String> = input
                 .ancestor_prefix_digests
                 .iter()
@@ -101,7 +153,15 @@ impl OwnedStore {
         }
         let (source, completeness) = if let Some(episode) = &resolved {
             (
-                CorrelationSource::CanonicalPrefix,
+                if bound.is_some() {
+                    match episode.correlation_source.as_str() {
+                        "explicit_root" => CorrelationSource::ExplicitRoot,
+                        "unresolved" => CorrelationSource::Unresolved,
+                        _ => anyhow::bail!("bound native episode has ambient correlation"),
+                    }
+                } else {
+                    CorrelationSource::CanonicalPrefix
+                },
                 super::super::parse_completeness(&episode.history_completeness)?,
             )
         } else if conflict || input.starts_with_prior_turns {
@@ -197,7 +257,7 @@ impl OwnedStore {
             candidate.extend(batch.guard_event.iter().cloned());
         }
         headroom::reserve(&candidate)?;
-        self.begin_in(
+        self.begin_with_prefix_in(
             tx,
             &BeginRequest {
                 episode,
@@ -206,6 +266,7 @@ impl OwnedStore {
                 native_parent_id: None,
                 protocol: input.protocol.clone(),
             },
+            bound.is_none(),
             budget,
         )
         .await?;

@@ -13,10 +13,12 @@ use super::{Service, command::Command, model::Caller, store::StoredResponse};
 
 mod authority;
 mod configuration;
+mod conformance;
 #[cfg(feature = "core")]
 mod eval;
 pub(in crate::tenancy) mod execution;
 mod http;
+mod learning_startup;
 #[cfg(not(feature = "core"))]
 mod no_core;
 
@@ -191,7 +193,7 @@ impl Fixture {
     async fn with_database(
         db: sea_orm::DatabaseConnection,
         limits: super::actor::OperationLimits,
-        started: &mut impl FnMut(&Service),
+        started: &mut (impl FnMut(&Service) + ?Sized),
     ) -> Result<Self> {
         crate::db::run_migrations(&db).await?;
         let service = Service::open_with_limits(db.clone(), None, limits).await?;

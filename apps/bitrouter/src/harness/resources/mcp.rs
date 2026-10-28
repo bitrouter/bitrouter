@@ -93,23 +93,14 @@ impl McpConnections {
     pub(crate) async fn connect_in_place(
         &mut self,
         workspace: &Path,
-        servers: &[McpServerConfig],
-        tool_servers: &std::collections::BTreeSet<String>,
+        catalog: crate::gateway::mcp::client::ConnectionCatalog<'_>,
         version: ProtocolVersion,
         cancel: &CancellationToken,
         max_duration: Duration,
         discovery: &Discovery,
     ) -> Result<(), ResourceError> {
         self.client
-            .connect_in_place(
-                workspace,
-                servers,
-                tool_servers,
-                version,
-                cancel,
-                max_duration,
-                discovery,
-            )
+            .connect_in_place(workspace, catalog, version, cancel, max_duration, discovery)
             .await
             .map_err(resource_error)?;
         self.refresh_metadata();

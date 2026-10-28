@@ -1,9 +1,10 @@
 # Owned execution receipts
 
 This describes the internal strict-receipt implementation under the resource
-tenancy contract. Tenant dispatch, revision-bound dispatch and strict-receipt
-capabilities remain disabled until the complete implementation and qualification
-gates in [the implementation tracker](RESOURCE_TENANCY_IMPLEMENTATION.md) pass.
+tenancy contract. Dispatch and strict receipts follow the supported opt-in,
+single-instance Unix SQLite [Service eligibility](RESOURCE_TENANCY_IMPLEMENTATION.md#current-local-dispatch-eligibility).
+Source-pinned local checks do not establish complete M3, final aggregate,
+platform or performance acceptance; see [remaining qualification](RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
 
 ## Execution ownership
 

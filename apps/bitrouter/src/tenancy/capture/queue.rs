@@ -4,7 +4,6 @@ use crate::{
     acp_trajectory::checkpoint::owned::Summary,
     harness::trajectory::owned::{Append, Appended},
 };
-use std::time::Duration;
 use tokio::sync::{OwnedSemaphorePermit, oneshot};
 use tokio::time::Instant;
 
@@ -13,11 +12,15 @@ pub(in crate::tenancy) enum Request {
     Create(String),
     Append { value: Arc<Append>, cleanup: bool },
     Freeze(String),
+    Human(Arc<super::human::Request>),
+    Block(Arc<crate::tenancy::execution::block::SelectionRequest>),
 }
 pub(in crate::tenancy) enum Reply {
     Created,
     Appended(Appended),
     Frozen(Option<Summary>),
+    Human(Box<super::human::Reply>, bool),
+    Block(Box<crate::tenancy::execution::block::store::Selection>),
 }
 pub(in crate::tenancy) struct Outcome {
     pub result: Result<Reply, Failure>,
@@ -45,11 +48,21 @@ impl Request {
 }
 
 impl Binding {
-    /// The owner stores the returned receiver alongside exact pending input
-    /// before awaiting it. H retains an admitted job if that waiter disappears.
+    #[cfg(all(test, unix))]
     pub(in crate::tenancy) async fn enqueue(
         self: &Arc<Self>,
         request: Request,
+    ) -> Result<oneshot::Receiver<Outcome>, Failure> {
+        self.enqueue_before(request, Instant::now() + std::time::Duration::from_secs(5))
+            .await
+    }
+
+    /// The owner stores the returned receiver alongside exact pending input
+    /// before awaiting it. H retains an admitted job if that waiter disappears.
+    pub(in crate::tenancy) async fn enqueue_before(
+        self: &Arc<Self>,
+        request: Request,
+        deadline: Instant,
     ) -> Result<oneshot::Receiver<Outcome>, Failure> {
         let service = self.service();
         if !self.origin(&service.cleanup) || service.stop.is_cancelled() {
@@ -58,7 +71,6 @@ impl Binding {
         if !request.cleanup() {
             self.check()?;
         }
-        let deadline = Instant::now() + Duration::from_secs(5);
         let read = service
             .reads
             .clone()

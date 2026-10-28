@@ -99,3 +99,40 @@ impl Service {
         Ok(body)
     }
 }
+
+/// The receipt decode/serialization body shared by the live actor and archive owner.
+pub(in crate::tenancy) async fn body(
+    db: &impl sea_orm::ConnectionTrait,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    request: &Request,
+    storage_failure: impl Fn() -> Failure,
+) -> Result<Vec<u8>, Failure> {
+    let encoded = match request {
+        Request::One(id) => {
+            let receipt = super::store::lookup(db, installation, tenant, id)
+                .await
+                .map_err(|_| storage_failure())?
+                .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
+            serde_json::to_vec(&receipt)
+        }
+        Request::Page {
+            correlation,
+            after,
+            limit,
+        } => {
+            let page = super::store::page(
+                db,
+                installation,
+                tenant,
+                correlation,
+                after.as_ref(),
+                *limit,
+            )
+            .await
+            .map_err(|_| storage_failure())?;
+            serde_json::to_vec(&page)
+        }
+    };
+    encoded.map_err(|_| Failure::from(ErrorCode::StorageUnavailable))
+}

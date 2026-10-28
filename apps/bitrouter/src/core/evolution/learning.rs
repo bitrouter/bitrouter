@@ -84,7 +84,7 @@ async fn resource_head(db: &DatabaseTransaction, checkpoint: &str) -> Result<Opt
 /// Union of observed prompt-active intervals. Time outside a prompt is excluded.
 /// Missing starts, responses or capture timestamps remain unknown. This is an
 /// ACP wall-clock measure, not an estimate of model compute time.
-fn prompt_active_ms(events: &[CanonicalEvent]) -> Result<Option<u64>> {
+pub(crate) fn prompt_active_ms(events: &[CanonicalEvent]) -> Result<Option<u64>> {
     let mut starts = BTreeMap::new();
     let mut intervals = Vec::new();
     for node in events

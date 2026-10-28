@@ -11,8 +11,50 @@ use std::{
 /// follow a retargeted symlink or a changed process working directory.
 #[derive(Clone)]
 pub(crate) struct Lease {
-    _lock: Arc<File>,
+    acquisition: Arc<Acquisition>,
     pub path: PathBuf,
+}
+
+struct Acquisition {
+    _lock: File,
+    path: PathBuf,
+    exclusive: bool,
+    id: String,
+    claimed: std::sync::atomic::AtomicBool,
+}
+
+/// Consumed only by the connector-produced database bundle. Clones of a lease
+/// share the one claim; failed startup never resets it.
+pub(crate) struct Claim {
+    acquisition: Arc<Acquisition>,
+}
+impl Claim {
+    pub(in crate::tenancy) fn identity(&self) -> &str {
+        &self.acquisition.id
+    }
+}
+impl Lease {
+    pub(crate) fn claim(&self) -> Result<Claim> {
+        ensure!(
+            self.acquisition.exclusive && self.path == self.acquisition.path,
+            "recovery requires the actual exclusive acquisition"
+        );
+        self.acquisition
+            .claimed
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .map_err(|_| anyhow::anyhow!("authority acquisition already claimed"))?;
+        Ok(Claim {
+            acquisition: self.acquisition.clone(),
+        })
+    }
+    pub(crate) fn exclusive(&self) -> bool {
+        self.acquisition.exclusive && self.path == self.acquisition.path
+    }
 }
 
 pub(crate) fn path(database_url: &str) -> Result<PathBuf> {
@@ -137,7 +179,13 @@ fn lock_path(path: &std::path::Path, create: bool, exclusive: bool) -> Result<Le
             .context("another process owns this tenancy authority file")?;
     }
     Ok(Lease {
-        _lock: Arc::new(lock),
+        acquisition: Arc::new(Acquisition {
+            _lock: lock,
+            path: canonical.clone(),
+            exclusive,
+            id: uuid::Uuid::new_v4().to_string(),
+            claimed: std::sync::atomic::AtomicBool::new(false),
+        }),
         path: canonical,
     })
 }
@@ -455,6 +503,69 @@ mod tests {
         pool.close().await?;
         authority.close().await?;
         drop(owner);
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod claim_tests {
+    use super::*;
+    #[tokio::test]
+    async fn actual_connector_claim_is_one_way_across_lease_clones() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("authority.db");
+        let bundle =
+            crate::db::connect_owned_tenancy(&format!("sqlite://{}", path.display())).await?;
+        let (db, lease, claim) = bundle.claim()?;
+        let alias = lease.clone();
+        ensure!(alias.claim().is_err());
+        let mut changed = lease.clone();
+        changed.path = root.path().join("different.db");
+        ensure!(changed.claim().is_err());
+        db.close().await?;
+        ensure!(acquire_path(&path, false).is_err());
+        drop((claim, lease, alias, changed));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                match acquire_path(&path, false) {
+                    Ok(next) => {
+                        let claimed = next.claim()?;
+                        drop(claimed);
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    Err(error)
+                        if matches!(
+                            error.downcast_ref::<std::fs::TryLockError>(),
+                            Some(std::fs::TryLockError::WouldBlock)
+                        ) =>
+                    {
+                        tokio::task::yield_now().await
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+        })
+        .await??;
+        Ok(())
+    }
+}
+
+#[cfg(all(test, not(unix)))]
+mod unsupported_claim_tests {
+    use super::*;
+    #[tokio::test]
+    async fn native_recovery_connector_refuses_before_creating_non_unix_authority() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("unsupported-authority.db");
+        let error = crate::db::connect_owned_tenancy(&format!("sqlite://{}", path.display()))
+            .await
+            .err()
+            .context("non-Unix exclusive acquisition was accepted")?;
+        ensure!(error.to_string().contains("Unix hosts only"));
+        ensure!(
+            std::fs::read_dir(root.path())?.next().is_none(),
+            "unsupported profile created a database or ownership sidecar"
+        );
         Ok(())
     }
 }

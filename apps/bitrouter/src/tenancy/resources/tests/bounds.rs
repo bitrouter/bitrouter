@@ -142,6 +142,7 @@ async fn compiler_rejects_execution_projection_capacity_before_returning_retaine
     let routes = compiler::configuration_routes(&doc, &artifacts)
         .map_err(|code| anyhow::anyhow!("fixture routes rejected: {code:?}"))?;
     let envelope = Envelope {
+        format: 1,
         document: doc.clone(),
         routes,
         artifacts: artifacts

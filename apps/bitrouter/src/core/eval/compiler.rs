@@ -50,7 +50,7 @@ impl EvalEvidenceSnapshot {
         })
     }
 
-    fn from_records(stored: SnapshotRecords) -> Result<Self> {
+    pub(crate) fn from_records(stored: SnapshotRecords) -> Result<Self> {
         let SnapshotRecords {
             snapshot,
             records: stored_records,

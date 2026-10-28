@@ -737,3 +737,101 @@ pub(super) async fn active_revisions(
 #[cfg(test)]
 #[path = "configuration_store/tests.rs"]
 mod tests;
+
+#[cfg(all(feature = "core", feature = "harness"))]
+async fn reserve_learner_json(
+    db: &impl ConnectionTrait,
+    mut query: SelectStatement,
+    columns: &[&str],
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+    multiplier: usize,
+) -> Result<()> {
+    use crate::storage::operation_budget::Error;
+    budget.check()?;
+    for name in columns {
+        let bytes = match db.get_database_backend() {
+            DatabaseBackend::Sqlite => format!("length(CAST({name} AS BLOB))"),
+            DatabaseBackend::Postgres => format!("CAST(OCTET_LENGTH({name}) AS BIGINT)"),
+            DatabaseBackend::MySql => format!("OCTET_LENGTH({name})"),
+        };
+        query.expr_as(Expr::cust(bytes), Alias::new(*name));
+    }
+    query.limit(1);
+    let Some(row) = db
+        .query_one(db.get_database_backend().build(&query))
+        .await?
+    else {
+        return Err(Error::Rejected(bitrouter_ai::tenancy::operation::ErrorCode::NotFound).into());
+    };
+    let mut bytes = 4096_usize;
+    for name in columns {
+        let value = usize::try_from(row.try_get::<i64>("", name)?)?;
+        ensure!(value <= MAX_ENVELOPE_BYTES, Error::Capacity);
+        bytes = bytes
+            .checked_add(value.checked_mul(multiplier).ok_or(Error::Capacity)?)
+            .ok_or(Error::Capacity)?;
+    }
+    budget.charge(1, bytes)?;
+    Ok(())
+}
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(super) async fn reserve_learner_resource(
+    db: &impl ConnectionTrait,
+    reference: &ResourceRef,
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+    multiplier: usize,
+) -> Result<()> {
+    let mut query = Query::select();
+    query.from(Alias::new(RESOURCES));
+    resource_key(&mut query, reference)?;
+    reserve_learner_json(
+        db,
+        query,
+        &["payload_json", "dependency_json"],
+        budget,
+        multiplier,
+    )
+    .await
+}
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(super) async fn reserve_learner_configuration(
+    db: &impl ConnectionTrait,
+    tenant: &TenantId,
+    revision: &RevisionId,
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+) -> Result<()> {
+    let mut query = Query::select();
+    query
+        .from(Alias::new(CONFIGURATIONS))
+        .and_where(Expr::col(Alias::new("tenant_id")).eq(tenant.as_str()))
+        .and_where(Expr::col(Alias::new("revision_id")).eq(revision.as_str()));
+    reserve_learner_json(
+        db,
+        query,
+        &["document_json", "compiled_json", "dependencies_json"],
+        budget,
+        3,
+    )
+    .await
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(super) async fn reserve_learner_catalog(
+    db: &impl ConnectionTrait,
+    budget: &crate::storage::operation_budget::OperationBudget<'_>,
+) -> Result<()> {
+    use crate::storage::operation_budget::Error;
+    budget.check()?;
+    let query = Query::select()
+        .from(Alias::new(RESOURCES))
+        .expr_as(Expr::cust("COUNT(*)"), Alias::new("count"))
+        .to_owned();
+    let row = db
+        .query_one(db.get_database_backend().build(&query))
+        .await?
+        .context("resource count absent")?;
+    let count = usize::try_from(row.try_get::<i64>("", "count")?)?;
+    ensure!(count <= MAX_DEPENDENCIES, Error::Capacity);
+    budget.charge(count, count.checked_mul(2048).ok_or(Error::Capacity)?)?;
+    Ok(())
+}

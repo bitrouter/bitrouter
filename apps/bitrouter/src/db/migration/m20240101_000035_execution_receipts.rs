@@ -67,11 +67,14 @@ fn incompatible() -> DbErr {
 }
 
 async fn validate_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
-    let backend = manager.get_database_backend();
-    let db = manager.get_connection();
+    validate_table_on(manager.get_connection()).await
+}
+
+async fn validate_table_on(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    let backend = db.get_database_backend();
     if backend == DatabaseBackend::Sqlite {
         let rows = db.query_all(Statement::from_string(backend,
-            "SELECT type, sql FROM sqlite_master WHERE name='tenancy_execution_receipts' LIMIT 2".to_owned())).await?;
+            "SELECT type, CASE WHEN length(CAST(sql AS BLOB))<=65536 THEN sql ELSE NULL END AS sql FROM sqlite_master WHERE name='tenancy_execution_receipts' LIMIT 2".to_owned())).await?;
         let row = rows.first().ok_or_else(incompatible)?;
         if rows.len() != 1
             || row.try_get::<String>("", "type")? != "table"
@@ -181,6 +184,15 @@ async fn validate_table(manager: &SchemaManager<'_>) -> Result<(), DbErr> {
         return Err(incompatible());
     }
     Ok(())
+}
+
+/// Validate only the supported archive reader schema, without DDL or repair.
+pub(super) async fn validate_archive(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        return Err(incompatible());
+    }
+    validate_table_on(db).await?;
+    catalog::indexes_on(db, true).await
 }
 
 #[async_trait::async_trait]

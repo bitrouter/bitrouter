@@ -1,4 +1,4 @@
-//! A judge sees a frozen, cited ACP prefix, without model prices or routing labels.
+//! A judge sees versioned, cited recorded evidence, without prices or routing labels.
 //!
 //! Protocol references: <https://agentclientprotocol.com/protocol/tool-calls> and
 //! <https://agentclientprotocol.com/protocol/terminals>. Only recorded envelopes
@@ -15,6 +15,21 @@ use serde_json::Value;
 use crate::acp_trajectory::checkpoint::types::{CheckpointContent, EvidenceCitation};
 
 pub const EVIDENCE_VERSION: &str = "recorded-acp-quality-evidence-v2";
+
+/// Projection of an acknowledged, complete native run, distinct from ACP capture.
+#[cfg(feature = "harness")]
+pub const NATIVE_EVIDENCE_VERSION: &str = "recorded-native-quality-evidence-v1";
+
+pub(crate) fn validate_projection(version: &str) -> Result<()> {
+    if version == EVIDENCE_VERSION {
+        return Ok(());
+    }
+    #[cfg(feature = "harness")]
+    if version == NATIVE_EVIDENCE_VERSION {
+        return Ok(());
+    }
+    anyhow::bail!("unsupported evidence projection")
+}
 
 fn legacy_projection_version() -> String {
     "recorded-acp-quality-evidence-v1".into()
@@ -64,10 +79,47 @@ impl EvidencePacket {
             .flat_map(|s| s.events.iter().chain(&s.setup))
             .map(|r| (r.node_id(), r.digest.clone()))
             .collect();
+        Self::project(
+            &content.checkpoint.checkpoint_id,
+            &content.checkpoint.prefix_digest,
+            content.checkpoint.gaps.clone(),
+            refs,
+            &content.events,
+        )
+    }
+
+    #[cfg(feature = "harness")]
+    pub(crate) fn from_owned(
+        checkpoint: &str,
+        prefix: &crate::harness::trajectory::owned::prefix::Prefix,
+        events: &[crate::acp_trajectory::CanonicalEvent],
+    ) -> Result<Self> {
+        let references = prefix
+            .references
+            .iter()
+            .chain(&prefix.setup)
+            .map(|reference| (reference.node_id(), reference.digest.clone()))
+            .collect();
+        Self::project(
+            checkpoint,
+            &prefix.digest()?,
+            Vec::new(),
+            references,
+            events,
+        )
+    }
+
+    fn project(
+        checkpoint: &str,
+        prefix_digest: &str,
+        gaps: Vec<String>,
+        refs: BTreeMap<String, String>,
+        events: &[crate::acp_trajectory::CanonicalEvent],
+    ) -> Result<Self> {
         let mut items = Vec::new();
         // Content order is the canonical inherited-prefix order, not wall-clock
         // order. Do not deduplicate by text or tool ID across connections.
-        for node in &content.events {
+        for node in events {
             let event = &node.event;
             let update = event.payload.get("update");
             let update_kind = update
@@ -149,9 +201,9 @@ impl EvidencePacket {
         }
         Ok(Self {
             projection_version: EVIDENCE_VERSION.into(),
-            checkpoint_id: content.checkpoint.checkpoint_id.clone(),
-            prefix_digest: content.checkpoint.prefix_digest.clone(),
-            gaps: content.checkpoint.gaps.clone(),
+            checkpoint_id: checkpoint.to_owned(),
+            prefix_digest: prefix_digest.to_owned(),
+            gaps,
             items,
         })
     }

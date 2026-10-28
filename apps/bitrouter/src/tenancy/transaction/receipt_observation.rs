@@ -64,6 +64,8 @@ pub(in crate::tenancy) struct Fact {
     pub begin: Option<SqlOutcome>,
     pub store: Option<SqlOutcome>,
     pub inserted: Option<bool>,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub native_checkpoint: Option<SqlOutcome>,
     pub commit: Option<SqlOutcome>,
     pub rollback: Option<SqlOutcome>,
     pub check_failed: bool,
@@ -84,6 +86,8 @@ pub(in crate::tenancy) enum Step {
     Store,
     Commit,
     Rollback,
+    #[cfg(all(feature = "core", feature = "harness"))]
+    NativeCheckpoint,
 }
 
 impl Proof {
@@ -137,6 +141,8 @@ impl Proof {
             begin: None,
             store: None,
             inserted: None,
+            #[cfg(all(feature = "core", feature = "harness"))]
+            native_checkpoint: None,
             commit: None,
             rollback: None,
             check_failed: false,
@@ -167,6 +173,8 @@ impl Proof {
                 Step::Store => fact.store = Some(outcome),
                 Step::Commit => fact.commit = Some(outcome),
                 Step::Rollback => fact.rollback = Some(outcome),
+                #[cfg(all(feature = "core", feature = "harness"))]
+                Step::NativeCheckpoint => fact.native_checkpoint = Some(outcome),
             }
             fact.disposition = self.disposition();
         });

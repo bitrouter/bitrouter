@@ -3,6 +3,7 @@
 
 pub(crate) mod acp_history;
 pub(crate) mod legacy;
+pub(crate) mod partition;
 
 #[cfg(feature = "core")]
 pub(crate) mod scope;

@@ -91,7 +91,8 @@ async fn retained_configuration_survives_source_removal_and_rejects_wrong_key() 
         let active: Option<RevisionId> = client.active_revision(installation, &tenant).await?.revision_id;
         ensure!(active.as_ref() == Some(&draft.revision_id));
         ensure!(client.configuration(installation, &tenant, &draft.revision_id).await?.document == input.document);
-        ensure!(!client.capabilities().await?.dispatch_enabled);
+        let capabilities = client.capabilities().await?;
+        ensure!(capabilities.dispatch_enabled && capabilities.strict_receipts && capabilities.revision_bound_dispatch);
         ensure!(provider.received_requests().await.context("mock recording unavailable")?.is_empty());
         ensure!(matches!(host.command(&DaemonCommand::Stop).await?, DaemonResponse::Ok));
         ensure!(host.exited().await?.success());
@@ -110,7 +111,7 @@ async fn tenancy_owner_preserves_health_reports_and_durable_restart() -> Result<
         let endpoint = format!("http://{}", host.remote);
         let client = TenancyClient::new(&endpoint, CONTROL_TOKEN)?;
         let before = client.capabilities().await?;
-        ensure!(!before.dispatch_enabled && !before.strict_receipts && !before.revision_bound_dispatch);
+        ensure!(before.dispatch_enabled && before.strict_receipts && before.revision_bound_dispatch);
         let tenant: TenantId = "lifecycle-tenant".try_into()?;
         let input = TenantPut {
             operation_id: "durable-host-operation".try_into()?, expected_revision: None,
@@ -129,8 +130,9 @@ async fn tenancy_owner_preserves_health_reports_and_durable_restart() -> Result<
             .bearer_auth(CONTROL_TOKEN)
             .json(&json!({"model": "lifecycle-model", "messages": [{"role": "user", "content": "must not execute"}]}))
             .send().await?;
-        ensure!(response.status() == reqwest::StatusCode::CONFLICT);
+        ensure!(response.status() == reqwest::StatusCode::BAD_REQUEST);
         let error: bitrouter_ai::tenancy::operation::Error = response.json().await?;
+        ensure!(error.code == bitrouter_ai::tenancy::operation::ErrorCode::InvalidRequest);
         ensure!(error.dispatch_state == bitrouter_ai::tenancy::operation::DispatchState::NotStarted);
         ensure!(provider.received_requests().await.context("mock recording unavailable")?.is_empty());
         ensure!(matches!(host.command(&DaemonCommand::Stop).await?, DaemonResponse::Ok));
@@ -139,6 +141,7 @@ async fn tenancy_owner_preserves_health_reports_and_durable_restart() -> Result<
         host.spawn(&host.home.join("private.yaml"))?;
         host.ready().await?;
         let after = client.capabilities().await?;
+        ensure!(after.dispatch_enabled && after.strict_receipts && after.revision_bound_dispatch);
         ensure!(after.installation_id == before.installation_id);
         ensure!(after.instance_id != before.instance_id);
         let replay = client.put_tenant(&tenant, &input).await?;

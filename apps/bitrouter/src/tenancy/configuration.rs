@@ -19,7 +19,7 @@ use super::{
 };
 
 pub(super) async fn prepare(
-    db: &sea_orm::DatabaseConnection,
+    db: &impl sea_orm::ConnectionTrait,
     resources: &super::resources::Resources,
     state: &Snapshot,
     caller: &Caller,

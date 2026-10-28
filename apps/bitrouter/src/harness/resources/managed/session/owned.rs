@@ -23,18 +23,58 @@ pub(super) struct Opening {
     pub ambiguous: bool,
 }
 
+// This is storage in the original host frame, not another task or owner. A
+// concurrent command may fail or unwind while this producer is still awaited.
+struct Paid {
+    work: Option<futures::future::BoxFuture<'static, ()>>,
+    completion_stop: CancellationToken,
+}
+impl Paid {
+    async fn finish(&mut self) {
+        self.completion_stop.cancel();
+        // Borrow through the await: an enclosing unwind must not drop the only
+        // producer by moving it out of the retained host frame first.
+        if let Some(work) = &mut self.work {
+            work.await;
+        }
+        self.work = None;
+    }
+}
+
 enum Command {
     Run {
         input: Box<TaskInput>,
         approval: Arc<dyn NativeApproval>,
         cancel: CancellationToken,
         reply: oneshot::Sender<Result<SessionSnapshot, CoreError>>,
+        _permit: tokio::sync::OwnedSemaphorePermit,
+    },
+    Cohort {
+        model: String,
+        root: String,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        reply:
+            oneshot::Sender<Result<crate::core::optimization::cohort::CohortAssessment, CoreError>>,
+    },
+    Assessment {
+        input: Box<crate::tenancy::capture::human::Input>,
+        deadline: tokio::time::Instant,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        reply: oneshot::Sender<Result<crate::tenancy::session::assessment::Reply, CoreError>>,
+    },
+    Paid {
+        checkpoint: String,
+        expected: Option<String>,
+        deadline: tokio::time::Instant,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        reply: oneshot::Sender<Result<(), CoreError>>,
     },
     Close(oneshot::Sender<Result<(), CoreError>>),
 }
 
 pub(super) struct Handle {
     commands: mpsc::Sender<Command>,
+    capacity: Arc<tokio::sync::Semaphore>,
     stop: CancellationToken,
     finished: tokio::sync::watch::Receiver<bool>,
 }
@@ -50,6 +90,13 @@ impl Handle {
         cancel: CancellationToken,
     ) -> Result<SessionSnapshot, CoreError> {
         input_bound(&input)?;
+        let permit = tokio::time::timeout(
+            Duration::from_secs(5),
+            self.capacity.clone().acquire_owned(),
+        )
+        .await
+        .map_err(|_| error("native host command deadline"))?
+        .map_err(|_| error("native owner stopped"))?;
         let cancel = cancel.child_token();
         let _cancel_on_drop = cancel.clone().drop_guard();
         let (reply, receive) = oneshot::channel();
@@ -60,6 +107,7 @@ impl Handle {
                 approval,
                 cancel,
                 reply,
+                _permit: permit,
             }),
         )
         .await
@@ -68,6 +116,111 @@ impl Handle {
         receive
             .await
             .map_err(|_| error("native owner response unavailable"))?
+    }
+    pub async fn cohort(
+        &self,
+        model: &str,
+        root: &str,
+    ) -> Result<crate::core::optimization::cohort::CohortAssessment, CoreError> {
+        if model.is_empty() || model.len() > 512 || root.len() > 80 {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "native cohort selector bound",
+            ));
+        }
+        let permit =
+            self.capacity.clone().try_acquire_owned().map_err(|_| {
+                CoreError::rejected(ErrorCode::Busy, "native owner command is active")
+            })?;
+        let (reply, receive) = oneshot::channel();
+        self.commands
+            .try_send(Command::Cohort {
+                model: model.to_owned(),
+                root: root.to_owned(),
+                permit,
+                reply,
+            })
+            .map_err(|_| {
+                CoreError::rejected(ErrorCode::Busy, "native owner queue is unavailable")
+            })?;
+        tokio::time::timeout(Duration::from_secs(5), receive)
+            .await
+            .map_err(|_| error("native cohort deadline"))?
+            .map_err(|_| error("native cohort response unavailable"))?
+    }
+    pub async fn assessment(
+        &self,
+        input: crate::tenancy::capture::human::Input,
+    ) -> Result<crate::tenancy::session::assessment::Reply, CoreError> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let input = crate::tenancy::session::assessment::bounded(input)?;
+        let permit =
+            self.capacity.clone().try_acquire_owned().map_err(|_| {
+                CoreError::rejected(ErrorCode::Busy, "native owner command is active")
+            })?;
+        let (reply, receive) = oneshot::channel();
+        self.commands
+            .try_send(Command::Assessment {
+                input: Box::new(input),
+                deadline,
+                permit,
+                reply,
+            })
+            .map_err(|_| {
+                CoreError::rejected(ErrorCode::Busy, "native owner queue is unavailable")
+            })?;
+        tokio::time::timeout_at(deadline, receive)
+            .await
+            .map_err(|_| {
+                let mut error = error("native assessment outcome is unconfirmed");
+                error.commit_status = bitrouter_ai::core::protocol::CommitStatus::Unknown;
+                error
+            })?
+            .map_err(|_| {
+                let mut error = error("native assessment owner response unavailable");
+                error.commit_status = bitrouter_ai::core::protocol::CommitStatus::Unknown;
+                error
+            })?
+    }
+    pub async fn assess_run(
+        &self,
+        checkpoint: &str,
+        expected: Option<&str>,
+    ) -> Result<(), CoreError> {
+        if checkpoint.is_empty()
+            || checkpoint.len() > 256
+            || checkpoint.chars().any(char::is_control)
+            || expected.is_some_and(|id| {
+                id.is_empty() || id.len() > 256 || id.chars().any(char::is_control)
+            })
+        {
+            return Err(CoreError::rejected(
+                ErrorCode::LimitExceeded,
+                "native paid selector bound",
+            ));
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let permit =
+            self.capacity.clone().try_acquire_owned().map_err(|_| {
+                CoreError::rejected(ErrorCode::Busy, "native owner command is active")
+            })?;
+        let (reply, receive) = oneshot::channel();
+        self.commands
+            .try_send(Command::Paid {
+                checkpoint: checkpoint.to_owned(),
+                expected: expected.map(str::to_owned),
+                deadline,
+                permit,
+                reply,
+            })
+            .map_err(|_| error("native paid owner queue unavailable"))?;
+        // The detached caller owns no producer. The one existing host owner
+        // polls the accepted job through its original execution/cleanup deadline.
+        receive.await.map_err(|_| {
+            let mut failure = error("native paid reply unavailable");
+            failure.commit_status = bitrouter_ai::core::protocol::CommitStatus::Unknown;
+            failure
+        })?
     }
     pub async fn close(self) -> Result<(), CoreError> {
         if *self.finished.borrow() {
@@ -120,6 +273,7 @@ pub(super) async fn open(
     let (commands, receiver) = mpsc::channel(1);
     let handle = Handle {
         commands,
+        capacity: Arc::new(tokio::sync::Semaphore::new(1)),
         stop: stop.clone(),
         finished: slot.finished(),
     };
@@ -151,69 +305,82 @@ struct Request {
     config: HarnessConfig,
 }
 
-async fn owner(
+fn owner(
     request: Request,
     authority: Arc<Authority>,
     handle: Handle,
     commands: mpsc::Receiver<Command>,
     reply: oneshot::Sender<Result<NativeSession, CoreError>>,
-) {
-    let service = authority.service().clone();
-    let stop = handle.stop.clone();
-    let service_stop = service.host_stop();
-    let mut opening = Opening {
-        store: Store::new(authority.clone()),
-        authority,
-        stop: stop.clone(),
-        binding: None,
-        workspace: None,
-        resources: None,
-        mcp: Arc::new(tokio::sync::Mutex::new(
-            crate::harness::resources::mcp::McpConnections::default(),
-        )),
-        port: None,
-        core: None,
-        epoch_started: false,
-        epoch_committed: false,
-        ambiguous: false,
-    };
-    let mut live = None;
-    // Opening and live remain outside the caught future. Its panic cannot drop
-    // the only workspace fence, resource owner or initial pending Core handle.
-    let result = {
-        let work = AssertUnwindSafe(serve(
-            request,
-            &mut opening,
-            &mut live,
-            handle,
-            commands,
-            reply,
-        ))
-        .catch_unwind();
-        tokio::pin!(work);
-        tokio::select! {
-            result = &mut work => result,
-            () = async { tokio::select! { () = stop.cancelled() => {}, () = service_stop.cancelled() => {} } } => {
-                stop.cancel();
-                match tokio::time::timeout(Duration::from_secs(30), &mut work).await {
-                    Ok(result) => result,
-                    Err(_) => {
-                        service.host_cleanup_unknown();
-                        // Keep polling the same work; the deadline did not prove cleanup.
-                        work.await
+) -> futures::future::BoxFuture<'static, ()> {
+    // Heap-own the host frame before it crosses the Registry spawn wrappers.
+    // Custody, the retained paid future and every cleanup boundary stay inside it.
+    async move {
+        let service = authority.service().clone();
+        let stop = handle.stop.clone();
+        let service_stop = service.host_stop();
+        let mut opening = Opening {
+            store: Store::new(authority.clone()),
+            authority,
+            stop: stop.clone(),
+            binding: None,
+            workspace: None,
+            resources: None,
+            mcp: Arc::new(tokio::sync::Mutex::new(
+                crate::harness::resources::mcp::McpConnections::default(),
+            )),
+            port: None,
+            core: None,
+            epoch_started: false,
+            epoch_committed: false,
+            ambiguous: false,
+        };
+        let mut live = None;
+        let mut paid = Paid {
+            work: None,
+            completion_stop: CancellationToken::new(),
+        };
+        // These remain outside the caught command future. Its failure cannot drop
+        // the only workspace fence, Core handle or accepted paid producer.
+        let result = {
+            let work = AssertUnwindSafe(serve(
+                request,
+                &mut opening,
+                &mut live,
+                handle,
+                commands,
+                reply,
+                &mut paid,
+            ))
+            .catch_unwind();
+            tokio::pin!(work);
+            tokio::select! {
+                result = &mut work => result,
+                () = async { tokio::select! { () = stop.cancelled() => {}, () = service_stop.cancelled() => {} } } => {
+                    stop.cancel();
+                    match tokio::time::timeout(Duration::from_secs(30), &mut work).await {
+                        Ok(result) => result,
+                        Err(_) => {
+                            service.host_cleanup_unknown();
+                            // Keep polling the same work; the deadline did not prove cleanup.
+                            work.await
+                        }
                     }
                 }
             }
+        };
+        let clean = matches!(result, Ok(Ok(())));
+        if !clean {
+            tracing::error!("native host cleanup failed or unwound; owner retained");
+            service.host_cleanup_unknown();
+            // Fencing new work does not join or discard an already accepted judge.
+            // Keep polling its original response/observation future on this host.
+            paid.finish().await;
+            pending::<()>().await;
         }
-    };
-    let clean = matches!(result, Ok(Ok(())));
-    if !clean {
-        tracing::error!("native host cleanup failed or unwound; owner retained");
-        service.host_cleanup_unknown();
-        pending::<()>().await;
+        // These drops occur only after successful resource shutdown and durable release.
+        drop((live, opening));
     }
-    // These drops occur only after successful resource shutdown and durable release.
-    drop((live, opening));
+    .boxed()
 }
 
 async fn serve(
@@ -223,6 +390,7 @@ async fn serve(
     handle: Handle,
     mut commands: mpsc::Receiver<Command>,
     reply: oneshot::Sender<Result<NativeSession, CoreError>>,
+    paid: &mut Paid,
 ) -> Result<(), CoreError> {
     let stop = handle.stop.clone();
     let service_stop = opening.authority.service().host_stop();
@@ -271,6 +439,9 @@ async fn serve(
             biased;
             () = stop.cancelled() => break None,
             () = service_stop.cancelled() => break None,
+            () = async {
+                match &mut paid.work { Some(work) => work.await, None => pending::<()>().await }
+            } => { paid.work = None; continue; }
             command = commands.recv() => command,
         };
         match command {
@@ -279,7 +450,25 @@ async fn serve(
                 approval,
                 cancel,
                 reply,
+                _permit,
             }) => {
+                if opening
+                    .binding
+                    .as_ref()
+                    .is_some_and(|binding| !matches!(binding.has_paid_source(), Ok(false)))
+                    || paid.work.is_some()
+                {
+                    if reply
+                        .send(Err(CoreError::rejected(
+                            ErrorCode::Busy,
+                            "native completed source has an unfinished paid assessment",
+                        )))
+                        .is_err()
+                    {
+                        tracing::debug!("blocked native run waiter disconnected");
+                    }
+                    continue;
+                }
                 if cancel.is_cancelled() {
                     if reply
                         .send(Err(error(
@@ -317,6 +506,123 @@ async fn serve(
                     break None;
                 }
             }
+            Some(Command::Cohort {
+                model,
+                root,
+                permit,
+                reply,
+            }) => {
+                let binding = opening
+                    .binding
+                    .clone()
+                    .ok_or_else(|| error("native binding absent"))?;
+                let outcome = crate::tenancy::experiment::queue::cohort(
+                    binding.clone(),
+                    &model,
+                    &root,
+                    permit,
+                )
+                .await
+                .map_err(core_error);
+                crate::tenancy::experiment::queue::deliver(&binding, reply, outcome);
+            }
+            Some(Command::Assessment {
+                input,
+                deadline,
+                permit,
+                reply,
+            }) => {
+                let binding = opening
+                    .binding
+                    .clone()
+                    .ok_or_else(|| error("native binding absent"))?;
+                let input = *input;
+                let write = !matches!(input, crate::tenancy::capture::human::Input::Review(_));
+                let request = crate::tenancy::session::assessment::Request::new(
+                    binding.clone(),
+                    input,
+                    deadline,
+                    permit,
+                )
+                .await;
+                let outcome = match request {
+                    Ok(request) => binding
+                        .authority()
+                        .service()
+                        .native_assessment(request)
+                        .await
+                        .map_err(|error| error.core()),
+                    Err(_) => Err(CoreError::rejected(
+                        ErrorCode::UnauthorizedScope,
+                        "native assessment admission rejected",
+                    )),
+                };
+                let unknown = outcome.as_ref().err().is_some_and(|error| {
+                    error.commit_status == bitrouter_ai::core::protocol::CommitStatus::Unknown
+                });
+                if unknown {
+                    opening.ambiguous = true;
+                }
+                crate::tenancy::session::assessment::deliver(
+                    &binding, write, deadline, reply, outcome,
+                );
+                // A consumed ambiguous receiver is not an unsent operation. The
+                // existing owner retains its cleanup/quarantine obligation.
+                if unknown {
+                    return Err(error("native assessment transaction remains unconfirmed"));
+                }
+            }
+            Some(Command::Paid {
+                checkpoint,
+                expected,
+                deadline,
+                permit,
+                reply,
+            }) => {
+                let binding = opening
+                    .binding
+                    .clone()
+                    .ok_or_else(|| error("native binding absent"))?;
+                if paid.work.is_some() || !matches!(binding.has_paid_source(), Ok(false)) {
+                    if reply
+                        .send(Err(CoreError::rejected(
+                            ErrorCode::Busy,
+                            "native source already has a paid assessment",
+                        )))
+                        .is_err()
+                    {
+                        tracing::debug!("duplicate paid waiter disconnected");
+                    }
+                    continue;
+                }
+                if reply.is_closed() {
+                    continue;
+                }
+                let completion_stop = paid.completion_stop.clone();
+                let service = binding.authority().service().clone();
+                paid.work = Some(Box::pin(async move {
+                    let work = async move {
+                        let outcome = crate::tenancy::learning::native::run(
+                            binding,
+                            checkpoint,
+                            expected,
+                            deadline,
+                            permit,
+                            completion_stop,
+                        )
+                        .await;
+                        if reply.send(outcome).is_err() {
+                            tracing::debug!("native paid work finished without its caller");
+                        }
+                    };
+                    if AssertUnwindSafe(work).catch_unwind().await.is_err() {
+                        // A panicked producer cannot be repolled. Keep its
+                        // host and registry obligations quarantined instead.
+                        service.host_cleanup_unknown();
+                        pending::<()>().await;
+                    }
+                }));
+            }
             Some(Command::Close(reply)) => break Some(reply),
             None => break None,
         }
@@ -328,6 +634,21 @@ async fn serve(
                 cancel.cancel();
                 if reply.send(Err(error("native owner is closing"))).is_err() {
                     tracing::debug!("queued native run has no response receiver");
+                }
+            }
+            Command::Cohort { reply, .. } => {
+                if reply.send(Err(error("native owner is closing"))).is_err() {
+                    tracing::debug!("queued native cohort has no response receiver");
+                }
+            }
+            Command::Assessment { reply, .. } => {
+                if reply.send(Err(error("native owner is closing"))).is_err() {
+                    tracing::debug!("queued native assessment has no response receiver");
+                }
+            }
+            Command::Paid { reply, .. } => {
+                if reply.send(Err(error("native owner is closing"))).is_err() {
+                    tracing::debug!("queued native paid waiter disconnected");
                 }
             }
             Command::Close(reply) => {
@@ -343,6 +664,8 @@ async fn serve(
     if let Some(binding) = &opening.binding {
         binding.close_new_work()?;
     }
+    // Keep polling the same paid producer; dropping a waiter is not cleanup.
+    paid.finish().await;
     opening.readback().await?;
     let session = live
         .as_mut()
@@ -360,6 +683,24 @@ async fn serve(
         .take()
         .ok_or_else(|| error("native owner missing at release"))?;
     let outcome = session.close().await;
+    let outcome = match outcome {
+        Ok(()) => {
+            if let Some(binding) = &opening.binding
+                && binding
+                    .has_paid_source()
+                    .map_err(|code| core_error(code.into()))?
+            {
+                let proof = Arc::new(CleanupProof {
+                    binding: binding.clone(),
+                });
+                crate::tenancy::learning::native::closed(proof)
+                    .await
+                    .map_err(|code| core_error(code.into()))?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(error),
+    };
     if let Some(reply) = close_reply
         && reply.send(outcome.clone()).is_err()
     {
@@ -385,29 +726,8 @@ impl Opening {
         if !port.failed.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(());
         }
-        let loaded = self.store.reconcile().await?;
-        let journal: Journal = serde_json::from_slice(&loaded.journal)
-            .map_err(|_| error("native readback journal is invalid"))?;
-        let binding = self
-            .binding
-            .as_ref()
-            .ok_or_else(|| error("native readback binding missing"))?;
-        binding.grant(&journal.grant)?;
-        let attempted = self.store.matches_attempt(&loaded)?;
-        let mut state = port.state.lock().await;
-        let same = crate::managed_store::owned::encode(&journal)
-            .map_err(|_| error("native readback bound"))?
-            == crate::managed_store::owned::encode(&state.journal)
-                .map_err(|_| error("native readback bound"))?;
-        if !((same && loaded.revision == state.revision) || attempted) {
-            return Err(error("native readback does not match the retained write"));
-        }
-        state.revision = loaded.revision;
-        state.journal = journal;
+        port.reconcile_owned(&self.store).await?;
         self.epoch_committed = true;
-        self.store.confirm_readback();
-        port.failed
-            .store(false, std::sync::atomic::Ordering::Release);
         Ok(())
     }
 
@@ -423,6 +743,53 @@ impl Opening {
             return Err(error(
                 "native startup journal or resource cleanup is unconfirmed",
             ));
+        }
+        if let Some(checked) = self.store.recovery().cloned() {
+            if !checked.committed() {
+                // Closed preparation has no dispatch, and confirmed non-commit
+                // leaves the exact predecessor row in place. Never manufacture
+                // a release or retry its atomic repair during failed-open cleanup.
+                if !self.store.write_not_committed() {
+                    return Err(error("native recovery disposition is unconfirmed"));
+                }
+                if let Some(resources) = &self.resources {
+                    resources.shutdown().await.map_err(error)?;
+                } else {
+                    self.mcp.lock().await.shutdown().await.map_err(error)?;
+                }
+                // The reserved predecessor marker stays Active/Idle exactly as
+                // found. No new native epoch was committed, so do not release it.
+                return Ok(());
+            }
+            if !checked.retired() {
+                let core = self
+                    .core
+                    .as_ref()
+                    .ok_or_else(|| error("committed recovery lost Core custody"))?;
+                let port = self
+                    .port
+                    .as_ref()
+                    .ok_or_else(|| error("committed recovery lost port custody"))?;
+                let durable = port.state.lock().await.journal.head.clone();
+                core.reconcile_owned(&durable).await?;
+                core.retire_stopped_native().await?;
+                let binding = self
+                    .binding
+                    .as_ref()
+                    .ok_or_else(|| error("native binding missing"))?;
+                self.workspace
+                    .as_ref()
+                    .ok_or_else(|| error("native workspace missing"))?
+                    .activate_stopped_native(&checked, binding.ownership_grant())
+                    .map_err(|err| error(err.to_string()))?;
+                self.store.retire_recovery()?;
+                let mut state = port.state.lock().await;
+                let next = state.journal.clone();
+                port.persist(&mut state, next).await?;
+                checked
+                    .confirm_retired()
+                    .map_err(|_| error("native retirement not acknowledged"))?;
+            }
         }
         if let Some(core) = &self.core {
             let port = self
@@ -473,4 +840,15 @@ fn input_bound(input: &TaskInput) -> Result<(), CoreError> {
     }
     serde_json::to_writer(&mut Count(0), input)
         .map_err(|_| CoreError::rejected(ErrorCode::LimitExceeded, "native input exceeds bound"))
+}
+
+/// Minted only after actual resources, Core release, durable journal release and
+/// workspace finish all returned success above. A caller/row cannot construct it.
+pub(crate) struct CleanupProof {
+    binding: Arc<Binding>,
+}
+impl CleanupProof {
+    pub(crate) fn binding(&self) -> &Arc<Binding> {
+        &self.binding
+    }
 }

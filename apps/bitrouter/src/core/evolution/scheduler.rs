@@ -78,6 +78,26 @@ async fn feedback_epoch(
 }
 
 impl EvolutionScheduler {
+    /// The shipped host chooses exactly one mode of its single scheduler.
+    pub(crate) fn start(
+        runtime: EvolutionRuntime,
+        pipeline: Option<Arc<Pipeline>>,
+        tenancy: Option<crate::tenancy::Service>,
+        gate: crate::daemon_handoff::HandoffGate,
+        shutdown: CancellationToken,
+    ) -> Option<tokio::task::JoinHandle<()>> {
+        if let Some(service) = tenancy {
+            #[cfg(feature = "harness")]
+            return crate::tenancy::learner::worker::start(service, gate, shutdown);
+            #[cfg(not(feature = "harness"))]
+            {
+                let _ = service;
+                return None;
+            }
+        }
+        Self::start_legacy(runtime, pipeline, false, gate, shutdown)
+    }
+
     /// One authenticated host association, supplied by the Service actor.
     /// The Legacy daemon worker remains dormant in tenancy mode.
     #[cfg(feature = "harness")]

@@ -40,6 +40,25 @@ pub struct CheckpointSummary {
     pub observations: usize,
 }
 
+/// Authorized bounded review of one immutable owned checkpoint.
+/// This projection is an in-process value, not a wire or authority contract.
+#[cfg(feature = "core")]
+#[derive(Debug)]
+pub struct CheckpointReview {
+    /// Exact immutable checkpoint referenced by the evidence.
+    pub checkpoint: CheckpointSummary,
+    /// Fixed rubric, cited evidence and exact expected effective revision.
+    pub scoring: crate::core::evolution::scoring::ScoringInput,
+    /// Supported prefill rubric, absent for a Human retraction.
+    pub previous: Option<crate::core::evolution::rubric::RubricEvaluation>,
+    /// The immutable revision supplying the prefill, including tombstones.
+    pub prefill_revision: Option<String>,
+    /// Complete bounded history of this checkpoint in deterministic order.
+    pub history: Vec<crate::acp_trajectory::checkpoint::types::AssessmentRevision>,
+    /// Current validated session watermark in the same snapshot.
+    pub current_watermark: i64,
+}
+
 /// One Service-owned controller. Dropping the handle requests stop; its owner
 /// continues through child reaping and pending capture transaction settlement.
 #[cfg(feature = "core")]
@@ -78,6 +97,45 @@ impl ControlledSession {
     pub async fn checkpoint(&self, native: &str) -> Result<Option<CheckpointSummary>> {
         self.handle.checkpoint(native).await
     }
+    /// Review an already committed checkpoint without starting an evaluator.
+    /// `None` selects this association's latest committed stopped prefix.
+    ///
+    /// # Errors
+    /// Rejects foreign/missing checkpoints, changed authority, closing hosts,
+    /// corrupt retained evidence and bounded capacity exhaustion.
+    pub async fn review_checkpoint(
+        &self,
+        native: &str,
+        checkpoint_id: Option<&str>,
+    ) -> Result<CheckpointReview> {
+        self.handle.review_checkpoint(native, checkpoint_id).await
+    }
+    /// Submit an explicit Human correction with the reviewed expected head.
+    /// Evaluator labels are normalized to the authenticated stable principal.
+    ///
+    /// # Errors
+    /// Rejects invalid rubric input, stale heads, changed authority, unknown
+    /// prior transaction custody and history capacity reserved for paid work.
+    pub async fn submit_assessment(
+        &self,
+        native: &str,
+        submission: crate::core::evolution::scoring::RubricSubmission,
+    ) -> Result<crate::core::evolution::scoring::ScoringReceipt> {
+        self.handle.submit_assessment(native, submission).await
+    }
+    /// Retract the current same-checkpoint assessment with a Human tombstone.
+    /// Input must have Human source, no assessment, and an explicit reason.
+    ///
+    /// # Errors
+    /// Rejects invalid retractions, stale heads, changed authority, closing
+    /// hosts, unknown transaction custody and bounded capacity exhaustion.
+    pub async fn retract_assessment(
+        &self,
+        native: &str,
+        input: crate::acp_trajectory::checkpoint::types::RevisionInput,
+    ) -> Result<crate::acp_trajectory::checkpoint::types::AssessmentRevision> {
+        self.handle.retract_assessment(native, input).await
+    }
     /// Bounded, lossy live rendering updates. Durable capture uses the proxy,
     /// independently of this UI stream. Subscribe before opening a native session.
     pub fn subscribe_updates(
@@ -105,5 +163,18 @@ impl ControlledSession {
 impl Drop for ControlledSession {
     fn drop(&mut self) {
         self.handle.stop();
+    }
+}
+
+/// Actual cleanup evidence, constructible only inside this controller module.
+/// It has no public constructor, persisted-data constructor or scope setter.
+#[cfg(feature = "core")]
+pub(crate) struct CleanupProof {
+    binding: Arc<crate::tenancy::capture::Binding>,
+}
+#[cfg(feature = "core")]
+impl CleanupProof {
+    pub(crate) fn binding(&self) -> &Arc<crate::tenancy::capture::Binding> {
+        &self.binding
     }
 }

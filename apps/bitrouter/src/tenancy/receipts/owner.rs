@@ -34,7 +34,10 @@ enum Phase {
 }
 
 pub(crate) struct Owner {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    learning: std::sync::OnceLock<Arc<crate::tenancy::learning::owner::Owner>>,
     identity: Identity,
+    pub(in crate::tenancy) observation: crate::telemetry::receipt_latency::Timing,
     // Retain the exact encrypted replacement independently of adapter/future
     // lifetime, including a confirmed rollback whose bounded reconciliation
     // also fails. No token bytes or second lifecycle registry escape this owner.
@@ -56,6 +59,100 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn recovery_seed(
+        &self,
+        service: &crate::tenancy::Service,
+    ) -> anyhow::Result<Option<super::recovery::Seed>> {
+        anyhow::ensure!(
+            Arc::ptr_eq(&self.origin, &service.cleanup),
+            "receipt origin mismatch"
+        );
+        service
+            .startup
+            .as_ref()
+            .map(|startup| {
+                startup
+                    .stamp(&self.origin)
+                    .map(|stamp| super::recovery::Seed::from_owner(&self.identity, stamp))
+            })
+            .transpose()
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn storage_identity(&self) -> (&InstallationId, &TenantId, &PrincipalId) {
+        (
+            &self.identity.installation,
+            &self.identity.tenant,
+            &self.identity.principal,
+        )
+    }
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn attach_learning(
+        &self,
+        owner: Arc<crate::tenancy::learning::owner::Owner>,
+    ) -> crate::gateway::error::Result<()> {
+        if owner.execution != self.identity.execution || !owner.binding.origin(&self.origin) {
+            return Err(crate::gateway::error::BitrouterError::internal(
+                "assessment receipt mismatch",
+            ));
+        }
+        self.learning.set(owner).map_err(|_| {
+            crate::gateway::error::BitrouterError::internal("assessment receipt already bound")
+        })
+    }
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) async fn drain_learning(&self) -> Result<(), ErrorCode> {
+        if let Some(owner) = self.learning.get() {
+            owner.drain().await?;
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn learning_seed(
+        &self,
+        binding: &crate::tenancy::learning::source::Binding,
+        prepared: &crate::tenancy::learning::store::Prepared,
+    ) -> anyhow::Result<Option<crate::tenancy::learning::recovery::Seed>> {
+        anyhow::ensure!(binding.origin(&self.origin), "paid owner origin mismatch");
+        binding
+            .assessment_check()
+            .map_err(|_| anyhow::anyhow!("paid owner authority rejected"))?;
+        let Some(startup) = &binding.service().startup else {
+            return Ok(None);
+        };
+        let origin = startup.stamp(&self.origin)?;
+        Ok(Some(crate::tenancy::learning::recovery::Seed::from_owner(
+            &self.identity,
+            origin,
+            binding,
+            prepared,
+        )?))
+    }
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn learning_terminal(&self) -> Result<Arc<Candidate>, ErrorCode> {
+        let phase = self
+            .phase
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        match &*phase {
+            Phase::Durable(candidate) => Ok(candidate.clone()),
+            _ => Err(ErrorCode::AuthorityUnavailable),
+        }
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(in crate::tenancy) fn stopped_learning(
+        &self,
+    ) -> Result<Option<Arc<crate::tenancy::learning::owner::Owner>>, ErrorCode> {
+        // Missing aux evidence is not permission to discard an auxiliary effect.
+        if !self.auxiliary.snapshot()?.is_empty() {
+            return Err(ErrorCode::CapabilityMismatch);
+        }
+        Ok(self.learning.get().cloned())
+    }
+
     pub(in crate::tenancy) fn new(
         identity: Identity,
         journal: Arc<Journal>,
@@ -63,10 +160,17 @@ impl Owner {
         lease: Arc<Lease>,
         admission: Arc<crate::tenancy::admission::Admission>,
         origin: Arc<Proof>,
-        deadline: tokio::time::Instant,
+        observed_deadline: (
+            tokio::time::Instant,
+            crate::telemetry::receipt_latency::Timing,
+        ),
     ) -> Arc<Self> {
+        let (deadline, observation) = observed_deadline;
         Arc::new(Self {
+            #[cfg(all(feature = "core", feature = "harness"))]
+            learning: std::sync::OnceLock::new(),
             identity,
+            observation,
             oauth_replacement: std::sync::OnceLock::new(),
             oauth_acknowledged: std::sync::atomic::AtomicBool::new(false),
             auxiliary: super::auxiliary::Journal::new(),
@@ -224,7 +328,13 @@ impl Owner {
                 _ => false,
             }
         };
+        if queue {
+            self.observation
+                .event(crate::telemetry::receipt_latency::Event::Retry);
+        }
         if queue && self.sender.try_send(Job::Receipt(self.clone())).is_err() {
+            self.observation
+                .event(crate::telemetry::receipt_latency::Event::QueueFailure);
             self.fail(ErrorCode::StorageUnavailable);
             return Err(ErrorCode::StorageUnavailable);
         }
@@ -280,6 +390,7 @@ impl Owner {
                         .set(outcome)
                         .map_err(|_| ErrorCode::StorageUnavailable)?;
                     *state = Phase::Queued(outcome);
+                    self.observation.ready();
                     true
                 }
                 Phase::Failed { code, .. } => return Err(code),
@@ -292,7 +403,12 @@ impl Owner {
                 }
             }
         };
+        if queue {
+            self.observation.queued();
+        }
         if queue && self.sender.try_send(Job::Receipt(self.clone())).is_err() {
+            self.observation
+                .event(crate::telemetry::receipt_latency::Event::QueueFailure);
             self.fail(ErrorCode::StorageUnavailable);
             return Err(ErrorCode::StorageUnavailable);
         }
@@ -353,6 +469,8 @@ impl Owner {
         {
             Ok(result) => result,
             Err(_) => {
+                self.observation
+                    .event(crate::telemetry::receipt_latency::Event::CallerWaitFailure);
                 self.fail(ErrorCode::StorageUnavailable);
                 Err(ErrorCode::StorageUnavailable)
             }
@@ -522,8 +640,10 @@ impl Owner {
         } else {
             lease.confirm_receipt(0, None)?;
         }
-        *phase = Phase::Durable(candidate);
+        *phase = Phase::Durable(candidate.clone());
+        let publication = self.observation.publication(&candidate.receipt);
         drop(phase);
+        publication.record();
         self.changed.notify_waiters();
         Ok(())
     }

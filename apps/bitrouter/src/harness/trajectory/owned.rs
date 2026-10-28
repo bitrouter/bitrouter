@@ -59,6 +59,17 @@ pub(crate) struct Descriptor {
     pub(crate) model: String,
     pub(crate) revision: String,
     pub(crate) mode: LearningMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) block_link: Option<ProviderLink>,
+}
+
+/// Storage commitment only; it never reconstructs a live capture binding.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProviderLink {
+    pub(crate) version: u32,
+    pub(crate) commitment: String,
+    pub(crate) credential: String,
 }
 
 /// Pre-encoded once before admission, and retained outside the actor work future.
@@ -121,6 +132,7 @@ impl Association {
             revision,
             model,
             mode,
+            block_link: None,
         };
         let connection = scope.physical_key(
             KeyDomain::CaptureConnection,
@@ -133,6 +145,17 @@ impl Association {
             descriptor,
             connection,
         })
+    }
+    pub(crate) fn with_block_link(mut self, link: ProviderLink) -> Result<Self> {
+        ensure!(
+            link.version == 1
+                && link.commitment.len() == 64
+                && link.commitment.bytes().all(|b| b.is_ascii_hexdigit()),
+            "invalid Block link commitment"
+        );
+        bounded_id(&link.credential, 128)?;
+        self.descriptor.block_link = Some(link);
+        Ok(self)
     }
     pub(crate) fn descriptor(&self) -> &Descriptor {
         &self.descriptor
@@ -150,6 +173,9 @@ impl Association {
     }
     pub(crate) fn metadata(&self) -> Result<crate::storage::scope::Metadata> {
         self.scope.metadata(&self.provenance)
+    }
+    pub(crate) fn scope(&self) -> &Scope {
+        &self.scope
     }
     pub(crate) fn predicate(&self, table: &str) -> Condition {
         use sea_orm::sea_query::{Alias, Expr};

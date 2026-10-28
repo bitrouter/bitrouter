@@ -354,6 +354,37 @@ impl OtelExporter {
         })
     }
 
+    #[cfg(all(test, feature = "otel-http"))]
+    pub(crate) fn collect_receipts_for_test(&self) -> anyhow::Result<()> {
+        let metrics = self
+            .metrics
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing test metrics"))?;
+        metrics.collect_receipts_for_test()?;
+        Ok(())
+    }
+
+    pub(crate) fn receipt_observer(
+        &self,
+        config: &super::receipt_latency::Config,
+    ) -> anyhow::Result<super::receipt_latency::Sink> {
+        if !config.enabled {
+            return Ok(super::receipt_latency::Sink::default());
+        }
+        let metrics = self
+            .metrics
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("receipt latency requires enabled OTLP metrics"))?;
+        Ok(metrics.receipt_observer(config))
+    }
+
+    /// Inspect the first shutdown outcome; never flush again to hide failure.
+    pub(crate) fn recorded_shutdown_is_clean(&self) -> bool {
+        self.shutdown_once
+            .get()
+            .is_some_and(|report| report.is_clean())
+    }
+
     fn gc_expired_spans(&self) {
         let now = Instant::now();
         let timeout = self.span_timeout;

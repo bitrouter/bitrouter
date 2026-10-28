@@ -11,6 +11,8 @@ pub(crate) mod journal;
 pub(crate) mod output;
 pub(crate) mod owner;
 pub(in crate::tenancy) mod read;
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) mod recovery;
 pub(in crate::tenancy) mod store;
 
 use bitrouter_ai::tenancy::{execution::Outcome, operation::ErrorCode};

@@ -440,6 +440,32 @@ state directory; old binaries cannot open a tenant-aware live store. Rollback
 uses a compatible binary or an isolated backup plus explicit reconciliation.
 Do not merge two writers' histories or fail over an uncertain invocation.
 
+## Paid assessment budget interpretation
+
+The initial owned paid-assessment profile uses the following accepted
+interpretation: cumulative accepted logical jobs per immutable revision.
+`learning.max_evaluations` counts durably accepted logical evaluator jobs
+cumulatively per installation, tenant and immutable configuration revision.
+Restart, reactivation and credential rotation do not reset that count. A new
+immutable configuration revision has a new budget: this is not a tenant lifetime
+spending limit. One accepted job counts once regardless of its provider-attempt
+count. Actual attempt and billed-usage evidence remains in execution receipts.
+No refund follows durable acceptance, including cancellation, failed assessment,
+stale selection or unknown provider outcome. An ambiguous acceptance transaction
+retains its reservation under the existing owner until its outcome is known;
+timeout or lost reply cannot establish rejection or authorize replay.
+
+Passive Generic observations, manual Eval imports, CoreChoice, input counting
+and pure policy calculation do not consume this logical-job allowance. Concurrent
+learning-job leases are separate and remain bounded by configuration and the
+installation profile. Learning Off initiates no evaluator work. Observe permits
+paid assessment only when an explicitly imported, retained evaluator binding is
+selected by the checked native checkpoint action, with current evaluation,
+execution and credential authority. Observe does not initiate automatic judge
+discovery, exploration or activation. Explore does not confer publication
+authority. Policy activation remains an explicit, current tenant-wide
+`policy.activate` operation with the existing active-revision CAS.
+
 ## Frozen capacity and benchmark profile
 
 `benchmark-profile.json` is the M0 reference input, not a measurement report.

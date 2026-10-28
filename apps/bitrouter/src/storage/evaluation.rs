@@ -382,7 +382,7 @@ fn validate_metric_id(value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_digest(value: &str, field: &str) -> Result<()> {
+pub(crate) fn validate_digest(value: &str, field: &str) -> Result<()> {
     let Some(hex_digest) = value.strip_prefix("sha256:") else {
         anyhow::bail!("{field} must be a sha256 digest")
     };

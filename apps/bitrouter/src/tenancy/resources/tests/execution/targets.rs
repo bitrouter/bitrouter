@@ -28,7 +28,26 @@ async fn every_target_field_and_optional_or_header_distinction_is_bound() -> Res
     let view = checked(resources.open_execution(&row))?;
     let route = selected(&view, "visible", ApiProtocol::ChatCompletions)?;
     let target = first(&route, "visible", ApiProtocol::ChatCompletions).await?;
+    assert!(target.registry.is_none());
     assert!(route.match_candidate(&target).is_ok());
+    let mut registry_target = target.clone();
+    registry_target.registry = Some(Arc::new(
+        crate::gateway::catalog::execution::SelectedInterface {
+            provider_id: target.provider_name.clone(),
+            provider_model_id: target.service_id.clone(),
+            tariff_endpoint: Some(target.api_base.clone()),
+            verified_profile: None,
+            billing: None,
+            interface: registry_json::json!({}),
+            auth: registry_json::json!({"kind": "none"}),
+            canonical_id: None,
+        },
+    ));
+    assert!(compiler::target_value(&registry_target).is_err());
+    assert!(matches!(
+        route.match_candidate(&registry_target),
+        Err(ErrorCode::Forbidden)
+    ));
     macro_rules! reject {
         ($field:ident, $value:expr) => {{
             let mut changed = target.clone();
@@ -153,7 +172,14 @@ fn mutate_targets(envelope: &mut Value, mutate: impl Fn(&mut Value)) -> Result<(
 async fn authenticated_but_corrupt_typed_target_fields_fail_before_execution() -> Result<()> {
     let (_db, resources, row) = fixture_row().await?;
     let original = plaintext(&resources, &row)?;
+    assert!(
+        original["routes"][0]["chains"][0]["targets"][0]["target"]
+            .get("registry")
+            .is_none()
+    );
     let cases = [
+        ("registry", json!(null)),
+        ("registry", json!({"auth": {"kind": "none"}})),
         ("auth_scheme", json!("unknown")),
         ("chat_token_limit_field", json!("unknown")),
         ("chat_supports_store", json!("false")),
@@ -319,5 +345,49 @@ async fn equal_concrete_targets_in_different_routes_keep_their_own_credential_re
     );
     assert_eq!(checked(b.match_candidate(&target))?, second_ref);
     assert!(!a.dependencies().contains(&second_ref));
+    Ok(())
+}
+
+#[cfg(all(feature = "core", feature = "harness"))]
+#[tokio::test]
+async fn canonical_defaults_allow_token_tariffs_but_unknown_overrides_do_not() -> Result<()> {
+    use crate::gateway::model::protocol::{
+        InboundAdapter, chat_completions::ChatCompletionsAdapter,
+    };
+
+    for extra_default in [false, true] {
+        let (db, resources) = fixture().await?;
+        let mut input = route("tenant", "visible", "model")?;
+        if extra_default {
+            input["definition"]["selector"] = json!("bitrouter/with-extra");
+            input["definition"]["routing"]["routers"] = json!({"with-extra": {
+                "selection":{"kind":"model","model":"fixture:model"},
+                "defaults":{"params":{"vendor_billable_option":true}}
+            }});
+        }
+        import(&resources, &db, vec![credential("tenant")?, input]).await?;
+        let row = retained(
+            &resources,
+            &db,
+            "tenant",
+            "config-v1",
+            document(
+                vec![reference("tenant", ResourceKind::Route, "visible")?],
+                None,
+            )?,
+        )
+        .await?;
+        let view = checked(resources.open_execution(&row))?;
+        let selected = selected(&view, "visible", ApiProtocol::ChatCompletions)?;
+        let mut prompt = ChatCompletionsAdapter.parse_request(json!({
+            "model":"visible", "messages":[{"role":"user","content":"fixture turn"}], "stream":false
+        }))?;
+        assert_eq!(selected.block_token_pricing_input(&prompt), !extra_default);
+        prompt
+            .params
+            .extra
+            .insert("vendor_billable_option".into(), json!(true));
+        assert!(!selected.block_token_pricing_input(&prompt));
+    }
     Ok(())
 }

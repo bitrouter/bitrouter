@@ -1,5 +1,30 @@
 use super::*;
 
+#[test]
+fn owned_compilation_disables_registry_and_rejects_host_catalog_settings() -> Result<()> {
+    let mut source = json!({"providers": {"fixture": {
+        "api_base": "https://example.com/v1", "models": [{"id": "model"}]
+    }}});
+    let (config, _) = compiler::routing_config(&source)?;
+    assert!(!config.registry.enabled);
+    assert!(
+        config
+            .providers
+            .values()
+            .all(|provider| provider.registry.is_none())
+    );
+    let targets = crate::config::routing_table::resolve_clean_route_chain(
+        &config,
+        "fixture:model",
+        &crate::gateway::pipeline::routing::RoutingPrefs::default(),
+    )?;
+    assert!(!targets.is_empty());
+    assert!(targets.iter().all(|target| target.registry.is_none()));
+    source["registry"] = json!({"enabled": true});
+    assert!(compiler::routing_config(&source).is_err());
+    Ok(())
+}
+
 #[tokio::test]
 async fn fixed_router_base_does_not_reinterpret_its_model_as_a_variant() -> Result<()> {
     let (db, resources) = fixture().await?;

@@ -95,15 +95,30 @@ impl Adapter {
                 starts_with_prior_turns: canonical.starts_with_prior_turns,
                 canonical_input_bytes: canonical.canonical_input_bytes,
             };
+            #[cfg(feature = "harness")]
+            let bound = self
+                .execution
+                .experiment()
+                .map(|witness| witness.episode().to_owned());
+            #[cfg(not(feature = "harness"))]
+            let bound: Option<String> = None;
             let input = Arc::new(CorrelateAndBegin {
-                new_episode_id: stable_id("episode", &owner, &request),
+                new_episode_id: bound
+                    .clone()
+                    .unwrap_or_else(|| stable_id("episode", &owner, &request)),
                 event_id: stable_id("request-start", &owner, &request),
                 request_id: request,
                 correlation_key_id: self.canonicalizer.key_id().into(),
                 native_parent_id: None,
                 native_parent_digest: None,
                 full_input_digest: canonical.full_input_digest,
-                ancestor_prefix_digests: canonical.ancestor_prefix_digests,
+                // Canonical digests remain evidence above. A bound native run
+                // neither resolves nor publishes ambient prefix aliases.
+                ancestor_prefix_digests: if bound.is_some() {
+                    Vec::new()
+                } else {
+                    canonical.ancestor_prefix_digests
+                },
                 ancestor_prefixes_truncated: canonical.ancestor_prefixes_truncated,
                 starts_with_prior_turns: canonical.starts_with_prior_turns,
                 canonical_input_bytes: canonical.canonical_input_bytes,
