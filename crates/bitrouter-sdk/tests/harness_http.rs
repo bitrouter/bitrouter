@@ -140,7 +140,7 @@ fn capabilities() -> Value {
     ] {
         limits.insert(name.into(), json!(128));
     }
-    json!({"version":2, "operations":["read_thread", "observe", "start_turn"], "runtime":{
+    json!({"version":2, "explicit_skill_consent":true, "operations":["read_thread", "observe", "start_turn"], "runtime":{
         "native_execution":true, "server_instance_id":INSTANCE, "limits":limits,
         "startup_discovery":null, "execution_ownership":null,
     }})
@@ -215,6 +215,7 @@ async fn all_existing_routes_preserve_bodies_headers_and_explicit_identity() -> 
     let client =
         HarnessClient::connect(&format!("{}/prefix/agent/v2/", server.endpoint), TOKEN).await?;
     assert_eq!(client.capabilities().runtime.server_instance_id, INSTANCE);
+    assert!(client.capabilities().explicit_skill_consent);
     assert_eq!(
         client.create_thread("create", &input()?).await?.thread_id,
         THREAD

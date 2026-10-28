@@ -1,5 +1,6 @@
 {
   "version": 2,
+  "explicit_skill_consent": false,
   "runtime": {
     "native_execution": false,
     "startup_discovery": {

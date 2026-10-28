@@ -402,6 +402,8 @@ jobs:
   application-features:
     name: application-features (${{ matrix.features }})
     runs-on: ubuntu-latest
+    env:
+      BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
     strategy:
       fail-fast: false
       matrix:
@@ -477,6 +479,14 @@ jobs:
                  echo '::error::profile without MySQL pulled its driver'; exit 1
                fi ;;
           esac
+
+      - name: prebuild selected-profile protocol fixtures
+        if: contains(matrix.features, 'harness') || matrix.features == 'mcp'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo build --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --jobs 2 --example onboarding_fixture --example pty_acp_fixture --example harness_mcp_fixture
 
       - name: verify gateway behavior without learning services
         if: matrix.features == '' || matrix.features == 'harness'
