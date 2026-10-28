@@ -551,11 +551,11 @@ jobs:
           cache-save-if: false
           cache-workspace-crates: true
       - uses: taiki-e/install-action@nextest
-      - name: build MCP and capture fixtures before library test deadlines
+      - name: build CLI and process fixtures before library test deadlines
         if: matrix.target == 'lib'
         run: >-
           cargo build --locked -p bitrouter --all-features --jobs 2
-          --example harness_mcp_fixture --example owned_capture_fixture
+          --example harness_mcp_fixture --example owned_capture_fixture --bin bro
       - env:
           TEST_TARGET_FLAGS: ${{ matrix.flags }}
           BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
