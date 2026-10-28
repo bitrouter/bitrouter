@@ -236,7 +236,19 @@ impl PreRequestHook for SessionContextHook {
             raw_body: &body,
             prompt: ctx.require_generation_prompt()?,
         });
-        if native != frozen.native || legacy.signal.key != frozen.legacy_workflow_session_id {
+        // Shared evidence may change the first visible user message. Its inferred
+        // fingerprint is an observation, not an authoritative session identity;
+        // retain the original observation while still checking declared identity.
+        let inferred_legacy = legacy.signal.source.as_deref()
+            == Some("prompt.first_user_message_sha256")
+            && frozen.evidence.iter().any(|evidence| {
+                evidence.transport == "derived"
+                    && evidence.source == "legacy"
+                    && evidence.field == "prompt.first_user_message_sha256"
+            });
+        if native != frozen.native
+            || (legacy.signal.key != frozen.legacy_workflow_session_id && !inferred_legacy)
+        {
             return Err(crate::gateway::error::BitrouterError::bad_request(
                 "context rebuild changed session attribution",
             ));
@@ -866,6 +878,84 @@ mod tests {
         context
             .extension::<RequestSessionContext>()
             .expect("normalized request context")
+    }
+
+    fn rebuilt_context(original: &PipelineContext, prompt: Prompt) -> PipelineContext {
+        let mut request =
+            PipelineRequest::new(original.original_model(), original.caller().clone(), prompt);
+        request.headers = original.headers().clone();
+        request.inbound_protocol = original.inbound_protocol();
+        let mut rebuilt = PipelineContext::new(request);
+        if let Some(frozen) = original.extension::<RequestSessionContext>() {
+            rebuilt.insert_extension(frozen);
+        }
+        rebuilt
+    }
+
+    #[tokio::test]
+    async fn context_revalidation_retains_inferred_identity_after_shared_evidence()
+    -> crate::gateway::error::Result<()> {
+        let hook = SessionContextHook::default();
+        let mut original = context(
+            "gpt-5",
+            ApiProtocol::Responses,
+            &[],
+            serde_json::Map::new(),
+            None,
+        );
+        let frozen = observe(SessionContextHook::default(), &mut original).await;
+        let mut prompt = original.require_generation_prompt()?.clone();
+        prompt
+            .messages
+            .insert(0, Message::text(Role::User, "child result"));
+        let rebuilt = rebuilt_context(&original, prompt);
+
+        assert!(matches!(
+            hook.revalidate_context(&rebuilt).await?,
+            HookDecision::Allow
+        ));
+        assert_eq!(rebuilt.extension::<RequestSessionContext>(), Some(frozen));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn context_revalidation_rejects_changed_declared_identity()
+    -> crate::gateway::error::Result<()> {
+        for (original_headers, rebuilt_headers) in [
+            (
+                vec![],
+                vec![("x-bitrouter-workflow-session", "new-session")],
+            ),
+            (
+                vec![("x-bitrouter-workflow-session", "declared")],
+                vec![("x-bitrouter-workflow-session", "changed")],
+            ),
+            (vec![("x-bitrouter-workflow-session", "declared")], vec![]),
+            (
+                vec![("x-claude-code-session-id", "original-root")],
+                vec![("x-claude-code-session-id", "changed-root")],
+            ),
+        ] {
+            let hook = SessionContextHook::default();
+            let mut original = context(
+                "gpt-5",
+                ApiProtocol::Responses,
+                &original_headers,
+                serde_json::Map::new(),
+                None,
+            );
+            let frozen = observe(SessionContextHook::default(), &mut original).await;
+            let mut rebuilt = context(
+                "gpt-5",
+                ApiProtocol::Responses,
+                &rebuilt_headers,
+                serde_json::Map::new(),
+                None,
+            );
+            rebuilt.insert_extension(frozen);
+            assert!(hook.revalidate_context(&rebuilt).await.is_err());
+        }
+        Ok(())
     }
 
     #[tokio::test]

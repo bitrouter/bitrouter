@@ -1,5 +1,20 @@
 # Spec: the TUI renderer — a retained journal behind a differential writer
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
+> **CLI-only G01 update (2026-10-18, local worktree):** shared ACP permission
+> policy/replies, command resolution, journal projection and plain transcripts now
+> live in `bitrouter_orchestrator::acp`; process diagnostics and client/UI adapters
+> are separated app-side. The existing UI remains for this phase. See the
+> [implementation evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> Earlier source locations below remain historical evidence; UI deletion is G05.
+
 > Code presentation update (2026-09-08):
 > [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md) supersedes permanent dashboard
 > navigation and independent interactive drivers. It preserves public CLI names,
@@ -55,17 +70,17 @@ All three follow from "append a line and never touch it again."
 
 1. **A tool call prints once per status change.** `ToolCall` and
    `ToolCallUpdate` each emit a fresh line
-   ([`transcript.rs:72`](../crates/bitrouter-tui/src/transcript.rs:72)), so one
+   (transcript.rs:72 (historical location, removed: `../crates/bitrouter-tui/src/transcript.rs:72`)), so one
    call going pending → in-progress → completed leaves three lines in
    scrollback. `insert_before` content belongs to the terminal the moment it is
    written, so the first cannot be revised.
 
 2. **Tool output is dropped entirely.** `diff_lines`
-   ([`transcript.rs:167`](../crates/bitrouter-tui/src/transcript.rs:167))
+   (transcript.rs:167 (historical location, removed: `../crates/bitrouter-tui/src/transcript.rs:167`))
    matches `ToolCallContent::Diff` and `continue`s past everything else, so
    `Content` — the variant carrying a tool's actual output — and `Terminal`
    render nothing. `block_text`
-   ([`transcript.rs:159`](../crates/bitrouter-tui/src/transcript.rs:159)) does
+   (transcript.rs:159 (historical location, removed: `../crates/bitrouter-tui/src/transcript.rs:159`)) does
    the same to four of `ContentBlock`'s five variants. An `Execute` tool call
    renders a title, a glyph, and silence.
 
@@ -93,7 +108,7 @@ it does not follow that the renderer's data model should stay append-only.
 
 ### 1.3 The one-row ceiling is imposed by the dependency
 
-[`viewport.rs:38`](../crates/bitrouter-tui/src/viewport.rs:38) sets
+viewport.rs:38 (historical location, removed: `../crates/bitrouter-tui/src/viewport.rs:38`) sets
 `LIVE_ROWS: u16 = 1` behind a compile-time `assert!(LIVE_ROWS <= 2)`. ratatui
 0.29 keeps `viewport` a private field (`terminal/terminal.rs:70`) and
 `Terminal::resize` reuses the stored height, so there is no in-place way to
@@ -193,7 +208,7 @@ Three load-bearing properties:
   settles. Under v2 the id is required and the fallback dies.
 
 **The turn-end flush requirement disappears.**
-[`transcript.rs:123`](../crates/bitrouter-tui/src/transcript.rs:123) documents
+transcript.rs:123 (historical location, removed: `../crates/bitrouter-tui/src/transcript.rs:123`) documents
 that `flush()` **must** be called at every turn end, because v1 ends a turn on
 the `session/prompt` response, which never appears on the update stream — and
 shipping without it meant plain answers were never drawn (`e8c71e93`). A journal
@@ -485,7 +500,7 @@ and the provider picker, and neither is a `_meta` surface:
   handed a bare `_meta` `Value` cannot produce `USD 0.4200`.
 - The picker is not a session update at all. `Picker::open` takes
   `&[ProviderInfo]` from an out-of-band `providers/list`
-  ([`picker.rs:44`](../crates/bitrouter-tui/src/picker.rs:44),
+  ([`picker.rs:44`](https://github.com/bitrouter/bitrouter/blob/eb6d10877b23b8468061921b79b3411e9da1d416/crates/bitrouter-tui/src/picker.rs#L44),
   [`acp_cli.rs:938`](../apps/bitrouter/src/acp_cli.rs:938)), and `choose(char)`
   needs key input no render trait expresses.
 
@@ -568,9 +583,9 @@ behavioural capability with no current reader and goes with it.
 **Correcting rev 2's premise.** Rev 2 framed this as "`translate.rs` forwards
 them and the renderer drops them again." That is the wrong path: the TUI
 subscribes to `session.raw_updates()`
-([`engine.rs:496`](../crates/bitrouter-sdk/src/acp/engine.rs:496)), which is the
+([`engine.rs:496`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/crates/bitrouter-sdk/src/acp/engine.rs#L496)), which is the
 untranslated stream, so these variants **already reach the renderer**. They die
-at [`transcript.rs:107`](../crates/bitrouter-tui/src/transcript.rs:107)'s
+at transcript.rs:107 (historical location, removed: `../crates/bitrouter-tui/src/transcript.rs:107`)'s
 `_ => self.flush()`. `translate.rs` matters for the manager path, not this one.
 
 Render all five:
@@ -592,7 +607,7 @@ schema. `Plan` itself is unconditional in v1.
 commands, and today `/route` is hardcoded while the agent's own are invisible.
 
 **And wire cancel.** `Session::cancel()` exists
-([`engine.rs:478`](../crates/bitrouter-sdk/src/acp/engine.rs:478)) and `chat`
+([`engine.rs:478`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/crates/bitrouter-sdk/src/acp/engine.rs#L478)) and `chat`
 never calls it; the turn loop
 ([`acp_cli.rs:850`](../apps/bitrouter/src/acp_cli.rs:850)) has no key-event arm.
 
@@ -688,7 +703,7 @@ multi-line composer with history stays deferred.
 ### 13.2 Terminal restoration
 
 Session-long raw mode destroys the property
-[`viewport.rs:21`](../crates/bitrouter-tui/src/viewport.rs:21) is proud of —
+viewport.rs:21 (historical location, removed: `../crates/bitrouter-tui/src/viewport.rs:21`) is proud of —
 *"no alternate screen, no lifecycle save/restore, and no panic hook"* — because
 nothing was taken from the terminal. Now something is.
 

@@ -3,7 +3,6 @@
 
 pub(crate) mod acp_history;
 
-#[cfg(any(feature = "core", feature = "harness"))]
 pub mod checkpoint;
 
 pub mod evaluation;
@@ -13,3 +12,5 @@ pub mod execution;
 pub mod session_identity;
 
 pub mod capture;
+
+pub mod skills;

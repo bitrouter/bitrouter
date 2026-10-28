@@ -113,6 +113,7 @@ fn generation(delta: Value, finish: &str) -> String {
 
 fn create_request(workspace: &Path) -> api::CreateThreadRequest {
     api::CreateThreadRequest {
+        skills: None,
         workspace: workspace.into(),
         model: "test-model".into(),
         model_mode: bitrouter_ai::core::protocol::ModelMode::Fixed,
@@ -315,6 +316,7 @@ async fn sdk_execution_preserves_acceptance_approval_history_and_restart_identit
                 approval_id,
                 "stale-answer",
                 &api::InputRequest {
+                    skill_consent: false,
                     turn_id: active.turn_id.clone(),
                     request_id: approval.request_id,
                     approved: true,
@@ -356,6 +358,7 @@ async fn sdk_execution_preserves_acceptance_approval_history_and_restart_identit
             &denied_thread.thread_id,
             "deny",
             &api::InputRequest {
+                skill_consent: false,
                 turn_id: denied.turn_id.clone(),
                 request_id: pending.request_id,
                 approved: false,

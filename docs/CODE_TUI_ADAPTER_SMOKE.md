@@ -1,5 +1,13 @@
 # Code TUI adapter smoke evidence
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Run on 2026-09-08 for the Code TUI work. This is an ACP `initialize` smoke
 only. It records what each adapter actually advertised; it does not establish
 that a prompt, tool call, session lifecycle operation, or terminal login

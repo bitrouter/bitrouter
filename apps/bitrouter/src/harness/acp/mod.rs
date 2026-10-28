@@ -58,9 +58,12 @@
 pub mod capture;
 pub mod client;
 pub mod controller;
+pub mod journal;
 #[cfg(feature = "harness")]
 pub mod native;
-pub(crate) mod permission;
+pub mod permission;
+pub mod plain;
+pub mod skills;
 pub mod telemetry;
 pub mod translate;
 pub mod up;

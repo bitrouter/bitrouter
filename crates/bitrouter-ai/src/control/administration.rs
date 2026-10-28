@@ -49,6 +49,8 @@ pub struct AgentEntry {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentsReport {
+    #[serde(default)]
+    pub skill_delivery: std::collections::BTreeMap<String, String>,
     pub resolved_via: String,
     pub readiness_checked: bool,
     pub agents: Vec<AgentEntry>,

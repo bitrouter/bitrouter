@@ -1137,6 +1137,7 @@ async fn steering_drains_inflight_read_workers_without_cancelling_them_before_th
                 RunChannels {
                     events: None,
                     approvals: None,
+                    skill_approvals: None,
                     commits: Some(commits),
                     control: Some(control),
                 },

@@ -8,7 +8,7 @@
 //! These are configuration data only, available with `config_file` and without
 //! any ACP runtime dependencies. They stay beside [`super::Config`] while the
 //! product configuration is shared with the SDK; the protocol runtime lives in
-//! `crates/bitrouter-orchestrator/src/acp/`.
+//! `apps/bitrouter/src/harness/acp/`.
 
 use std::collections::HashMap;
 

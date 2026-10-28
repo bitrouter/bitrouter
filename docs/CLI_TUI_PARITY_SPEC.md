@@ -1,5 +1,20 @@
 # Spec: CLI ↔ TUI parity — what "the same command" can and cannot mean
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
+> **CLI-only G01 update (2026-10-18, local worktree):** shared ACP permission
+> policy/replies, command resolution, journal projection and plain transcripts now
+> live in `bitrouter_orchestrator::acp`; process diagnostics and client/UI adapters
+> are separated app-side. The existing UI remains for this phase. See the
+> [implementation evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> Earlier source locations below remain historical evidence; UI deletion is G05.
+
 > **Superseded in part (2026-09-14):**
 > [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes the OSS origin
 > MCP transport and its action mapping. The retained CLI/TUI parity reasoning
@@ -130,14 +145,14 @@ claims below correct the brief that commissioned this spec; those are marked
 |---|---|
 | The CLI has **29 top-level commands** | [`main.rs:128`](../apps/bitrouter/src/main.rs:128) `enum Command`, confirmed against `bro --help` |
 | …and **103 invocable leaves** | walked from `Cli::command()`: `cloud` alone contributes 40, `policy` 13, `eval` 8, `workflow-state` 6 |
-| The interactive surface is **two** slash commands | [`machine.rs:375`](../crates/bitrouter-tui/src/machine.rs:375) — `/commands`, and `/route` gated on `state.routable` |
+| The interactive surface is **two** slash commands | [`machine.rs:375`](https://github.com/bitrouter/bitrouter/blob/65891881df6b4584a154955bb05c80cc29427351/crates/bitrouter-tui/src/machine.rs#L375) — `/commands`, and `/route` gated on `state.routable` |
 | Both are hardcoded string compares in `submit()`, not a table | same site; there is no command registry in the TUI at all |
-| **[correction]** `/commands` does **not** merge BitRouter's own commands with the agent's — it lists *only* the agent's | [`render/session.rs`](../crates/bitrouter-tui/src/render/session.rs) `commands()` takes `&[AvailableCommand]` from the journal and nothing else; [`session.rs:366`](../apps/bitrouter/src/chat/session.rs:366) passes `view.commands()` |
+| **[correction]** `/commands` does **not** merge BitRouter's own commands with the agent's — it lists *only* the agent's | [`render/session.rs`](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/render/session.rs) `commands()` takes `&[AvailableCommand]` from the journal and nothing else; [`session.rs:366`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/apps/bitrouter/src/chat/session.rs#L366) passes `view.commands()` |
 | …so **`/route` is not discoverable from inside the TUI.** The only place it is written down is `docs/CLI.md:532` and the skill | grep for `"/route"` in `crates/bitrouter-tui/` returns the dispatch site and no help text |
-| **[correction]** The TUI drives **two** extension methods, not three | `Effect::{ListRoutes, SetRoute}` ([`machine.rs:203`](../crates/bitrouter-tui/src/machine.rs:203)); there is no `Effect::ResetRoute` |
+| **[correction]** The TUI drives **two** extension methods, not three | `Effect::{ListRoutes, SetRoute}` ([`machine.rs:203`](https://github.com/bitrouter/bitrouter/blob/65891881df6b4584a154955bb05c80cc29427351/crates/bitrouter-tui/src/machine.rs#L203)); there is no `Effect::ResetRoute` |
 | …and `_bitrouter/route/reset` is fully implemented on both sides with **no** interactive caller | [`client.rs:743`](../crates/bitrouter-orchestrator/src/acp/client.rs:743) `route_reset`; its only call site outside the controller is a unit test at `client.rs:1987` |
 | **[correction]** `claude/mcp-drop-complete` exists **only as a local branch and points at `43ae57d8`** — no `complete` removal is in this tree | `git log --oneline claude/mcp-drop-complete -1` → `43ae57d8`; `git ls-remote --heads origin` does not list it; `ACTIONS` still carries the `complete` row |
-| `ACTIONS` has **six** rows, of which **four** have two surfaces | [`actions/mod.rs`](../crates/bitrouter-mcp/src/actions/mod.rs): `status`, `list_models`, `route`, `skills_search` have both; `complete` and `skills_get` have one each |
+| `ACTIONS` has **six** rows, of which **four** have two surfaces | [`actions/mod.rs`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/actions/mod.rs): `status`, `list_models`, `route`, `skills_search` have both; `complete` and `skills_get` have one each |
 | Every row is a **read**. No row is a mutation | the four schema'd reports are `StatusReport`, `ModelsReport`, `RouteReport`, `SkillsReport`; `RouteQuery::route` is documented "Read-only: nothing is sent upstream" |
 | `route/set` — the only write on any surface — has **no row, no shared type, and no guard** | `AcpRouteSet` → [`daemon.rs:666`](../apps/bitrouter/src/daemon.rs:666); its report shape is `RouteSetResponse` in `bitrouter-sdk`, unknown to `ACTIONS` |
 | The guard tests are three, and they assert **tool ⇒ row**, never **leaf ⇒ row** | [`main.rs:5859`](../apps/bitrouter/src/main.rs:5859)–`5934` |
@@ -147,7 +162,7 @@ claims below correct the brief that commissioned this spec; those are marked
 | `AvailableCommandsUpdate.available_commands` is documented as *"Commands **the agent** can execute"* | same file, `:697` |
 | The `_bitrouter/route/*` capability is negotiated on **three** conditions, per method | [`client.rs:398`](../crates/bitrouter-orchestrator/src/acp/client.rs:398) `RouteControlCapability::from_init` — `version == "1"`, `scope == "session"`, method listed in `methods` |
 | `bitrouter-tui` **cannot** depend on `apps/bitrouter` | `Cargo.toml` comment + the path dependency direction; the reverse edge is a cyclic-package error |
-| `apps/bitrouter/src/chat/` **cannot name the daemon, metering, policy, or the control socket** — enforced by a source-scanning test | [`chat/mod.rs`](../apps/bitrouter/src/chat/mod.rs) `the_chat_module_reaches_nothing_daemon_wide`, forbidding `crate::daemon`, `crate::metering`, `crate::policy`, `MeteringStore`, `bitrouter_sdk::config`, `control_socket`, `DaemonRouteControl`, `DaemonSessionCost`, `LocalControllerBinding` |
+| `apps/bitrouter/src/chat/` **cannot name the daemon, metering, policy, or the control socket** — enforced by a source-scanning test | [`chat/mod.rs`](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/apps/bitrouter/src/chat/mod.rs) `the_chat_module_reaches_nothing_daemon_wide`, forbidding `crate::daemon`, `crate::metering`, `crate::policy`, `MeteringStore`, `bitrouter_sdk::config`, `control_socket`, `DaemonRouteControl`, `DaemonSessionCost`, `LocalControllerBinding` |
 | …but the *process* has all of them one layer up | [`acp_cli.rs:1010`](../apps/bitrouter/src/acp_cli.rs:1010) `LocalControllerBinding` holds the socket path, principal, and controller instance id |
 | The controller is **in-process, over a duplex channel** — the "wire" between the TUI and BitRouter's own surfaces costs no bytes and no process | [`acp_cli.rs:1927`](../apps/bitrouter/src/acp_cli.rs:1927) `agent_client_protocol::Channel::duplex()` |
 | Route control is injected as `Arc<dyn AcpRouteControl>`, built app-side, handed to the controller — the *same* port shape `ACTIONS` uses | `binding.route_control()` → `Controller::route_control(..)` |
@@ -172,13 +187,13 @@ the brief that commissioned this addition, and those are marked **[correction]**
 | Claim | Evidence |
 |---|---|
 | ACP's `AvailableCommandsUpdate` survives the proxy and is translated into BitRouter's own type | [`translate.rs:223`](../crates/bitrouter-orchestrator/src/acp/translate.rs:223) → `SessionUpdateKind::AvailableCommands` |
-| The journal stores it, replacing the previous set wholesale | [`journal.rs:178`](../crates/bitrouter-tui/src/journal.rs:178) `self.commands = update.available_commands` |
-| The TUI renders it under `/commands`, and the doc comment says whose it is | [`render/session.rs:64`](../crates/bitrouter-tui/src/render/session.rs:64) — *"The agent's own slash commands."* |
+| The journal stores it, replacing the previous set wholesale | [`journal.rs:178`](https://github.com/bitrouter/bitrouter/blob/65891881df6b4584a154955bb05c80cc29427351/crates/bitrouter-tui/src/journal.rs#L178) `self.commands = update.available_commands` |
+| The TUI renders it under `/commands`, and the doc comment says whose it is | [`render/session.rs:64`](https://github.com/bitrouter/bitrouter/blob/23cc164452fe844b04919aeb93e05a83286d775c/crates/bitrouter-tui/src/render/session.rs#L64) — *"The agent's own slash commands."* |
 | It is rendered **on request only**, never kept on screen | same file, `:10` — *"listed on request, because a list of commands is not a thing to keep on screen"* |
 | BitRouter's own `/route` does **not** appear in that list | [§1](#1-verified-starting-state); `commands()` takes `&[AvailableCommand]` from the journal and nothing else |
 | **[correction]** The data **does** reach a headless caller — as an unsolicited NDJSON event, not as an answer to a question | `acp prompt --format json` emits every `SessionUpdateKind` verbatim ([`acp_cli.rs:2137`](../apps/bitrouter/src/acp_cli.rs:2137) `emit_update`), so an `{"type":"available_commands",…}` line is already on stdout. What is missing is a **command**, not the data |
 | …and it is dropped by the other two formats | `--format text` renders the journal *document*, which deliberately excludes the command list (`render/session.rs:10`); `--format quiet` prints assistant text only |
-| The piped `chat` loop consumes no slash command at all except a refusal | [`chat/session.rs:538`](../apps/bitrouter/src/chat/session.rs:538) — `/route` prints *"needs a terminal"*; there is no `/commands` branch |
+| The piped `chat` loop consumes no slash command at all except a refusal | [`chat/session.rs:538`](https://github.com/bitrouter/bitrouter/blob/9956a427bd5d4316b3bf2359f88e293b158781d5/apps/bitrouter/src/chat/session.rs#L538) — `/route` prints *"needs a terminal"*; there is no `/commands` branch |
 | **[correction]** BitRouter's own type **drops `input`** | [`translate.rs:59`](../crates/bitrouter-orchestrator/src/acp/translate.rs:59) `AgentCommand { name, description }` — ACP's `input: Option<AvailableCommandInput>` is not carried, so no surface can render a command's `hint` |
 | ACP has **no method to ask** for the list | [§1](#1-verified-starting-state)'s enumerated v1 method set; `available_commands_update` is a notification |
 | …and the agent is not obliged to send one | [`slash-commands.mdx`](https://github.com/agentclientprotocol/agent-client-protocol/blob/main/docs/protocol/v1/slash-commands.mdx): *"After creating a session, the Agent **MAY** send a list of available commands"* |
@@ -1624,16 +1639,16 @@ worktree at `0a9537b5`.
 | Claim | Evidence |
 |---|---|
 | `bro mcp serve` already has a **remote transport**, and it is not ACP | [`main.rs:818`](../apps/bitrouter/src/main.rs:818) `enum McpTransport { Stdio, Http }` — *"Streamable HTTP, mounted at `/mcp-control`"*, `--bind` default `127.0.0.1:4357` ([`main.rs:774`](../apps/bitrouter/src/main.rs:774)) |
-| It is genuinely multi-tenant, not loopback-only by accident | [`multitenant_http.rs:58`](../crates/bitrouter-mcp/tests/multitenant_http.rs:58) `two_callers_forward_distinct_bearers` — two clients, two bearers, each forwarded to the upstream separately |
-| An unauthenticated bind is **forced** to loopback | [`lib.rs:142`](../crates/bitrouter-mcp/src/lib.rs:142) → [`server.rs:786`](../crates/bitrouter-mcp/src/server.rs:786) `ensure_loopback_bind` |
-| The two transports serve **two profiles of one table**, not two implementations | [`lib.rs:160`](../crates/bitrouter-mcp/src/lib.rs:160) `stdio_profile` and [`server.rs:880`](../crates/bitrouter-mcp/src/server.rs:880) `http_profile`, both assembling the same `BitrouterMcp::builder()` from the same ports |
-| The remote profile is a **strict subset**, and a guard says exactly which | [`server.rs:1403`](../crates/bitrouter-mcp/src/server.rs:1403) `http_profile_never_carries_host_bound_tools` asserts `["complete", "list_models", "status"]` — and `["complete", "list_models"]` for a backend with no status of its own |
-| …and a second guard stops the stdio side widening it | [`lib.rs:308`](../crates/bitrouter-mcp/src/lib.rs:308) `wiring_skills_into_stdio_does_not_widen_the_http_profile` |
-| The exclusion criterion is **host-boundness**, stated as a crate invariant | [`server.rs:825`](../crates/bitrouter-mcp/src/server.rs:825): *"the remaining non-completion tools are semantically bound to one machine (`route_preview` resolves against the serving host's own config and control socket; `skills_search`/`skills_get` read its installed-skills root), so **no multi-tenant HTTP profile may carry them**"* |
-| The guarantee is **structural, not conventional** | [`lib.rs:150`](../crates/bitrouter-mcp/src/lib.rs:150): the HTTP profile *"is built from an `Arc<dyn Backend>` alone and therefore **cannot** reach these ports even by accident"* |
-| Statefulness is separately excluded, by the MCP version negotiation | [`server.rs:825`](../crates/bitrouter-mcp/src/server.rs:825): under SEP-2567 a peer negotiating `2026-07-28` is *"**always** served statelessly… each request gets a fresh handler… Adding a stateful tool to this HTTP profile would therefore break under draft-version clients even though it works today against `2025-11-25`"* |
+| It is genuinely multi-tenant, not loopback-only by accident | [`multitenant_http.rs:58`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/tests/multitenant_http.rs#L58) `two_callers_forward_distinct_bearers` — two clients, two bearers, each forwarded to the upstream separately |
+| An unauthenticated bind is **forced** to loopback | [`lib.rs:142`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/lib.rs#L142) → [`server.rs:786`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs#L786) `ensure_loopback_bind` |
+| The two transports serve **two profiles of one table**, not two implementations | [`lib.rs:160`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/lib.rs#L160) `stdio_profile` and [`server.rs:880`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs#L880) `http_profile`, both assembling the same `BitrouterMcp::builder()` from the same ports |
+| The remote profile is a **strict subset**, and a guard says exactly which | [`server.rs:1403`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs#L1403) `http_profile_never_carries_host_bound_tools` asserts `["complete", "list_models", "status"]` — and `["complete", "list_models"]` for a backend with no status of its own |
+| …and a second guard stops the stdio side widening it | [`lib.rs:308`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/lib.rs#L308) `wiring_skills_into_stdio_does_not_widen_the_http_profile` |
+| The exclusion criterion is **host-boundness**, stated as a crate invariant | [`server.rs:825`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs#L825): *"the remaining non-completion tools are semantically bound to one machine (`route_preview` resolves against the serving host's own config and control socket; `skills_search`/`skills_get` read its installed-skills root), so **no multi-tenant HTTP profile may carry them**"* |
+| The guarantee is **structural, not conventional** | [`lib.rs:150`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/lib.rs#L150): the HTTP profile *"is built from an `Arc<dyn Backend>` alone and therefore **cannot** reach these ports even by accident"* |
+| Statefulness is separately excluded, by the MCP version negotiation | [`server.rs:825`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs#L825): under SEP-2567 a peer negotiating `2026-07-28` is *"**always** served statelessly… each request gets a fresh handler… Adding a stateful tool to this HTTP profile would therefore break under draft-version clients even though it works today against `2025-11-25`"* |
 | A degraded answer is a **result**, not a fabrication | same guard's comment: *"A backend with no status of its own gets no `status` tool rather than a fabricated one: the local daemon's liveness is a control-socket question the HTTP profile cannot answer"* |
-| The named seam, if a remote client ever needs the host-bound reads | [`server.rs:825`](../crates/bitrouter-mcp/src/server.rs:825): *"this is the single function to change — take a handler factory, keep the profile strictly loopback and incompatible with the cloud backend, and prefer modeling that read-only data as MCP resources over widening the tool surface"* |
+| The named seam, if a remote client ever needs the host-bound reads | [`server.rs:825`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs#L825): *"this is the single function to change — take a handler factory, keep the profile strictly loopback and incompatible with the cloud backend, and prefer modeling that read-only data as MCP resources over widening the tool surface"* |
 
 ⇒ **Finding 19. BitRouter's answer to "the same table, but remote" already exists,
 and it is neither a new protocol nor two implementations behind a trait. It is one
@@ -3114,7 +3129,7 @@ concession.
    B's is structural"* and D10 left that risk unpriced. It is now priced, and the
    price is two assertions: the HTTP profile *"is built from an `Arc<dyn Backend>`
    alone and therefore **cannot** reach these ports even by accident"*
-   ([`lib.rs:150`](../crates/bitrouter-mcp/src/lib.rs:150)). **A narrower
+   ([`lib.rs:150`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/lib.rs#L150)). **A narrower
    constructor is a structural guarantee.** It is enforced by the type system in
    the same way a JSON-RPC boundary would be, and it costs no protocol. This is
    the single most useful thing the transport requirement surfaced, and it
@@ -3139,7 +3154,7 @@ makes it a table.
 A fourth concern the local case never had, recorded so it is not discovered later:
 **a remote surface has a threat model.** The existing code already reflects this —
 an unauthenticated bind is forced to loopback
-([`ensure_loopback_bind`](../crates/bitrouter-mcp/src/server.rs:786)), and the
+([`ensure_loopback_bind`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs#L786)), and the
 comment says why: it *"would expose the BYOK daemon's provider keys to the
 network."* Anything reachable remotely inherits that constraint, and
 [§7](#7-the-membership-rule)'s R3 ("never handles a secret") stops being a
@@ -3197,7 +3212,7 @@ Four readings. Only one is available today.
   (5) prescribes.
 
 **Recommendation: (b) for the portable rows, over the MCP surface that already
-exists, extended per the named seam at [`server.rs:825`](../crates/bitrouter-mcp/src/server.rs:825)
+exists, extended per the named seam at [`server.rs:825`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs#L825)
 if the host-bound reads are ever wanted remotely — and (d) for the session verbs,
 which do not travel and should say so.** Build nothing until a remote caller
 actually asks: the requirement names a shape, not yet a consumer, and CLAUDE.md

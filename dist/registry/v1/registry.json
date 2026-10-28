@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-10-23T19:52:32Z",
+  "as_of": "2026-10-28T19:35:49Z",
   "version": 1,
   "spec_revision": "1.0.0-beta.6",
   "data": {
@@ -87,27 +87,6 @@
           "text"
         ],
         "release_date": "2026-10-07"
-      },
-      {
-        "curation": {
-          "checked_at": "2026-10-22T17:30:00Z",
-          "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
-        },
-        "family": "claude-opus",
-        "id": "anthropic/claude-opus-4.8",
-        "input_modalities": [
-          "text",
-          "image"
-        ],
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 128000,
-        "name": "Anthropic: Claude Opus 4.8",
-        "open_weights": false,
-        "output_modalities": [
-          "text"
-        ],
-        "release_date": "2026-05-28"
       },
       {
         "curation": {
@@ -325,6 +304,7 @@
       {
         "curation": {
           "checked_at": "2026-10-22T17:30:00Z",
+          "expires_at": "2026-11-23T00:00:00Z",
           "reason": "Migrated reviewed recommendation; current identity and active offer verified",
           "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
         },
@@ -365,7 +345,28 @@
       },
       {
         "curation": {
+          "checked_at": "2026-10-28T19:35:49Z",
+          "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "id": "minimax/minimax-m3.1-flash",
+        "input_modalities": [
+          "image",
+          "text",
+          "video"
+        ],
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 524288,
+        "name": "MiniMax: MiniMax M3.1 Flash",
+        "output_modalities": [
+          "text"
+        ],
+        "release_date": "2026-10-19"
+      },
+      {
+        "curation": {
           "checked_at": "2026-10-22T17:30:00Z",
+          "expires_at": "2026-11-23T00:00:00Z",
           "reason": "Migrated reviewed recommendation; current identity and active offer verified",
           "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
         },
@@ -405,6 +406,26 @@
           "text"
         ],
         "release_date": "2026-07-16"
+      },
+      {
+        "curation": {
+          "checked_at": "2026-10-28T19:35:49Z",
+          "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "id": "moonshotai/kimi-k3.1-pro",
+        "input_modalities": [
+          "image",
+          "text",
+          "video"
+        ],
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 943718,
+        "name": "MoonshotAI: Kimi K3.1 Pro",
+        "output_modalities": [
+          "text"
+        ],
+        "release_date": "2026-10-23"
       },
       {
         "curation": {
@@ -696,6 +717,46 @@
           "text"
         ],
         "release_date": "2026-09-29"
+      },
+      {
+        "curation": {
+          "checked_at": "2026-10-28T19:35:49Z",
+          "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "id": "openai/gpt-6.1-terra",
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "name": "OpenAI: GPT-6.1 Terra",
+        "output_modalities": [
+          "text"
+        ],
+        "release_date": "2026-10-26"
+      },
+      {
+        "curation": {
+          "checked_at": "2026-10-28T19:35:49Z",
+          "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+          "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+        },
+        "id": "openai/gpt-6.1-terra-pro",
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "name": "OpenAI: GPT-6.1 Terra Pro",
+        "output_modalities": [
+          "text"
+        ],
+        "release_date": "2026-10-26"
       },
       {
         "curation": {
@@ -5719,6 +5780,45 @@
             "status": "active"
           },
           {
+            "canonical_id": "openai/gpt-6.1-terra",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "chat_completions"
+              },
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "responses"
+              }
+            ],
+            "provider_model_id": "gpt-6.1-terra",
+            "status": "active"
+          },
+          {
             "canonical_id": "x-ai/grok-4.6",
             "interfaces": [
               {
@@ -6262,6 +6362,28 @@
             "status": "active"
           },
           {
+            "canonical_id": "minimax/minimax-m3.1-flash",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.015,
+                    "no_cache": 0.15
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.6
+                  }
+                },
+                "protocol": "chat_completions"
+              }
+            ],
+            "provider_model_id": "minimax/minimax-m3.1-flash",
+            "status": "active"
+          },
+          {
             "canonical_id": "moonshotai/kimi-k2.7-code",
             "interfaces": [
               {
@@ -6303,6 +6425,29 @@
               }
             ],
             "provider_model_id": "moonshotai/kimi-k3",
+            "status": "active"
+          },
+          {
+            "canonical_id": "moonshotai/kimi-k3.1-pro",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.2,
+                    "cache_write": 2.0,
+                    "no_cache": 2.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 10.0
+                  }
+                },
+                "protocol": "chat_completions"
+              }
+            ],
+            "provider_model_id": "moonshotai/kimi-k3.1-pro",
             "status": "active"
           },
           {
@@ -7713,6 +7858,17 @@
             "status": "active"
           },
           {
+            "canonical_id": "openai/gpt-6.1-terra",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "protocol": "chat_completions"
+              }
+            ],
+            "provider_model_id": "gpt-6.1-terra",
+            "status": "active"
+          },
+          {
             "canonical_id": "x-ai/grok-4.5",
             "interfaces": [
               {
@@ -8226,6 +8382,50 @@
             ],
             "provider_model_id": "MiniMax-M3",
             "status": "active"
+          },
+          {
+            "canonical_id": "minimax/minimax-m3.1-flash",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.015,
+                    "no_cache": 0.15
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.6
+                  }
+                },
+                "protocol": "messages",
+                "rate_limits": {
+                  "requests_per_minute": 60
+                }
+              },
+              {
+                "base_url": "https://api.minimax.io/v1",
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.015,
+                    "no_cache": 0.15
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.6
+                  }
+                },
+                "protocol": "chat_completions",
+                "rate_limits": {
+                  "requests_per_minute": 60
+                }
+              }
+            ],
+            "provider_model_id": "MiniMax-M3.1-Flash",
+            "status": "active"
           }
         ],
         "name": "minimax",
@@ -8349,6 +8549,50 @@
             ],
             "provider_model_id": "MiniMax-M3",
             "status": "active"
+          },
+          {
+            "canonical_id": "minimax/minimax-m3.1-flash",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.0149,
+                    "no_cache": 0.1494
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.5976
+                  }
+                },
+                "protocol": "messages",
+                "rate_limits": {
+                  "requests_per_minute": 60
+                }
+              },
+              {
+                "base_url": "https://api.minimaxi.com/v1",
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.0149,
+                    "no_cache": 0.1494
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.5976
+                  }
+                },
+                "protocol": "chat_completions",
+                "rate_limits": {
+                  "requests_per_minute": 60
+                }
+              }
+            ],
+            "provider_model_id": "MiniMax-M3.1-Flash",
+            "status": "active"
           }
         ],
         "name": "minimax_cn",
@@ -8470,6 +8714,52 @@
               }
             ],
             "provider_model_id": "kimi-k3",
+            "status": "active"
+          },
+          {
+            "canonical_id": "moonshotai/kimi-k3.1-pro",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.2,
+                    "cache_write": 2.0,
+                    "no_cache": 2.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 10.0
+                  }
+                },
+                "protocol": "chat_completions",
+                "rate_limits": {
+                  "requests_per_minute": 60
+                }
+              },
+              {
+                "base_url": "https://api.moonshot.ai/anthropic",
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.2,
+                    "cache_write": 2.0,
+                    "no_cache": 2.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 10.0
+                  }
+                },
+                "protocol": "messages",
+                "rate_limits": {
+                  "requests_per_minute": 60
+                }
+              }
+            ],
+            "provider_model_id": "kimi-k3.1-pro",
             "status": "active"
           }
         ],
@@ -8624,6 +8914,28 @@
             "status": "active"
           },
           {
+            "canonical_id": "minimax/minimax-m3.1-flash",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.015,
+                    "no_cache": 0.15
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.6
+                  }
+                },
+                "protocol": "chat_completions"
+              }
+            ],
+            "provider_model_id": "minimax/minimax-m3.1-flash",
+            "status": "active"
+          },
+          {
             "canonical_id": "moonshotai/kimi-k2.7-code",
             "interfaces": [
               {
@@ -8665,6 +8977,29 @@
               }
             ],
             "provider_model_id": "moonshotai/kimi-k3",
+            "status": "active"
+          },
+          {
+            "canonical_id": "moonshotai/kimi-k3.1-pro",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.2,
+                    "cache_write": 2.0,
+                    "no_cache": 2.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 10.0
+                  }
+                },
+                "protocol": "chat_completions"
+              }
+            ],
+            "provider_model_id": "moonshotai/kimi-k3.1-pro",
             "status": "active"
           },
           {
@@ -9386,6 +9721,54 @@
             ],
             "provider_model_id": "gpt-6.1-sol",
             "status": "active"
+          },
+          {
+            "canonical_id": "openai/gpt-6.1-terra",
+            "interfaces": [
+              {
+                "compatibility": {
+                  "token_limit_field": "max_completion_tokens"
+                },
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "chat_completions",
+                "rate_limits": {
+                  "requests_per_minute": 60
+                }
+              },
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "responses",
+                "rate_limits": {
+                  "requests_per_minute": 60
+                }
+              }
+            ],
+            "provider_model_id": "gpt-6.1-terra",
+            "status": "active"
           }
         ],
         "name": "openai",
@@ -9582,6 +9965,17 @@
             ],
             "provider_model_id": "gpt-6.1-sol",
             "status": "active"
+          },
+          {
+            "canonical_id": "openai/gpt-6.1-terra",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "protocol": "responses"
+              }
+            ],
+            "provider_model_id": "gpt-6.1-terra",
+            "status": "active"
           }
         ],
         "name": "openai-codex",
@@ -9625,6 +10019,17 @@
               }
             ],
             "provider_model_id": "deepseek-v4.1-flash",
+            "status": "active"
+          },
+          {
+            "canonical_id": "google/gemini-4-argon",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "protocol": "chat_completions"
+              }
+            ],
+            "provider_model_id": "gemini-4-argon",
             "status": "active"
           },
           {
@@ -9738,6 +10143,17 @@
             "status": "active"
           },
           {
+            "canonical_id": "moonshotai/kimi-k3.1-pro",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "protocol": "chat_completions"
+              }
+            ],
+            "provider_model_id": "kimi-k3.1-pro",
+            "status": "active"
+          },
+          {
             "interfaces": [
               {
                 "operation": "generation",
@@ -9821,6 +10237,17 @@
               }
             ],
             "provider_model_id": "minimax-m3",
+            "status": "active"
+          },
+          {
+            "canonical_id": "minimax/minimax-m3.1-flash",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "protocol": "chat_completions"
+              }
+            ],
+            "provider_model_id": "minimax-m3.1-flash",
             "status": "active"
           },
           {
@@ -11802,6 +12229,59 @@
             "status": "active"
           },
           {
+            "canonical_id": "minimax/minimax-m3.1-flash",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.015,
+                    "no_cache": 0.15
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.6
+                  }
+                },
+                "protocol": "chat_completions"
+              },
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.015,
+                    "no_cache": 0.15
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.6
+                  }
+                },
+                "protocol": "responses"
+              },
+              {
+                "base_url": "https://openrouter.ai/api",
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.015,
+                    "no_cache": 0.15
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 0.6
+                  }
+                },
+                "protocol": "messages"
+              }
+            ],
+            "provider_model_id": "minimax/minimax-m3.1-flash",
+            "status": "active"
+          },
+          {
             "canonical_id": "moonshotai/kimi-k2.7-code",
             "interfaces": [
               {
@@ -11905,6 +12385,59 @@
               }
             ],
             "provider_model_id": "moonshotai/kimi-k3",
+            "status": "active"
+          },
+          {
+            "canonical_id": "moonshotai/kimi-k3.1-pro",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.2,
+                    "no_cache": 2.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 10.0
+                  }
+                },
+                "protocol": "chat_completions"
+              },
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.2,
+                    "no_cache": 2.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 10.0
+                  }
+                },
+                "protocol": "responses"
+              },
+              {
+                "base_url": "https://openrouter.ai/api",
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.2,
+                    "no_cache": 2.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 10.0
+                  }
+                },
+                "protocol": "messages"
+              }
+            ],
+            "provider_model_id": "moonshotai/kimi-k3.1-pro",
             "status": "active"
           },
           {
@@ -12689,6 +13222,118 @@
               }
             ],
             "provider_model_id": "openai/gpt-6.1-sol-pro",
+            "status": "active"
+          },
+          {
+            "canonical_id": "openai/gpt-6.1-terra",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "chat_completions"
+              },
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "responses"
+              },
+              {
+                "base_url": "https://openrouter.ai/api",
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "messages"
+              }
+            ],
+            "provider_model_id": "openai/gpt-6.1-terra",
+            "status": "active"
+          },
+          {
+            "canonical_id": "openai/gpt-6.1-terra-pro",
+            "interfaces": [
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "chat_completions"
+              },
+              {
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "responses"
+              },
+              {
+                "base_url": "https://openrouter.ai/api",
+                "operation": "generation",
+                "pricing": {
+                  "currency": "USD",
+                  "input_tokens": {
+                    "cache_read": 0.05,
+                    "cache_write": 1.25,
+                    "no_cache": 1.0
+                  },
+                  "kind": "token",
+                  "output_tokens": {
+                    "text": 5.0
+                  }
+                },
+                "protocol": "messages"
+              }
+            ],
+            "provider_model_id": "openai/gpt-6.1-terra-pro",
             "status": "active"
           },
           {

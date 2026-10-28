@@ -945,6 +945,45 @@
         }
       ],
       "canonical_id": "x-ai/grok-4.6"
+    },
+    {
+      "provider_model_id": "gpt-6.1-terra",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.0,
+              "cache_read": 0.05,
+              "cache_write": 1.25
+            },
+            "output_tokens": {
+              "text": 5.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.0,
+              "cache_read": 0.05,
+              "cache_write": 1.25
+            },
+            "output_tokens": {
+              "text": 5.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6.1-terra"
     }
   ],
   "name": "azure",

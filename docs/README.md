@@ -4,6 +4,10 @@ This folder holds internal development documentation and the version-controlled
 [protocol specifications](specs/README.md). The protocol directory has its own
 authorship and compatibility rules; development plans are not protocol standards.
 
+First-party TUI/Conversation UX, rendering and navigation documents are historical
+after CLI-only G05. Their implementation labels describe those earlier stages;
+the CLI-only contract and implementation record define the current product.
+
 ## Contents
 
 - [Protocol specifications](specs/README.md) — tracked interoperability contracts.
@@ -27,14 +31,35 @@ authorship and compatibility rules; development plans are not protocol standards
 - [`DISTRIBUTION.md`](DISTRIBUTION.md) — full and gateway profiles, archive
   identity/checksums, profile-preserving updates and packaged SDK acceptance.
 - [`BITROUTER_SERVICE_REFACTOR_PLAN.md`](BITROUTER_SERVICE_REFACTOR_PLAN.md) —
-  **P0 accepted at `9cbe512d`; [#984](https://github.com/bitrouter/bitrouter/pull/984)
-  remains unmerged.** Complete package/module
+  **P0 integration tracked in [#984](https://github.com/bitrouter/bitrouter/pull/984).** Complete package/module
   migration inventory, lightweight AI contracts, HTTP SDK, application-owned
   telemetry, feature dependencies, P0 single-instance delivery and acceptance,
   capability-aware daemon compatibility, profile-preserving updates, and the
   separate P1 gateway multi-instance milestone.
 - [`BITROUTER_SERVICE_REFACTOR_PROGRESS.md`](BITROUTER_SERVICE_REFACTOR_PROGRESS.md)
   — P0 baseline, implementation stages, review evidence and acceptance ledger.
+
+- [`CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md) —
+  **current convergence contract.** Retains native/ACP orchestration and resource
+  capabilities behind a CLI, removes first-party TUI entry points, and defines
+  daemon auto-start, connected-agent inspection, simpler onboarding, MCP CRUD,
+  direct local skill directory operations and explicit resource selection; acquisition is external.
+- [`CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_GOALS.md) —
+  Completed G00–G11 stage index and validation rules; full execution cards and
+  copyable prompts remain linked to their immutable Git revision.
+- [`CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md`](CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md) —
+  A27/A28 and M01–M10 distinguish gateway protocol checks from native host loading,
+  approval, origin and cache requirements against a pinned specification;
+  M01–M10 have local gateway/native evidence, including verified support files,
+  independent consent, actual model inputs, budgets and original cache recovery.
+- [`CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md) —
+  Concise stage outcomes, key regressions and immutable implementation history.
+  Current verification and immutable original G00–G11 history are linked separately.
+- [`CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_G11_ACCEPTANCE.md) —
+  Current directory/explicit-selection verification, retired behavior and separate external qualifications.
+- [`CLI_ONLY_AND_WORKFLOW_SKILLS_G00_AUDIT.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_G00_AUDIT.md) —
+  Source and dependency baseline, execution identities, existing protocol operations,
+  TUI consumers and retained business-test mappings for G01–G05; no runtime changes.
 - [`ORCHESTRATOR_CORE_SPEC.md`](ORCHESTRATOR_CORE_SPEC.md) — **v1.0, frozen
   implementation contract; implementation in progress.** Core-owned model/context routing
   and agent scheduling, harness-owned tools and durable state, managed

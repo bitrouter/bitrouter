@@ -1,8 +1,10 @@
 //! Persisted session records and offline checkpoint inspection.
 //! Scheduling and execution transitions are implemented by core.
 
+#[cfg(any(feature = "core", feature = "harness"))]
 use super::digest;
 use super::evidence::SourceSpan;
+#[cfg(any(feature = "core", feature = "harness"))]
 use bitrouter_ai::core::protocol::CoreError;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -66,6 +68,7 @@ pub struct Candidate {
     pub excerpt: String,
 }
 
+#[cfg(any(feature = "core", feature = "harness"))]
 pub(crate) fn view_identity(view: &ContextView) -> Result<String, CoreError> {
     let mut value = view.clone();
     value.view_id.clear();

@@ -73,6 +73,84 @@ impl Port {
 
 #[async_trait]
 impl HarnessPort for Port {
+    async fn skill_catalog(
+        &self,
+    ) -> Result<Option<crate::storage::skills::SkillCatalog>, CoreError> {
+        self.authorize_dispatch().await?;
+        Ok(self
+            .resources
+            .as_ref()
+            .map(|resources| crate::storage::skills::SkillCatalog {
+                local: resources.inventory.local_skills.clone(),
+                mcp: resources.inventory.mcp_skills.clone(),
+            }))
+    }
+
+    async fn resolve_mcp_skill(
+        &self,
+        server: &str,
+        uri: &str,
+        cancel: &CancellationToken,
+    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
+        self.authorize_dispatch().await?;
+        self.resources
+            .as_ref()
+            .ok_or_else(|| unavailable("native resources are unavailable"))?
+            .mcp_skill(server, uri, cancel)
+            .await
+            .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
+    }
+
+    async fn skill_instructions(
+        &self,
+        source: &crate::storage::skills::SkillSource,
+        max_bytes: u64,
+        cached_bytes: Option<&[u8]>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.authorize_dispatch().await?;
+        let resources = self
+            .resources
+            .as_ref()
+            .ok_or_else(|| unavailable("native resources are unavailable"))?;
+        match source {
+            crate::storage::skills::SkillSource::Local(binding) => resources
+                .managed_skill_file(binding, "SKILL.md", max_bytes)
+                .await
+                .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),
+            crate::storage::skills::SkillSource::Mcp(held) => resources
+                .mcp_skill_file(
+                    held,
+                    crate::skills::mcp::SkillRead {
+                        reference: &held.entry.uri,
+                        max_bytes,
+                        cached_bytes,
+                    },
+                    cancel,
+                )
+                .await
+                .map(|file| file.bytes)
+                .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),
+        }
+    }
+
+    async fn skill_file(
+        &self,
+        source: &crate::storage::skills::SkillSource,
+        reference: &str,
+        max_bytes: u64,
+        cached_bytes: Option<&[u8]>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>, CoreError> {
+        self.authorize_dispatch().await?;
+        self.resources
+            .as_ref()
+            .ok_or_else(|| unavailable("native resources are unavailable"))?
+            .skill_file(source, reference, max_bytes, cached_bytes, cancel)
+            .await
+            .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
+    }
+
     async fn model_cancelled(&self) {
         self.cancelled.cancelled().await;
     }

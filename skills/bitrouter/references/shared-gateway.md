@@ -26,6 +26,9 @@ Routing, policies and provider credentials must already be published there.
 `bro start` and `bro restart` reject shared configuration before local daemon
 discovery or runtime-file creation. Use your service manager to run and stop the
 foreground process; do not use the local daemon launcher for a shared deployment.
+Local `bro mcp` configuration commands also reject shared process files before
+reading entry input or launching an editor; they do not publish MCP authority
+to the shared namespace.
 
 ```yaml
 server:

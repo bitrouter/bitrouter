@@ -16,7 +16,8 @@
     "curation": {
       "reason": "Migrated reviewed recommendation; current identity and active offer verified",
       "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
+      "checked_at": "2026-10-22T17:30:00Z",
+      "expires_at": "2026-11-23T00:00:00Z"
     }
   },
   {
@@ -38,6 +39,26 @@
       "reason": "Migrated reviewed recommendation; current identity and active offer verified",
       "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
       "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "minimax/minimax-m3.1-flash",
+    "name": "MiniMax: MiniMax M3.1 Flash",
+    "input_modalities": [
+      "image",
+      "text",
+      "video"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 524288,
+    "release_date": "2026-10-19",
+    "curation": {
+      "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-28T19:35:49Z"
     }
   }
 ]

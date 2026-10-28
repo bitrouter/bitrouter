@@ -1,8 +1,0 @@
-
-> Explain the first result.
-
-First result: ready.
-
-> Explain the second result.
-
-Second result: ready too.

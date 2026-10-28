@@ -97,6 +97,16 @@ pub(super) struct RemotePort {
 }
 
 impl RemotePort {
+    pub(super) async fn is_connected(&self) -> bool {
+        self.connection
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|connection| {
+                !connection.closed.is_cancelled() && !connection.sender.is_closed()
+            })
+    }
+
     pub(super) fn new(
         principal: Principal,
         grant: bitrouter_ai::core::protocol::OwnershipGrant,

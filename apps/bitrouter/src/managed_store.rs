@@ -5,7 +5,9 @@
 use crate::harness::resources::managed::store::{MAX_STORE_BYTES, NativeStore};
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, Set,
+    AccessMode, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend,
+    DatabaseConnection, EntityTrait, IsolationLevel, QueryFilter, QuerySelect, Set,
+    TransactionTrait,
 };
 
 pub struct DatabaseNativeStore {
@@ -15,14 +17,7 @@ pub struct DatabaseNativeStore {
 
 impl DatabaseNativeStore {
     pub fn new(db: DatabaseConnection, id: String) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            !id.is_empty()
-                && id.len() <= 128
-                && id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)),
-            "invalid managed session name"
-        );
+        crate::managed_task::protocol::validate_session_name(&id)?;
         Ok(Self { db, id })
     }
 }
@@ -46,14 +41,29 @@ mod session {
 #[async_trait::async_trait]
 impl NativeStore for DatabaseNativeStore {
     async fn load(&self) -> Result<Option<(u64, Vec<u8>)>, CoreError> {
+        // Bound the payload before fetching it, while keeping both SELECTs in
+        // the same snapshot if the live owner publishes another revision.
+        let (isolation, access) = match self.db.get_database_backend() {
+            DatabaseBackend::Sqlite => (None, None),
+            _ => (
+                Some(IsolationLevel::RepeatableRead),
+                Some(AccessMode::ReadOnly),
+            ),
+        };
+        let transaction = self
+            .db
+            .begin_with_config(isolation, access)
+            .await
+            .map_err(storage)?;
         let metadata = session::Entity::find_by_id(&self.id)
             .select_only()
             .columns([session::Column::Revision, session::Column::PayloadBytes])
             .into_tuple::<(i64, i64)>()
-            .one(&self.db)
+            .one(&transaction)
             .await
             .map_err(storage)?;
         let Some((revision, bytes)) = metadata else {
+            transaction.commit().await.map_err(storage)?;
             return Ok(None);
         };
         if revision <= 0 || bytes < 0 || bytes as u64 > MAX_STORE_BYTES as u64 {
@@ -61,13 +71,14 @@ impl NativeStore for DatabaseNativeStore {
         }
         let record = session::Entity::find_by_id(&self.id)
             .filter(session::Column::Revision.eq(revision))
-            .one(&self.db)
+            .one(&transaction)
             .await
             .map_err(storage)?
             .ok_or_else(|| storage("managed session changed while reading"))?;
         if record.payload.len() as i64 != bytes {
             return Err(storage("managed payload length mismatch"));
         }
+        transaction.commit().await.map_err(storage)?;
         Ok(Some((revision as u64, record.payload.into_bytes())))
     }
 
@@ -123,4 +134,51 @@ fn storage(error: impl std::fmt::Display) -> CoreError {
         ErrorCode::CheckpointUnavailable,
         format!("managed session storage: {error}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn payload(revision: u64) -> Vec<u8> {
+        format!(
+            "revision:{revision}:{}",
+            "x".repeat((revision as usize % 17) * 19)
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn snapshot_reads_keep_bounded_metadata_and_payload_coherent_during_live_commits()
+    -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let db = crate::db::connect(&format!(
+            "sqlite://{}?mode=rwc",
+            root.path().join("state.db").display()
+        ))
+        .await?;
+        crate::db::run_migrations(&db).await?;
+        let store = Arc::new(DatabaseNativeStore::new(db, "coherent-reader".into())?);
+        store.save(0, payload(1)).await?;
+        let writer = store.clone();
+        let task = tokio::spawn(async move {
+            for revision in 2..=256 {
+                writer.save(revision - 1, payload(revision)).await?;
+                tokio::task::yield_now().await;
+            }
+            Ok::<_, CoreError>(())
+        });
+        for _ in 0..256 {
+            let (revision, bytes) = store
+                .load()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("original session disappeared"))?;
+            assert_eq!(bytes, payload(revision));
+            tokio::task::yield_now().await;
+        }
+        task.await??;
+        assert_eq!(store.load().await?, Some((256, payload(256))));
+        Ok(())
+    }
 }

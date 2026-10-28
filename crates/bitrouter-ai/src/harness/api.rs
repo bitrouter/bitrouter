@@ -15,6 +15,8 @@ pub const PROTOCOL_VERSION: u32 = 2;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CreateThreadRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<crate::core::skills::SkillConstraints>,
     pub workspace: PathBuf,
     pub model: String,
     #[serde(default)]
@@ -42,6 +44,8 @@ pub struct TurnRequest {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct InputRequest {
+    #[serde(default)]
+    pub skill_consent: bool,
     pub turn_id: String,
     pub request_id: String,
     pub approved: bool,

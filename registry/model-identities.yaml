@@ -818,6 +818,12 @@
         "provider_model_id": "gemini-4-argon",
         "source_url": "https://ai.google.dev/api",
         "verified_at": "2026-10-22T17:30:00Z"
+      },
+      {
+        "provider": "opencode-go",
+        "provider_model_id": "gemini-4-argon",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/opencode-go.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
       }
     ]
   },
@@ -2950,6 +2956,140 @@
         "provider_model_id": "z-ai/glm-5.3-prime",
         "source_url": "https://openrouter.ai/docs/api-reference/overview",
         "verified_at": "2026-10-22T17:30:00Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "openai/gpt-6.1-terra",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-10-28T19:35:49Z",
+    "canonical_slug": "openai/gpt-6.1-terra-20261026",
+    "bindings": [
+      {
+        "provider": "azure",
+        "provider_model_id": "gpt-6.1-terra",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/azure.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "github-copilot",
+        "provider_model_id": "gpt-6.1-terra",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/github-copilot.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "openai-codex",
+        "provider_model_id": "gpt-6.1-terra",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/openai-codex.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "openai",
+        "provider_model_id": "gpt-6.1-terra",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/openai.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "openrouter",
+        "provider_model_id": "openai/gpt-6.1-terra",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/openrouter.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "minimax/minimax-m3.1-flash",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-10-28T19:35:49Z",
+    "canonical_slug": "minimax/minimax-m3.1-flash-20261019",
+    "bindings": [
+      {
+        "provider": "bitrouter",
+        "provider_model_id": "minimax/minimax-m3.1-flash",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/bitrouter.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "minimax",
+        "provider_model_id": "MiniMax-M3.1-Flash",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/minimax.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "minimax_cn",
+        "provider_model_id": "MiniMax-M3.1-Flash",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/minimax_cn.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "novita",
+        "provider_model_id": "minimax/minimax-m3.1-flash",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/novita.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "opencode-go",
+        "provider_model_id": "minimax-m3.1-flash",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/opencode-go.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "openrouter",
+        "provider_model_id": "minimax/minimax-m3.1-flash",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/openrouter.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "moonshotai/kimi-k3.1-pro",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-10-28T19:35:49Z",
+    "canonical_slug": "moonshotai/kimi-k3.1-pro-20261023",
+    "bindings": [
+      {
+        "provider": "bitrouter",
+        "provider_model_id": "moonshotai/kimi-k3.1-pro",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/bitrouter.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "moonshotai",
+        "provider_model_id": "kimi-k3.1-pro",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/moonshotai.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "novita",
+        "provider_model_id": "moonshotai/kimi-k3.1-pro",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/novita.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "opencode-go",
+        "provider_model_id": "kimi-k3.1-pro",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/opencode-go.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      },
+      {
+        "provider": "openrouter",
+        "provider_model_id": "moonshotai/kimi-k3.1-pro",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/openrouter.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
+      }
+    ]
+  },
+  {
+    "canonical_id": "openai/gpt-6.1-terra-pro",
+    "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+    "observed_at": "2026-10-28T19:35:49Z",
+    "canonical_slug": "openai/gpt-6.1-terra-pro-20261026",
+    "bindings": [
+      {
+        "provider": "openrouter",
+        "provider_model_id": "openai/gpt-6.1-terra-pro",
+        "source_url": "https://github.com/bitrouter/bitrouter/blob/66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7/registry/providers/openrouter.yaml",
+        "verified_at": "2026-10-28T19:35:49Z"
       }
     ]
   }

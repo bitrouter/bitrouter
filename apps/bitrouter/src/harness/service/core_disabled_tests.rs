@@ -87,7 +87,7 @@ async fn native_admission_rejects_before_workspace_lookup_or_store_ownership() -
             .recover_thread(
                 &target,
                 &CallerContext::local(),
-                crate::harness::thread::ThreadRecoveryRequest {
+                bitrouter_ai::harness::thread::ThreadRecoveryRequest {
                     source_server_instance_id: "prior".into(),
                     source_cursor: 1,
                     idempotency_key: "recover".into(),

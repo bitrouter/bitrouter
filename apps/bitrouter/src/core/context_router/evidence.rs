@@ -78,7 +78,7 @@ impl ContextStore {
         messages: &[Message],
         source: &EvidenceSource,
     ) -> Result<Vec<String>, CoreError> {
-        self.capture_with_sources(messages, source, &BTreeMap::new())
+        self.capture_with_sources(messages, source, &BTreeMap::new(), &BTreeMap::new())
     }
 
     pub fn capture_with_sources(
@@ -86,6 +86,7 @@ impl ContextStore {
         messages: &[Message],
         source: &EvidenceSource,
         call_sources: &BTreeMap<String, EvidenceSource>,
+        skill_sources: &BTreeMap<String, String>,
     ) -> Result<Vec<String>, CoreError> {
         let prior: BTreeMap<String, String> = self
             .evidence
@@ -102,10 +103,16 @@ impl ContextStore {
         let mut ids = Vec::new();
         for group in groups(messages)? {
             let content_sha256 = digest(&group)?;
-            let id = match prior.get(&content_sha256) {
+            let binding = skill_sources.get(&content_sha256);
+            let id = match prior.get(&content_sha256).filter(|id| {
+                self.evidence
+                    .get(*id)
+                    .is_some_and(|block| block.source.skill_binding.as_ref() == binding)
+            }) {
                 Some(id) => id.clone(),
                 None => {
                     let mut provenance = source.clone();
+                    provenance.skill_binding = binding.cloned();
                     let calls: Vec<_> = group
                         .iter()
                         .flat_map(|message| &message.content)

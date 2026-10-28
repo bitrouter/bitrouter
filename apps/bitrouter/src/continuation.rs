@@ -9765,7 +9765,14 @@ mod tests {
     async fn queued_preparation_receipt_retains_compensation_until_consumed() -> anyhow::Result<()>
     {
         for streamed in [false, true] {
-            let registry = registry(55).await?;
+            let db = crate::db::connect("sqlite::memory:").await?;
+            crate::db::run_migrations(&db).await?;
+            let registry = ContinuationRegistry::new(
+                db,
+                ContinuationKeySource::fixed(ContinuationKey::from_bytes(rand::random())?),
+                30,
+                10,
+            )?;
             let runtime = ContinuationRuntime::new(registry.clone());
             let signals = Arc::new(PreparationHandoffSignals::default());
             let routes = Arc::new(StaticRoutingTable::new());

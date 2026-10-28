@@ -321,11 +321,13 @@ async fn create(
                     AgentConfig::fixed(body.model, body.effort)
                         .with_model_mode(body.model_mode)
                         .with_output_reservation(body.max_output_tokens)
+                        .with_skill_constraints(body.skills)
                         .read_only()
                 } else {
                     AgentConfig::fixed(body.model, body.effort)
                         .with_model_mode(body.model_mode)
                         .with_output_reservation(body.max_output_tokens)
+                        .with_skill_constraints(body.skills)
                 },
                 permission_profile: if body.read_only {
                     PermissionProfile::ReadOnly
@@ -446,6 +448,25 @@ async fn input(
 ) -> Result<Json<TurnReceiptResponse>, ApiError> {
     state.native_execution(&headers)?;
     let target = state.thread(&headers, id, true).await?;
+    let view = state
+        .service
+        .read_thread_view(&target, &api_caller())
+        .map_err(runtime_error)?;
+    if view
+        .latest_turn
+        .as_ref()
+        .filter(|turn| turn.turn_id == body.turn_id)
+        .and_then(|turn| turn.pending_input.as_ref())
+        .is_some_and(|input| {
+            input.request_id == body.request_id && input.tool_name == "mcp_skill.activate"
+        })
+        && !body.skill_consent
+    {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "MCP skill approval requires explicit skill_consent=true; command policy grants no skill consent",
+        ));
+    }
     let receipt = state
         .service
         .answer_thread_input(

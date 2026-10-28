@@ -1,15 +1,19 @@
 //! Local gateway endpoint selection and best-effort startup shared by setup and launch.
 
+#[cfg(feature = "harness")]
 use crate::commands::invocation;
+#[cfg(feature = "harness")]
 use crate::style::Palette;
 
 /// BitRouter's own API-key env var (`brk_…`). When set, it is forwarded to the
 /// harness as the gateway bearer credential.
+#[cfg(any(feature = "harness", test))]
 pub(crate) const BITROUTER_API_KEY_ENV: &str = "BITROUTER_API_KEY";
 
 /// Placeholder credential injected when no real key is available. Ignored by
 /// the daemon under `skip_auth: true` (the `bro init` default); the
 /// harness merely needs *some* credential to start.
+#[cfg(any(feature = "harness", test))]
 pub(crate) const PLACEHOLDER_API_KEY: &str = "bitrouter-local";
 
 /// Read an environment variable, treating an unset *or empty* value as absent.
@@ -90,6 +94,7 @@ pub(crate) fn listen_from_base_url(url: &str) -> Option<String> {
 /// readiness. Best-effort throughout: on any failure it warns and returns so
 /// the agent still launches (and surfaces its own connection error) — matching
 /// spawn's "never block the launch" stance.
+#[cfg(feature = "harness")]
 pub(crate) async fn ensure_local_daemon(
     source: &crate::paths::ConfigSource,
     cfg: &crate::config::Config,
@@ -128,9 +133,9 @@ pub(crate) async fn ensure_local_daemon(
                         reset = p.reset,
                     );
                 }
-                Ok(crate::daemon::DaemonStartOutcome::NotReadyInTime { pid }) => {
+                Ok(crate::daemon::DaemonStartOutcome::NotReadyInTime { .. }) => {
                     eprintln!(
-                        "{cyan}note:{reset} daemon started (pid {pid}) but is not ready yet — \
+                        "{cyan}note:{reset} daemon started but is not ready yet — \
                          the agent may need a moment; logs at {}",
                         log_path.display(),
                         cyan = p.cyan,
@@ -165,6 +170,7 @@ pub(crate) async fn ensure_local_daemon(
 
 /// Best-effort TCP reachability probe against the daemon's listen address.
 /// Prints a one-line warning when nothing is listening; never errors.
+#[cfg(feature = "harness")]
 pub(crate) fn warn_if_daemon_unreachable(listen: &str) {
     use std::net::{TcpStream, ToSocketAddrs};
     use std::time::Duration;

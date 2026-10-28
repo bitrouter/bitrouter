@@ -295,6 +295,12 @@ pub struct SessionSnapshot {
 }
 
 impl SessionSnapshot {
+    pub fn skill_selection(
+        &self,
+        agent_turn_id: &str,
+    ) -> Option<&crate::storage::skills::SkillSelection> {
+        self.context_store.work.get(agent_turn_id)?.skills.as_ref()
+    }
     pub fn root_turn(&self) -> Option<&AgentTurn> {
         self.agents
             .get(&self.agent_id)

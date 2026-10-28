@@ -1,5 +1,13 @@
 # Spec: `bro` onboarding — a guided CLI wizard over existing verbs
 
+> Historical proposal (2026-07-15). Current implementation and acceptance are
+> defined by [CLI-only spec](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md),
+> [CLI reference](CLI.md#bro-init-onboarding-wizard) and the
+> [implementation record](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> Onboarding now saves Router configuration, optionally calls the shared MCP
+> publisher and versioned skill installer, and retains saved progress after
+> optional failures. The no-config-write premise below is historical.
+
 Status: **proposed — not yet implemented** · Author: Claude (with Spikel) ·
 Date: 2026-07-15 · Branch: `claude/cli-onboarding-flow`
 

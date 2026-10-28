@@ -657,7 +657,7 @@ async fn corrupt_or_unsettled_instruction_context_blocks_recovery()
                 .recover_thread(
                     &target,
                     &CallerContext::local(),
-                    crate::harness::thread::ThreadRecoveryRequest {
+                    bitrouter_ai::harness::thread::ThreadRecoveryRequest {
                         source_server_instance_id: recovery.source_server_instance_id.clone(),
                         source_cursor: recovery.source_cursor,
                         idempotency_key: "invalid-recovery".into(),

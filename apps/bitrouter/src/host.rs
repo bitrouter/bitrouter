@@ -366,6 +366,10 @@ async fn serve_with_options(
         let managed_core = crate::orchestrator_api::ManagedCoreApi::new(
             app.clone(), assembled.db.clone(), server_instance_id.clone(),
         );
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let managed_native = crate::managed_task::owner::Owner::new(
+            app.clone(), assembled.db.clone(), cfg.clone(), native_harness_config(&cfg, home),
+        );
         let reloader = Arc::new(reloader);
         let registry_stop = tokio_util::sync::CancellationToken::new();
         let _registry_stop_guard = registry_stop.clone().drop_guard();
@@ -383,6 +387,8 @@ async fn serve_with_options(
         let task_socket = crate::client::agent_local::socket_path(&socket_path);
         #[cfg(feature = "harness")]
         let task_listener = daemon::transport::bind(&task_socket).await?;
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let managed_listener = daemon::transport::bind(&crate::managed_task::protocol::socket_path(&socket_path)).await?;
         #[cfg(feature = "harness")]
         let acp_listener = daemon::transport::bind(&crate::native_acp::socket_path(&socket_path)).await?;
         #[cfg(feature = "harness")]
@@ -411,6 +417,14 @@ async fn serve_with_options(
         );
         #[cfg(feature = "harness")]
         let agent_api = crate::agent_api::BoundAgentApi::bind(&cfg.agent_api, task_service.clone()).await?;
+        #[cfg(feature = "harness")]
+        let native_owners = crate::connected_agents::NativeOwners {
+            threads: task_service.clone(), acp: native_acp.clone(),
+            #[cfg(feature = "core")]
+            managed: managed_core.clone(),
+            #[cfg(feature = "core")]
+            managed_native: managed_native.clone(),
+        };
         let remote_control = match remote_control {
             Some(server) => Some(
                 server
@@ -429,6 +443,10 @@ async fn serve_with_options(
         let http_app = app.clone();
         let handoff_gate = crate::daemon_handoff::HandoffGate::default();
         let http_handoff_gate = handoff_gate.clone();
+        // Native queue workers hold admission for their listener lifetime until
+        // they participate in the atomic daemon handoff protocol.
+        #[cfg(feature = "harness")]
+        let native_admission = handoff_gate.admit().ok_or_else(|| anyhow::anyhow!("native runtime admission is closed"))?;
         // Managed channels, pending checkpoint ACKs and native queue workers can
         // outlive HTTP response bodies. Until their ownership participates in
         // atomic handoff admission, retain the existing conservative lifetime
@@ -447,6 +465,8 @@ async fn serve_with_options(
             .as_deref()
             .map(crate::telemetry::http_layer::router_wrapper);
         let (http_shutdown_tx, http_shutdown_rx) = tokio::sync::oneshot::channel();
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let managed_instance = server_instance_id.clone();
         let http = async move {
             #[cfg(feature = "core")]
             let _managed_admission = managed_admission;
@@ -520,13 +540,25 @@ async fn serve_with_options(
             let task = async move {
                 #[cfg(feature = "harness")]
                 {
+                    let _native_admission = native_admission;
                     if cfg!(feature = "core") && let Err(error) = task_service.initialize_execution().await {
                         tracing::warn!(%error, "native execution ownership is blocked; recovery inspection remains available");
                     }
                     let runtime = task_service.clone();
                     let acp_cleanup = native_acp.clone();
+                    #[cfg(feature = "core")]
+                    let managed_cleanup = managed_native.clone();
                     let runtime_shutdown = task_shutdown_for_server.clone();
-                    let cleanup = async move { runtime_shutdown.cancelled().await; runtime.shutdown().await; acp_cleanup.shutdown().await; };
+                    let cleanup = async move {
+                        runtime_shutdown.cancelled().await;
+                        runtime.shutdown().await;
+                        acp_cleanup.shutdown().await;
+                        #[cfg(feature = "core")]
+                        managed_cleanup.shutdown().await?;
+                        Ok::<(), anyhow::Error>(())
+                    };
+                    #[cfg(feature = "core")]
+                    let managed = crate::managed_task::local::serve(managed_listener, managed_native, managed_instance, task_shutdown_for_server.clone());
                     let acp = crate::native_acp::serve(acp_listener, native_acp, task_shutdown_for_server.clone());
                     let local = crate::harness::local::serve(
                         task_listener,
@@ -546,12 +578,15 @@ async fn serve_with_options(
                         }
                     };
                     let serving = async {
+                        #[cfg(feature = "core")]
+                        let result = tokio::try_join!(local, http, acp, managed).map(|_| ());
+                        #[cfg(not(feature = "core"))]
                         let result = tokio::try_join!(local, http, acp).map(|_| ());
                         task_shutdown_for_cleanup.cancel();
                         result
                     };
-                    let (result, ()) = tokio::join!(serving, cleanup);
-                    result
+                    let (result, cleanup_result) = tokio::join!(serving, cleanup);
+                    combine_shutdown_results(result, cleanup_result)
                 }
                 #[cfg(not(feature = "harness"))]
                 {
@@ -622,6 +657,8 @@ async fn serve_with_options(
                 evolution: Some(assembled.evolution.clone()),
             },
             daemon::LocalControlOptions {
+                #[cfg(feature = "harness")]
+                native: Some(native_owners),
                 administration: Some(administration),
                 gate: handoff_gate.clone(),
                 cli_owned,
@@ -1081,6 +1118,8 @@ pub(crate) fn native_harness_config(
         servers,
         protocol: crate::gateway::mcp::upstream_protocol_version(cfg.mcp.upstream_protocol),
         skill_roots,
+        skills: cfg.skills.clone(),
+        library: Some(Arc::new(crate::skills::native::Library::runtime())),
         instructions: crate::harness::resources::instructions::InstructionConfig {
             global_root: Some(home.to_path_buf()),
             ..Default::default()

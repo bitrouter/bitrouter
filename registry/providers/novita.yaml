@@ -294,6 +294,51 @@
           }
         }
       ]
+    },
+    {
+      "provider_model_id": "minimax/minimax-m3.1-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.15,
+              "cache_read": 0.015
+            },
+            "output_tokens": {
+              "text": 0.6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3.1-flash"
+    },
+    {
+      "provider_model_id": "moonshotai/kimi-k3.1-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 2.0,
+              "cache_read": 0.2,
+              "cache_write": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3.1-pro"
     }
   ],
   "name": "novita",

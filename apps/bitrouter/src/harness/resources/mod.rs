@@ -1,14 +1,18 @@
 //! Workspace-scoped project instructions, MCP and skills for the native runtime.
 //! AGENTS.md augments model instructions; resource discovery never grants permission.
 
+use crate::skills::mcp::SkillScopeExt;
 use bitrouter_ai::harness::resources::HarnessInventory;
 #[cfg(feature = "core")]
 use bitrouter_ai::harness::resources::McpTool;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config::mcp::McpServerConfig;
+use crate::config::skills::SkillsConfig;
+use crate::gateway::caller::CallerContext;
 #[cfg(feature = "core")]
 use bitrouter_ai::types::Tool;
 use bitrouter_ai::types::ToolResultOutput;
@@ -48,6 +52,8 @@ pub struct HarnessConfig {
     pub servers: Vec<McpServerConfig>,
     pub protocol: ProtocolVersion,
     pub skill_roots: Vec<PathBuf>,
+    pub skills: SkillsConfig,
+    pub library: Option<Arc<dyn crate::skills::library::SkillDirectory>>,
     pub instructions: instructions::InstructionConfig,
 }
 
@@ -57,6 +63,8 @@ impl Default for HarnessConfig {
             servers: Vec::new(),
             protocol: ProtocolVersion::LATEST,
             skill_roots: Vec::new(),
+            skills: SkillsConfig::default(),
+            library: None,
             instructions: instructions::InstructionConfig::default(),
         }
     }
@@ -84,9 +92,18 @@ impl McpToolExt for McpTool {
 /// Application-owned helpers for the public HarnessInventory contract.
 pub(crate) trait HarnessInventoryExt: Sized {
     fn validate(&self) -> Result<(), String>;
+    fn same_execution_resources(&self, other: &Self) -> bool;
 }
 
 impl HarnessInventoryExt for HarnessInventory {
+    fn same_execution_resources(&self, other: &Self) -> bool {
+        self.binding_digest == other.binding_digest
+            && self.tools == other.tools
+            && self.instructions == other.instructions
+            && self.skills == other.skills
+            && self.skill_problems == other.skill_problems
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.binding_digest.len() != 64
             || !self.binding_digest.bytes().all(|c| c.is_ascii_hexdigit())
@@ -115,12 +132,17 @@ impl HarnessInventoryExt for HarnessInventory {
 pub(crate) struct HarnessResources {
     pub(crate) inventory: HarnessInventory,
     mcp: Mutex<mcp::McpConnections>,
+    skill_policy: SkillsConfig,
+    caller: CallerContext,
+    workspace: PathBuf,
+    library: Option<Arc<dyn crate::skills::library::SkillDirectory>>,
 }
 
 impl HarnessResources {
     pub(crate) async fn discover(
         workspace: &Path,
         config: &HarnessConfig,
+        caller: &CallerContext,
         mode: ToolMode,
         cancel: &CancellationToken,
         max_duration: Duration,
@@ -132,21 +154,52 @@ impl HarnessResources {
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
-        // Unknown effects are not exposed in read-only mode, regardless of MCP hints.
-        let servers = if mode == ToolMode::ReadOnly {
-            &[][..]
+        let local_skills = if let Some(library) = &config.library {
+            match library.catalog(workspace, caller).await {
+                Ok(catalog) => catalog,
+                Err(error) => bitrouter_ai::harness::skills::LocalSkillCatalog {
+                    skills: Vec::new(),
+                    problems: vec![error],
+                },
+            }
         } else {
-            config.servers.as_slice()
+            bitrouter_ai::harness::skills::LocalSkillCatalog::default()
         };
-        let mut connections = mcp::McpConnections::connect_cancellable(
+        // Unknown effects are not exposed in read-only mode, regardless of MCP hints.
+        let tool_servers: std::collections::BTreeSet<_> = config
+            .servers
+            .iter()
+            .filter(|_| mode != ToolMode::ReadOnly)
+            .map(|server| server.name.clone())
+            .collect();
+        let allowed_sources: std::collections::BTreeSet<_> = config
+            .skills
+            .mcp_sources
+            .iter()
+            .filter(|(_, grant)| {
+                bitrouter_ai::harness::skills::SkillScope::authorize(grant, caller, workspace)
+                    .is_ok()
+            })
+            .map(|(server, _)| server.clone())
+            .collect();
+        let servers: Vec<_> = config
+            .servers
+            .iter()
+            .filter(|server| {
+                tool_servers.contains(&server.name) || allowed_sources.contains(&server.name)
+            })
+            .cloned()
+            .collect();
+        let mut connections = mcp::McpConnections::connect_scoped(
             workspace,
-            servers,
+            &servers,
+            &tool_servers,
             config.protocol.clone(),
             cancel,
             max_duration.saturating_sub(started.elapsed()),
         )
         .await?;
-        let encoded = serde_json::to_value((
+        let mut encoded = serde_json::to_value((
             workspace,
             servers,
             config.protocol.to_string(),
@@ -154,6 +207,40 @@ impl HarnessResources {
             mode,
         ))
         .map_err(|e| e.to_string())?;
+        if !config.skills.mcp_sources.is_empty() {
+            encoded = serde_json::json!([encoded, config.skills]);
+        }
+        let access = crate::skills::mcp::SkillAccess {
+            caller,
+            policy: &config.skills,
+        };
+        let mut mcp_skills = bitrouter_ai::harness::skills::McpSkillCatalog::default();
+        for server in allowed_sources {
+            let result = tokio::time::timeout(
+                max_duration.saturating_sub(started.elapsed()),
+                connections.list_skills(&server, &access, cancel),
+            )
+            .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(_) => Err("MCP skill discovery exceeded the remaining Turn time".into()),
+            };
+            match result {
+                Ok(mut catalog) => {
+                    mcp_skills.skills.append(&mut catalog.skills);
+                    mcp_skills.excluded.append(&mut catalog.excluded);
+                }
+                Err(reason) => {
+                    mcp_skills
+                        .excluded
+                        .push(bitrouter_ai::harness::skills::McpSkillProblem {
+                            server,
+                            uri: None,
+                            reason,
+                        })
+                }
+            }
+        }
         let binding_digest =
             sha256(&serde_json::to_vec(&canonical(encoded)).map_err(|e| e.to_string())?);
         let inventory = HarnessInventory {
@@ -162,6 +249,8 @@ impl HarnessResources {
             instructions: connections.instructions.clone(),
             skills: catalog.skills,
             skill_problems: catalog.problems,
+            mcp_skills,
+            local_skills,
         };
         if let Err(error) = inventory.validate() {
             return match connections.shutdown().await {
@@ -175,7 +264,93 @@ impl HarnessResources {
         Ok(Self {
             inventory,
             mcp: Mutex::new(connections),
+            skill_policy: config.skills.clone(),
+            caller: caller.clone(),
+            workspace: workspace.to_path_buf(),
+            library: config.library.clone(),
         })
+    }
+
+    pub(crate) async fn managed_skill_file(
+        &self,
+        binding: &bitrouter_ai::harness::skills::LocalSkill,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, String> {
+        self.library
+            .as_ref()
+            .ok_or("managed skill library is unavailable")?
+            .read(&self.workspace, &self.caller, binding, path, max_bytes)
+            .await
+    }
+
+    pub(crate) async fn mcp_skill(
+        &self,
+        server: &str,
+        uri: &str,
+        cancel: &CancellationToken,
+    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, String> {
+        self.mcp
+            .lock()
+            .await
+            .get_skill(
+                server,
+                uri,
+                &crate::skills::mcp::SkillAccess {
+                    caller: &self.caller,
+                    policy: &self.skill_policy,
+                },
+                cancel,
+            )
+            .await
+    }
+
+    pub(crate) async fn skill_file(
+        &self,
+        source: &crate::storage::skills::SkillSource,
+        reference: &str,
+        max_bytes: u64,
+        cached_bytes: Option<&[u8]>,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>, String> {
+        match source {
+            crate::storage::skills::SkillSource::Local(binding) => {
+                self.managed_skill_file(binding, reference, max_bytes).await
+            }
+            crate::storage::skills::SkillSource::Mcp(held) => self
+                .mcp_skill_file(
+                    held,
+                    crate::skills::mcp::SkillRead {
+                        reference,
+                        max_bytes,
+                        cached_bytes,
+                    },
+                    cancel,
+                )
+                .await
+                .map(|file| file.bytes),
+        }
+    }
+
+    pub(crate) async fn mcp_skill_file(
+        &self,
+        held: &bitrouter_ai::harness::skills::HeldMcpSkill,
+        read: crate::skills::mcp::SkillRead<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<crate::skills::mcp::VerifiedSkillFile, String> {
+        self.mcp
+            .lock()
+            .await
+            .read_skill_file(
+                held,
+                &crate::skills::mcp::SkillAccess {
+                    caller: &self.caller,
+                    policy: &self.skill_policy,
+                },
+                read,
+                cancel,
+            )
+            .await
     }
 
     #[cfg(feature = "core")]

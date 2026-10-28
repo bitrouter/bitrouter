@@ -208,6 +208,7 @@ async fn oversized_tool_evidence_survives_replay_and_is_readable_only_in_its_tas
             RunChannels {
                 events: None,
                 approvals: None,
+                skill_approvals: None,
                 commits: None,
                 control: None,
             },
@@ -537,13 +538,13 @@ async fn native_spend_limit_stops_new_model_work_without_losing_settlement()
 }
 
 #[tokio::test]
-async fn native_agent_executes_context_decision_through_core_and_thread_commit_channel()
+async fn native_agent_uses_full_context_without_calling_the_configured_decision_backend()
 -> Result<(), Box<dyn std::error::Error>> {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/systemone"))
         .respond_with(decision)
-        .expect(1)
+        .expect(0)
         .mount(&server)
         .await;
     let workspace = TempDir::new()?;
@@ -589,7 +590,7 @@ async fn native_agent_executes_context_decision_through_core_and_thread_commit_c
     assert!(serde_json::to_string(&report.messages)?.contains("native-optional-evidence-sentinel"));
     let prompts = executor.prompts.lock().await;
     assert_eq!(prompts.len(), 2);
-    assert!(!serde_json::to_string(&prompts[1])?.contains("native-optional-evidence-sentinel"));
+    assert!(serde_json::to_string(&prompts[1])?.contains("native-optional-evidence-sentinel"));
     let records = owner.await?;
     let states = records
         .iter()
@@ -613,13 +614,13 @@ async fn native_agent_executes_context_decision_through_core_and_thread_commit_c
             .state
             .clone(),
     )?;
-    assert_eq!(state.context_store.decisions.len(), 1);
+    assert!(state.context_store.decisions.is_empty());
     assert!(
         state
             .context_store
             .views
             .values()
-            .any(|view| !view.omitted.is_empty())
+            .all(|view| view.omitted.is_empty())
     );
     assert!(
         records
@@ -810,6 +811,7 @@ async fn native_legacy_capacity_upgrades_between_runs_and_replays()
             RunChannels {
                 events: None,
                 approvals: None,
+                skill_approvals: None,
                 commits: Some(commits),
                 control: None,
             },

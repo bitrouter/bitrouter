@@ -266,6 +266,7 @@ async fn all_existing_routes_preserve_bodies_headers_and_explicit_identity() -> 
             THREAD,
             "input",
             &api::InputRequest {
+                skill_consent: false,
                 turn_id: TURN.into(),
                 request_id: "approval-one".into(),
                 approved: false,
@@ -346,7 +347,7 @@ async fn all_existing_routes_preserve_bodies_headers_and_explicit_identity() -> 
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&records[7].body)?,
-        json!({"turn_id":TURN,"request_id":"approval-one","approved":false})
+        json!({"turn_id":TURN,"request_id":"approval-one","approved":false,"skill_consent":false})
     );
     assert!(records[8].body.is_empty());
     assert!(!format!("{client:?}").contains(TOKEN));

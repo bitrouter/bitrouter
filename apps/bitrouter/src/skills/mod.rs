@@ -7,7 +7,16 @@
 //! Core. Ordinary `bro skills list` does not activate a skill or execute scripts.
 
 pub mod cli;
+#[cfg(feature = "harness")]
+pub mod delivery;
+pub mod directory;
+pub mod explain;
+mod files;
 pub mod format;
+pub mod library;
+pub mod mcp;
+pub(crate) mod native;
+pub mod protocol;
 pub mod root;
 
 /// Errors from `SKILL.md` parsing and skills-directory reads.
@@ -15,7 +24,7 @@ pub mod root;
 pub enum Error {
     /// A skill name failed the Agent Skills format rules.
     #[error(
-        "invalid skill name {0:?}: use 1-64 lowercase ASCII letters, digits, or single hyphens; hyphens may not lead, trail, or repeat"
+        "invalid skill name {0:?}: use 1-64 lowercase Unicode letters, numbers, or single hyphens; hyphens may not lead, trail, or repeat"
     )]
     InvalidSkillName(String),
     /// A filesystem operation failed.
@@ -37,7 +46,7 @@ mod tests {
 
     #[test]
     fn accepts_ordinary_names() {
-        for name in ["alpha", "my-skill", "a1"] {
+        for name in ["alpha", "my-skill", "a1", "é", "审阅-٢"] {
             assert!(validate_skill_name(name).is_ok(), "{name} should be valid");
         }
     }
@@ -56,7 +65,9 @@ mod tests {
             "-leading",
             "trailing-",
             "sp ace",
-            "é",
+            "É",
+            "ǅ",
+            "审阅-😀",
         ] {
             assert!(
                 matches!(validate_skill_name(name), Err(Error::InvalidSkillName(_))),

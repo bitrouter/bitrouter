@@ -19,13 +19,13 @@ use crate::harness::storage::ExecutionStore;
 use crate::harness::storage::MemoryExecutionStore;
 use crate::harness::storage::StoredExecution;
 use crate::harness::storage::ThreadHistoryChunk;
-use crate::harness::thread::ThreadRecoveryRequest;
 use crate::harness::thread::ThreadTarget;
 use crate::harness::thread::WorkspaceGrant;
 use bitrouter_ai::harness::item::CallOrigin;
 use bitrouter_ai::harness::runtime::ErrorCode;
 use bitrouter_ai::harness::runtime::ExecutionOwner;
 use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::thread::ThreadRecoveryRequest;
 use bitrouter_ai::harness::thread::ThreadStatus;
 
 #[derive(Serialize, Deserialize)]

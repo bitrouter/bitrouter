@@ -60,6 +60,7 @@ async fn offline_local_observation_and_capabilities_do_not_claim_execution()
     );
     for operation in [
         Operation::CreateThread {
+            skills: None,
             workspace: fixture.workspace.path().join("missing"),
             model: "fixture".into(),
             model_mode: Default::default(),

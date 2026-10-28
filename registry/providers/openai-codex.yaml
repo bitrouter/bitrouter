@@ -190,6 +190,17 @@
         }
       ],
       "canonical_id": "openai/gpt-6.1-sol"
+    },
+    {
+      "provider_model_id": "gpt-6.1-terra",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "responses",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "openai/gpt-6.1-terra"
     }
   ]
 }

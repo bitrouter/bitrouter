@@ -47,15 +47,13 @@ use std::time::Instant;
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream, StreamExt};
 
-use super::skills::{
-    SKILL_SCHEME, SKILLS_GET_METHOD, SKILLS_LIST_METHOD, namespace_entry, namespace_uri,
-    strip_label,
-};
 use super::{
     AggregateMember, Executor, McpRequest, McpResponse, McpStreamPart, McpTarget, ServerSelector,
 };
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
+use crate::skills::protocol::{namespace_entry, namespace_uri, strip_label};
+use bitrouter_ai::protocol::mcp_skills::{SKILL_SCHEME, SKILLS_GET_METHOD, SKILLS_LIST_METHOD};
 
 /// Whether `uri` falls under `template`'s literal prefix — the text before its
 /// first RFC 6570 expansion.

@@ -15,6 +15,7 @@ use crate::harness::service::state::{Inner, State};
 use crate::harness::storage::{ExecutionStore, MemoryExecutionStore};
 use bitrouter_ai::harness::thread::PermissionProfile;
 
+pub mod activity;
 mod admission;
 mod approval;
 mod checkpoint_pages;
@@ -25,6 +26,7 @@ mod ownership;
 mod queue;
 mod recovery;
 mod runner;
+pub mod skills;
 pub mod startup;
 mod state;
 mod steering;
@@ -275,6 +277,7 @@ impl ThreadService {
             server_instance_id: self.inner.instance_id.clone(),
             limits: self.inner.limits.clone(),
             execution_ownership: state.execution_ownership.clone(),
+            skill_constraints: true,
         }
     }
 

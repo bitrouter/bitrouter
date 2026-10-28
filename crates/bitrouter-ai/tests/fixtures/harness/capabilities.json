@@ -47,7 +47,8 @@
         "generation": 1,
         "stopped_at_ms": null
       }
-    }
+    },
+    "skill_constraints": false
   },
   "operations": [
     "read_thread",

@@ -44,27 +44,6 @@
     }
   },
   {
-    "release_date": "2026-05-28",
-    "family": "claude-opus",
-    "id": "anthropic/claude-opus-4.8",
-    "input_modalities": [
-      "text",
-      "image"
-    ],
-    "max_input_tokens": 1000000,
-    "max_output_tokens": 128000,
-    "name": "Anthropic: Claude Opus 4.8",
-    "open_weights": false,
-    "output_modalities": [
-      "text"
-    ],
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
-  },
-  {
     "description": "Anthropic's Claude Opus 5.",
     "family": "claude-opus",
     "id": "anthropic/claude-opus-5",

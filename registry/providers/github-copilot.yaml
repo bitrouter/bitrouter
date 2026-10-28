@@ -313,6 +313,17 @@
         }
       ],
       "canonical_id": "google/gemini-4-argon"
+    },
+    {
+      "provider_model_id": "gpt-6.1-terra",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "openai/gpt-6.1-terra"
     }
   ]
 }

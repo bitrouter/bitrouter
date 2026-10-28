@@ -111,6 +111,52 @@
         }
       ],
       "canonical_id": "moonshotai/kimi-k2.7-code"
+    },
+    {
+      "provider_model_id": "kimi-k3.1-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 2.0,
+              "cache_read": 0.2,
+              "cache_write": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.moonshot.ai/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 2.0,
+              "cache_read": 0.2,
+              "cache_write": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3.1-pro"
     }
   ],
   "name": "moonshotai",

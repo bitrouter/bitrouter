@@ -181,6 +181,9 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
                     "steer",
                     "resume_queue",
                     "unload_thread",
+                    "load_thread",
+                    "close_thread",
+                    "recover_thread",
                 ]
             } else {
                 &[
@@ -214,6 +217,7 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
             read_only,
             verification_command,
             idempotency_key,
+            skills,
         } => match ThreadService::require_native_execution()
             .and_then(|()| service.register_local_workspace(&workspace))
         {
@@ -227,11 +231,13 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
                             AgentConfig::fixed(model, effort)
                                 .with_model_mode(model_mode)
                                 .with_output_reservation(max_output_tokens)
+                                .with_skill_constraints(skills)
                                 .read_only()
                         } else {
                             AgentConfig::fixed(model, effort)
                                 .with_model_mode(model_mode)
                                 .with_output_reservation(max_output_tokens)
+                                .with_skill_constraints(skills)
                         },
                         permission_profile: if read_only {
                             PermissionProfile::ReadOnly
@@ -258,6 +264,34 @@ async fn dispatch(service: &ThreadService, command: ThreadCommand) -> ReplyResul
             .unload_thread(&make_target(thread_id), &caller)
             .await
             .map(|_| ReplyResult::Ok),
+        Operation::LoadThread {
+            thread_id,
+            workspace,
+        } => match service.register_local_workspace(&workspace) {
+            Ok(workspace) => match service.load_thread(&make_target(thread_id), &caller).await {
+                Ok(view) if view.thread.workspace == workspace => Ok(ReplyResult::View {
+                    view: Box::new(view),
+                }),
+                Ok(_) => Err("Thread workspace cannot change on load".into()),
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        },
+        Operation::CloseThread {
+            thread_id,
+            idempotency_key,
+        } => service
+            .close_thread(&make_target(thread_id), &caller, idempotency_key)
+            .await
+            .map(|receipt| ReplyResult::Thread {
+                snapshot: Box::new(receipt.snapshot),
+            }),
+        Operation::RecoverThread { thread_id, request } => service
+            .recover_thread(&make_target(thread_id), &caller, request)
+            .await
+            .map(|view| ReplyResult::View {
+                view: Box::new(view),
+            }),
         Operation::ReadTurn { thread_id, turn_id } => service
             .read_stored_turn(&make_target(thread_id), &caller, &turn_id)
             .await

@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 
-use super::skills::is_valid_gateway_label;
 use super::{AggregateMember, McpTarget, RoutingTable, ServerSelector};
 use crate::config::mcp::{McpServerConfig, McpTransport};
 use crate::gateway::caller::CallerContext;
@@ -64,21 +63,13 @@ impl ConfigMcpRoutingTable {
             cfg.validate()
                 .map_err(|e| BitrouterError::internal(e.to_string()))?;
             if agg.aggregate {
-                if !is_valid_gateway_label(&key) {
-                    return Err(BitrouterError::internal(format!(
-                        "mcp server routing key '{key}' is not a safe aggregate label; use one \
-                         non-empty ASCII URI segment containing only lowercase letters, digits, \
-                         '-', '.', '_', or '~'"
-                    )));
-                }
-                if let Some(other) = seen_prefixes.get(&agg.tool_prefix) {
-                    return Err(BitrouterError::internal(format!(
-                        "mcp aggregate: servers '{other}' and '{key}' share tool_prefix \
-                         '{}' — prefixes must be unique among aggregate members",
-                        agg.tool_prefix
-                    )));
-                }
-                seen_prefixes.insert(agg.tool_prefix.clone(), key.clone());
+                crate::config::mcp::validate_aggregate_member(
+                    &key,
+                    true,
+                    &agg.tool_prefix,
+                    &mut seen_prefixes,
+                )
+                .map_err(BitrouterError::internal)?;
                 members.push(AggregateMember {
                     server_name: key.clone(),
                     tool_prefix: agg.tool_prefix.clone(),

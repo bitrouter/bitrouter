@@ -289,6 +289,39 @@
         }
       ],
       "canonical_id": "anthropic/claude-haiku-5.5"
+    },
+    {
+      "provider_model_id": "kimi-k3.1-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3.1-pro"
+    },
+    {
+      "provider_model_id": "minimax-m3.1-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3.1-flash"
+    },
+    {
+      "provider_model_id": "gemini-4-argon",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "google/gemini-4-argon"
     }
   ]
 }

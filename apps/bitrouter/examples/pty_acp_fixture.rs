@@ -1,4 +1,4 @@
-//! Deterministic ACP peer for the Unix PTY acceptance suite.
+//! Deterministic ACP peer for Unix CLI and protocol acceptance tests.
 
 #[cfg(unix)]
 mod fixture {
@@ -18,6 +18,7 @@ mod fixture {
         permissions: BTreeSet<String>,
         prompt_count: usize,
         session: String,
+        session_count: usize,
     }
 
     struct Peer {
@@ -42,6 +43,14 @@ mod fixture {
                 {"value": "a12-confirmed", "name": "A12 confirmed"}
             ]
         }])
+    }
+
+    fn modes(current: &str) -> Value {
+        json!({"currentModeId": current, "availableModes": [
+            {"id": "work", "name": "Work"},
+            {"id": "plan", "name": "Plan"},
+            {"id": "rejected", "name": "Rejected by fixture"}
+        ]})
     }
 
     impl Peer {
@@ -113,15 +122,13 @@ mod fixture {
                     .read_line(&mut command)?;
                 match command.trim() {
                     "release" => self.settle("end_turn", "FXRL")?,
-                    "refusal" => self.settle("refusal", "FXST")?,
-                    "permission" => self.permissions()?,
-                    "backlog" => {
-                        let pending = lock(&self.state)?.pending.take();
-                        if let Some(id) = pending {
-                            for number in 0..90 {
-                                self.update(&format!("BG{number:03}\n"), None)?;
-                            }
-                            self.finish(&id, "end_turn")?;
+                    "settings-update" if self.scenario == "control-settings" => {
+                        let session = lock(&self.state)?.session.clone();
+                        for update in [
+                            json!({"sessionUpdate":"current_mode_update","currentModeId":"plan"}),
+                            json!({"sessionUpdate":"config_option_update","configOptions":settings("a12-confirmed")}),
+                        ] {
+                            self.send(json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":session,"update":update}}))?;
                         }
                     }
                     _ => {}
@@ -139,7 +146,7 @@ mod fixture {
             let id = &message["id"];
             match message["method"].as_str() {
                 Some("initialize") => {
-                    let capabilities = if matches!(self.scenario.as_str(), "settings-confirmed" | "settings-failure" | "session-lifecycle") {
+                    let capabilities = if matches!(self.scenario.as_str(), "session-lifecycle" | "control-settings") {
                         json!({"loadSession": true, "sessionCapabilities": {"list": {}, "resume": {}}})
                     } else {
                         json!({})
@@ -147,28 +154,26 @@ mod fixture {
                     self.respond(id, json!({"protocolVersion": 1, "agentCapabilities": capabilities, "agentInfo": {"name": "pty-minimal", "version": "1"}}))?;
                 }
                 Some("session/new") => {
-                    if self.scenario == "hanging-session" {
-                        return Ok(());
-                    }
-                    if self.scenario == "fresh-sessions" {
-                        lock(&self.state)?.session = format!("pty-fresh-{}", std::process::id());
-                    }
-                    if matches!(self.scenario.as_str(), "settings-confirmed" | "settings-failure") {
-                        self.respond(id, json!({"sessionId": "pty-native", "configOptions": settings("a12-old"), "_meta": {"agentSessionId": "agent-a12-settings"}}))?;
-                        self.update("FXSET", None)?;
+                    if self.scenario == "control-settings" {
+                        let session = {
+                            let mut state = lock(&self.state)?;
+                            state.session_count += 1;
+                            state.session = format!("control-session-{}", state.session_count);
+                            state.session.clone()
+                        };
+                        self.respond(id, json!({"sessionId":session,"modes":modes("work"),"configOptions":settings("a12-old"),"_meta":{"agentSessionId":format!("agent-{session}")}}))?;
                     } else {
                         let session = lock(&self.state)?.session.clone();
                         self.respond(id, json!({"sessionId": session}))?;
                     }
-                    let ready = if self.scenario == "fresh-sessions" {
-                        format!("FXRD {}", lock(&self.state)?.session)
-                    } else {
-                        "FXRD".into()
-                    };
-                    self.update(&ready, None)?;
+                    self.update("FXRD", None)?;
                 }
                 Some("session/load") => {
-                    if self.scenario == "session-lifecycle" {
+                    if self.scenario == "control-settings" {
+                        let session = message["params"]["sessionId"].as_str().ok_or("session id missing")?;
+                        lock(&self.state)?.session = session.into();
+                        self.respond(id, json!({"modes":modes("work"),"configOptions":settings("a12-old"),"_meta":{"agentSessionId":format!("agent-{session}")}}))?;
+                    } else if self.scenario == "session-lifecycle" {
                         let session = message["params"]["sessionId"].as_str().unwrap_or("native-a12-load");
                         self.update("FXLOAD", Some(session))?;
                         self.respond(id, json!({"configOptions": settings("a12-old"), "_meta": {"agentSessionId": "agent-a12-load"}}))?;
@@ -176,10 +181,28 @@ mod fixture {
                         self.respond(id, json!({"_meta": {"loadedBy": "pty-fixture"}}))?;
                     }
                 }
-                Some("session/resume") => self.respond(id, json!({"configOptions": settings("a12-old"), "_meta": {"agentSessionId": "agent-a12-resume"}}))?,
+                Some("session/resume") => {
+                    if self.scenario == "control-settings" {
+                        let session = message["params"]["sessionId"].as_str().ok_or("session id missing")?;
+                        lock(&self.state)?.session = session.into();
+                        self.respond(id, json!({"modes":modes("plan"),"configOptions":settings("a12-old"),"_meta":{"agentSessionId":format!("agent-{session}")}}))?;
+                    } else {
+                        self.respond(id, json!({"configOptions": settings("a12-old"), "_meta": {"agentSessionId": "agent-a12-resume"}}))?;
+                    }
+                }
+                Some("session/list") if self.scenario == "control-settings" => {
+                    self.respond(id, json!({"sessions":[{"sessionId":"control-saved","cwd":message["params"]["cwd"],"title":"Saved CLI fixture"}]}))?;
+                }
+                Some("session/set_mode") if self.scenario == "control-settings" => {
+                    if message["params"]["modeId"] == "rejected" {
+                        self.send(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"fixture rejected mode"}}))?;
+                    } else {
+                        self.respond(id, json!({}))?;
+                    }
+                }
                 Some("session/set_config_option") => match self.scenario.as_str() {
-                    "settings-confirmed" => self.respond(id, json!({"configOptions": settings("a12-confirmed")}))?,
-                    "settings-failure" => self.send(json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32000, "message": "FXSF"}}))?,
+                    "control-settings" if message["params"]["value"] == "a12-confirmed" => self.respond(id, json!({"configOptions": settings("a12-confirmed")}))?,
+                    "control-settings" => self.send(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"fixture rejected setting"}}))?,
                     _ => self.respond(id, json!({"configOptions": []}))?,
                 },
                 Some("session/prompt") => {
@@ -189,34 +212,26 @@ mod fixture {
                         state.prompt_count
                     };
                     let text = message.to_string();
-                    if text.contains("background-isolation-fixture") {
-                        self.update("BACKGROUND_PRIVATE_OUTPUT", None)?;
-                        self.finish(id, "end_turn")?;
+                    let marker = if self.scenario == "control-settings" && text.contains("wait-for-timeout") {
+                        Some("FXWAIT".to_owned())
                     } else {
-                        let marker = if self.scenario == "fresh-sessions" && text.contains("wait-for-timeout") {
-                            Some("FXWAIT".to_owned())
-                        } else {
-                            match self.scenario.as_str() {
-                                "delayed-cancel" => Some("FXCN".into()),
-                                "delayed-normal" => Some(format!("FXW{count}")),
-                                "delayed-refusal" => Some("FXRF".into()),
-                                "overlapping-permissions" => Some(String::new()),
-                                "permission-during-inspector" => Some("FXPD".into()),
-                                "detached-backlog" => Some("FXBG".into()),
-                                _ => None,
-                            }
-                        };
-                        if let Some(marker) = marker {
-                            lock(&self.state)?.pending = Some(id.clone());
-                            if self.scenario == "overlapping-permissions" {
-                                self.permissions()?;
-                            } else {
-                                self.update(&marker, None)?;
-                            }
-                        } else {
-                            self.update(&format!("FXRP{count}"), None)?;
-                            self.finish(id, "end_turn")?;
+                        match self.scenario.as_str() {
+                            "delayed-cancel" => Some("FXCN".into()),
+                            "delayed-normal" => Some(format!("FXW{count}")),
+                            "overlapping-permissions" => Some(String::new()),
+                            _ => None,
                         }
+                    };
+                    if let Some(marker) = marker {
+                        lock(&self.state)?.pending = Some(id.clone());
+                        if self.scenario == "overlapping-permissions" {
+                            self.permissions()?;
+                        } else {
+                            self.update(&marker, None)?;
+                        }
+                    } else {
+                        self.update(&format!("FXRP{count}"), None)?;
+                        self.finish(id, "end_turn")?;
                     }
                 }
                 Some("session/cancel") => {
@@ -244,13 +259,29 @@ mod fixture {
     }
 
     pub fn run() -> FixtureResult {
+        let scenario = std::env::var("BITROUTER_PTY_SCENARIO").unwrap_or_else(|_| "minimal".into());
+        if !matches!(
+            scenario.as_str(),
+            "minimal"
+                | "delayed-cancel"
+                | "delayed-normal"
+                | "overlapping-permissions"
+                | "session-lifecycle"
+                | "control-settings"
+        ) {
+            return Err(std::io::Error::other(format!(
+                "unsupported ACP fixture scenario: {scenario}"
+            ))
+            .into());
+        }
         let peer = Arc::new(Peer {
-            scenario: std::env::var("BITROUTER_PTY_SCENARIO").unwrap_or_else(|_| "minimal".into()),
+            scenario,
             state: Mutex::new(State {
                 pending: None,
                 permissions: BTreeSet::new(),
                 prompt_count: 0,
                 session: "pty-native".into(),
+                session_count: 0,
             }),
             output: Mutex::new(()),
         });

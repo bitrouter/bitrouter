@@ -14,6 +14,9 @@
 
 #![cfg(unix)] // bash stubs are Unix-only
 
+#[path = "support/example_binary.rs"]
+mod example_binary;
+
 use std::collections::HashMap;
 
 use bitrouter::config::Config;
@@ -1036,8 +1039,10 @@ async fn headless(
     (tally, String::from_utf8(buf).expect("utf8"))
 }
 
-fn policy(mode: bitrouter::harness::permission::Mode) -> bitrouter::harness::permission::Policy {
-    bitrouter::harness::permission::Policy {
+fn policy(
+    mode: bitrouter::harness::acp::permission::Mode,
+) -> bitrouter::harness::acp::permission::Policy {
+    bitrouter::harness::acp::permission::Policy {
         mode,
         ..Default::default()
     }
@@ -1048,7 +1053,7 @@ fn policy(mode: bitrouter::harness::permission::Mode) -> bitrouter::harness::per
 #[tokio::test]
 async fn prompt_approve_all_selects_the_allow_option() {
     let options = bitrouter::acp_cli::PromptOptions {
-        policy: policy(bitrouter::harness::permission::Mode::ApproveAll),
+        policy: policy(bitrouter::harness::acp::permission::Mode::ApproveAll),
         ..Default::default()
     };
     let (tally, output) = headless(permission_stub("execute"), "run it", options).await;
@@ -1081,7 +1086,7 @@ async fn prompt_approve_all_selects_the_allow_option() {
 #[tokio::test]
 async fn prompt_approve_reads_reads_the_kind() {
     let reads = || bitrouter::acp_cli::PromptOptions {
-        policy: policy(bitrouter::harness::permission::Mode::ApproveReads),
+        policy: policy(bitrouter::harness::acp::permission::Mode::ApproveReads),
         ..Default::default()
     };
     let (tally, output) = headless(permission_stub("read"), "read it", reads()).await;
@@ -1098,8 +1103,8 @@ async fn prompt_approve_reads_reads_the_kind() {
 #[tokio::test]
 async fn prompt_permission_policy_title_head_wins() {
     let options = bitrouter::acp_cli::PromptOptions {
-        policy: bitrouter::harness::permission::Policy {
-            mode: bitrouter::harness::permission::Mode::ApproveAll,
+        policy: bitrouter::harness::acp::permission::Policy {
+            mode: bitrouter::harness::acp::permission::Mode::ApproveAll,
             auto_deny: vec!["write".to_string()],
             ..Default::default()
         },
@@ -1460,33 +1465,34 @@ async fn conformance_forwarded_update_variants_survive_round_trip() {
     fixture.shutdown().await;
 }
 
-// ── Test 5: `chat` on a pipe ─────────────────────────────────────────────────
-
-/// `bro chat` renders for a person; a redirect has none. Spawn it with
-/// stdout on a pipe, feed it one prompt, and assert the transcript arrives as
-/// plain text — **no ESC byte anywhere**.
-///
-/// This is the property, not a proxy for it: the interactive path's live row,
-/// cursor moves, and raw-mode switches are all ESC sequences, so a single
-/// `0x1b` in this output would mean the terminal path ran against a file.
-///
-/// Driven as a subprocess because that is the only way to get a pipe on
-/// stdout: in-process, the test harness's own capture decides what
-/// `is_terminal()` reports.
+// A real piped CLI retains the plain transcript after chat is removed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn chat_on_a_pipe_is_plain_text() -> anyhow::Result<()> {
-    use anyhow::{Context, ensure};
-    use std::time::Duration;
+async fn run_on_a_pipe_is_plain_text() -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt as _;
-
     let dir = tempfile::tempdir()?;
     let config_path = dir.path().join("bitrouter.yaml");
-    std::fs::write(&config_path, SERVE_CONFIG_YAML)?;
-    let stderr_path = dir.path().join("chat.stderr");
-    let stderr_file = std::fs::File::create(&stderr_path)?;
+    let executable = {
+        let _cwd = CwdGuard::hold();
+        example_binary::build("bitrouter", "pty_acp_fixture").map_err(anyhow::Error::msg)?
+    };
+    std::fs::write(
+        &config_path,
+        serde_json::to_vec(&serde_json::json!({
+            "inherit_defaults":false,
+            "registry":{"enabled":false},
+        "agents":{"stub":{"name":"stub","transport":{"type":"stdio","command":executable,
+                "env":{"BITROUTER_PTY_CAPTURE":dir.path().join("captured.ndjson")}}}}
+        }))?,
+    )?;
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bro"))
-        .args(["chat", "stub", "--direct", "--config"])
+        .args([
+            "run", "stub", "-", "--format", "text", "--direct", "--config",
+        ])
         .arg(&config_path)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", dir.path())
+        .env("BITROUTER_HOME", dir.path())
         .current_dir(dir.path())
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -1495,27 +1501,31 @@ async fn chat_on_a_pipe_is_plain_text() -> anyhow::Result<()> {
         .env("BITROUTER_HOME", dir.path().join("runtime"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(stderr_file)
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
-
-    let mut child_stdin = child.stdin.take().context("chat stdin")?;
-    child_stdin.write_all(b"hello\n").await?;
-    // EOF ends the piped session and its owned child; no terminal is involved.
-    drop(child_stdin);
-    let finished = tokio::time::timeout(Duration::from_secs(60), child.wait_with_output())
-        .await
-        .context("chat must exit once stdin closes")??;
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("missing piped stdin"))?;
+    input.write_all(b"hello\n").await?;
+    drop(input);
+    let finished =
+        tokio::time::timeout(std::time::Duration::from_secs(60), child.wait_with_output())
+            .await??;
     let stdout = String::from_utf8_lossy(&finished.stdout);
-    let stderr = std::fs::read_to_string(&stderr_path)?;
-    ensure!(finished.status.success(), "chat failed: {stderr}");
-    ensure!(
-        !finished.stdout.contains(&0x1b),
-        "a redirected stdout must carry no escape sequences; got {stdout:?}\nstderr:\n{stderr}"
+    anyhow::ensure!(
+        finished.status.success(),
+        "run failed: {}",
+        String::from_utf8_lossy(&finished.stderr)
     );
-    ensure!(
-        stdout.contains("hi"),
-        "the agent's reply must still reach a pipe; got {stdout:?}\nstderr:\n{stderr}"
+    anyhow::ensure!(
+        !finished.stdout.contains(&0x1b),
+        "a redirected stdout emitted terminal controls: {stdout}"
+    );
+    anyhow::ensure!(
+        stdout.contains("FXRP1"),
+        "the agent reply did not reach the pipe: {stdout}"
     );
     Ok(())
 }

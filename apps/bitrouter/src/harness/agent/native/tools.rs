@@ -21,7 +21,7 @@ pub(super) async fn execute(
     (dispatch, skip): (ToolExecute, bool),
     cancel: CancellationToken,
     approvals: Option<mpsc::Sender<ApprovalRequest>>,
-    effects: Arc<RwLock<()>>,
+    (effects, approval_gate): (Arc<RwLock<()>>, Arc<tokio::sync::Mutex<()>>),
 ) -> Result<bool, String> {
     let observation = |status| ToolObservation {
         invocation_id: dispatch.invocation_id.clone(),
@@ -46,25 +46,30 @@ pub(super) async fn execute(
     } else if !read_only(&dispatch.tool)
         && let Some(approvals) = approvals
     {
-        core.tool_status(
-            &uuid::Uuid::new_v4().to_string(),
-            observation(ToolStatus::WaitingApproval),
-        )
-        .await
-        .map_err(|error| error.message)?;
-        let (response, receive) = oneshot::channel();
-        let request = ApprovalRequest {
-            id: uuid::Uuid::new_v4().to_string(),
-            tool_id: item_id.clone(),
-            tool_name: dispatch.tool.clone(),
-            arguments: dispatch.arguments.to_string(),
-            response,
-        };
-        tokio::select! {
-            biased;
-            _ = cancel.cancelled() => false,
-            _ = port.stopped.cancelled() => false,
-            outcome = async { approvals.send(request).await.map_err(|_| ())?; receive.await.map_err(|_| ()) } => outcome.unwrap_or(false),
+        let _approval = approval_gate.lock().await;
+        if cancel.is_cancelled() || port.stopped.is_cancelled() {
+            false
+        } else {
+            core.tool_status(
+                &uuid::Uuid::new_v4().to_string(),
+                observation(ToolStatus::WaitingApproval),
+            )
+            .await
+            .map_err(|error| error.message)?;
+            let (response, receive) = oneshot::channel();
+            let request = ApprovalRequest {
+                id: uuid::Uuid::new_v4().to_string(),
+                tool_id: item_id.clone(),
+                tool_name: dispatch.tool.clone(),
+                arguments: dispatch.arguments.to_string(),
+                response,
+            };
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => false,
+                _ = port.stopped.cancelled() => false,
+                outcome = async { approvals.send(request).await.map_err(|_| ())?; receive.await.map_err(|_| ()) } => outcome.unwrap_or(false),
+            }
         }
     } else {
         true

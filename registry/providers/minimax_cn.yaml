@@ -112,6 +112,50 @@
         }
       ],
       "canonical_id": "minimax/minimax-m3"
+    },
+    {
+      "provider_model_id": "MiniMax-M3.1-Flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.1494,
+              "cache_read": 0.0149
+            },
+            "output_tokens": {
+              "text": 0.5976
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.minimaxi.com/v1",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.1494,
+              "cache_read": 0.0149
+            },
+            "output_tokens": {
+              "text": 0.5976
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3.1-flash"
     }
   ],
   "name": "minimax_cn",

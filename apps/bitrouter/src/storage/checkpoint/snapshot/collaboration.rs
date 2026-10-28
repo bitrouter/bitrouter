@@ -32,6 +32,8 @@ pub struct Work {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "name", content = "arguments", deny_unknown_fields)]
 pub enum Action {
+    #[serde(rename = "skill_read")]
+    SkillRead { skill_id: String, reference: String },
     #[serde(rename = "context")]
     Context(crate::storage::checkpoint::snapshot::context::action::ContextAction),
     #[serde(rename = "spawn_agent")]

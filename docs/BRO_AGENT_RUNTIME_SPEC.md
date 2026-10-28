@@ -1,5 +1,12 @@
 # BRO standalone runtime contract
 
+> **CLI-only G05 entry update (2026-10-19, local worktree).** Runtime, protocol,
+> permission and recovery requirements in this document remain authoritative.
+> First-party code/tui/chat/agents attach interfaces are removed; earlier UI
+> examples and source paths are historical. Use native Thread controls, headless
+> ACP commands or native harness launchers from the [current CLI reference](CLI.md).
+> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Updated: 2026-10-06. Standalone source baseline:
 [`65555b12`](https://github.com/bitrouter/bitrouter/commit/65555b126e8d14982b2a7c977b618d545cd8f5b7),
 PR #945; native ACP additions are local and recorded in
@@ -303,7 +310,7 @@ and close intent/completion; public history excludes credentials. See
 
 ## Client and transport boundary
 
-Local protocol is **v17**; reject mismatches without fallback/resubmit. HTTP uses
+Local protocol is **v19**; reject mismatches without fallback/resubmit. HTTP uses
 **`/agent/v2`**, loopback, a dedicated bearer credential, workspace allowlist and
 body/admission bounds. See [agent_api.rs](../apps/bitrouter/src/agent_api.rs) for
 routes: create/read Thread, start/enqueue/read/cancel Turn, steer, approve, resume,

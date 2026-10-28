@@ -450,9 +450,18 @@
         {
           "protocol": "decisions",
           "operation": "decisions",
-          "question_types": ["predicate", "choice", "score"],
-          "input_modalities": ["text", "image"],
-          "output_modalities": ["structured"],
+          "question_types": [
+            "predicate",
+            "choice",
+            "score"
+          ],
+          "input_modalities": [
+            "text",
+            "image"
+          ],
+          "output_modalities": [
+            "structured"
+          ],
           "extensions": {
             "verification_url": "https://developers.openai.com/api/docs/guides/decisions"
           },
@@ -591,6 +600,54 @@
           "/status": "catalog"
         }
       }
+    },
+    {
+      "provider_model_id": "gpt-6.1-terra",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.0,
+              "cache_read": 0.05,
+              "cache_write": 1.25
+            },
+            "output_tokens": {
+              "text": 5.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          },
+          "compatibility": {
+            "token_limit_field": "max_completion_tokens"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.0,
+              "cache_read": 0.05,
+              "cache_write": 1.25
+            },
+            "output_tokens": {
+              "text": 5.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6.1-terra"
     }
   ],
   "name": "openai",

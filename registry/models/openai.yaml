@@ -289,5 +289,45 @@
       "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
       "checked_at": "2026-10-22T17:30:00Z"
     }
+  },
+  {
+    "id": "openai/gpt-6.1-terra",
+    "name": "OpenAI: GPT-6.1 Terra",
+    "input_modalities": [
+      "file",
+      "image",
+      "text"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 1050000,
+    "max_output_tokens": 128000,
+    "release_date": "2026-10-26",
+    "curation": {
+      "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-28T19:35:49Z"
+    }
+  },
+  {
+    "id": "openai/gpt-6.1-terra-pro",
+    "name": "OpenAI: GPT-6.1 Terra Pro",
+    "input_modalities": [
+      "file",
+      "image",
+      "text"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 1050000,
+    "max_output_tokens": 128000,
+    "release_date": "2026-10-26",
+    "curation": {
+      "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-28T19:35:49Z"
+    }
   }
 ]

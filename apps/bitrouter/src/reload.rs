@@ -510,6 +510,11 @@ fn restart_required_fields(
     if mcp_servers_changed(current, candidate) {
         fields.insert("mcp_servers".to_string());
     }
+    // Native resource owners retain their admitted source policy; swapping the
+    // inference table cannot grant or revoke skills on those owners.
+    if serialized_values_differ(&current.skills, &candidate.skills) {
+        fields.insert("skills".to_string());
+    }
     if server_tools_changed(current, candidate) {
         fields.insert("server_tools".to_string());
     }
@@ -1073,6 +1078,7 @@ fn fixed_top_level_field(name: &str) -> &'static str {
         "plugins" => "plugins",
         "mcp" => "mcp",
         "mcp_servers" => "mcp_servers",
+        "skills" => "skills",
         "server_tools" => "server_tools",
         "agents" => "agents",
         "inherit_defaults" => "inherit_defaults",
@@ -1130,6 +1136,7 @@ fn fixed_restart_field(path: &str) -> String {
         | "plugins"
         | "mcp"
         | "mcp_servers"
+        | "skills"
         | "server_tools"
         | "agents"
         | "upstream.fallback_backoff_ms"

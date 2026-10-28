@@ -52,17 +52,56 @@ impl McpConnections {
             .map_err(resource_error)
     }
 
-    pub(crate) async fn connect_cancellable(
+    pub(crate) async fn connect_scoped(
         workspace: &Path,
         servers: &[McpServerConfig],
+        tool_servers: &std::collections::BTreeSet<String>,
         version: ProtocolVersion,
         cancel: &CancellationToken,
         max_duration: Duration,
     ) -> Result<Self, ResourceError> {
-        BoundedMcpClient::connect_cancellable(workspace, servers, version, cancel, max_duration)
+        BoundedMcpClient::connect_scoped(
+            workspace,
+            servers,
+            tool_servers,
+            version,
+            cancel,
+            max_duration,
+        )
+        .await
+        .map(Self::from_client)
+        .map_err(resource_error)
+    }
+
+    pub async fn list_skills(
+        &self,
+        server: &str,
+        access: &crate::skills::mcp::SkillAccess<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<bitrouter_ai::harness::skills::McpSkillCatalog, String> {
+        self.client.list_skills(server, access, cancel).await
+    }
+
+    pub async fn get_skill(
+        &self,
+        server: &str,
+        uri: &str,
+        access: &crate::skills::mcp::SkillAccess<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, String> {
+        self.client.get_skill(server, uri, access, cancel).await
+    }
+
+    pub async fn read_skill_file(
+        &self,
+        held: &bitrouter_ai::harness::skills::HeldMcpSkill,
+        access: &crate::skills::mcp::SkillAccess<'_>,
+        read: crate::skills::mcp::SkillRead<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<crate::skills::mcp::VerifiedSkillFile, String> {
+        self.client
+            .read_skill_file(held, access, read, cancel)
             .await
-            .map(Self::from_client)
-            .map_err(resource_error)
     }
 
     fn from_client(client: BoundedMcpClient) -> Self {

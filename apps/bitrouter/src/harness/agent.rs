@@ -1,3 +1,4 @@
+use crate::harness::resources::HarnessInventoryExt;
 #[cfg(feature = "core")]
 use crate::harness::resources::McpToolExt;
 #[cfg(feature = "core")]
@@ -32,6 +33,10 @@ pub trait AgentConfigExt: Sized {
     fn with_model_mode(self, mode: bitrouter_ai::core::protocol::ModelMode) -> Self;
     fn with_output_reservation(self, tokens: Option<u32>) -> Self;
     fn tool_mode(&self) -> ToolMode;
+    fn with_skill_constraints(
+        self,
+        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+    ) -> Self;
 }
 
 impl AgentConfigExt for AgentConfig {
@@ -41,6 +46,7 @@ impl AgentConfigExt for AgentConfig {
             model_mode: bitrouter_ai::core::protocol::ModelMode::Fixed,
             effort,
             max_output_tokens: None,
+            skills: None,
             instructions: DEFAULT_INSTRUCTIONS.into(),
             max_steps: 32,
             max_tool_calls: 128,
@@ -65,6 +71,14 @@ impl AgentConfigExt for AgentConfig {
 
     fn with_output_reservation(mut self, tokens: Option<u32>) -> Self {
         self.max_output_tokens = tokens;
+        self
+    }
+
+    fn with_skill_constraints(
+        mut self,
+        skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
+    ) -> Self {
+        self.skills = skills;
         self
     }
 
@@ -150,7 +164,6 @@ pub struct Agent {
     native_checkpoint_bytes: u64,
     #[cfg(feature = "core")]
     app: Arc<App>,
-    #[cfg(feature = "core")]
     caller: CallerContext,
     tools: WorkspaceTools,
     resource_config: Arc<crate::harness::resources::HarnessConfig>,
@@ -179,6 +192,7 @@ pub(crate) struct RunInput {
 pub(crate) struct RunChannels {
     pub events: Option<mpsc::Sender<RunEvent>>,
     pub approvals: Option<mpsc::Sender<ApprovalRequest>>,
+    pub skill_approvals: Option<mpsc::Sender<ApprovalRequest>>,
     pub commits: Option<mpsc::Sender<CommitRequest>>,
     pub control: Option<TurnControl>,
 }
@@ -289,6 +303,9 @@ impl Agent {
         workspace: &Path,
         config: AgentConfig,
     ) -> Result<Self, String> {
+        if let Some(skills) = &config.skills {
+            skills.validate().map_err(|error| error.to_string())?;
+        }
         if !cfg!(feature = "core") {
             return Err(NATIVE_UNAVAILABLE.into());
         }
@@ -316,7 +333,6 @@ impl Agent {
             native_checkpoint_bytes: 32 * 1024 * 1024,
             #[cfg(feature = "core")]
             app: _app,
-            #[cfg(feature = "core")]
             caller: _caller,
             tools,
             resource_config: Arc::new(crate::harness::resources::HarnessConfig::default()),
@@ -362,6 +378,7 @@ impl Agent {
             cancel,
             RunChannels {
                 events,
+                skill_approvals: approvals.clone(),
                 approvals,
                 commits,
                 control: None,
@@ -405,6 +422,7 @@ impl Agent {
         let RunChannels {
             events,
             approvals,
+            skill_approvals,
             commits,
             control,
         } = channels;
@@ -471,6 +489,7 @@ impl Agent {
                 Ok(snapshot) => crate::harness::resources::HarnessResources::discover(
                     self.tools.root(),
                     &self.resource_config,
+                    &self.caller,
                     self.config.tool_mode,
                     &cancel,
                     self.config.max_duration.saturating_sub(started.elapsed()),
@@ -484,7 +503,7 @@ impl Agent {
                 let error = if report
                     .resources
                     .as_ref()
-                    .is_some_and(|old| old != &resources.inventory)
+                    .is_some_and(|old| !old.same_execution_resources(&resources.inventory))
                 {
                     Some(
                         "harness resources changed; refuse continuation with a different inventory"
@@ -592,6 +611,7 @@ impl Agent {
                                 RunChannels {
                                     events: events.clone(),
                                     approvals,
+                                    skill_approvals,
                                     commits: commits.clone(),
                                     control,
                                 },

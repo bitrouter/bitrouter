@@ -67,6 +67,7 @@ fn server_tag(message: &ServerMessage) -> &'static str {
         ServerMessage::ToolExecute(_) => "tool.execute",
         ServerMessage::ToolCancel { .. } => "tool.cancel",
         ServerMessage::MaterialRequest { .. } => "material.request",
+        ServerMessage::SkillConsentRequest(_) => "skill.consent.request",
         ServerMessage::ArtifactPut { .. } => "artifact.put",
         ServerMessage::ArtifactRead { .. } => "artifact.read",
         ServerMessage::Receipt(_) => "operation.receipt",
@@ -188,6 +189,16 @@ fn all_server_variants_preserve_literal_wire_contracts() -> Result<()> {
             json!({"request_id":"request","material_id":"material","version":"v1"}),
         ),
         (
+            "skill.consent.request",
+            json!({"session_id":"session","run_id":"run","agent_id":"agent","agent_turn_id":"turn",
+            "consent":{"request_id":"consent","execution_epoch":1,"permission_revision":1,"tool_manifest_digest":"tools",
+            "skill_id":"source","entry_digest":"entry","approved":null,"answer_operation_id":null,"revoked":false},
+            "source":{"origin":{"server":"fixture","configuration_digest":"configuration",
+            "scope":{"workspace":"workspace","api_key_id":"key","user_id":"user","local":false}},
+            "entry":{"uri":"skill://review/SKILL.md","frontmatter":{"name":"review","description":"fixture"},
+            "resources":[{"uri":"skill://review/SKILL.md","digest":"sha256:fixture","size":3}]},"entry_digest":"entry"}}),
+        ),
+        (
             "artifact.put",
             json!({"reference":artifact(),"offset":0,"content_base64":"YWJj"}),
         ),
@@ -203,7 +214,7 @@ fn all_server_variants_preserve_literal_wire_contracts() -> Result<()> {
         ("session.head", head()),
         ("error", error()),
     ];
-    ensure!(cases.len() == 10);
+    ensure!(cases.len() == 11);
     let mut seen = std::collections::BTreeSet::new();
     for (tag, payload) in cases {
         let wire = json!({"type":tag,"payload":payload});
@@ -215,6 +226,6 @@ fn all_server_variants_preserve_literal_wire_contracts() -> Result<()> {
         );
         seen.insert(server_tag(&decoded));
     }
-    ensure!(seen.len() == 10);
+    ensure!(seen.len() == 11);
     Ok(())
 }

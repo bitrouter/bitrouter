@@ -31,6 +31,10 @@ pub struct HarnessInventory {
     pub instructions: Vec<MaterialRef>,
     pub skills: Vec<SkillMetadata>,
     pub skill_problems: Vec<String>,
+    #[serde(default, skip_serializing_if = "mcp_catalog_empty")]
+    pub mcp_skills: super::skills::McpSkillCatalog,
+    #[serde(default, skip_serializing_if = "managed_catalog_empty")]
+    pub local_skills: super::skills::LocalSkillCatalog,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -41,3 +45,11 @@ pub struct SkillMetadata {
 }
 
 redacted_contract_debug!(MaterialRef, McpTool, HarnessInventory, SkillMetadata);
+
+fn mcp_catalog_empty(catalog: &super::skills::McpSkillCatalog) -> bool {
+    catalog.skills.is_empty() && catalog.excluded.is_empty()
+}
+
+fn managed_catalog_empty(catalog: &super::skills::LocalSkillCatalog) -> bool {
+    catalog.skills.is_empty() && catalog.problems.is_empty()
+}
