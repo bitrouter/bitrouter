@@ -69,6 +69,16 @@ and onboarding tests pass; background startup uses isolated lifecycle coverage
 instead of the obsolete status-only bare-command assertion. Independent static
 review found no further issue in this repair batch.
 
+The next profile pass also exposed two stale UI integration assumptions. Native
+route action identities are retained while their CLI leaves are absent without
+Harness, and plain ACP transcript tests now assert retained Markdown bytes.
+The minimum-profile CI base-contract selection passes all 127 cases locally.
+MCP management keeps a cancellation receiver alive across prompt transitions,
+closing a signal-listener gap observed by Linux PTY CI. All three terminal
+editing/cancellation cases pass locally with their existing deadlines and
+source-preservation assertions. Independent review identified no additional
+root cause among the current failed checks.
+
 Full runtime, platform and security results for the updated three-PR stack will
 be recorded against its final heads. Earlier performance campaigns remain
 historical evidence; this integration makes no new performance claim. No PR
