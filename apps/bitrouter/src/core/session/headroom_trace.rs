@@ -88,3 +88,64 @@ impl Drop for Scope {
         }
     }
 }
+
+// Six fixed transition stages. Timing is test-only and emits no checkpoint data.
+#[derive(Clone, Copy)]
+pub(super) enum Stage {
+    CommitLock,
+    Prepare,
+    ChoicePreflight,
+    Propose,
+    HarnessCommit,
+    Adopt,
+}
+
+pub(super) struct Transition {
+    started: std::time::Instant,
+    previous: std::time::Instant,
+    milliseconds: [u128; 6],
+    completed: u8,
+    revision: u64,
+    receipts: usize,
+}
+impl Transition {
+    pub(super) fn new() -> Self {
+        let started = std::time::Instant::now();
+        Self {
+            started,
+            previous: started,
+            milliseconds: [0; 6],
+            completed: 0,
+            revision: 0,
+            receipts: 0,
+        }
+    }
+    pub(super) fn snapshot(&mut self, revision: u64, receipts: usize) {
+        self.revision = revision;
+        self.receipts = receipts;
+    }
+    pub(super) fn mark(&mut self, stage: Stage) {
+        let now = std::time::Instant::now();
+        if let Some(value) = self.milliseconds.get_mut(stage as usize) {
+            *value = now.duration_since(self.previous).as_millis();
+            self.completed |= 1 << stage as u8;
+        }
+        self.previous = now;
+    }
+}
+impl Drop for Transition {
+    fn drop(&mut self) {
+        let elapsed = self.started.elapsed();
+        if elapsed >= std::time::Duration::from_secs(1) {
+            let [commit_lock, prepare, preflight, propose, commit, adopt] = self.milliseconds;
+            eprintln!(
+                "headroom transition timing: revision={}, receipts={}, elapsed_ms={}, completed_stages={:06b}, commit_lock_ms={commit_lock}, prepare_ms={prepare}, choice_preflight_ms={preflight}, propose_ms={propose}, harness_commit_ms={commit}, adopt_ms={adopt}, pending_ms={}",
+                self.revision,
+                self.receipts,
+                elapsed.as_millis(),
+                self.completed,
+                self.previous.elapsed().as_millis(),
+            );
+        }
+    }
+}

@@ -150,7 +150,7 @@ impl Store {
         self.load_unconfirmed.load(Ordering::Acquire)
     }
     pub(crate) fn matches_attempt(&self, loaded: &Loaded) -> Result<bool, CoreError> {
-        let digest = journal_digest(&loaded.journal)?;
+        let (_, digest) = journal_evidence(&loaded.journal)?;
         let attempted = self
             .attempted
             .lock()
@@ -242,19 +242,16 @@ impl NativeStore for Store {
             .binding
             .get()
             .ok_or_else(|| storage("native store is unbound"))?;
-        let attempt = Attempt {
-            revision: expected_revision
-                .checked_add(1)
-                .ok_or_else(|| storage("native revision exhausted"))?,
-            digest: journal_digest(&bytes)?,
-        };
+        let revision = expected_revision
+            .checked_add(1)
+            .ok_or_else(|| storage("native revision exhausted"))?;
+        let (value, digest) = journal_evidence(&bytes)?;
+        let attempt = Attempt { revision, digest };
         *self
             .attempted
             .lock()
             .map_err(|_| storage("native write evidence unavailable"))? = Some(attempt);
         self.last_write.store(1, Ordering::Release);
-        let value: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|_| storage("invalid native journal"))?;
         let metadata = {
             let mut metadata = self
                 .metadata
@@ -360,14 +357,15 @@ impl NativeStore for Store {
 
 // Only a digest of the exact bounded attempted journal is retained. Reconciliation
 // cannot substitute a matching checkpoint with different artifacts or tool starts.
-fn journal_digest(bytes: &[u8]) -> Result<[u8; 32], CoreError> {
+// Return the decoded value so save can also inspect metadata without reparsing.
+fn journal_evidence(bytes: &[u8]) -> Result<(serde_json::Value, [u8; 32]), CoreError> {
     if bytes.len() > MAX_STORE_BYTES {
         return Err(storage("native journal exceeds storage allowance"));
     }
     let journal: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| storage("invalid native write evidence"))?;
     let canonical = encode(&journal).map_err(|_| storage("native write evidence exceeds bound"))?;
-    Ok(Sha256::digest(canonical).into())
+    Ok((journal, Sha256::digest(canonical).into()))
 }
 
 fn scoped(authority: &Authority) -> Result<sea_orm::Select<session::Entity>> {

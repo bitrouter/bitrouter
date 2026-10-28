@@ -3605,11 +3605,17 @@ impl CoreSession {
     where
         F: FnOnce(&mut SessionSnapshot, &DurableHead, bool) -> Result<Value, CoreError> + Send,
     {
+        #[cfg(test)]
+        let mut timing = headroom_trace::Transition::new();
         let _commit = self.shared.commits.lock().await;
+        #[cfg(test)]
+        timing.mark(headroom_trace::Stage::CommitLock);
         let (batch, disconnected, archive, manifest, rejection) = {
             let mut live = self.shared.live.lock().await;
             let mut next = live.state.clone();
             let head = live.gate.head().clone();
+            #[cfg(test)]
+            timing.snapshot(head.state_revision, next.context_store.decisions.len());
             // During restoration, delayed stop reports can still correct
             // the open interval. Seal only the authenticated entry baseline
             // until output replay and the lifecycle drain have finished.
@@ -3687,6 +3693,8 @@ impl CoreSession {
                 }
                 Err(error) => return Err(error),
             };
+            #[cfg(test)]
+            timing.mark(headroom_trace::Stage::Prepare);
             #[cfg(feature = "harness")]
             if let Some(journal) = &self.shared.owned_journal {
                 let preflight = journal.preflight(&proposed, live.gate.head()).await;
@@ -3699,6 +3707,8 @@ impl CoreSession {
                 }
                 preflight?;
             }
+            #[cfg(test)]
+            timing.mark(headroom_trace::Stage::ChoicePreflight);
             let proposed = live.gate.propose(proposed);
             #[cfg(test)]
             if let Err(error) = &proposed {
@@ -3733,6 +3743,8 @@ impl CoreSession {
                 rejection,
             )
         };
+        #[cfg(test)]
+        timing.mark(headroom_trace::Stage::Propose);
         let acknowledgement = tokio::select! {
             biased;
             _ = disconnected.cancelled() => Err(reject(ErrorCode::CheckpointUnavailable, "durable authority disconnected during commit")),
@@ -3741,6 +3753,8 @@ impl CoreSession {
                 self.shared.harness.commit(batch).await
             } => acknowledgement,
         };
+        #[cfg(test)]
+        timing.mark(headroom_trace::Stage::HarnessCommit);
         let mut live = self.shared.live.lock().await;
         let result = match acknowledgement {
             Ok(ack) => match live.gate.acknowledge(&ack) {
@@ -3759,6 +3773,8 @@ impl CoreSession {
             },
             Err(error) => Err(error),
         };
+        #[cfg(test)]
+        timing.mark(headroom_trace::Stage::Adopt);
         result.map_err(|mut error| {
             #[cfg(test)]
             eprintln!(
