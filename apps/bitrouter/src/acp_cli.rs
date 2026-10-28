@@ -3253,7 +3253,7 @@ mod text_presenter_tests {
         presenter.turn_settled().await?;
         presenter.turn_settled().await?;
         drop(presenter);
-        assert_eq!(output, b"First turn\nSecond turn\n");
+        assert_eq!(output, b"**First turn**\nSecond turn\n");
         Ok(())
     }
 
