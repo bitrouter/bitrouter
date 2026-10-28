@@ -157,28 +157,33 @@ async fn addition(name: &str, input: AddInput) -> Result<String> {
             env: Default::default(),
         },
         (None, None) if crate::prompt::terminal() => {
-            let selected = crate::prompt::select(
-                "MCP transport",
-                "Saving does not connect or start the server.",
-                vec![
-                    crate::prompt::Item::new("http", "Streamable HTTP URL"),
-                    crate::prompt::Item::new("stdio", "Local server program"),
-                ],
-                0,
-            )
-            .await?;
-            if selected == 0 {
-                McpTransport::Http {
-                    url: crate::prompt::line("HTTP URL").await?,
-                    headers: Default::default(),
-                }
-            } else {
-                McpTransport::Stdio {
-                    command: crate::prompt::line("Program (use --from for arguments/env)").await?,
-                    args: Vec::new(),
-                    env: Default::default(),
-                }
-            }
+            crate::prompt::interruptible(async {
+                // One receiver spans both prompts without wrapping explicit blocking input.
+                let selected = crate::prompt::select(
+                    "MCP transport",
+                    "Saving does not connect or start the server.",
+                    vec![
+                        crate::prompt::Item::new("http", "Streamable HTTP URL"),
+                        crate::prompt::Item::new("stdio", "Local server program"),
+                    ],
+                    0,
+                )
+                .await?;
+                Ok(if selected == 0 {
+                    McpTransport::Http {
+                        url: crate::prompt::line("HTTP URL").await?,
+                        headers: Default::default(),
+                    }
+                } else {
+                    McpTransport::Stdio {
+                        command: crate::prompt::line("Program (use --from for arguments/env)")
+                            .await?,
+                        args: Vec::new(),
+                        env: Default::default(),
+                    }
+                })
+            })
+            .await?
         }
         _ => {
             return Err(bad(
@@ -223,11 +228,6 @@ async fn editor(value: &serde_json::Value) -> Result<String> {
 }
 
 pub async fn execute(command: Command, output: &Output) -> Result<()> {
-    // Keep one signal receiver alive across prompt transitions and editor waits.
-    crate::prompt::interruptible(execute_inner(command, output)).await
-}
-
-async fn execute_inner(command: Command, output: &Output) -> Result<()> {
     let (config, name, write) = match &command {
         Command::List { config } => (config, None, false),
         Command::Show { config, name } => (config, Some(name.as_str()), false),

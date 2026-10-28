@@ -1035,6 +1035,10 @@ mod tests {
             request_id,
             first,
         } = terminal_recorder_fixture().await?;
+        assert_eq!(
+            recorder.record_if_tracked(&first, None).await?,
+            TrajectorySettlementDisposition::Persisted
+        );
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "UPDATE trajectory_requests SET settlement_event_id = ? WHERE request_id = ?",
@@ -1058,6 +1062,10 @@ mod tests {
             request_id,
             first,
         } = terminal_recorder_fixture().await?;
+        assert_eq!(
+            recorder.record_if_tracked(&first, None).await?,
+            TrajectorySettlementDisposition::Persisted
+        );
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "UPDATE trajectory_requests SET status = 'settled' WHERE request_id = ?",
@@ -1081,6 +1089,10 @@ mod tests {
             request_id,
             first,
         } = terminal_recorder_fixture().await?;
+        assert_eq!(
+            recorder.record_if_tracked(&first, None).await?,
+            TrajectorySettlementDisposition::Persisted
+        );
         db.execute(Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
             "UPDATE trajectory_requests SET settlement_outbox_id = ? WHERE request_id = ?",
@@ -1759,10 +1771,6 @@ mod tests {
         let recorder = TrajectorySettlementRecorder::new(store, None, identity_key);
         let mut first = context("external-request-1");
         first.emit(routing_failure_metering("external-request-1", 100));
-        assert_eq!(
-            recorder.record_if_tracked(&first, None).await?,
-            TrajectorySettlementDisposition::Persisted
-        );
         Ok(TerminalRecorderFixture {
             db,
             recorder,
