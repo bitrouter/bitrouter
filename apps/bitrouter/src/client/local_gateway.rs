@@ -125,10 +125,9 @@ pub(crate) async fn ensure_local_daemon(
             )
             .await
             {
-                Ok(crate::daemon::DaemonStartOutcome::Ready(info)) => {
+                Ok(crate::daemon::DaemonStartOutcome::Ready(_)) => {
                     eprintln!(
-                        "{cyan}note:{reset} BitRouter daemon ready (pid {})",
-                        info.pid,
+                        "{cyan}note:{reset} BitRouter daemon ready",
                         cyan = p.cyan,
                         reset = p.reset,
                     );

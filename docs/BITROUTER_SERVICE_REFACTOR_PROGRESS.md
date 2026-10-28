@@ -56,8 +56,18 @@ Windows standard-stream preparation belongs to the CLI process entry point and
 runs before its worker or subprocesses. The platform API dependency is
 Windows-only; the application library retains its unsafe-code prohibition and
 no longer references a Harness-gated helper from minimum gateway startup.
-The timeout startup hint omits correlation-derived process metadata. Platform
+Startup hints omit correlation-derived process metadata. Platform
 execution and the updated CodeQL result remain current-head hosted gates.
+
+The subsequent hosted profile run found obsolete removed-UI gate assertions,
+profile fixture builders that requested unavailable offline all-feature
+dependencies, and a lost HTTP capability field. Profile jobs now prebuild their
+three protocol fixtures with the selected features. The public capabilities
+contract preserves `explicit_skill_consent`, defaults it to false for older
+servers, and advertises it only with native execution. Minimum-profile ingress
+and onboarding tests pass; background startup uses isolated lifecycle coverage
+instead of the obsolete status-only bare-command assertion. Independent static
+review found no further issue in this repair batch.
 
 Full runtime, platform and security results for the updated three-PR stack will
 be recorded against its final heads. Earlier performance campaigns remain

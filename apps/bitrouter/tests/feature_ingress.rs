@@ -122,7 +122,7 @@ async fn unavailable_agent_execution_rejects_without_reading_inputs_or_creating_
         &["launch", "codex", "--check"],
         &["claude", "--check"],
         &["codex", "--check"],
-        &["chat", "codex-acp"],
+        &["threads", "list"],
         &["agents", "check", "codex-acp"],
         &["agents", "sessions"],
         &["acp", "serve", "--agent", "codex-acp"],
