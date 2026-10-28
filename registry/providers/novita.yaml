@@ -125,6 +125,15 @@ models:
         cache_read: 0.015
       output_tokens:
         text: 0.6
+  - id: moonshotai/kimi-k3.1-pro
+    provider_model_id: moonshotai/kimi-k3.1-pro
+    pricing:
+      input_tokens:
+        no_cache: 2.0
+        cache_read: 0.2
+        cache_write: 2.0
+      output_tokens:
+        text: 10.0
 status: active
 weight: 1
 submitted_at: 2026-07-07

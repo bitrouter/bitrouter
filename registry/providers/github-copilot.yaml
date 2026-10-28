@@ -73,6 +73,8 @@ models:
     provider_model_id: claude-haiku-5.5
   - id: google/gemini-4-argon
     provider_model_id: gemini-4-argon
+  - id: openai/gpt-6.1-terra
+    provider_model_id: gpt-6.1-terra
 status: active
 weight: 1
 community: false
