@@ -23,6 +23,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod tracing_filter;
+#[cfg(windows)]
+#[path = "main/windows.rs"]
+mod windows;
 use tracing_filter::resolve_env_filter;
 
 use anyhow::{Context, Result};
@@ -1781,6 +1784,11 @@ fn warn_deprecated_invocation() {
 }
 
 fn main() {
+    #[cfg(windows)]
+    if let Err(error) = windows::prevent_stdio_inheritance() {
+        eprintln!("error: failed to prepare CLI standard handles: {error}");
+        std::process::exit(1);
+    }
     let worker = std::thread::Builder::new()
         .name("bitrouter-main".to_owned())
         .stack_size(CLI_MAIN_STACK_SIZE)
@@ -1863,6 +1871,12 @@ async fn async_main() {
 }
 
 fn emit_command_error(error: &anyhow::Error, output: &Output) {
+    if let Some(incomplete) = error.downcast_ref::<bitrouter::onboarding::resources::Incomplete>() {
+        let _ = output.emit(&incomplete.report);
+        eprintln!("error: {incomplete}");
+        return;
+    }
+
     #[cfg(feature = "harness")]
     if let Some(routing) = error.downcast_ref::<bitrouter::acp_cli::RoutingError>() {
         eprintln!("error: {routing}");

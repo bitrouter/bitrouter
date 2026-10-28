@@ -1,21 +1,21 @@
 //! Session command discovery and configured prompt expansion for the CLI.
 
 use crate::actions::ACTIONS;
-#[cfg(any(feature = "harness", test))]
+#[cfg(feature = "harness")]
 use crate::actions::Requires;
-#[cfg(any(feature = "harness", test))]
+#[cfg(feature = "harness")]
 use crate::commands::chat::Command;
 #[cfg(feature = "harness")]
 use crate::harness::acp::client::{AcpClient, RouteMethod};
 
 /// What `/route` says at a session with no route surface to open a picker over.
-#[cfg(any(feature = "harness", test))]
+#[cfg(feature = "harness")]
 const NOT_ROUTABLE: &str = "this session cannot be rerouted (the controller advertises no route \
                             control: running direct, or without a trusted local daemon binding)";
 /// What `/route reset` says at the same session. Distinct from [`NOT_ROUTABLE`]
 /// because a controller may advertise `set` without `reset`, and a reader told
 /// "cannot be rerouted" would not know which of the two they had.
-#[cfg(any(feature = "harness", test))]
+#[cfg(feature = "harness")]
 const NOT_RESETTABLE: &str = "this session has no route lease to drop (the controller advertises \
                               no route reset)";
 
@@ -55,7 +55,7 @@ pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
 
 /// Resolve the same command inventory for a supervised client's negotiated
 /// snapshot without granting that presentation a direct controller handle.
-#[cfg(any(feature = "harness", test))]
+#[cfg(feature = "harness")]
 pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<Command> {
     ACTIONS
         .iter()

@@ -79,7 +79,7 @@ pub(crate) fn validate_history(messages: &[Message]) -> Result<(), String> {
 /// The canonical typed result stays in the journal; this changes only the
 /// prepared prompt, before byte accounting. Chat/Responses have no native
 /// error flag, so the JSON envelope preserves both status and original output.
-#[cfg(any(feature = "core", test))]
+#[cfg(any(feature = "core", all(test, feature = "harness")))]
 pub(crate) fn prepare_tool_results(messages: &mut [Message]) {
     use bitrouter_ai::types::{Role, ToolResultOutput};
     for message in messages

@@ -594,11 +594,6 @@ pub struct ControlLease {
     pub expires_at: DateTime<Utc>,
 }
 
-// Runtime implementation follows the wire declarations so presentation
-// clients can depend on the types without depending on the process owner.
-
-/// Daemon-owned collection of supervised ACP controller lifetimes.
-
 impl SessionAuthorization {
     pub(crate) fn new(token: String) -> Self {
         Self(token)

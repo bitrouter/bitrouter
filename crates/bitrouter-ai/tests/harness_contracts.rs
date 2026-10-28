@@ -23,6 +23,7 @@ fn capabilities_retain_owner_metadata_and_legacy_native_default() -> Result {
     roundtrip::<api::CapabilitiesResponse>(wire.clone())?;
     let response: api::CapabilitiesResponse = serde_json::from_value(wire.clone())?;
     assert!(!response.runtime.native_execution);
+    assert!(!response.runtime.skill_constraints);
     assert!(matches!(
         response.runtime.execution_ownership,
         Some(bitrouter_ai::harness::runtime::OwnerClaim::Blocked { .. })
@@ -33,6 +34,7 @@ fn capabilities_retain_owner_metadata_and_legacy_native_default() -> Result {
         .ok_or("runtime fixture is not an object")?;
     for key in [
         "native_execution",
+        "skill_constraints",
         "startup_discovery",
         "execution_ownership",
     ] {
@@ -40,6 +42,7 @@ fn capabilities_retain_owner_metadata_and_legacy_native_default() -> Result {
     }
     let response: api::CapabilitiesResponse = serde_json::from_value(legacy.clone())?;
     assert!(response.runtime.native_execution);
+    assert!(!response.runtime.skill_constraints);
     assert!(response.runtime.execution_ownership.is_none());
     assert!(response.runtime.startup_discovery.is_none());
     legacy["runtime"]["limits"]
@@ -58,6 +61,7 @@ fn request_defaults_match_existing_ingress_without_defaulting_required_controls(
     assert_eq!(create.model_mode, ModelMode::Fixed);
     assert!(!create.read_only);
     assert_eq!(create.max_output_tokens, None);
+    assert!(create.skills.is_none());
     assert_eq!(
         serde_json::to_value(create)?,
         json!({
@@ -93,7 +97,9 @@ fn request_defaults_match_existing_ingress_without_defaulting_required_controls(
     let observe: ObserveQuery = serde_json::from_value(json!({}))?;
     assert_eq!(observe.after, None);
     roundtrip::<api::TurnRequest>(json!({"prompt":CONTENT,"mode":"enqueue"}))?;
-    roundtrip::<api::InputRequest>(json!({"turn_id":"t","request_id":"r","approved":false}))?;
+    roundtrip::<api::InputRequest>(
+        json!({"turn_id":"t","request_id":"r","approved":false,"skill_consent":false}),
+    )?;
     roundtrip::<api::SteeringRequest>(json!({"expected_turn_id":"t","text":CONTENT}))?;
     roundtrip::<api::CancelRequest>(json!({"mode":"queued"}))
 }

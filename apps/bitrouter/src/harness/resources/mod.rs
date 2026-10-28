@@ -28,8 +28,6 @@ use bitrouter_ai::harness::runtime::EffectStatus;
 pub mod instructions;
 pub mod managed;
 pub mod mcp;
-#[cfg(windows)]
-pub mod process;
 pub mod skills;
 
 #[derive(Debug, thiserror::Error)]

@@ -41,6 +41,24 @@ Local stage validation on macOS arm64 / Rust 1.99:
   examined repairs. CI fixture inventories, feature requirements and shell/YAML
   structure were checked; no per-test deadline or retry policy was relaxed.
 
+### Current CI repair follow-up
+
+Hosted checks exposed missing native skill feature negotiation, lost onboarding
+partial reports, explicit new wire-field defaults and the isolated consumer's
+new consent frame. Those paths are repaired. The four previously failing CLI
+cases pass locally, including native local/MCP skills through routed execution,
+operator approval, source evidence and cold reconnect. Public contract/client
+suites and the isolated Core-enabled consumer's offline tests passed. Strict
+workspace/all-feature/test Clippy passed on CI's Rust 1.97, and formatting passed.
+Live process consumer cases remain explicit hosted/aggregate gates.
+
+Windows standard-stream preparation belongs to the CLI process entry point and
+runs before its worker or subprocesses. The platform API dependency is
+Windows-only; the application library retains its unsafe-code prohibition and
+no longer references a Harness-gated helper from minimum gateway startup.
+The timeout startup hint omits correlation-derived process metadata. Platform
+execution and the updated CodeQL result remain current-head hosted gates.
+
 Full runtime, platform and security results for the updated three-PR stack will
 be recorded against its final heads. Earlier performance campaigns remain
 historical evidence; this integration makes no new performance claim. No PR
