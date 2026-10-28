@@ -1432,6 +1432,7 @@ operation rewrites `as_of` or provider/model evidence timestamps.
 A locally configured provider `models` list is a complete explicit routing
 inventory: its model constraints, protocols, and prices remain authoritative.
 An empty local provider stub may instead opt into the registry inventory.
+Automatically discovered models do not constitute an explicit local inventory.
 Once a registry owns that inventory, same-source refresh and ordinary reload
 MUST keep it unavailable when its provider is withdrawn or its contract is
 unsupported. Generic direct routing or model discovery MUST NOT bypass that

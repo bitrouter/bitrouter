@@ -64,6 +64,16 @@ re-review found no remaining actionable P1/P2/P3 in the repair. Final
 post-repair aggregate and current-head platform gates are recorded on the pull
 request, separately from the source-attributed campaign above.
 
+An additional first-adoption regression reproduced an automatically discovered
+inventory being mistaken for explicit local configuration during refresh.
+Discovery preservation now follows registry admission and authority retention;
+only still-local empty inventories retain their earlier discovered models.
+The regression covers active and rejected record adoption, absent custom
+providers and complete explicit local inventories using an actual local models
+endpoint. No additional wire fields, cache format or startup reorder is needed.
+All 78 registry/catalog/reload regressions passed in 2.693 seconds after this
+repair. The final campaign also asserts canonical routing on first adoption.
+
 ## Scope
 
 - Complete public documents, open extension vocabularies, recoverable admission

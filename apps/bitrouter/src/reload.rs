@@ -1439,6 +1439,102 @@ mod registry_publication_tests {
     use serde_json::json;
 
     #[tokio::test]
+    async fn registry_claims_discovered_stubs_without_overriding_manual_inventories()
+    -> anyhow::Result<()> {
+        use crate::config::routing_table::{ConfigRoutingTable, resolve_route_chain};
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::path("/v1/models"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(json!({"data":[{"id":"discovered"}]})),
+            )
+            .mount(&server)
+            .await;
+        for change in ["active", "suspended", "future-auth", "absent", "manual"] {
+            let home = tempfile::tempdir()?;
+            let path = home.path().join("bitrouter.yaml");
+            let source = format!("https://fixture.example/{}", uuid::Uuid::new_v4());
+            let models = if change == "manual" {
+                "[{id: manual}]"
+            } else {
+                "[]"
+            };
+            std::fs::write(
+                &path,
+                format!(
+                    "registry: {{url: '{source}'}}\nproviders:\n  fixture:\n    api_base: '{0}/v1'\n    api_key: fixture-key\n    auto_discover: true\n    models: {models}\n  custom:\n    api_base: '{0}/v1'\n    api_key: custom-key\n    auto_discover: true\n",
+                    server.uri()
+                ),
+            )?;
+            let baseline =
+                load_configuration_baseline(&crate::paths::ConfigSource::File(path.clone()))
+                    .await?;
+            let mut initial = baseline.config().clone();
+            crate::config::discover_models(&mut initial).await;
+            assert!(initial.providers["fixture"].registry.is_none());
+            assert!(!initial.providers["fixture"].models.is_empty());
+            let table = Arc::new(ConfigRoutingTable::from_config(initial));
+            let reloader = AppReloader::new(
+                Arc::new(PolicyStore::new()),
+                table.clone(),
+                Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+                ReloadSource::File(path),
+            )
+            .with_startup_configuration(baseline);
+            let mut raw = crate::gateway::catalog::tests::document("native");
+            match change {
+                "suspended" | "manual" => {
+                    raw["data"]["providers"][0]["status"] = json!("suspended")
+                }
+                "future-auth" => {
+                    raw["data"]["providers"][0]["auth"] = json!({"kind":"future-auth"})
+                }
+                "absent" => {
+                    raw["data"]["providers"] = json!([]);
+                    raw["data"]["models"] = json!([]);
+                }
+                _ => {}
+            }
+            let snapshot = CatalogSnapshot {
+                fetched_at: 42,
+                data: crate::gateway::catalog::decode::from_slice(&serde_json::to_vec(&raw)?)?,
+            };
+            reloader
+                .publish_registry(0, &source, &snapshot, &mut Catalog::new(&source))
+                .await?;
+            let current = table.snapshot_config();
+            assert_eq!(
+                current.providers["fixture"].registry.is_some(),
+                !matches!(change, "absent" | "manual"),
+                "{change}"
+            );
+            let mut selectors = vec![("custom:discovered", 1)];
+            match change {
+                "absent" => selectors.push(("fixture:discovered", 1)),
+                "manual" => {
+                    selectors.push(("fixture:manual", 1));
+                    assert_eq!(current.providers["fixture"].models[0].id, "manual");
+                }
+                _ => selectors.extend([
+                    ("fixture:discovered", 0),
+                    ("fixture:native", usize::from(change == "active")),
+                ]),
+            }
+            if change == "active" {
+                selectors.push(("org/model", 1));
+            }
+            for (selector, expected) in selectors {
+                assert_eq!(
+                    resolve_route_chain(&current, selector, &RoutingPrefs::default())?.len(),
+                    expected,
+                    "{change}: {selector}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn registry_authority_survives_withdrawal_and_same_source_reload() -> anyhow::Result<()> {
         use crate::config::routing_table::{ConfigRoutingTable, resolve_route_chain};
         for change in ["status", "auth", "removed"] {
@@ -1801,8 +1897,8 @@ impl AppReloader {
         let live = self.routing_table.snapshot_config();
         let explicit_inventories =
             crate::providers::registry::apply::explicit_inventory_ids(&fresh);
-        // Preserve previously applied local login activation and discovery;
-        // registry refresh does not inspect those files or probe endpoints.
+        // Preserve previously applied local login activation without inspecting
+        // credential files or probing endpoints during registry refresh.
         for (id, provider) in &live.providers {
             if provider
                 .registry
@@ -1817,12 +1913,6 @@ impl AppReloader {
                 };
                 fresh.providers.insert(id.clone(), stub);
             }
-            if let Some(manual) = fresh.providers.get_mut(id)
-                && manual.auto_discover
-                && provider.registry.is_none()
-            {
-                manual.models = provider.models.clone();
-            }
         }
         crate::providers::apply::apply_builtin_defaults(&mut fresh);
         crate::providers::registry::apply::apply_registry(&mut fresh, &snapshot.data);
@@ -1831,6 +1921,18 @@ impl AppReloader {
             &live,
             &explicit_inventories,
         );
+        // Admission must see the raw empty stub before preserving discovery.
+        // Discovered models never constitute an explicit local inventory.
+        for (id, provider) in &live.providers {
+            if provider.registry.is_none()
+                && let Some(manual) = fresh.providers.get_mut(id)
+                && manual.auto_discover
+                && manual.registry.is_none()
+                && manual.models.is_empty()
+            {
+                manual.models = provider.models.clone();
+            }
+        }
         fresh
             .validate_router_config()
             .map_err(|_| RegistryPublishError::Unavailable)?;
