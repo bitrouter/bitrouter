@@ -137,9 +137,9 @@ jobs:
         include:
           - os: macos-latest
             retries: "0"
-            # A cold all-features build takes about 24 minutes on this runner.
+            # Fixtures plus a measured cold all-features build take 61 minutes.
             # Leave time for the full suite; per-test deadlines still apply.
-            timeout: 75
+            timeout: 90
           - os: windows-latest
             # Windows also exposes the trajectory timestamp race under load.
             retries: "2"
