@@ -1874,6 +1874,11 @@
         },
         {
           "api_protocol": "openai",
+          "provider": "opencode-go",
+          "provider_model_id": "gemini-4-argon"
+        },
+        {
+          "api_protocol": "openai",
           "pricing": {
             "input_tokens": {
               "cache_read": 0.1,
@@ -2367,6 +2372,20 @@
         "text"
       ],
       "providers": [
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.015,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "minimax/minimax-m3.1-flash"
+        },
         {
           "api_protocol": [
             "anthropic",
@@ -2893,6 +2912,21 @@
       ],
       "providers": [
         {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.0,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "moonshotai/kimi-k3.1-pro"
+        },
+        {
           "api_protocol": [
             "openai",
             "anthropic"
@@ -2912,6 +2946,21 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.0,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            }
+          },
+          "provider": "novita",
+          "provider_model_id": "moonshotai/kimi-k3.1-pro"
         },
         {
           "api_protocol": "openai",
@@ -4440,6 +4489,130 @@
         }
       ],
       "release_date": "2026-09-29"
+    },
+    {
+      "id": "openai/gpt-6.1-terra",
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "max_input_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "name": "OpenAI: GPT-6.1 Terra",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider": "azure",
+          "provider_model_id": "gpt-6.1-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "openai",
+          "provider": "github-copilot",
+          "provider_model_id": "gpt-6.1-terra"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider": "openai",
+          "provider_model_id": "gpt-6.1-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": "responses",
+          "provider": "openai-codex",
+          "provider_model_id": "gpt-6.1-terra"
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "openai/gpt-6.1-terra"
+        }
+      ],
+      "release_date": "2026-10-26"
+    },
+    {
+      "id": "openai/gpt-6.1-terra-pro",
+      "input_modalities": [
+        "file",
+        "image",
+        "text"
+      ],
+      "max_input_tokens": 1050000,
+      "max_output_tokens": 128000,
+      "name": "OpenAI: GPT-6.1 Terra Pro",
+      "output_modalities": [
+        "text"
+      ],
+      "providers": [
+        {
+          "api_protocol": [
+            "openai",
+            "responses",
+            "anthropic"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider": "openrouter",
+          "provider_model_id": "openai/gpt-6.1-terra-pro"
+        }
+      ],
+      "release_date": "2026-10-26"
     },
     {
       "id": "qwen/qwen3.7-flash",

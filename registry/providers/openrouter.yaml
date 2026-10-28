@@ -577,6 +577,24 @@ models:
         cache_read: 0.2
       output_tokens:
         text: 10.0
+  - id: openai/gpt-6.1-terra
+    provider_model_id: openai/gpt-6.1-terra
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.05
+        cache_write: 1.25
+      output_tokens:
+        text: 5.0
+  - id: openai/gpt-6.1-terra-pro
+    provider_model_id: openai/gpt-6.1-terra-pro
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.05
+        cache_write: 1.25
+      output_tokens:
+        text: 5.0
 status: active
 weight: 1
 community: false
