@@ -292,6 +292,7 @@ async fn capabilities(
     };
     Ok(Json(CapabilitiesResponse {
         version: PROTOCOL_VERSION,
+        explicit_skill_consent: runtime.native_execution,
         runtime,
         operations: operations
             .iter()

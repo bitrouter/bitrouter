@@ -22,6 +22,7 @@ fn capabilities_retain_owner_metadata_and_legacy_native_default() -> Result {
     let wire: Value = serde_json::from_str(include_str!("fixtures/harness/capabilities.json"))?;
     roundtrip::<api::CapabilitiesResponse>(wire.clone())?;
     let response: api::CapabilitiesResponse = serde_json::from_value(wire.clone())?;
+    assert!(!response.explicit_skill_consent);
     assert!(!response.runtime.native_execution);
     assert!(!response.runtime.skill_constraints);
     assert!(matches!(
@@ -29,6 +30,10 @@ fn capabilities_retain_owner_metadata_and_legacy_native_default() -> Result {
         Some(bitrouter_ai::harness::runtime::OwnerClaim::Blocked { .. })
     ));
     let mut legacy = wire;
+    legacy
+        .as_object_mut()
+        .ok_or("capabilities fixture is not an object")?
+        .remove("explicit_skill_consent");
     let runtime = legacy["runtime"]
         .as_object_mut()
         .ok_or("runtime fixture is not an object")?;
@@ -41,6 +46,7 @@ fn capabilities_retain_owner_metadata_and_legacy_native_default() -> Result {
         runtime.remove(key);
     }
     let response: api::CapabilitiesResponse = serde_json::from_value(legacy.clone())?;
+    assert!(!response.explicit_skill_consent);
     assert!(response.runtime.native_execution);
     assert!(!response.runtime.skill_constraints);
     assert!(response.runtime.execution_ownership.is_none());

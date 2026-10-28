@@ -10,7 +10,7 @@ use std::process::{Command, Output, Stdio};
 use serde_json::Value;
 use tempfile::TempDir;
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "harness"))]
 #[path = "support/example_binary.rs"]
 mod example_binary;
 
@@ -139,7 +139,7 @@ async fn init_rejects_unpaired_keys_and_handles_a_closed_stdout_pipe() -> anyhow
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "harness"))]
 #[tokio::test]
 async fn init_after_launch_explicitly_runs_the_native_harness() -> anyhow::Result<()> {
     let home = startup_home()?;
@@ -213,6 +213,7 @@ async fn bare_and_init_ensure_one_ready_background_daemon_and_preserve_running_s
     assert_eq!(a["pid"], b["pid"]);
     assert_eq!(a["listen"], listen);
     assert_eq!(a["config_state"]["running"], "in_sync");
+    assert!(!home.path().join("logs").exists());
     let status = invoke(home.path(), &["status"]).await?;
     assert_eq!(serde_json::from_slice::<Value>(&status.stdout)?["pid"], pid);
     let human = invoke(home.path(), &["--human"]).await?;
@@ -436,42 +437,6 @@ fn non_tty_reset_without_yes_preserves_provider_credentials() -> anyhow::Result<
     Ok(())
 }
 
-#[cfg(not(feature = "harness"))]
-#[test]
-fn bare_entry_without_harness_never_creates_session_logs() -> anyhow::Result<()> {
-    for saved in [
-        None,
-        Some("inherit_defaults: false\n"),
-        Some("inherit_defaults: false\nchat: { agent: codex-acp }\n"),
-    ] {
-        let home = TempDir::new()?;
-        let data = TempDir::new()?;
-        let config = home.path().join("bitrouter.yaml");
-        if let Some(raw) = saved {
-            std::fs::write(&config, raw)?;
-        }
-        let output = run_cli(home.path(), data.path(), &[], &[]);
-        if saved.is_some_and(|raw| raw.contains("codex-acp")) {
-            assert!(!output.status.success());
-            let diagnostic = format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(diagnostic.contains("harness feature"), "{diagnostic}");
-        } else {
-            assert!(output.status.success());
-        }
-        assert!(!home.path().join(".bitrouter").exists());
-        assert!(!home.path().join("logs").exists());
-        assert!(std::fs::read_dir(data.path())?.next().is_none());
-        if let Some(raw) = saved {
-            assert_eq!(std::fs::read_to_string(config)?, raw);
-        }
-    }
-    Ok(())
-}
-
 #[test]
 fn bare_unconfigured_errors_without_writing_configuration() -> anyhow::Result<()> {
     let home = TempDir::new()?;
@@ -647,6 +612,7 @@ fn init_preserves_existing_settings_unless_force_is_requested() -> anyhow::Resul
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[test]
 fn init_saves_default_harness_model_and_user_home() -> anyhow::Result<()> {
     let home = TempDir::new()?;
@@ -679,6 +645,7 @@ fn init_saves_default_harness_model_and_user_home() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[test]
 fn changing_harness_preserves_routes_and_chat_commands() -> anyhow::Result<()> {
     let home = TempDir::new()?;
@@ -743,6 +710,7 @@ fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(any(feature = "harness", feature = "mcp"))]
 #[tokio::test]
 async fn onboarding_saves_mcp_without_installing_skills_or_starting_the_resource()
 -> anyhow::Result<()> {

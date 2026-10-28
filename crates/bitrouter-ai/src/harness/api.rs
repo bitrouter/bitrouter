@@ -90,6 +90,8 @@ pub struct ObserveQuery {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct CapabilitiesResponse {
     pub version: u32,
+    #[serde(default)]
+    pub explicit_skill_consent: bool,
     pub runtime: RuntimeCapabilities,
     pub operations: Vec<String>,
 }

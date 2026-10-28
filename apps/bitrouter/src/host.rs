@@ -206,8 +206,9 @@ pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool)
     serve_with_options(source, managed_child, |_| Ok(()), selected).await
 }
 
-/// Reject a shared deployment before a local launcher creates files, discovers
-/// a control socket or replaces a daemon. Shared services use foreground serve.
+/// Reject cold shared startup before a local launcher creates files or children.
+/// A verified running local owner can be reused without parsing saved edits.
+/// Shared services use foreground serve.
 pub async fn validate_local_daemon_source(source: &crate::paths::ConfigSource) -> Result<()> {
     let selected = crate::config::shared_process::select(source).await?;
     #[cfg(feature = "multi-instance")]
