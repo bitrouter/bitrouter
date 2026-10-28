@@ -524,13 +524,17 @@ jobs:
       matrix:
         include:
           - target: lib
+            timeout: 75
             build_jobs: "2"
             flags: --lib
           - target: bin
+            timeout: 45
             build_jobs: "1"
             flags: --bin bro
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Cold compilation and the complete library recovery sequence share this
+    # job budget; each test and recovery step keeps its own existing deadline.
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
       - name: add swap for the lib test harness
