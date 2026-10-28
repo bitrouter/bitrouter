@@ -1,5 +1,10 @@
-//! Failure-only test diagnostics. No identity, payload or error text is emitted.
+//! Test failure diagnostics and opt-in timings; no identity, payload or error text.
 use super::CoreError;
+use std::io::Write;
+
+fn timing_enabled() -> bool {
+    std::env::var("BITROUTER_TEST_CHECKPOINT_TIMING").is_ok_and(|value| value == "1")
+}
 
 #[derive(Debug)]
 enum Operation {
@@ -61,17 +66,21 @@ impl Scope {
     pub(super) fn returned<T>(&mut self, result: &Result<T, CoreError>) {
         self.returned = true;
         let elapsed = self.started.elapsed();
-        if elapsed >= std::time::Duration::from_secs(1) {
-            eprintln!(
+        if elapsed >= std::time::Duration::from_secs(1) && timing_enabled() {
+            let _ = writeln!(
+                std::io::stderr().lock(),
                 "headroom callback duration: operation={:?}, elapsed_ms={}",
                 self.operation,
                 elapsed.as_millis()
             );
         }
         if let Err(error) = result {
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr().lock(),
                 "headroom scope returned: operation={:?}, code={:?}, commit={:?}",
-                self.operation, error.code, error.commit_status
+                self.operation,
+                error.code,
+                error.commit_status
             );
         }
     }
@@ -80,7 +89,8 @@ impl Scope {
 impl Drop for Scope {
     fn drop(&mut self) {
         if !self.returned {
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr().lock(),
                 "headroom scope dropped: operation={:?}, unwinding={}",
                 self.operation,
                 std::thread::panicking()
@@ -136,9 +146,10 @@ impl Transition {
 impl Drop for Transition {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        if elapsed >= std::time::Duration::from_secs(1) {
+        if elapsed >= std::time::Duration::from_secs(1) && timing_enabled() {
             let [commit_lock, prepare, preflight, propose, commit, adopt] = self.milliseconds;
-            eprintln!(
+            let _ = writeln!(
+                std::io::stderr().lock(),
                 "headroom transition timing: revision={}, receipts={}, elapsed_ms={}, completed_stages={:06b}, commit_lock_ms={commit_lock}, prepare_ms={prepare}, choice_preflight_ms={preflight}, propose_ms={propose}, harness_commit_ms={commit}, adopt_ms={adopt}, pending_ms={}",
                 self.revision,
                 self.receipts,

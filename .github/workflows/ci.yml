@@ -151,6 +151,16 @@ jobs:
     timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
+      - name: bound macOS compiler resources
+        if: runner.os == 'macOS'
+        shell: bash
+        # Apply before toolchain/cache setup so every build uses these bounds.
+        run: |
+          printf '%s\n' \
+            'CARGO_BUILD_JOBS=2' \
+            'CARGO_INCREMENTAL=0' \
+            'CARGO_PROFILE_DEV_DEBUG=0' \
+            'CARGO_PROFILE_TEST_DEBUG=0' >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@nextest
       - name: build process fixtures before macOS test deadlines
@@ -330,6 +340,7 @@ jobs:
     timeout-minutes: 120
     env:
       CAPACITY_CASE: ${{ matrix.case }}
+      BITROUTER_TEST_CHECKPOINT_TIMING: "1"
     steps:
       - uses: actions/checkout@v6
       - name: add swap for the Linux lib test harness

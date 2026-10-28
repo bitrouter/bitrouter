@@ -1,4 +1,5 @@
-//! Test-only wall-time observations; no identity, payload or error text.
+//! Opt-in test wall-time observations; no identity, payload or error text.
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy)]
@@ -89,6 +90,10 @@ impl Scope {
 
 impl Drop for Scope {
     fn drop(&mut self) {
+        // Ordinary child fixtures have a fixed stderr allowance.
+        if !std::env::var("BITROUTER_TEST_CHECKPOINT_TIMING").is_ok_and(|value| value == "1") {
+            return;
+        }
         let elapsed = self.started.elapsed();
         // Separate selected populations: a subsecond persist can be observed
         // independently of its enclosing commit. These are not deadline changes.
@@ -104,7 +109,8 @@ impl Drop for Scope {
         match self.operation {
             Operation::NativeCommit => {
                 let [lock, validate, choices, assemble, persist, tail] = self.milliseconds;
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr().lock(),
                     "headroom native commit timing: state_revision={:?}, store_revision={:?}, elapsed_ms={}, completed_stages={:06b}, state_lock_ms={lock}, append_validation_ms={validate}, choice_apply_ms={choices}, assemble_ms={assemble}, persist_ms={persist}, ack_tail_ms={tail}, pending_ms={pending}, outcome={:?}, unwinding={unwinding}",
                     self.state_revision,
                     self.store_revision,
@@ -115,7 +121,8 @@ impl Drop for Scope {
             }
             Operation::NativePersist => {
                 let [recovery, encode, save, adopt, _, _] = self.milliseconds;
-                eprintln!(
+                let _ = writeln!(
+                    std::io::stderr().lock(),
                     "headroom native persist timing: state_revision={:?}, store_revision={:?}, elapsed_ms={}, completed_stages={:04b}, recovery_ms={recovery}, encode_ms={encode}, store_save_ms={save}, adopt_ms={adopt}, pending_ms={pending}, outcome={:?}, unwinding={unwinding}",
                     self.state_revision,
                     self.store_revision,
