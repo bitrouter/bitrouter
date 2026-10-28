@@ -8,7 +8,7 @@ no hosted final-head pass is asserted here.
 
 ## Stack integration (2026-10-29)
 
-This update incorporates P0 `b1e5012d` and main `66cd3b8d`, including the
+This update incorporates P0 `a8019d28` and main `66cd3b8d`, including the
 CLI-only orchestration and skill consent migration. Shared configuration selection,
 operator commands, foreground shared startup and independent optional capabilities
 remain present. Owned continuation tests now use fresh random fixture keys.
@@ -20,6 +20,11 @@ the MCP rejection regression and failed-driver shutdown cleanup passed locally.
 Strict workspace/all-feature/test Clippy passed on Rust 1.97. Independent review closed the shared/local configuration finding.
 Current-head CI, security and aggregate runtime acceptance are pending; the dated campaigns
 below retain their original source identity and performance limitations.
+
+The hosted onboarding regression also restores verified daemon-owner reuse
+before parsing edited saved configuration. Cold shared configuration is still
+rejected before local startup files, locks or children; the under-lock owner
+recheck remains in place for concurrent launchers.
 
 Previously accepted source `a83c7bc0505053cd11a4ac3485ff441b3a19e214` passed v12 shared
 **206/206 in 96.096s**, with two test threads and zero retries. This includes

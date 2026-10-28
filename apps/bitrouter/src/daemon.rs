@@ -2206,6 +2206,13 @@ pub async fn start_and_wait(
     socket: Option<&Path>,
     timeout: std::time::Duration,
 ) -> Result<DaemonStartOutcome> {
+    // Running source-owned state remains authoritative after saved YAML edits.
+    // Cold starts still validate mode before creating any files or processes.
+    if let Some(located) = crate::daemon_locator::locate_source(source).await?
+        && let Some(info) = probe_status(located.socket()).await?
+    {
+        return Ok(DaemonStartOutcome::Ready(info));
+    }
     crate::host::validate_local_daemon_source(source).await?;
     crate::paths::ensure_home_directory(source.home())?;
     // Serialize local launchers across processes. Without this, two clients
