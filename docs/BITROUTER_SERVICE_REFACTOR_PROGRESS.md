@@ -79,6 +79,14 @@ editing/cancellation cases pass locally with their existing deadlines and
 source-preservation assertions. Independent review identified no additional
 root cause among the current failed checks.
 
+A follow-up FIFO regression demonstrates that explicit blocking input must not
+inherit guided prompt signal handling: it failed before narrowing the scope,
+then passed alongside all eight existing MCP transaction/terminal cases.
+Settlement fixtures now separate construction from the first persisted write;
+each corruption test still verifies that write before tampering. This preserves
+random keys and validation while removing the aggregate test return implicated
+by CodeQL's counter-to-key flow. Hosted security confirmation remains required.
+
 Full runtime, platform and security results for the updated three-PR stack will
 be recorded against its final heads. Earlier performance campaigns remain
 historical evidence; this integration makes no new performance claim. No PR
