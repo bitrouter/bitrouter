@@ -5784,34 +5784,10 @@
             "interfaces": [
               {
                 "operation": "generation",
-                "pricing": {
-                  "currency": "USD",
-                  "input_tokens": {
-                    "cache_read": 0.05,
-                    "cache_write": 1.25,
-                    "no_cache": 1.0
-                  },
-                  "kind": "token",
-                  "output_tokens": {
-                    "text": 5.0
-                  }
-                },
                 "protocol": "chat_completions"
               },
               {
                 "operation": "generation",
-                "pricing": {
-                  "currency": "USD",
-                  "input_tokens": {
-                    "cache_read": 0.05,
-                    "cache_write": 1.25,
-                    "no_cache": 1.0
-                  },
-                  "kind": "token",
-                  "output_tokens": {
-                    "text": 5.0
-                  }
-                },
                 "protocol": "responses"
               }
             ],
@@ -9731,6 +9707,19 @@
                 },
                 "operation": "generation",
                 "pricing": {
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_tokens": {
+                        "cache_read": 0.1,
+                        "cache_write": 2.5,
+                        "no_cache": 2
+                      },
+                      "output_tokens": {
+                        "text": 7.5
+                      }
+                    }
+                  ],
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.05,
@@ -9750,6 +9739,19 @@
               {
                 "operation": "generation",
                 "pricing": {
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_tokens": {
+                        "cache_read": 0.1,
+                        "cache_write": 2.5,
+                        "no_cache": 2
+                      },
+                      "output_tokens": {
+                        "text": 7.5
+                      }
+                    }
+                  ],
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.05,
@@ -13230,6 +13232,19 @@
               {
                 "operation": "generation",
                 "pricing": {
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_tokens": {
+                        "cache_read": 0.1,
+                        "cache_write": 2.5,
+                        "no_cache": 2
+                      },
+                      "output_tokens": {
+                        "text": 7.5
+                      }
+                    }
+                  ],
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.05,
@@ -13246,6 +13261,19 @@
               {
                 "operation": "generation",
                 "pricing": {
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_tokens": {
+                        "cache_read": 0.1,
+                        "cache_write": 2.5,
+                        "no_cache": 2
+                      },
+                      "output_tokens": {
+                        "text": 7.5
+                      }
+                    }
+                  ],
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.05,
@@ -13263,6 +13291,19 @@
                 "base_url": "https://openrouter.ai/api",
                 "operation": "generation",
                 "pricing": {
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_tokens": {
+                        "cache_read": 0.1,
+                        "cache_write": 2.5,
+                        "no_cache": 2
+                      },
+                      "output_tokens": {
+                        "text": 7.5
+                      }
+                    }
+                  ],
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.05,
@@ -13286,6 +13327,19 @@
               {
                 "operation": "generation",
                 "pricing": {
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_tokens": {
+                        "cache_read": 0.1,
+                        "cache_write": 2.5,
+                        "no_cache": 2
+                      },
+                      "output_tokens": {
+                        "text": 7.5
+                      }
+                    }
+                  ],
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.05,
@@ -13302,6 +13356,19 @@
               {
                 "operation": "generation",
                 "pricing": {
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_tokens": {
+                        "cache_read": 0.1,
+                        "cache_write": 2.5,
+                        "no_cache": 2
+                      },
+                      "output_tokens": {
+                        "text": 7.5
+                      }
+                    }
+                  ],
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.05,
@@ -13319,6 +13386,19 @@
                 "base_url": "https://openrouter.ai/api",
                 "operation": "generation",
                 "pricing": {
+                  "context_tiers": [
+                    {
+                      "above_input_tokens": 272000,
+                      "input_tokens": {
+                        "cache_read": 0.1,
+                        "cache_write": 2.5,
+                        "no_cache": 2
+                      },
+                      "output_tokens": {
+                        "text": 7.5
+                      }
+                    }
+                  ],
                   "currency": "USD",
                   "input_tokens": {
                     "cache_read": 0.05,

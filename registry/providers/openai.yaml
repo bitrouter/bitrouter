@@ -621,7 +621,20 @@
               "text": 5.0
             },
             "kind": "token",
-            "currency": "USD"
+            "currency": "USD",
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "no_cache": 2,
+                  "cache_read": 0.1,
+                  "cache_write": 2.5
+                },
+                "output_tokens": {
+                  "text": 7.5
+                }
+              }
+            ]
           },
           "compatibility": {
             "token_limit_field": "max_completion_tokens"
@@ -643,7 +656,20 @@
               "text": 5.0
             },
             "kind": "token",
-            "currency": "USD"
+            "currency": "USD",
+            "context_tiers": [
+              {
+                "above_input_tokens": 272000,
+                "input_tokens": {
+                  "no_cache": 2,
+                  "cache_read": 0.1,
+                  "cache_write": 2.5
+                },
+                "output_tokens": {
+                  "text": 7.5
+                }
+              }
+            ]
           }
         }
       ],

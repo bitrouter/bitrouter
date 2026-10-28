@@ -5,6 +5,31 @@ This records implementation evidence for wire version 1, revision
 [`specs/registry-v1/`](specs/registry-v1/README.md). This file is development
 evidence, not an additional protocol requirement.
 
+## Stack integration (2026-10-29)
+
+This integration includes main `66cd3b8d`, P0 `a8019d28`, and shared gateway
+`753dd139`. The dated campaigns below retain their original source identity;
+the integrated runtime and hosted checks are separate acceptance gates.
+
+Catalog migration retains main's four new canonical recommendations and new
+native offers, with exact decimal tariffs and explicit identity bindings.
+Recommendation retirement does not remove still-active provider offers.
+Fresh full OpenRouter admission passed for all 476 canonical references
+(67 distinct IDs); 15 deliberately unbound native offers remain manually
+addressable. The resulting public document SHA-256 is
+`ceebff5564663efb504d57b7d8042a1ffcbc08cdd8c5a9e65fe83e1e52479189`.
+These counts describe this observation and are not fixed assertions.
+
+Independent review found missing long-context Terra tariffs. OpenRouter's
+[official schema](https://openrouter.ai/openapi.json) defines
+`min_prompt_tokens` as a strictly greater condition; the
+[OpenAI Terra model reference](https://developers.openai.com/api/docs/models/gpt-6.1-terra)
+also specifies prompts above 272,000 tokens. The OpenRouter Terra/Pro and
+direct OpenAI Terra interfaces now include this exact tier. New Azure Terra
+rates remain omitted because its complete deployment tariff was not verified;
+omission means unavailable pricing, never free usage. Source validation,
+artifact generation and fresh canonical admission pass after this repair.
+
 ## Scope
 
 - Complete public documents, open extension vocabularies, recoverable admission
