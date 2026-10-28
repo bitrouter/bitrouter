@@ -967,11 +967,22 @@ fn activate_stored_credential_providers(config: &mut crate::config::Config) {
 /// Apply the same non-mutating configuration enrichment used when the daemon
 /// constructs a replacement routing snapshot. Keeping this in one helper makes
 /// the current and candidate shapes comparable before remote classification.
-async fn resolve_reloadable_config(config: &mut crate::config::Config) {
+async fn resolve_reloadable_config(
+    config: &mut crate::config::Config,
+    previous: Option<&crate::config::Config>,
+) {
+    let explicit_inventories = crate::providers::registry::apply::explicit_inventory_ids(config);
     crate::providers::apply::apply_builtin_defaults(config);
     crate::claude_code::enable_if_logged_in(config);
     crate::assemble::merge_registry_into(config).await;
     activate_stored_credential_providers(config);
+    if let Some(previous) = previous {
+        crate::providers::registry::apply::retain_registry_authority(
+            config,
+            previous,
+            &explicit_inventories,
+        );
+    }
     // Discovery is bounded by the SDK and completes before any live swap.
     crate::config::discover_models(config).await;
 }
@@ -1417,6 +1428,7 @@ enum ReloadInvocation {
 mod registry_publication_tests {
     use super::*;
     use crate::config::Config;
+    use crate::daemon::DaemonReloader;
     use crate::gateway::catalog::{
         Catalog,
         store::{CatalogSnapshot, CatalogStore, Durability, StoreError},
@@ -1425,6 +1437,133 @@ mod registry_publication_tests {
     use crate::gateway::pipeline::{executor::HttpExecutor, routing::RoutingPrefs};
     use registry_json as serde_json;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn registry_authority_survives_withdrawal_and_same_source_reload() -> anyhow::Result<()> {
+        use crate::config::routing_table::{ConfigRoutingTable, resolve_route_chain};
+        for change in ["status", "auth", "removed"] {
+            let home = tempfile::tempdir()?;
+            let path = home.path().join("bitrouter.yaml");
+            let source = format!("https://fixture.example/{}", uuid::Uuid::new_v4());
+            let yaml = |source: &str, enabled: bool| {
+                format!(
+                    "registry: {{url: '{source}', enabled: {enabled}}}\nproviders:\n  fixture:\n    api_base: 'https://local.example/v1'\n    api_key: fixture-key\n  custom:\n    api_base: 'https://custom.example/v1'\n    api_key: custom-key\n"
+                )
+            };
+            std::fs::write(&path, yaml(&source, true))?;
+            let baseline =
+                load_configuration_baseline(&crate::paths::ConfigSource::File(path.clone()))
+                    .await?;
+            let table = Arc::new(ConfigRoutingTable::from_config(baseline.config().clone()));
+            let reloader = AppReloader::new(
+                Arc::new(PolicyStore::new()),
+                table.clone(),
+                Arc::new(HttpExecutor::new(HttpTimeouts::default())?),
+                ReloadSource::File(path.clone()),
+            )
+            .with_startup_configuration(baseline);
+            let active = crate::gateway::catalog::tests::document("native");
+            let snapshot = |raw: &serde_json::Value| -> anyhow::Result<CatalogSnapshot> {
+                Ok(CatalogSnapshot {
+                    fetched_at: 42,
+                    data: crate::gateway::catalog::decode::from_slice(&serde_json::to_vec(raw)?)?,
+                })
+            };
+            let mut catalog = Catalog::new(&source);
+            reloader
+                .publish_registry(0, &source, &snapshot(&active)?, &mut catalog)
+                .await?;
+            assert_eq!(
+                resolve_route_chain(
+                    &table.snapshot_config(),
+                    "fixture:native",
+                    &RoutingPrefs::default()
+                )?
+                .len(),
+                1
+            );
+            let mut withdrawn = active.clone();
+            match change {
+                "status" => withdrawn["data"]["providers"][0]["status"] = json!("suspended"),
+                "auth" => withdrawn["data"]["providers"][0]["auth"] = json!({"kind":"future-auth"}),
+                _ => {
+                    withdrawn["data"]["providers"] = json!([]);
+                    withdrawn["data"]["models"] = json!([]);
+                }
+            }
+            reloader
+                .publish_registry(0, &source, &snapshot(&withdrawn)?, &mut catalog)
+                .await?;
+            assert!(
+                resolve_route_chain(
+                    &table.snapshot_config(),
+                    "fixture:native",
+                    &RoutingPrefs::default()
+                )?
+                .is_empty(),
+                "{change}"
+            );
+            assert_eq!(
+                resolve_route_chain(
+                    &table.snapshot_config(),
+                    "custom:native",
+                    &RoutingPrefs::default()
+                )?
+                .len(),
+                1
+            );
+            reloader.reload().await?;
+            assert!(
+                resolve_route_chain(
+                    &table.snapshot_config(),
+                    "fixture:native",
+                    &RoutingPrefs::default()
+                )?
+                .is_empty(),
+                "after reload: {change}"
+            );
+            let epoch = reloader.registry_settings().0;
+            reloader
+                .publish_registry(epoch, &source, &snapshot(&active)?, &mut catalog)
+                .await?;
+            assert_eq!(
+                resolve_route_chain(
+                    &table.snapshot_config(),
+                    "fixture:native",
+                    &RoutingPrefs::default()
+                )?
+                .len(),
+                1
+            );
+            reloader
+                .publish_registry(epoch, &source, &snapshot(&withdrawn)?, &mut catalog)
+                .await?;
+            std::fs::write(&path, yaml(&format!("{source}/new"), true))?;
+            reloader.reload().await?;
+            assert!(
+                table.snapshot_config().providers["fixture"]
+                    .registry
+                    .is_none()
+            );
+            assert_eq!(
+                resolve_route_chain(
+                    &table.snapshot_config(),
+                    "fixture:native",
+                    &RoutingPrefs::default()
+                )?
+                .len(),
+                1
+            );
+            std::fs::write(&path, yaml(&source, false))?;
+            reloader.reload().await?;
+            assert!(
+                table.snapshot_config().providers["fixture"]
+                    .registry
+                    .is_none()
+            );
+        }
+        Ok(())
+    }
 
     struct BrokenStore;
     impl CatalogStore for BrokenStore {
@@ -1660,6 +1799,8 @@ impl AppReloader {
             return Err(RegistryPublishError::Superseded);
         }
         let live = self.routing_table.snapshot_config();
+        let explicit_inventories =
+            crate::providers::registry::apply::explicit_inventory_ids(&fresh);
         // Preserve previously applied local login activation and discovery;
         // registry refresh does not inspect those files or probe endpoints.
         for (id, provider) in &live.providers {
@@ -1685,6 +1826,11 @@ impl AppReloader {
         }
         crate::providers::apply::apply_builtin_defaults(&mut fresh);
         crate::providers::registry::apply::apply_registry(&mut fresh, &snapshot.data);
+        crate::providers::registry::apply::retain_registry_authority(
+            &mut fresh,
+            &live,
+            &explicit_inventories,
+        );
         fresh
             .validate_router_config()
             .map_err(|_| RegistryPublishError::Unavailable)?;
@@ -1867,7 +2013,8 @@ impl AppReloader {
         // live routing-table swap. Every later participant consumes this exact
         // prepared candidate.
         let source_config = baseline.config.clone();
-        resolve_reloadable_config(&mut baseline.config).await;
+        let previous = self.routing_table.snapshot_config();
+        resolve_reloadable_config(&mut baseline.config, Some(&previous)).await;
         Ok((baseline, source_config))
     }
 
@@ -2579,7 +2726,7 @@ policies:
             load_configuration_baseline(&crate::paths::ConfigSource::File(config_path.clone()))
                 .await?;
         let mut initial = initial_baseline.config.clone();
-        resolve_reloadable_config(&mut initial).await;
+        resolve_reloadable_config(&mut initial, None).await;
         let routing_table = Arc::new(ConfigRoutingTable::from_config(initial.clone()));
         let executor = Arc::new(HttpExecutor::new(HttpTimeouts::default())?);
         let db = crate::db::connect("sqlite::memory:").await?;
@@ -2608,7 +2755,7 @@ policies:
             "id: operator\nallowed_models: [beta:m]\n",
         )?;
         let mut candidate = config::load(&config_path).await?;
-        resolve_reloadable_config(&mut candidate).await;
+        resolve_reloadable_config(&mut candidate, None).await;
         let candidate_policy_digest =
             crate::policy_lock::load_for_config(&candidate, Some(&config_path))
                 .await?
@@ -2649,7 +2796,7 @@ policies:
         let (path, dir) = temp_config_path();
         std::fs::write(&path, config_yaml(30))?;
         let mut initial = config::parse(&config_yaml(30))?;
-        resolve_reloadable_config(&mut initial).await;
+        resolve_reloadable_config(&mut initial, None).await;
         let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
         let executor = Arc::new(HttpExecutor::new(HttpTimeouts {
             read: Duration::from_secs(30),
@@ -3091,7 +3238,7 @@ presets:
 "#;
         std::fs::write(&path, initial_yaml)?;
         let mut initial = config::load(&path).await?;
-        resolve_reloadable_config(&mut initial).await;
+        resolve_reloadable_config(&mut initial, None).await;
         let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
         let reloader = AppReloader::new(
             Arc::new(PolicyStore::new()),
@@ -3587,7 +3734,7 @@ presets:
         let baseline =
             load_configuration_baseline(&crate::paths::ConfigSource::File(path.clone())).await?;
         let mut initial = baseline.config().clone();
-        resolve_reloadable_config(&mut initial).await;
+        resolve_reloadable_config(&mut initial, None).await;
         let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
         let reloader = AppReloader::new(
             Arc::new(PolicyStore::new()),
@@ -3634,7 +3781,7 @@ presets:
         };
         std::fs::write(&path, config("old"))?;
         let mut initial = config::load(&path).await?;
-        resolve_reloadable_config(&mut initial).await;
+        resolve_reloadable_config(&mut initial, None).await;
         let routing_table = Arc::new(ConfigRoutingTable::from_config(initial));
         let reloader = AppReloader::new(
             Arc::new(PolicyStore::new()),

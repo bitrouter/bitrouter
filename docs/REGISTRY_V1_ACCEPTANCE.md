@@ -37,8 +37,32 @@ The first integrated workspace campaign ran 4,804 tests in 600.162 seconds:
 fixtures. Their cache now uses the exact selected source, v1 key/header and a
 validated complete document. All nine terminal onboarding cases pass after
 the repair, retaining their provider selection, login, secret echo, cancellation
-and source-preservation assertions. Final aggregate and platform gates remain
-tracked on the pull request.
+and source-preservation assertions.
+
+The integrated `c797d4b9` campaign then passed all 4,805 tests in 512.363
+seconds, with 151 opt-in cases skipped. Strict workspace Clippy on Rust 1.97,
+doctests, rustdoc with `-D warnings`, formatting and generated-artifact checks
+also passed. The actual public sync-to-host experiment passed in both the full
+and minimum builds (9.52 and 8.03 seconds), observing 688 models per run and
+verifying identical served bytes, authenticated canonical/native requests,
+complete cached documents and offline restart. Inference used an isolated
+test-owned upstream. An extracted, manifest-verified `gateway-shared` archive
+from the same source passed 27 process and 76 additional shared authority cases
+against isolated PostgreSQL 18.6 with SCRAM authentication.
+
+Final independent review exposed an authority fallback for local empty
+provider stubs when a registry record became unsupported or disappeared. The
+repair keeps same-source ownership across background refresh and ordinary
+reload, withholds generic direct routing/discovery, and rebuilds registry-owned
+model projections on repeated application. Complete explicit local inventories
+still override; custom providers and source/reset boundaries retain startup
+semantics. Four initial regressions failed before the repair; all five focused
+regressions passed afterward, including the distinction between explicit and
+automatically enriched model inventories. The protocol clarifies this
+process-local boundary without adding wire fields or cache history. Independent
+re-review found no remaining actionable P1/P2/P3 in the repair. Final
+post-repair aggregate and current-head platform gates are recorded on the pull
+request, separately from the source-attributed campaign above.
 
 ## Scope
 

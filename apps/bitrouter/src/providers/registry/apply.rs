@@ -39,9 +39,8 @@ use bitrouter_ai::catalog::types::{
 const BITROUTER_CLOUD_ID: &str = "bitrouter";
 
 /// Merge `data` into `config`. No-op when `inherit_defaults` or
-/// `registry.enabled` is false. Idempotent: re-running over an already-merged
-/// config changes nothing (every write is guarded by an "is it empty / unset"
-/// check).
+/// `registry.enabled` is false. Rebuild registry-owned inventories on each
+/// application while preserving complete explicit local inventories.
 pub fn apply_registry(config: &mut Config, data: &RegistryData) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
@@ -81,6 +80,47 @@ pub fn apply_registry(config: &mut Config, data: &RegistryData) {
     }
 }
 
+fn withhold_registry_inventory(provider: &mut ProviderConfig) {
+    provider.models.clear();
+    provider.registry = Some(registry_json::json!({"status":"unavailable","models":[]}));
+}
+
+/// Capture explicit inventories before built-ins or discovery enrich local stubs.
+pub(crate) fn explicit_inventory_ids(config: &Config) -> std::collections::BTreeSet<String> {
+    config
+        .providers
+        .iter()
+        .filter(|(_, provider)| !provider.models.is_empty() && provider.registry.is_none())
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
+/// Keep established same-source authority after enrichment, before discovery.
+/// Complete local inventories and newly selected sources retain startup semantics.
+pub(crate) fn retain_registry_authority(
+    config: &mut Config,
+    previous: &Config,
+    explicit_inventories: &std::collections::BTreeSet<String>,
+) {
+    if !config.inherit_defaults
+        || !config.registry.enabled
+        || !previous.inherit_defaults
+        || !previous.registry.enabled
+        || config.registry.source() != previous.registry.source()
+    {
+        return;
+    }
+    for (id, prior) in &previous.providers {
+        if prior.registry.is_some()
+            && !explicit_inventories.contains(id)
+            && let Some(local) = config.providers.get_mut(id)
+            && local.registry.is_none()
+        {
+            withhold_registry_inventory(local);
+        }
+    }
+}
+
 fn apply_v1(config: &mut Config, data: &RegistryData, document: &registry_json::Value) {
     use bitrouter_registry::document::ReaderPolicy;
     config.registry_models = document["data"]["models"].as_array().cloned();
@@ -92,6 +132,13 @@ fn apply_v1(config: &mut Config, data: &RegistryData, document: &registry_json::
         let Some(id) = raw["name"].as_str() else {
             continue;
         };
+        // Rejected records still own matching stubs; they cannot become generic
+        // direct routes merely because their execution contract is unavailable.
+        if let Some(local) = config.providers.get_mut(id)
+            && (local.registry.is_some() || local.models.is_empty())
+        {
+            withhold_registry_inventory(local);
+        }
         let Some(provider) = data.providers.iter().find(|p| p.name == id) else {
             continue;
         };
@@ -125,7 +172,7 @@ fn apply_v1(config: &mut Config, data: &RegistryData, document: &registry_json::
             continue;
         }
         let entry = config.providers.entry(id.into()).or_default();
-        let local_inventory = !entry.models.is_empty();
+        let local_inventory = !entry.models.is_empty() && entry.registry.is_none();
         let manual_subscription_opt_in = local_inventory
             && (!entry.api_key.is_empty() || !entry.accounts.is_empty())
             && raw["billing"] == "subscription";
@@ -135,7 +182,7 @@ fn apply_v1(config: &mut Config, data: &RegistryData, document: &registry_json::
         if entry.api_key.is_empty() {
             entry.api_key = key.unwrap_or_default();
         }
-        if entry.models.is_empty() {
+        if !local_inventory {
             entry.models = build_models(provider);
         }
         if entry.class.is_none() && !manual_subscription_opt_in {
@@ -174,6 +221,168 @@ mod v1_tests {
     use crate::gateway::pipeline::routing::RoutingPrefs;
     use registry_json as serde_json;
     use serde_json::{Value, json};
+
+    fn local_stub() -> anyhow::Result<Config> {
+        Ok(serde_json::from_value(json!({"providers":{"fixture":{
+            "api_base":"https://local.example/v1","api_key":"fixture-key"
+        }}}))?)
+    }
+
+    #[test]
+    fn registry_empty_stubs_preserve_rejected_contracts_and_manual_inventories()
+    -> anyhow::Result<()> {
+        let active = crate::gateway::catalog::tests::document("native");
+        for change in ["status", "auth", "features", "access", "handler"] {
+            let mut raw = active.clone();
+            let provider = &mut raw["data"]["providers"][0];
+            match change {
+                "status" => provider["status"] = json!("suspended"),
+                "auth" => provider["auth"] = json!({"kind":"future-auth"}),
+                "features" => provider["requires"] = json!(["future.feature"]),
+                "access" => provider["access"] = json!("local_oauth"),
+                _ => {
+                    provider["auth"] =
+                        json!({"kind":"oauth","handler":"future-handler","params":{}})
+                }
+            }
+            let rejected = data(&raw)?;
+            let mut config = local_stub()?;
+            apply_registry(&mut config, &rejected);
+            assert!(config.providers["fixture"].registry.is_some(), "{change}");
+            for selector in [
+                "fixture:native".to_owned(),
+                bitrouter_registry::selector::encode("fixture", "native")?,
+            ] {
+                assert!(
+                    resolve_route_chain(&config, &selector, &RoutingPrefs::default())?.is_empty(),
+                    "{change}"
+                );
+            }
+            apply_registry(&mut config, &data(&active)?);
+            assert_eq!(
+                resolve_route_chain(&config, "fixture:native", &RoutingPrefs::default())?.len(),
+                1
+            );
+            let mut manual = local_stub()?;
+            manual
+                .providers
+                .get_mut("fixture")
+                .ok_or_else(|| anyhow::anyhow!("missing stub"))?
+                .models = serde_json::from_value(json!([{"id":"manual"}]))?;
+            apply_registry(&mut manual, &rejected);
+            assert!(manual.providers["fixture"].registry.is_none());
+            assert_eq!(
+                resolve_route_chain(&manual, "fixture:manual", &RoutingPrefs::default())?.len(),
+                1
+            );
+        }
+        let mut disabled = local_stub()?;
+        disabled
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing stub"))?
+            .active = false;
+        apply_registry(&mut disabled, &data(&active)?);
+        assert!(!disabled.providers["fixture"].active);
+        Ok(())
+    }
+
+    #[test]
+    fn registry_application_preserves_ownership_and_updates_projection() -> anyhow::Result<()> {
+        let mut raw = crate::gateway::catalog::tests::document("native");
+        let mut config = local_stub()?;
+        apply_registry(&mut config, &data(&raw)?);
+        apply_registry(&mut config, &data(&raw)?);
+        let target = resolve_route_chain(&config, "fixture:native", &RoutingPrefs::default())?;
+        assert!(
+            target
+                .first()
+                .is_some_and(|target| target.registry.is_some())
+        );
+        let mut added = raw["data"]["providers"][0]["models"][0].clone();
+        added["provider_model_id"] = json!("next-native");
+        added["canonical_id"] = json!("org/next");
+        raw["data"]["providers"][0]["models"]
+            .as_array_mut()
+            .ok_or_else(|| anyhow::anyhow!("missing offers"))?
+            .push(added);
+        apply_registry(&mut config, &data(&raw)?);
+        assert_eq!(
+            resolve_route_chain(&config, "org/next", &RoutingPrefs::default())?.len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn registry_authority_distinguishes_explicit_and_enriched_inventories() -> anyhow::Result<()> {
+        let mut previous = local_stub()?;
+        apply_registry(
+            &mut previous,
+            &data(&crate::gateway::catalog::tests::document("native"))?,
+        );
+        let mut fresh = local_stub()?;
+        let explicit = explicit_inventory_ids(&fresh);
+        fresh
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing stub"))?
+            .models = serde_json::from_value(json!([{"id":"enriched-native"}]))?;
+        let mut manual = fresh.clone();
+        let manual_ids = explicit_inventory_ids(&manual);
+        retain_registry_authority(&mut fresh, &previous, &explicit);
+        assert!(
+            resolve_route_chain(&fresh, "fixture:enriched-native", &RoutingPrefs::default())?
+                .is_empty()
+        );
+        retain_registry_authority(&mut manual, &previous, &manual_ids);
+        assert_eq!(
+            resolve_route_chain(&manual, "fixture:enriched-native", &RoutingPrefs::default())?
+                .len(),
+            1
+        );
+        apply_registry(
+            &mut fresh,
+            &data(&crate::gateway::catalog::tests::document("native"))?,
+        );
+        retain_registry_authority(&mut fresh, &previous, &explicit);
+        assert_eq!(
+            resolve_route_chain(&fresh, "fixture:native", &RoutingPrefs::default())?.len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn registry_fences_skip_manual_discovery() -> anyhow::Result<()> {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"data":[{"id":"unverified"}]})),
+            )
+            .mount(&server)
+            .await;
+        let mut config = local_stub()?;
+        let stub = config
+            .providers
+            .get_mut("fixture")
+            .ok_or_else(|| anyhow::anyhow!("missing stub"))?;
+        stub.api_base = server.uri();
+        stub.auto_discover = true;
+        let mut raw = crate::gateway::catalog::tests::document("native");
+        raw["data"]["providers"][0]["status"] = json!("suspended");
+        apply_registry(&mut config, &data(&raw)?);
+        crate::config::discover_models(&mut config).await;
+        assert!(
+            server
+                .received_requests()
+                .await
+                .ok_or_else(|| anyhow::anyhow!("missing requests"))?
+                .is_empty()
+        );
+        Ok(())
+    }
 
     fn data(raw: &Value) -> anyhow::Result<RegistryData> {
         crate::gateway::catalog::decode::from_slice(&serde_json::to_vec(raw)?)

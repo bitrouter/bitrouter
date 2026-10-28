@@ -1432,6 +1432,15 @@ operation rewrites `as_of` or provider/model evidence timestamps.
 A locally configured provider `models` list is a complete explicit routing
 inventory: its model constraints, protocols, and prices remain authoritative.
 An empty local provider stub may instead opt into the registry inventory.
+Once a registry owns that inventory, same-source refresh and ordinary reload
+MUST keep it unavailable when its provider is withdrawn or its contract is
+unsupported. Generic direct routing or model discovery MUST NOT bypass that
+restriction. A supported provider record can restore it. This ownership is
+process-local: restart, source changes, or disabling and re-enabling the
+registry use startup selection again. A custom provider absent from the
+selected startup document remains a local provider; no ownership history is
+added to the wire document or cache. A complete explicit local inventory
+continues to override registry ownership.
 Registry-only refresh uses the last applied local configuration, never pending
 file edits, and shares serialization with ordinary configuration reload. A
 candidate waiting for that serialization is not yet a successful check and

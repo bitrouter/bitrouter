@@ -2100,6 +2100,8 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// populate the model list from the response (`{ "data": [{ "id": … }] }`,
 /// the Chat Completions / Messages shape). A provider whose discovery call fails is
 /// left as-is with a WARN — discovery never aborts startup.
+/// Registry-owned inventories use their declared execution contracts instead
+/// of generic discovery, including when a provider is withheld or unsupported.
 ///
 /// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
 /// unreachable provider can't stall a `bro reload` for the OS-level
@@ -2116,7 +2118,11 @@ pub async fn discover_models(config: &mut Config) {
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     for (provider_id, provider) in config.providers.iter_mut() {
-        if !provider.active || !provider.auto_discover || !provider.models.is_empty() {
+        if !provider.active
+            || !provider.auto_discover
+            || !provider.models.is_empty()
+            || provider.registry.is_some()
+        {
             continue;
         }
         let url = format!("{}/models", provider.api_base.trim_end_matches('/'));
