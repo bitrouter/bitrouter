@@ -314,8 +314,9 @@ jobs:
   # exactly this module; both supported Unix platforms retain both exact tests.
   # Windows ordinary tests retain the unsupported-local-tenancy refusal case.
   # Cold compilation is separate from the bounded 30-minute campaign and its
-  # 35-minute nextest watchdog. Repeated large-state serialization needs application
-  # optimization; keep debug assertions and every original operation/product limit.
+  # 35-minute nextest watchdog. Qualify the functional frontier with the existing
+  # dist codegen and explicit debug/overflow checks, not a performance comparison.
+  # https://doc.rust-lang.org/cargo/reference/profiles.html
   test-choice-capacity:
     name: Choice capacity (${{ matrix.os }}, ${{ matrix.case }})
     strategy:
@@ -346,7 +347,9 @@ jobs:
         shell: bash
         run: >-
           cargo nextest run --locked -p bitrouter --all-features --lib
-          --config profile.test.package.bitrouter.opt-level=1
+          --cargo-profile dist
+          --config profile.dist.debug-assertions=true
+          --config profile.dist.overflow-checks=true
           --build-jobs 2 --no-run
           -E "test(=tenancy::tests::execution::native::session::choice::headroom::$CAPACITY_CASE)"
       - name: run the capacity consumer without competing workloads
@@ -354,7 +357,9 @@ jobs:
         shell: bash
         run: >-
           cargo nextest run --locked -p bitrouter --all-features --lib
-          --config profile.test.package.bitrouter.opt-level=1
+          --cargo-profile dist
+          --config profile.dist.debug-assertions=true
+          --config profile.dist.overflow-checks=true
           --build-jobs 2 --test-threads 1 --retries 0 --no-tests fail
           -E "test(=tenancy::tests::execution::native::session::choice::headroom::$CAPACITY_CASE)"
 

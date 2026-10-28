@@ -1051,6 +1051,33 @@ Opt-in reduced/capacity campaigns retain their separately recorded results.
 Delivery stages remain open pending final qualification; current dispatch
 eligibility is described above.
 
+## Choice capacity functional qualification
+
+The two native Choice capacity consumers qualify the real receipt frontier,
+refusal before provider send, retained pending outcomes and clean release. Their
+build uses the existing `dist` profile with explicit debug assertions and integer
+overflow checks:
+
+```text
+--cargo-profile dist
+--config profile.dist.debug-assertions=true
+--config profile.dist.overflow-checks=true
+```
+
+This replaces the application-only test-profile optimization for these two
+consumers. Both Unix platforms, all features, original workloads and assertions,
+serial execution, zero retries and every operation/campaign deadline are
+unchanged. Cold compilation remains separate from the bounded runtime campaign.
+Record the actual source, compiler, effective profile and test executable with
+each result. Earlier application-only profile failures remain failed observations;
+a result from the replacement profile cannot relabel them.
+
+This is a dist-derived test executable with additional checks, not evidence that
+its bytes or configuration equal a shipped binary. It establishes functional
+capacity only after the original consumers pass. It does not demonstrate a
+production speedup or replace the separate matched-artifact M5 measurements,
+their development build profile, baseline or performance budgets.
+
 ## Remaining acceptance
 
 The reviewed [ACP Block profile](RESOURCE_TENANCY_CAPTURE_PROFILE.md#explicit-retained-acp-block-profile)
