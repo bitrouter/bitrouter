@@ -293,3 +293,7 @@ required-features = ["core", "harness"]
 [[test]]
 name = "acp_skill_delivery"
 required-features = ["harness"]
+
+[[test]]
+name = "background_cli"
+required-features = ["harness"]

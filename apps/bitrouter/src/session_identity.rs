@@ -895,8 +895,7 @@ mod tests {
     #[tokio::test]
     async fn context_revalidation_retains_inferred_identity_after_shared_evidence()
     -> crate::gateway::error::Result<()> {
-        let runtime = Arc::new(AcpRuntime::new());
-        let hook = SessionContextHook::new(runtime.clone());
+        let hook = SessionContextHook::default();
         let mut original = context(
             "gpt-5",
             ApiProtocol::Responses,
@@ -904,7 +903,7 @@ mod tests {
             serde_json::Map::new(),
             None,
         );
-        let frozen = observe(SessionContextHook::new(runtime), &mut original).await;
+        let frozen = observe(SessionContextHook::default(), &mut original).await;
         let mut prompt = original.require_generation_prompt()?.clone();
         prompt
             .messages
@@ -937,8 +936,7 @@ mod tests {
                 vec![("x-claude-code-session-id", "changed-root")],
             ),
         ] {
-            let runtime = Arc::new(AcpRuntime::new());
-            let hook = SessionContextHook::new(runtime.clone());
+            let hook = SessionContextHook::default();
             let mut original = context(
                 "gpt-5",
                 ApiProtocol::Responses,
@@ -946,7 +944,7 @@ mod tests {
                 serde_json::Map::new(),
                 None,
             );
-            let frozen = observe(SessionContextHook::new(runtime), &mut original).await;
+            let frozen = observe(SessionContextHook::default(), &mut original).await;
             let mut rebuilt = context(
                 "gpt-5",
                 ApiProtocol::Responses,

@@ -219,7 +219,7 @@ pub(super) fn directory_id(path: &Path) -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "harness"))]
 mod tests {
     use super::*;
 

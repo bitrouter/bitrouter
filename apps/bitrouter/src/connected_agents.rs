@@ -229,7 +229,7 @@ pub(crate) async fn snapshot(
         "managed_native_session",
     ] {
         coverage.push(Coverage {
-            source: source.into(), status: if native.is_some() { "observed" } else { "unavailable" }.into(),
+            source: source.into(), status: if native.is_some() && (matches!(source, "native_worker" | "native_acp_attachment") || cfg!(feature = "core")) { "observed" } else { "unavailable" }.into(),
             detail: match source {
                 "native_worker" => "Resident TurnWorker guards across daemon callers; cold/loaded Threads and queued Turns excluded",
                 "native_acp_attachment" => "Live session attachments only; initialized connections without a session are outside this view",
