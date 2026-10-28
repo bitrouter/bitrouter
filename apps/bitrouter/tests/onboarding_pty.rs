@@ -6,6 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use portable_pty::{CommandBuilder, PtySize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 #[path = "support/example_binary.rs"]
 mod example_binary;
@@ -53,21 +54,33 @@ impl Terminal {
         if configured {
             write_config(home.path())?;
         }
-        let registry = bitrouter::config::RegistryConfig::default().url;
-        let cache = home.path().join("cache/bitrouter");
+        let registry = bitrouter::config::RegistryConfig::default()
+            .source()
+            .to_owned();
+        let cache = home.path().join("cache/bitrouter/registry-v1");
         std::fs::create_dir_all(&cache)?;
-        std::fs::write(
-            cache.join("registry.json"),
-            serde_json::to_vec(&json!({
-                "source": registry,
-                "fetched_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(),
-                "data": { "providers": [
-                    {"name": "fixture-one", "status": "active", "api_base": "http://127.0.0.1:9", "auth": {"kind":"bearer", "env":"FIXTURE_ONE_API_KEY"}},
-                    {"name": "fixture-two", "status": "active", "api_base": "http://127.0.0.1:9", "auth": {"kind":"bearer", "env":"FIXTURE_TWO_API_KEY"}},
-                    {"name": "claude-code", "status": "active", "api_base": "http://127.0.0.1:9", "auth": {"kind":"bearer", "env":"FIXTURE_CLAUDE_API_KEY"}}
-                ], "canonical": [] }
-            }))?,
+        let document = serde_json::to_vec(&json!({
+            "version": 1,
+            "spec_revision": bitrouter_registry::document::SPEC_REVISION,
+            "as_of": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "data": { "models": [], "providers": [
+                {"name": "fixture-one", "status": "active", "billing": "usage", "models": [], "api_base": "https://fixture.invalid/v1", "auth": {"kind":"bearer", "env":"FIXTURE_ONE_API_KEY"}},
+                {"name": "fixture-two", "status": "active", "billing": "usage", "models": [], "api_base": "https://fixture.invalid/v1", "auth": {"kind":"bearer", "env":"FIXTURE_TWO_API_KEY"}},
+                {"name": "claude-code", "status": "active", "billing": "usage", "models": [], "api_base": "https://fixture.invalid/v1", "auth": {"kind":"bearer", "env":"FIXTURE_CLAUDE_API_KEY"}}
+            ] }
+        }))?;
+        bitrouter_registry::document::Document::parse(
+            &document,
+            &bitrouter_registry::document::ReaderPolicy::default(),
         )?;
+        let mut cached = serde_json::to_vec(&json!({
+            "cache_version": 1, "source": registry,
+            "checked_at": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs()
+        }))?;
+        cached.push(b'\n');
+        cached.extend(document);
+        let key = hex::encode(Sha256::digest(format!("1\0{registry}").as_bytes()));
+        std::fs::write(cache.join(format!("{key}.json")), cached)?;
         // Init sees our cached provider choices; the serving runtime stays
         // offline because inherit_defaults=false gates the registry merge.
         if configured {

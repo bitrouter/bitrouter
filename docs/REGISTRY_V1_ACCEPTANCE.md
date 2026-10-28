@@ -7,8 +7,8 @@ evidence, not an additional protocol requirement.
 
 ## Stack integration (2026-10-29)
 
-This integration includes main `66cd3b8d`, P0 `a8019d28`, and shared gateway
-`753dd139`. The dated campaigns below retain their original source identity;
+This integration includes main `66cd3b8d`, P0 `fa460bd6`, and shared gateway
+`aae6b6eb`. The dated campaigns below retain their original source identity;
 the integrated runtime and hosted checks are separate acceptance gates.
 
 Catalog migration retains main's four new canonical recommendations and new
@@ -29,6 +29,16 @@ direct OpenAI Terra interfaces now include this exact tier. New Azure Terra
 rates remain omitted because its complete deployment tariff was not verified;
 omission means unavailable pricing, never free usage. Source validation,
 artifact generation and fresh canonical admission pass after this repair.
+
+All workspace/all-feature targets compile after the main branch's new manual
+MCP routing fixture explicitly initializes registry provenance to `None`.
+The first integrated workspace campaign ran 4,804 tests in 600.162 seconds:
+4,801 passed and three new onboarding terminal cases exposed obsolete v0 cache
+fixtures. Their cache now uses the exact selected source, v1 key/header and a
+validated complete document. All nine terminal onboarding cases pass after
+the repair, retaining their provider selection, login, secret echo, cancellation
+and source-preservation assertions. Final aggregate and platform gates remain
+tracked on the pull request.
 
 ## Scope
 
