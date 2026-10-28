@@ -399,8 +399,11 @@ jobs:
               core-only) features=(--features core); variable=BITROUTER_PAID_CORE_LIBTEST ;;
               harness-only) features=(--features harness); variable=BITROUTER_PAID_HARNESS_LIBTEST ;;
             esac
+            # Preserve artifact JSON while rendering compiler errors in the log.
+            # https://doc.rust-lang.org/cargo/commands/cargo-build.html#display-options
             cargo test --locked -p bitrouter --lib --no-default-features \
-              "${features[@]}" --no-run --message-format=json > "$artifacts/$profile.jsonl"
+              "${features[@]}" --no-run --message-format=json,json-render-diagnostics \
+              > "$artifacts/$profile.jsonl"
             binary="$(jq -sr '
               [.[] | select(.reason == "compiler-artifact"
                 and .target.name == "bitrouter" and .target.kind == ["lib"]

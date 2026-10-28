@@ -11,9 +11,9 @@ use std::{path::Path, sync::Arc, time::Duration};
 mod driver;
 
 pub(in crate::tenancy::tests) const ROOT: &str = "BITROUTER_PAID_STARTUP_ROOT";
-#[cfg(all(feature = "core", feature = "harness"))]
+#[cfg(all(unix, feature = "core", feature = "harness"))]
 pub(in crate::tenancy::tests) const MODE: &str = "BITROUTER_PAID_STARTUP_MODE";
-#[cfg(all(feature = "core", feature = "harness"))]
+#[cfg(all(unix, feature = "core", feature = "harness"))]
 pub(in crate::tenancy::tests) const WITNESS: &str = "paid-startup-physical-file-ready";
 const PROFILE: &str = "BITROUTER_PAID_STARTUP_PROFILE";
 

@@ -198,7 +198,7 @@ impl Service {
         Self::open_with_limits(db, owner, actor::OperationLimits::default()).await
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn open_profile(
         db: DatabaseConnection,
         owner: Option<ownership::Lease>,

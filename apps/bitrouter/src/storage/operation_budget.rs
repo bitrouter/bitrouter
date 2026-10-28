@@ -36,7 +36,7 @@ impl<'a> OperationBudget<'a> {
             bytes: bytes.min(32 * 1024 * 1024),
         }
     }
-    #[cfg(feature = "harness")]
+    #[cfg(all(feature = "core", feature = "harness"))]
     pub(crate) fn usage(&self) -> Result<(usize, usize), Error> {
         self.check()?;
         self.used
