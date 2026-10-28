@@ -1,7 +1,5 @@
-//! Reports for the `skills` commands.
-//!
-//! Only `list` and `init` remain. The `add` / `remove` / `find` / `update`
-//! reports were removed with the skills package manager — see `crate::skills`.
+//! Source scaffolding and compatibility discovery reports. Managed lifecycle
+//! reports live beside the versioned installation store in `crate::skills`.
 
 use crate::actions::skills::SkillsReport;
 use serde::Serialize;
@@ -11,11 +9,7 @@ use crate::output::human::Human;
 #[cfg(test)]
 use crate::output::human::Theme;
 
-/// Human rendering for the shared `skills_search` report.
-///
-/// The type is the MCP crate's — `impl CliReport for <foreign report>` is legal
-/// because the trait is ours — so `bro skills list --json` is byte-for-byte
-/// the tool's structured content, and only this rendering is CLI-only.
+/// Human rendering for the shared unmanaged discovery report.
 impl CliReport for SkillsReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         if self.skills.is_empty() {

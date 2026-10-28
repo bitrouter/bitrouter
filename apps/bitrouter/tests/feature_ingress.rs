@@ -320,28 +320,15 @@ async fn unavailable_ingress_rejects_before_assembly_reload_or_preflight_effects
 #[tokio::test]
 async fn unavailable_ingress_commands_reject_before_configuration_or_logs() -> Result<()> {
     let mut cases: Vec<(&[&str], &str)> = Vec::new();
-    if !cfg!(feature = "tui") {
-        cases.extend([
-            (&["code", "--config", "missing.yaml"][..], "tui feature"),
-            (&["tui", "--config", "missing.yaml"][..], "tui feature"),
-            (&["agents"][..], "tui feature"),
-            (
-                &["agents", "attach", "fixture", "--config", "missing.yaml"][..],
-                "tui feature",
-            ),
-            (
-                &[
-                    "init",
-                    "--yes",
-                    "--after",
-                    "launch",
-                    "--config",
-                    "missing.yaml",
-                ][..],
-                "tui feature",
-            ),
-        ]);
-    }
+    cases.extend([
+        (&["code", "--config", "missing.yaml"][..], "removed"),
+        (&["tui", "--config", "missing.yaml"][..], "removed"),
+        (&["chat", "--config", "missing.yaml"][..], "removed"),
+        (
+            &["agents", "attach", "fixture", "--config", "missing.yaml"][..],
+            "removed",
+        ),
+    ]);
     if !cfg!(feature = "mcp") {
         cases.extend([
             (

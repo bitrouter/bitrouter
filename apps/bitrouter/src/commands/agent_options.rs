@@ -29,7 +29,7 @@ pub enum PromptFormat {
     #[default]
     #[value(alias = "json")]
     Ndjson,
-    /// The transcript as the piped `bro chat <agent>` compatibility path prints it.
+    /// The settled transcript as plain text, without terminal control sequences.
     Text,
     /// The assistant's text and nothing else.
     Quiet,
@@ -80,6 +80,9 @@ pub enum SessionSelection {
 /// support from an agent name or optimistically send draft methods.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CapabilitySnapshot {
+    /// Actual connection's carrier contract; this is not native activation.
+    #[serde(default)]
+    pub skill_delivery: SkillDeliveryCapabilities,
     pub load: bool,
     pub resume: bool,
     pub list: bool,
@@ -114,4 +117,25 @@ impl CapabilitySnapshot {
         }
         supported.join(", ")
     }
+}
+
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillDeliveryAdapter {
+    CodexText,
+    ClaudeEmbeddedContext,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillDeliveryCapabilities {
+    pub adapter: Option<SkillDeliveryAdapter>,
+    pub prompt_instructions: bool,
+    pub native_activation: bool,
+    pub verified_bundle_access: bool,
+    pub mcp_origin: bool,
+    /// Model history and token admission stay owned by the external agent.
+    #[serde(default)]
+    pub model_context_budget_verified: bool,
+    pub reason: String,
 }

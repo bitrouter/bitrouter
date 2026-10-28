@@ -266,6 +266,7 @@ async fn all_existing_routes_preserve_bodies_headers_and_explicit_identity() -> 
             THREAD,
             "input",
             &api::InputRequest {
+                skill_consent: false,
                 turn_id: TURN.into(),
                 request_id: "approval-one".into(),
                 approved: false,

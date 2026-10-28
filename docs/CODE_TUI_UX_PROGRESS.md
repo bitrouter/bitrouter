@@ -1,5 +1,13 @@
 # Code TUI implementation and acceptance evidence
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Status: **implemented and locally verified**, 2026-09-08.
 
 Implementation follows [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md), including
@@ -70,15 +78,15 @@ picker content rather than the first chunk of a terminal redraw.
 
 Evidence locations:
 
-- **UI:** [conversation state/render tests](../crates/bitrouter-tui/src/code.rs),
-  [editor tests](../crates/bitrouter-tui/src/editor.rs), and retained journal,
+- **UI:** [conversation state/render tests](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/code.rs),
+  [editor tests](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/editor.rs), and retained journal,
   permission, command-resolution, and Markdown renderer tests in the same crate.
-- **Driver:** [shared application loop](../apps/bitrouter/src/chat/code.rs),
-  [wire lifecycle tests](../apps/bitrouter/src/chat/code_wire.rs),
+- **Driver:** [shared application loop](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/apps/bitrouter/src/chat/code.rs),
+  [wire lifecycle tests](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/apps/bitrouter/src/chat/code_wire.rs),
   [session-host tests](../apps/bitrouter/src/acp_cli.rs), and the application
   dependency-boundary guard.
 - **ACP:** [Shared client protocol tests](../crates/bitrouter-orchestrator/src/acp/client.rs).
-- **PTY:** [real terminal journeys](../apps/bitrouter/tests/code_tui_pty.rs).
+- **PTY:** [real terminal journeys](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/apps/bitrouter/tests/code_tui_pty.rs).
 - **Output:** [ACP/headless/pipe integration tests](../apps/bitrouter/tests/acp.rs).
 
 | Criterion | Result | Evidence |

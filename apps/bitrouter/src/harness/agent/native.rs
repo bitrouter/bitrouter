@@ -13,6 +13,8 @@ mod projection;
 #[cfg(feature = "core")]
 mod scheduling;
 #[cfg(feature = "core")]
+mod skills;
+#[cfg(feature = "core")]
 mod tools;
 
 #[cfg(test)]

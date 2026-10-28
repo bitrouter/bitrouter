@@ -26,15 +26,14 @@ fn canonical_aliases_expand_transitive_features_and_keep_exact_custom_sets()
     for (roots, expected) in [
         (vec!["otel"], vec!["otel-http"]),
         (vec!["harness"], vec!["harness", "mcp"]),
-        (vec!["tui"], vec!["harness", "mcp", "tui"]),
         (vec!["server-tools"], vec!["mcp", "server-tools"]),
         (
             vec!["otel", "otel-http", "otel-grpc"],
             vec!["otel-grpc", "otel-http"],
         ),
         (
-            vec!["tui", "core", "mcp", "tui"],
-            vec!["core", "harness", "mcp", "tui"],
+            vec!["harness", "core", "mcp", "harness"],
+            vec!["core", "harness", "mcp"],
         ),
     ] {
         let selected = selection(MANIFEST, &roots)?;
@@ -236,7 +235,6 @@ fn generated_identity_agrees_with_compiled_capabilities_and_legacy_handoff_id()
         ("harness", cfg!(feature = "harness")),
         ("mcp", cfg!(feature = "mcp")),
         ("server-tools", cfg!(feature = "server-tools")),
-        ("tui", cfg!(feature = "tui")),
         ("guardrails", cfg!(feature = "guardrails")),
         ("otel-http", cfg!(feature = "otel-http")),
         ("otel-grpc", cfg!(feature = "otel-grpc")),

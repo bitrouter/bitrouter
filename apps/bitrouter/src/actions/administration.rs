@@ -233,6 +233,7 @@ pub fn agents(config: &Config, source: &str) -> AgentsReport {
             .collect()
     };
     AgentsReport {
+        skill_delivery: skill_delivery_paths(),
         resolved_via: source.into(),
         readiness_checked: false,
         agents,
@@ -328,4 +329,21 @@ mod snapshot_tests {
         assert_eq!(active_after.digest, disk.digest);
         Ok(())
     }
+}
+
+pub fn skill_delivery_paths() -> std::collections::BTreeMap<String, String> {
+    [
+        ("native", "native_activation"),
+        (
+            "supervised_acp",
+            "local_prompt_instructions_when_negotiated",
+        ),
+        ("supervised_acp_mcp_origin", "unsupported"),
+        ("native_launcher", "unsupported"),
+        ("inference_only", "unsupported"),
+        ("transparent_or_standalone_acp", "unsupported"),
+    ]
+    .into_iter()
+    .map(|(path, mode)| (path.into(), mode.into()))
+    .collect()
 }

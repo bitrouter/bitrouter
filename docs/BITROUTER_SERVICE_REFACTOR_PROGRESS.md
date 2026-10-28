@@ -4,13 +4,47 @@ Implementation follows the [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
 P1 remains out of scope. This ledger records evidence for the full P0 delivery;
 completing one extraction does not complete the milestone.
 
-Current status: the PR incorporates post-revert main `e972d5e`. Latest runtime
-candidate `6c66b9b` passed the complete local all-feature workspace suite,
-minimum-gateway finalizer regressions, strict linting and scoped independent
-review. Its immutable full/minimum artifacts have two recorded performance
-campaigns. Fresh hosted CI and CodeQL on the follow-up PR head remain required:
-the preceding head passed CodeQL but failed two macOS process tests. Earlier
-acceptance retains its dated source identity. P1 remains outside this PR.
+Current integration targets main `66cd3b8d7aa33aa9828b4de3dbe9a7fbf454dbd7`,
+including the CLI orchestration migration from #989. The dated evidence below
+retains its original source identity; it does not certify this integration.
+Current-head hosted checks and aggregate stack acceptance remain required.
+
+## CLI orchestration integration (2026-10-29)
+
+The application retains the five-package P0 boundary and independent gateway,
+Core, Harness, MCP, telemetry and database-driver feature selections. The main
+branch's CLI-only orchestration, daemon-owned managed jobs, skill source receipts,
+consent and connected-agent inspection replace the retired first-party TUI.
+Public skill metadata and consent records belong to `bitrouter-ai`; filesystem,
+validation, MCP transport and execution remain application-owned. The HTTP SDK
+remains client-only. Harness skill discovery shares the bounded MCP client's
+existing process ownership and cancellation cleanup.
+
+The integration restores early validation of frozen skill policy, consent and
+budgets before recovery normalizes state. Its regression recomputes checkpoint
+and ACK digests and includes an unchanged positive control. Without the repair,
+a corrupted validation progress marker is accepted; with it, all four semantic
+mutations are rejected. Managed shutdown drains every driver after a failed
+join, and missing-driver CLI diagnostics retain database credential redaction.
+
+Local stage validation on macOS arm64 / Rust 1.99:
+
+- All workspace/all-feature targets were compiled, including the formerly
+  disabled ACP/MCP skill tests and the client SDK tests. Migrated fixture and
+  module paths were corrected.
+- All 38 native skill execution/recovery tests passed with no retries. The new
+  restoration tamper test was observed failing before its validation repair.
+- Independent Harness, minimum gateway, Core and MCP production builds passed.
+  Optional-only helpers now follow their owning capability gates.
+- Schema regeneration, registry validation/build and complete dist checks passed.
+- Independent runtime and CI/boundary reviews found no remaining P1/P2/P3 in the
+  examined repairs. CI fixture inventories, feature requirements and shell/YAML
+  structure were checked; no per-test deadline or retry policy was relaxed.
+
+Full runtime, platform and security results for the updated three-PR stack will
+be recorded against its final heads. Earlier performance campaigns remain
+historical evidence; this integration makes no new performance claim. No PR
+merge, release or installed-daemon replacement is performed by this validation.
 
 ## Post-revert main integration (2026-10-20)
 

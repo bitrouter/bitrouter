@@ -15,6 +15,22 @@ pub mod checkpoint;
 
 #[derive(Debug, clap::Subcommand)]
 pub enum EvolutionAction {
+    /// Inspect/preview/register exact candidate revisions through the live owner.
+    Candidate {
+        #[command(subcommand)]
+        action: CandidateCommand,
+    },
+    /// Freeze/review/submit a recorded checkpoint through the live owner.
+    Checkpoint {
+        #[arg(long)]
+        source: String,
+        #[arg(long)]
+        session: String,
+        #[command(subcommand)]
+        action: CheckpointCommand,
+    },
+    /// Change only the judge model, preserving the current evolution mode.
+    JudgeModel { model: String },
     /// Inspect modes, blocks, scheduled checkpoints and judge task status.
     Status,
     /// Select feedback mode; automatic requires a configured judge model.
@@ -59,6 +75,19 @@ pub enum EvolutionAction {
 impl EvolutionAction {
     pub async fn operation(self) -> Result<EvolutionOperation> {
         Ok(match self {
+            Self::Candidate { action } => EvolutionOperation::Candidate {
+                action: action.operation().await?,
+            },
+            Self::Checkpoint {
+                source,
+                session,
+                action,
+            } => EvolutionOperation::Checkpoint {
+                source,
+                session_id: session,
+                action: action.operation().await?,
+            },
+            Self::JudgeModel { model } => EvolutionOperation::JudgeModel { model },
             Self::Status => EvolutionOperation::Status,
             Self::Mode { mode, judge_model } => EvolutionOperation::Mode { mode, judge_model },
             Self::Register { file } => EvolutionOperation::Register {
@@ -100,6 +129,83 @@ impl EvolutionAction {
             }
         })
     }
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum CandidateCommand {
+    Catalog,
+    Revision {
+        block: String,
+    },
+    /// Read a complete CandidateSpec; returns an immutable, reviewable preview.
+    Preview {
+        #[arg(long = "from")]
+        file: PathBuf,
+    },
+    /// Register the exact reviewed CandidatePreview; rechecks dependency fences.
+    Register {
+        #[arg(long = "from")]
+        file: PathBuf,
+    },
+}
+
+impl CandidateCommand {
+    async fn operation(self) -> Result<super::runtime::candidates::CandidateAction> {
+        use super::runtime::candidates::CandidateAction;
+        Ok(match self {
+            Self::Catalog => CandidateAction::Catalog,
+            Self::Revision { block } => CandidateAction::Revision { block_id: block },
+            Self::Preview { file } => CandidateAction::Preview {
+                spec: Box::new(read_json(&file).await?),
+            },
+            Self::Register { file } => CandidateAction::Register {
+                preview: Box::new(read_json(&file).await?),
+            },
+        })
+    }
+}
+
+#[derive(Debug, clap::Subcommand)]
+pub enum CheckpointCommand {
+    List,
+    Freeze {
+        #[arg(long)]
+        expected_watermark: i64,
+    },
+    /// Return frozen evidence, current revision, history and optional prefill.
+    Review {
+        checkpoint: String,
+    },
+    /// Submit an exact RubricSubmission, including its revision/idempotency fences.
+    Submit {
+        #[arg(long = "from")]
+        file: PathBuf,
+    },
+}
+
+impl CheckpointCommand {
+    async fn operation(self) -> Result<checkpoint::CheckpointAction> {
+        Ok(match self {
+            Self::List => checkpoint::CheckpointAction::List,
+            Self::Freeze { expected_watermark } => {
+                checkpoint::CheckpointAction::Freeze { expected_watermark }
+            }
+            Self::Review { checkpoint } => checkpoint::CheckpointAction::Review {
+                checkpoint_id: checkpoint,
+            },
+            Self::Submit { file } => checkpoint::CheckpointAction::Submit {
+                submission: Box::new(read_json(&file).await?),
+            },
+        })
+    }
+}
+
+async fn read_json<T: serde::de::DeserializeOwned>(file: &std::path::Path) -> Result<T> {
+    Ok(serde_json::from_str(
+        &tokio::fs::read_to_string(file)
+            .await
+            .with_context(|| format!("reading {}", file.display()))?,
+    )?)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

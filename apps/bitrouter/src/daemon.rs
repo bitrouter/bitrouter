@@ -43,6 +43,9 @@ use {
     bitrouter_ai::control::administration::ProvidersReport,
 };
 
+/// Instance-fenced local evolution control, distinct from handoff and ACP versions.
+pub const EVOLUTION_CONTROL_VERSION: u16 = 1;
+
 /// Anything the daemon's `Reload` command (and SIGHUP) should re-read. The
 /// runtime reloader fans out to every reloadable subsystem — routing table,
 /// policy store, … — atomically per subsystem. A failure in one is reported
@@ -162,6 +165,8 @@ pub enum DaemonCommand {
     ReloadState,
     /// Report daemon status.
     Status,
+    /// Read live owner-local agent instances without opening any connection.
+    ConnectedAgents { after: Option<String>, limit: usize },
     /// List every model the live routing table can route, each with the
     /// providers that can serve it.
     ///
@@ -192,6 +197,17 @@ pub enum DaemonCommand {
         #[cfg(feature = "core")]
         operation: crate::core::evolution::operator::EvolutionOperation,
         // Decode only to reject the unavailable operation on reduced builds.
+        #[cfg(not(feature = "core"))]
+        operation: serde_json::Value,
+    },
+    /// Negotiate instance-fenced evolution control without changing any state.
+    EvolutionHello,
+    /// Versioned owner operation; no fallback to the legacy unpinned variant.
+    EvolutionFenced {
+        version: u16,
+        server_instance_id: String,
+        #[cfg(feature = "core")]
+        operation: crate::core::evolution::operator::EvolutionOperation,
         #[cfg(not(feature = "core"))]
         operation: serde_json::Value,
     },
@@ -293,6 +309,9 @@ pub struct RouteHop {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "resp", rename_all = "snake_case")]
 pub enum DaemonResponse {
+    ConnectedAgents {
+        report: Box<crate::connected_agents::Report>,
+    },
     /// The command succeeded with no payload.
     Ok,
     HandoffHello {
@@ -407,6 +426,10 @@ pub enum DaemonResponse {
         report: Box<crate::core::evolution::operator::EvolutionReport>,
         #[cfg(not(feature = "core"))]
         report: Box<serde_json::Value>,
+    },
+    EvolutionHello {
+        version: u16,
+        server_instance_id: String,
     },
     /// This daemon shares the recorder's database and records gateway requests.
     AcpRecordingRegistered {
@@ -613,6 +636,8 @@ pub struct ReadyInfo {
     pub listen: String,
     /// Count of routable models.
     pub models: usize,
+    /// Redaction-safe saved/running evidence from the runtime.
+    pub config_state: Option<Box<bitrouter_ai::control::reload::ConfigurationState>>,
 }
 
 /// Resolve the control-socket path for a `(source, cfg)` pair. For a `File`
@@ -637,21 +662,32 @@ pub fn socket_path_for(
 /// listening yet (not reachable — keep waiting); `Err` = a daemon is there but
 /// the exchange failed (a real error worth surfacing).
 pub async fn probe_status(socket: &Path) -> Result<Option<ReadyInfo>> {
-    match send_command(socket, &DaemonCommand::Status).await {
-        Ok(DaemonResponse::Status {
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        send_command(socket, &DaemonCommand::Status),
+    )
+    .await
+    .context("daemon readiness probe timed out")?
+    {
+        Ok(response) => response,
+        Err(error) if is_not_reachable(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    match response {
+        DaemonResponse::Status {
             pid,
             listen,
             models,
+            config_state,
             ..
-        }) => Ok(Some(ReadyInfo {
+        } => Ok(Some(ReadyInfo {
             pid,
             listen,
             models,
+            config_state,
         })),
-        Ok(DaemonResponse::Error { message }) => Err(anyhow::anyhow!(message)),
-        Ok(other) => Err(anyhow::anyhow!("unexpected response: {other:?}")),
-        Err(e) if is_not_reachable(&e) => Ok(None),
-        Err(e) => Err(e),
+        DaemonResponse::Error { message } => Err(anyhow::anyhow!(message)),
+        other => Err(anyhow::anyhow!("unexpected response: {other:?}")),
     }
 }
 
@@ -755,6 +791,8 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
         acp,
         LocalControlOptions {
             administration,
+            #[cfg(feature = "harness")]
+            native: None,
             gate: crate::daemon_handoff::HandoffGate::default(),
             cli_owned: false,
         },
@@ -764,6 +802,8 @@ pub async fn run_control_socket_with_acp_runtime_and_administration(
 
 /// Optional owner-scoped services shared with the HTTP listener.
 pub struct LocalControlOptions {
+    #[cfg(feature = "harness")]
+    pub native: Option<crate::connected_agents::NativeOwners>,
     pub administration: Option<Administration>,
     pub gate: crate::daemon_handoff::HandoffGate,
     pub cli_owned: bool,
@@ -801,6 +841,8 @@ pub(crate) async fn run_bound_control_socket(
         None => None,
     };
     let services = LocalControlServices {
+        #[cfg(feature = "harness")]
+        native: options.native,
         administration: options.administration,
         #[cfg(feature = "harness")]
         supervisor,
@@ -832,6 +874,8 @@ pub(crate) async fn run_bound_control_socket(
 
 #[derive(Clone)]
 struct LocalControlServices {
+    #[cfg(feature = "harness")]
+    native: Option<crate::connected_agents::NativeOwners>,
     administration: Option<Administration>,
     #[cfg(feature = "harness")]
     supervisor: Option<crate::harness::supervisor::Supervisor>,
@@ -992,6 +1036,7 @@ where
         DaemonCommand::Stop
             | DaemonCommand::Status
             | DaemonCommand::HandoffHello
+            | DaemonCommand::EvolutionHello
             | DaemonCommand::HandoffPrepare
             | DaemonCommand::HandoffAbort { .. }
             | DaemonCommand::HandoffStop { .. }
@@ -1027,7 +1072,49 @@ async fn dispatch(
     acp: &AcpControlPlane,
     services: &LocalControlServices,
 ) -> DaemonResponse {
+    if let DaemonCommand::EvolutionFenced {
+        version,
+        server_instance_id,
+        ..
+    } = &command
+    {
+        if *version != EVOLUTION_CONTROL_VERSION {
+            return DaemonResponse::Error {
+                message: format!(
+                    "unsupported evolution control version {version}; expected {EVOLUTION_CONTROL_VERSION}"
+                ),
+            };
+        }
+        if server_instance_id != &services.handoff_instance_id {
+            return DaemonResponse::Error { message:"evolution server instance changed; inspect the new owner before submitting an operation".into() };
+        }
+    }
     match command {
+        DaemonCommand::EvolutionHello => DaemonResponse::EvolutionHello {
+            version: EVOLUTION_CONTROL_VERSION,
+            server_instance_id: services.handoff_instance_id.clone(),
+        },
+        #[cfg(feature = "harness")]
+        DaemonCommand::ConnectedAgents { after, limit } => match crate::connected_agents::snapshot(
+            &services.handoff_instance_id,
+            services.supervisor.as_ref(),
+            services.native.as_ref(),
+            after.as_deref(),
+            limit,
+        )
+        .await
+        {
+            Ok(report) => DaemonResponse::ConnectedAgents {
+                report: Box::new(report),
+            },
+            Err(error) => DaemonResponse::Error {
+                message: error.to_string(),
+            },
+        },
+        #[cfg(not(feature = "harness"))]
+        DaemonCommand::ConnectedAgents { .. } => DaemonResponse::Error {
+            message: "connected agent inspection requires the harness feature".into(),
+        },
         #[cfg(not(feature = "harness"))]
         DaemonCommand::AcpControllerCleanup { .. }
         | DaemonCommand::AcpRouteList { .. }
@@ -1117,11 +1204,14 @@ async fn dispatch(
             }
         }
         #[cfg(not(feature = "core"))]
-        DaemonCommand::Evolution { .. } => DaemonResponse::Error {
-            message: "checkpoint evolution requires the core feature".into(),
-        },
+        DaemonCommand::Evolution { .. } | DaemonCommand::EvolutionFenced { .. } => {
+            DaemonResponse::Error {
+                message: "checkpoint evolution requires the core feature".into(),
+            }
+        }
         #[cfg(feature = "core")]
-        DaemonCommand::Evolution { operation } => {
+        DaemonCommand::Evolution { operation }
+        | DaemonCommand::EvolutionFenced { operation, .. } => {
             let Some(runtime) = &acp.evolution else {
                 return DaemonResponse::Error {
                     message: "checkpoint evolution is unavailable on this daemon".into(),
@@ -1611,7 +1701,11 @@ pub async fn send_command(socket_path: &Path, command: &DaemonCommand) -> Result
         .await
         .context("reading daemon response")?;
     if line.trim().is_empty() {
-        anyhow::bail!("daemon closed the connection without responding");
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "daemon closed the connection without responding",
+        )
+        .into());
     }
     serde_json::from_str(line.trim()).context("parsing daemon response")
 }
@@ -2050,7 +2144,9 @@ fn spawn_detached_serve(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // Winbase.h constants — avoid pulling in a `windows`/`winapi` crate.
+        crate::harness::resources::process::prevent_stdio_inheritance()
+            .context("preventing the daemon from retaining launcher pipes")?;
+        // Winbase.h process flags; only handle metadata APIs are needed above.
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
@@ -2118,49 +2214,197 @@ pub async fn start_and_wait(
     // can both observe no socket, start two daemons, and race the same SQLite
     // migrations before either control listener is available.
     let lock_path = source.home().join("bitrouter.start.lock");
-    let startup_lock = std::fs::OpenOptions::new()
+    let mut startup_lock = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .write(true)
         .truncate(false)
         .open(&lock_path)
         .with_context(|| format!("opening startup lock {}", lock_path.display()))?;
-    let _startup_lock = tokio::task::spawn_blocking(move || -> std::io::Result<std::fs::File> {
-        startup_lock.lock()?;
-        Ok(startup_lock)
-    })
-    .await??;
-    if let Some(socket) = socket
-        && let Some(info) = probe_status(socket).await?
+    // A blocking file lock would keep Tokio alive after Ctrl-C. Try/poll keeps
+    // the waiter cancellable, and dropping it can never launch a child later.
+    loop {
+        match startup_lock.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) => tokio::time::sleep(READY_POLL_INTERVAL).await,
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+    if let Some(located) = crate::daemon_locator::locate_source(source).await?
+        && let Some(info) = probe_status(located.socket()).await?
     {
         return Ok(DaemonStartOutcome::Ready(info));
     }
-    let (mut child, log_size_before) = spawn_detached_serve(source, log_path)?;
+    // A prior caller may have timed out while its child was still starting.
+    // A live PID is a reason to wait, never readiness and never a second spawn.
+    use std::io::{Read, Seek, Write};
+    let identity = crate::daemon_locator::config_identity_digest(source)?;
+    let mut record = String::new();
+    startup_lock.read_to_string(&mut record)?;
+    let mut pending: std::collections::BTreeMap<String, u32> = if record.trim().is_empty() {
+        std::collections::BTreeMap::new()
+    } else {
+        serde_json::from_str(&record).with_context(|| {
+            format!(
+                "invalid pending startup record {}; inspect it before starting another daemon",
+                lock_path.display()
+            )
+        })?
+    };
+    pending.retain(|_, pid| process_is_alive(*pid));
+    let existing_pid = pending.get(&identity).copied();
+    if let Some(socket) = socket {
+        if let Some(info) = probe_status(socket).await? {
+            anyhow::ensure!(
+                existing_pid == Some(info.pid),
+                "control endpoint {} is already ready (pid {}), but cannot verify it belongs to the selected configuration; inspect bro status --socket. No daemon was started or changed",
+                socket.display(),
+                info.pid
+            );
+            return Ok(DaemonStartOutcome::Ready(info));
+        }
+        if existing_pid.is_none()
+            && let Some(pid) = read_pid_file(&socket.with_extension("pid"))
+                .await
+                .filter(|pid| process_is_alive(*pid))
+        {
+            anyhow::bail!(
+                "process {pid} is still starting at {}; readiness and selected configuration ownership are unverified; inspect bro status before retrying",
+                socket.display()
+            );
+        }
+    }
+    let (child, log_size_before) = if existing_pid.is_none() {
+        let (mut child, offset) = spawn_detached_serve(source, log_path)?;
+        pending.insert(identity, child.id());
+        // Persist the pending process before any await. Cancellation/timeout
+        // releases the lock but leaves enough evidence to avoid spawning twice.
+        let saved = (|| -> Result<()> {
+            startup_lock.rewind()?;
+            startup_lock.set_len(0)?;
+            serde_json::to_writer(&mut startup_lock, &pending)?;
+            startup_lock.flush()?;
+            Ok(())
+        })();
+        if let Err(error) = saved {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.context("recording pending daemon startup"));
+        }
+        (Some(child), offset)
+    } else {
+        (
+            None,
+            std::fs::metadata(log_path)
+                .map(|metadata| metadata.len())
+                .unwrap_or(0),
+        )
+    };
+    wait_for_readiness(
+        child,
+        existing_pid,
+        log_path,
+        log_size_before,
+        socket,
+        timeout,
+    )
+    .await
+}
 
-    let deadline = std::time::Instant::now() + timeout;
+async fn wait_for_readiness(
+    mut child: Option<std::process::Child>,
+    existing_pid: Option<u32>,
+    log_path: &Path,
+    log_size_before: u64,
+    socket: Option<&Path>,
+    timeout: std::time::Duration,
+) -> Result<DaemonStartOutcome> {
+    let pid = child
+        .as_ref()
+        .map(std::process::Child::id)
+        .or(existing_pid)
+        .context("startup process is missing")?;
+    let deadline = tokio::time::Instant::now() + timeout;
     loop {
         // Early-death: a bad config / port-in-use kills the child fast; surface
         // it with the log tail rather than waiting out the whole timeout. Any
         // exit before readiness means the daemon isn't serving, so the status
         // code is reported verbatim and treated as a startup failure by callers
         // (`serve` never exits 0 before it binds the control socket).
-        if let Ok(Some(status)) = child.try_wait() {
+        if let Some(child) = child.as_mut()
+            && let Some(status) = child.try_wait()?
+        {
             let log_tail = read_log_tail(log_path, log_size_before).await;
             return Ok(DaemonStartOutcome::Exited {
                 status: status.to_string(),
                 log_tail,
             });
         }
+        if child.is_none() && !process_is_alive(pid) {
+            return Ok(DaemonStartOutcome::Exited {
+                status: "previous startup process exited".into(),
+                log_tail: read_log_tail(log_path, log_size_before).await,
+            });
+        }
         if let Some(socket) = socket {
-            match probe_status(socket).await {
-                Ok(Some(info)) => return Ok(DaemonStartOutcome::Ready(info)),
-                Ok(None) => {}
-                Err(e) => tracing::debug!(error = %e, "readiness probe failed; retrying"),
+            match tokio::time::timeout_at(deadline, probe_status(socket)).await {
+                Ok(Ok(Some(info))) => {
+                    anyhow::ensure!(
+                        info.pid == pid,
+                        "control endpoint answered from another process (pid {}); expected startup process {pid}. No replacement was started",
+                        info.pid
+                    );
+                    return Ok(DaemonStartOutcome::Ready(info));
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(e)) => tracing::debug!(error = %e, "readiness probe failed; retrying"),
+                Err(_) => return Ok(DaemonStartOutcome::NotReadyInTime { pid }),
             }
         }
-        if std::time::Instant::now() >= deadline {
-            return Ok(DaemonStartOutcome::NotReadyInTime { pid: child.id() });
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(DaemonStartOutcome::NotReadyInTime { pid });
         }
         tokio::time::sleep(READY_POLL_INTERVAL).await;
+    }
+}
+
+/// Bare invocation and onboarding share `start`'s config, lock and readiness
+/// path. Reuse an existing runtime without applying saved configuration edits.
+pub async fn ensure_started(
+    source: &crate::paths::ConfigSource,
+) -> Result<crate::output::reports::daemon::DaemonActionReport> {
+    let log = source.home().join("bitrouter.log");
+    let socket = if let Some(located) = crate::daemon_locator::locate_source(source).await? {
+        located.socket().to_path_buf()
+    } else {
+        let config = crate::paths::load_config(source).await?;
+        socket_path_for(source, &config)
+    };
+    match start_and_wait(source, &log, Some(&socket), DAEMON_READY_TIMEOUT).await? {
+        DaemonStartOutcome::Ready(info) => {
+            let mut report = crate::output::reports::daemon::DaemonActionReport::started(
+                "ensure_start",
+                "ready",
+                info.pid,
+                info.listen,
+                info.models,
+                log.display().to_string(),
+            );
+            report.config_state = info.config_state;
+            Ok(report)
+        }
+        DaemonStartOutcome::NotReadyInTime { pid } => anyhow::bail!(
+            "daemon (pid {pid}) did not become ready within {}s; it may still be starting; inspect bro status and {}. No replacement was started",
+            DAEMON_READY_TIMEOUT.as_secs(),
+            log.display()
+        ),
+        DaemonStartOutcome::Exited { status, log_tail } => {
+            eprint_failure_log(&log, &log_tail);
+            anyhow::bail!(
+                "daemon exited during startup ({status}); inspect {}",
+                log.display()
+            )
+        }
     }
 }
 

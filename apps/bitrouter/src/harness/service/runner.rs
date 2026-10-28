@@ -160,6 +160,7 @@ impl ThreadService {
                         run_cancel,
                         RunChannels {
                             events: Some(event_tx),
+                            skill_approvals: Some(approval_tx.clone()),
                             approvals: if profile == PermissionProfile::AllowEffects {
                                 None
                             } else {

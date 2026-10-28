@@ -32,9 +32,9 @@ use bitrouter_ai::harness::turn::VerificationStatus;
 fn recovery_request(
     view: &bitrouter_ai::harness::thread::ThreadView,
     key: &str,
-) -> Result<crate::harness::thread::ThreadRecoveryRequest, String> {
+) -> Result<bitrouter_ai::harness::thread::ThreadRecoveryRequest, String> {
     let report = view.recovery.as_ref().ok_or("recovery report missing")?;
-    Ok(crate::harness::thread::ThreadRecoveryRequest {
+    Ok(bitrouter_ai::harness::thread::ThreadRecoveryRequest {
         source_server_instance_id: report.source_server_instance_id.clone(),
         source_cursor: report.source_cursor,
         idempotency_key: key.into(),

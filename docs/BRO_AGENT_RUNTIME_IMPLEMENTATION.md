@@ -1,5 +1,12 @@
 # BRO runtime acceptance and evidence
 
+> **CLI-only G05 entry update (2026-10-19, local worktree).** Runtime, protocol,
+> permission and recovery requirements in this document remain authoritative.
+> First-party code/tui/chat/agents attach interfaces are removed; earlier UI
+> examples and source paths are historical. Use native Thread controls, headless
+> ACP commands or native harness launchers from the [current CLI reference](CLI.md).
+> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Updated: 2026-10-06. Contract: [standalone runtime](BRO_AGENT_RUNTIME_SPEC.md).
 This is the entry point for source-specific evidence. Each linked record identifies
 its source and validation boundaries; earlier provider/platform evidence is not

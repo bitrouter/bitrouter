@@ -1,5 +1,13 @@
 # BRO Conversation UI integration evidence
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Date: 2026-10-04. Contract: [BRO_CONVERSATION_UI_SPEC.md](BRO_CONVERSATION_UI_SPEC.md).
 Validated source: `485728f9` on macOS with Rust 1.97.0. This ledger is a
 documentation-only follow-up to that source. Builds used incremental=0 and
@@ -23,6 +31,9 @@ dev/test debug=0. Hosted CI for the published head is a separate gate.
   install no context, worker, subscriber or runner. Resident pages refresh
   current public state every two seconds. Local protocol is v17; HTTP v2 is
   unchanged and has no new directory endpoint.
+  This v17 directory entry records that phase's evidence; CLI-only G04 extends
+  the current local protocol to v18 for load/close/recover. See
+  [current controls](CLI.md#single-operation-native-and-acp-controls).
 - History reconstruction uses one public durable cutoff and stable entity IDs.
   Observation resynchronization restores that same snapshot cutoff; stale live
   output cannot overwrite a newer durable projection. Accepted steering status

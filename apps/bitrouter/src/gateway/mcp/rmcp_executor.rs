@@ -7,7 +7,7 @@
 //! <https://modelcontextprotocol.io/specification/2025-06-18>.
 //!
 //! Beyond that catalogue, the methods in [`RELAYED_EXTENSION_METHODS`] are
-//! relayed verbatim via rmcp's `CustomRequest`. Everything else still comes
+//! capability-gated and relayed via rmcp's `CustomRequest`. Everything else still comes
 //! back as JSON-RPC "Method not found" (`-32601`) — the relay is an
 //! **allowlist**, not a passthrough, so the gateway never becomes an arbitrary
 //! JSON-RPC tunnel into upstreams the inbound caller could not otherwise
@@ -29,6 +29,7 @@
 //! first caller's already-authenticated connection. Recorded as D7 in
 //! `docs/SKILLS_MCP_SPEC.md`.
 
+use crate::skills::protocol::SkillEntryExt;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
@@ -63,7 +64,7 @@ use crate::config::mcp::McpTransport;
 use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 
-/// Extension methods relayed verbatim to an upstream via `CustomRequest`.
+/// Extension methods eligible for capability-gated relay via `CustomRequest`.
 ///
 /// All three are SEP-2640 (`io.modelcontextprotocol/skills`): `skills/list`
 /// and `skills/get` are mandatory for a server declaring that extension, and
@@ -73,9 +74,9 @@ use crate::gateway::error::Result;
 /// turn the gateway into a general JSON-RPC tunnel, letting an inbound caller
 /// invoke upstream surface that the gateway never meant to expose.
 pub const RELAYED_EXTENSION_METHODS: &[&str] = &[
-    super::skills::SKILLS_LIST_METHOD,
-    super::skills::SKILLS_GET_METHOD,
-    super::skills::RESOURCES_DIRECTORY_READ_METHOD,
+    bitrouter_ai::protocol::mcp_skills::SKILLS_LIST_METHOD,
+    bitrouter_ai::protocol::mcp_skills::SKILLS_GET_METHOD,
+    bitrouter_ai::protocol::mcp_skills::RESOURCES_DIRECTORY_READ_METHOD,
 ];
 
 /// [`ClientHandler`] for upstream MCP servers reached through [`RmcpExecutor`].
@@ -477,6 +478,36 @@ fn upstream(server: &str, msg: impl Into<String>) -> BitrouterError {
 
 fn bad_params(server: &str, method: &str, msg: impl std::fmt::Display) -> BitrouterError {
     BitrouterError::bad_request(format!("mcp '{server}' {method}: {msg}"))
+}
+
+/// Consult this exact connection's negotiated declaration on every dispatch.
+/// A gateway declaration or a previous pooled connection grants no authority.
+fn require_skills_capability(peer: &Peer<RoleClient>, server: &str, method: &str) -> Result<()> {
+    let info = peer.peer_info().ok_or_else(|| {
+        BitrouterError::NotFound(format!("mcp '{server}': no observed server capabilities"))
+    })?;
+    let settings = info
+        .capabilities
+        .extensions
+        .as_ref()
+        .and_then(|extensions| {
+            extensions.get(bitrouter_ai::protocol::mcp_skills::SKILLS_EXTENSION_ID)
+        });
+    if info.capabilities.resources.is_none() || settings.is_none() {
+        return Err(BitrouterError::NotFound(format!(
+            "mcp '{server}': '{method}' requires this connection to declare Resources and {}",
+            bitrouter_ai::protocol::mcp_skills::SKILLS_EXTENSION_ID,
+        )));
+    }
+    if method == bitrouter_ai::protocol::mcp_skills::RESOURCES_DIRECTORY_READ_METHOD
+        && settings.and_then(|value| value.get("directoryRead"))
+            != Some(&serde_json::Value::Bool(true))
+    {
+        return Err(BitrouterError::NotFound(format!(
+            "mcp '{server}': '{method}' requires this connection to declare directoryRead=true",
+        )));
+    }
+    Ok(())
 }
 
 /// Inspect a transport error for an upstream auth challenge (rmcp
@@ -919,11 +950,45 @@ async fn send_custom_request(
         .map_err(|e| map_service_error(server, method, e))?;
     match result {
         ServerResult::CustomResult(value) => Ok(value.0),
+        // rmcp's untagged result union recognizes the directory envelope as
+        // its ordinary Resources list shape before trying CustomResult.
+        ServerResult::ListResourcesResult(value)
+            if method == bitrouter_ai::protocol::mcp_skills::RESOURCES_DIRECTORY_READ_METHOD =>
+        {
+            serde_json::to_value(value).map_err(|error| upstream(server, error.to_string()))
+        }
         other => Err(upstream(
             server,
             format!("{method}: unexpected server result {other:?}"),
         )),
     }
+}
+
+fn validate_skills_metadata(server: &str, result: &serde_json::Value, method: &str) -> Result<()> {
+    let validate = |entry: &serde_json::Value| -> Result<()> {
+        let entry: bitrouter_ai::protocol::mcp_skills::SkillEntry =
+            serde_json::from_value(entry.clone())
+                .map_err(|error| upstream(server, format!("{method}: invalid entry: {error}")))?;
+        entry
+            .validate_metadata()
+            .map_err(|error| upstream(server, format!("{method}: {error}")))
+    };
+    if method == bitrouter_ai::protocol::mcp_skills::SKILLS_LIST_METHOD {
+        let entries = result
+            .get("skills")
+            .and_then(|value| value.as_array())
+            .ok_or_else(|| upstream(server, "skills/list result has no skills array"))?;
+        for entry in entries {
+            validate(entry)?;
+        }
+    } else {
+        validate(
+            result
+                .get("skill")
+                .ok_or_else(|| upstream(server, "skills/get result has no skill entry"))?,
+        )?;
+    }
+    Ok(())
 }
 
 async fn dispatch(
@@ -1044,14 +1109,16 @@ async fn dispatch(
         // known one, so neither shadows it in the untagged `ServerResult`
         // union — pinned by `skills_list_result_decodes_as_custom_result`).
         relayed if RELAYED_EXTENSION_METHODS.contains(&relayed) => {
+            require_skills_capability(peer, server, relayed)?;
             let params = match &request.params {
                 serde_json::Value::Null => None,
                 params => Some(params.clone()),
             };
             let mut result = send_custom_request(peer, server, relayed, params).await?;
-            if relayed == super::skills::SKILLS_LIST_METHOD {
+            if relayed == bitrouter_ai::protocol::mcp_skills::SKILLS_LIST_METHOD {
                 normalize_cacheable_result_envelope(&mut result, relayed)
                     .map_err(|e| upstream(server, e))?;
+                validate_skills_metadata(server, &result, relayed)?;
                 let mut policy_at = Instant::now();
                 let mut cursor = take_custom_list_cursor(&mut result)
                     .map_err(|e| upstream(server, format!("{method}: {e}")))?;
@@ -1079,6 +1146,7 @@ async fn dispatch(
                             .await?;
                     normalize_cacheable_result_envelope(&mut page, relayed)
                         .map_err(|e| upstream(server, e))?;
+                    validate_skills_metadata(server, &page, relayed)?;
                     let received_at = Instant::now();
                     super::age_cacheable_result(&mut result, received_at.duration_since(policy_at));
                     cursor = take_custom_list_cursor(&mut page)
@@ -1088,9 +1156,18 @@ async fn dispatch(
                     policy_at = received_at;
                 }
                 super::age_cacheable_result(&mut result, policy_at.elapsed());
-            } else if relayed == super::skills::SKILLS_GET_METHOD {
+            } else if relayed == bitrouter_ai::protocol::mcp_skills::SKILLS_GET_METHOD {
                 normalize_cacheable_result_envelope(&mut result, relayed)
                     .map_err(|e| upstream(server, e))?;
+                validate_skills_metadata(server, &result, relayed)?;
+                if request.params.get("uri")
+                    != result.get("skill").and_then(|entry| entry.get("uri"))
+                {
+                    return Err(upstream(
+                        server,
+                        "skills/get returned a different skill URI",
+                    ));
+                }
             }
             Ok(result)
         }

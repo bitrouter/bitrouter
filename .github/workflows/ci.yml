@@ -154,7 +154,7 @@ jobs:
         if: runner.os == 'macOS'
         run: >-
           cargo build --locked -p bitrouter --all-features --jobs 2
-          --example harness_mcp_fixture --example pty_acp_fixture
+          --example harness_mcp_fixture --example pty_acp_fixture --example acp_codex_skill_fixture --example acp_claude_skill_fixture --example mcp_skills_fixture --example onboarding_fixture --example managed_effect_fixture
       - run: >-
           cargo nextest run --workspace --all-features
           --no-fail-fast
@@ -212,9 +212,10 @@ jobs:
         if: matrix.target == 'lib'
         run: cargo build --locked -p bitrouter --all-features --jobs 2 --example harness_mcp_fixture
       - env:
-          TEST_BUILD_JOBS: ${{ matrix.build_jobs }}
           TEST_TARGET_FLAGS: ${{ matrix.flags }}
           BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
+          TEST_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
+          CARGO_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
         shell: bash
         run: |
           read -r -a target_flags <<< "$TEST_TARGET_FLAGS"
@@ -269,9 +270,6 @@ jobs:
           - shard: core-scheduling
             retries: "0"
             targets: --test core_contract --test core_execution
-          - shard: terminal
-            retries: "0"
-            targets: --test code_tui_pty --test native_agent_tui
           - shard: optimization
             retries: "0"
             targets: >-
@@ -285,6 +283,13 @@ jobs:
               --test managed_native --test onboarding --test smithers_reward_loop
               --test terminus_2_workflow_state
               --test trajectory_progress_control
+          - shard: cli-orchestration
+            retries: "0"
+            build_jobs: "1"
+            targets: >-
+              --test background_cli --test connected_agents --test managed_daemon --test management_cli --test mcp_config --test mcp_config_pty
+              --test onboarding_pty --test orchestrator_core --test skills_lifecycle
+              --test native_evolution_cli --test mcp_skill_host --test mcp_skills_gateway --test acp_skill_delivery
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -295,18 +300,23 @@ jobs:
           cache-save-if: ${{ matrix.shard == 'interfaces' }}
           cache-workspace-crates: true
       - uses: taiki-e/install-action@nextest
-      - name: build ACP fixture before terminal test deadlines
-        if: matrix.shard == 'terminal'
-        run: cargo build --locked -p bitrouter --all-features --jobs 2 --example pty_acp_fixture
+      - name: build CLI fixtures before process deadlines
+        if: contains(fromJSON('["interfaces","control-plane","cli-orchestration"]'), matrix.shard)
+        run: >-
+          cargo build --locked -p bitrouter --all-features --jobs 2
+          --example harness_mcp_fixture --example pty_acp_fixture --example acp_codex_skill_fixture
+          --example acp_claude_skill_fixture --example mcp_skills_fixture --example onboarding_fixture --example managed_effect_fixture
       - name: run integration shard
         shell: bash
         env:
           TEST_RETRIES: ${{ matrix.retries }}
+          TEST_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
+          CARGO_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
           TEST_TARGETS: ${{ matrix.targets }}
-          BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
+          BITROUTER_TEST_EXAMPLES_DIR: ${{ contains(fromJSON('["interfaces","control-plane","cli-orchestration"]'), matrix.shard) && format('{0}/target/debug/examples', github.workspace) || '' }}
         run: |
           read -r -a test_targets <<< "$TEST_TARGETS"
-          cargo nextest run -p bitrouter --all-features --build-jobs 2 \
+          cargo nextest run -p bitrouter --all-features --build-jobs "$TEST_BUILD_JOBS" \
             --retries "$TEST_RETRIES" \
             "${test_targets[@]}"
 
@@ -399,9 +409,7 @@ jobs:
           - ''
           - core
           - harness
-          - tui
           - core,harness
-          - core,tui
           - mcp
           - server-tools
           - guardrails
@@ -424,26 +432,23 @@ jobs:
           cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bro
           cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
           cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
-          case ",$PROFILE_FEATURES," in
-            *,tui,*) ;;
-            *) if grep -Eq '^(ratatui(-[^ ]*)?|crossterm) v' profile-tree.txt; then
+          if grep -Eq '^(ratatui(-[^ ]*)?|crossterm) v' profile-tree.txt; then
                  echo '::error::headless profile pulled terminal dependencies'; exit 1
-               fi ;;
-          esac
+          fi
           case ",$PROFILE_FEATURES," in
-            *,harness,*|*,tui,*) ;;
+            *,harness,*) ;;
             *) if grep -Eq '^agent-client-protocol[^ ]* v' profile-tree.txt; then
                  echo '::error::profile without harness pulled ACP runtime'; exit 1
                fi ;;
           esac
           case ",$PROFILE_FEATURES," in
-            *,harness,*|*,tui,*) ;;
+            *,harness,*) ;;
             *) if grep -Eq '^jsonschema v' profile-tree.txt; then
                  echo '::error::profile without harness pulled result validation'; exit 1
                fi ;;
           esac
           case ",$PROFILE_FEATURES," in
-            *,mcp,*|*,server-tools,*|*,harness,*|*,tui,*) ;;
+            *,mcp,*|*,server-tools,*|*,harness,*) ;;
             *) if grep -Eq '^(rmcp|process-wrap) v' profile-tree.txt; then
                  echo '::error::profile without MCP pulled its transport runtime'; exit 1
                fi ;;
@@ -490,7 +495,7 @@ jobs:
           --test onboarding --test source_boundaries
 
       - name: verify unavailable telemetry before startup side effects
-        if: matrix.features == '' || matrix.features == 'harness' || matrix.features == 'tui'
+        if: matrix.features == '' || matrix.features == 'harness'
         env:
           PROFILE_FEATURES: ${{ matrix.features }}
         run: >-

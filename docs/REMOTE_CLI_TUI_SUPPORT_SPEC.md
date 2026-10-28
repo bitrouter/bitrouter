@@ -1,5 +1,13 @@
 # RFD: remote ACP sessions for CLI and TUI clients (Phase 2)
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Status: **deferred; no implementation in the HTTP-only remote-control MVP.**
 Baseline: `main` at `61dd77333a91f7aab01647b0ae7d8625d3039ffe`.
 Verified: 2026-09-07.
@@ -56,12 +64,12 @@ merged stack; some descriptions in `docs/README.md` still say proposed.
 | [`controller.rs`](../crates/bitrouter-orchestrator/src/acp/controller.rs) | One controller owns one harness connection carrying native session IDs. The controller forwards native lifecycle and callbacks; manager disconnect tears down the harness and live route state. No durable BitRouter conversation store exists. |
 | [`client.rs`](../crates/bitrouter-orchestrator/src/acp/client.rs), `AcpClient::connect` | Already accepts `ConnectTo<Client>` instead of requiring stdio. It owns ACP handshake, permission resolution, cancellation, raw and translated updates, and route capability probing. File/terminal tooling capabilities are off. `terminal_auth` is caller-selected and must be false remotely. Update broadcasts currently filter lag errors: reliable network replay alone cannot make a lagging consumer lossless. |
 | [`config/agent.rs`](../crates/bitrouter-sdk/src/config/agent.rs), `AcpTransport` | Configures upstream agents over stdio only. The new client-to-host connection does not require adding remote upstream agents to this enum. |
-| [`actions/mod.rs`](../crates/bitrouter-mcp/src/actions/mod.rs) | `ACTIONS` inventories CLI/MCP/TUI mappings, report schemas, effect/inverse, requirements, and `Reach`. Shared read reports/ports live here; implementation and human rendering remain app-side. |
+| [`actions/mod.rs`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/actions/mod.rs) | `ACTIONS` inventories CLI/MCP/TUI mappings, report schemas, effect/inverse, requirements, and `Reach`. Shared read reports/ports live here; implementation and human rendering remain app-side. |
 | [`actions/session.rs`](../apps/bitrouter/src/actions/session.rs), `SessionPorts` | Bundles status/models/route ports and renders their shared reports for the TUI. Today `open` selects local implementations and `run` uses default local caller auth. |
 | [`actions/status.rs`](../apps/bitrouter/src/actions/status.rs) | `DaemonStatus` ignores `CallerAuth`; spend is host-wide. Exposing this implementation under a personal-looking read scope would leak other callers' data. |
 | [`actions/models.rs`](../apps/bitrouter/src/actions/models.rs), [`actions/route.rs`](../apps/bitrouter/src/actions/route.rs) | Prefer daemon answers and can fall back to local config. The models fallback includes older daemons rejecting the command. Remote failure must never cause client A's config to answer for B. Live route preview does not simulate prompt-dependent policy: retain that limitation honestly. |
-| [`bitrouter-mcp/server.rs`](../crates/bitrouter-mcp/src/server.rs), `http_profile` | `/mcp-control` offers only backend-provided `status`/`list_models`. Its local unauthenticated profile refuses non-loopback; the cloud profile forwards caller credentials. Presence-only bearer middleware is not local token validation. Existing Portable-only guards must remain intact. |
-| [`chat/session.rs`](../apps/bitrouter/src/chat/session.rs), [`bitrouter-tui`](../crates/bitrouter-tui/src/lib.rs) | The app drives asynchronous effects; the renderer draws. The renderer has no app dependency or async runtime. The chat driver must not acquire daemon report/storage knowledge. |
+| [`bitrouter-mcp/server.rs`](https://github.com/bitrouter/bitrouter/blob/b1cd8f334b68999df7354071327afcc4c8188592/crates/bitrouter-mcp/src/server.rs), `http_profile` | `/mcp-control` offers only backend-provided `status`/`list_models`. Its local unauthenticated profile refuses non-loopback; the cloud profile forwards caller credentials. Presence-only bearer middleware is not local token validation. Existing Portable-only guards must remain intact. |
+| [`chat/session.rs`](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/apps/bitrouter/src/chat/session.rs), [`bitrouter-tui`](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/lib.rs) | The app drives asynchronous effects; the renderer draws. The renderer has no app dependency or async runtime. The chat driver must not acquire daemon report/storage knowledge. |
 
 Read alongside [ACTIONS_SPEC.md](ACTIONS_SPEC.md),
 [ACP_CONTROLLER_SPEC.md](ACP_CONTROLLER_SPEC.md),

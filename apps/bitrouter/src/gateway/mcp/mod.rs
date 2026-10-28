@@ -47,8 +47,6 @@ use crate::gateway::error::BitrouterError;
 use crate::gateway::error::Result;
 use crate::gateway::pipeline::hooks::HookDecision;
 
-pub mod skills;
-
 #[cfg(feature = "mcp")]
 pub mod client;
 #[cfg(feature = "mcp")]

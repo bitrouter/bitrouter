@@ -11,10 +11,15 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use crate::config::Config;
+use crate::config::routing_table::ConfigRoutingTable;
+use crate::harness::acp::client::SessionInitialSettings;
+use crate::harness::acp::controller::{COST_PROVENANCE_META_KEY, COST_PROVENANCE_ROUTER};
+use crate::harness::acp::permission::{Decision, Prompt as PermissionPrompt};
 use agent_client_protocol::schema::v1::SessionUpdate;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify, RwLock, mpsc, oneshot};
 use uuid::Uuid;
@@ -33,8 +38,6 @@ use crate::client::sessions::wire::{
     TurnState,
 };
 use crate::commands::agent_options::SessionSelection;
-use crate::config::Config;
-use crate::config::routing_table::ConfigRoutingTable;
 use crate::paths::ConfigSource;
 
 const JOURNAL_EVENT_LIMIT: usize = 2_048;
@@ -83,6 +86,7 @@ enum StartState {
 }
 
 struct Run {
+    skill_context: Option<crate::skills::delivery::Context>,
     state: Mutex<RunState>,
     mutation_gate: Mutex<()>,
     startup_cancel: tokio_util::sync::CancellationToken,
@@ -105,6 +109,7 @@ enum StartupCompletion {
 }
 
 struct RunState {
+    turn_cancel: tokio_util::sync::CancellationToken,
     snapshot: RunSnapshot,
     journal: VecDeque<JournalEntry>,
     history_complete: bool,
@@ -136,6 +141,7 @@ enum SessionActorCommand {
 }
 
 struct PromptActorInput {
+    cancel: tokio_util::sync::CancellationToken,
     client: Box<crate::harness::acp::client::AcpClient>,
     session_id: String,
     text: String,
@@ -156,6 +162,8 @@ struct LedgerFile {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LedgerEntry {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    skill_deliveries: Vec<crate::skills::delivery::Report>,
     run_id: String,
     label: String,
     agent_id: String,
@@ -265,6 +273,7 @@ impl LedgerStore {
 impl From<&RunSnapshot> for LedgerEntry {
     fn from(snapshot: &RunSnapshot) -> Self {
         Self {
+            skill_deliveries: snapshot.skill_deliveries.clone(),
             run_id: snapshot.run_id.clone(),
             label: snapshot.label.clone(),
             agent_id: snapshot.agent_id.clone(),
@@ -323,11 +332,21 @@ impl Supervisor {
     /// Dispatch one owner-scoped local command.
     pub(crate) async fn dispatch(&self, request: SessionRequest) -> Result<SessionResponse> {
         anyhow::ensure!(
-            request.version == SESSION_PROTOCOL_VERSION,
+            matches!(request.version, 1 | 2 | SESSION_PROTOCOL_VERSION),
             "unsupported session protocol version {}; expected {}",
             request.version,
             SESSION_PROTOCOL_VERSION
         );
+        anyhow::ensure!(
+            request.version >= 2 || !matches!(request.command, SessionCommand::ActionStatus { .. }),
+            "action_status requires session protocol version 2"
+        );
+        if let SessionCommand::Start(start) = &request.command {
+            anyhow::ensure!(
+                request.version >= 3 || start.launch.skills.is_none(),
+                "skill delivery requires session protocol version 3"
+            );
+        }
         if let SessionCommand::Authorize { client_id, scopes } = &request.command {
             anyhow::ensure!(
                 request.authorization.is_none(),
@@ -347,6 +366,25 @@ impl Supervisor {
             SessionCommand::Snapshot { run_id } => Ok(SessionResponse::Snapshot {
                 snapshot: Box::new(self.run(&run_id).await?.snapshot().await),
             }),
+            SessionCommand::ActionStatus { fence } => {
+                let run = self.run(&fence.run_id).await?;
+                let _gate = run.mutation_gate.lock().await;
+                validate_identifier("action request", &fence.action_request_id)?;
+                let state = run.state.lock().await;
+                let acknowledgement = match state.actions.get(&fence.action_request_id) {
+                    Some(record) => {
+                        anyhow::ensure!(
+                            record.owner_client_id == fence.client_id
+                                && record.lease_generation == fence.lease_generation
+                                && state.lease_generation == fence.lease_generation,
+                            "stale or foreign action identity"
+                        );
+                        Some(Box::new(record.acknowledgement.clone()))
+                    }
+                    None => None,
+                };
+                Ok(SessionResponse::ActionStatus { acknowledgement })
+            }
             SessionCommand::Attach {
                 run_id,
                 client_id,
@@ -674,6 +712,37 @@ impl Supervisor {
         Ok(SessionResponse::RunSummaries { runs: summaries })
     }
 
+    /// Metadata from live initialized controller handles, including idle runs.
+    /// Historical process flags and route/control leases are not liveness.
+    pub async fn connected_runs(&self) -> Vec<RunSummary> {
+        let runs = self
+            .inner
+            .runs
+            .read()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut connected = Vec::new();
+        for run in runs {
+            let handle = run.handle.lock().await;
+            let Some(handle) = handle.as_ref() else {
+                continue;
+            };
+            if !handle.client.is_connected() || handle.closed().now_or_never().is_some() {
+                continue;
+            }
+            let snapshot = run.snapshot().await;
+            if matches!(
+                snapshot.process,
+                ProcessState::Running | ProcessState::Stopping
+            ) {
+                connected.push(RunSummary::from(&snapshot));
+            }
+        }
+        connected
+    }
+
     /// A process remains active while its turn is idle or its UI is detached.
     pub(crate) async fn active_run_count(&self) -> usize {
         let starting = self
@@ -871,6 +940,7 @@ impl Supervisor {
         self.reserve_claim(&claim_key, &run_id, request.allow_shared_directory)
             .await?;
         let snapshot = RunSnapshot {
+            skill_deliveries: Vec::new(),
             run_id: run_id.clone(),
             label: request
                 .label
@@ -906,7 +976,7 @@ impl Supervisor {
             started_at: now,
             updated_at: now,
         };
-        let run = Arc::new(Run::new(
+        let mut run = Run::new(
             snapshot,
             request.permission_policy.clone(),
             request.result_schema.clone(),
@@ -914,7 +984,11 @@ impl Supervisor {
             self.inner.ledger.clone(),
             self.inner.claims.clone(),
             self.inner.shutdown_token.child_token(),
-        ));
+        );
+        run.skill_context = Some(crate::skills::delivery::Context {
+            constraints: request.launch.skills.clone().unwrap_or_default(),
+        });
+        let run = Arc::new(run);
         self.inner
             .runs
             .write()
@@ -1156,7 +1230,30 @@ impl Supervisor {
             }
             SessionAction::SetMode { mode_id } => {
                 let (client, session_id) = run.client_and_session().await?;
-                client.set_session_mode(&session_id, mode_id).await?;
+                let before = run
+                    .state
+                    .lock()
+                    .await
+                    .snapshot
+                    .initial_settings
+                    .as_ref()
+                    .and_then(|settings| settings.modes.as_ref())
+                    .map(|modes| modes.current_mode_id.clone());
+                client
+                    .set_session_mode(&session_id, mode_id.clone())
+                    .await?;
+                if let Some(modes) = run
+                    .state
+                    .lock()
+                    .await
+                    .snapshot
+                    .initial_settings
+                    .as_mut()
+                    .and_then(|settings| settings.modes.as_mut())
+                    && before.as_ref() == Some(&modes.current_mode_id)
+                {
+                    modes.current_mode_id = mode_id.into();
+                }
                 None
             }
             SessionAction::SetConfig { config_id, value } => {
@@ -1269,7 +1366,9 @@ impl Run {
             }
         };
         Self {
+            skill_context: None,
             state: Mutex::new(RunState {
+                turn_cancel: tokio_util::sync::CancellationToken::new(),
                 snapshot,
                 journal: VecDeque::new(),
                 history_complete: true,
@@ -1300,6 +1399,7 @@ impl Run {
         claims: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
     ) -> Self {
         let snapshot = RunSnapshot {
+            skill_deliveries: entry.skill_deliveries,
             run_id: entry.run_id,
             label: entry.label,
             agent_id: entry.agent_id,
@@ -1359,6 +1459,42 @@ impl Run {
             snapshot = self.state.lock().await.snapshot.clone();
         }
         snapshot
+    }
+
+    async fn record_skill_result(
+        &self,
+        turn_id: &str,
+        success: bool,
+        cancelled: bool,
+        failure: Option<String>,
+    ) -> Result<()> {
+        let current = self
+            .state
+            .lock()
+            .await
+            .snapshot
+            .skill_deliveries
+            .iter()
+            .find(|report| report.turn_id == turn_id)
+            .cloned();
+        if let Some(mut report) = current {
+            if cancelled {
+                report.stage = "cancelled".into();
+            } else if success && report.receipt.is_some() {
+                report.stage = "delivered".into();
+            } else if !success {
+                report.stage = if report.receipt.is_some() {
+                    "uncertain"
+                } else {
+                    "failed"
+                }
+                .into();
+            }
+            report.failure =
+                failure.map(|message| crate::skills::delivery::truncate(&message, 2048));
+            crate::skills::delivery::Journal::save(self, &report).await?;
+        }
+        Ok(())
     }
 
     async fn persist(&self) -> Result<()> {
@@ -1535,11 +1671,53 @@ impl Run {
         last_update_sequence: &mut u64,
         input: PromptActorInput,
     ) {
-        let mut prompt = Box::pin(
-            input
-                .client
-                .prompt_with_boundary(&input.session_id, &input.text),
-        );
+        let snapshot = self.state.lock().await.snapshot.clone();
+        let turn_id = format!("{}:{}", snapshot.run_id, input.generation);
+        let mut prompt = Box::pin(async {
+            let caller = crate::gateway::caller::CallerContext::local();
+            let prepared = if let Some(context) = &self.skill_context {
+                let capabilities = snapshot
+                    .capabilities
+                    .as_ref()
+                    .map(|capabilities| capabilities.skill_delivery.clone())
+                    .unwrap_or_default();
+                context
+                    .prepare(
+                        crate::harness::acp::skills::Target {
+                            session_id: &input.session_id,
+                            turn_id: &turn_id,
+                            workspace: &snapshot.cwd,
+                            caller: &caller,
+                            context_limit: 2 * 1024 * 1024,
+                        },
+                        &input.text,
+                        &capabilities,
+                        &input.cancel,
+                        self,
+                    )
+                    .await?
+            } else {
+                None
+            };
+            anyhow::ensure!(
+                !input.cancel.is_cancelled(),
+                "ACP prompt cancelled before dispatch"
+            );
+            match prepared {
+                Some(prepared) => {
+                    input
+                        .client
+                        .prompt_typed_with_boundary(prepared.request)
+                        .await
+                }
+                None => {
+                    input
+                        .client
+                        .prompt_with_boundary(&input.session_id, &input.text)
+                        .await
+                }
+            }
+        });
         let initial_timeout = self
             .turn_timeout
             .unwrap_or_else(|| Duration::from_secs(100 * 365 * 24 * 60 * 60));
@@ -1560,6 +1738,13 @@ impl Run {
                     }
                 }
                 result = &mut prompt => {
+                    let cancelled = input.cancel.is_cancelled() || result.as_ref().is_ok_and(|outcome|
+                        outcome.response.stop_reason == agent_client_protocol::schema::v1::StopReason::Cancelled);
+                    if let Err(error) = self.record_skill_result(&turn_id, result.is_ok(), cancelled,
+                        result.as_ref().err().map(|error| format!("{error:#}"))).await {
+                        self.fail_turn_if_current(input.generation, format!("skill delivery journal: {error:#}")).await;
+                        return;
+                    }
                     match result {
                         Ok(outcome) => {
                             if let Err(message) = self
@@ -1589,8 +1774,8 @@ impl Run {
                             }
                         }
                         Err(error) => {
-                            self.fail_turn_if_current(input.generation, format!("{error:#}"))
-                                .await;
+                            if cancelled { self.settle_turn(input.generation, "cancelled".into()).await; }
+                            else { self.fail_turn_if_current(input.generation, format!("{error:#}")).await; }
                         }
                     }
                     return;
@@ -1695,6 +1880,31 @@ impl Run {
 
     async fn record_update(&self, update: SessionUpdate) {
         let mut state = self.state.lock().await;
+        match &update {
+            SessionUpdate::CurrentModeUpdate(mode) => {
+                let settings = state
+                    .snapshot
+                    .initial_settings
+                    .get_or_insert_with(SessionInitialSettings::default);
+                if let Some(modes) = &mut settings.modes {
+                    modes.current_mode_id = mode.current_mode_id.clone();
+                } else {
+                    settings.modes =
+                        Some(agent_client_protocol::schema::v1::SessionModeState::new(
+                            mode.current_mode_id.clone(),
+                            Vec::new(),
+                        ));
+                }
+            }
+            SessionUpdate::ConfigOptionUpdate(config) => {
+                state
+                    .snapshot
+                    .initial_settings
+                    .get_or_insert_with(SessionInitialSettings::default)
+                    .config_options = Some(config.config_options.clone());
+            }
+            _ => {}
+        }
         if let Some(crate::harness::acp::translate::SessionUpdateKind::MessageChunk {
             text, ..
         }) = crate::harness::acp::translate::translate(update.clone())
@@ -1724,15 +1934,10 @@ impl Run {
             let marker = usage
                 .meta
                 .as_ref()
-                .and_then(|meta| meta.get(crate::presentation::cost::COST_PROVENANCE_META_KEY));
+                .and_then(|meta| meta.get(COST_PROVENANCE_META_KEY));
             let source = match marker {
                 None => Some("harness"),
-                Some(value)
-                    if value.as_str()
-                        == Some(crate::presentation::cost::COST_PROVENANCE_ROUTER) =>
-                {
-                    Some("router")
-                }
+                Some(value) if value.as_str() == Some(COST_PROVENANCE_ROUTER) => Some("router"),
                 Some(_) => None,
             };
             state.snapshot.attributed_cost = source.map(|source| AttributedCost {
@@ -1823,7 +2028,7 @@ impl Run {
         anyhow::ensure!(!text.trim().is_empty(), "prompt must not be empty");
         let (client, session_id) = self.client_and_session().await?;
         let original = text.clone();
-        let generation = {
+        let (generation, cancel) = {
             let mut state = self.state.lock().await;
             anyhow::ensure!(
                 state.snapshot.turn == TurnState::Idle,
@@ -1836,6 +2041,7 @@ impl Run {
             if let Some(schema) = &self.result_schema {
                 text.push_str(&result_schema_instruction(schema)?);
             }
+            state.turn_cancel = self.startup_cancel.child_token();
             state.turn_generation = state.turn_generation.saturating_add(1);
             let generation = state.turn_generation;
             state.snapshot.turn = TurnState::Submitting;
@@ -1859,7 +2065,7 @@ impl Run {
                 },
                 false,
             );
-            generation
+            (generation, state.turn_cancel.clone())
         };
         let sender = self
             .session_commands
@@ -1869,6 +2075,7 @@ impl Run {
             .context("supervised session actor is not live")?;
         if sender
             .send(SessionActorCommand::Prompt(PromptActorInput {
+                cancel,
                 client: Box::new(client),
                 session_id,
                 text,
@@ -2022,6 +2229,7 @@ impl Run {
                 TurnState::Submitting | TurnState::Working
             )
         {
+            state.turn_cancel.cancel();
             state.snapshot.turn = TurnState::Cancelling;
             state.snapshot.activity = "Cancelling".to_string();
             state.append(
@@ -2063,6 +2271,7 @@ impl Run {
                 ),
                 "there is no active turn to cancel"
             );
+            state.turn_cancel.cancel();
             state.snapshot.turn = TurnState::Cancelling;
             state.snapshot.activity = "Cancelling".to_string();
             state.append(
@@ -2641,10 +2850,7 @@ impl RunState {
 }
 
 impl PermissionPolicy {
-    fn decide(
-        &self,
-        permission: &PendingPermissionSnapshot,
-    ) -> Option<crate::harness::permission::Decision> {
+    fn decide(&self, permission: &PendingPermissionSnapshot) -> Option<Decision> {
         let prompt = permission_prompt(permission);
         let title = prompt.title().trim();
         let head = title.split_whitespace().next().unwrap_or_default();
@@ -2662,28 +2868,28 @@ impl PermissionPolicy {
             })
         };
         if matches(&self.auto_deny) {
-            return Some(crate::harness::permission::Decision::Deny);
+            return Some(Decision::Deny);
         }
         if matches(&self.auto_approve) {
-            return Some(crate::harness::permission::Decision::Approve);
+            return Some(Decision::Approve);
         }
         match self.unmatched {
             PermissionDefault::Ask => None,
-            PermissionDefault::ApproveAll => Some(crate::harness::permission::Decision::Approve),
+            PermissionDefault::ApproveAll => Some(Decision::Approve),
             PermissionDefault::ApproveReads => match prompt.kind() {
                 Some(
                     agent_client_protocol::schema::v1::ToolKind::Read
                     | agent_client_protocol::schema::v1::ToolKind::Search,
-                ) => Some(crate::harness::permission::Decision::Approve),
-                _ => Some(crate::harness::permission::Decision::Deny),
+                ) => Some(Decision::Approve),
+                _ => Some(Decision::Deny),
             },
-            PermissionDefault::DenyAll => Some(crate::harness::permission::Decision::Deny),
+            PermissionDefault::DenyAll => Some(Decision::Deny),
         }
     }
 }
 
-fn permission_prompt(permission: &PendingPermissionSnapshot) -> crate::harness::permission::Prompt {
-    crate::harness::permission::Prompt::new(
+fn permission_prompt(permission: &PendingPermissionSnapshot) -> PermissionPrompt {
+    PermissionPrompt::new(
         permission.permission_id.clone(),
         permission.tool_call.fields.title.clone(),
         permission.tool_call.tool_call_id.0.to_string(),
@@ -2704,7 +2910,52 @@ fn selected_option(
     }
 }
 
+#[async_trait::async_trait]
+impl crate::skills::delivery::Journal for Run {
+    async fn save(&self, report: &crate::skills::delivery::Report) -> Result<()> {
+        {
+            let mut state = self.state.lock().await;
+            anyhow::ensure!(
+                state.snapshot.process == ProcessState::Running
+                    && state.snapshot.native_session_id.as_deref()
+                        == Some(report.session_id.as_str())
+                    && report.turn_id
+                        == format!("{}:{}", state.snapshot.run_id, state.turn_generation)
+                    && state.snapshot.turn != TurnState::Idle,
+                "skill delivery belongs to a stale ACP input/session"
+            );
+            let mut retained = state.snapshot.skill_deliveries.clone();
+            if let Some(prior) = retained
+                .iter_mut()
+                .find(|prior| prior.turn_id == report.turn_id)
+            {
+                *prior = report.clone();
+            } else {
+                retained.push(report.clone());
+            }
+            anyhow::ensure!(
+                retained.len() <= 64 && serde_json::to_vec(&retained)?.len() <= 4 * 1024 * 1024,
+                "supervised skill evidence capacity exceeded; no receipt was discarded"
+            );
+            state.snapshot.skill_deliveries = retained;
+            state.snapshot.updated_at = Utc::now();
+        }
+        self.persist().await
+    }
+}
+
 fn validate_start(request: &StartRunRequest) -> Result<()> {
+    if let Some(skills) = &request.launch.skills {
+        skills.validate()?;
+        anyhow::ensure!(
+            !skills.include.iter().any(|selector| matches!(
+                selector,
+                bitrouter_ai::core::skills::SkillSelector::Mcp { .. }
+            )),
+            "unsupported: ACP skill delivery cannot preserve MCP-origin manifest/consent/cache/execution boundaries"
+        );
+        anyhow::ensure!(skills.include.len() <= 4, "selected_skill_count_budget");
+    }
     validate_identifier("agent", &request.agent_id)?;
     if let Some(label) = &request.label {
         validate_identifier("label", label)?;
@@ -2831,6 +3082,9 @@ fn command_scope_requirement(
         | SessionCommand::Snapshot { .. }
         | SessionCommand::NativeList { .. }
         | SessionCommand::RouteList { .. } => (&[SessionScope::Peek], &[], None),
+        SessionCommand::ActionStatus { fence } => {
+            (&[SessionScope::Peek], &[], Some(&fence.client_id))
+        }
         SessionCommand::Attach { client_id, .. } => (
             &[SessionScope::Attach, SessionScope::Transcript],
             &[],
@@ -2887,6 +3141,7 @@ mod tests {
         let (ledger, _) = LedgerStore::open(temporary.path().join("ledger.json")).await?;
         let now = Utc::now();
         let snapshot = RunSnapshot {
+            skill_deliveries: Vec::new(),
             run_id: "run-1".to_string(),
             label: "test".to_string(),
             agent_id: "stub".to_string(),
@@ -3103,6 +3358,34 @@ mod tests {
             list_grant.authorization != transcript_grant.authorization,
             "different scope sets shared one bearer proof"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn connected_runs_reject_historical_flags_and_stale_leases_without_a_handle() -> Result<()>
+    {
+        let directory = tempfile::tempdir()?;
+        let (_ledger, run) = test_run(directory.path(), "old-client").await?;
+        if let Some(lease) = run.state.lock().await.snapshot.lease.as_mut() {
+            lease.expires_at = Utc::now() - chrono::Duration::hours(1);
+        }
+        let supervisor = test_supervisor(directory.path(), run.clone());
+        for process in [
+            ProcessState::Running,
+            ProcessState::Starting,
+            ProcessState::Stopping,
+            ProcessState::Stopped,
+            ProcessState::Failed,
+            ProcessState::Interrupted,
+        ] {
+            run.state.lock().await.snapshot.process = process;
+            assert!(supervisor.connected_runs().await.is_empty());
+            let SessionResponse::RunSummaries { runs } = supervisor.list().await? else {
+                anyhow::bail!("run history was not returned");
+            };
+            assert_eq!(runs.len(), 1);
+            assert_eq!(runs[0].process, process);
+        }
         Ok(())
     }
 

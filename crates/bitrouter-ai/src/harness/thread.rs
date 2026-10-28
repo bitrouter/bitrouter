@@ -256,3 +256,12 @@ redacted_contract_debug!(
     ThreadObservation,
     ThreadHistoryPage
 );
+
+/// Explicitly accept one inspected durable checkpoint. A load alone never
+/// grants continuation; retries retain the inspected source and operation key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadRecoveryRequest {
+    pub source_server_instance_id: String,
+    pub source_cursor: u64,
+    pub idempotency_key: String,
+}

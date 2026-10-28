@@ -1,5 +1,13 @@
 # Codex style native scrollback conversation and Agents navigation
 
+> **CLI-only G05 supersedes this UI design (2026-10-19, local worktree).**
+> The first-party code/tui/chat/agents attach interfaces, renderer and TUI crate
+> have been removed. Runtime, ACP/MCP protocols, permissions and durable history
+> remain supported through CLI/API/native launchers. Earlier implementation
+> notes and source locations below are historical, including G01 notes that UI
+> remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
+> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+
 Status: **implemented; locally verified (first delivery)** · Date: 2026-10-01
 
 This proposal refactors `bitrouter-tui` around a Codex-like conversation entry
@@ -311,10 +319,10 @@ authorization, or claim production acceptance without corresponding evidence.
 Inspection baseline: BitRouter `d93ed73be2411992cc44e3234b6e7b11df1effb2`;
 Codex main `d91294c39edb93d204926b33f21310dc968edc34`.
 
-- [Conversation state/view](../crates/bitrouter-tui/src/code.rs),
-  [agent deck](../crates/bitrouter-tui/src/agents.rs),
-  [writer](../crates/bitrouter-tui/src/writer.rs),
-  [driver](../apps/bitrouter/src/chat/code.rs),
+- [Conversation state/view](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/code.rs),
+  [agent deck](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/agents.rs),
+  [writer](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/crates/bitrouter-tui/src/writer.rs),
+  [driver](https://github.com/bitrouter/bitrouter/blob/54c822a34d4dbfd75d484ca35e108b497048efef/apps/bitrouter/src/chat/code.rs),
   [supervisor mapping](../apps/bitrouter/src/agent_sessions.rs).
 - [Codex composer navigation](https://github.com/openai/codex/blob/d91294c39edb93d204926b33f21310dc968edc34/codex-rs/tui/src/bottom_pane/chat_composer/agents_navigation.rs).
 - [Codex Agents layout](https://github.com/openai/codex/blob/d91294c39edb93d204926b33f21310dc968edc34/codex-rs/tui/src/app/agent_center/render.rs).

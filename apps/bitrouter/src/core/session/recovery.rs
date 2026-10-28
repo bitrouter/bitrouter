@@ -83,6 +83,11 @@ impl CoreSession {
         responses::validate(&state, &request.binding)?;
         recovery_time::reconcile(&mut state, &request)?;
         context_decisions::reconcile(&mut state);
+        for work in state.context_store.work.values_mut() {
+            if let Some(selection) = &mut work.skills {
+                selection.validated_step_count = None;
+            }
+        }
         let outputs = resume_model_steps(&mut state);
         let initialization = PendingInitialization {
             base_revision: request.binding.durable_head.state_revision,
@@ -111,6 +116,7 @@ impl CoreSession {
                     unresolved_tool_deliveries: BTreeSet::new(),
                     cancelled_tools: BTreeSet::new(),
                     sent_materials: BTreeSet::new(),
+                    sent_skill_consents: BTreeSet::new(),
                     provisional_blocks: BTreeSet::new(),
                     provisional_steering: BTreeMap::new(),
                     disconnected: CancellationToken::new(),
@@ -133,6 +139,7 @@ impl CoreSession {
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
                 changed: Notify::new(),
+                skill_consents_changed: Notify::new(),
                 steering_changed: Notify::new(),
                 budget_changed: Arc::new(Notify::new()),
             }),

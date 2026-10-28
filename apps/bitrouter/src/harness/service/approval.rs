@@ -59,6 +59,38 @@ impl ThreadService {
     ) -> Result<(), ServiceError> {
         let gate = self.commit_gate(turn_id)?;
         let _guard = gate.lock().await;
+        let abandoned = {
+            let state = self.lock_state();
+            let record = state.turns.get(turn_id).ok_or_else(unknown_turn)?;
+            if record.snapshot.status == TurnStatus::WaitingForInput
+                && record
+                    .pending
+                    .as_ref()
+                    .is_some_and(|pending| pending.response.is_closed())
+            {
+                record.snapshot.pending_input_id.clone()
+            } else {
+                None
+            }
+        };
+        if let Some(request_id) = abandoned {
+            // A cancelled/stale consumer cannot authorize anything. Resolve its
+            // closed request as denied before publishing the next queued input.
+            self.append_serialized(
+                turn_id,
+                TurnEventPayload::InputResolved {
+                    request_id,
+                    approved: false,
+                },
+            )
+            .await?;
+            self.lock_state()
+                .turns
+                .get_mut(turn_id)
+                .ok_or_else(unknown_turn)?
+                .pending
+                .take();
+        }
         {
             let mut state = self.lock_state();
             let record = state.turns.get_mut(turn_id).ok_or_else(unknown_turn)?;

@@ -38,7 +38,7 @@ impl SkillCatalog {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(Error::Io(error.to_string())),
             }
-            for found in format::discover_bounded(root, MAX_SKILLS)? {
+            for found in format::discover_bounded(root)? {
                 let path = found
                     .skill_md
                     .canonicalize()

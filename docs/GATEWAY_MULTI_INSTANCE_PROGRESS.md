@@ -6,7 +6,22 @@ Status: **P1 implementation and local acceptance complete**. Hosted final-head
 checks and review state are tracked on [#990](https://github.com/bitrouter/bitrouter/pull/990);
 no hosted final-head pass is asserted here.
 
-Current source `a83c7bc0505053cd11a4ac3485ff441b3a19e214` passed v12 shared
+## Stack integration (2026-10-29)
+
+This update incorporates P0 `4a2b1586` and main `66cd3b8d`, including the
+CLI-only orchestration and skill consent migration. Shared configuration selection,
+operator commands, foreground shared startup and independent optional capabilities
+remain present. Owned continuation tests now use fresh random fixture keys.
+MCP configuration commands reject shared process files before entry input; the
+regression preserves exact source bytes, including attempts to select Shared through environment substitution.
+The old implementation was observed accepting the write.
+Workspace/all-feature target compilation, all eight continuation ownership cases,
+the MCP rejection regression and failed-driver shutdown cleanup passed locally.
+Independent review closed the shared/local configuration finding.
+Current-head CI, security and aggregate runtime acceptance are pending; the dated campaigns
+below retain their original source identity and performance limitations.
+
+Previously accepted source `a83c7bc0505053cd11a4ac3485ff441b3a19e214` passed v12 shared
 **206/206 in 96.096s**, with two test threads and zero retries. This includes
 all 27 stock-process cases and both added metering/cleanup regressions. Strict
 workspace Clippy, formatting and whitespace checks passed. Production repair

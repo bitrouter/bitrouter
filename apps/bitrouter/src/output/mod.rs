@@ -125,6 +125,3 @@ mod tests {
         assert_eq!(String::from_utf8(buf).unwrap(), "ok=false\n");
     }
 }
-
-#[cfg(feature = "harness")]
-pub(crate) mod plain;

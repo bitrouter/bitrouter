@@ -396,7 +396,7 @@ models:
 }
 
 #[tokio::test]
-async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<()> {
+async fn core_keeps_named_policy_and_learn_receipts_without_semantic_decisions() -> Result<()> {
     use bitrouter::policy_lock::{PolicyDefinition, PolicyLock};
     use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
     use bitrouter_ai::core::protocol::ModelMode;
@@ -405,7 +405,7 @@ async fn core_uses_shared_semantics_named_policy_and_learn_receipts() -> Result<
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id":"core-fixture", "object":"chat.completion", "model":"cheap",
+            "id":"core-fixture", "object":"chat.completion", "model":"strong",
             "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
             "usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}
         }))).mount(&upstream).await;
@@ -523,15 +523,16 @@ policy:
         .first()
         .and_then(|step| step.plan.as_ref())
         .context("committed plan")?;
-    assert_eq!(plan.effective_model, "mock:cheap");
-    assert_eq!(state.context_store.decisions.len(), 1);
+    assert_eq!(plan.effective_model, "mock:strong");
+    assert!(state.context_store.decisions.is_empty());
+    let requests = upstream
+        .received_requests()
+        .await
+        .context("generation capture")?;
+    assert_eq!(requests.len(), 1);
     assert_eq!(
-        upstream
-            .received_requests()
-            .await
-            .context("generation capture")?
-            .len(),
-        1
+        serde_json::from_slice::<serde_json::Value>(&requests[0].body)?["model"],
+        "strong"
     );
     assert_eq!(
         backend
@@ -539,7 +540,7 @@ policy:
             .await
             .context("semantic capture")?
             .len(),
-        1
+        0
     );
     app.language_model()
         .context("pipeline")?
@@ -557,24 +558,11 @@ policy:
         .iter()
         .find(|subject| subject.scope == EvalScope::Episode)
         .context("episode eval")?;
-    let assessment = episode
-        .evidence
-        .iter()
-        .find(|item| item.kind == "routing.assessment")
-        .context("semantic receipt")?;
-    let committed = state
-        .context_store
-        .decisions
-        .values()
-        .next()
-        .context("Core semantic receipt")?;
-    assert_eq!(
-        assessment.attributes.get("decision_receipt_id"),
-        Some(&committed.decision_id)
-    );
-    assert_eq!(
-        assessment.attributes.get("model").map(String::as_str),
-        Some("fixture-v1")
+    assert!(
+        !episode
+            .evidence
+            .iter()
+            .any(|item| item.kind == "routing.assessment")
     );
     let selected = episode
         .evidence
@@ -594,7 +582,7 @@ policy:
     );
     assert_eq!(
         selected.attributes.get("model").map(String::as_str),
-        Some("mock:cheap")
+        Some("mock:strong")
     );
     Ok(())
 }

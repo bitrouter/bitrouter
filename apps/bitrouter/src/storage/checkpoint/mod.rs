@@ -470,3 +470,6 @@ pub(crate) fn ack_for_batch(batch: &CheckpointBatch, payload: &CheckpointPayload
         execution_epoch: batch.identity.execution_epoch,
     }
 }
+
+/// Maximum retained native journal bytes, shared by storage and local IPC.
+pub const MAX_NATIVE_STORE_BYTES: usize = 128 * 1024 * 1024;

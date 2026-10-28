@@ -38,8 +38,19 @@ pub struct AgentRegistryRow {
 #[derive(Serialize)]
 pub struct AgentsListReport {
     pub agents: Vec<AgentRow>,
+    pub skill_delivery: std::collections::BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub registry: Option<Vec<AgentRegistryRow>>,
+}
+
+impl AgentsListReport {
+    pub fn new(agents: Vec<AgentRow>, registry: Option<Vec<AgentRegistryRow>>) -> Self {
+        Self {
+            agents,
+            registry,
+            skill_delivery: crate::actions::administration::skill_delivery_paths(),
+        }
+    }
 }
 
 impl CliReport for AgentsListReport {
@@ -54,6 +65,7 @@ impl CliReport for AgentsListReport {
             ]);
         }
         h.table(&t)?;
+        h.line("Skill delivery: native activation; supervised ACP local prompt instructions require connection support. Launcher, inference-only, transparent ACP and external MCP-origin delivery are unsupported.")?;
         if let Some(registry) = &self.registry {
             h.line("")?;
             h.line(&format!("ACP registry ({} agents):", registry.len()))?;
@@ -111,8 +123,8 @@ impl CliReport for AgentsCheckReport {
 }
 
 /// Scriptable inventory returned by `agents sessions`.
-#[derive(Serialize)]
 #[cfg(feature = "harness")]
+#[derive(Serialize)]
 pub struct AgentSessionsReport {
     pub runs: Vec<RunSummary>,
 }
@@ -159,7 +171,7 @@ impl CliReport for BackgroundRunReport {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         h.line(&format!("agent run {} · {}", self.agent_run_id, self.state))?;
         h.line(&format!(
-            "attach: {} agents attach {}",
+            "inspect: {} agents show {}",
             crate::commands::invocation::name(),
             self.agent_run_id
         ))

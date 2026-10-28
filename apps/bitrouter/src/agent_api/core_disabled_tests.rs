@@ -248,6 +248,7 @@ async fn sdk_reads_offline_history_and_observation_without_acquiring_execution_a
             .create_thread(
                 "create",
                 &CreateThreadRequest {
+                    skills: None,
                     workspace: fixture.workspace.path().join("missing"),
                     model: "fixture".into(),
                     model_mode: bitrouter_ai::core::protocol::ModelMode::Fixed,
@@ -298,6 +299,7 @@ async fn sdk_reads_offline_history_and_observation_without_acquiring_execution_a
                 thread_id,
                 "input",
                 &InputRequest {
+                    skill_consent: false,
                     turn_id: turn_id.clone(),
                     request_id: "unrequested".into(),
                     approved: true,

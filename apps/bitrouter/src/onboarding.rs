@@ -1,10 +1,9 @@
-//! First-run configuration and the default Code ACP entry point.
-//!
-//! Credentials alone do not complete onboarding: the selected ACP harness and
-//! optional model are saved in `chat`, then reused by every bare invocation.
+//! First-run line-based configuration and the background daemon entry point.
+
+pub mod resources;
 
 use std::collections::BTreeSet;
-use std::io::IsTerminal;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -19,8 +18,9 @@ use serde::Serialize;
 
 use crate::cloud::auth::{LoginInputs, login as cloud_login};
 use crate::commands::{ProviderLoginOptions, login_provider_with_options};
+use crate::output::CliReport;
+use crate::output::Output;
 use crate::output::human::Human;
-use crate::output::{CliReport, Output};
 use crate::providers::cli_install::SpawnAgent;
 
 // =====================================================================
@@ -127,7 +127,7 @@ fn detected_env_keys(lookup: impl Fn(&str) -> Option<String>) -> Vec<String> {
 /// The three-way finish exit (§3.2 step 3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum AfterAction {
-    /// Open BitRouter's TUI using the selected ACP harness.
+    /// Explicitly launch the selected native harness with inherited terminal I/O.
     Launch,
     /// Start the daemon and print a paste-in snippet for an existing tool.
     Serve,
@@ -169,9 +169,10 @@ pub struct OnboardingFlags {
     pub use_detected: bool,
     /// (Step 2) Harnesses to drive: `claude` / `codex` (repeatable).
     pub harnesses: Vec<SpawnAgent>,
+    pub resources: resources::Options,
     /// (Step 3) What to do at the end.
     pub after: Option<AfterAction>,
-    /// (Step 3) Default model saved for future TUI sessions.
+    /// (Step 3) Optional default model saved for native launch.
     pub model: Option<String>,
 }
 
@@ -188,7 +189,7 @@ pub struct Snippet {
     pub anthropic: String,
     /// `OPENAI_BASE_URL` + `OPENAI_API_KEY` export lines.
     pub openai: String,
-    /// The Codex command for Code's ACP conversation view.
+    /// The native Codex launcher command.
     pub codex: String,
 }
 
@@ -203,8 +204,14 @@ pub struct OnboardingReport {
     /// Providers that would need an interactive human (OAuth device/PKCE, a
     /// claude-code session import) and were reported-and-skipped, not attempted.
     pub providers_skipped_interactive: Vec<String>,
-    /// Selected built-in ACP ids (legacy field name; no native installation).
+    /// Deprecated field: always empty; selecting an agent never installs it.
     pub harnesses_installed: Vec<String>,
+    /// Agent configuration selected here, without a connection claim.
+    pub agents_selected: Vec<String>,
+    pub resources: Vec<resources::Outcome>,
+    /// Readiness evidence when the finish action ensured the daemon was running.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub daemon: Option<crate::output::reports::daemon::DaemonActionReport>,
     /// `"launch"` | `"serve"` | `"exit"`.
     pub after: String,
     /// The paste-in snippet for `after: serve`; `null` otherwise.
@@ -234,14 +241,35 @@ impl CliReport for OnboardingReport {
             h.field("skipped", self.providers_skipped_interactive.join(", "))?;
         }
         h.field(
-            "harnesses",
-            if self.harnesses_installed.is_empty() {
+            "agents selected",
+            if self.agents_selected.is_empty() {
                 "(none)".to_string()
             } else {
-                self.harnesses_installed.join(", ")
+                self.agents_selected.join(", ")
             },
         )?;
         h.field("after", &self.after)?;
+        for resource in &self.resources {
+            h.field(resource.kind, resource.status)?;
+            if let Some(target) = &resource.target {
+                h.field("target", target)?;
+            }
+            if let Some(receipt) = &resource.receipt {
+                h.field(
+                    "receipt",
+                    serde_json::to_string(receipt).map_err(std::io::Error::other)?,
+                )?;
+            }
+            if let Some(failure) = &resource.failure {
+                h.note(failure)?;
+            }
+            if let Some(reason) = resource.reason {
+                h.field("reason", reason)?;
+            }
+        }
+        if let Some(daemon) = &self.daemon {
+            daemon.render(h)?;
+        }
         if let Some(snippet) = &self.snippet {
             h.blank()?;
             h.line(&format!("paste-in wiring ({}):", snippet.base_url))?;
@@ -284,7 +312,6 @@ pub struct OnboardingStatusReport {
 }
 
 impl OnboardingStatusReport {
-    #[cfg(any(feature = "tui", test))]
     fn from_signals(signals: &ProbeSignals) -> Self {
         let mut parts = Vec::new();
         if signals.cloud_session {
@@ -304,7 +331,7 @@ impl OnboardingStatusReport {
             configured: true,
             signals: parts,
             hint: format!(
-                "run `{}` to start an ACP coding session",
+                "run `{}` to ensure the background daemon is ready",
                 invocation::name()
             ),
         }
@@ -329,46 +356,56 @@ impl CliReport for OnboardingStatusReport {
 // Entry points
 // =====================================================================
 
-/// Bare invocation opens the saved default in Code, or the first-run wizard.
+/// Ensure a configured daemon is ready, or complete first-run onboarding.
 pub async fn entry(output: &Output) -> Result<()> {
+    crate::prompt::interruptible(entry_inner(output)).await
+}
+
+async fn entry_inner(output: &Output) -> Result<()> {
     let path = config_path(None)?;
+    let source = crate::daemon_locator::selected_source(None)?;
     if path.is_file() {
-        let source = crate::paths::resolve_config(Some(&path))?;
-        let config = crate::paths::load_config(&source).await?;
-        if config
-            .chat
-            .agent
-            .as_deref()
-            .is_some_and(|id| !id.trim().is_empty())
-        {
-            return start_default_chat(&source, config).await;
-        }
+        return emit(output, &crate::daemon::ensure_started(&source).await?);
     }
-    if std::io::stdin().is_terminal() {
-        validate_tui_availability(false, None)?;
-        #[cfg(feature = "tui")]
-        {
-            let manager = crate::cloud::default_manager()?;
-            return run_interactive(
-                OnboardingFlags {
-                    config: Some(path),
-                    ..Default::default()
-                },
-                &probe(),
-                output,
-                manager,
-            )
-            .await;
-        }
+    let signals = probe();
+    // A live source-owned runtime already holds its configuration and keys.
+    // Its client need not re-export a one-shot startup key or recreate YAML.
+    if (source.is_default() && signals.is_configured())
+        || crate::daemon_locator::locate_source(&source)
+            .await?
+            .is_some()
+    {
+        return emit(output, &crate::daemon::ensure_started(&source).await?);
     }
-    print_hint();
-    emit(output, &empty_report())
+    if crate::prompt::terminal() {
+        let manager = crate::cloud::default_manager()?;
+        run_interactive(
+            OnboardingFlags {
+                config: Some(path),
+                after: Some(AfterAction::Serve),
+                ..Default::default()
+            },
+            &signals,
+            output,
+            manager,
+        )
+        .await
+    } else {
+        print_hint();
+        anyhow::bail!(
+            "setup needs stdin and stderr terminals; run `{} init --yes` with explicit credential flags, or provide a valid bitrouter.yaml",
+            invocation::name()
+        )
+    }
 }
 
 /// Find the onboarding destination without requiring a config to exist yet.
-fn config_path(explicit: Option<&std::path::Path>) -> Result<PathBuf> {
+pub(crate) fn config_path(explicit: Option<&std::path::Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(std::path::absolute(path)?);
+    }
+    if let Ok(crate::paths::ConfigSource::File(path)) = crate::paths::resolve_config(None) {
+        return Ok(path);
     }
     let local = std::env::current_dir()?.join("bitrouter.yaml");
     if local.is_file() {
@@ -379,74 +416,21 @@ fn config_path(explicit: Option<&std::path::Path>) -> Result<PathBuf> {
     )?)
 }
 
-#[cfg(feature = "harness")]
-async fn start_default_chat(
-    source: &crate::paths::ConfigSource,
-    config: crate::config::Config,
-) -> Result<()> {
-    let agent =
-        config.chat.agent.clone().with_context(|| {
-            format!("no default ACP harness; run `{} init`", invocation::name())
-        })?;
-    let routing = crate::commands::agent_options::RoutingOptions {
-        model: config.chat.model.clone(),
-        ..Default::default()
-    };
-    // Preserve the pre-Code plain renderer for scripts and redirected output.
-    // Interactive users always enter the one full-screen Code lifecycle UI.
-    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        return crate::acp_cli::chat(crate::acp_cli::SpawnContext {
-            source,
-            config,
-            agent_id: &agent,
-            options: crate::acp_cli::launch_options(None),
-            routing,
-        })
-        .await;
-    }
-    #[cfg(feature = "tui")]
-    {
-        let config_path = match source {
-            crate::paths::ConfigSource::File(path) => Some(path.as_path()),
-            crate::paths::ConfigSource::Default { .. } => None,
-        };
-        crate::dashboard::run(
-            None,
-            config_path,
-            None,
-            Some(crate::dashboard::SessionRequest {
-                agent,
-                selection: crate::commands::agent_options::SessionSelection::New,
-                turn_timeout: None,
-                routing,
-            }),
-        )
-        .await
-    }
-    #[cfg(not(feature = "tui"))]
-    anyhow::bail!("interactive default chat requires the tui feature")
-}
-
-#[cfg(not(feature = "harness"))]
-async fn start_default_chat(
-    _source: &crate::paths::ConfigSource,
-    _config: crate::config::Config,
-) -> Result<()> {
-    anyhow::ensure!(
-        !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal(),
-        "interactive default chat requires the tui feature"
-    );
-    anyhow::bail!("default agent chat requires the harness feature")
-}
-
 /// Persist onboarding atomically; an interrupted wizard never marks itself complete.
 fn save_config(
     flags: &OnboardingFlags,
-    agent: &str,
+    agent: Option<&str>,
     providers: &BTreeSet<String>,
 ) -> Result<PathBuf> {
     use std::io::Write;
     let path = config_path(flags.config.as_deref())?;
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+    {
+        crate::paths::ensure_home_directory(parent)?;
+    }
+    // Serialize config publication with MCP edits and the policy/router writers.
+    let _publication_lock = crate::policy_lock::acquire_publication_lock(&path)?;
     let existing = path.is_file();
     let text = if existing && !flags.force {
         std::fs::read_to_string(&path)?
@@ -457,31 +441,46 @@ fn save_config(
     if value.is_null() {
         value = serde_json::json!({});
     }
+    let original = value.clone();
     let root = value
         .as_object_mut()
         .context("configuration must be a YAML mapping")?;
-    let chat = root.entry("chat").or_insert_with(|| serde_json::json!({}));
-    let chat = chat
-        .as_object_mut()
-        .context("chat must be a YAML mapping")?;
-    chat.insert("agent".into(), agent.into());
-    if let Some(model) = &flags.model {
-        chat.insert("model".into(), model.clone().into());
+    if agent.is_some() || flags.model.is_some() {
+        let chat = root.entry("chat").or_insert_with(|| serde_json::json!({}));
+        let chat = chat
+            .as_object_mut()
+            .context("chat must be a YAML mapping")?;
+        if let Some(agent) = agent {
+            chat.insert("agent".into(), agent.into());
+        }
+        if let Some(model) = &flags.model {
+            chat.insert("model".into(), model.clone().into());
+        }
     }
-    let entries = root
-        .entry("providers")
-        .or_insert_with(|| serde_json::json!({}));
-    let entries = entries
-        .as_object_mut()
-        .context("providers must be a YAML mapping")?;
-    for provider in providers {
-        entries.entry(provider.clone()).or_insert_with(|| {
-            if provider == PROVIDER_ID {
-                serde_json::json!({"auto_discover": true})
-            } else {
-                serde_json::json!({})
-            }
-        });
+    if !providers.is_empty() {
+        let entries = root
+            .entry("providers")
+            .or_insert_with(|| serde_json::json!({}));
+        let entries = entries
+            .as_object_mut()
+            .context("providers must be a YAML mapping")?;
+        for provider in providers {
+            entries.entry(provider.clone()).or_insert_with(|| {
+                if provider == PROVIDER_ID {
+                    serde_json::json!({"auto_discover": true})
+                } else {
+                    serde_json::json!({})
+                }
+            });
+        }
+    }
+    if existing && !flags.force && value == original {
+        let _: crate::config::Config = serde_saphyr::from_str(&text)?;
+        note(&format!(
+            "using saved Router configuration in {}",
+            path.display()
+        ));
+        return Ok(path);
     }
     let serialized = serde_saphyr::to_string(&value)?;
     // Reject invalid edits before replacing a working configuration.
@@ -495,10 +494,7 @@ fn save_config(
     temp.as_file().sync_all()?;
     temp.persist(&path)
         .with_context(|| format!("saving {}", path.display()))?;
-    note(&format!(
-        "saved default ACP harness '{agent}' in {}",
-        path.display()
-    ));
+    note(&format!("saved Router configuration in {}", path.display()));
     Ok(path)
 }
 
@@ -509,47 +505,37 @@ fn acp_id(agent: SpawnAgent) -> &'static str {
     }
 }
 
-/// Reject unavailable onboarding UI before logging, credentials or config writes.
-/// Explicit launch requires TUI even when the setup itself is noninteractive.
-pub fn validate_tui_availability(yes: bool, after: Option<AfterAction>) -> Result<()> {
-    if !cfg!(feature = "tui") {
-        if after == Some(AfterAction::Launch) {
-            anyhow::bail!("onboarding --after launch requires the tui feature");
-        }
-        if !yes && std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "interactive onboarding requires the tui feature; use init --yes for noninteractive setup"
-            );
-        }
-    }
-    Ok(())
+/// `bro init [flags]`. Runs the wizard interactively, or headlessly when
+/// `--yes` is set (or no TTY is attached). `--reset` clears credentials first.
+pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
+    crate::prompt::interruptible(run_inner(flags, output)).await
 }
 
-/// `bro init [flags]`. Runs the wizard interactively, or headlessly when
-/// `--yes` is set (or no TTY is attached). Capability checks precede `--reset`.
-pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
-    validate_tui_availability(flags.yes, flags.after)?;
+async fn run_inner(flags: OnboardingFlags, output: &Output) -> Result<()> {
+    #[cfg(not(feature = "harness"))]
+    anyhow::ensure!(
+        flags.harnesses.is_empty() && flags.after != Some(AfterAction::Launch),
+        "agent configuration and native launch require the harness feature"
+    );
+    flags
+        .resources
+        .validate(!flags.yes && crate::prompt::terminal())?;
+    anyhow::ensure!(
+        flags.provider_api_keys.len() <= flags.providers.len(),
+        "each --provider-api-key needs a paired --provider"
+    );
     let manager = crate::cloud::default_manager()?;
     if flags.reset {
-        reset_credentials(flags.yes, std::io::stdin().is_terminal()).await?;
+        reset_credentials(flags.yes, crate::prompt::terminal()).await?;
     }
-    #[cfg(feature = "tui")]
-    if !flags.yes && std::io::stdin().is_terminal() {
+    if flags.yes {
+        return run_headless(flags, output, manager).await;
+    }
+    if crate::prompt::terminal() {
         let signals = probe();
-        return run_interactive(flags, &signals, output, manager).await;
-    }
-    run_headless(flags, output, manager).await
-}
-
-fn empty_report() -> OnboardingReport {
-    OnboardingReport {
-        action: "onboarding",
-        providers_configured: Vec::new(),
-        providers_skipped_interactive: Vec::new(),
-        harnesses_installed: Vec::new(),
-        after: AfterAction::Exit.as_str().to_string(),
-        snippet: None,
-        config_activation: None,
+        run_interactive(flags, &signals, output, manager).await
+    } else {
+        run_headless(flags, output, manager).await
     }
 }
 
@@ -586,28 +572,34 @@ async fn run_headless(
         .copied()
         .map(acp_id)
         .map(String::from)
-        .or(existing_agent)
-        .unwrap_or_else(|| "codex-acp".into());
-    let path = save_config(&flags, &agent, &configured)?;
+        .or(existing_agent);
+    let path = save_config(&flags, agent.as_deref(), &configured)?;
+    let resources = resources::run(&flags.resources, &path, false).await?;
+    let incomplete = resources.iter().any(|resource| resource.status == "failed");
     let after = flags.after.unwrap_or(AfterAction::Exit);
     let report = OnboardingReport {
         action: "onboarding",
         providers_configured: configured.into_iter().collect(),
         providers_skipped_interactive: skipped,
-        harnesses_installed: flags
+        harnesses_installed: Vec::new(),
+        daemon: None,
+        agents_selected: flags
             .harnesses
             .iter()
             .copied()
             .map(acp_id)
             .map(String::from)
-            .chain(flags.harnesses.is_empty().then(|| agent.to_string()))
             .collect(),
-        after: after.as_str().to_string(),
+        resources,
+        after: if incomplete { "exit" } else { after.as_str() }.to_string(),
         snippet: None,
         config_activation: Some(crate::output::reports::config::ConfigActivation::SavedOnly),
     };
+    if incomplete {
+        return Err(resources::Incomplete { report }.into());
+    }
     match after {
-        AfterAction::Launch => finish_launch(&path, report, output).await,
+        AfterAction::Launch => finish_launch(&path, report, output, true).await,
         AfterAction::Serve => finish_serve(&path, report, output).await,
         AfterAction::Exit => emit(output, &report),
     }
@@ -639,6 +631,7 @@ async fn apply_flag_credentials(
                 Ok(()) => {
                     configured.insert(cloud.to_string());
                 }
+                Err(e) if crate::prompt::cancelled(&e) => return Err(e),
                 Err(e) => note(&format!("cloud sign-in did not complete: {e:#}")),
             }
         }
@@ -654,6 +647,9 @@ async fn apply_flag_credentials(
                     configured.insert(provider.clone());
                 }
                 Err(e) => {
+                    if crate::prompt::cancelled(&e) {
+                        return Err(e);
+                    }
                     note(&format!("provider '{provider}' not configured: {e:#}"));
                     skipped.push(provider.clone());
                 }
@@ -670,6 +666,9 @@ async fn apply_flag_credentials(
                     configured.insert(provider.clone());
                 }
                 Err(e) => {
+                    if crate::prompt::cancelled(&e) {
+                        return Err(e);
+                    }
                     note(&format!(
                         "provider '{provider}' login did not complete: {e:#}"
                     ));
@@ -720,7 +719,6 @@ async fn seed_provider_api_key(provider: &str, key: &str) -> Result<()> {
 // Interactive wizard
 // =====================================================================
 
-#[cfg(feature = "tui")]
 async fn run_interactive(
     flags: OnboardingFlags,
     signals: &ProbeSignals,
@@ -765,31 +763,34 @@ async fn run_interactive(
     // --- Step 2: harness ---
     let installed = interactive_harness(&flags).await?;
 
+    // Persist Router progress before optional operations; never rewrite it
+    // after the MCP publisher has committed its source-owned transaction.
+    let path = save_config(&flags, installed.first().map(String::as_str), &configured)?;
+    let resources = resources::run(&flags.resources, &path, true).await?;
+
     // --- Step 3: finish ---
     let after = interactive_after(&flags, &installed).await?;
 
-    let agent = installed
-        .first()
-        .context("select an ACP harness to complete onboarding")?;
-    let path = save_config(&flags, agent, &configured)?;
     let report = OnboardingReport {
         action: "onboarding",
         providers_configured: configured.into_iter().collect(),
         providers_skipped_interactive: skipped,
-        harnesses_installed: installed,
+        harnesses_installed: Vec::new(),
+        agents_selected: installed,
+        resources,
+        daemon: None,
         after: after.as_str().to_string(),
         snippet: None,
         config_activation: Some(crate::output::reports::config::ConfigActivation::SavedOnly),
     };
     match after {
-        AfterAction::Launch => finish_launch(&path, report, output).await,
+        AfterAction::Launch => finish_launch(&path, report, output, false).await,
         AfterAction::Serve => finish_serve(&path, report, output).await,
         AfterAction::Exit => emit(output, &report),
     }
 }
 
 /// Providers offered by the OSS registry, with no special placement for Cloud.
-#[cfg(feature = "tui")]
 fn provider_choices(
     data: &bitrouter_ai::catalog::types::RegistryData,
 ) -> Vec<&bitrouter_ai::catalog::types::RegistryProvider> {
@@ -811,14 +812,13 @@ fn provider_choices(
     providers
 }
 
-#[cfg(feature = "tui")]
 async fn interactive_credentials(
     flags: &OnboardingFlags,
     configured: &mut BTreeSet<String>,
     skipped: &mut Vec<String>,
     manager: Arc<CredentialManager>,
 ) -> Result<()> {
-    use crate::presentation::selection::Item;
+    use crate::prompt::Item;
 
     let path = config_path(flags.config.as_deref())?;
     let registry = if path.is_file() && !flags.force {
@@ -838,9 +838,9 @@ async fn interactive_credentials(
         }
     }
     let mut help = if providers.is_empty() {
-        "Registry unavailable or disabled. Continue to set up an ACP harness.".to_string()
+        "Registry unavailable or disabled. Continue to optional agent setup.".to_string()
     } else {
-        "Choose a provider to sign in. End jumps to Continue.".to_string()
+        "Choose a provider to sign in, or Continue to skip.".to_string()
     };
     let mut selected = if configured.is_empty() {
         0
@@ -857,13 +857,16 @@ async fn interactive_credentials(
                     ""
                 };
                 Item::new(
-                    provider.display_name.as_deref().unwrap_or(&provider.name),
-                    format!("{}{status}", provider.name),
+                    &provider.name,
+                    format!(
+                        "{}{status}",
+                        provider.display_name.as_deref().unwrap_or(&provider.name)
+                    ),
                 )
             })
             .collect();
         items.push(Item::new(
-            "Continue to harness setup",
+            "Continue to agent setup",
             if configured.is_empty() {
                 "skip provider login for now".to_string()
             } else {
@@ -892,7 +895,7 @@ async fn interactive_credentials(
             if method == 0 {
                 seed_cloud_interactive(Arc::clone(&manager)).await
             } else {
-                let key = crate::commands::read_api_key(id)?;
+                let key = crate::commands::read_api_key(id).await?;
                 seed_cloud_api_key(&key, Arc::clone(&manager)).await
             }
         } else {
@@ -908,10 +911,7 @@ async fn interactive_credentials(
                 selected = providers.len();
             }
             Err(error) => {
-                if error
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|e| e.kind() == std::io::ErrorKind::Interrupted)
-                {
+                if crate::prompt::cancelled(&error) {
                     return Err(error);
                 }
                 note(&format!(
@@ -944,11 +944,8 @@ async fn seed_cloud_interactive(manager: Arc<CredentialManager>) -> Result<()> {
     .context("BitRouter Cloud sign-in")
 }
 
-#[cfg(feature = "tui")]
+#[cfg(feature = "harness")]
 async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
-    eprintln!();
-    eprintln!("Step 2/3 — Default ACP harness");
-    note("BitRouter provides the TUI. ACP adapters use a compatible local CLI when available.");
     if !flags.harnesses.is_empty() {
         return Ok(flags
             .harnesses
@@ -959,50 +956,49 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
             .collect());
     }
     let harnesses = crate::harness::catalog::CATALOG;
+    let mut items: Vec<_> = harnesses
+        .iter()
+        .map(|harness| crate::prompt::Item::new(harness.id, harness.description))
+        .collect();
+    items.push(crate::prompt::Item::new(
+        "Skip",
+        "keep existing agent settings and continue to optional MCP/skills setup",
+    ));
     let selected = crate::prompt::select(
-        "Step 2/3 — Default ACP harness",
-        "BitRouter provides the TUI. Choose the agent it runs.",
-        harnesses
-            .iter()
-            .map(|harness| {
-                crate::presentation::selection::Item::new(harness.id, harness.description)
-            })
-            .collect(),
-        harnesses
-            .iter()
-            .position(|harness| harness.id == "codex-acp")
-            .unwrap_or(0),
+        "Step 2/3 — Agents and resources (optional)",
+        "Select an ACP adapter default, or Skip. Selection does not install or connect an agent.",
+        items,
+        harnesses.len(),
     )
     .await?;
-    Ok(vec![
-        harnesses
-            .get(selected)
-            .context("no ACP harness selected")?
-            .id
-            .to_string(),
-    ])
+    Ok(harnesses
+        .get(selected)
+        .map(|harness| vec![harness.id.to_string()])
+        .unwrap_or_default())
 }
 
-#[cfg(feature = "tui")]
 async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Result<AfterAction> {
-    use crate::presentation::selection::Item;
+    use crate::prompt::Item;
     if let Some(after) = flags.after {
+        eprintln!("\nStep 3/3 — Finish ({})", after.as_str());
         return Ok(after);
     }
-    let mut actions = Vec::new();
-    let mut items = Vec::new();
-    if !installed.is_empty() {
+    let mut actions = vec![AfterAction::Serve, AfterAction::Exit];
+    let mut items = vec![
+        Item::new(
+            "Start the daemon",
+            "wait for readiness, then return to shell",
+        ),
+        Item::new("Save and exit", "run bro when ready"),
+    ];
+    if installed.first().is_some_and(|id| native_id(id).is_some()) {
         actions.push(AfterAction::Launch);
         items.push(Item::new(
-            "Open BitRouter Code now",
-            "use the selected default ACP harness",
+            "Launch native harness",
+            "explicitly hand the terminal to the selected native tool",
         ));
     }
-    actions.extend([AfterAction::Serve, AfterAction::Exit]);
-    items.extend([
-        Item::new("Start the daemon", "print connection instructions"),
-        Item::new("Save and exit", "run bro whenever you're ready"),
-    ]);
+
     let selected = crate::prompt::select(
         "Step 3/3 — Finish",
         "Save your setup and choose what happens next",
@@ -1020,41 +1016,62 @@ async fn interactive_after(flags: &OnboardingFlags, installed: &[String]) -> Res
 // Finish exits (a) launch / (b) serve+snippet
 // =====================================================================
 
-/// Open the same unified Code TUI as every subsequent bare invocation.
+fn native_id(id: &str) -> Option<&'static str> {
+    match id {
+        "claude-acp" => Some("claude"),
+        "codex-acp" => Some("codex"),
+        _ => None,
+    }
+}
+
+/// Explicit opt-in to a native launcher, never the first-party Code UI.
+#[cfg(feature = "harness")]
 async fn finish_launch(
     path: &std::path::Path,
     report: OnboardingReport,
     output: &Output,
+    no_install: bool,
 ) -> Result<()> {
     let source = crate::paths::resolve_config(Some(path))?;
     let config = crate::paths::load_config(&source).await?;
+    let id = config.chat.agent.as_deref().and_then(native_id).context("--after launch needs --harness claude or codex; use bro launch <agent> for other native tools")?;
+    let prepared = crate::spawn::prepare(
+        &source,
+        &config,
+        crate::spawn::SpawnOptions {
+            agent: crate::spawn::resolve_launch_agent(id)?,
+            model: config.chat.model.clone(),
+            agent_args: Vec::new(),
+            base_url: None,
+            no_install,
+            no_start: false,
+            check: false,
+        },
+    )
+    .await?;
     emit(output, &report)?;
-    start_default_chat(&source, config).await
+    crate::spawn::exec_inherited(prepared).await
 }
 
-/// Exit (b): start the local daemon (best-effort, reusing the launch path's
-/// auto-start), build the paste-in snippet, and emit the envelope with it.
 async fn finish_serve(
     path: &std::path::Path,
     mut report: OnboardingReport,
     output: &Output,
 ) -> Result<()> {
     let source = crate::paths::resolve_config(Some(path))?;
-    let cfg = crate::paths::load_config(&source).await?;
-    crate::client::local_gateway::ensure_local_daemon(&source, &cfg, false).await;
-    report.snippet = Some(build_snippet(&cfg.server.listen));
+    let daemon = crate::daemon::ensure_started(&source).await?;
+    if let Some(listen) = &daemon.listen {
+        report.snippet = Some(build_snippet(listen));
+    }
+    report.daemon = Some(daemon);
     emit(output, &report)
 }
 
-/// Build the three labeled paste-in shapes (§13 Q2). Templates the bearer by
-/// auth mode: a real exported `BITROUTER_API_KEY` (`brk_`) when present, else
-/// the local `skip_auth` placeholder. The Codex example opens Code.
+/// Shell templates reference the caller's key without copying it into reports.
+/// The local skip-auth fallback is a placeholder; Codex uses its native launcher.
 fn build_snippet(listen: &str) -> Snippet {
     let base_url = crate::client::local_gateway::derive_base_url(listen);
-    let token = crate::client::local_gateway::nonempty_env(
-        crate::client::local_gateway::BITROUTER_API_KEY_ENV,
-    )
-    .unwrap_or_else(|| crate::client::local_gateway::PLACEHOLDER_API_KEY.to_string());
+    let token = "${BITROUTER_API_KEY:-bitrouter-local}";
     let v1 = {
         let trimmed = base_url.trim_end_matches('/');
         if trimmed.ends_with("/v1") {
@@ -1066,7 +1083,7 @@ fn build_snippet(listen: &str) -> Snippet {
     let anthropic =
         format!("export ANTHROPIC_BASE_URL={base_url}\nexport ANTHROPIC_AUTH_TOKEN={token}");
     let openai = format!("export OPENAI_BASE_URL={v1}\nexport OPENAI_API_KEY={token}");
-    let codex = format!("{} code codex --base-url {base_url}", invocation::name());
+    let codex = format!("{} launch codex --base-url {base_url}", invocation::name());
     Snippet {
         base_url,
         anthropic,
@@ -1175,26 +1192,15 @@ fn emit(output: &Output, report: &dyn CliReport) -> Result<()> {
     Output::emit(output, report).map_err(anyhow::Error::from)
 }
 
-/// Confirmation uses the same selector; cancellation propagates before reset.
+/// Cancellation propagates before reset mutates any credentials.
 async fn prompt_yes_no(prompt: &str, default_yes: bool) -> Result<bool> {
-    let index = crate::prompt::select(
-        prompt,
-        "Choose whether to continue",
-        vec![
-            crate::presentation::selection::Item::new("Yes", ""),
-            crate::presentation::selection::Item::new("No", ""),
-        ],
-        usize::from(!default_yes),
-    )
-    .await?;
-    Ok(index == 0)
+    crate::prompt::confirm(prompt, default_yes).await
 }
 
 /// The multi-line onboarding hint (unconfigured, non-TTY). Mirrors the recovery
 /// chain of the former `print_onboarding_hint`.
 fn print_hint() {
     let p = crate::style::Palette::for_stderr();
-    #[cfg(feature = "tui")]
     eprintln!(
         "{cyan}{bold}info:{reset} setup is not complete. Run `{cli}` in a terminal or `{cli} init --yes`:",
         cyan = p.cyan,
@@ -1202,16 +1208,7 @@ fn print_hint() {
         reset = p.reset,
         cli = invocation::name(),
     );
-    #[cfg(not(feature = "tui"))]
-    eprintln!(
-        "{cyan}{bold}info:{reset} setup is not complete. Run `{cli} init --yes`:",
-        cyan = p.cyan,
-        bold = p.bold,
-        reset = p.reset,
-        cli = invocation::name(),
-    );
     eprintln!();
-    #[cfg(feature = "tui")]
     eprintln!(
         "  {cli} init                 # guided setup wizard (interactive)",
         cli = invocation::name()
@@ -1232,31 +1229,6 @@ fn print_hint() {
 mod tests {
     use super::*;
 
-    #[test]
-    fn noninteractive_exit_and_serve_do_not_require_tui() -> Result<()> {
-        for after in [None, Some(AfterAction::Exit), Some(AfterAction::Serve)] {
-            validate_tui_availability(true, after)?;
-        }
-        Ok(())
-    }
-
-    #[cfg(not(feature = "tui"))]
-    #[test]
-    fn explicit_launch_requires_tui_even_with_yes() -> Result<()> {
-        for yes in [false, true] {
-            let error = validate_tui_availability(yes, Some(AfterAction::Launch))
-                .err()
-                .context("explicit launch must require tui")?;
-            assert!(
-                error
-                    .to_string()
-                    .contains("--after launch requires the tui feature")
-            );
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "tui")]
     #[test]
     fn provider_menu_contains_every_public_active_entry_in_display_order() -> Result<()> {
         let data: bitrouter_ai::catalog::types::RegistryData =
@@ -1356,7 +1328,10 @@ mod tests {
             action: "onboarding",
             providers_configured: vec!["bitrouter".to_string(), "openai".to_string()],
             providers_skipped_interactive: vec!["github-copilot".to_string()],
-            harnesses_installed: vec!["claude".to_string()],
+            harnesses_installed: Vec::new(),
+            agents_selected: vec!["claude".to_string()],
+            resources: Vec::new(),
+            daemon: None,
             after: "launch".to_string(),
             snippet: None,
             config_activation: Some(crate::output::reports::config::ConfigActivation::SavedOnly),
@@ -1371,7 +1346,7 @@ mod tests {
             v["providers_skipped_interactive"],
             serde_json::json!(["github-copilot"])
         );
-        assert_eq!(v["harnesses_installed"], serde_json::json!(["claude"]));
+        assert_eq!(v["agents_selected"], serde_json::json!(["claude"]));
         assert_eq!(v["after"], "launch");
         assert_eq!(v["config_activation"], "saved_only");
         // `snippet` is present-but-null when there is nothing to paste.
@@ -1389,18 +1364,6 @@ mod tests {
             human.contains("active or requires reload/restart"),
             "{human}"
         );
-        Ok(())
-    }
-
-    #[test]
-    fn inert_envelope_does_not_claim_a_saved_configuration() -> Result<()> {
-        let report = empty_report();
-        let value = serde_json::to_value(&report)?;
-        assert!(value.get("config_activation").is_none());
-        let human =
-            String::from_utf8(Output::new(crate::output::Format::Human).render_to_vec(&report))?;
-        assert!(human.contains("configuration not saved"), "{human}");
-        assert!(!human.contains("requires reload/restart"), "{human}");
         Ok(())
     }
 
@@ -1457,7 +1420,7 @@ mod tests {
                 .contains("ANTHROPIC_BASE_URL=http://127.0.0.1:4356")
         );
         assert!(snippet.anthropic.contains(&format!(
-            "ANTHROPIC_AUTH_TOKEN={}",
+            "ANTHROPIC_AUTH_TOKEN=${{BITROUTER_API_KEY:-{}}}",
             crate::client::local_gateway::PLACEHOLDER_API_KEY
         )));
         // OpenAI shape carries the /v1 suffix.
@@ -1468,7 +1431,7 @@ mod tests {
         );
         assert_eq!(
             snippet.codex,
-            "bro code codex --base-url http://127.0.0.1:4356"
+            "bro launch codex --base-url http://127.0.0.1:4356"
         );
     }
 
@@ -1521,7 +1484,7 @@ mod tests {
     }
 
     #[test]
-    fn status_report_lists_signals_and_hint() {
+    fn status_report_lists_signals_and_hint() -> Result<()> {
         let signals = ProbeSignals {
             env_keys: vec!["OPENAI_API_KEY".to_string()],
             cloud_session: true,
@@ -1529,9 +1492,29 @@ mod tests {
         };
         let report = OnboardingStatusReport::from_signals(&signals);
         assert!(report.configured);
-        assert!(report.hint.contains("ACP"));
-        let v = serde_json::to_value(&report).unwrap();
+        assert!(report.hint.contains("background daemon"));
+        let v = serde_json::to_value(&report)?;
         assert_eq!(v["action"], "status");
         assert_eq!(v["configured"], true);
+        Ok(())
     }
+}
+
+#[cfg(not(feature = "harness"))]
+async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        flags.harnesses.is_empty(),
+        "agent configuration requires the harness feature"
+    );
+    Ok(Vec::new())
+}
+
+#[cfg(not(feature = "harness"))]
+async fn finish_launch(
+    _path: &std::path::Path,
+    _report: OnboardingReport,
+    _output: &Output,
+    _no_install: bool,
+) -> Result<()> {
+    anyhow::bail!("native harness launch requires the harness feature")
 }

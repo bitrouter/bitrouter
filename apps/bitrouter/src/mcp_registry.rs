@@ -211,7 +211,7 @@ impl Argument {
 pub enum InstallSupport {
     /// A `streamable-http` remote exists — zero-install config entry.
     Remote,
-    /// An npm/pypi stdio package — `mcp add` emits a ready stub.
+    /// An npm/pypi stdio package that the library can represent as a stub.
     Stub(&'static str),
     /// oci/mcpb/… packages only — listed but not auto-stubbed.
     Manual,
@@ -490,12 +490,12 @@ pub fn parse_server_detail(json: &str) -> Result<ServerEntry> {
     serde_json::from_str(json).context("parsing MCP registry server detail")
 }
 
-// ===== rows for `mcp list` / `mcp search` =====
+// ===== rows for legacy `mcp search` =====
 
 /// One row in the registry table.
 #[derive(Debug, Clone)]
 pub struct RegistryRow {
-    /// Reverse-DNS registry name (the `mcp add` argument).
+    /// Reverse-DNS registry name (not a local configuration key).
     pub name: String,
     pub version: String,
     /// `remote` / `npx` / `uvx` / `manual` / `-`.
@@ -529,7 +529,7 @@ pub fn registry_rows(entries: &[ServerEntry]) -> Vec<RegistryRow> {
     rows
 }
 
-// ===== `mcp add` stub =====
+// ===== library-only registry stub generation =====
 
 /// The result of [`add_stub`]: the derived `mcp_servers:` key and the YAML.
 #[derive(Debug, Clone)]
@@ -538,7 +538,7 @@ pub struct AddStub {
     pub yaml: String,
 }
 
-/// `bro mcp add <name>` — emit a YAML stub for a registry entry the
+/// Emit a YAML stub for library callers reviewing a registry entry the
 /// user pastes under `mcp_servers:` after review. Manual-tier entries
 /// (oci/mcpb-only) are refused with a pointer to the project, mirroring the
 /// ACP binary-only refusal. Stub-paste is SEP-1024-compliant by
@@ -712,7 +712,7 @@ impl RegistryClient {
         })
     }
 
-    /// `mcp search <query>` / `mcp list` — fetch visible (active + latest)
+    /// Fetch visible (active + latest) entries for legacy `mcp search`.
     /// entries, following cursors until `limit` rows are gathered, the
     /// registry runs out of pages, or the page cap is reached.
     pub async fn servers(
@@ -741,7 +741,7 @@ impl RegistryClient {
         })
     }
 
-    /// `mcp add <name>` — fetch one server's latest version.
+    /// Fetch one registry server's latest version for library callers.
     pub async fn latest(&self, name: &str) -> Result<FetchOutcome<ServerEntry>> {
         let cache = self
             .cache_dir

@@ -26,3 +26,5 @@ mod schema_tests;
 fn omit_serialized_default(schema: &mut schemars::Schema) {
     schema.remove("default");
 }
+
+pub mod mcp_skills;

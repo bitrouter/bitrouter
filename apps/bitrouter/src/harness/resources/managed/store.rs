@@ -6,7 +6,7 @@ use bitrouter_ai::core::protocol::CoreError;
 #[cfg(feature = "core")]
 pub(super) mod local;
 
-pub const MAX_STORE_BYTES: usize = 128 * 1024 * 1024;
+pub const MAX_STORE_BYTES: usize = crate::storage::checkpoint::MAX_NATIVE_STORE_BYTES;
 
 /// One database row per session. `save` atomically compares the old revision and
 /// persists the complete replacement; an ACK may only follow durable success.

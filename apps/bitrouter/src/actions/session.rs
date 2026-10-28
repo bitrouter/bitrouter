@@ -1,36 +1,21 @@
-//! The session surface of the shared actions.
-//!
-//! Lives in `crate::actions`, not `crate::chat`: deciding what a session offers
-//! reads the `ACTIONS` table and what the controller advertised, and the chat
-//! guard keeps `chat/` from naming anything daemon-wide. The driver is *handed*
-//! the finished list and names nothing else — the same move `route_control`
-//! already makes.
-
-use std::path::PathBuf;
-use std::sync::Arc;
+//! Session command discovery and configured prompt expansion for the CLI.
 
 use crate::actions::ACTIONS;
-#[cfg(feature = "harness")]
+#[cfg(any(feature = "harness", test))]
 use crate::actions::Requires;
-use crate::actions::ToolError;
-use crate::actions::models::ModelsQuery;
-use crate::actions::status::StatusQuery;
+#[cfg(any(feature = "harness", test))]
 use crate::commands::chat::Command;
 #[cfg(feature = "harness")]
 use crate::harness::acp::client::{AcpClient, RouteMethod};
-use {crate::actions::route::RouteQuery, bitrouter_ai::control::route::RouteInput};
-
-use crate::output::CliReport;
-use crate::paths::ConfigSource;
 
 /// What `/route` says at a session with no route surface to open a picker over.
-#[cfg(feature = "harness")]
+#[cfg(any(feature = "harness", test))]
 const NOT_ROUTABLE: &str = "this session cannot be rerouted (the controller advertises no route \
                             control: running direct, or without a trusted local daemon binding)";
 /// What `/route reset` says at the same session. Distinct from [`NOT_ROUTABLE`]
 /// because a controller may advertise `set` without `reset`, and a reader told
 /// "cannot be rerouted" would not know which of the two they had.
-#[cfg(feature = "harness")]
+#[cfg(any(feature = "harness", test))]
 const NOT_RESETTABLE: &str = "this session has no route lease to drop (the controller advertises \
                               no route reset)";
 
@@ -38,7 +23,7 @@ const NOT_RESETTABLE: &str = "this session has no route lease to drop (the contr
 ///
 /// App-side rather than on the row because no other surface reads it: the MCP
 /// tool has its own description and the CLI leaf has clap's. A guard fails a
-/// row that carries a `tui_command` and has no arm here, so this cannot fall
+/// row that carries a `session_command` and has no arm here, so this cannot fall
 /// behind the table.
 pub fn summary_for(action: &str) -> &'static str {
     match action {
@@ -52,7 +37,7 @@ pub fn summary_for(action: &str) -> &'static str {
     }
 }
 
-/// The `ACTIONS` rows that carry a `tui_command`, in table order, with each
+/// The `ACTIONS` rows that carry a `session_command`, in table order, with each
 /// row's requirement resolved against what this controller advertised.
 ///
 /// Resolved once, at launch, and handed to the reducer as plain data. A row
@@ -70,12 +55,12 @@ pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
 
 /// Resolve the same command inventory for a supervised client's negotiated
 /// snapshot without granting that presentation a direct controller handle.
-#[cfg(feature = "harness")]
+#[cfg(any(feature = "harness", test))]
 pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<Command> {
     ACTIONS
         .iter()
         .filter_map(|row| {
-            let name = row.tui_command?;
+            let name = row.session_command?;
             let unavailable = match (row.requires, row.id) {
                 (Requires::Nothing, _) => None,
                 // `reset` is advertised separately from `list`/`set`, so it is
@@ -93,105 +78,6 @@ pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<
             })
         })
         .collect()
-}
-
-/// What a session offers, and what answers it.
-///
-/// One value rather than three parameters: both chat loops need all three, and
-/// threading them separately pushed three signatures past the argument count
-/// clippy accepts. Bundling them says the true thing anyway — these are one
-/// concept, the session's command surface.
-pub struct SessionSurface<'a> {
-    /// BitRouter's own commands. Empty until the controller has been asked:
-    /// `offered_commands` needs a live client, so the piped path fills this
-    /// in once its session is open.
-    pub commands: Vec<Command>,
-    /// The user's prompt-expansion commands, resolved from config at launch.
-    pub prompt_commands: Vec<crate::commands::chat::PromptCommand>,
-    /// The ports a read command is answered through.
-    pub ports: &'a SessionPorts,
-}
-
-/// The session's view of the shared actions: the same ports the stdio MCP
-/// profile is built from, handed to the chat driver as one value.
-///
-/// Not a new trait. The four port traits already exist and the MCP profile is
-/// already assembled by bundling `Arc<dyn _>` of them; the session is the same
-/// bundle with a third consumer. A second implementation of an action would
-/// therefore have to be a second `impl StatusQuery`, which is the point — the
-/// CLI leaf, the MCP tool and the slash command cannot answer differently
-/// because there is only one thing for them to ask.
-pub struct SessionPorts {
-    status: Arc<dyn StatusQuery>,
-    models: Arc<dyn ModelsQuery>,
-    route: Arc<dyn RouteQuery>,
-}
-
-impl SessionPorts {
-    /// The same three constructors `bro status`, `bro models` and
-    /// `bro route` call, with the same arguments.
-    pub fn open(source: ConfigSource, socket: PathBuf) -> Self {
-        Self {
-            status: Arc::new(crate::actions::status::DaemonStatus::new(
-                socket.clone(),
-                Some(source.clone()),
-            )),
-            models: Arc::new(crate::actions::models::RoutableModels::new(
-                source.clone(),
-                Some(socket.clone()),
-            )),
-            route: Arc::new(crate::actions::route::RouteAction::new(
-                source,
-                Some(socket),
-            )),
-        }
-    }
-
-    /// Resolve one row id and its arguments to a report.
-    ///
-    /// The only place a slash command becomes a port call. The reducer emits
-    /// only ids the app gave it, so an unknown id here is a bug in the list the
-    /// app built — reported as an error rather than a panic, because a mistyped
-    /// table should not take the session down.
-    pub async fn run(
-        &self,
-        action: &str,
-        args: &[String],
-    ) -> Result<Box<dyn CliReport>, ToolError> {
-        match action {
-            "status" => {
-                // Nothing to take, so what was typed is refused rather than
-                // silently dropped.
-                if !args.is_empty() {
-                    return Err(ToolError::new("usage: /status"));
-                }
-                Ok(Box::new(self.status.status().await?))
-            }
-            // The filter is applied to the report, not asked of the port —
-            // the same `filtered` the CLI leaf calls, so both surfaces mean
-            // the same thing by "declared by this provider".
-            "list_models" => Ok(Box::new(
-                self.models
-                    .list_models()
-                    .await?
-                    .filtered(args.first().map(String::as_str)),
-            )),
-            "route" => {
-                let Some(model) = args.first() else {
-                    return Err(ToolError::new("usage: /preview <model>"));
-                };
-                Ok(Box::new(
-                    self.route
-                        .route(RouteInput {
-                            model: model.clone(),
-                            prompt: None,
-                        })
-                        .await?,
-                ))
-            }
-            other => Err(ToolError::new(format!("no session action `{other}`"))),
-        }
-    }
 }
 
 /// The user's prompt-expansion commands, or an error naming the first one that
@@ -227,7 +113,7 @@ pub fn prompt_commands(
              `{}` — the slash is how it is typed, not part of the name",
             name.trim_start_matches('/')
         );
-        if let Some(row) = ACTIONS.iter().find(|row| row.tui_command == Some(name)) {
+        if let Some(row) = ACTIONS.iter().find(|row| row.session_command == Some(name)) {
             anyhow::bail!(
                 "`chat.commands` defines `/{name}`, which is BitRouter's own `{}` command. \
                  Rename it: a config command may not shadow one that reaches BitRouter's ports",
@@ -259,29 +145,7 @@ pub fn prompt_commands(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::*;
-    use crate::actions::status::DaemonStatus;
-
-    /// Write `yaml` as a `bitrouter.yaml` in a fresh temp dir and return the
-    /// source pointing at it.
-    fn config_source(dir: &Path, yaml: &str) -> ConfigSource {
-        let path = dir.join("bitrouter.yaml");
-        std::fs::write(&path, yaml).expect("write config");
-        ConfigSource::File(path)
-    }
-
-    /// One active provider declaring one model.
-    const ONE_MODEL: &str = r#"
-providers:
-  demo:
-    api_base: https://api.example.test
-    api_key: sk-test
-    active: true
-    models:
-      - id: demo-model
-"#;
 
     /// A config command may not take a name BitRouter answers.
     ///
@@ -290,8 +154,7 @@ providers:
     /// the two sets cannot overlap.
     #[test]
     fn a_config_command_may_not_shadow_a_bitrouter_one() {
-        use crate::config::ChatConfig;
-        use crate::config::PromptCommandConfig;
+        use crate::config::{ChatConfig, PromptCommandConfig};
 
         let entry = |name: &str| PromptCommandConfig {
             name: name.to_string(),
@@ -306,7 +169,7 @@ providers:
         let ok = prompt_commands(&commands(&["review", "ship"])).expect("no clash");
         assert_eq!(ok.len(), 2);
 
-        // Every row that carries a `tui_command` is refused by that name.
+        // Every row that carries a `session_command` is refused by that name.
         for taken in ["status", "models", "preview", "commands", "route"] {
             let error = prompt_commands(&commands(&[taken]))
                 .expect_err(&format!("`{taken}` is BitRouter's"));
@@ -323,147 +186,5 @@ providers:
         // A name with a space could never be typed as one word.
         let error = prompt_commands(&commands(&["two words"])).expect_err("whitespace");
         assert!(format!("{error}").contains("one word"), "{error}");
-    }
-
-    /// The third surface answers with the second's bytes.
-    ///
-    /// `bro status` constructs `DaemonStatus` and calls `report()`;
-    /// `/status` goes through `SessionPorts`. This holds `open` to constructing
-    /// the action the leaf constructs, from the same source and the same
-    /// socket — a mismatch shows up as a different `socket` in the report.
-    ///
-    /// What it does not catch is a live-daemon divergence: no daemon runs under
-    /// test, which is the same limit `both_surfaces_produce_the_same_report`
-    /// has. A shared type stops the shapes diverging, not the contents.
-    #[tokio::test]
-    async fn the_session_surface_answers_with_the_cli_leafs_bytes() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let source = config_source(dir.path(), ONE_MODEL);
-        let socket = dir.path().join("bitrouter.sock");
-
-        let leaf = DaemonStatus::new(socket.clone(), Some(source.clone()))
-            .report()
-            .await
-            .expect("cli surface");
-        let ports = SessionPorts::open(source, socket);
-        let session = ports.run("status", &[]).await.expect("session surface");
-
-        assert_eq!(
-            serde_json::to_value(&leaf).expect("leaf json"),
-            serde_json::to_value(session.as_ref()).expect("session json"),
-            "the session surface must answer with the leaf's bytes"
-        );
-    }
-
-    /// And it reaches the screen as the CLI's own plain rendering — the same
-    /// renderer, with the palette off, so there is one human view of a report
-    /// rather than one per surface.
-    #[tokio::test]
-    async fn the_session_surface_renders_what_the_cli_renders() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let source = config_source(dir.path(), ONE_MODEL);
-        let socket = dir.path().join("bitrouter.sock");
-
-        let leaf = DaemonStatus::new(socket.clone(), Some(source.clone()))
-            .report()
-            .await
-            .expect("cli surface");
-        let ports = SessionPorts::open(source, socket);
-        let session = ports.run("status", &[]).await.expect("session surface");
-
-        let human = crate::output::Output::new(crate::output::Format::Human);
-        let expected = human.render_to_vec(&leaf);
-        assert_eq!(
-            human.render_to_vec(session.as_ref()),
-            expected,
-            "the notice's bytes are the CLI's plain rendering of the same report"
-        );
-        assert!(
-            !expected.is_empty(),
-            "a report that renders to nothing would make this test vacuous"
-        );
-    }
-
-    /// `/models` answers with what `bro models --provider` answers,
-    /// filter included — the filter is the report's, so both surfaces read
-    /// "declared by this provider" the same way.
-    #[tokio::test]
-    async fn the_models_surface_answers_with_the_cli_leafs_bytes() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let source = config_source(dir.path(), ONE_MODEL);
-        let socket = dir.path().join("bitrouter.sock");
-
-        let leaf =
-            crate::actions::models::RoutableModels::new(source.clone(), Some(socket.clone()))
-                .report()
-                .await
-                .expect("cli surface")
-                .filtered(Some("demo"));
-        let ports = SessionPorts::open(source, socket);
-        let session = ports
-            .run("list_models", &["demo".to_string()])
-            .await
-            .expect("session surface");
-
-        assert_eq!(
-            serde_json::to_value(&leaf).expect("leaf json"),
-            serde_json::to_value(session.as_ref()).expect("session json"),
-        );
-        assert!(!leaf.models.is_empty(), "the fixture declares one model");
-    }
-
-    /// `/preview <model>` answers with what `bro route <model>` answers.
-    #[tokio::test]
-    async fn the_preview_surface_answers_with_the_cli_leafs_bytes() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let source = config_source(dir.path(), ONE_MODEL);
-        let socket = dir.path().join("bitrouter.sock");
-
-        let leaf = crate::actions::route::RouteAction::new(source.clone(), Some(socket.clone()))
-            .report(RouteInput {
-                model: "demo-model".to_string(),
-                prompt: None,
-            })
-            .await
-            .expect("cli surface");
-        let ports = SessionPorts::open(source, socket);
-        let session = ports
-            .run("route", &["demo-model".to_string()])
-            .await
-            .expect("session surface");
-
-        assert_eq!(
-            serde_json::to_value(&leaf).expect("leaf json"),
-            serde_json::to_value(session.as_ref()).expect("session json"),
-        );
-    }
-
-    /// `/preview` with nothing to preview says how to use it. A missing
-    /// argument is a typo, not a crash.
-    #[tokio::test]
-    async fn preview_without_a_model_answers_with_its_usage() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let ports = SessionPorts::open(
-            config_source(dir.path(), ONE_MODEL),
-            dir.path().join("bitrouter.sock"),
-        );
-        match ports.run("route", &[]).await {
-            Ok(_) => panic!("a model is required"),
-            Err(error) => assert!(format!("{error}").contains("usage: /preview"), "{error}"),
-        }
-    }
-
-    /// An id the table does not carry is an error, not a panic: a mistyped
-    /// command list must not take the session down.
-    #[tokio::test]
-    async fn an_unknown_action_is_reported_rather_than_panicking() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let source = config_source(dir.path(), ONE_MODEL);
-        let ports = SessionPorts::open(source, dir.path().join("bitrouter.sock"));
-        // `Box<dyn CliReport>` is not `Debug`, so this cannot be `expect_err`.
-        match ports.run("not_a_row", &[]).await {
-            Ok(_) => panic!("an unknown id must not resolve to a report"),
-            Err(error) => assert!(format!("{error}").contains("not_a_row"), "{error}"),
-        }
     }
 }

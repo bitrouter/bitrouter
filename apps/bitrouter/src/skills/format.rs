@@ -1,12 +1,14 @@
 //! Shared Agent Skills frontmatter, validation and local discovery.
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use std::fs::File;
+use std::io::Read;
+
+const MAX_SKILLS: usize = 256;
 const MAX_SKILL_BYTES: u64 = 256 * 1024;
 
 /// Format or local discovery failure, independent of harness execution.
@@ -30,13 +32,7 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 fn is_valid_skill_name(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && name
-            .bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-        && !name.contains("--")
+    crate::skills::protocol::valid_agent_skill_name(name)
 }
 
 fn is_valid_skill_description(description: &str) -> bool {
@@ -79,6 +75,19 @@ pub struct SkillFrontmatter {
     /// to CLI/report consumers.
     #[serde(skip)]
     pub raw: serde_json::Map<String, serde_json::Value>,
+}
+
+impl SkillFrontmatter {
+    /// Shared content validation, independent of a content-addressed storage path.
+    pub fn validate(&self) -> Result<()> {
+        validate_skill_name(&self.name)?;
+        if !is_valid_skill_description(&self.description) {
+            return Err(Error::Frontmatter(
+                "description must be 1-1024 characters".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Extract the YAML frontmatter block (the text between the first pair of `---`
@@ -258,13 +267,10 @@ impl DiscoveredSkill {
                 fm.name
             ));
         }
-        if !is_valid_skill_name(&fm.name) {
-            return Some(Error::InvalidSkillName(fm.name.clone()).to_string());
-        }
-        if !is_valid_skill_description(&fm.description) {
-            return Some("description must be 1-1024 characters".to_string());
-        }
-        None
+        fm.validate().err().map(|error| match error {
+            Error::Frontmatter(message) => message,
+            other => other.to_string(),
+        })
     }
 }
 
@@ -283,9 +289,8 @@ pub fn discover_all_skills(root: &Path) -> Vec<DiscoveredSkill> {
     discover(root, usize::MAX, usize::MAX).unwrap_or_default()
 }
 
-#[cfg(feature = "harness")]
-pub(crate) fn discover_bounded(root: &Path, skill_limit: usize) -> Result<Vec<DiscoveredSkill>> {
-    discover(root, 4096, skill_limit)
+pub fn discover_bounded(root: &Path) -> Result<Vec<DiscoveredSkill>> {
+    discover(root, 4096, MAX_SKILLS)
 }
 
 fn discover(root: &Path, entry_limit: usize, skill_limit: usize) -> Result<Vec<DiscoveredSkill>> {
