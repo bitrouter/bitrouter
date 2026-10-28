@@ -223,6 +223,11 @@ async fn editor(value: &serde_json::Value) -> Result<String> {
 }
 
 pub async fn execute(command: Command, output: &Output) -> Result<()> {
+    // Keep one signal receiver alive across prompt transitions and editor waits.
+    crate::prompt::interruptible(execute_inner(command, output)).await
+}
+
+async fn execute_inner(command: Command, output: &Output) -> Result<()> {
     let (config, name, write) = match &command {
         Command::List { config } => (config, None, false),
         Command::Show { config, name } => (config, Some(name.as_str()), false),

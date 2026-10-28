@@ -114,7 +114,11 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         id: "route_set",
-        cli_leaf: Some("agents route set"),
+        cli_leaf: if cfg!(feature = "harness") {
+            Some("agents route set")
+        } else {
+            None
+        },
         session_command: Some("route"),
         effect: Effect::Write {
             inverse: "route_reset",
@@ -124,7 +128,11 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         id: "route_reset",
-        cli_leaf: Some("agents route reset"),
+        cli_leaf: if cfg!(feature = "harness") {
+            Some("agents route reset")
+        } else {
+            None
+        },
         session_command: Some("route reset"),
         effect: Effect::Write {
             inverse: "route_set",
