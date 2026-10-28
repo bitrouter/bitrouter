@@ -177,6 +177,17 @@ async fn invoke(
     report: &Path,
     key: Option<&OsStr>,
 ) -> Result<std::process::Output> {
+    invoke_with_observation(binary, fixture, plan, report, key, Duration::from_secs(20)).await
+}
+
+async fn invoke_with_observation(
+    binary: &Path,
+    fixture: &Fixture,
+    plan: &Path,
+    report: &Path,
+    key: Option<&OsStr>,
+    observation: Duration,
+) -> Result<std::process::Output> {
     let mut command = tokio::process::Command::new(binary);
     command
         .args([
@@ -201,12 +212,13 @@ async fn invoke(
     if let Some(key) = key {
         command.env(fixture::KEY_ENV, key);
     }
+    let started = Instant::now();
     let mut child = command.spawn()?;
     let mut stdout = child.stdout.take().context("CLI stdout")?;
     let mut stderr = child.stderr.take().context("CLI stderr")?;
     let mut out = Vec::new();
     let mut err = Vec::new();
-    let result = tokio::time::timeout(Duration::from_secs(20), async {
+    let result = tokio::time::timeout(observation, async {
         let (_, _, status) = tokio::try_join!(
             async {
                 (&mut stdout).take(OUTPUT + 1).read_to_end(&mut out).await?;
@@ -224,10 +236,18 @@ async fn invoke(
     })
     .await;
     if !matches!(result, Ok(Ok(_))) {
+        let exited_before_kill = child.try_wait().map(|status| status.is_some());
         let _ = child.start_kill();
         tokio::time::timeout(Duration::from_secs(5), child.wait())
             .await
             .context("CLI child kill/reap timeout")??;
+        eprintln!(
+            "recovery CLI observation failed: elapsed_ms={}, observation_ms={}, exited_before_kill={exited_before_kill:?}, stdout_bytes={}, stderr_bytes={}, child_reaped=true",
+            started.elapsed().as_millis(),
+            observation.as_millis(),
+            out.len(),
+            err.len(),
+        );
     }
     fixture.secret_free(&out)?;
     fixture.secret_free(&err)?;

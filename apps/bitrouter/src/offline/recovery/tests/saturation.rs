@@ -146,7 +146,13 @@ async fn actual_full_operation_ledger_is_archived_and_fresh_target_keeps_indepen
         let plan = fixture.directory.path().join("full-source-plan.json");
         fixture::private_json(&plan, &fixture.plan)?;
         let report = fixture.directory.path().join("full-source-verified");
-        let result = invoke(&binary, &fixture, &plan, &report, None).await?;
+        // Observe the existing 120-second recovery work budget plus startup and
+        // cleanup margin. Product deadlines and the full-ledger assertions stay
+        // unchanged; the ordinary small-fixture CLI observer remains 20 seconds.
+        let started = Instant::now();
+        eprintln!("full-ledger recovery CLI started");
+        let result = invoke_with_observation(&binary, &fixture, &plan, &report, None, Duration::from_secs(140)).await?;
+        eprintln!("full-ledger recovery CLI exited: elapsed_ms={}, status={}", started.elapsed().as_millis(), result.status);
         ensure!(result.status.code() == Some(0), "actual full-source CLI failed: {}", String::from_utf8_lossy(&result.stdout));
         let output: Value = serde_json::from_slice(&result.stdout)?;
         ensure!(output["fresh_provisioning_verified"] == true
