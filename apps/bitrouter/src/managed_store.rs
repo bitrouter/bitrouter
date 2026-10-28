@@ -22,9 +22,6 @@ impl DatabaseNativeStore {
     }
 }
 
-/// The client and database owner share the original name constraint; this
-/// validation neither opens a database nor creates a session.
-
 mod session {
     use sea_orm::entity::prelude::*;
     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]

@@ -133,9 +133,9 @@ pub(crate) async fn ensure_local_daemon(
                         reset = p.reset,
                     );
                 }
-                Ok(crate::daemon::DaemonStartOutcome::NotReadyInTime { pid }) => {
+                Ok(crate::daemon::DaemonStartOutcome::NotReadyInTime { .. }) => {
                     eprintln!(
-                        "{cyan}note:{reset} daemon started (pid {pid}) but is not ready yet — \
+                        "{cyan}note:{reset} daemon started but is not ready yet — \
                          the agent may need a moment; logs at {}",
                         log_path.display(),
                         cyan = p.cyan,

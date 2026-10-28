@@ -8,7 +8,7 @@ no hosted final-head pass is asserted here.
 
 ## Stack integration (2026-10-29)
 
-This update incorporates P0 `4a2b1586` and main `66cd3b8d`, including the
+This update incorporates P0 `b1e5012d` and main `66cd3b8d`, including the
 CLI-only orchestration and skill consent migration. Shared configuration selection,
 operator commands, foreground shared startup and independent optional capabilities
 remain present. Owned continuation tests now use fresh random fixture keys.
@@ -17,7 +17,7 @@ regression preserves exact source bytes, including attempts to select Shared thr
 The old implementation was observed accepting the write.
 Workspace/all-feature target compilation, all eight continuation ownership cases,
 the MCP rejection regression and failed-driver shutdown cleanup passed locally.
-Independent review closed the shared/local configuration finding.
+Strict workspace/all-feature/test Clippy passed on Rust 1.97. Independent review closed the shared/local configuration finding.
 Current-head CI, security and aggregate runtime acceptance are pending; the dated campaigns
 below retain their original source identity and performance limitations.
 

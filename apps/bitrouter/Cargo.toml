@@ -136,6 +136,7 @@ jsonschema = { version = "0.47.0", default-features = false, optional = true }
 schemars.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }
 atomicwrites.workspace = true
 winapi-util = "0.1"
 

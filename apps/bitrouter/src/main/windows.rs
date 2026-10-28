@@ -1,4 +1,5 @@
-//! Windows handle preparation for detached host processes.
+//! CLI-owned Windows handle preparation before any subprocess is spawned.
+//! https://learn.microsoft.com/windows/win32/api/handleapi/nf-handleapi-sethandleinformation
 
 use std::io;
 use std::os::windows::io::AsRawHandle;
