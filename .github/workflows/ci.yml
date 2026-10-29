@@ -137,10 +137,10 @@ jobs:
         include:
           - os: macos-latest
             retries: "0"
-            # Cold fixture/test builds took 85 minutes with bounded compiler resources.
+            # Cold fixture/test builds exhausted 120 minutes before any test ran.
             # Leave runtime for the ordinary suite, exact process parents and cleanup;
             # their individual deadlines remain unchanged.
-            timeout: 120
+            timeout: 180
           - os: windows-latest
             # Windows also exposes the trajectory timestamp race under load.
             retries: "2"
