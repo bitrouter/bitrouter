@@ -44,6 +44,11 @@ do not replace tenant selection. Execution IDs and provider leases belong to
 individual steps. An idle session holds neither an execution lease nor a retained
 cache pin. New input, steering, signals, queue activation, collaboration, reconnect,
 material requests and actual model/tool dispatch check the binding again.
+Runtime skill lookup, instructions and supporting-file reads recheck current
+authority when asynchronous work resumes, including after a queued MCP mutex or
+local-directory wait. Revocation prevents new request admission; previously
+admitted transport work remains with the same owner until cleanup is confirmed.
+Authority rejection remains distinct from an unavailable skill resource.
 
 ## Journal and lifecycle
 
@@ -206,6 +211,12 @@ Rubric names, text, null descriptions and string labels are preserved. Required
 instructions, opaque continuity and atomic tool groups retain their existing
 protections. A rejected answer cannot authorize omission, and original provider
 usage is not replaced with a zero or a successful Core interpretation.
+
+Full and routed context are checked independently against the hard byte limit.
+An expanding summary or extract cannot discard a feasible full view. The full
+fallback retains the acknowledged Choice evidence without another paid call;
+fixed/full mode still cannot select a lossy view. If no permitted view fits,
+preparation fails. Source-integrity errors remain fatal.
 
 Each paid Choice obtains a fresh execution, ordinary admission slot and 035
 receipt, separately from the Generation step already holding its slot. Admission
