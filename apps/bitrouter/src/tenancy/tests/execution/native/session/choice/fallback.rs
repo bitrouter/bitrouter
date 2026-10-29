@@ -94,6 +94,11 @@ async fn expanding(
         let mut session = fixture::open(&bound, &generation, &workspace, spies.clone()).await?;
         let core = session.core().clone();
         let checked = async {
+            let revision = bound.fixture.service.configuration(
+                &bound.fixture.operator, &bound.fixture.tenant, &bound.revision,
+            ).await.map_err(failure)?;
+            ensure!(revision.revision_id == bound.revision);
+            let defaults = revision.document.generation_defaults;
             // Pressure exceeds the frozen 96 KiB soft target without growing
             // the task/Choice request. This is protected original user evidence.
             let padding = "p".repeat(100 * 1024);
@@ -106,7 +111,8 @@ async fn expanding(
             let baseline = session.run(initial.clone(), Arc::new(Approval), CancellationToken::new()).await?;
             ensure!(baseline.run.as_ref().context("baseline run")?.status == RunStatus::Completed);
             ensure!(baseline.context_store.decisions.is_empty());
-            generation.receive().await?;
+            let baseline_request = generation.receive().await?;
+            ensure!(baseline_request.body["temperature"] == json!(defaults.temperature));
             let block = baseline.context_store.evidence.values()
                 .find(|block| block.messages == vec![Message::text(Role::Assistant, ARCHIVE)])
                 .context("catalogued optional archive")?;
@@ -119,7 +125,12 @@ async fn expanding(
                     message_index: 0, content_index: 0, start: 0, end: ARCHIVE.len(),
                 }] }
             };
-            let expected = core.derive_context_fallback_for_test(action).await?;
+            let expected = core.derive_context_fallback_for_test(action, &defaults).await?;
+            let baseline_plan = baseline.agents.get(&baseline.agent_id)
+                .and_then(|agent| agent.turn.as_ref()).and_then(|turn| turn.steps.last())
+                .and_then(|step| step.plan.as_ref()).context("baseline canonical plan")?;
+            ensure!(serde_json::to_value(&expected.params)? == serde_json::to_value(&baseline_plan.prompt.params)?,
+                "fixture does not apply the retained canonical generation defaults");
             // Repeating this task keeps the derivation's task/instruction digest
             // stable. The full catalog retains each identical source group once.
             // Leave less headroom than either representation's rendering wrapper.
@@ -184,6 +195,7 @@ async fn expanding(
                     messages.push(json!({"role":message.role,"content":text}));
                 }
                 ensure!(sent.body["messages"] == json!(messages), "generation did not receive exact full history");
+                ensure!(sent.body["temperature"] == json!(defaults.temperature));
                 ensure!(generation.calls() == 2);
             }
             let saved = fixture::journal(&bound).await?;
