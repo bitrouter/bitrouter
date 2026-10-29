@@ -7,6 +7,7 @@ use fixture::Bound;
 mod authority;
 #[cfg(unix)]
 pub(super) mod custody;
+mod fallback;
 pub(in crate::tenancy::tests::execution::native) mod fixture;
 mod headroom;
 mod inheritance;

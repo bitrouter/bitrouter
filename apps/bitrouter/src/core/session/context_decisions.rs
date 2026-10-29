@@ -11,6 +11,9 @@ use crate::storage::checkpoint::snapshot::context::view::CandidateSet;
 use crate::storage::checkpoint::snapshot::context::view::SourceRevision;
 use crate::storage::checkpoint::snapshot::context::{ExecutionPlan, FEATURE, WorkUnit};
 
+#[cfg(all(test, unix, feature = "harness"))]
+mod fallback_tests;
+
 pub(super) fn enabled(state: &SessionSnapshot) -> bool {
     state
         .manifest
@@ -360,7 +363,9 @@ impl CoreSession {
                     };
                 }
             }
-            let routed = candidates.compile(
+            // A summary or extract can expand when rendered. Its byte limit
+            // failure must not discard a feasible exact-history candidate.
+            let routed = match candidates.compile(
                 &store,
                 &original,
                 CompileOptions {
@@ -371,7 +376,11 @@ impl CoreSession {
                     reason,
                     hard_limit_bytes,
                 },
-            )?;
+            ) {
+                Ok(routed) => Some(routed),
+                Err(error) if error.code == ErrorCode::NoFeasibleRoute => None,
+                Err(error) => return Err(error),
+            };
             let full = match candidates.compile(
                 &store,
                 &original,
@@ -388,9 +397,18 @@ impl CoreSession {
                 Err(error) if error.code == ErrorCode::NoFeasibleRoute => None,
                 Err(error) => return Err(error),
             };
-            let mut offered = vec![("routed", routed)];
+            let mut offered = Vec::new();
+            if let Some(routed) = routed {
+                offered.push(("routed", routed));
+            }
             if let Some(full) = full {
                 offered.push(("full", full));
+            }
+            if offered.is_empty() {
+                return Err(reject(
+                    ErrorCode::NoFeasibleRoute,
+                    "no context candidate fits the prompt byte limit",
+                ));
             }
             let current = self.snapshot().await;
             let receipt = decision_id
