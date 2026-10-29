@@ -163,8 +163,9 @@ jobs:
             'CARGO_PROFILE_TEST_DEBUG=0' >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@nextest
-      - name: build process fixtures before macOS test deadlines
-        if: runner.os == 'macOS'
+      # Both platforms need prebuilt fixtures: otherwise each nextest process
+      # can launch Cargo while its 300-second test deadline is already running.
+      - name: build process fixtures before test deadlines
         run: >-
           cargo build --locked -p bitrouter --all-features --jobs 2
           --example harness_mcp_fixture --example pty_acp_fixture --example acp_codex_skill_fixture --example acp_claude_skill_fixture --example mcp_skills_fixture --example onboarding_fixture --example managed_effect_fixture --example owned_capture_fixture --bin bro
@@ -174,7 +175,7 @@ jobs:
           --no-fail-fast
           --retries "${{ matrix.retries }}"
         env:
-          BITROUTER_TEST_EXAMPLES_DIR: ${{ runner.os == 'macOS' && format('{0}/target/debug/examples', github.workspace) || '' }}
+          BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
 
       # Keep the same Cargo workspace/target selection as the full run above.
       # Changing to -p bitrouter --lib rebuilt its feature-unified test binary
