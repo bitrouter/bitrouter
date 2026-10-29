@@ -40,15 +40,6 @@ models:
         cache_write: 12.5
       output_tokens:
         text: 50
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: anthropic.claude-sonnet-4-6
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15
   - id: openai/gpt-oss-120b
     provider_model_id: openai.gpt-oss-120b
     pricing:
@@ -189,6 +180,15 @@ models:
         cache_write: 0.125
       output_tokens:
         text: 0.5
+  - id: openai/gpt-6.1-terra
+    provider_model_id: openai.gpt-6.1-terra
+    pricing:
+      input_tokens:
+        no_cache: 1.1
+        cache_read: 0.055
+        cache_write: 1.375
+      output_tokens:
+        text: 5.5
 auto_sync:
   feed: models_dev
   key: amazon-bedrock

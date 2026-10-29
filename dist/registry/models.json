@@ -914,202 +914,6 @@
       "release_date": "2026-09-22"
     },
     {
-      "deprecation_date": "2026-10-29",
-      "description": "Anthropic's Claude Sonnet 4.6.",
-      "family": "claude-sonnet",
-      "id": "anthropic/claude-sonnet-4.6",
-      "input_modalities": [
-        "text",
-        "image"
-      ],
-      "knowledge_cutoff": "2025-08-31",
-      "max_input_tokens": 1000000,
-      "max_output_tokens": 128000,
-      "name": "Anthropic: Claude Sonnet 4.6",
-      "open_weights": false,
-      "output_modalities": [
-        "text"
-      ],
-      "providers": [
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools",
-            "image_input"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "anthropic",
-          "provider_model_id": "claude-sonnet-4-6",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "aws-bedrock",
-          "provider_model_id": "anthropic.claude-sonnet-4-6",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "azure",
-          "provider_model_id": "claude-sonnet-4-6",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "bitrouter",
-          "provider_model_id": "anthropic/claude-sonnet-4.6",
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
-            "tools",
-            "image_input"
-          ],
-          "provider": "claude-code",
-          "provider_model_id": "claude-sonnet-4-6",
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": "openai",
-          "provider": "github-copilot",
-          "provider_model_id": "claude-sonnet-4.6"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "gmicloud",
-          "provider_model_id": "anthropic/claude-sonnet-4.6"
-        },
-        {
-          "api_protocol": "openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "opencode-zen",
-          "provider_model_id": "claude-sonnet-4-6"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider": "openrouter",
-          "provider_model_id": "anthropic/claude-sonnet-4.6"
-        }
-      ],
-      "release_date": "2026-02-17"
-    },
-    {
       "description": "Anthropic's Claude Sonnet 5.",
       "family": "claude-sonnet",
       "id": "anthropic/claude-sonnet-5",
@@ -4511,6 +4315,27 @@
           ],
           "pricing": {
             "input_tokens": {
+              "cache_read": 0.055,
+              "cache_write": 1.375,
+              "no_cache": 1.1
+            },
+            "output_tokens": {
+              "text": 5.5
+            }
+          },
+          "provider": "aws-bedrock",
+          "provider_model_id": "openai.gpt-6.1-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "pricing": {
+            "input_tokens": {
               "cache_read": 0.05,
               "cache_write": 1.25,
               "no_cache": 1.0
@@ -4524,6 +4349,21 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": "openai",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider": "bitrouter",
+          "provider_model_id": "openai/gpt-6.1-terra"
         },
         {
           "api_protocol": "openai",

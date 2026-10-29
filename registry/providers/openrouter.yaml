@@ -117,15 +117,6 @@ models:
       output_tokens:
         text: 5
     capabilities: [tools]
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: anthropic/claude-sonnet-4.6
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15
   - id: qwen/qwen3.7-plus
     provider_model_id: qwen/qwen3.7-plus
     pricing:

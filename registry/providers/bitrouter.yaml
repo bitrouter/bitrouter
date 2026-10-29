@@ -39,19 +39,6 @@ models:
       output_tokens:
         text: 5
     capabilities: [tools]
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: anthropic/claude-sonnet-4.6
-    reasoning_effort: &claude_max_effort
-      levels: [low, medium, high, max]
-      default: high
-    capabilities: [reasoning]
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15
   - id: anthropic/claude-sonnet-5
     provider_model_id: anthropic/claude-sonnet-5
     reasoning_effort: *claude_full_effort
@@ -447,6 +434,15 @@ models:
         cache_write: 2.0
       output_tokens:
         text: 10.0
+  - id: openai/gpt-6.1-terra
+    provider_model_id: openai/gpt-6.1-terra
+    pricing:
+      input_tokens:
+        no_cache: 1.0
+        cache_read: 0.05
+        cache_write: 1.25
+      output_tokens:
+        text: 5.0
 status: active
 weight: 1
 community: false

@@ -955,39 +955,6 @@
           "capabilities": [
             "reasoning",
             "structured_outputs",
-            "tools",
-            "image_input"
-          ],
-          "id": "anthropic/claude-sonnet-4.6",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider_model_id": "claude-sonnet-4-6",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
             "tools"
           ],
           "id": "anthropic/claude-sonnet-4.5",
@@ -1384,27 +1351,6 @@
             "openai",
             "responses"
           ],
-          "id": "anthropic/claude-sonnet-4.6",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider_model_id": "anthropic.claude-sonnet-4-6",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
           "id": "openai/gpt-oss-120b",
           "pricing": {
             "input_tokens": {
@@ -1731,6 +1677,27 @@
           "rate_limits": {
             "requests_per_minute": 60
           }
+        },
+        {
+          "api_protocol": [
+            "openai",
+            "responses"
+          ],
+          "id": "openai/gpt-6.1-terra",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.055,
+              "cache_write": 1.375,
+              "no_cache": 1.1
+            },
+            "output_tokens": {
+              "text": 5.5
+            }
+          },
+          "provider_model_id": "openai.gpt-6.1-terra",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
         }
       ],
       "name": "aws-bedrock",
@@ -1824,27 +1791,6 @@
             }
           },
           "provider_model_id": "claude-sonnet-4-5",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses"
-          ],
-          "id": "anthropic/claude-sonnet-4.6",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider_model_id": "claude-sonnet-4-6",
           "rate_limits": {
             "requests_per_minute": 60
           }
@@ -2277,33 +2223,6 @@
             }
           },
           "provider_model_id": "anthropic/claude-haiku-4.5"
-        },
-        {
-          "api_protocol": "openai",
-          "capabilities": [
-            "reasoning"
-          ],
-          "id": "anthropic/claude-sonnet-4.6",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider_model_id": "anthropic/claude-sonnet-4.6",
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ]
-          }
         },
         {
           "api_protocol": "openai",
@@ -3026,6 +2945,21 @@
             }
           },
           "provider_model_id": "moonshotai/kimi-k3.1-pro"
+        },
+        {
+          "api_protocol": "openai",
+          "id": "openai/gpt-6.1-terra",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 1.25,
+              "no_cache": 1.0
+            },
+            "output_tokens": {
+              "text": 5.0
+            }
+          },
+          "provider_model_id": "openai/gpt-6.1-terra"
         }
       ],
       "name": "bitrouter",
@@ -3235,26 +3169,6 @@
           "capabilities": [
             "reasoning",
             "structured_outputs",
-            "tools",
-            "image_input"
-          ],
-          "id": "anthropic/claude-sonnet-4.6",
-          "provider_model_id": "claude-sonnet-4-6",
-          "reasoning_effort": {
-            "default": "high",
-            "levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ]
-          }
-        },
-        {
-          "api_protocol": "anthropic",
-          "capabilities": [
-            "reasoning",
-            "structured_outputs",
             "tools"
           ],
           "id": "anthropic/claude-haiku-4.5",
@@ -3413,11 +3327,6 @@
           "api_protocol": "openai",
           "id": "anthropic/claude-fable-5",
           "provider_model_id": "claude-fable-5"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "anthropic/claude-sonnet-4.6",
-          "provider_model_id": "claude-sonnet-4.6"
         },
         {
           "api_protocol": "openai",
@@ -3596,20 +3505,6 @@
             }
           },
           "provider_model_id": "zai-org/GLM-5.2-FP8"
-        },
-        {
-          "api_protocol": "openai",
-          "id": "anthropic/claude-sonnet-4.6",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider_model_id": "anthropic/claude-sonnet-4.6"
         },
         {
           "api_protocol": "openai",
@@ -5105,21 +5000,6 @@
         },
         {
           "api_protocol": "openai",
-          "id": "anthropic/claude-sonnet-4.6",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider_model_id": "claude-sonnet-4-6"
-        },
-        {
-          "api_protocol": "openai",
           "id": "qwen/qwen3.6-plus",
           "pricing": {
             "input_tokens": {
@@ -5812,25 +5692,6 @@
             }
           },
           "provider_model_id": "anthropic/claude-haiku-4.5"
-        },
-        {
-          "api_protocol": [
-            "openai",
-            "responses",
-            "anthropic"
-          ],
-          "id": "anthropic/claude-sonnet-4.6",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.3,
-              "cache_write": 3.75,
-              "no_cache": 3.0
-            },
-            "output_tokens": {
-              "text": 15.0
-            }
-          },
-          "provider_model_id": "anthropic/claude-sonnet-4.6"
         },
         {
           "api_protocol": [

@@ -40,14 +40,6 @@ models:
         cache_read: 0.182
       output_tokens:
         text: 3.08
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: anthropic/claude-sonnet-4.6
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-      output_tokens:
-        text: 15
   - id: qwen/qwen3.8-flash
     provider_model_id: Qwen/Qwen3.8-Flash
     pricing:

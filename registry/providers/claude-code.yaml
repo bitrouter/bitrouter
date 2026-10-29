@@ -25,16 +25,6 @@ models:
       - structured_outputs
       - tools
       - image_input
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: claude-sonnet-4-6
-    reasoning_effort: &claude_max_effort
-      levels: [low, medium, high, max]
-      default: high
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-      - image_input
   - id: anthropic/claude-haiku-4.5
     provider_model_id: claude-haiku-4-5
     capabilities:

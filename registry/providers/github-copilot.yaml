@@ -29,8 +29,6 @@ models:
     provider_model_id: claude-haiku-4.5
   - id: anthropic/claude-fable-5
     provider_model_id: claude-fable-5
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: claude-sonnet-4.6
   - id: moonshotai/kimi-k2.7-code
     provider_model_id: kimi-k2.7-code
   - id: anthropic/claude-sonnet-5

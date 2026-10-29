@@ -56,15 +56,6 @@ models:
         cache_write: 3.75
       output_tokens:
         text: 15
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: claude-sonnet-4-6
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15
   - id: anthropic/claude-sonnet-5
     provider_model_id: claude-sonnet-5
     pricing:
