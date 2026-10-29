@@ -390,7 +390,9 @@ impl EvalStore {
                 io::json_size(snapshot, io::MAX_BYTES)?,
             )?;
         }
-        let mut records = Vec::with_capacity(snapshot.entries.len());
+        // Grow only after validating stored rows. Legacy manifests do not carry
+        // the owned reader's row bound, so their length cannot size an allocation.
+        let mut records = Vec::new();
         let mut legacy_owners = BTreeSet::new();
         for entry in &snapshot.entries {
             let mut query = self.results().filter(

@@ -153,7 +153,7 @@ async fn actual_full_operation_ledger_is_archived_and_fresh_target_keeps_indepen
         eprintln!("full-ledger recovery CLI started");
         let result = invoke_with_observation(&binary, &fixture, &plan, &report, None, Duration::from_secs(140)).await?;
         eprintln!("full-ledger recovery CLI exited: elapsed_ms={}, status={}", started.elapsed().as_millis(), result.status);
-        ensure!(result.status.code() == Some(0), "actual full-source CLI failed: {}", String::from_utf8_lossy(&result.stdout));
+        ensure!(result.status.code() == Some(0), "actual full-source CLI failed: {}", result.status);
         let output: Value = serde_json::from_slice(&result.stdout)?;
         ensure!(output["fresh_provisioning_verified"] == true
             && output["static_closure_authenticated"] == true
