@@ -6,8 +6,10 @@ The presence of a contract or client method does not advertise its runtime suppo
 Current stage status and runtime qualification gates are tracked in
 [Resource tenancy implementation](RESOURCE_TENANCY_IMPLEMENTATION.md).
 
-Baseline: `38ddfd231f053beae9b52a61443a3706688628e0`, stacked on the existing
-shared-concurrency change. The service/crate refactor, HTTP SDK, embedded telemetry,
+Original contract baseline: `38ddfd231f053beae9b52a61443a3706688628e0`, stacked
+on the existing shared-concurrency change. The implementation now follows merged
+main and #994/#995 as recorded in the implementation tracker. The service/crate
+refactor, HTTP SDK, embedded telemetry,
 optional HTTP/2 and shared gateway are prerequisites already present in that tree.
 This milestone does not reimplement them or require multi-instance operation.
 
@@ -22,7 +24,8 @@ transport in `bitrouter-sdk`. M0 freezes wire fixtures before adding M1 public A
 No new runtime crate, transport, external database or identity service is required.
 
 Base gateway owns local authority, routing resources and receipt lookup. `core`
-adds learning/scheduling operations; `tui -> harness -> mcp` stays unchanged.
+adds learning/scheduling operations; `harness` enables `mcp` independently of
+`core`. The retired TUI is not part of the current feature graph.
 `http2` remains optional/default-on. Strict local receipts are an operator runtime
 mode. Existing shared APIs keep their contracts; shared admission's API-key ID as
 principal and user ID as tenant are legacy mappings, not the new identity model.

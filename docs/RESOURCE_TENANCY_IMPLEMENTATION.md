@@ -946,8 +946,9 @@ M2/M3 capability flags remain false.
 Public DTOs stay in `bitrouter-ai`; HTTP transport stays in `bitrouter-sdk`;
 authority, persistence, compilation, dispatch and receipts stay in
 `apps/bitrouter`. Base gateway includes local tenancy and strict receipts;
-`core` adds scheduling/learning; `tui -> harness -> mcp` and optional,
-default-on `http2` remain unchanged. No new runtime crate or external database
+`core` adds scheduling/learning; `harness` independently enables `mcp`, and
+`http2` remains optional and default-on. The current product has no TUI feature.
+No new runtime crate or external database
 is required. Identity-provider login, commercial policy and accounting remain
 external services. Single-instance operation is the acceptance target; distributed
 coordination is reserved without implementing it in this change.
