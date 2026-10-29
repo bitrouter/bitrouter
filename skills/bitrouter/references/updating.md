@@ -1,5 +1,7 @@
 # Updating BitRouter
 
+Official macOS release and update assets support Apple Silicon (`arm64`) only.
+
 `bro update` preserves the installed distribution profile. Full-profile
 installations can update in place using cargo-dist's self-update path when
 the install receipt belongs to the running executable. A missing, unreadable,

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (macOS):** officially release and test Apple Silicon (`arm64`)
+  only. Retire Intel macOS artifacts across full, gateway and shared gateway
+  distributions.
+
 ## [1.0.0-alpha.35]
 
 ### Added

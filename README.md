@@ -84,8 +84,10 @@ See the [full study and limitations](benchmarks/002-2026-09-07-tbench-v2.1-route
 
 ## Install
 
+Official macOS distributions support Apple Silicon (`arm64`) only.
+
 ```bash
-# macOS / Linux
+# macOS (Apple Silicon) / Linux
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/bitrouter/bitrouter/releases/download/v1.0.0-alpha.33/bitrouter-installer.sh | sh
 
 # Homebrew

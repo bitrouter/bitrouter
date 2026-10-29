@@ -13,10 +13,12 @@ The release workflow builds `bitrouter-gateway-<target>.tar.gz` on Unix and
 `bitrouter-gateway-<target>.zip` on Windows, together with `<archive>.sha256`.
 The target set matches the full-product release configuration:
 
+Official macOS distributions and CI support Apple Silicon (`arm64`) only.
+Full, gateway and shared gateway releases use the same platform policy.
+
 | Target | Archive |
 | --- | --- |
 | `aarch64-apple-darwin` | `.tar.gz` |
-| `x86_64-apple-darwin` | `.tar.gz` |
 | `aarch64-unknown-linux-gnu` | `.tar.gz` |
 | `x86_64-unknown-linux-gnu` | `.tar.gz` |
 | `x86_64-unknown-linux-musl` | `.tar.gz` |
@@ -90,7 +92,7 @@ revision. The artifact identity describes that source revision and compiled
 capabilities; archive and binary hashes identify the exact bytes. A local dirty
 checkout is not a reproducible release merely because its base revision is known.
 
-The reusable `gateway-artifacts.yml` workflow builds the six targets, verifies
+The reusable `gateway-artifacts.yml` workflow builds the configured targets, verifies
 archive checksums, extracts each candidate and runs the
 [independent SDK acceptance](../apps/bitrouter/tests/fixtures/sdk_consumer/README.md).
 PR CI uses development candidates; the cargo-dist local-artifacts hook uses
