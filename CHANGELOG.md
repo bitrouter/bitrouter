@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancels every accepted input and waits for native cleanup. Runtime format 7
   preserves 2/3/4/5/6 reads. Explicit external-agent proxy commands retain their path.
 
+### Fixed
+
+- Update the locked TLS dependencies to rustls 0.23.46 and the internal archive
+  helper to ZIP 9.0.5 for published security fixes. Replace the yanked
+  chacha20 0.10.1 dependency with 0.10.2.
+
 ### Changed
 
 - Upgrade ACP schema to 1.10.2 with the matching SDK and Conductor 3.0.0,
