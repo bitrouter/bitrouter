@@ -461,6 +461,8 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         .arg("--config")
         .arg(&config)
         .env("BRO_AGENT_API_TEST_TOKEN", API_TOKEN)
+        .env("HOME", home.path())
+        .env_remove("CODEX_HOME")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
@@ -583,6 +585,12 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
             .json()
             .await?;
         if snapshot["turn"]["status"] == "completed" {
+            let inventory: bitrouter_ai::harness::resources::HarnessInventory =
+                serde_json::from_value(snapshot["turn"]["resources"].clone())?;
+            ensure!(
+                inventory.skills.is_empty() && inventory.local_skills.skills.is_empty(),
+                "test runtime inherited external skills"
+            );
             break;
         }
         ensure!(
@@ -758,6 +766,8 @@ async fn authenticated_http_and_local_client_share_one_runtime() -> Result<()> {
         .arg("stop")
         .arg("--config")
         .arg(&config)
+        .env("HOME", home.path())
+        .env_remove("CODEX_HOME")
         .output()
         .await;
     let _ = server.wait().await;
