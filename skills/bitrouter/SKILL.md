@@ -35,7 +35,8 @@ missing command → §2; no active providers → §3; stopped daemon → `start`
 curl --proto '=https' --tlsv1.2 -LsSf https://bitrouter.ai/install.sh | sh
 ```
 
-macOS: `brew install bitrouter/tap/bitrouter`. Node: `npm install -g bitrouter`.
+Official macOS distributions support Apple Silicon (`arm64`) only.
+macOS (Apple Silicon): `brew install bitrouter/tap/bitrouter`. Node: `npm install -g bitrouter`.
 Windows: `powershell -ExecutionPolicy Bypass -c "irm https://bitrouter.ai/install.ps1 | iex"`.
 Verify with `bro --version`; on failure read `references/diagnose.md`.
 

@@ -26,16 +26,15 @@ jobs:
         profile: [gateway, gateway-shared]
         target:
           - aarch64-apple-darwin
-          - x86_64-apple-darwin
           - x86_64-unknown-linux-gnu
           - aarch64-unknown-linux-gnu
           - x86_64-unknown-linux-musl
           - x86_64-pc-windows-msvc
         include:
           - target: aarch64-apple-darwin
-            runner: macos-14
-          - target: x86_64-apple-darwin
-            runner: macos-15-intel
+            # Native Apple Silicon, matching cargo-dist's runner override.
+            # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+            runner: macos-15
           - target: x86_64-unknown-linux-gnu
             runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu

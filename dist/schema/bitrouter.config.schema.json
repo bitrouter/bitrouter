@@ -2676,7 +2676,7 @@
       "type": "object"
     }
   },
-  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.33/config.schema.json",
+  "$id": "https://bitrouter.dev/schema/v1.0.0-alpha.35/config.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "The top-level configuration.",

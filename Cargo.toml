@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "extensions/*/*", "helpers/*"]
 
 [workspace.package]
-version = "1.0.0-alpha.33"
+version = "1.0.0-alpha.35"
 edition = "2024"
 license = "Apache-2.0"
 authors = ["Archer <archer@bitrouter.ai>"]
@@ -30,10 +30,10 @@ keyring = { version = "3", default-features = false, features = [
 ] }
 
 # internal crates
-bitrouter-ai = { path = "crates/bitrouter-ai", version = "1.0.0-alpha.33" }
-bitrouter-registry = { path = "crates/bitrouter-registry", version = "1.0.0-alpha.33" }
-bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.33", default-features = false }
-bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1.0.0-alpha.33" }
+bitrouter-ai = { path = "crates/bitrouter-ai", version = "1.0.0-alpha.35" }
+bitrouter-registry = { path = "crates/bitrouter-registry", version = "1.0.0-alpha.35" }
+bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.35", default-features = false }
+bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1.0.0-alpha.35" }
 
 # Safe syscall wrappers. Used by the app's ACP runtime for `killpg(2)` and
 # native runtime process control without requiring unsafe blocks.

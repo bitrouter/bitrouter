@@ -7,13 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking (macOS):** officially release and test Apple Silicon (`arm64`)
+  only. Retire Intel macOS artifacts across full, gateway and shared gateway
+  distributions.
+
+## [1.0.0-alpha.35]
+
 ### Added
+
+- Publish `bitrouter-registry`, the shared Registry v1 validation, feed sync,
+  identity reconciliation, native selector, and exact pricing library.
+- Support Registry v1 source selection, complete source-bound caches, background
+  refresh, and atomic routing updates with recoverable compatibility errors.
+- Add opt-in PostgreSQL coordination for shared gateway authority, admission,
+  idempotency, budgets, leases, recovery, and settlement across `bro` processes.
 
 - Native BRO ACP v1 and draft v2 via bare `bro acp serve --model MODEL`, backed
   by the daemon's existing ThreadService. Unexpected disconnect preserves work
   and pending approval; cancel retains a paused queue, while close durably
   cancels every accepted input and waits for native cleanup. Runtime format 7
   preserves 2/3/4/5/6 reads. Explicit external-agent proxy commands retain their path.
+
+### Fixed
+
+- Update the locked TLS dependencies to rustls 0.23.46 and the internal archive
+  helper to ZIP 9.0.5 for published security fixes. Replace the yanked
+  chacha20 0.10.1 dependency with 0.10.2.
 
 ### Changed
 
