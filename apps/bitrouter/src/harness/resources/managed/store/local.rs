@@ -271,6 +271,18 @@ impl NativePort {
         }
     }
 
+    // A resource future may wait for a connection or a local reader before it
+    // admits I/O. Revalidate on the poll that resumes it, keeping the authority
+    // guard only for that poll and retaining resource custody in this port.
+    async fn poll_dispatch<F: std::future::Future>(&self, work: F) -> Result<F::Output, CoreError> {
+        tokio::pin!(work);
+        std::future::poll_fn(|cx| match self.with_dispatch(|| work.as_mut().poll(cx)) {
+            Ok(poll) => poll.map(Ok),
+            Err(error) => std::task::Poll::Ready(Err(error)),
+        })
+        .await
+    }
+
     pub async fn persist(
         &self,
         state: &mut DurableState,
@@ -461,10 +473,8 @@ impl HarnessPort for NativePort {
         uri: &str,
         cancel: &CancellationToken,
     ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
-        self.authorize_dispatch().await?;
-        self.resources
-            .mcp_skill(server, uri, cancel)
-            .await
+        self.poll_dispatch(self.resources.mcp_skill(server, uri, cancel))
+            .await?
             .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
     }
 
@@ -475,28 +485,30 @@ impl HarnessPort for NativePort {
         cached_bytes: Option<&[u8]>,
         cancel: &CancellationToken,
     ) -> Result<Vec<u8>, CoreError> {
-        self.authorize_dispatch().await?;
-        match source {
-            crate::storage::skills::SkillSource::Local(binding) => self
-                .resources
-                .managed_skill_file(binding, "SKILL.md", max_bytes)
-                .await
-                .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),
-            crate::storage::skills::SkillSource::Mcp(held) => self
-                .resources
-                .mcp_skill_file(
-                    held,
-                    crate::skills::mcp::SkillRead {
-                        reference: &held.entry.uri,
-                        max_bytes,
-                        cached_bytes,
-                    },
-                    cancel,
-                )
-                .await
-                .map(|file| file.bytes)
-                .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),
-        }
+        self.poll_dispatch(async {
+            match source {
+                crate::storage::skills::SkillSource::Local(binding) => {
+                    self.resources
+                        .managed_skill_file(binding, "SKILL.md", max_bytes)
+                        .await
+                }
+                crate::storage::skills::SkillSource::Mcp(held) => self
+                    .resources
+                    .mcp_skill_file(
+                        held,
+                        crate::skills::mcp::SkillRead {
+                            reference: &held.entry.uri,
+                            max_bytes,
+                            cached_bytes,
+                        },
+                        cancel,
+                    )
+                    .await
+                    .map(|file| file.bytes),
+            }
+        })
+        .await?
+        .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
     }
 
     async fn skill_file(
@@ -507,11 +519,15 @@ impl HarnessPort for NativePort {
         cached_bytes: Option<&[u8]>,
         cancel: &CancellationToken,
     ) -> Result<Vec<u8>, CoreError> {
-        self.authorize_dispatch().await?;
-        self.resources
-            .skill_file(source, reference, max_bytes, cached_bytes, cancel)
-            .await
-            .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
+        self.poll_dispatch(self.resources.skill_file(
+            source,
+            reference,
+            max_bytes,
+            cached_bytes,
+            cancel,
+        ))
+        .await?
+        .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
     }
 
     async fn authorize_dispatch(&self) -> Result<(), CoreError> {

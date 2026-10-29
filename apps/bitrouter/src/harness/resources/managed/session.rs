@@ -614,6 +614,11 @@ impl NativeSession {
         &self.core
     }
 
+    #[cfg(all(test, unix))]
+    pub(crate) fn harness_port_for_test(&self) -> Arc<dyn HarnessPort> {
+        self.port.clone()
+    }
+
     /// Assess one frozen Eval root against this authenticated handle's retained
     /// experiment route. This local read starts no model work and takes no
     /// execution lease. Current tenant-wide ResourceRead and the original

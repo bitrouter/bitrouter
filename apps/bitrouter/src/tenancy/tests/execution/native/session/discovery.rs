@@ -3,6 +3,8 @@ use super::*;
 use crate::config::mcp::{McpServerConfig, McpTransport};
 use crate::harness::resources::managed::store::NativeStore;
 
+mod runtime_skills;
+
 struct ObservedStore {
     inner: crate::managed_store::DatabaseNativeStore,
     loads: AtomicUsize,
