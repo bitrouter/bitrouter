@@ -180,8 +180,11 @@ pub(in crate::harness::resources::managed) fn validate(
             Err(invalid())
         };
     };
+    // Context views also carry ordinary skill provenance. Negotiating that
+    // capability does not grant paid Choice authority; each retained receipt
+    // still requires its exact profile binding in validate_links below.
     if binding.authority().has_choices()
-        != journal
+        && !journal
             .manifest
             .required_features
             .iter()

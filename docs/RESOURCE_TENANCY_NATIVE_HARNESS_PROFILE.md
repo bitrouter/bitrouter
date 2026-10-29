@@ -49,6 +49,9 @@ authority when asynchronous work resumes, including after a queued MCP mutex or
 local-directory wait. Revocation prevents new request admission; previously
 admitted transport work remains with the same owner until cleanup is confirmed.
 Authority rejection remains distinct from an unavailable skill resource.
+Native skills also require context-view support for provenance, even without a
+paid Choice profile. That negotiated feature grants no paid authority: Choice
+receipts must still match an explicitly retained profile and binding.
 
 ## Journal and lifecycle
 
