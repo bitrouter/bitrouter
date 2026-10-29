@@ -1,10 +1,24 @@
 # Resource tenancy implementation
 
 This tracks implementation of the contracts in [M0](RESOURCE_TENANCY_M0.md).
-The baseline is `38ddfd231f053beae9b52a61443a3706688628e0`; the implementation
-continues the existing service/crate, HTTP/2 and shared-concurrency refactors.
+The original baseline was `38ddfd231f053beae9b52a61443a3706688628e0`.
+The stack now continues merged service/crate, native-agent and Registry v1 work
+through main `25c8239049c0da80d08f3c152dc35710e62199bd`, followed by the
+HTTP/2 (#994) and shared-concurrency (#995) changes.
 All stages stay in the same stacked change. A checked stage requires runtime
 evidence and independent review; fixtures alone do not satisfy runtime gates.
+
+The integration preserves the current command-oriented CLI and independent
+`core`/`harness` features; it does not restore the retired TUI. Ordinary Core
+execution keeps complete context. Paid Choice is available only through an
+explicit sealed owned profile, and skill-bound context retains its provenance
+and cannot be omitted by that choice. Owned configurations continue to reject
+ambient Registry bindings and tariffs; explicit retained routes use their own
+credentials and exact rational cost evidence.
+
+The current delivery boundary is independent review and final composed-head CI.
+Historical validation below does not qualify the restacked source. M5 performance
+qualification and deployment cutover remain separate, unperformed gates.
 
 ## Current local dispatch eligibility
 
