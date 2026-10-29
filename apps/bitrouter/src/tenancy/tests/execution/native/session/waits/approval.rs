@@ -255,6 +255,9 @@ async fn native36_approval_wait_rechecks_revocation_and_scope_before_real_mcp_ca
             );
             ensure!(joined(&gate)? && fixture.service.host_slots_for_test() == 1);
             ensure!(fixture.service.current().is_ok());
+            // The observer's Core clone retains its skill-resource wrapper even
+            // after close has joined the actual worker and returned the host slot.
+            drop(core);
             drop(observed);
             ensure!(
                 gate.mcp
