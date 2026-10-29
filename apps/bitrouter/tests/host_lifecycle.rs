@@ -338,19 +338,51 @@ impl Drop for Host {
 }
 
 async fn listener_closed(address: SocketAddr) -> Result<bool> {
-    match tokio::time::timeout(
+    let probe = tokio::time::timeout(
         Duration::from_secs(1),
         tokio::net::TcpStream::connect(address),
     )
-    .await?
-    {
-        Ok(stream) => {
-            drop(stream);
+    .await?;
+    connection_was_refused(probe.map(drop)).context("probe owned HTTP listener")
+}
+
+fn connection_was_refused(probe: std::io::Result<()>) -> std::io::Result<bool> {
+    match probe {
+        Ok(()) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(true),
+        // Reset/abort can race shutdown without proving the listener is closed.
+        // Keep polling for an explicit refusal under the existing deadline.
+        // https://doc.rust-lang.org/std/io/enum.ErrorKind.html
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted
+            ) =>
+        {
             Ok(false)
         }
-        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(true),
-        Err(error) => Err(error).context("probe owned HTTP listener"),
+        Err(error) => Err(error),
     }
+}
+
+#[test]
+fn listener_probe_requires_a_refused_connection() -> Result<()> {
+    use std::io::{Error, ErrorKind};
+
+    ensure!(!connection_was_refused(Ok(()))?);
+    for transient in [ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted] {
+        ensure!(
+            !connection_was_refused(Err(Error::from(transient)))?,
+            "transient probe failure must not prove listener closure"
+        );
+    }
+    ensure!(connection_was_refused(Err(Error::from(
+        ErrorKind::ConnectionRefused
+    )))?);
+    for unexpected in [ErrorKind::PermissionDenied, ErrorKind::TimedOut] {
+        ensure!(connection_was_refused(Err(Error::from(unexpected))).is_err());
+    }
+    Ok(())
 }
 
 #[derive(Clone)]
