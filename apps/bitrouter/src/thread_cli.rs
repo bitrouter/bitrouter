@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_orchestrator::thread::ThreadRecoveryRequest;
+use bitrouter_ai::harness::thread::ThreadRecoveryRequest;
 use clap::{Args, Subcommand, ValueEnum};
 
-use crate::agent_local::{self, Operation, ReplyResult, ThreadClient};
+use crate::client::agent_local::{self, Operation, ReplyResult, ThreadClient};
 use crate::control_output::{self, Endpoint, PromptFile, Request};
 use crate::output::Output;
 
@@ -248,9 +248,9 @@ pub async fn run(command: Command, output: &Output) -> Result<()> {
                 workspace: workspace.canonicalize()?,
                 model,
                 model_mode: if model_policy {
-                    bitrouter_orchestrator::core::protocol::ModelMode::Policy
+                    bitrouter_ai::core::protocol::ModelMode::Policy
                 } else {
-                    bitrouter_orchestrator::core::protocol::ModelMode::Fixed
+                    bitrouter_ai::core::protocol::ModelMode::Fixed
                 },
                 effort,
                 max_output_tokens,

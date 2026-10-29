@@ -488,7 +488,7 @@ are a subset of the total, not an extra charge to add. Failed, superseded and
 older checkpoint attempts retain their spend. Missing metering, unknown usage
 or prices, interrupted calls, pending reconciliation and missing fallback-hop
 costs keep the total unknown while preserving known subtotals. Status refresh
-reads late receipts without rerunning the judge. The TUI status inspector shows
+reads late receipts without rerunning the judge. The CLI status report includes
 the owner total, retry subset and job costs. Coding spend is separate; this
 report does not establish net routing savings.
 Deleting recorded content still removes cached judge text; content-free cost
@@ -509,11 +509,9 @@ The reason is retained in publication history, separately from rubric evidence.
 An identical retry acknowledges its original receipt without withdrawing any
 subsequent revision. Serving resolves the last supported baseline, falling back
 to configured routing when dependency guards fail; in-flight requests are not
-restarted and session overrides retain precedence. In the TUI, open **Policy
-block evidence → Restore supported baseline**, enter a reason, review the
-target, close the inspector with Esc and select **Restore this baseline**.
-Reason and evaluation fields accept pasted text; Enter confirms the input.
-The block inspector also shows its experiment's publication history.
+restarted and session overrides retain precedence. Use `bro acp evolution restore`
+with the inspected experiment, block revision and reason. Publication history
+retains the receipt and remains separate from rubric evidence.
 
 The evidence view reports usable session groups separately for quality, cost
 and duration in each arm, together with the reviewed experiment's configured
@@ -521,7 +519,7 @@ minimum. Archived experiments retain their own minimum. Related forks share a
 group; assigned sessions, repeated assessments and prior strength do not add
 observed groups. Reaching the minimum does not by itself permit adoption:
 quality and resource criteria must also pass. If an older daemon omits the
-minimum, the UI does not substitute a default. Counts describe usable evidence,
+minimum, the report does not substitute a default. Counts describe usable evidence,
 not proof of statistical independence.
 
 Learner v2 keeps bounded initial exposure during cold start until each arm has
@@ -546,76 +544,26 @@ their existing members can still withdraw an adoption and its dependent later
 versions. Routing uses the last supported baseline after withdrawal, with live
 route validation. Omitting `--experiment` targets the current version.
 
-`learning` and the TUI block inspector separate original trial evidence from
+`learning` separates original trial evidence from
 quality monitoring of new sessions after adoption. `improve` and the worker can
 withdraw an adopted block on supported quality-floor or severe-violation alarms;
 corrections to the original trial can also invalidate adoption. Monitoring does
 not add randomized samples or establish continuing comparative savings. Sessions
 first admitted while off are not enrolled retroactively when reenabled.
 
-In a local coding TUI, press `/` and choose **`/evolution`**. It
-provides status, mode and judge selection, current-session checkpoint review,
-candidate creation and policy-block evidence/reconciliation. A local serving daemon and
-recorded ACP session are required for checkpoint operations. Remote and
-explicit-socket operations-only targets do not offer these controls. Changing
-the judge preserves the current mode, including off.
+Use the CLI for evolution controls; the first-party terminal inspector has been
+removed. `bro acp evolution status`, `learning` and `improve` inspect or reconcile
+recorded facts. `candidate --help` describes preview and registration; `revise`
+requires the inspected predecessor. Changing the judge preserves the mode.
 
-After trial registration, choose **`/new`** in the `/` launcher to start a fresh native
-session with the same agent, model, routing flags and turn timeout. Existing
-native sessions keep their assignments. The previous connection closes before
-the new one starts; no load or history replay is requested. Selecting the same
-agent preserves these launch settings too; selecting a different agent uses
-default launch options. Finish the current turn, permissions and queued work
-before switching sessions.
+Checkpoint review operates on an explicitly frozen recorded prefix. Use
+`bro acp evolution checkpoint --help` for freeze, review and submission. Retain
+checkpoint identity, expected revision, submission ID and original evidence in
+the reviewed input file. New session content is never silently included; stale
+revisions fail instead of overwriting later assessments.
 
-**Session checkpoints → Evaluate the current recorded prefix** freezes the
-observed prefix at idle without calling a model. Select each rubric's score,
-uncertainty or permitted non-applicability; choose original evidence and explain
-the score/applicability. The rubric menu displays its weight, applicability and
-scoring anchors above the choices, wrapped to the terminal width. Custom scores
-range from 0 to 1. **Read recorded
-evidence** opens the full frozen content. Positive verification requires a tool
-observation. Add overall feedback and select **Review and submit**; Escape from
-the preview returns to the save/edit choices. The displayed quality range is a
-missing-evidence bound, not statistical confidence.
-
-**Evaluation history** lists the opened checkpoint's stored revisions and shows
-their scores, source/evaluator, explanations, citations, replacements and
-retractions. Inspection leaves the draft unchanged. A current checkpoint uses
-its selected revision as the starting point; a historical checkpoint prefers
-its latest manual revision, then its latest automatic one. Retractions and
-unsupported rubric formats leave the draft unscored. Saving a historical
-correction retains it without replacing a newer prefix's selected evaluation.
-Reopen the review to refresh its history snapshot.
-
-Manual revisions preserve checkpoint and expected revision identity. Errors
-retain the unsaved draft; a newer assessment cannot be overwritten by a stale
-draft. An unchanged retry reuses the submission ID. New session content is not
-silently included. Drafts live only in this TUI process; opening another session
-or discarding the draft clears them.
-
-**Create a candidate experiment** selects the current preset/virtual route and
-candidate route for the connected agent. Add related rules to the same block,
-choose manual or configured-judge feedback, and enter the trial reason and
-relationship to other experiments. **Review experiment** validates live routes
-and shows complete fallback chains, prompt-default presence, quality gates and
-trial limits. Escape returns to **Register this experiment**, **Refresh preview**
-and **Edit candidate**. Registration preserves mode and does not reassign the
-current session. Changed routes or settings require re-review; unchanged retries
-return the existing experiment. Failed actions retain the draft, which can also
-be resumed after a transport disconnect. Opening another session or discarding
-clears it. Manual review and candidate drafts are mutually exclusive.
-
-**Start the next experiment** selects a block for the connected agent. The draft
-preserves its name, matcher set, TS settings and declared dependencies, and fills
-in supported baselines. Edit its candidate routes, evaluator and trial reason,
-then review and register. The preview identifies a required rebase after route
-changes. A stale predecessor or changed route/settings requires a fresh review.
-**Experiment history** opens each archived version's evidence; reconciliation
-stays bound to that version. Lost registration replies return the original
-experiment receipt even after later revisions exist.
-
-Initial TUI candidate creation uses default TS parameters. The `register` and
-`revise` CLI commands also support fingerprints, dependencies and custom
-parameters. Changing evaluators can leave an experiment waiting for comparable
-feedback, because numeric scores from different evaluators are not pooled.
+Start a fresh session explicitly with `bro threads` or a new supervised
+`bro run`. Existing sessions keep their assignments. Inspect archived versions
+with `learning --experiment`; reconciliation remains bound to the inspected
+version. Evaluator scores are not pooled when their contracts differ. See the
+[CLI reference](cli.md) for command flags and owner-instance fencing.

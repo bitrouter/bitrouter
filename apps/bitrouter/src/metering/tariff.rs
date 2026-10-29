@@ -2,16 +2,16 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use bitrouter_ai::types::{ApiProtocol, Usage, UsageOrigin};
-use bitrouter_sdk::event::PipelineEvent;
-use bitrouter_sdk::language_model::context::PipelineContext;
-use bitrouter_sdk::language_model::hooks::RouteHook;
-use bitrouter_sdk::language_model::settlement::SettlementContext;
-use bitrouter_sdk::language_model::stream::{
+use crate::gateway::pipeline::context::PipelineContext;
+use crate::gateway::pipeline::hooks::RouteHook;
+use crate::gateway::pipeline::settlement::SettlementContext;
+use crate::gateway::pipeline::stream::{
     PricingTargetKey, UsagePricing, UsagePricingBracket, UsagePricingSnapshot, UsagePricingTier,
 };
-use bitrouter_sdk::language_model::types::RoutingTarget;
+use crate::gateway::pipeline::types::RoutingTarget;
+use async_trait::async_trait;
+use bitrouter_ai::event::PipelineEvent;
+use bitrouter_ai::types::{ApiProtocol, Usage, UsageOrigin};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -244,7 +244,7 @@ impl RouteHook for CaptureTariffs {
         &self,
         chain: &[RoutingTarget],
         ctx: &mut PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let snapshots = chain
             .iter()
             .map(|target| self.pricing.snapshot(target))
@@ -254,7 +254,7 @@ impl RouteHook for CaptureTariffs {
                 .iter()
                 .any(|snapshot| !snapshot.tariff.guarantees_known_price())
         {
-            return Err(bitrouter_sdk::error::BitrouterError::bad_request(
+            return Err(crate::gateway::error::BitrouterError::bad_request(
                 "known-price coverage is unavailable for the selected route",
             ));
         }
@@ -277,7 +277,7 @@ impl RouteHook for CaptureTariffs {
         &self,
         chain: &[RoutingTarget],
         ctx: &PipelineContext,
-    ) -> bitrouter_sdk::Result<()> {
+    ) -> crate::gateway::error::Result<()> {
         let snapshots = ctx.get_events::<TargetTariffSnapshot>();
         for target in chain {
             let key = PricingTargetKey::from_target(target);
@@ -286,12 +286,12 @@ impl RouteHook for CaptureTariffs {
                 .rev()
                 .find(|snapshot| snapshot.target == key)
                 .ok_or_else(|| {
-                    bitrouter_sdk::error::BitrouterError::bad_request(
+                    crate::gateway::error::BitrouterError::bad_request(
                         "rebuilt context has no admitted tariff for the selected route",
                     )
                 })?;
             if self.require_known && !snapshot.tariff.guarantees_known_price() {
-                return Err(bitrouter_sdk::error::BitrouterError::bad_request(
+                return Err(crate::gateway::error::BitrouterError::bad_request(
                     "known-price coverage is unavailable for the selected route",
                 ));
             }

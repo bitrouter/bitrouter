@@ -1,6 +1,7 @@
 //! Actual CLI/daemon/process proof over the original native managed journal.
 #![cfg(unix)]
 
+use bitrouter::storage::checkpoint::CheckpointBatchExt;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -8,19 +9,19 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter::managed_task::{
-    local::Client,
-    protocol::{Operation, Report, socket_path},
-};
-use bitrouter_orchestrator::core::protocol::{
-    CommitStatus, CoreError, ErrorCode, TaskInput, ToolExecute, ToolOutcome,
-};
-use bitrouter_orchestrator::harness::{
+use bitrouter::harness::resources::{
     HarnessConfig,
     managed::{
         session::{NativeApproval, NativeSession, StoredSession},
         store::NativeStore,
     },
+};
+use bitrouter::managed_task::{
+    local::Client,
+    protocol::{Operation, Report, socket_path},
+};
+use bitrouter_ai::core::protocol::{
+    CommitStatus, CoreError, ErrorCode, TaskInput, ToolExecute, ToolOutcome,
 };
 use serde_json::{Value, json};
 use tokio::process::{Child, Command};
@@ -29,10 +30,10 @@ use wiremock::{
     matchers::{method, path},
 };
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 
-#[path = "../../../crates/bitrouter-sdk/tests/support/mcp_fixture.rs"]
+#[path = "support/mcp_fixture.rs"]
 mod mcp_fixture;
 
 #[path = "managed_daemon/skills.rs"]
@@ -114,7 +115,7 @@ impl Fixture {
             .env("HOME", self.home.path())
             .env("BITROUTER_HOME", self.home.path())
             .env("NO_COLOR", "1")
-            .env("RUST_LOG", "bitrouter_orchestrator::core::session::preparation_work=debug,bitrouter::evolution::runtime=debug")
+            .env("RUST_LOG", "bitrouter::core::session::preparation_work=debug,bitrouter::core::evolution::runtime=debug")
             .env("BITROUTER_TEST_DECISION_KEY", "fixture")
             .env(
                 "BITROUTER_TEST_AGENT_TOKEN",
@@ -471,11 +472,8 @@ async fn detached_cli_keeps_one_driver_and_cancel_preserves_unknown_effects() ->
     let final_report = wait_owner_finished(&client, "effect").await?;
     ensure!(
         !final_report.released
-            && final_report
-                .run
-                .as_ref()
-                .is_some_and(|r| r.status
-                    == bitrouter_orchestrator::core::session::RunStatus::RecoveryRequired),
+            && final_report.run.as_ref().is_some_and(|r| r.status
+                == bitrouter::storage::checkpoint::snapshot::RunStatus::RecoveryRequired),
         "{final_report:?}"
     );
     let output =
@@ -563,10 +561,10 @@ async fn original_embedded_journal_continues_in_daemon_without_identity_migratio
     )?);
     let mut embedded = NativeSession::open(
         Arc::new(assembled.app),
-        bitrouter_sdk::caller::CallerContext::local(),
+        bitrouter::gateway::caller::CallerContext::local(),
         store.clone(),
         &fixture.workspace,
-        bitrouter_orchestrator::agent::ToolMode::ReadOnly,
+        bitrouter_ai::harness::agent::ToolMode::ReadOnly,
         &HarnessConfig::default(),
     )
     .await?;
@@ -622,7 +620,7 @@ impl NativeStore for LostInputAck {
         let journal: Value = serde_json::from_slice(&bytes)
             .map_err(|e| CoreError::rejected(ErrorCode::CheckpointUnavailable, e.to_string()))?;
         let accepted = if journal["checkpoint"].is_object() {
-            let batch: bitrouter_orchestrator::core::checkpoint::CheckpointBatch =
+            let batch: bitrouter_ai::core::checkpoint::CheckpointBatch =
                 serde_json::from_value(journal["checkpoint"].clone()).map_err(|e| {
                     CoreError::rejected(ErrorCode::CheckpointUnavailable, e.to_string())
                 })?;
@@ -668,10 +666,10 @@ async fn durable_input_ack_uncertainty_remains_blocked_without_replay_or_forced_
     });
     let embedded = NativeSession::open(
         Arc::new(assembled.app),
-        bitrouter_sdk::caller::CallerContext::local(),
+        bitrouter::gateway::caller::CallerContext::local(),
         store.clone(),
         &fixture.workspace,
-        bitrouter_orchestrator::agent::ToolMode::ReadOnly,
+        bitrouter_ai::harness::agent::ToolMode::ReadOnly,
         &HarnessConfig::default(),
     )
     .await?;
@@ -958,7 +956,7 @@ async fn ctrl_c_and_daemon_shutdown_join_native_effects_without_forcing_release(
                     .as_ref()
                     .and_then(|s| s.run.as_ref())
                     .is_some_and(|r| r.status
-                        == bitrouter_orchestrator::core::session::RunStatus::RecoveryRequired)
+                        == bitrouter::storage::checkpoint::snapshot::RunStatus::RecoveryRequired)
         );
         ensure!(
             calls.load(Ordering::SeqCst) == 1
@@ -1143,7 +1141,7 @@ async fn cli_options_and_verification_evidence_remain_in_the_original_native_che
     let report = fixture.inspect("verification").await?;
     let run = report.run.context("missing verified run")?;
     ensure!(report.released && !report.resident);
-    ensure!(run.status == bitrouter_orchestrator::core::session::RunStatus::Completed);
+    ensure!(run.status == bitrouter::storage::checkpoint::snapshot::RunStatus::Completed);
     ensure!(
         run.input.model == "coding"
             && run.input.effort.as_deref() == Some("low")
@@ -1190,7 +1188,7 @@ async fn cli_options_and_verification_evidence_remain_in_the_original_native_che
     ensure!(
         rejected.released
             && rejected.run.as_ref().is_some_and(
-                |r| r.status == bitrouter_orchestrator::core::session::RunStatus::Failed
+                |r| r.status == bitrouter::storage::checkpoint::snapshot::RunStatus::Failed
             )
     );
     fixture.stop().await?;

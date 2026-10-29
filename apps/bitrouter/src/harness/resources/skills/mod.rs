@@ -1,0 +1,106 @@
+//! Local skills are harness resources. Discovery publishes metadata; activation
+//! and instruction placement are decisions of the managed core.
+
+use bitrouter_ai::harness::resources::SkillMetadata;
+use std::path::PathBuf;
+
+use super::sha256;
+use bitrouter_ai::harness::resources::MaterialRef;
+
+use crate::skills::format::{self, Error, Result, read_skill};
+
+const MAX_CATALOG_BYTES: usize = 16 * 1024 * 1024;
+const MAX_SKILLS: usize = 256;
+
+/// A bounded, immutable metadata snapshot. Duplicate names from different
+/// roots remain distinct; callers select by material ID, never by name alone.
+#[derive(Default)]
+pub struct SkillCatalog {
+    pub skills: Vec<SkillMetadata>,
+    pub problems: Vec<String>,
+}
+
+impl SkillCatalog {
+    /// Roots are selected by the local host, not by model output. Each root
+    /// includes its own SKILL.md and the conventional local skills layouts.
+    pub fn discover(roots: &[PathBuf]) -> Result<Self> {
+        if roots.len() > 32 {
+            return Err(Error::Io(
+                "skills discovery exceeds 32 selected roots".into(),
+            ));
+        }
+        let mut catalog = Self::default();
+        let mut seen = std::collections::BTreeSet::new();
+        let mut bytes = 0usize;
+        for root in roots {
+            match root.canonicalize() {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::Io(error.to_string())),
+            }
+            for found in format::discover_bounded(root)? {
+                let path = found
+                    .skill_md
+                    .canonicalize()
+                    .map_err(|e| Error::Io(e.to_string()))?;
+                if !seen.insert(path.clone()) {
+                    continue;
+                }
+                if seen.len() > MAX_SKILLS {
+                    return Err(Error::Io(
+                        "skills catalog exceeds 256 discovered entries".into(),
+                    ));
+                }
+                if let Some(problem) = found.problem() {
+                    catalog.problems.push(
+                        format!("{}: {problem}", path.display())
+                            .chars()
+                            .take(1024)
+                            .collect(),
+                    );
+                    continue;
+                }
+                // Read the exact version being advertised and validate those
+                // exact bytes. A discovery/read race cannot mismatch metadata.
+                if !format::is_safe_installed_path(root, &found.skill_md) {
+                    return Err(Error::Io("skill path changed during discovery".into()));
+                }
+                let content = read_skill(&path).map_err(|e| Error::Io(e.to_string()))?;
+                let parsed = format::parse_frontmatter(&content)?;
+                let frozen = format::DiscoveredSkill {
+                    dir: found.dir,
+                    skill_md: found.skill_md,
+                    frontmatter: Ok(parsed),
+                };
+                if let Some(problem) = frozen.problem() {
+                    return Err(Error::Frontmatter(problem));
+                }
+                bytes = bytes.saturating_add(content.len());
+                if bytes > MAX_CATALOG_BYTES {
+                    return Err(Error::Io("skills catalog exceeds 16 MiB".into()));
+                }
+                let path_text = path
+                    .to_str()
+                    .ok_or_else(|| Error::Io("skill paths must be UTF-8".into()))?;
+                let material_id = format!("skill_{}", sha256(path_text.as_bytes()));
+                let digest = sha256(content.as_bytes());
+                let material = MaterialRef {
+                    material_id: material_id.clone(),
+                    version: digest.clone(),
+                    sha256: digest,
+                    media_type: "text/markdown".into(),
+                    provenance: format!("local_skill:{}", path.display()),
+                };
+                catalog.skills.push(SkillMetadata {
+                    name: frozen.name(),
+                    description: frozen.description().into(),
+                    material,
+                });
+            }
+        }
+        catalog.skills.sort_by(|a, b| {
+            (&a.name, &a.material.material_id).cmp(&(&b.name, &b.material.material_id))
+        });
+        Ok(catalog)
+    }
+}

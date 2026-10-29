@@ -1,22 +1,21 @@
 //! Live owners of the existing native managed harness. Durable authority stays
 //! in DatabaseNativeStore/Core; only pre-admission failures have a boot cache.
 
+use crate::storage::skills::SkillConsentAnswerExt;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, OnceLock};
 
-use bitrouter_orchestrator::agent::ToolMode;
-use bitrouter_orchestrator::core::checkpoint::sha256;
-use bitrouter_orchestrator::core::protocol::{
-    CoreError, ErrorCode, OwnershipGrant, TaskInput, Verification,
-};
-use bitrouter_orchestrator::core::session::CoreSession;
-use bitrouter_orchestrator::core::skills::SkillConsentAnswer;
-use bitrouter_orchestrator::harness::HarnessConfig;
-use bitrouter_orchestrator::harness::managed::session::{
-    NativeApproval, NativeSession, StoredSession,
-};
-use bitrouter_orchestrator::harness::managed::store::NativeStore;
-use bitrouter_sdk::{App, caller::CallerContext, config::Config};
+use crate::config::Config;
+use crate::core::session::CoreSession;
+use crate::gateway::assembly::App;
+use crate::gateway::caller::CallerContext;
+use crate::harness::resources::HarnessConfig;
+use crate::harness::resources::managed::session::{NativeApproval, NativeSession, StoredSession};
+use crate::harness::resources::managed::store::NativeStore;
+use crate::storage::checkpoint::sha256;
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode, OwnershipGrant, TaskInput, Verification};
+use bitrouter_ai::core::skills::SkillConsentAnswer;
+use bitrouter_ai::harness::agent::ToolMode;
 use sea_orm::DatabaseConnection;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -37,7 +36,7 @@ struct HeadlessApproval;
 impl NativeApproval for HeadlessApproval {
     async fn approve(
         &self,
-        _: &bitrouter_orchestrator::core::protocol::ToolExecute,
+        _: &bitrouter_ai::core::protocol::ToolExecute,
     ) -> Result<bool, CoreError> {
         // Preserve this explicit headless command's original permission policy.
         // NativeResources still enforce workspace, mode and declared tools.
@@ -46,7 +45,7 @@ impl NativeApproval for HeadlessApproval {
 
     async fn approve_skill(
         &self,
-        _: &bitrouter_orchestrator::core::skills::SkillConsentRequest,
+        _: &bitrouter_ai::core::skills::SkillConsentRequest,
     ) -> Result<bool, CoreError> {
         // The original Core request remains pending until an exact operator
         // answer or cancellation. Headless command policy grants no consent.
@@ -145,7 +144,7 @@ impl Owner {
             effort: request.effort.map(|e| e.to_string()),
             max_output_tokens: request.max_output_tokens,
             context_limit_bytes: None,
-            routing: bitrouter_orchestrator::core::protocol::RoutingSettings {
+            routing: bitrouter_ai::core::protocol::RoutingSettings {
                 model: model_mode,
                 skills: request.skills.clone(),
                 ..Default::default()
@@ -537,10 +536,16 @@ impl Owner {
         }
         let mut drivers = std::mem::take(&mut registry.drivers);
         drop(registry);
+        let mut first_error = None;
         while let Some(result) = drivers.join_next().await {
-            result?;
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
+            }
         }
-        Ok(())
+        match first_error {
+            Some(error) => Err(error.into()),
+            None => Ok(()),
+        }
     }
 }
 
@@ -595,16 +600,16 @@ fn stored_report(name: &str, operation_id: Option<&str>, stored: &StoredSession)
 }
 
 fn consent_projection(
-    snapshot: &bitrouter_orchestrator::core::session::SessionSnapshot,
-    receipt: Option<&bitrouter_orchestrator::core::protocol::OperationReceipt>,
-) -> Vec<bitrouter_orchestrator::core::skills::SkillConsentRequest> {
+    snapshot: &crate::storage::checkpoint::snapshot::SessionSnapshot,
+    receipt: Option<&bitrouter_ai::core::protocol::OperationReceipt>,
+) -> Vec<bitrouter_ai::core::skills::SkillConsentRequest> {
     receipt
         .and_then(|receipt| receipt.assigned_ids.get("run_id"))
         .map_or_else(Vec::new, |run_id| snapshot.skill_consent_requests(run_id))
 }
 
 fn ensure_skill_input(
-    snapshot: &bitrouter_orchestrator::core::session::SessionSnapshot,
+    snapshot: &crate::storage::checkpoint::snapshot::SessionSnapshot,
     operation_id: &str,
     answer: &SkillConsentAnswer,
 ) -> Result<(), CoreError> {
@@ -624,10 +629,10 @@ fn ensure_skill_input(
 }
 
 fn retained_skill_answer(
-    snapshot: &bitrouter_orchestrator::core::session::SessionSnapshot,
+    snapshot: &crate::storage::checkpoint::snapshot::SessionSnapshot,
     operation_id: &str,
     answer: &SkillConsentAnswer,
-) -> Result<bitrouter_orchestrator::core::protocol::OperationReceipt, CoreError> {
+) -> Result<bitrouter_ai::core::protocol::OperationReceipt, CoreError> {
     let receipt = snapshot.operations.get(operation_id).ok_or_else(|| error(ErrorCode::RecoveryRequired, "no live owner can accept a new skill answer; only an original committed answer may be inspected"))?;
     if receipt.request_sha256 != answer.fingerprint()? {
         return Err(error(
@@ -636,4 +641,34 @@ fn retained_skill_answer(
         ));
     }
     Ok(receipt.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn shutdown_drains_other_drivers_after_a_join_failure() -> anyhow::Result<()> {
+        let owner = Owner::new(
+            Arc::new(App::builder().build()?),
+            crate::db::connect("sqlite::memory:").await?,
+            Config::default(),
+            HarnessConfig::default(),
+        );
+        let cleaned = Arc::new(AtomicBool::new(false));
+        let mut registry = owner.shared.registry.lock().await;
+        registry.drivers.spawn(std::future::pending()).abort();
+        let marker = cleaned.clone();
+        registry.drivers.spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            marker.store(true, Ordering::SeqCst);
+        });
+        drop(registry);
+        let result = tokio::time::timeout(Duration::from_secs(5), owner.shutdown()).await?;
+        assert!(result.is_err());
+        assert!(cleaned.load(Ordering::SeqCst));
+        Ok(())
+    }
 }

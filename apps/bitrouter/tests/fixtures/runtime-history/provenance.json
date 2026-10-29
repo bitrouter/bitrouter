@@ -1,0 +1,183 @@
+{
+  "capture_date": "2026-10-16",
+  "rustc": "rustc 1.99.0 (b940084d7 2026-09-28)",
+  "cargo": "cargo 1.99.0 (5f94df478 2026-08-27)",
+  "method": "Unchanged historical ThreadService and MemoryExecutionStore with one appended ignored capture test; original Cargo.lock; two scripted model replies and a real workspace read. JSON serialized by each historical StoredExecution type. No record or format rewriting.",
+  "fixtures": [
+    {
+      "format_version": 2,
+      "writer_revision": "e2453004734b1a2723b5f7e54087e21f3e64a315",
+      "file": "runtime-v2.json.zst",
+      "sha256": "7ff346a27704e5647adbc59da550d3f9a96c666af5111c0063c570ff0947a80d",
+      "json_sha256": "bf04cfe7d3b14d4d860352ae4318fff21195b46cdac15b8067c76883e1e5845d",
+      "json_bytes": 23563,
+      "execution_id": "e2d8ead6-ccc2-49b1-9c52-a32a957b59a9",
+      "records": 34,
+      "record_kinds": {
+        "thread_created": 1,
+        "accepted_key": 2,
+        "thread_event": 15,
+        "turn_queued": 1,
+        "turn_activated": 1,
+        "turn_record": 12,
+        "thread_checkpoint": 2
+      },
+      "fact_kinds": {
+        "turn_lifecycle": 2,
+        "run_checkpoint": 2,
+        "model_request": 2,
+        "model_response": 2,
+        "tool_intent": 1,
+        "tool_result": 1,
+        "settled": 1,
+        "workspace_release_prepared": 1
+      },
+      "writer_patch": "writer-v2.patch",
+      "writer_patch_sha256": "7777ac820ed92049b7a336f9ada0a95d1947af89875c461113940368722027dd",
+      "source_sha256": {
+        "Cargo.toml": "68ed21779bc34e40ba0af704f97b269c2801dcf6a40564d7446bd39c72171c08",
+        "Cargo.lock": "264941f50ad22cc2c1fddb635b58cc7e4f09ba0b379cffaab19d7bdb0837e23c",
+        "crates/bitrouter-orchestrator/Cargo.toml": "d32bf93cb4b28b6288d77733f1052558dd320f75f7c3cdfbd0e3f98179171827",
+        "crates/bitrouter-orchestrator/src/store.rs": "6c4f14c12bbfbb977b80d4dbe32229d289cf38000971697752daaef61fd5fc51",
+        "crates/bitrouter-orchestrator/src/service.rs": "92a1734e74a1cf5566f65d0f0d6a44003dad4e028b1d6e23cd3fe635d674a650"
+      },
+      "test_name": "service::recovery_tests::write_p0_historical_runtime_fixture",
+      "writer_binary_sha256": "eb57ea168000d79d8c17e36ced94f6038861086aec6b7f222933dfacaeaf078c",
+      "writer_binary_bytes": 31562672,
+      "capture_log": "capture-v2.log"
+    },
+    {
+      "format_version": 3,
+      "writer_revision": "321ccaad5fe69f7adb39e0230a11f6e1851ff84d",
+      "file": "runtime-v3.json.zst",
+      "sha256": "a00b6d514a5c1b889984a5ba43cc92e68212119d9bcb39fd016866cb572513b9",
+      "json_sha256": "140a5a33dea225167f1de828909c01cd18b4e99b120191ec9779be867144b111",
+      "json_bytes": 24672,
+      "execution_id": "764e7f0b-4e47-4573-9f72-2c99f73f060b",
+      "records": 36,
+      "record_kinds": {
+        "thread_created": 1,
+        "accepted_key": 2,
+        "thread_event": 16,
+        "turn_queued": 1,
+        "turn_activated": 1,
+        "turn_record": 13,
+        "thread_checkpoint": 2
+      },
+      "fact_kinds": {
+        "turn_lifecycle": 2,
+        "harness_inventory": 1,
+        "run_checkpoint": 2,
+        "model_request": 2,
+        "model_response": 2,
+        "tool_intent": 1,
+        "tool_result": 1,
+        "settled": 1,
+        "workspace_release_prepared": 1
+      },
+      "writer_patch": "writer-v3.patch",
+      "writer_patch_sha256": "467ac1fc79faa161fc8bc46d720cc8b6c12e362665f8e13bd1bd2452c2708e0a",
+      "source_sha256": {
+        "Cargo.toml": "812438ca687a32423394059ca95e1b4f1a439e152f21e3f4cfea5bfad0e9e704",
+        "Cargo.lock": "66200d919f990f64809cf11f6056e20145b60f24a6969ee191b68273600e0f76",
+        "crates/bitrouter-orchestrator/Cargo.toml": "5a76b756fbffe883876cd91c2e8c6ca3980665f287cbf76384eafe48eae28e75",
+        "crates/bitrouter-orchestrator/src/store.rs": "55b22538a7d545e65cb1fd4781182a898106658ab6c035e0e6bd1c91c09dd6ed",
+        "crates/bitrouter-orchestrator/src/service/tests/support.rs": "1f054f245f680ae0f98e74d10490fdaa6de15094f8448a001a58147c2e717480"
+      },
+      "test_name": "service::tests::support::write_p0_historical_runtime_fixture",
+      "writer_binary_sha256": "b125e3f3847eb4133e1400160007f951ae5151315bb992a7ef34acf0e5df028f",
+      "writer_binary_bytes": 63016528,
+      "capture_log": "capture-v3.log"
+    },
+    {
+      "format_version": 4,
+      "writer_revision": "aa2ec3476f68b1a5a72faba2e9f97f2be767a120",
+      "file": "runtime-v4.json.zst",
+      "sha256": "44220d6fa19773808b3a4f0a7562983e0093a369d511894e3feb617555545121",
+      "json_sha256": "0852bcc7dd3558eaa3e7da51d9fe095c34ba32740534f87dfc419567faf06623",
+      "json_bytes": 26587,
+      "execution_id": "92310312-04d6-4c4e-9392-03e9fd2d295a",
+      "records": 37,
+      "record_kinds": {
+        "thread_created": 1,
+        "accepted_key": 2,
+        "thread_event": 16,
+        "turn_queued": 1,
+        "turn_activated": 1,
+        "turn_record": 14,
+        "thread_checkpoint": 2
+      },
+      "fact_kinds": {
+        "turn_lifecycle": 2,
+        "instruction_context": 1,
+        "harness_inventory": 1,
+        "run_checkpoint": 2,
+        "model_request": 2,
+        "model_response": 2,
+        "tool_intent": 1,
+        "tool_result": 1,
+        "settled": 1,
+        "workspace_release_prepared": 1
+      },
+      "writer_patch": "writer-v4.patch",
+      "writer_patch_sha256": "f758ad9af6cc65cef59c940d8ee5aa36c8c89037d7c76565917137fb4456c10a",
+      "source_sha256": {
+        "Cargo.toml": "87db7a917d4f80e6b6e695b7bdd81af3b563ee80d68f6354db14a9b27dd822ac",
+        "Cargo.lock": "79e5c6021a7102e3d223a0c1023bd4cda28d2a31d96c9b97f2fffa14a463ec95",
+        "crates/bitrouter-orchestrator/Cargo.toml": "026c5b572ab2a408f5c7fa7cdc06faee77f8d7a83036e9cbc0d7a5e43ef0ffa7",
+        "crates/bitrouter-orchestrator/src/store.rs": "629533a39a18e774bb8a7ecc127a76c0fe636f7ed66f0710ceb1c73f1b7204c6",
+        "crates/bitrouter-orchestrator/src/service/tests/support.rs": "81a7b3e2ac461e2f97a48ff67c6f39912ba46fa02e048f4346058796768d6fed"
+      },
+      "test_name": "service::tests::support::write_p0_historical_runtime_fixture",
+      "writer_binary_sha256": "1bfad43463460c7c91fd4ece2dbe9d4e845c4f1ac68470bd7021d55220d4991d",
+      "writer_binary_bytes": 64444544,
+      "capture_log": "capture-v4.log"
+    },
+    {
+      "format_version": 6,
+      "writer_revision": "a68c215f0b579aeb34dd15baf1670ef037c310f8",
+      "file": "runtime-v6.json.zst",
+      "sha256": "d44ba54270b3ee5a91fb195469754dbbc475a079bea935183006aa7050f3d8b0",
+      "json_sha256": "a1ac93f2bf711c730acf02423dcdace8b564c56b4093505e0e740dfab80c8648",
+      "json_bytes": 2249672,
+      "execution_id": "bf8d67cd-2598-4006-918d-46306398433d",
+      "records": 106,
+      "record_kinds": {
+        "thread_created": 1,
+        "accepted_key": 2,
+        "thread_event": 47,
+        "turn_queued": 1,
+        "turn_activated": 1,
+        "turn_record": 52,
+        "thread_checkpoint": 2
+      },
+      "fact_kinds": {
+        "turn_lifecycle": 2,
+        "instruction_context": 1,
+        "harness_inventory": 1,
+        "core_checkpoint": 32,
+        "core_dispatch": 7,
+        "model_request": 2,
+        "model_response": 2,
+        "tool_intent": 1,
+        "tool_result": 1,
+        "run_checkpoint": 1,
+        "settled": 1,
+        "workspace_release_prepared": 1
+      },
+      "writer_patch": "writer-v6.patch",
+      "writer_patch_sha256": "4d112a0e19469b40cac83e44fe15f4b891ce858132f6ca190930e5326638793e",
+      "source_sha256": {
+        "Cargo.toml": "812438ca687a32423394059ca95e1b4f1a439e152f21e3f4cfea5bfad0e9e704",
+        "Cargo.lock": "2a37e737579b4d47cd31dfdb7643de3e1eac494f69cac41aa73ad62a79c46663",
+        "crates/bitrouter-orchestrator/Cargo.toml": "07dd66b15c7ccdada497e65849b75fccd1be19148cc59bd420502c11c93bd957",
+        "crates/bitrouter-orchestrator/src/store.rs": "46d173a178a18b444298292e62a61a28041527c4c48200845edd6c716e56c04c",
+        "crates/bitrouter-orchestrator/src/service/tests/support.rs": "b0e097be17c202d842b50523589b65a1329a72a67870557fe7f45c51ff0fbf23"
+      },
+      "test_name": "service::tests::support::write_p0_historical_runtime_fixture",
+      "writer_binary_sha256": "98cb7eaf2df69987bfbc2b4c4f96f1decb6bfbc4ae8ebaaa27d0de5fac0ead3c",
+      "writer_binary_bytes": 91270064,
+      "capture_log": "capture-v6.log"
+    }
+  ]
+}

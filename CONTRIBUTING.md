@@ -81,10 +81,10 @@ If the provider uses an already-supported wire protocol (Chat Completions, Respo
 1. Add a provider definition under [`registry/providers/`](registry/providers/) as `<id>.yaml` (the `name` field must match the stem). Providers are fetched from the registry at runtime, not compiled into the binary — only the `bitrouter` cloud gateway is compiled in.
 2. `bearer` / `header` auth needs no Rust. For a regional or per-account base URL, use `${VAR}` in `api_base` (resolved from the environment at merge time, e.g. `${AWS_REGION}`); an unset var with no `:-default` drops the provider from routing.
 3. For a model catalog, add `auto_sync: { feed: models_dev, key: <models.dev slug> }` and leave `models: []` — the sync fills pricing. Then regenerate the dist: `cargo run -p dist-helper -- registry sync --write && cargo run -p dist-helper -- registry build` (the docs site's `supported-*` tables regenerate from the committed `dist/registry`).
-4. For stateful auth (OAuth, token-exchange), add an `AuthApplier` in `crates/bitrouter-ai/src/providers/` keyed by the `auth.handler` name and register it in `apps/bitrouter/src/assemble.rs::build_auth_appliers` (see `copilot`).
+4. For stateful auth (OAuth, token-exchange), add an `AuthApplier` in `apps/bitrouter/src/gateway/providers/` keyed by the `auth.handler` name and register it in `apps/bitrouter/src/assemble.rs::build_auth_appliers` (see `copilot`).
 5. Add or update tests, and update user-facing docs + the `/bitrouter` skill when the provider list or env vars change.
 
-If the provider needs a wire that isn't HTTP+JSON+SSE (a vendor SDK owning a binary framing) — rare, and no current registry provider needs it — see the `ApiProtocol::Custom` escape hatch in [`crates/bitrouter-ai/src/protocol/mod.rs`](crates/bitrouter-ai/src/protocol/mod.rs): add an `OutboundAdapter` + `Transport` in a standalone crate and register it on the dispatch executor. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for where each layer lives.
+If the provider needs a wire that isn't HTTP+JSON+SSE (a vendor SDK owning a binary framing) — rare, and no current registry provider needs it — see the `ApiProtocol::Custom` escape hatch in [`apps/bitrouter/src/gateway/model/protocol/mod.rs`](apps/bitrouter/src/gateway/model/protocol/mod.rs): add an `OutboundAdapter` + `Transport` in a standalone crate and register it on the dispatch executor. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for where each layer lives.
 
 ## Questions and Discussion
 

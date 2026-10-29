@@ -1,10 +1,9 @@
 //! Per-attempt estimates share settlement's frozen price table and calculator.
 //! They are audit evidence only and never write or reconcile a metering row.
 
-use bitrouter_sdk::language_model::native::NativeAttemptReport;
-use bitrouter_sdk::language_model::native_accounting::{
-    NativeCostEstimator, NativeTokenCost, NativeTokenRates, validated_provider_usage,
-};
+use crate::gateway::pipeline::native_accounting::{NativeCostEstimator, validated_provider_usage};
+use bitrouter_ai::core::evidence::NativeAttemptReport;
+use bitrouter_ai::core::evidence::{NativeTokenCost, NativeTokenRates};
 
 use super::pricing::{MAX_TRUSTED_TOKENS, PricingSource, PricingTable};
 
@@ -16,8 +15,8 @@ impl NativeCostEstimator for PricingTable {
     fn estimate_for_attempt(
         &self,
         report: &NativeAttemptReport,
-        ctx: &bitrouter_sdk::language_model::context::PipelineContext,
-        target: &bitrouter_sdk::language_model::types::RoutingTarget,
+        ctx: &crate::gateway::pipeline::context::PipelineContext,
+        target: &crate::gateway::pipeline::types::RoutingTarget,
     ) -> NativeTokenCost {
         if report.actual_provider.as_deref() != Some(target.provider_name.as_str())
             || report.actual_model.as_deref() != Some(target.service_id.as_str())
@@ -25,7 +24,7 @@ impl NativeCostEstimator for PricingTable {
         {
             return NativeTokenCost::unknown("execution_target_mismatch");
         }
-        let key = bitrouter_sdk::language_model::stream::PricingTargetKey::from_target(target);
+        let key = crate::gateway::pipeline::stream::PricingTargetKey::from_target(target);
         let snapshot = ctx
             .get_events::<super::tariff::TargetTariffSnapshot>()
             .into_iter()
@@ -121,12 +120,12 @@ mod tests {
     use super::super::pricing::calculate_charge_evidence;
     use super::super::pricing::{ContextTier, ModelPricing};
     use super::*;
+    use bitrouter_ai::core::evidence::NativeRoute;
     use bitrouter_ai::types::{ApiProtocol, GenerateResult, Usage, UsageOrigin};
-    use bitrouter_sdk::language_model::native::NativeRoute;
     use serde_json::json;
 
-    fn target() -> bitrouter_sdk::language_model::types::RoutingTarget {
-        bitrouter_sdk::language_model::types::RoutingTarget {
+    fn target() -> crate::gateway::pipeline::types::RoutingTarget {
+        crate::gateway::pipeline::types::RoutingTarget {
             provider_name: "execution-provider".into(),
             service_id: "served-model".into(),
             api_base: "https://api.openai.com/v1".into(),
@@ -141,7 +140,7 @@ mod tests {
             account_label: None,
             api_key_override: None,
             api_base_override: None,
-            auth_scheme: bitrouter_ai::types::AuthScheme::Bearer,
+            auth_scheme: crate::gateway::model::target::AuthScheme::Bearer,
             headers: Vec::new(),
         }
     }
@@ -154,8 +153,8 @@ mod tests {
 
     fn fixture_context(
         table: &PricingTable,
-        target: &bitrouter_sdk::language_model::types::RoutingTarget,
-    ) -> bitrouter_sdk::language_model::context::PipelineContext {
+        target: &crate::gateway::pipeline::types::RoutingTarget,
+    ) -> crate::gateway::pipeline::context::PipelineContext {
         let prompt = bitrouter_ai::types::Prompt {
             model: "served-model".into(),
             system: None,
@@ -167,10 +166,10 @@ mod tests {
             tool_choice: None,
             stream: false,
         };
-        let mut ctx = bitrouter_sdk::language_model::context::PipelineContext::new(
-            bitrouter_sdk::language_model::types::PipelineRequest::new(
+        let mut ctx = crate::gateway::pipeline::context::PipelineContext::new(
+            crate::gateway::pipeline::types::PipelineRequest::new(
                 "served-model",
-                bitrouter_sdk::caller::CallerContext::local(),
+                crate::gateway::caller::CallerContext::local(),
                 prompt,
             ),
         );
@@ -237,9 +236,9 @@ mod tests {
 
     #[tokio::test]
     async fn rebuilt_context_reuses_frozen_tariffs_and_rejects_new_targets()
-    -> bitrouter_sdk::Result<()> {
+    -> crate::gateway::error::Result<()> {
         use super::super::tariff::{CaptureTariffs, TargetTariffSnapshot};
-        use bitrouter_sdk::language_model::hooks::RouteHook;
+        use crate::gateway::pipeline::hooks::RouteHook;
         use std::sync::Arc;
 
         let pricing = table(pricing());

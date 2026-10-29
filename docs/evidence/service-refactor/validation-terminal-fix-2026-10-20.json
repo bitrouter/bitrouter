@@ -1,0 +1,224 @@
+{
+  "schema": "bitrouter.p0-terminal-fix-validation.v1",
+  "date": "2026-10-20",
+  "source_revision": "6e8221738d10242fbc56e28486db84c5bb00c892",
+  "previous_pr_head": "effc842f438144857a974eaaef8b2ac02afcac11",
+  "baseline_revision": "e972d5ebb8215a51dbe88d404616087b940250ca",
+  "fixes": [
+    {
+      "commit": "258ee11",
+      "scope": "Await explicit SIGCONT before the three existing TUI callers reacquire terminal custody. Restore the generic fix from bf51790 removed by the Goals revert; no Goals implementation is restored."
+    },
+    {
+      "commit": "6e82217",
+      "scope": "Replace the test-only fixed correlation key flagged by CodeQL with random bytes; assertions do not depend on key material."
+    }
+  ],
+  "original_failure": {
+    "run": 39305479191,
+    "job": 118241294899,
+    "url": "https://github.com/bitrouter/bitrouter/actions/runs/39305479191/job/118241294899",
+    "log": "/tmp/bitrouter-p0-terminal-ci-39305479191.log",
+    "sha256": "67a0230d2a44b5efaa7c876a49c64f8dab2accd499787970bcfdf198202f33c1",
+    "result": "49 passed, 1 failed, 6 skipped; standalone manager timed out waiting for alternate-screen re-entry after SIGCONT"
+  },
+  "review": {
+    "reviewer": "Jason",
+    "agent_id": "01a1559a-c7d5-7892-a1f0-9f763990a3e2",
+    "base_revision": "effc842f438144857a974eaaef8b2ac02afcac11",
+    "verdict": "approved",
+    "scope": "SIGCONT listener before SIGSTOP, awaited by all three existing terminal callers; repeated PTY suspension with full original termios assertions; improved timeout diagnostics; random test-only settlement correlation key.",
+    "findings": [],
+    "limits": "Read-only review. No Cargo execution. The one-line random key replacement was reviewed as a proposed change and subsequently applied exactly. Runtime and hosted CI evidence are separate."
+  },
+  "checks": [
+    {
+      "name": "terminal",
+      "log": "/tmp/bitrouter-p0-terminal-fix-nextest.log",
+      "sha256": "6234f80cd230e147713ce3a02d573fe4351e98fceca84a5ae980bcfc37ce69c7",
+      "command": "cargo nextest run --locked -p bitrouter --all-features --test code_tui_pty --test native_agent_tui --test-threads 2 --retries 0 --no-fail-fast",
+      "passed": 50,
+      "skipped": 6,
+      "test_seconds": 166.19,
+      "exit_code": 0
+    },
+    {
+      "name": "settlement",
+      "log": "/tmp/bitrouter-p0-terminal-fix-settlement.log",
+      "sha256": "acabab7cdf317cf01503d0b6edf0d508ecc39fb77ae18f417d39eb918d07c413",
+      "command": "cargo +1.99.0 test --locked -p bitrouter --all-features --lib core::eval::settlement::tests",
+      "passed": 6,
+      "skipped": 0,
+      "test_seconds": 0.1,
+      "exit_code": 0
+    },
+    {
+      "name": "clippy",
+      "log": "/tmp/bitrouter-p0-terminal-fix-clippy.log",
+      "sha256": "84c22e4a2d243efe67330567040175c4e3e171a35027cad39aba23d4f1aad829",
+      "command": "cargo +1.97.0 clippy --locked -p bitrouter --all-features --lib --tests -- -D warnings",
+      "passed": null,
+      "skipped": null,
+      "test_seconds": null,
+      "exit_code": 0
+    }
+  ],
+  "applicability": "Terminal validation used the final production source before its commit. The later single-line change affects only cfg(test) settlement fixtures, which passed separately. Performance artifacts were rebuilt from the committed source revision above. Previous post-revert ownership, SDK, package, persistence and feature evidence remains recorded separately. No new full-workspace local run is claimed.",
+  "artifact_identities": {
+    "full": {
+      "version": "1.0.0-alpha.33",
+      "source_revision": "6e8221738d10242fbc56e28486db84c5bb00c892",
+      "target": "aarch64-apple-darwin",
+      "features": [
+        "core",
+        "db-mysql",
+        "db-postgres",
+        "harness",
+        "mcp",
+        "otel-http",
+        "server-tools",
+        "tui"
+      ],
+      "profile": "full",
+      "handoff_build_id": "4d630ea30786ad7169b73131141e5ea39404097307b75733f46efba537537aee"
+    },
+    "gateway": {
+      "version": "1.0.0-alpha.33",
+      "source_revision": "6e8221738d10242fbc56e28486db84c5bb00c892",
+      "target": "aarch64-apple-darwin",
+      "features": [],
+      "profile": "gateway",
+      "handoff_build_id": "6db6282c125b756a1fd7722b669f577aa63836fcf66a4bca7afdd8ebe17e583f"
+    }
+  },
+  "performance": {
+    "report": "gateway-terminal-fix-2026-10-20.json",
+    "summary": {
+      "baseline": {
+        "startup_ms": {
+          "median": 65.966375,
+          "min": 63.783500000000004,
+          "max": 100.614625
+        },
+        "idle_rss_mib": {
+          "median": 61.53125,
+          "min": 61.34375,
+          "max": 61.53125
+        },
+        "after_load_rss_mib": {
+          "median": 201.921875,
+          "min": 194,
+          "max": 205.734375
+        },
+        "ordinary_rps": {
+          "median": 4147.676070363048,
+          "min": 4103.307818886508,
+          "max": 4164.960640252554
+        },
+        "streaming_rps": {
+          "median": 5306.650657752288,
+          "min": 5286.132404001316,
+          "max": 5386.63477175691
+        },
+        "ordinary_p95_ms": {
+          "median": 2.980958,
+          "min": 2.908083,
+          "max": 3.019041
+        },
+        "streaming_p95_ms": {
+          "median": 1.993084,
+          "min": 1.9927909999999998,
+          "max": 2.0274170000000002
+        }
+      },
+      "full": {
+        "startup_ms": {
+          "median": 66.460041,
+          "min": 59.195209,
+          "max": 79.86945800000001
+        },
+        "idle_rss_mib": {
+          "median": 63.6875,
+          "min": 63.5625,
+          "max": 63.859375
+        },
+        "after_load_rss_mib": {
+          "median": 197.375,
+          "min": 184.1875,
+          "max": 203.765625
+        },
+        "ordinary_rps": {
+          "median": 4180.605881084471,
+          "min": 4137.112556025503,
+          "max": 4191.250891670465
+        },
+        "streaming_rps": {
+          "median": 5353.0480097232885,
+          "min": 5257.097438989324,
+          "max": 5381.2280709208335
+        },
+        "ordinary_p95_ms": {
+          "median": 2.877667,
+          "min": 2.873834,
+          "max": 2.91675
+        },
+        "streaming_p95_ms": {
+          "median": 2.0014999999999996,
+          "min": 1.991791,
+          "max": 2.0211669999999997
+        }
+      },
+      "gateway": {
+        "startup_ms": {
+          "median": 62.06104199999999,
+          "min": 61.319334000000005,
+          "max": 69.080875
+        },
+        "idle_rss_mib": {
+          "median": 42,
+          "min": 41.828125,
+          "max": 42.390625
+        },
+        "after_load_rss_mib": {
+          "median": 176.390625,
+          "min": 168.03125,
+          "max": 182.125
+        },
+        "ordinary_rps": {
+          "median": 4174.293218934654,
+          "min": 4136.266905774131,
+          "max": 4183.051036399761
+        },
+        "streaming_rps": {
+          "median": 5146.832962179996,
+          "min": 4844.337515260521,
+          "max": 5457.375215513525
+        },
+        "ordinary_p95_ms": {
+          "median": 2.922291,
+          "min": 2.83125,
+          "max": 2.994125
+        },
+        "streaming_p95_ms": {
+          "median": 2.102041,
+          "min": 1.945917,
+          "max": 2.446167
+        }
+      }
+    },
+    "full_idle_delta_mib": 2.15625,
+    "full_idle_delta_percent": 3.50431691213815,
+    "full_ordinary_delta_percent": 0.7939340045554744,
+    "full_streaming_delta_percent": 0.8743245968758195,
+    "limits": "Local macOS arm64 development builds, Rust 1.99.0, debug info disabled, rotating three-sample order, fresh SQLite and counted local provider. Baseline executable retained from the post-revert campaign; full and minimum gateway rebuilt. No production throughput or portable memory claim."
+  },
+  "hosted_ci_at_capture": "The prior head failed Ubuntu terminal acceptance. Fresh full platform, packaging and CodeQL checks are required on the follow-up PR head.",
+  "aggregate_review": {
+    "reviewer": "Copernicus",
+    "agent_id": "01a155a6-afbc-7df0-9e78-6c37941d5027",
+    "verdict": "approved_for_push",
+    "findings": [],
+    "scope": "Six-file source follow-up and four evidence documents. Verified signal lifecycle, unchanged Goals/feature boundaries, fixture-only key change, scoped logs, hashes, binary sizes, compiled identities, handoff IDs, all nine samples and statistical deltas.",
+    "remaining_gate": "Fresh hosted platform, packaging and CodeQL checks on the follow-up PR head."
+  }
+}

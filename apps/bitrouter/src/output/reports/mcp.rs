@@ -84,7 +84,7 @@ impl CliReport for McpRegistryReport {
         h.line("")?;
         h.line(&format!(
             "  save a server with: {} mcp add <local-name> --url <url> (or --command <program>)",
-            bitrouter_sdk::invocation::name()
+            crate::commands::invocation::name()
         ))?;
         Ok(())
     }

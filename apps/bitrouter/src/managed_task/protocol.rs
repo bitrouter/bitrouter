@@ -3,12 +3,12 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::storage::checkpoint::snapshot::RootRun;
+use bitrouter_ai::core::checkpoint::DurableHead;
+use bitrouter_ai::core::protocol::{CoreError, OperationReceipt, OwnershipGrant};
+use bitrouter_ai::core::skills::{SkillConsentAnswer, SkillConsentRequest};
+use bitrouter_ai::harness::agent::ToolMode;
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_orchestrator::agent::ToolMode;
-use bitrouter_orchestrator::core::checkpoint::DurableHead;
-use bitrouter_orchestrator::core::protocol::{CoreError, OperationReceipt, OwnershipGrant};
-use bitrouter_orchestrator::core::session::RootRun;
-use bitrouter_orchestrator::core::skills::{SkillConsentAnswer, SkillConsentRequest};
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u32 = 1;
@@ -16,8 +16,7 @@ pub const VERSION: u32 = 1;
 // also accommodates ownership/selector metadata without narrowing that API.
 pub(super) const MAX_COMMAND: u64 = 4 * 1024 * 1024;
 // Preserve the native journal/output allowance when moving execution to IPC.
-pub(super) const MAX_REPLY: u64 =
-    bitrouter_orchestrator::harness::managed::store::MAX_STORE_BYTES as u64;
+pub(super) const MAX_REPLY: u64 = crate::storage::checkpoint::MAX_NATIVE_STORE_BYTES as u64;
 
 pub fn socket_path(control: &Path) -> PathBuf {
     control.with_extension("managed.sock")
@@ -36,7 +35,7 @@ pub struct Submit {
     pub check: Option<String>,
     pub read_only: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub skills: Option<bitrouter_orchestrator::core::skills::SkillConstraints>,
+    pub skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +90,7 @@ pub struct Report {
 }
 
 impl Report {
+    #[cfg(all(feature = "core", feature = "harness"))]
     pub(super) fn empty(name: String, operation_id: Option<String>, state: &str) -> Self {
         Self {
             name,
@@ -136,4 +136,16 @@ pub struct Reply {
     pub command_id: Option<String>,
     pub daemon_instance_id: String,
     pub result: ResultBody,
+}
+
+pub fn validate_session_name(id: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !id.is_empty()
+            && id.len() <= 128
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)),
+        "invalid managed session name"
+    );
+    Ok(())
 }

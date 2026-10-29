@@ -146,8 +146,10 @@ pub(crate) fn cancelled(error: &anyhow::Error) -> bool {
                 io::ErrorKind::Interrupted | io::ErrorKind::UnexpectedEof
             )
         }) || matches!(
-            cause.downcast_ref::<bitrouter_ai::auth::login::LoginError>(),
-            Some(bitrouter_ai::auth::login::LoginError::UserIo(_))
+            cause.downcast_ref::<crate::gateway::providers::auth::login::LoginError>(),
+            Some(crate::gateway::providers::auth::login::LoginError::UserIo(
+                _
+            ))
         )
     })
 }

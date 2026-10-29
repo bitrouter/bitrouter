@@ -1,6 +1,7 @@
 //! Product CLI client for daemon-owned native managed sessions.
 
 pub mod local;
+#[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod owner;
 pub mod protocol;
 
@@ -8,10 +9,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::storage::checkpoint::snapshot::RunStatus;
 use anyhow::{Context, Result, ensure};
+use bitrouter_ai::core::protocol::CoreError;
 use bitrouter_ai::types::ReasoningEffort;
-use bitrouter_orchestrator::core::protocol::CoreError;
-use bitrouter_orchestrator::core::session::RunStatus;
 use tokio_util::sync::CancellationToken;
 
 use local::Client;
@@ -29,7 +30,7 @@ pub struct Options {
     pub max_output_tokens: Option<u32>,
     pub request_id: Option<String>,
     pub server_instance: Option<String>,
-    pub skills: Option<bitrouter_orchestrator::core::skills::SkillConstraints>,
+    pub skills: Option<bitrouter_ai::core::skills::SkillConstraints>,
 }
 
 #[derive(Debug, Clone, clap::Args)]
@@ -181,7 +182,7 @@ pub async fn run(options: Options) -> Result<()> {
         }
     };
     // Reuse the selected startup/readiness path, never build App or a database.
-    crate::agent_local::connect_or_start(&source, &control).await?;
+    crate::client::agent_local::connect_or_start(&source, &control).await?;
     let client = Client::connect(&protocol::socket_path(&control)).await?;
     ensure!(
         options.skills.is_none() || client.skill_constraints,
@@ -197,7 +198,7 @@ pub async fn run(options: Options) -> Result<()> {
     let name = options
         .session
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-    crate::managed_store::validate_session_name(&name)?;
+    crate::managed_task::protocol::validate_session_name(&name)?;
     let operation_id = options
         .request_id
         .unwrap_or_else(|| format!("input_{}", uuid::Uuid::new_v4()));

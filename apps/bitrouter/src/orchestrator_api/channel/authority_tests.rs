@@ -56,7 +56,7 @@ fn port(principal: Principal) -> Result<RemotePort, CoreError> {
     let limits = Limits::default();
     Ok(RemotePort::new(
         principal,
-        bitrouter_orchestrator::core::protocol::OwnershipGrant {
+        bitrouter_ai::core::protocol::OwnershipGrant {
             session_id: "session".into(),
             harness_id: "harness".into(),
             core_instance_id: "core".into(),
@@ -177,7 +177,7 @@ async fn connected_projection_isolates_principals_and_ignores_retained_closed_ch
 -> TestResult {
     let (principal, db) = principal().await?;
     let api = ManagedCoreApi::new(
-        Arc::new(bitrouter_sdk::App::builder().build()?),
+        Arc::new(crate::gateway::assembly::App::builder().build()?),
         db.clone(),
         "core".into(),
     );

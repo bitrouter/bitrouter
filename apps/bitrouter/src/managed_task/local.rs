@@ -4,16 +4,22 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use bitrouter_orchestrator::core::protocol::{CoreError, ErrorCode};
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+#[cfg(all(feature = "core", feature = "harness"))]
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+#[cfg(all(feature = "core", feature = "harness"))]
+use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(all(feature = "core", feature = "harness"))]
 use tokio_util::sync::CancellationToken;
 
+#[cfg(all(feature = "core", feature = "harness"))]
 use super::owner::{MAX_ACTIVE, Owner};
 use super::protocol::{
     Command, MAX_COMMAND, MAX_REPLY, Operation, Reply, Report, ResultBody, VERSION,
 };
 use crate::daemon::transport;
 
+#[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) async fn serve(
     mut listener: transport::ControlListener,
     owner: Owner,
@@ -45,6 +51,7 @@ pub(crate) async fn serve(
     serving
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 async fn connection(
     stream: impl AsyncRead + AsyncWrite + Unpin,
     owner: Owner,
@@ -93,6 +100,7 @@ async fn connection(
     Ok(())
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 async fn dispatch(
     owner: &Owner,
     instance: &str,

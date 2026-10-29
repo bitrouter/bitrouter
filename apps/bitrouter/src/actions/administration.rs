@@ -2,116 +2,34 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use {
+    bitrouter_ai::control::administration::AgentEntry,
+    bitrouter_ai::control::administration::AgentsReport,
+    bitrouter_ai::control::administration::CertificateIdentity,
+    bitrouter_ai::control::administration::ObserveReport,
+    bitrouter_ai::control::administration::PolicyDetail,
+    bitrouter_ai::control::administration::PolicyInput,
+    bitrouter_ai::control::administration::PolicyReport,
+    bitrouter_ai::control::administration::PolicyView,
+    bitrouter_ai::control::administration::ProviderEntry,
+    bitrouter_ai::control::administration::ProvidersReport,
+    bitrouter_ai::control::administration::validate_identifier,
+};
 
+use crate::config::Config;
+use crate::config::routing_table::ConfigRoutingTable;
 use anyhow::Result;
-use bitrouter_sdk::config::{Config, ConfigRoutingTable, PolicyModelTarget};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
 use crate::daemon::ObserveStatusProvider;
 use crate::paths::ConfigSource;
 use crate::policy_lock::{LoadedPolicyLock, PolicyRuntime};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum PolicyView {
-    #[default]
-    Active,
-    Disk,
+pub(crate) trait ObserveReportRuntime: Sized {
+    fn from_snapshot(snapshot: crate::daemon::ObserveStatusPayload, reachable: bool) -> Self;
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PolicyInput {
-    #[serde(default)]
-    pub view: PolicyView,
-    pub name: Option<String>,
-}
-
-impl PolicyInput {
-    pub fn validate(&self) -> Result<()> {
-        if let Some(name) = &self.name {
-            validate_identifier(name)?;
-        }
-        Ok(())
-    }
-}
-
-pub fn validate_identifier(value: &str) -> Result<()> {
-    anyhow::ensure!(
-        !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control),
-        "identifier must contain 1–256 bytes and no control characters"
-    );
-    Ok(())
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderEntry {
-    pub id: String,
-    pub models: usize,
-    pub active: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ProvidersReport {
-    pub resolved_via: String,
-    pub providers: Vec<ProviderEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AgentEntry {
-    pub id: String,
-    pub configured: bool,
-    pub in_catalog: bool,
-    pub description: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AgentsReport {
-    pub resolved_via: String,
-    pub readiness_checked: bool,
-    pub agents: Vec<AgentEntry>,
-    #[serde(default)]
-    pub skill_delivery: std::collections::BTreeMap<String, String>,
-}
-
-/// Program delivery contracts. Effective ACP support is negotiated per connection.
-pub fn skill_delivery_paths() -> std::collections::BTreeMap<String, String> {
-    [
-        ("native", "native_activation"),
-        (
-            "supervised_acp",
-            "local_prompt_instructions_when_negotiated",
-        ),
-        ("supervised_acp_mcp_origin", "unsupported"),
-        ("native_launcher", "unsupported"),
-        ("inference_only", "unsupported"),
-        ("transparent_or_standalone_acp", "unsupported"),
-    ]
-    .into_iter()
-    .map(|(path, mode)| (path.into(), mode.into()))
-    .collect()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ObserveReport {
-    pub daemon_reachable: bool,
-    pub compiled_in: bool,
-    pub exporter_wired: bool,
-    pub sampler: Option<String>,
-    pub sampler_arg: Option<f64>,
-    pub metrics_enabled: bool,
-    pub header_count: usize,
-    pub resource_attribute_count: usize,
-    pub api_key_count: usize,
-    pub api_key_cap: usize,
-    pub user_id_count: usize,
-    pub user_id_cap: usize,
-    pub active_spans: usize,
-}
-
-impl ObserveReport {
-    pub fn from_snapshot(snapshot: crate::daemon::ObserveStatusPayload, reachable: bool) -> Self {
+impl ObserveReportRuntime for ObserveReport {
+    fn from_snapshot(snapshot: crate::daemon::ObserveStatusPayload, reachable: bool) -> Self {
         Self {
             daemon_reachable: reachable,
             compiled_in: snapshot.compiled_in,
@@ -130,44 +48,13 @@ impl ObserveReport {
     }
 }
 
-/// Explicitly selected policy fields; never serialize the source document.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PolicyDetail {
-    pub tiers: BTreeMap<String, PolicyModelTarget>,
-    pub routes: BTreeMap<String, String>,
-    pub default_tier: Option<String>,
-    pub tool_use_tier: Option<String>,
-    pub tool_safe_tiers: Vec<String>,
-    pub certificates: BTreeMap<String, CertificateIdentity>,
+pub(crate) trait PolicyReportRuntime: Sized {
+    fn from_loaded(config: &Config, loaded: Option<&LoadedPolicyLock>, view: PolicyView) -> Self;
+    fn selected(self, name: Option<&str>) -> Result<Self>;
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct CertificateIdentity {
-    pub selected_tier: String,
-    pub evidence_digest: String,
-    pub compiler_config_digest: String,
-    pub evaluator_config_digest: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct PolicyReport {
-    pub view: PolicyView,
-    pub availability: String,
-    pub digest: Option<String>,
-    pub mode: String,
-    pub policies: Vec<String>,
-    pub bindings: BTreeMap<String, String>,
-    pub evidence_root: Option<String>,
-    pub eval_snapshot_root: Option<String>,
-    pub definitions: BTreeMap<String, PolicyDetail>,
-}
-
-impl PolicyReport {
-    pub fn from_loaded(
-        config: &Config,
-        loaded: Option<&LoadedPolicyLock>,
-        view: PolicyView,
-    ) -> Self {
+impl PolicyReportRuntime for PolicyReport {
+    fn from_loaded(config: &Config, loaded: Option<&LoadedPolicyLock>, view: PolicyView) -> Self {
         let definitions = loaded
             .map(|loaded| {
                 loaded
@@ -223,8 +110,8 @@ impl PolicyReport {
             .into(),
             digest: loaded.map(|loaded| loaded.digest.clone()),
             mode: match config.policy.mode {
-                bitrouter_sdk::config::PolicyRuntimeMode::Frozen => "frozen",
-                bitrouter_sdk::config::PolicyRuntimeMode::Adaptive => "adaptive",
+                crate::config::PolicyRuntimeMode::Frozen => "frozen",
+                crate::config::PolicyRuntimeMode::Adaptive => "adaptive",
             }
             .into(),
             policies: definitions.keys().cloned().collect(),
@@ -238,7 +125,7 @@ impl PolicyReport {
         }
     }
 
-    pub fn selected(mut self, name: Option<&str>) -> Result<Self> {
+    fn selected(mut self, name: Option<&str>) -> Result<Self> {
         match name {
             Some(name) => {
                 validate_identifier(name)?;
@@ -316,23 +203,40 @@ pub fn providers(config: &Config, source: &str) -> ProvidersReport {
 }
 
 pub fn agents(config: &Config, source: &str) -> AgentsReport {
+    #[cfg(feature = "harness")]
+    let agents = crate::agents::list(config)
+        .into_iter()
+        .map(|row| AgentEntry {
+            id: row.id,
+            configured: row.configured,
+            in_catalog: row.in_catalog,
+            description: if row.in_catalog {
+                row.description
+            } else {
+                "Custom configured agent".into()
+            },
+        })
+        .collect();
+    // Reduced builds retain configuration inspection without loading an agent
+    // execution catalog or claiming that a configured agent can run locally.
+    #[cfg(not(feature = "harness"))]
+    let agents = {
+        let mut ids: Vec<_> = config.agents.keys().collect();
+        ids.sort();
+        ids.into_iter()
+            .map(|id| AgentEntry {
+                id: id.clone(),
+                configured: true,
+                in_catalog: false,
+                description: "Custom configured agent".into(),
+            })
+            .collect()
+    };
     AgentsReport {
         skill_delivery: skill_delivery_paths(),
         resolved_via: source.into(),
         readiness_checked: false,
-        agents: crate::agents::list(config)
-            .into_iter()
-            .map(|row| AgentEntry {
-                id: row.id,
-                configured: row.configured,
-                in_catalog: row.in_catalog,
-                description: if row.in_catalog {
-                    row.description
-                } else {
-                    "Custom configured agent".into()
-                },
-            })
-            .collect(),
+        agents,
     }
 }
 
@@ -342,7 +246,7 @@ mod tests {
 
     #[test]
     fn custom_agent_commands_are_never_reported() -> Result<()> {
-        let config = bitrouter_sdk::config::parse(
+        let config = crate::config::parse(
             "agents:\n  custom:\n    name: custom\n    transport:\n      type: stdio\n      command: secret-command\n      args: [secret-token]\n",
         )?;
         let report = serde_json::to_string(&agents(&config, "live"))?;
@@ -382,14 +286,14 @@ mod snapshot_tests {
         };
         std::fs::write(&path, initial_yaml)?;
         std::fs::write(&lock, policy_yaml("old"))?;
-        let initial = bitrouter_sdk::config::load(&path).await?;
+        let initial = crate::config::load(&path).await?;
         let db = crate::db::connect("sqlite::memory:").await?;
         crate::db::run_migrations(&db).await?;
         let runtime = PolicyRuntime::new(
             &initial,
             Some(&path),
             None,
-            crate::eval::settlement::PendingEvalDecisionStore::default(),
+            crate::gateway::observability::decision::PendingEvalDecisionStore::default(),
             None,
         )
         .await?;
@@ -411,7 +315,7 @@ mod snapshot_tests {
         assert_eq!(still_active.bindings, active_before.bindings);
         assert_eq!(still_active.digest, active_before.digest);
 
-        let candidate = bitrouter_sdk::config::load(&path).await?;
+        let candidate = crate::config::load(&path).await?;
         let prepared = runtime.prepare_for_config(&candidate, Some(&path)).await?;
         assert_eq!(
             runtime.administration_snapshot().digest,
@@ -425,4 +329,21 @@ mod snapshot_tests {
         assert_eq!(active_after.digest, disk.digest);
         Ok(())
     }
+}
+
+pub fn skill_delivery_paths() -> std::collections::BTreeMap<String, String> {
+    [
+        ("native", "native_activation"),
+        (
+            "supervised_acp",
+            "local_prompt_instructions_when_negotiated",
+        ),
+        ("supervised_acp_mcp_origin", "unsupported"),
+        ("native_launcher", "unsupported"),
+        ("inference_only", "unsupported"),
+        ("transparent_or_standalone_acp", "unsupported"),
+    ]
+    .into_iter()
+    .map(|(path, mode)| (path.into(), mode.into()))
+    .collect()
 }

@@ -23,8 +23,8 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::gateway::error::{BitrouterError, Result};
 use bitrouter_ai::types::{Usage, UsageOrigin};
-use bitrouter_sdk::{BitrouterError, Result};
 
 use crate::cloud::settlement::{SettlementReceipt, SettlementState};
 use crate::metering::db::{ReconciliationStatus, RequestMetric};
@@ -879,7 +879,7 @@ impl MeteringStore {
     /// and foreign rows are indistinguishable to the reader.
     pub(super) async fn native_request_rows(
         &self,
-        caller: &bitrouter_sdk::caller::CallerContext,
+        caller: &crate::gateway::caller::CallerContext,
         request_ids: &[String],
     ) -> Result<Vec<requests::Model>> {
         if request_ids.is_empty() {
@@ -1169,7 +1169,7 @@ impl MeteringStore {
                         })?,
                         effective_rates: Default::default(),
                         pricing_source: PricingSource::AuthoritativeReceipt,
-                        pricing_version: crate::eval::types::canonical_digest(receipt)
+                        pricing_version: crate::storage::evaluation::canonical_digest(receipt)
                             .map_err(|error| BitrouterError::internal(error.to_string()))?,
                         unknown_reason: None,
                     }

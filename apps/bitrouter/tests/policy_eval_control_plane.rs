@@ -1,28 +1,32 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use bitrouter::eval::EvalService;
-use bitrouter::eval::admission::SubmissionPrincipal;
-use bitrouter::eval::compiler::EvalEvidenceSnapshot;
-use bitrouter::eval::settlement::{
-    EvalInvocation, EvalSettlementRecorder, PendingEvalDecision, PendingEvalDecisionStore,
+use bitrouter::core::eval::EvalService;
+use bitrouter::core::eval::admission::SubmissionPrincipal;
+use bitrouter::core::eval::compiler::EvalEvidenceSnapshot;
+use bitrouter::core::eval::settlement::EvalSettlementRecorder;
+use bitrouter::core::eval::store::EvalStore;
+use bitrouter::core::policy::{CompileInput, compile_candidate};
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::model::target::AuthScheme;
+use bitrouter::gateway::observability::decision::{
+    EvalInvocation, PendingEvalDecision, PendingEvalDecisionStore,
 };
-use bitrouter::eval::store::EvalStore;
-use bitrouter::eval::types::{
-    EVAL_SCHEMA_VERSION, EvalDecisionRef, EvalScope, EvalSubject, EvalVerdict, EvaluationResult,
-    EvaluatorIdentity, EvaluatorKind, evidence_digest,
-};
-use bitrouter::policy_compile::{CompileInput, compile_candidate};
+use bitrouter::gateway::observability::event::EventBus;
+use bitrouter::gateway::observability::prediction::PredictiveResponseObserver;
+use bitrouter::gateway::pipeline::context::PipelineContext;
+use bitrouter::gateway::pipeline::hooks::{HopOutcome, ObserveHook};
+use bitrouter::gateway::pipeline::settlement::{SettlementContext, SettlementRecorder};
+use bitrouter::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml, semantic_digest};
-use bitrouter::workflow_state::response_observer::PredictiveResponseObserver;
-use bitrouter_ai::types::AuthScheme;
 use bitrouter_ai::types::{
     ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Prompt, UsageOrigin,
 };
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::event::EventBus;
-use bitrouter_sdk::language_model::{
-    ExecutionResult, HopOutcome, ObserveHook, PipelineContext, PipelineRequest, RoutingTarget,
-    SettlementContext, SettlementRecorder,
+use {
+    bitrouter::storage::evaluation::evidence_digest, bitrouter_ai::eval::EVAL_SCHEMA_VERSION,
+    bitrouter_ai::eval::EvalDecisionRef, bitrouter_ai::eval::EvalScope,
+    bitrouter_ai::eval::EvalSubject, bitrouter_ai::eval::EvalVerdict,
+    bitrouter_ai::eval::EvaluationResult, bitrouter_ai::eval::EvaluatorIdentity,
+    bitrouter_ai::eval::EvaluatorKind,
 };
 
 fn base_lock() -> PolicyLock {
@@ -140,10 +144,11 @@ async fn stale_candidate_loses_compare_and_swap_without_touching_active_bytes() 
     let newer_bytes = deterministic_yaml(&newer)?;
     std::fs::write(&active_path, &newer_bytes)?;
 
-    let error = bitrouter::policy_lock::publish_candidate_file(&config_path, &candidate_path)
-        .await
-        .err()
-        .ok_or_else(|| anyhow::anyhow!("stale publication unexpectedly succeeded"))?;
+    let error =
+        bitrouter::core::policy::files::publish_candidate_file(&config_path, &candidate_path)
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("stale publication unexpectedly succeeded"))?;
 
     assert_eq!(std::fs::read_to_string(active_path)?, newer_bytes);
     assert!(error.to_string().contains("parent digest"));
@@ -261,7 +266,7 @@ async fn policy_eval_control_plane_records_observed_action_without_quality_rewar
         model: "model".into(),
         caller: CallerContext::local(),
         headers: http::HeaderMap::new(),
-        input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(Prompt {
+        input: bitrouter::gateway::pipeline::types::PipelineInput::Generation(Box::new(Prompt {
             model: "model".into(),
             system: None,
             system_provider_metadata: BTreeMap::new(),
@@ -515,7 +520,7 @@ async fn snapshot_compile_publish_preserves_exact_eval_lineage() -> anyhow::Resu
     .document;
     std::fs::write(&candidate_path, deterministic_yaml(&candidate)?)?;
 
-    bitrouter::policy_lock::publish_candidate_file(&config_path, &candidate_path).await?;
+    bitrouter::core::policy::files::publish_candidate_file(&config_path, &candidate_path).await?;
 
     let published: PolicyLock = serde_saphyr::from_str(&std::fs::read_to_string(active_path)?)?;
     assert_eq!(semantic_digest(&published)?, semantic_digest(&candidate)?);

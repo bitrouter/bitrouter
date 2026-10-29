@@ -112,18 +112,53 @@ impl CanonicalStore {
         let key = identity.key()?;
         let revision_id = digest(&(&key, &input.submission_id))?;
         let input_digest = digest(&input)?;
-        let tx = self.db.begin().await?;
-        precondition(&tx).await?;
-        let keys: BTreeSet<_> = cp
+        let mut keys: BTreeSet<_> = cp
             .segments
             .iter()
             .map(|s| s.identity.key())
             .collect::<Result<_>>()?;
-        for key in keys {
-            lock_session(&tx, &key).await?;
+        // A historical checkpoint can have a different fork ancestry. Discover
+        // its session locks before starting the mutation, without making this
+        // read authoritative or rejecting an otherwise idempotent submission.
+        // Missing/corrupt hints are validated below only if the expected head
+        // actually matches; discovery never grants access across native scope.
+        if let Some(expected) = &input.expected_revision
+            && let Some(row) = revisions::Entity::find_by_id(expected)
+                .one(&self.db)
+                .await?
+            && row.session_key == key
+            && let Ok(previous) = serde_json::from_str::<AssessmentRevision>(&row.revision_json)
+            && let Some(row) = checkpoints::Entity::find_by_id(&previous.input.checkpoint_id)
+                .one(&self.db)
+                .await?
+            && row.session_key == key
+            && let Ok(previous) = serde_json::from_str::<Checkpoint>(&row.manifest_json)
+        {
+            for segment in previous.segments {
+                if segment.identity.owner == identity.owner
+                    && segment.identity.source == identity.source
+                    && let Ok(key) = segment.identity.key()
+                {
+                    keys.insert(key);
+                }
+            }
         }
-        manifest(&tx, identity, &input.checkpoint_id).await?;
-        if let Some(existing) = revisions::Entity::find_by_id(&revision_id).one(&tx).await? {
+        let tx = self.db.begin().await?;
+        precondition(&tx).await?;
+        let mut locked_sessions = BTreeMap::new();
+        for key in keys {
+            // Validate deletion when the corresponding manifest is used. An
+            // obsolete expected-head hint must not preempt duplicate handling.
+            if let Some(row) = lock_session_metadata(&tx, &key).await? {
+                locked_sessions.insert(key, row);
+            }
+        }
+        locked_manifest(&tx, identity, &input.checkpoint_id, &locked_sessions).await?;
+        if let Some(existing) = revisions::Entity::find_by_id(&revision_id)
+            .lock_exclusive()
+            .one(&tx)
+            .await?
+        {
             let value: AssessmentRevision = serde_json::from_str(&existing.revision_json)?;
             ensure!(
                 value.input_digest == input_digest,
@@ -132,19 +167,40 @@ impl CanonicalStore {
             tx.commit().await?;
             return Ok(value);
         }
-        let current_id = head(&tx, &key).await?;
+        // The session fence does not refresh an older MySQL read view. The
+        // selected head and its revision must both be read at that fence.
+        let current_id = heads::Entity::find_by_id(&key)
+            .lock_exclusive()
+            .one(&tx)
+            .await?
+            .and_then(|head| head.revision_id);
         ensure!(
             current_id == input.expected_revision,
             "effective revision changed; refresh before submitting"
         );
         let current = match &current_id {
-            Some(id) => Some(revision(&tx, id).await?),
+            Some(id) => {
+                let row = revisions::Entity::find_by_id(id)
+                    .lock_exclusive()
+                    .one(&tx)
+                    .await?
+                    .context("assessment revision missing")?;
+                Some(serde_json::from_str::<AssessmentRevision>(
+                    &row.revision_json,
+                )?)
+            }
             None => None,
         };
         let mut selected = true;
         let mut selection_reason = "selected";
         if let Some(current) = &current {
-            let previous = manifest(&tx, identity, &current.input.checkpoint_id).await?;
+            let previous = locked_manifest(
+                &tx,
+                identity,
+                &current.input.checkpoint_id,
+                &locked_sessions,
+            )
+            .await?;
             if input.assessment.is_none() {
                 ensure!(
                     current.input.assessment.is_some()

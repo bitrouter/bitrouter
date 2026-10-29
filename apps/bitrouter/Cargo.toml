@@ -19,14 +19,72 @@ path = "src/lib.rs"
 name = "bro"
 path = "src/main.rs"
 
+[features]
+default = ["core", "harness", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql"]
+core = ["dep:rand_distr"]
+harness = ["mcp", "dep:jsonschema", "dep:agent-client-protocol", "dep:agent-client-protocol-schema", "dep:agent-client-protocol-conductor", "dep:globset", "dep:ignore", "dep:tokio-stream"]
+mcp = ["dep:rmcp", "dep:process-wrap"]
+server-tools = ["mcp"]
+guardrails = ["dep:bitrouter-guardrails"]
+db-postgres = ["sea-orm/sqlx-postgres", "sea-orm-migration/sqlx-postgres"]
+db-mysql = ["sea-orm/sqlx-mysql", "sea-orm-migration/sqlx-mysql"]
+
+otel = ["otel-http"]
+otel-http = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:dashmap",
+    "dep:opentelemetry-http",
+    "dep:bytes",
+    "opentelemetry-otlp/http-proto",
+    "opentelemetry-otlp/reqwest-client",
+    "opentelemetry-otlp/reqwest-rustls",
+]
+otel-grpc = [
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry-semantic-conventions",
+    "dep:tracing-opentelemetry",
+    "dep:dashmap",
+    "dep:tonic",
+    "opentelemetry-otlp/grpc-tonic",
+    "opentelemetry-otlp/tls-roots",
+]
+
 [dependencies]
-bitrouter-ai = { workspace = true, features = ["pkce", "hosted-login", "file-store"] }
-bitrouter-sdk = { workspace = true, features = ["server", "config_file", "mcp"] }
-bitrouter-orchestrator = { workspace = true, features = ["acp"] }
-# `server`: the inbound ingress SERVER span, which wraps the SDK router this
-# binary serves. A deployment that builds its own ingress span takes
-# `otel-http` alone.
-bitrouter-telemetry = { workspace = true, features = ["otel-http", "server"] }
+bitrouter-sdk.workspace = true
+async-stream.workspace = true
+eventsource-stream.workspace = true
+httpdate.workspace = true
+tower.workspace = true
+bytes = { workspace = true, optional = true }
+dashmap = { workspace = true, optional = true }
+futures-core.workspace = true
+opentelemetry = { workspace = true, optional = true }
+opentelemetry-http = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+opentelemetry-semantic-conventions = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+pin-project-lite.workspace = true
+tonic = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+
+# Harness execution and shared MCP transports have separate capability gates.
+process-wrap = { workspace = true, optional = true, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
+rmcp = { workspace = true, optional = true }
+globset = { workspace = true, optional = true }
+ignore = { workspace = true, optional = true }
+regex.workspace = true
+similar.workspace = true
+agent-client-protocol-schema = { workspace = true, optional = true }
+agent-client-protocol-conductor = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true, features = ["sync"] }
+bitrouter-guardrails = { workspace = true, optional = true }
+bitrouter-ai = { workspace = true, features = ["schema"] }
 # Product-only OS keyring discovery for explicitly adopted external CLI sessions.
 keyring.workspace = true
 chrono.workspace = true
@@ -38,7 +96,7 @@ subtle.workspace = true
 base64.workspace = true
 zstd = { version = "0.13", default-features = false }
 rand.workspace = true
-rand_distr = "0.6"
+rand_distr = { version = "0.6", optional = true }
 hex.workspace = true
 uuid = { workspace = true }
 serde-saphyr.workspace = true
@@ -51,12 +109,15 @@ clap.workspace = true
 serde.workspace = true
 # Reviewed policies and persisted experiment digests require exact f64 round trips.
 # https://github.com/serde-rs/json/blob/master/src/de.rs
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+# Persisted JSON fingerprints also retain the full product's insertion order.
+# Keep it explicit: optional ACP dependencies must not select storage semantics.
+serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
 toml.workspace = true
 erased-serde = "0.4"
 async-trait.workspace = true
 reqwest.workspace = true
 url.workspace = true
+fluent-uri.workspace = true
 anyhow = "1"
 tempfile.workspace = true
 thiserror.workspace = true
@@ -64,14 +125,15 @@ http.workspace = true
 axum = { workspace = true, features = ["ws"] }
 http-body.workspace = true
 futures.workspace = true
-agent-client-protocol.workspace = true
+agent-client-protocol = { workspace = true, optional = true }
 tokio-util = { workspace = true, features = ["compat", "rt"] }
 axoupdater = { version = "0.10", default-features = false, features = ["github_releases"] }
 semver = "1"
-jsonschema = { version = "0.47.0", default-features = false }
+jsonschema = { version = "0.47.0", default-features = false, optional = true }
 schemars.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation"] }
 atomicwrites.workspace = true
 winapi-util = "0.1"
 
@@ -82,8 +144,18 @@ rustix = { workspace = true, features = ["process", "event", "termios", "fs"] }
 # Reads the committed registry artifacts to generate the ACP harness catalog.
 serde_json.workspace = true
 sha2.workspace = true
+# Derives artifact capabilities from this package's manifest, including archives.
+toml.workspace = true
 
 [dev-dependencies]
+# Differential stored-history tests use the pinned schema without activating
+# an ACP runtime in the application's normal/build dependency closure.
+agent-client-protocol-schema.workspace = true
+bitrouter-sdk = { workspace = true, features = ["core"] }
+bitrouter-ai = { workspace = true, features = ["testing"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
+tonic = { workspace = true, features = ["server", "router"] }
+tokio-stream = { workspace = true, features = ["net"] }
 tokio-tungstenite = "0.29"
 rmcp.workspace = true
 bitrouter-guardrails = { path = "../../extensions/regex-checker/matcher" }
@@ -100,8 +172,129 @@ serde-saphyr.workspace = true
 # OTLP/HTTP+protobuf decoding for full-stack tests that inspect the trace
 # bodies the observe plugin pushes to the configured collector. Pins live in
 # the root `[workspace.dependencies]` alongside the rest of the 0.32.x stack.
-opentelemetry-proto.workspace = true
+opentelemetry-proto = { workspace = true, features = ["gen-tonic", "metrics"] }
 prost.workspace = true
 # Real-terminal acceptance coverage: the process under test must see a PTY,
 # while the test controls its size, input bytes, output, and child lifetime.
 portable-pty = "0.9"
+
+[[test]]
+name = "observe_hierarchy"
+required-features = ["otel-http"]
+
+[[test]]
+name = "telemetry_ingress_log_target"
+required-features = ["otel-http"]
+
+[[test]]
+name = "core_contract"
+required-features = ["core"]
+
+[[test]]
+name = "core_execution"
+required-features = ["core"]
+
+[[test]]
+name = "orchestrator_core"
+required-features = ["core"]
+
+[[test]]
+name = "managed_native"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "telemetry_grpc_transport"
+required-features = ["otel-grpc"]
+
+[[bench]]
+name = "observe_overhead"
+harness = false
+required-features = ["otel-http"]
+
+[[test]]
+name = "smithers_reward_loop"
+required-features = ["core"]
+
+[[test]]
+name = "workflow_state_replay"
+required-features = ["core"]
+
+[[test]]
+name = "eval_exchange_equivalence"
+required-features = ["core"]
+
+[[test]]
+name = "workflow_state_real_agent_e2e"
+required-features = ["core"]
+
+[[test]]
+name = "policy_eval_control_plane"
+required-features = ["core"]
+
+[[example]]
+name = "checkpoint_ts_publication"
+required-features = ["core"]
+
+[[example]]
+name = "checkpoint_ts_simulation"
+required-features = ["core"]
+
+[[example]]
+name = "sdk_manifest_fixture"
+required-features = ["core"]
+
+[[example]]
+name = "legacy_guardrails"
+required-features = ["guardrails"]
+
+[[test]]
+name = "harness_mcp_check"
+required-features = ["mcp"]
+
+[[test]]
+name = "database_capture"
+required-features = ["harness"]
+
+[[test]]
+name = "acp"
+required-features = ["harness"]
+
+[[test]]
+name = "native_acp"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "native_agent_process"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "native_harness_resources"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "harness_sdk"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "mcp_skill_host"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "managed_daemon"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "management_cli"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "native_evolution_cli"
+required-features = ["core", "harness"]
+
+[[test]]
+name = "acp_skill_delivery"
+required-features = ["harness"]
+
+[[test]]
+name = "background_cli"
+required-features = ["harness"]

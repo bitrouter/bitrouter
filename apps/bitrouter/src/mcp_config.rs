@@ -5,9 +5,9 @@ mod document;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+use crate::config::mcp::{McpServerConfig, McpTransport};
+use crate::gateway::error::BitrouterError;
 use anyhow::{Context, Result, ensure};
-use bitrouter_sdk::error::BitrouterError;
-use bitrouter_sdk::mcp::transport::{McpServerConfig, McpTransport};
 use clap::{Args, Subcommand};
 use serde::Serialize;
 
@@ -74,7 +74,7 @@ struct ConfigReport {
     servers: Vec<ConfiguredServer>,
     #[serde(skip_serializing_if = "Option::is_none")]
     activation: Option<ConfigActivation>,
-    running: crate::reload::RunningConfigState,
+    running: bitrouter_ai::control::reload::RunningConfigState,
     #[serde(skip_serializing_if = "Option::is_none")]
     restart_required: Option<bool>,
     hint: &'static str,
@@ -157,28 +157,33 @@ async fn addition(name: &str, input: AddInput) -> Result<String> {
             env: Default::default(),
         },
         (None, None) if crate::prompt::terminal() => {
-            let selected = crate::prompt::select(
-                "MCP transport",
-                "Saving does not connect or start the server.",
-                vec![
-                    crate::prompt::Item::new("http", "Streamable HTTP URL"),
-                    crate::prompt::Item::new("stdio", "Local server program"),
-                ],
-                0,
-            )
-            .await?;
-            if selected == 0 {
-                McpTransport::Http {
-                    url: crate::prompt::line("HTTP URL").await?,
-                    headers: Default::default(),
-                }
-            } else {
-                McpTransport::Stdio {
-                    command: crate::prompt::line("Program (use --from for arguments/env)").await?,
-                    args: Vec::new(),
-                    env: Default::default(),
-                }
-            }
+            crate::prompt::interruptible(async {
+                // One receiver spans both prompts without wrapping explicit blocking input.
+                let selected = crate::prompt::select(
+                    "MCP transport",
+                    "Saving does not connect or start the server.",
+                    vec![
+                        crate::prompt::Item::new("http", "Streamable HTTP URL"),
+                        crate::prompt::Item::new("stdio", "Local server program"),
+                    ],
+                    0,
+                )
+                .await?;
+                Ok(if selected == 0 {
+                    McpTransport::Http {
+                        url: crate::prompt::line("HTTP URL").await?,
+                        headers: Default::default(),
+                    }
+                } else {
+                    McpTransport::Stdio {
+                        command: crate::prompt::line("Program (use --from for arguments/env)")
+                            .await?,
+                        args: Vec::new(),
+                        env: Default::default(),
+                    }
+                })
+            })
+            .await?
         }
         _ => {
             return Err(bad(
@@ -258,7 +263,7 @@ pub async fn execute(command: Command, output: &Output) -> Result<()> {
                 })
                 .collect(),
             activation: None,
-            running: crate::reload::RunningConfigState::Unknown,
+            running: bitrouter_ai::control::reload::RunningConfigState::Unknown,
             restart_required: None,
             hint: "Configured entries only. Use bro mcp check to connect and discover tools.",
         })?;
@@ -335,7 +340,7 @@ async fn publish(
         source,
         servers: Vec::new(),
         activation: Some(ConfigActivation::SavedOnly),
-        running: crate::reload::RunningConfigState::Unknown,
+        running: bitrouter_ai::control::reload::RunningConfigState::Unknown,
         restart_required: Some(true),
         hint: "Saved only. Use bro status for target-owned state; explicitly restart after active work finishes. Route reload does not update native MCP bindings.",
     })

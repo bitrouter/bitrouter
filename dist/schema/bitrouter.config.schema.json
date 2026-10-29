@@ -124,7 +124,7 @@
       "type": "string"
     },
     "Capability": {
-      "description": "An optional inference feature a request may require and a provider may\nadvertise. Capabilities are API-agnostic: the same capability maps to a\ndifferent wire parameter in each protocol (structured outputs is Chat\nCompletions' `response_format`, Messages' `output_config.format`, Generate\nContent's `responseSchema`, Responses' `text.format`). The serde\nrepresentation (e.g. `structured_outputs`) is the stable token used to match\na request's needs against a provider's advertised capabilities.\n\nA capability-aware `RoutingTable`\ncan read the set a request requires ([`Prompt::required_capabilities`]) and\nrestrict the chain to providers advertising all of them.",
+      "description": "An optional inference feature a request may require and a provider may\nadvertise. Capabilities are API-agnostic: the same capability maps to a\ndifferent wire parameter in each protocol (structured outputs is Chat\nCompletions' `response_format`, Messages' `output_config.format`, Generate\nContent's `responseSchema`, Responses' `text.format`). The serde\nrepresentation (e.g. `structured_outputs`) is the stable token used to match\na request's needs against a provider's advertised capabilities.\n\nApplication routing derives a request's required capabilities and can\nrestrict its provider chain to those advertising all of them.",
       "oneOf": [
         {
           "const": "structured_outputs",
@@ -763,7 +763,7 @@
       "type": "object"
     },
     "McpServerConfig": {
-      "description": "One configured upstream MCP server, as written in `bitrouter.yaml`.\n\nThe same `name` becomes the URL segment in `POST /mcp/{name}` and the\nidentifier the [`super::RoutingTable`] resolves against. Restrictions\nchosen to match the v0 config schema for paste-compatibility:\n\n- non-empty\n- no `/` (collides with the URL path segment)\n- not literally `sse` (reserved by the spec's deprecated transport name)",
+      "description": "One configured upstream MCP server, as written in `bitrouter.yaml`.\n\nThe same `name` becomes the URL segment in `POST /mcp/{name}` and the\nidentifier the [`crate::gateway::mcp::RoutingTable`] resolves against. Restrictions\nchosen to match the v0 config schema for paste-compatibility:\n\n- non-empty\n- no `/` (collides with the URL path segment)\n- not literally `sse` (reserved by the spec's deprecated transport name)",
       "properties": {
         "aggregate": {
           "default": true,
@@ -2667,7 +2667,7 @@
       "default": {
         "mcp_sources": {}
       },
-      "description": "Explicit native MCP skill source grants. Empty grants no MCP skill sources."
+      "description": "Explicit native MCP skill source grants. Empty grants no sources."
     },
     "trajectory": {
       "$ref": "#/$defs/TrajectoryConfig",

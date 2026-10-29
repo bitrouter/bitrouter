@@ -15,13 +15,9 @@ async fn fixture(profile: &str, options: &[&str]) -> Result<Fixture> {
     static CODEX: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     static CLAUDE: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     let binary = if profile == "claude-acp" {
-        CLAUDE.get_or_init(|| {
-            example_binary::build("bitrouter-orchestrator", "acp_claude_skill_fixture")
-        })
+        CLAUDE.get_or_init(|| example_binary::build("bitrouter", "acp_claude_skill_fixture"))
     } else {
-        CODEX.get_or_init(|| {
-            example_binary::build("bitrouter-orchestrator", "acp_codex_skill_fixture")
-        })
+        CODEX.get_or_init(|| example_binary::build("bitrouter", "acp_codex_skill_fixture"))
     }
     .as_ref()
     .map_err(|error| anyhow::anyhow!("{error}"))?;
@@ -401,8 +397,10 @@ async fn configure_decisions(fixture: &mut Fixture, base_url: &str) -> Result<()
 #[tokio::test]
 async fn legacy_supervisor_constraints_are_rejected_before_authority_or_adapter_effects()
 -> Result<()> {
+    use bitrouter::client::sessions::wire::{
+        Presentation, SessionCommand, SessionRequest, StartRunRequest,
+    };
     use bitrouter::daemon::{DaemonCommand, DaemonResponse};
-    use bitrouter::supervisor::{Presentation, SessionCommand, SessionRequest, StartRunRequest};
     let mut fixture = fixture("codex-acp", &[]).await?;
     for version in [1, 2] {
         let request = SessionRequest {

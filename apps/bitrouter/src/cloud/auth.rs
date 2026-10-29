@@ -6,12 +6,14 @@
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
-use bitrouter_ai::providers::hosted::credentials::{CredentialKind, Credentials, StoredCredential};
+use crate::gateway::providers::hosted::credentials::{
+    CredentialKind, Credentials, StoredCredential,
+};
 
 use crate::cloud::account::manager::CredentialManager;
 use crate::cloud::account::settings::{Settings, require_secure_url, resolve, resolve_from_env};
-use bitrouter_ai::providers::hosted::flow;
-use bitrouter_ai::providers::hosted::metadata::{self, AsMetadata};
+use crate::gateway::providers::hosted::metadata::AsMetadata;
+use crate::gateway::providers::hosted::{flow, metadata};
 
 /// User-supplied flag values for `bro cloud login` / `logout`.
 /// The CLI passes them straight through.

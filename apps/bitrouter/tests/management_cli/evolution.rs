@@ -3,10 +3,10 @@
 use super::{Fixture, Result, Value, field, idle, json, text_path};
 use anyhow::{Context, ensure};
 use bitrouter::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-use bitrouter::evolution::evidence::EvidenceKind;
-use bitrouter::evolution::operator::checkpoint::ReviewInput;
-use bitrouter::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
-use bitrouter::evolution::scoring::RubricSubmission;
+use bitrouter::core::evolution::evidence::EvidenceKind;
+use bitrouter::core::evolution::operator::checkpoint::ReviewInput;
+use bitrouter::core::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
+use bitrouter::core::evolution::scoring::RubricSubmission;
 use wiremock::MockServer;
 
 async fn operate(fixture: &Fixture, action: &[&str]) -> Result<Value> {
@@ -433,12 +433,12 @@ async fn candidate_cli_preserves_joint_rules_judge_fences_balanced_accounts_and_
         first["report"]["report"]["definition"]["batch_sessions"],
         16
     );
-    let mut foreign: bitrouter::evolution::runtime::candidates::CandidatePreview =
+    let mut foreign: bitrouter::core::evolution::runtime::candidates::CandidatePreview =
         serde_json::from_value(first["report"]["report"].clone())?;
     foreign.owner = "another-owner".into();
     // The digest is public integrity, not authorization. A caller can recompute
     // it; the independent owner fence must still reject the authentic shape.
-    foreign.preview_digest = rubric::digest(&(
+    foreign.preview_digest = bitrouter::storage::evolution::digest(&(
         "candidate-preview-v1",
         &foreign.owner,
         &foreign.spec,
@@ -475,10 +475,10 @@ async fn candidate_cli_preserves_joint_rules_judge_fences_balanced_accounts_and_
     .await?;
     assert_eq!(
         judge["report"]["report"]["definition"]["measurement_contract"],
-        json!(bitrouter::evolution::scoring::measurement_contract(
+        json!(bitrouter::core::evolution::scoring::measurement_contract(
             AssessmentSource::Agentic,
             "checkpoint-judge:mock:model",
-            bitrouter::evolution::judge::JUDGE_VERSION
+            bitrouter::core::evolution::judge::JUDGE_VERSION
         )?)
     );
     operate(&fixture, &["judge-model", "mock:alt"]).await?;

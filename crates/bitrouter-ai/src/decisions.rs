@@ -223,6 +223,7 @@ pub enum DecisionInputPart {
 
 /// A typed category value; boolean true differs from string "true".
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum DecisionChoiceValue {
     /// String category.
@@ -309,6 +310,7 @@ impl DecisionQuestion {
 
 /// A native per-choice probability.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DecisionChoiceProbability {
     /// Supplied typed choice value.
     pub value: DecisionChoiceValue,
@@ -321,6 +323,7 @@ pub struct DecisionChoiceProbability {
 
 /// A native per-level probability.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct DecisionScoreProbability {
     /// Zero-based rubric level index.
     pub value: u32,
@@ -335,6 +338,7 @@ pub struct DecisionScoreProbability {
 
 /// One ordered typed answer or refusal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DecisionAnswer {
     /// Estimated predicate probability.

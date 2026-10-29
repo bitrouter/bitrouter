@@ -8,27 +8,26 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use base64::Engine;
-use bitrouter_ai::auth::AuthAppliers;
-use bitrouter_ai::auth::ContinuationAuthority;
-use bitrouter_ai::protocol::responses::{
+use crate::gateway::error::{BitrouterError, Result as PipelineResult};
+use crate::gateway::model::protocol::responses::{
     AssistantTurnCommitment, CausalPrefixCommitment, CausalPrefixPlan,
     decode_gateway_continuation_id, encode_gateway_continuation_id,
 };
-use bitrouter_ai::types::{ApiProtocol, Role};
-use bitrouter_sdk::error::{BitrouterError, Result as PipelineResult};
-use bitrouter_sdk::language_model::RoutingTarget;
-use bitrouter_sdk::language_model::context::{
+use crate::gateway::pipeline::context::{
     PipelineContext, ProviderContinuation, RequireContinuationAuthority,
     SuppressProviderContinuation,
 };
-use bitrouter_sdk::language_model::hooks::{HookDecision, PreRequestHook, RouteHook};
-use bitrouter_sdk::language_model::settlement::{
+use crate::gateway::pipeline::hooks::{HookDecision, PreRequestHook, RouteHook};
+use crate::gateway::pipeline::settlement::{
     RequiredDeliveryHandshake, RequiredFinalizationContext, RequiredFinalizationReceipt,
     RequiredFinalizer,
 };
+use crate::gateway::pipeline::types::RoutingTarget;
+use crate::gateway::providers::auth::{AuthAppliers, ContinuationAuthority};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use base64::Engine;
+use bitrouter_ai::types::{ApiProtocol, Role};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use hmac::{Hmac, KeyInit, Mac};
 use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
@@ -38,7 +37,7 @@ use sea_orm::{ActiveValue::Set, DatabaseConnection, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use crate::workflow_state::predictive::authenticated_visible_causal_prefix;
+use crate::gateway::routing::workflow::predictive::authenticated_visible_causal_prefix;
 
 const OWNER_IDENTITY_DOMAIN: &[u8] = b"bitrouter.continuation.owner.v1";
 const CONTINUATION_IDENTITY_DOMAIN: &[u8] = b"bitrouter.continuation.identity.v1";
@@ -177,8 +176,8 @@ impl ContinuationKey {
         let account = target.account_label.as_deref().unwrap_or("");
         let protocol = target.api_protocol.to_string();
         let auth_scheme = match credential_authority.effective_scheme() {
-            bitrouter_ai::types::AuthScheme::XApiKey => "x-api-key",
-            bitrouter_ai::types::AuthScheme::Bearer => "bearer",
+            crate::gateway::model::target::AuthScheme::XApiKey => "x-api-key",
+            crate::gateway::model::target::AuthScheme::Bearer => "bearer",
         };
         let credential_authority = hex::encode(credential_authority.credential().proof_bytes());
         let digest = hmac_bytes(
@@ -2276,7 +2275,12 @@ impl RouteHook for ContinuationRuntime {
                     if target.api_protocol != ApiProtocol::Responses {
                         continue;
                     }
-                    let credential_authority = bitrouter_sdk::language_model::native_auth::continuation_authority_for_request(&self.auth_appliers, target, Some(ctx.headers()))
+                    let credential_authority =
+                        crate::gateway::pipeline::native_auth::continuation_authority_for_request(
+                            &self.auth_appliers,
+                            target,
+                            Some(ctx.headers()),
+                        )
                         .await
                         .map_err(|error| {
                             BitrouterError::internal(format!(
@@ -2356,7 +2360,7 @@ impl ContinuationRuntime {
         let credential_authority = match ctx.credential_authority.as_ref() {
             Some(authority) => authority.clone(),
             None if self.auth_appliers.lookup(&target.provider_name).is_none() => {
-                bitrouter_sdk::language_model::native_auth::continuation_authority_for_request(
+                crate::gateway::pipeline::native_auth::continuation_authority_for_request(
                     &self.auth_appliers,
                     target,
                     None,
@@ -2725,30 +2729,34 @@ mod tests {
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use async_trait::async_trait;
-    use axum::body::Body;
-    use axum::http::Request as HttpRequest;
-    use bitrouter_ai::auth::AuthAppliers;
-    use bitrouter_ai::auth::{AppliedAuth, AuthApplier, CredentialAuthority};
-    use bitrouter_ai::types::{
-        ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
-        Role, StreamPart, Tool, ToolResultOutput, Usage,
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::http::{AppState, build_router};
+    use crate::gateway::pipeline::builder::PipelineBuilder;
+    use crate::gateway::pipeline::context::{PipelineContext, ProviderContinuation, StreamContext};
+    use crate::gateway::pipeline::execution::Pipeline;
+    use crate::gateway::pipeline::executor::{
+        Executor, HttpExecutor, MockExecutor, MockResponse, StreamPartStream,
     };
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::context::{PipelineContext, ProviderContinuation};
-    use bitrouter_sdk::language_model::hooks::{
-        ObserveHook, RequestOutcome, RouteHook, StreamHook,
-    };
-    use bitrouter_sdk::language_model::settlement::{
+    use crate::gateway::pipeline::hooks::{ObserveHook, RequestOutcome, RouteHook, StreamHook};
+    use crate::gateway::pipeline::routing::StaticRoutingTable;
+    use crate::gateway::pipeline::settlement::{
         DeliveryAcknowledgement, RequiredFinalizationContext, RequiredFinalizer, SettlementContext,
         SettlementRecorder,
     };
-    use bitrouter_sdk::language_model::{
-        ExecutionResult, Executor, HttpExecutor, MockExecutor, MockResponse, Pipeline,
-        PipelineBuilder, PipelineRequest, RoutingTarget, StaticRoutingTable, StreamAction,
-        StreamContext, StreamInterest, StreamOutcome, StreamPartStream,
+    use crate::gateway::pipeline::stream::{StreamAction, StreamInterest, StreamOutcome};
+    use crate::gateway::pipeline::types::{ExecutionResult, PipelineRequest, RoutingTarget};
+    use crate::gateway::providers::auth::{
+        AppliedAuth, AuthApplier, AuthAppliers, CredentialAuthority,
     };
-    use bitrouter_sdk::server::{AppState, build_router};
+    use async_trait::async_trait;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
+    use bitrouter_ai::types::{
+        ApiProtocol, Content, FinishReason, GenerateResult, GenerationParams, Message, Prompt,
+        Role, StreamPart, Usage,
+    };
+    #[cfg(feature = "server-tools")]
+    use bitrouter_ai::types::{Tool, ToolResultOutput};
     use chrono::{TimeDelta, TimeZone, Utc};
     use futures::StreamExt;
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
@@ -2812,7 +2820,7 @@ mod tests {
     fn static_authority(api_key: &str) -> ContinuationAuthority {
         ContinuationAuthority::new(
             CredentialAuthority::derive("static-transport-credential", api_key),
-            bitrouter_ai::types::AuthScheme::Bearer,
+            crate::gateway::model::target::AuthScheme::Bearer,
         )
     }
 
@@ -3828,19 +3836,17 @@ mod tests {
             model: "openai:gpt-5".into(),
             caller: CallerContext::new("key", owner),
             headers: Default::default(),
-            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
-                Prompt {
-                    model: "gpt-5".into(),
-                    system: None,
-                    system_provider_metadata: Default::default(),
-                    messages,
-                    tools: Vec::new(),
-                    params,
-                    response_format: None,
-                    tool_choice: None,
-                    stream: true,
-                },
-            )),
+            input: crate::gateway::pipeline::types::PipelineInput::Generation(Box::new(Prompt {
+                model: "gpt-5".into(),
+                system: None,
+                system_provider_metadata: Default::default(),
+                messages,
+                tools: Vec::new(),
+                params,
+                response_format: None,
+                tool_choice: None,
+                stream: true,
+            })),
             inbound_protocol: Some(ApiProtocol::Responses),
         })
     }
@@ -6245,8 +6251,10 @@ mod tests {
         forwarded_parents: Vec<Option<String>>,
     }
 
+    #[cfg(feature = "server-tools")]
     struct ToolRoundResponder(Arc<std::sync::Mutex<ToolRoundState>>);
 
+    #[cfg(feature = "server-tools")]
     impl Respond for ToolRoundResponder {
         fn respond(&self, request: &Request) -> ResponseTemplate {
             let body: serde_json::Value = serde_json::from_slice(&request.body)
@@ -6342,8 +6350,10 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server-tools")]
     struct NonstreamToolRoundResponder(Arc<std::sync::Mutex<ToolRoundState>>);
 
+    #[cfg(feature = "server-tools")]
     impl Respond for NonstreamToolRoundResponder {
         fn respond(&self, request: &Request) -> ResponseTemplate {
             let body: serde_json::Value = serde_json::from_slice(&request.body)
@@ -6537,12 +6547,12 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             let value =
                 reqwest::header::HeaderValue::from_str(&format!("Bearer {}", self.credential))
                     .map_err(|error| {
-                        bitrouter_ai::error::ModelError::configuration(format!(
+                        crate::gateway::model::error::ModelError::configuration(format!(
                             "test bearer: {error}"
                         ))
                     })?;
@@ -6555,8 +6565,8 @@ mod tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven(
                 self.apply(request, target).await?,
                 CredentialAuthority::derive("test/dynamic-principal", &self.credential),
@@ -6565,8 +6575,8 @@ mod tests {
 
         async fn continuation_authority(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<CredentialAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<CredentialAuthority>> {
             Ok(Some(CredentialAuthority::derive(
                 "test/dynamic-principal",
                 &self.credential,
@@ -6581,8 +6591,8 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             request.headers_mut().insert(
                 reqwest::header::AUTHORIZATION,
                 reqwest::header::HeaderValue::from_static("Bearer unsupported"),
@@ -6598,16 +6608,16 @@ mod tests {
         async fn apply(
             &self,
             request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             Ok(request)
         }
 
         async fn continuation_authority(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<CredentialAuthority>> {
-            Err(bitrouter_ai::error::ModelError::configuration(
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<CredentialAuthority>> {
+            Err(crate::gateway::model::error::ModelError::configuration(
                 "broken non-Responses credential store",
             ))
         }
@@ -6620,16 +6630,16 @@ mod tests {
         async fn apply(
             &self,
             request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             Ok(request)
         }
 
         async fn continuation_authority_proof(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<ContinuationAuthority>> {
-            Err(bitrouter_ai::error::ModelError::configuration(
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<ContinuationAuthority>> {
+            Err(crate::gateway::model::error::ModelError::configuration(
                 "opaque authority plugin exposed opaque-authority-private-sentinel",
             ))
         }
@@ -6642,9 +6652,9 @@ mod tests {
         async fn apply(
             &self,
             _request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
-            Err(bitrouter_ai::error::ModelError::configuration(
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
+            Err(crate::gateway::model::error::ModelError::configuration(
                 "opaque apply plugin exposed opaque-public-auth-private-sentinel",
             ))
         }
@@ -6657,8 +6667,8 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             request.headers_mut().insert(
                 reqwest::header::AUTHORIZATION,
                 reqwest::header::HeaderValue::from_static("Bearer principal-b"),
@@ -6669,8 +6679,8 @@ mod tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven(
                 self.apply(request, target).await?,
                 CredentialAuthority::derive("test/dynamic-principal", "principal-b"),
@@ -6679,8 +6689,8 @@ mod tests {
 
         async fn continuation_authority(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<CredentialAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<CredentialAuthority>> {
             Ok(Some(CredentialAuthority::derive(
                 "test/dynamic-principal",
                 "principal-a",
@@ -6688,15 +6698,15 @@ mod tests {
         }
     }
 
-    struct SchemeAuthApplier(bitrouter_ai::types::AuthScheme);
+    struct SchemeAuthApplier(crate::gateway::model::target::AuthScheme);
 
     #[async_trait]
     impl AuthApplier for SchemeAuthApplier {
         async fn apply(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             Ok(self
                 .apply_with_authority(request, target)
                 .await?
@@ -6706,16 +6716,16 @@ mod tests {
         async fn apply_with_authority(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             match self.0 {
-                bitrouter_ai::types::AuthScheme::Bearer => {
+                crate::gateway::model::target::AuthScheme::Bearer => {
                     request.headers_mut().insert(
                         reqwest::header::AUTHORIZATION,
                         reqwest::header::HeaderValue::from_static("Bearer same-principal"),
                     );
                 }
-                bitrouter_ai::types::AuthScheme::XApiKey => {
+                crate::gateway::model::target::AuthScheme::XApiKey => {
                     request.headers_mut().insert(
                         "x-api-key",
                         reqwest::header::HeaderValue::from_static("same-principal"),
@@ -6731,8 +6741,8 @@ mod tests {
 
         async fn continuation_authority(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<CredentialAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<CredentialAuthority>> {
             Ok(Some(CredentialAuthority::derive(
                 "test/same-principal",
                 "principal",
@@ -6741,8 +6751,8 @@ mod tests {
 
         async fn continuation_authority_proof(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<ContinuationAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<ContinuationAuthority>> {
             Ok(Some(ContinuationAuthority::new(
                 CredentialAuthority::derive("test/same-principal", "principal"),
                 self.0,
@@ -6752,7 +6762,7 @@ mod tests {
 
     struct HeaderAuthApplier {
         headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
-        route_scheme: bitrouter_ai::types::AuthScheme,
+        route_scheme: crate::gateway::model::target::AuthScheme,
     }
 
     #[async_trait]
@@ -6760,8 +6770,8 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             for (name, value) in &self.headers {
                 request.headers_mut().append(name, value.clone());
             }
@@ -6771,8 +6781,8 @@ mod tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven(
                 self.apply(request, target).await?,
                 CredentialAuthority::derive("test/header-principal", "principal"),
@@ -6781,8 +6791,8 @@ mod tests {
 
         async fn continuation_authority_proof(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<ContinuationAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<ContinuationAuthority>> {
             Ok(Some(ContinuationAuthority::new(
                 CredentialAuthority::derive("test/header-principal", "principal"),
                 self.route_scheme,
@@ -7039,13 +7049,15 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     struct SearchTool;
 
+    #[cfg(feature = "server-tools")]
     #[async_trait]
-    impl bitrouter_sdk::language_model::server_tools::toolset::RouterToolset for SearchTool {
+    impl crate::gateway::pipeline::server_tools::toolset::RouterToolset for SearchTool {
         async fn list_tools(
             &self,
-            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+            _ctx: &crate::gateway::pipeline::server_tools::toolset::ToolContext,
         ) -> PipelineResult<Vec<Tool>> {
             Ok(vec![Tool::Function {
                 name: "search".into(),
@@ -7060,7 +7072,7 @@ mod tests {
             &self,
             _name: &str,
             _arguments: &str,
-            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+            _ctx: &crate::gateway::pipeline::server_tools::toolset::ToolContext,
         ) -> PipelineResult<ToolResultOutput> {
             Ok(ToolResultOutput::Text {
                 value: "search-result".into(),
@@ -7072,13 +7084,15 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "server-tools")]
     struct FailingSearchTool;
 
+    #[cfg(feature = "server-tools")]
     #[async_trait]
-    impl bitrouter_sdk::language_model::server_tools::toolset::RouterToolset for FailingSearchTool {
+    impl crate::gateway::pipeline::server_tools::toolset::RouterToolset for FailingSearchTool {
         async fn list_tools(
             &self,
-            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+            _ctx: &crate::gateway::pipeline::server_tools::toolset::ToolContext,
         ) -> PipelineResult<Vec<Tool>> {
             Ok(vec![Tool::Function {
                 name: "search".into(),
@@ -7093,7 +7107,7 @@ mod tests {
             &self,
             _name: &str,
             _arguments: &str,
-            _ctx: &bitrouter_sdk::language_model::server_tools::toolset::ToolContext,
+            _ctx: &crate::gateway::pipeline::server_tools::toolset::ToolContext,
         ) -> PipelineResult<ToolResultOutput> {
             Err(BitrouterError::internal("synthetic search failure"))
         }
@@ -7121,19 +7135,17 @@ mod tests {
             model: "gpt-5".into(),
             caller: CallerContext::new("key", "tool-owner"),
             headers: Default::default(),
-            input: bitrouter_sdk::language_model::types::PipelineInput::Generation(Box::new(
-                Prompt {
-                    model: "gpt-5".into(),
-                    system: None,
-                    system_provider_metadata: Default::default(),
-                    messages: vec![Message::text(Role::User, "answer with search")],
-                    tools: Vec::new(),
-                    params,
-                    response_format: None,
-                    tool_choice: None,
-                    stream,
-                },
-            )),
+            input: crate::gateway::pipeline::types::PipelineInput::Generation(Box::new(Prompt {
+                model: "gpt-5".into(),
+                system: None,
+                system_provider_metadata: Default::default(),
+                messages: vec![Message::text(Role::User, "answer with search")],
+                tools: Vec::new(),
+                params,
+                response_format: None,
+                tool_choice: None,
+                stream,
+            })),
             inbound_protocol: Some(ApiProtocol::Responses),
         }
     }
@@ -7149,11 +7161,12 @@ mod tests {
         tool_request_with_stream(request_id, previous_response_id, false)
     }
 
+    #[cfg(feature = "server-tools")]
     fn nonstream_server_tool_pipeline(
         registry: ContinuationRegistry,
         upstream: &MockServer,
-        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
-        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+        config: crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn crate::gateway::pipeline::server_tools::toolset::RouterToolset>,
     ) -> anyhow::Result<Arc<Pipeline>> {
         let runtime = ContinuationRuntime::new(registry);
         let mut upstream_target = target("credential");
@@ -7161,12 +7174,10 @@ mod tests {
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![upstream_target]);
         let server_loop = Arc::new(
-            bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop::new(
-                bitrouter_sdk::language_model::server_tools::toolset::ToolsetRegistry::new(vec![
-                    tool,
-                ]),
+            crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop::new(
+                crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry::new(vec![tool]),
                 config,
-                Arc::new(bitrouter_sdk::language_model::server_tools::approval::AllowAll),
+                Arc::new(crate::gateway::pipeline::server_tools::approval::AllowAll),
             ),
         );
         let mut builder = PipelineBuilder::new();
@@ -7300,6 +7311,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn server_tool_continuation_binds_only_final_provider_round() -> anyhow::Result<()> {
         let upstream = MockServer::start().await;
@@ -7317,13 +7329,12 @@ mod tests {
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![upstream_target]);
         let server_loop = Arc::new(
-            bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop::new(
-                bitrouter_sdk::language_model::server_tools::toolset::ToolsetRegistry::new(vec![
+            crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop::new(
+                crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry::new(vec![
                     Arc::new(SearchTool),
                 ]),
-                bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig::default(
-                ),
-                Arc::new(bitrouter_sdk::language_model::server_tools::approval::AllowAll),
+                crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig::default(),
+                Arc::new(crate::gateway::pipeline::server_tools::approval::AllowAll),
             ),
         );
         let mut builder = PipelineBuilder::new();
@@ -7374,6 +7385,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn nonstream_server_tool_continuation_binds_only_final_provider_round()
     -> anyhow::Result<()> {
@@ -7435,11 +7447,12 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     async fn assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
         request_id: &str,
         expected_reason: &str,
-        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
-        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+        config: crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn crate::gateway::pipeline::server_tools::toolset::RouterToolset>,
     ) -> anyhow::Result<()> {
         let upstream = MockServer::start().await;
         let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
@@ -7505,13 +7518,14 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn nonstream_max_tool_iterations_does_not_publish_intermediate_continuation()
     -> anyhow::Result<()> {
         assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
             "nonstream-max-tool-request",
             "max_tool_iterations",
-            bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+            crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig {
                 max_iterations: 0,
                 ..Default::default()
             },
@@ -7520,13 +7534,14 @@ mod tests {
         .await
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn nonstream_tool_errors_do_not_publish_intermediate_continuation() -> anyhow::Result<()>
     {
         assert_nonstream_synthetic_server_tool_terminal_is_not_resumable(
             "nonstream-tool-error-request",
             "tool_errors",
-            bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+            crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig {
                 max_consecutive_errors: 1,
                 ..Default::default()
             },
@@ -7535,11 +7550,12 @@ mod tests {
         .await
     }
 
+    #[cfg(feature = "server-tools")]
     async fn assert_synthetic_server_tool_terminal_is_not_resumable(
         request_id: &str,
         expected_reason: &str,
-        config: bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig,
-        tool: Arc<dyn bitrouter_sdk::language_model::server_tools::toolset::RouterToolset>,
+        config: crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig,
+        tool: Arc<dyn crate::gateway::pipeline::server_tools::toolset::RouterToolset>,
     ) -> anyhow::Result<()> {
         let upstream = MockServer::start().await;
         let state = Arc::new(std::sync::Mutex::new(ToolRoundState::default()));
@@ -7556,12 +7572,10 @@ mod tests {
         let routes = Arc::new(StaticRoutingTable::new());
         routes.insert("gpt-5", vec![upstream_target]);
         let server_loop = Arc::new(
-            bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop::new(
-                bitrouter_sdk::language_model::server_tools::toolset::ToolsetRegistry::new(vec![
-                    tool,
-                ]),
+            crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop::new(
+                crate::gateway::pipeline::server_tools::toolset::ToolsetRegistry::new(vec![tool]),
                 config,
-                Arc::new(bitrouter_sdk::language_model::server_tools::approval::AllowAll),
+                Arc::new(crate::gateway::pipeline::server_tools::approval::AllowAll),
             ),
         );
         let mut builder = PipelineBuilder::new();
@@ -7612,10 +7626,11 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn max_tool_iterations_does_not_publish_intermediate_continuation() -> anyhow::Result<()>
     {
-        let config = bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+        let config = crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig {
             max_iterations: 0,
             ..Default::default()
         };
@@ -7628,9 +7643,10 @@ mod tests {
         .await
     }
 
+    #[cfg(feature = "server-tools")]
     #[tokio::test]
     async fn tool_errors_do_not_publish_intermediate_continuation() -> anyhow::Result<()> {
-        let config = bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig {
+        let config = crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig {
             max_consecutive_errors: 1,
             ..Default::default()
         };
@@ -7708,7 +7724,9 @@ mod tests {
             dynamic_auth_pipeline(
                 registry.clone(),
                 &upstream,
-                Arc::new(SchemeAuthApplier(bitrouter_ai::types::AuthScheme::Bearer)),
+                Arc::new(SchemeAuthApplier(
+                    crate::gateway::model::target::AuthScheme::Bearer,
+                )),
             )?,
             tool_request("scheme-root", None),
         )
@@ -7718,7 +7736,9 @@ mod tests {
         let error = dynamic_auth_pipeline(
             registry,
             &upstream,
-            Arc::new(SchemeAuthApplier(bitrouter_ai::types::AuthScheme::XApiKey)),
+            Arc::new(SchemeAuthApplier(
+                crate::gateway::model::target::AuthScheme::XApiKey,
+            )),
         )?
         .execute_stream(tool_request("scheme-resume", Some(&public_id)))
         .await
@@ -7740,7 +7760,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_or_ambiguous_wire_auth_fails_before_responses_dispatch() -> anyhow::Result<()>
     {
-        use bitrouter_ai::types::AuthScheme;
+        use crate::gateway::model::target::AuthScheme;
         use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
 
         let upstream = MockServer::start().await;
@@ -8468,7 +8488,7 @@ mod tests {
         fn authority() -> ContinuationAuthority {
             ContinuationAuthority::new(
                 CredentialAuthority::derive("test/refreshing-custom-auth", "stable-principal"),
-                bitrouter_ai::types::AuthScheme::Bearer,
+                crate::gateway::model::target::AuthScheme::Bearer,
             )
         }
     }
@@ -8478,8 +8498,8 @@ mod tests {
         async fn apply(
             &self,
             mut request: reqwest::Request,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<reqwest::Request> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
             let credential = reqwest::header::HeaderValue::from_static(self.credential());
             request.headers_mut().insert(
                 reqwest::header::AUTHORIZATION,
@@ -8496,27 +8516,27 @@ mod tests {
         async fn apply_with_authority(
             &self,
             request: reqwest::Request,
-            target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<AppliedAuth> {
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
             Ok(AppliedAuth::proven_with_scheme(
                 self.apply(request, target).await?,
                 Self::authority().credential().clone(),
-                bitrouter_ai::types::AuthScheme::Bearer,
+                crate::gateway::model::target::AuthScheme::Bearer,
             ))
         }
 
         async fn continuation_authority_proof(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
-        ) -> bitrouter_ai::error::Result<Option<ContinuationAuthority>> {
+            _target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<Option<ContinuationAuthority>> {
             Ok(Some(Self::authority()))
         }
 
         async fn refresh_after_unauthorized(
             &self,
-            _target: &bitrouter_ai::target::ModelTarget,
+            _target: &crate::gateway::model::target::ModelTarget,
             _rejected_authorization: Option<&reqwest::header::HeaderValue>,
-        ) -> bitrouter_ai::error::Result<bool> {
+        ) -> crate::gateway::model::error::Result<bool> {
             self.generation.store(1, Ordering::SeqCst);
             Ok(true)
         }
@@ -8615,7 +8635,7 @@ mod tests {
     impl ObserveHook for MaliciousTraceHeaderObserver {
         async fn after_phase(
             &self,
-            _phase: bitrouter_sdk::language_model::Phase,
+            _phase: crate::gateway::pipeline::hooks::Phase,
             _ctx: &PipelineContext,
         ) {
         }
@@ -8657,7 +8677,7 @@ mod tests {
     impl ObserveHook for OutcomeObserver {
         async fn after_phase(
             &self,
-            _phase: bitrouter_sdk::language_model::Phase,
+            _phase: crate::gateway::pipeline::hooks::Phase,
             _ctx: &PipelineContext,
         ) {
         }
@@ -9520,6 +9540,199 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
         assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        Ok(())
+    }
+
+    #[derive(Default)]
+    struct PreparationHandoffSignals {
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        completed: tokio::sync::Notify,
+        rollback_started: tokio::sync::Notify,
+        release_rollback: tokio::sync::Notify,
+        rollbacks: AtomicUsize,
+        receipt: std::sync::Mutex<Option<RequiredFinalizationReceipt>>,
+    }
+
+    struct PreparationHandoffFinalizer {
+        runtime: ContinuationRuntime,
+        signals: Arc<PreparationHandoffSignals>,
+    }
+
+    #[async_trait]
+    impl RequiredFinalizer for PreparationHandoffFinalizer {
+        async fn finalize(&self, ctx: &RequiredFinalizationContext) -> PipelineResult<()> {
+            self.runtime.finalize(ctx).await
+        }
+
+        async fn finalize_with_receipt(
+            &self,
+            ctx: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+        ) -> PipelineResult<()> {
+            *self
+                .signals
+                .receipt
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()) = Some(receipt.clone());
+            self.signals.started.notify_one();
+            self.signals.release.notified().await;
+            self.runtime.finalize_with_receipt(ctx, receipt).await?;
+            self.signals.completed.notify_one();
+            Ok(())
+        }
+
+        async fn rollback_with_receipt(
+            &self,
+            ctx: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+        ) -> PipelineResult<()> {
+            let same = self
+                .signals
+                .receipt
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .is_some_and(|original| original.same_invocation(receipt));
+            if !same {
+                return Err(BitrouterError::internal(
+                    "preparation receipt changed before rollback",
+                ));
+            }
+            self.signals.rollbacks.fetch_add(1, Ordering::SeqCst);
+            self.signals.rollback_started.notify_one();
+            self.signals.release_rollback.notified().await;
+            self.runtime.rollback_with_receipt(ctx, receipt).await
+        }
+
+        async fn commit_with_receipt(
+            &self,
+            ctx: &RequiredFinalizationContext,
+            receipt: &RequiredFinalizationReceipt,
+            delivery: &RequiredDeliveryHandshake,
+        ) -> PipelineResult<bool> {
+            self.runtime
+                .commit_with_receipt(ctx, receipt, delivery)
+                .await
+        }
+
+        async fn drain_pending_work(&self) -> PipelineResult<()> {
+            self.runtime.drain_pending_work().await
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_preparation_receipt_retains_compensation_until_consumed() -> anyhow::Result<()>
+    {
+        for streamed in [false, true] {
+            let db = crate::db::connect("sqlite::memory:").await?;
+            crate::db::run_migrations(&db).await?;
+            let registry = ContinuationRegistry::new(
+                db,
+                ContinuationKeySource::fixed(ContinuationKey::from_bytes(rand::random())?),
+                30,
+                10,
+            )?;
+            let runtime = ContinuationRuntime::new(registry.clone());
+            let signals = Arc::new(PreparationHandoffSignals::default());
+            let routes = Arc::new(StaticRoutingTable::new());
+            routes.insert("gpt-5", vec![target("credential")]);
+            let response = if streamed {
+                MockResponse::Stream(vec![
+                    StreamPart::ResponseStarted {
+                        id: "handoff-provider".into(),
+                        source_protocol: ApiProtocol::Responses,
+                    },
+                    StreamPart::ResponseCompleted {
+                        id: "handoff-provider".into(),
+                        source_protocol: ApiProtocol::Responses,
+                        status: "completed".into(),
+                        usage: None,
+                        response_output_commitment: None,
+                    },
+                ])
+            } else {
+                MockResponse::Generate(GenerateResult {
+                    content: vec![Content::Text {
+                        text: "handoff".into(),
+                        provider_metadata: Default::default(),
+                    }],
+                    usage: None,
+                    finish_reason: Some(FinishReason::Stop),
+                    response_id: Some("handoff-provider".into()),
+                    stop_details: None,
+                    provider_metadata: Default::default(),
+                })
+            };
+            let mut builder = PipelineBuilder::new();
+            builder
+                .routing_table(routes)
+                .executor(Arc::new(MockExecutor::new(vec![response])))
+                .route_hook(runtime.clone())
+                .required_finalizer(PreparationHandoffFinalizer {
+                    runtime,
+                    signals: signals.clone(),
+                });
+            let pipeline = Arc::new(builder.build()?);
+            let active = pipeline.clone();
+            let mut execution = Box::pin(async move {
+                if streamed {
+                    let mut stream = active
+                        .execute_stream(tool_request("queued-handoff", None))
+                        .await?;
+                    while let Some(part) = stream.next().await {
+                        part?;
+                    }
+                } else {
+                    active
+                        .execute(nonstream_tool_request("queued-handoff", None))
+                        .await?;
+                }
+                Ok::<(), BitrouterError>(())
+            });
+            tokio::select! {
+                _ = signals.started.notified() => {},
+                result = &mut execution => anyhow::bail!("execution ended before preparation: {result:?}"),
+            }
+            signals.release.notify_one();
+            // This current-thread test never polls the receipt consumer again.
+            // The producer notifies and enqueues in one poll, then relinquishes
+            // execution. Dropping now covers successful send, not send failure.
+            signals.completed.notified().await;
+            drop(execution);
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                signals.rollback_started.notified(),
+            )
+            .await?;
+            assert_eq!(signals.rollbacks.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                registry
+                    .resolve(
+                        "tool-owner",
+                        &encode_gateway_continuation_id("queued-handoff")?,
+                        Utc::now()
+                    )
+                    .await?,
+                ContinuationResolution::Missing
+            );
+            signals.release_rollback.notify_one();
+            pipeline.drain_required_pending_settlements().await?;
+            assert_eq!(signals.rollbacks.load(Ordering::SeqCst), 1);
+            let row = registry
+                .database()
+                .query_one(Statement::from_string(
+                    DatabaseBackend::Sqlite,
+                    "SELECT COUNT(*) AS count FROM provider_continuations".to_owned(),
+                ))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("continuation count missing"))?;
+            assert_eq!(
+                row.try_get::<i64>("", "count")?,
+                0,
+                "queued receipt orphaned provisional continuation"
+            );
+        }
         Ok(())
     }
 

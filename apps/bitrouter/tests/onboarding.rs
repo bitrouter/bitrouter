@@ -2,16 +2,16 @@
 //! invocation (wizard-vs-status decision), the `init --yes` headless contract,
 //! and the network-free / `BITROUTER_HOME`-tolerant probe. Every case here is
 //! hermetic: an isolated `HOME` + `XDG_DATA_HOME`, all BYOK env vars removed,
-//! stdin nulled (non-TTY), and no network.
+//! stdin nulled (non-TTY) except explicit PTY cases, and no network.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use serde_json::Value;
 use tempfile::TempDir;
 
-#[cfg(unix)]
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[cfg(all(unix, feature = "harness"))]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 
 /// The BYOK env vars the probe reads — removed so the test's own environment
@@ -139,7 +139,7 @@ async fn init_rejects_unpaired_keys_and_handles_a_closed_stdout_pipe() -> anyhow
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, feature = "harness"))]
 #[tokio::test]
 async fn init_after_launch_explicitly_runs_the_native_harness() -> anyhow::Result<()> {
     let home = startup_home()?;
@@ -213,6 +213,7 @@ async fn bare_and_init_ensure_one_ready_background_daemon_and_preserve_running_s
     assert_eq!(a["pid"], b["pid"]);
     assert_eq!(a["listen"], listen);
     assert_eq!(a["config_state"]["running"], "in_sync");
+    assert!(!home.path().join("logs").exists());
     let status = invoke(home.path(), &["status"]).await?;
     assert_eq!(serde_json::from_slice::<Value>(&status.stdout)?["pid"], pid);
     let human = invoke(home.path(), &["--human"]).await?;
@@ -371,6 +372,69 @@ fn run_cli(home: &Path, data_home: &Path, args: &[&str], extra_env: &[(&str, &st
 fn stdout_json(output: &Output) -> Value {
     let text = String::from_utf8_lossy(&output.stdout);
     serde_json::from_str(&text).unwrap_or_else(|e| panic!("stdout was not JSON ({e}): {text}"))
+}
+
+fn seed_onboarding_state(home: &Path, data_home: &Path) -> anyhow::Result<Vec<(PathBuf, Vec<u8>)>> {
+    use bitrouter::gateway::providers::auth::credentials::Credential;
+    use bitrouter::gateway::providers::auth::file::snapshot::CredentialStore;
+
+    let config = home.join("bitrouter.yaml");
+    let cloud = data_home.join("bitrouter/account-credentials.json");
+    let providers = data_home.join("bitrouter/oauth-tokens.json");
+    std::fs::write(
+        &config,
+        "server: { listen: '127.0.0.1:9012', skip_auth: false }\n",
+    )?;
+    std::fs::create_dir_all(data_home.join("bitrouter"))?;
+    std::fs::write(
+        &cloud,
+        r#"{"kind":"api_key","api_key":"brk_existing.fixture","base_url":"https://api.bitrouter.ai"}"#,
+    )?;
+    CredentialStore::load(&providers)?.set(
+        "openai",
+        "default",
+        Credential::api_key("sk-existing"),
+    )?;
+    [config, cloud, providers]
+        .into_iter()
+        .map(|path| Ok((path.clone(), std::fs::read(path)?)))
+        .collect()
+}
+
+#[test]
+fn non_tty_reset_without_yes_preserves_provider_credentials() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let data = TempDir::new()?;
+    let saved = seed_onboarding_state(home.path(), data.path())?;
+    let provider_path = data.path().join("bitrouter/oauth-tokens.json");
+    let out = run_cli(
+        home.path(),
+        data.path(),
+        &["init", "--reset", "--after", "exit"],
+        &[],
+    );
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(stdout_json(&out)["after"], "exit");
+    assert!(
+        !data
+            .path()
+            .join("bitrouter/account-credentials.json")
+            .exists()
+    );
+    for (path, bytes) in saved {
+        if path == provider_path {
+            assert_eq!(
+                std::fs::read(path)?,
+                bytes,
+                "non-TTY reset granted provider removal consent"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[test]
@@ -548,6 +612,7 @@ fn init_preserves_existing_settings_unless_force_is_requested() -> anyhow::Resul
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[test]
 fn init_saves_default_harness_model_and_user_home() -> anyhow::Result<()> {
     let home = TempDir::new()?;
@@ -580,6 +645,7 @@ fn init_saves_default_harness_model_and_user_home() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "harness")]
 #[test]
 fn changing_harness_preserves_routes_and_chat_commands() -> anyhow::Result<()> {
     let home = TempDir::new()?;
@@ -644,6 +710,7 @@ fn public_help_exposes_canonical_agent_entry_points() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(any(feature = "harness", feature = "mcp"))]
 #[tokio::test]
 async fn onboarding_saves_mcp_without_installing_skills_or_starting_the_resource()
 -> anyhow::Result<()> {

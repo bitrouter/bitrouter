@@ -4,11 +4,12 @@ use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Context, Result, ensure};
+use bitrouter::config::mcp::{McpServerConfig, McpTransport};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/harness_resources/mcp_fixture.rs"]
+#[path = "harness_resources/mcp_fixture.rs"]
 mod mcp_fixture;
 
 fn cli(home: &Path, path: &Path, args: &[&str]) -> Command {
@@ -53,6 +54,50 @@ async fn result(mut command: Command, input: Option<&str>, success: bool) -> Res
     );
     ensure!(!result.stdout.contains(&0x1b), "ANSI in JSON output");
     serde_json::from_slice(&result.stdout).context("CLI JSON")
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn explicit_blocking_input_keeps_sigint_cancellation_and_source_bytes() -> Result<()> {
+    use rustix::fs::{Mode, OFlags};
+    let home = tempfile::tempdir()?;
+    let path = home.path().join("config.yaml");
+    let original = "inherit_defaults: false\n";
+    std::fs::write(&path, original)?;
+    let input = home.path().join("entry.fifo");
+    // Opening the writer proves the CLI has entered its explicit input read.
+    // https://pubs.opengroup.org/onlinepubs/9799919799/functions/open.html
+    ensure!(
+        Command::new("mkfifo").arg(&input).status().await?.success(),
+        "could not create input FIFO"
+    );
+    let child = cli(home.path(), &path, &["add", "blocked", "--from"])
+        .arg(&input)
+        .spawn()?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let writer = loop {
+        match rustix::fs::open(&input, OFlags::WRONLY | OFlags::NONBLOCK, Mode::empty()) {
+            Ok(writer) => break writer,
+            Err(rustix::io::Errno::NXIO) => {
+                ensure!(
+                    tokio::time::Instant::now() < deadline,
+                    "CLI did not open explicit input"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    let pid = rustix::process::Pid::from_raw(i32::try_from(child.id().context("child PID")?)?)
+        .context("invalid child PID")?;
+    rustix::process::kill_process(pid, rustix::process::Signal::INT)?;
+    let output = tokio::time::timeout(std::time::Duration::from_secs(3), child.wait_with_output())
+        .await
+        .context("SIGINT did not cancel explicit input")??;
+    drop(writer);
+    ensure!(!output.status.success());
+    ensure!(std::fs::read_to_string(path)? == original);
+    Ok(())
 }
 
 #[tokio::test]
@@ -212,7 +257,7 @@ async fn shortcut_creation_path_and_explicit_connect_only_on_check() -> Result<(
     let home = tempfile::tempdir()?;
     let path = home.path().join("new.yaml");
     let configured = mcp_fixture::configuration(&upstream);
-    let bitrouter_sdk::mcp::transport::McpTransport::Http { url, .. } = configured.transport else {
+    let bitrouter::config::mcp::McpTransport::Http { url, .. } = configured.transport else {
         anyhow::bail!("fixture transport");
     };
     // Explicit missing --config is a create target for add; a read still fails.

@@ -8,13 +8,13 @@ use clap::{Args, Subcommand};
 use serde_json::json;
 
 use super::BackgroundClient;
-use crate::acp_cli::SessionSelection;
+use crate::client::sessions::wire::{
+    ControlFence, LeaseMode, SessionAction, SessionCommand, SessionResponse, SessionScope,
+};
+use crate::commands::agent_options::SessionSelection;
 use crate::control_output::{self, Endpoint, PromptFile, Request};
 use crate::daemon::{DaemonCommand, DaemonResponse};
 use crate::output::Output;
-use crate::supervisor::{
-    ControlFence, LeaseMode, SessionAction, SessionCommand, SessionResponse, SessionScope,
-};
 
 #[derive(Debug, Clone, Args)]
 pub struct Target {
@@ -266,7 +266,7 @@ async fn request(client: &BackgroundClient, command: SessionCommand) -> Result<S
 async fn snapshot(
     client: &BackgroundClient,
     run_id: &str,
-) -> Result<crate::supervisor::RunSnapshot> {
+) -> Result<crate::client::sessions::wire::RunSnapshot> {
     match request(
         client,
         SessionCommand::Snapshot {
@@ -306,7 +306,7 @@ async fn mutate(
     };
     let result = request(
         client,
-        SessionCommand::Mutate(crate::supervisor::SessionMutation {
+        SessionCommand::Mutate(crate::client::sessions::wire::SessionMutation {
             fence: fence.clone(),
             action,
         }),

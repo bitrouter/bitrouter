@@ -4,10 +4,11 @@
 #![cfg(unix)]
 
 use anyhow::{Context, Result, bail, ensure};
-use bitrouter::acp_trajectory::{CanonicalStore, SessionIdentity};
+use bitrouter::acp_trajectory::CanonicalStore;
 use bitrouter::daemon::{AcpControlPlane, NoopObserveStatus, NoopReloader};
-use bitrouter::evolution::bandit::BanditConfig;
-use bitrouter::evolution::control::{BlockStatus, EvolutionMode};
+use bitrouter::gateway::routing::blocks::allocation::BanditConfig;
+use bitrouter::gateway::routing::blocks::control::{BlockStatus, EvolutionMode};
+use bitrouter::storage::session_identity::SessionIdentity;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -70,10 +71,8 @@ struct Cli {
 }
 impl Cli {
     fn launch(mock: Environment, agent: &str, runtime: &tokio::runtime::Runtime) -> Result<Self> {
-        let config = bitrouter_sdk::config::parse_with(
-            &std::fs::read_to_string(&mock.config_path)?,
-            |_| None,
-        )?;
+        let config =
+            bitrouter::config::parse_with(&std::fs::read_to_string(&mock.config_path)?, |_| None)?;
         let socket = bitrouter::daemon::socket_path_for(
             &bitrouter::paths::ConfigSource::File(mock.config_path.clone()),
             &config,
@@ -88,30 +87,32 @@ impl Cli {
             })
             .collect::<Result<Vec<_>>>()?;
         let client = bitrouter::agent_sessions::BackgroundClient::new(socket);
-        let started = runtime.block_on(client.start(bitrouter::supervisor::StartRunRequest {
-            action_request_id: uuid::Uuid::new_v4().to_string(),
-            client_id: None,
-            label: None,
-            agent_id: agent.into(),
-            prompt: None,
-            cwd: mock._directory.path().to_path_buf(),
-            routing: bitrouter::acp_cli::RoutingOptions {
-                model: Some(selector(agent).into()),
-                no_start: true,
-                ..Default::default()
+        let started = runtime.block_on(client.start(
+            bitrouter::client::sessions::wire::StartRunRequest {
+                action_request_id: uuid::Uuid::new_v4().to_string(),
+                client_id: None,
+                label: None,
+                agent_id: agent.into(),
+                prompt: None,
+                cwd: mock._directory.path().to_path_buf(),
+                routing: bitrouter::commands::agent_options::RoutingOptions {
+                    model: Some(selector(agent).into()),
+                    no_start: true,
+                    ..Default::default()
+                },
+                launch: bitrouter::acp_cli::LaunchOptions {
+                    strip_inherited_env,
+                    turn_timeout: Some(Duration::from_secs(30)),
+                    ..Default::default()
+                },
+                session: Default::default(),
+                presentation: bitrouter::client::sessions::wire::Presentation::Background,
+                parent_run_id: None,
+                allow_shared_directory: false,
+                permission_policy: Default::default(),
+                result_schema: None,
             },
-            launch: bitrouter::acp_cli::LaunchOptions {
-                strip_inherited_env,
-                turn_timeout: Some(Duration::from_secs(30)),
-                ..Default::default()
-            },
-            session: Default::default(),
-            presentation: bitrouter::supervisor::Presentation::Background,
-            parent_run_id: None,
-            allow_shared_directory: false,
-            permission_policy: Default::default(),
-            result_schema: None,
-        }))?;
+        ))?;
         let run_id = started.snapshot.run_id;
         let cli = Self { mock, run_id };
         cli.idle()?;
@@ -215,11 +216,12 @@ impl Drop for Cli {
 }
 
 use bitrouter::acp_trajectory::checkpoint::types::{AssessmentSource, CriterionScore};
-use bitrouter::evolution::evidence::{EvidenceKind, EvidencePacket};
-use bitrouter::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
-use bitrouter::evolution::runtime::EvolutionRuntime;
-use bitrouter::evolution::scheduler::EvolutionScheduler;
-use bitrouter_sdk::server::{AppState, build_router};
+use bitrouter::core::evolution::evidence::{EvidenceKind, EvidencePacket};
+use bitrouter::core::evolution::rubric::{self, Applicability, RubricEvaluation, RubricItem};
+use bitrouter::core::evolution::runtime::EvolutionRuntime;
+use bitrouter::core::evolution::scheduler::EvolutionScheduler;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
 use serde_json::{Value, json};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers};
 
@@ -328,7 +330,8 @@ async fn setup_with_reply(
     worker_env: &str,
     responder: fn(&Request) -> Result<ResponseTemplate>,
 ) -> Result<NativeService> {
-    use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
+    use bitrouter::config::agent::AcpAgentConfig;
+    use bitrouter::config::agent::AcpTransport;
     use std::collections::HashMap;
     use std::os::unix::fs::PermissionsExt;
 
@@ -343,7 +346,7 @@ async fn setup_with_reply(
             .context("adapter package directory missing")?
             .join("package.json"),
     )?)?;
-    let harness = bitrouter::harness::by_id(agent).context("unknown harness")?;
+    let harness = bitrouter::harness::catalog::by_id(agent).context("unknown harness")?;
     let (name, version) = harness
         .maintained_adapter_identity()
         .context("adapter is not pinned")?;
@@ -456,7 +459,7 @@ models:
         serde_json::to_string(&HashMap::from([(agent, agent_config)]))?
     ));
     std::fs::write(&mock.config_path, &config_text)?;
-    let config = bitrouter_sdk::config::parse_with(&config_text, |_| None)?;
+    let config = bitrouter::config::parse_with(&config_text, |_| None)?;
     let assembled =
         bitrouter::assemble::build_app_with_path(&config, Some(&mock.config_path)).await?;
     let evolution = assembled.evolution.clone();
@@ -492,9 +495,10 @@ models:
             Arc::new(NoopReloader),
             Arc::new(NoopObserveStatus { compiled_in: false }),
             AcpControlPlane {
+                #[cfg(feature = "harness")]
                 runtime: assembled.acp_runtime,
                 metering: bitrouter::metering::MeteringStore::new(assembled.db),
-                inventory: Some(evolution.inventory()),
+                inventory: Some(assembled.gateway_requests.inventory()),
                 evolution: Some(evolution.clone()),
             },
             Some(administration),
@@ -813,7 +817,7 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
         "--expected-watermark",
         &watermark,
     ])?;
-    let input: bitrouter::evolution::operator::checkpoint::ReviewInput =
+    let input: bitrouter::core::evolution::operator::checkpoint::ReviewInput =
         serde_json::from_value(frozen["report"]["data"].clone())?;
     let mut evaluation = input.previous.context("automatic rubric prefill missing")?;
     let citation = input
@@ -834,13 +838,13 @@ fn run(agent: &str, adapter: &str, worker: &str) -> Result<()> {
     delivery.explanation =
         "Controlled manual correction of the recorded reply; fixture score only.".into();
     evaluation.summary = "Native terminal manual correction".into();
-    let submission = bitrouter::evolution::scoring::RubricSubmission {
+    let submission = bitrouter::core::evolution::scoring::RubricSubmission {
         submission_id: "cli-manual-correction".into(),
         checkpoint_id: input.checkpoint.checkpoint_id,
         expected_revision: input.expected_revision,
         source: AssessmentSource::Human,
-        evaluator_id: bitrouter::evolution::scoring::TUI_EVALUATOR_ID.into(),
-        evaluator_version: bitrouter::evolution::scoring::TUI_EVALUATOR_VERSION.into(),
+        evaluator_id: bitrouter::core::evolution::scoring::TUI_EVALUATOR_ID.into(),
+        evaluator_version: bitrouter::core::evolution::scoring::TUI_EVALUATOR_VERSION.into(),
         evaluation,
     };
     let file = code.mock._directory.path().join("manual-review.json");

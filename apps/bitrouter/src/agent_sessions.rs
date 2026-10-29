@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, bail};
 use tokio::sync::Mutex;
 
-use crate::paths::ConfigSource;
-use crate::supervisor::{
+use crate::client::sessions::wire::{
     ActionAcknowledgement, ControlFence, LeaseMode, RunAttachment, RunSnapshot, RunSummary,
     SessionCommand, SessionGrant, SessionResponse, SessionScope, StartRunRequest,
 };
+use crate::paths::ConfigSource;
 
 pub mod control;
 
@@ -313,7 +313,7 @@ impl BackgroundClient {
 
     async fn request(&self, command: SessionCommand) -> Result<SessionResponse> {
         let grant = self.grant().await?;
-        crate::supervisor::request(&self.socket, &grant, command).await
+        crate::client::sessions::request(&self.socket, &grant, command).await
     }
 
     async fn grant(&self) -> Result<SessionGrant> {
@@ -321,7 +321,7 @@ impl BackgroundClient {
             return Ok(grant);
         }
         let grant =
-            crate::supervisor::authorize(&self.socket, &self.client_id, self.scopes.clone())
+            crate::client::sessions::authorize(&self.socket, &self.client_id, self.scopes.clone())
                 .await?;
         anyhow::ensure!(
             grant.client_id == self.client_id && grant.scopes == self.scopes,
@@ -335,7 +335,7 @@ impl BackgroundClient {
 /// Ensure the selected daemon owns the supervisor before accepting a run.
 pub async fn start_background(
     source: &ConfigSource,
-    config: &bitrouter_sdk::config::Config,
+    config: &crate::config::Config,
     no_start: bool,
     request: StartRunRequest,
 ) -> Result<RunSnapshot> {

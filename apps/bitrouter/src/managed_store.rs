@@ -2,8 +2,8 @@
 //! A checkpoint, exact ACK, artifact closure and tool-start tombstones occupy
 //! one versioned row, so no partial combination can become execution authority.
 
-use bitrouter_orchestrator::core::protocol::{CoreError, ErrorCode};
-use bitrouter_orchestrator::harness::managed::store::{MAX_STORE_BYTES, NativeStore};
+use crate::harness::resources::managed::store::{MAX_STORE_BYTES, NativeStore};
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
 use sea_orm::{
     AccessMode, ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseBackend,
     DatabaseConnection, EntityTrait, IsolationLevel, QueryFilter, QuerySelect, Set,
@@ -17,23 +17,9 @@ pub struct DatabaseNativeStore {
 
 impl DatabaseNativeStore {
     pub fn new(db: DatabaseConnection, id: String) -> anyhow::Result<Self> {
-        validate_session_name(&id)?;
+        crate::managed_task::protocol::validate_session_name(&id)?;
         Ok(Self { db, id })
     }
-}
-
-/// The client and database owner share the original name constraint; this
-/// validation neither opens a database nor creates a session.
-pub fn validate_session_name(id: &str) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !id.is_empty()
-            && id.len() <= 128
-            && id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte)),
-        "invalid managed session name"
-    );
-    Ok(())
 }
 
 mod session {

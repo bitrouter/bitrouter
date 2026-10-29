@@ -7,8 +7,8 @@ use clap::Subcommand;
 
 use super::directory;
 use crate::commands;
-use bitrouter_orchestrator::core::skills::{SkillConstraints, SkillSelector};
-use bitrouter_orchestrator::harness::skills::library::LocalScope;
+use bitrouter_ai::core::skills::{SkillConstraints, SkillSelector};
+use bitrouter_ai::harness::skills::LocalScope;
 
 #[derive(Debug, Default, clap::Args)]
 pub struct ConstraintArgs {
@@ -53,7 +53,7 @@ fn parse_selector(value: &str) -> std::result::Result<SkillSelector, String> {
         "mcp" => {
             let (server, uri) = identity.split_once(':').ok_or("use mcp:SERVER:URI")?;
             crate::control_output::validate_id(server).map_err(|error| error.to_string())?;
-            bitrouter_sdk::mcp::skills::validate_skill_resource_uri(uri)?;
+            crate::skills::protocol::validate_skill_resource_uri(uri)?;
             Ok(SkillSelector::Mcp {
                 server: server.into(),
                 uri: uri.into(),

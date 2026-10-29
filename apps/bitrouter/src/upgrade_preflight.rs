@@ -14,6 +14,7 @@ use crate::paths::ConfigSource;
 
 pub struct Preflight {
     path: PathBuf,
+    control_socket: PathBuf,
     applied: Vec<String>,
     config_bytes: Option<Vec<u8>>,
 }
@@ -127,6 +128,11 @@ async fn snapshot(db: &DatabaseConnection, destination: &Path) -> Result<()> {
 }
 
 impl Preflight {
+    /// Endpoint the candidate will bind using the configuration checked here.
+    pub fn control_socket(&self) -> &Path {
+        &self.control_socket
+    }
+
     pub async fn check(source: &ConfigSource) -> Result<Self> {
         Self::check_inner(source, false).await
     }
@@ -136,8 +142,10 @@ impl Preflight {
     }
 
     async fn check_inner(source: &ConfigSource, allow_control: bool) -> Result<Self> {
+        crate::host::validate_startup_features()?;
         let config_bytes = config_bytes(source)?;
         let config = crate::paths::load_config(source).await?;
+        let control_socket = crate::daemon::socket_path_for(source, &config);
         ensure!(
             allow_control || !config.control.enabled,
             "automatic handoff is unavailable while the separate remote-control listener is enabled"
@@ -162,6 +170,7 @@ impl Preflight {
         candidate.close().await?;
         Ok(Self {
             path,
+            control_socket,
             applied,
             config_bytes,
         })
@@ -170,11 +179,16 @@ impl Preflight {
     /// Recheck lineage under the daemon's drain gate, then retain a private
     /// recovery snapshot before the old process is stopped.
     pub async fn backup(&self, source: &ConfigSource) -> Result<PathBuf> {
+        crate::host::validate_startup_features()?;
         ensure!(
             config_bytes(source)? == self.config_bytes,
             "configuration changed during handoff preflight"
         );
         let config = crate::paths::load_config(source).await?;
+        ensure!(
+            crate::daemon::socket_path_for(source, &config) == self.control_socket,
+            "control endpoint changed during handoff preflight"
+        );
         ensure!(
             sqlite_path(&config.database.url, source.home())? == self.path,
             "database changed during handoff preflight"

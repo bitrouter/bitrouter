@@ -1,10 +1,11 @@
 //! OS-local transport and stdio bridge for orchestrator-owned native ACP.
 
+use crate::harness::agent::AgentConfigExt;
 use std::path::{Path, PathBuf};
 
+use crate::harness::acp::native::NativeAcpServer;
 use anyhow::{Context, Result};
-use bitrouter_orchestrator::acp::native::NativeAcpServer;
-use bitrouter_orchestrator::agent::AgentConfig;
+use bitrouter_ai::harness::agent::AgentConfig;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_util::sync::CancellationToken;
@@ -28,8 +29,8 @@ pub fn socket_path(control: &Path) -> PathBuf {
 /// A bridge owns protocol bytes only; EOF never sends business cancellation.
 pub async fn bridge(
     source: &crate::paths::ConfigSource,
-    config: &bitrouter_sdk::config::Config,
-    routing: &crate::acp_cli::RoutingOptions,
+    config: &crate::config::Config,
+    routing: &crate::commands::agent_options::RoutingOptions,
     read_only: bool,
     turn_timeout: Option<u64>,
 ) -> Result<()> {
@@ -56,7 +57,7 @@ pub async fn bridge(
             "local daemon is unavailable and --no-start was selected"
         );
     } else {
-        crate::agent_local::connect_or_start(source, &control).await?;
+        crate::client::agent_local::connect_or_start(source, &control).await?;
     }
     let mut stream = transport::connect(&socket_path(&control))
         .await

@@ -11,13 +11,13 @@
 //!
 //! [`gateway_servers`] is the one spec; [`to_acp`] renders it as the ACP
 //! `session/new` `mcpServers` descriptor for a headless sub-agent, while
-//! [`crate::harness::Harness::launch_overlay`] renders it into whatever config
+//! [`crate::harness::catalog::Harness::launch_overlay`] renders it into whatever config
 //! surface an interactive harness offers. Two renderers, one source, so the
 //! two paths can't drift.
 
 use agent_client_protocol::schema::v1 as acp;
 
-use crate::harness::{McpServer, McpTransport};
+use crate::harness::catalog::{McpServer, McpTransport};
 
 /// Name of the aggregate tool-gateway MCP server injected into a harness.
 pub const TOOLS_SERVER: &str = "bitrouter_tools";

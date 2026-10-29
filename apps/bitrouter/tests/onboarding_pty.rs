@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use portable_pty::{CommandBuilder, PtySize};
 use serde_json::{Value, json};
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 
 #[path = "support/terminal.rs"]
@@ -38,19 +38,22 @@ impl Terminal {
         let home = tempfile::tempdir_in("/tmp")?;
         prepare(home.path())?;
         if args.contains(&"--reset") {
-            let mut store = bitrouter_ai::auth::file::snapshot::CredentialStore::load(
-                home.path().join("data/bitrouter/oauth-tokens.json"),
-            )?;
+            let mut store =
+                bitrouter::gateway::providers::auth::file::snapshot::CredentialStore::load(
+                    home.path().join("data/bitrouter/oauth-tokens.json"),
+                )?;
             store.set(
                 "fixture-one",
                 "default",
-                bitrouter_ai::auth::credentials::Credential::api_key("fixture-reset-secret"),
+                bitrouter::gateway::providers::auth::credentials::Credential::api_key(
+                    "fixture-reset-secret",
+                ),
             )?;
         }
         if configured {
             write_config(home.path())?;
         }
-        let registry = bitrouter_sdk::config::RegistryConfig::default().url;
+        let registry = bitrouter::config::RegistryConfig::default().url;
         let cache = home.path().join("cache/bitrouter");
         std::fs::create_dir_all(&cache)?;
         std::fs::write(
@@ -258,7 +261,7 @@ fn reset_uses_yes_no_confirmation_and_default_no_keeps_credentials() -> Result<(
         terminal.wait("Optional resources")?;
         terminal.send(b"Continue\n")?;
         terminal.finish(true)?;
-        let store = bitrouter_ai::auth::file::snapshot::CredentialStore::load(
+        let store = bitrouter::gateway::providers::auth::file::snapshot::CredentialStore::load(
             terminal
                 .home
                 .path()

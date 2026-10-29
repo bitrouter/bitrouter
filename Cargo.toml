@@ -32,11 +32,7 @@ keyring = { version = "3", default-features = false, features = [
 # internal crates
 bitrouter-ai = { path = "crates/bitrouter-ai", version = "1.0.0-alpha.33" }
 bitrouter-sdk = { path = "crates/bitrouter-sdk", version = "1.0.0-alpha.33", default-features = false }
-bitrouter-orchestrator = { path = "crates/bitrouter-orchestrator", version = "1.0.0-alpha.33" }
 bitrouter-guardrails = { path = "extensions/regex-checker/matcher", version = "1.0.0-alpha.33" }
-# Optional telemetry egress. `default-features = false` keeps a consumer that
-# only wants the observability contract off the OpenTelemetry stack entirely.
-bitrouter-telemetry = { path = "crates/bitrouter-telemetry", version = "1.0.0-alpha.33", default-features = false }
 
 # Safe syscall wrappers. Used by the app's ACP runtime for `killpg(2)` and
 # native runtime process control without requiring unsafe blocks.
@@ -47,7 +43,7 @@ process-wrap = { version = "10", default-features = false }
 # v2; the external-agent controller continues to speak v1.
 agent-client-protocol = { version = "=3.0.0", features = ["process", "stdio", "unstable_session_fork", "unstable_protocol_v2"] }
 agent-client-protocol-conductor = "=3.0.0"
-# Diffs are also consumed by the orchestrator workspace harness.
+# Diffs are consumed by workspace tools.
 similar = "3.1"
 shell-words = "1"
 # Controller endpoint setup and lifecycle fixtures retain their extensions.
@@ -166,20 +162,16 @@ rmcp = { version = "3.3", default-features = false, features = [
 
 # database — sea-orm is the only database dependency in the workspace.
 # bitrouter depends on this high-level ORM abstraction, never on a concrete
-# driver: enabling `sqlx-sqlite` / `sqlx-postgres` / `sqlx-mysql` here lets
-# the `bitrouter` binary talk to every backend sea-orm supports from one
-# build. The schema is defined as `sea-orm-migration` Rust code, not SQL.
+# driver. SQLite is the base backend; application `db-postgres` / `db-mysql`
+# features activate the other drivers in both ORM and migration dependencies.
+# The schema is defined as `sea-orm-migration` Rust code, not SQL.
 sea-orm = { version = "1", default-features = false, features = [
     "macros",
     "sqlx-sqlite",
-    "sqlx-postgres",
-    "sqlx-mysql",
     "runtime-tokio-rustls",
 ] }
 sea-orm-migration = { version = "1", default-features = false, features = [
     "sqlx-sqlite",
-    "sqlx-postgres",
-    "sqlx-mysql",
     "runtime-tokio-rustls",
 ] }
 

@@ -1,6 +1,42 @@
 # BitRouter CLI Reference
 
+MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
+Without `harness`, the daemon opens no local task or native ACP listener, and
+`agent_api.enabled` and `acp serve` report the missing capability before startup.
+Empty MCP configuration and disabled agent API settings remain readable.
+Local native headless execution requires both `core` and `harness`.
+Supervised sessions and ACP route-lease control also require `harness`; a
+gateway-only daemon leaves the supervisor ledger untouched. Request identity
+and existing session-attributed spend remain available.
+SQLite needs no feature. PostgreSQL/MySQL configuration requires `db-postgres` /
+`db-mysql`; both are included in the default distribution. Reduced builds report
+an unavailable selected backend before connecting.
+Gateway server-side tools require `server-tools` (included by default and enabling
+`mcp`). Selecting MCP tools, advisor, subagent, Fusion, web search or web fetch
+without that feature fails at startup, reload and profile preflight. Saved loop
+tuning with no selected tool remains readable and does not activate execution.
+
+Evidence and learning commands require the application's `core` feature:
+`eval`, `optimize`, `workflow-state`, and `policy compile`, `publish`, `verify`
+and `evolve`, plus `acp evolution` and checkpoint `judge`, `judge-job` and
+`rubric` operations. Without core they report the requirement before opening
+inputs or stores. Nonempty `BITROUTER_WORKFLOW_TRACE_JSONL` also requires core.
+`serve`, `start` and `restart` reject it before creating runtime files or stopping
+a resident daemon. Published-policy loading/enforcement, ordinary
+policy inspection/reload/rollback, request metering and trajectory inspection,
+replay and pruning remain available without the learning runtime.
+
 `bro <subcommand> [flags]`
+
+## Executable identity
+
+`bro build-info` reports the local executable's version, source revision (or
+`null` when unavailable), target platform, sorted effective features, distribution
+profile and handoff fingerprint. It reads no configuration or service storage.
+Use `--human` for a text view. The profile is `gateway` for no optional features,
+`full` for the manifest's default capability set, and `custom` for other sets.
+Aliases and transitive features are normalized at build time; `--all-features`
+is a custom selection, not the official full profile.
 
 ## Output format
 
@@ -416,7 +452,7 @@ Most targets are Rust module paths (`bitrouter`, `bitrouter_sdk`, …), so `RUST
 
 These use `::` separators (not `_`) precisely because they are not module paths: they are stable selectors that survive the code moving between crates. Two consequences for operators:
 
-- **`RUST_LOG=bitrouter_observe=debug` selects nothing at all.** There is no `bitrouter-observe` crate; the exporter lives in `bitrouter-telemetry`, so that is a dead selector rather than a narrower one — and the module-path fallback would be `bitrouter_telemetry::otel::…`, which is exactly what the pins below exist to make irrelevant. The pinned `bitrouter::observe::*` targets below are the stable way to reach this instrumentation: use `RUST_LOG=bitrouter::observe::http=debug` (or a plain `info` default, which includes it).
+- **`RUST_LOG=bitrouter_observe=debug` selects nothing at all.** There is no `bitrouter-observe` crate; the exporter lives in application telemetry, so that is a dead selector rather than a narrower one — and the module-path fallback would be `bitrouter::telemetry::…`, which is exactly what the pins below exist to make irrelevant. The pinned `bitrouter::observe::*` targets below are the stable way to reach this instrumentation: use `RUST_LOG=bitrouter::observe::http=debug` (or a plain `info` default, which includes it).
 - **Turn on `bitrouter::observe::span_attributes` when a forwarded attribute does not appear on a span.** A deployment can attach its own attributes to the root `chat` span, but the span schema reserves its own vocabulary: keys under `bitrouter.` or `gen_ai.`, and any key the schema already declares (`$screen_name`, `error.type`, `server.address`, …), are **dropped rather than stamped**, so one deployment cannot redefine what an attribute means for everyone else. The drop is deliberate and per-request, hence DEBUG rather than WARN: `RUST_LOG=info,bitrouter::observe::span_attributes=debug` names each dropped key. The full reserved region is `crates/bitrouter-sdk/span-schema.json`.
 - **`RUST_LOG` no longer affects tracing.** This used to be the opposite, and the reversal is worth stating because the old advice is still in circulation: the ingress span was a `tracing` span bridged into OpenTelemetry, so a filter that dropped `bitrouter::observe::http` at INFO also dropped the SERVER span, and every `chat` span exported as an orphan root with no error reported anywhere. A blanket `RUST_LOG=warn` was enough to do it. The ingress span is now an OpenTelemetry span in its own right and never passes through the `tracing` subscriber, so **no filter can suppress it**. Set `RUST_LOG` for the logs you want; traces are unaffected either way.
 
@@ -498,7 +534,7 @@ Contexts live in `contexts.toml` under `$BITROUTER_HOME`, or under
 environment-variable **name**, never the bearer value. Endpoints must use HTTPS;
 plain HTTP is accepted only for `localhost`/loopback, including an SSH-forwarded
 port. The client performs the `/control/v1/capabilities` handshake before its
-first action (and caches it for a long-lived TUI), follows no redirects, and
+first action (and retains it for that command), follows no redirects, and
 never falls back to this computer's config, socket, or database after a remote
 error. A named context is the complete target: supported remote commands reject
 local `--config` and `--socket` flags before opening local configuration,
@@ -593,12 +629,27 @@ Stops the running daemon (waiting up to 30s for in-flight requests to drain), th
 For a file SQLite database, restart first validates migration lineage and runs
 pending migrations on a private snapshot. It retains a recovery backup before
 stopping the daemon. The explicit restart may interrupt active agent runs.
+When both executables report different compiled distributions, restart instead
+requires verified launcher ownership and the atomic idle handoff gate before
+stopping anything. Unsupported configuration, active work or unknown idleness
+leaves the resident unchanged. The same-profile explicit restart retains its
+existing interruption behavior.
+
+A profile transition can also apply a saved control-socket change. Preflight
+checks the candidate endpoint before stopping the resident, and readiness,
+artifact identity and locator verification use that new endpoint.
 
 ### Local daemon after an update
 
 `bro status` reports the installed and running daemon versions when the daemon
 supports that metadata. Its JSON also includes `compatibility`, launcher
 ownership, and observed active-work counts when the daemon can report them.
+`installed_artifact` and `daemon_artifact` identify the corresponding compiled
+distributions. Missing legacy metadata remains unknown. A `profile_mismatch`
+allows common inspection but prevents automatic replacement by a different
+feature set or target; use a matching executable for execution or request an
+explicit profile transition. Control HTTP capabilities also report the server's
+artifact separately from the caller's authorized actions.
 These counts are a passive snapshot; the daemon checks them again behind its
 drain gate before stopping. A new `bro` probes the local daemon before supervised
 session commands. When the daemon has the handoff protocol, is idle, and its
@@ -609,10 +660,17 @@ it is idle; finish its work and run `bro restart` explicitly.
 Foreground `bro serve` remains under its external supervisor; the CLI does not
 take it over automatically.
 
-The standalone BRO runtime holds a daemon admission for its endpoint lifetime.
-Until native requests, queue runners and recovery participate in an atomic
-handoff, even an idle BRO daemon defers automatic replacement. Finish its work
-and use the explicit `bro restart` when changing binaries.
+Every `core` build holds daemon admission for its managed runtime's lifetime,
+including core-only sessions executed by an external harness. Channel work,
+pending checkpoint acknowledgements, native requests and queue runners do not
+yet participate in an atomic handoff, so even an apparently idle core resident
+defers automatic replacement. Gateway and harness-only builds retain tracked
+idle handoff. Finish managed work and use the explicit `bro restart` when
+changing binaries.
+That exception applies to the same compiled distribution. A cross-profile
+restart still requires atomic idle evidence and is refused by the managed
+lifetime guard; plan an explicit stop after finishing work before starting the
+other profile. No command silently removes that guard to change profiles.
 
 `bro update` attempts the same safe handoff after a self-managed installation.
 Package-manager installs still delegate the binary update; the next
@@ -2336,12 +2394,10 @@ an adoption and withdraw later versions that inherited it. Routing falls back
 to the last supported baseline, subject to live dependency checks. Other blocks
 are unchanged except where they declare dependencies on a withdrawn revision.
 
-The local TUI exposes **Start the next experiment** and **Experiment history**.
-A revision draft inherits its matchers and supported baselines; edit candidate
-routes and the trial reason, then review and register. The preview states when
-a route change requires rebasing to configured selectors. Reconciliation from
-an evidence view stays bound to the displayed experiment, even after a newer
-version is registered.
+Use the CLI `candidate` and `revise` operations to preview and register an
+experiment. Retain the inspected predecessor and request ID across retries.
+`learning --experiment` inspects a specific archived version; reconciliation
+remains bound to that version after later revisions are registered.
 
 `learning` distinguishes the original trial evidence from quality monitoring of
 new sessions after adoption. `improve` and the worker can withdraw an adopted

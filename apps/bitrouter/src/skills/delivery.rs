@@ -1,14 +1,14 @@
 //! ACP delivery reads explicitly selected local skill directories.
 //! The supervisor remains the sole owner of input identity and the dispatch journal.
 
+use crate::commands::agent_options::SkillDeliveryCapabilities as Capabilities;
+use crate::harness::acp::skills::{self, Instructions, Prepared, Target};
+use crate::skills::library::SkillDirectory;
+use crate::storage::skills::{SkillCandidate, SkillSource, selection};
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
-use bitrouter_orchestrator::acp::skills::{self, Capabilities, Instructions, Prepared, Target};
-use bitrouter_orchestrator::core::protocol::{CoreError, ErrorCode};
-use bitrouter_orchestrator::core::skills::{
-    SkillCandidate, SkillConstraints, SkillSelector, SkillSource, selection,
-};
-use bitrouter_orchestrator::harness::skills::library::SkillDirectory;
+use bitrouter_ai::core::protocol::{CoreError, ErrorCode};
+use bitrouter_ai::core::skills::{SkillConstraints, SkillSelector};
 
 use serde::{Deserialize, Serialize};
 
@@ -136,7 +136,7 @@ impl Context {
         journal.save(&report).await?;
         selection::select(&mut report.candidates, &self.constraints)?;
         selection::bound(&report.candidates, 4, 64 * 1024, |source| {
-            skills::instruction_size(source, target).map_err(|error| {
+            crate::storage::skills::state::instruction_size(source).map_err(|error| {
                 CoreError::rejected(ErrorCode::ArtifactUnavailable, error.to_string())
             })
         })?;

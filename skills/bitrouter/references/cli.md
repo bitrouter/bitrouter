@@ -23,6 +23,13 @@ are removed.
 
 ## Native tasks through the managed core
 
+Local native execution requires the application's `core` and `harness` features
+(enabled in the default distribution). A harness build without core can inspect stored sessions
+and validate their checkpoints, but cannot create or resume native work. Check
+the runtime's `native_execution` capability before submission; unavailable work
+is rejected before execution ownership or workspace resources are acquired.
+This does not disable the separate external ACP harness path.
+
 `bro task managed PROMPT [--model PROVIDER/MODEL] --workspace PATH --session NAME`
 is a client of the selected local daemon's managed v1 endpoint. The daemon owns
 NativeSession/CoreSession, native workspace tools, resource connections and the
@@ -378,8 +385,11 @@ BitRouter fails closed if a signed lock contains any `progress_guard` while
 reload rejects changes to `enabled`, `retention_days`, or `outbox_batch_size`
 and preserves the live last-known-good state. Restart the daemon to apply any
 of them. When enabled, capture uses the existing local correlation-key
-lifecycle and starts durable outbox publication and startup retention. When
-disabled, it creates no correlation key and writes no trajectory ledger rows.
+lifecycle and startup retention. With `core` enabled, it also publishes the durable
+evaluation outbox. Without core, gateway terminal facts and outbox envelopes stay
+durable; publication attempts remain pending until a core-enabled daemon opens
+the same state. Retention does not discard undelivered evidence. When trajectory
+is disabled, it creates no correlation key and writes no trajectory ledger rows.
 
 Provider-native Responses continuation remains always active even when
 trajectory is disabled. Its independent lifecycle settings are:
@@ -458,7 +468,7 @@ edit or publish `policy-lock.yaml`.
 | `bro eval snapshot get <SHA256> [--config PATH]` | Read an immutable snapshot manifest. |
 | `bro eval status [--config PATH]` | Count subjects and latest admission states. |
 
-Authenticated daemon endpoints mirror the exchange at
+With the application `core` feature, authenticated daemon endpoints mirror the exchange at
 `/v1/evals/subjects`, `/v1/evals/results`, `/v1/evals/snapshots`, and
 `/v1/evals/status`. External evaluators submit scores; BitRouter owns schema,
 identity/metric authority, conflict/holdout admission, and snapshots.

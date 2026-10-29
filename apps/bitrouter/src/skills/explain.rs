@@ -2,12 +2,21 @@
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, ensure};
-use bitrouter_orchestrator::core::skills::explain::Explanation;
-use bitrouter_orchestrator::harness::managed::session::NativeSession;
-use bitrouter_sdk::caller::CallerContext;
+#[cfg(all(feature = "core", feature = "harness"))]
+use crate::gateway::caller::CallerContext;
+#[cfg(all(feature = "core", feature = "harness"))]
+use crate::harness::resources::managed::session::NativeSession;
+use crate::storage::skills::explain::Explanation;
+#[cfg(all(feature = "core", feature = "harness"))]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(all(feature = "core", feature = "harness"))]
+use anyhow::ensure;
+#[cfg(all(feature = "core", feature = "harness"))]
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
-use serde::{Deserialize, Serialize};
+#[cfg(all(feature = "core", feature = "harness"))]
+use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Debug, clap::Args)]
 #[command(group(clap::ArgGroup::new("runtime").args(["thread", "managed_session"]).required(true)))]
@@ -51,12 +60,13 @@ pub enum Selector {
     ManagedNative {
         managed_session: String,
         request_id: String,
-        grant: bitrouter_orchestrator::core::protocol::OwnershipGrant,
-        head: bitrouter_orchestrator::core::checkpoint::DurableHead,
+        grant: bitrouter_ai::core::protocol::OwnershipGrant,
+        head: bitrouter_ai::core::checkpoint::DurableHead,
         released: bool,
     },
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 pub async fn read(options: Options) -> Result<Report> {
     for id in [
         options.thread.as_deref(),
@@ -70,7 +80,7 @@ pub async fn read(options: Options) -> Result<Report> {
         crate::control_output::validate_id(id)?;
     }
     if let Some(session) = &options.managed_session {
-        crate::managed_store::validate_session_name(session)?;
+        crate::managed_task::protocol::validate_session_name(session)?;
     }
     ensure!(
         options.thread.is_some() != options.managed_session.is_some(),
@@ -84,7 +94,7 @@ pub async fn read(options: Options) -> Result<Report> {
     let db = database(&options).await?;
     let mut report = if let (Some(thread), Some(turn)) = (options.thread, options.turn) {
         let store = crate::agent_store::DatabaseExecutionStore::new(db);
-        let inspection = bitrouter_orchestrator::service::skills::inspect(
+        let inspection = crate::harness::service::skills::inspect(
             &store,
             &CallerContext::local(),
             &thread,
@@ -125,13 +135,12 @@ pub async fn read(options: Options) -> Result<Report> {
         ensure!(
             receipt.error.is_none()
                 && receipt.disposition
-                    == bitrouter_orchestrator::core::protocol::OperationDisposition::Accepted
+                    == bitrouter_ai::core::protocol::OperationDisposition::Accepted
                 && receipt.assigned_ids.get("agent_id") == Some(&snapshot.agent_id)
                 && receipt.assigned_ids.contains_key("agent_turn_id"),
             "operation is not an accepted managed input"
         );
-        let explanation =
-            bitrouter_orchestrator::core::skills::explain::capture(&snapshot, run_id)?;
+        let explanation = crate::storage::skills::explain::capture(&snapshot, run_id)?;
         Report {
             operation: "explain",
             selector: Selector::ManagedNative {
@@ -160,16 +169,18 @@ pub async fn read(options: Options) -> Result<Report> {
     Ok(report)
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct DatabaseLocation {
-    database: bitrouter_sdk::config::DatabaseConfig,
+    database: crate::config::DatabaseConfig,
 }
 
+#[cfg(all(feature = "core", feature = "harness"))]
 async fn database(options: &Options) -> Result<DatabaseConnection> {
     let location = if let Some(url) = &options.database_url {
         crate::db::anchor_url(
-            &bitrouter_sdk::config::substitute_env(url)?,
+            &crate::config::substitute_env(url)?,
             &std::env::current_dir()?,
         )
     } else {
@@ -183,7 +194,7 @@ async fn database(options: &Options) -> Result<DatabaseConnection> {
             crate::paths::ConfigSource::Default { .. } => DatabaseLocation::default(),
         };
         crate::db::anchor_url(
-            &bitrouter_sdk::config::substitute_env(&location.database.url)?,
+            &crate::config::substitute_env(&location.database.url)?,
             source.home(),
         )
     };
@@ -267,10 +278,10 @@ impl crate::output::CliReport for Report {
             }
             for candidate in &selection.candidates {
                 let source = match &candidate.source {
-                    bitrouter_orchestrator::core::skills::SkillSource::Local(binding) => {
+                    crate::storage::skills::SkillSource::Local(binding) => {
                         format!("{:?}:{}", binding.scope, binding.directory_id)
                     }
-                    bitrouter_orchestrator::core::skills::SkillSource::Mcp(held) => format!(
+                    crate::storage::skills::SkillSource::Mcp(held) => format!(
                         "mcp:{}:{}",
                         held.origin.server,
                         held.entry.uri.escape_debug()
@@ -314,4 +325,9 @@ impl crate::output::CliReport for Report {
         }
         Ok(())
     }
+}
+
+#[cfg(not(all(feature = "core", feature = "harness")))]
+pub async fn read(_options: Options) -> Result<Report> {
+    anyhow::bail!("native skill history requires the core and harness features")
 }

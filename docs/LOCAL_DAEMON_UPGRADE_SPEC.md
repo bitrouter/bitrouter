@@ -3,9 +3,13 @@
 Status: **implemented and locally verified** · 2026-09-22
 
 The later standalone BRO integration conservatively holds admission while its
-native endpoint is resident. Automatic replacement is deferred until native
-admission, queue workers and recovery have an atomic handoff contract; explicit
-restart remains available. The original ACP/HTTP evidence below is historical.
+managed runtime is resident. This applies to every `core` build, including a
+core-only service with an external harness: channel work and pending checkpoint
+ACKs outlive HTTP response bodies. Automatic replacement is deferred until
+managed admission, queue workers and recovery have an atomic handoff contract;
+same-capability explicit restart remains available. Gateway and harness-only
+profiles retain tracked idle handoff. The original ACP/HTTP evidence below is
+historical.
 
 ## Decision
 

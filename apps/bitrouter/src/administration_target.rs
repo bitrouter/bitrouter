@@ -5,29 +5,35 @@
 //! provider environment, then exposes the same read operations to the CLI and
 //! operations dashboard.
 
+use crate::actions::administration::{ObserveReportRuntime, PolicyReportRuntime};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::actions::models::ModelsReport;
-use crate::actions::route::{RouteInput, RouteReport};
-use crate::actions::status::StatusReport;
 use anyhow::Result;
+use bitrouter_ai::control::models::ModelsReport;
+use bitrouter_ai::control::status::StatusReport;
+use {bitrouter_ai::control::route::RouteInput, bitrouter_ai::control::route::RouteReport};
 
-use crate::actions::administration::{
-    AgentsReport, ObserveReport, PolicyInput, PolicyReport, PolicyView, ProvidersReport,
-};
 use crate::actions::models::RoutableModels;
-use crate::actions::requests::{RequestFilters, RequestsAction};
 use crate::actions::route::RouteAction;
 use crate::actions::status::DaemonStatus;
 use crate::contexts::RemoteContext;
 use crate::daemon::{
     self, DaemonCommand, DaemonInspection, DaemonInspectionReport, DaemonResponse,
 };
-use crate::output::reports::requests::RequestsReport;
 use crate::paths::ConfigSource;
-use crate::reload::ReloadState;
-use crate::remote_control::operations::{OperationReport, ReloadInput};
+use bitrouter_ai::control::reload::ReloadState;
+use bitrouter_ai::control::reload::{OperationReport, ReloadInput};
+use bitrouter_ai::control::requests::RequestsReport;
+use {crate::actions::requests::RequestsAction, bitrouter_ai::control::requests::RequestFilters};
+use {
+    bitrouter_ai::control::administration::AgentsReport,
+    bitrouter_ai::control::administration::ObserveReport,
+    bitrouter_ai::control::administration::PolicyInput,
+    bitrouter_ai::control::administration::PolicyReport,
+    bitrouter_ai::control::administration::PolicyView,
+    bitrouter_ai::control::administration::ProvidersReport,
+};
 
 /// Result of an explicit reload submitted through a selected target.
 ///
@@ -60,7 +66,7 @@ pub enum InspectionTarget {
     },
     Remote {
         name: String,
-        client: Arc<crate::remote_control::HttpControlClient>,
+        client: Arc<crate::client::control::HttpControlClient>,
     },
 }
 
@@ -217,7 +223,7 @@ impl InspectionTarget {
                 Ok(DaemonInspectionReport::Observe(report)) => Ok(report),
                 Ok(other) => unexpected_inspection("observe", other),
                 Err(error) if daemon::is_not_reachable(&error) => Ok(ObserveReport::from_snapshot(
-                    daemon::ObserveStatusPayload::unwired(bitrouter_telemetry::OTEL_ENABLED),
+                    daemon::ObserveStatusPayload::unwired(crate::telemetry::OTEL_ENABLED),
                     false,
                 )),
                 Err(error) => Err(error),
@@ -331,7 +337,7 @@ fn unexpected_inspection<T>(action: &str, report: DaemonInspectionReport) -> Res
 
 pub fn reject_remote_local_flags(config: Option<&Path>, socket: Option<&Path>) -> Result<()> {
     if config.is_some() || socket.is_some() {
-        return Err(bitrouter_sdk::BitrouterError::bad_request(
+        return Err(crate::gateway::error::BitrouterError::bad_request(
             "a remote context does not accept --config or --socket; the named context is the \
              complete target",
         )

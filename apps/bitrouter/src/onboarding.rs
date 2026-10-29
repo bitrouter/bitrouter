@@ -9,10 +9,10 @@ use std::sync::Arc;
 
 use crate::cloud::account::credentials::default_credentials_path;
 use crate::cloud::account::manager::CredentialManager;
+use crate::commands::invocation;
+use crate::gateway::providers::auth::file::snapshot::CredentialStore;
+use crate::gateway::providers::hosted::PROVIDER_ID;
 use anyhow::{Context, Result};
-use bitrouter_ai::auth::file::snapshot::CredentialStore;
-use bitrouter_ai::providers::hosted::PROVIDER_ID;
-use bitrouter_sdk::invocation;
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -21,7 +21,7 @@ use crate::commands::{ProviderLoginOptions, login_provider_with_options};
 use crate::output::CliReport;
 use crate::output::Output;
 use crate::output::human::Human;
-use crate::spawn::SpawnAgent;
+use crate::providers::cli_install::SpawnAgent;
 
 // =====================================================================
 // §5 — network-free credential probe
@@ -475,7 +475,7 @@ fn save_config(
         }
     }
     if existing && !flags.force && value == original {
-        let _: bitrouter_sdk::config::Config = serde_saphyr::from_str(&text)?;
+        let _: crate::config::Config = serde_saphyr::from_str(&text)?;
         note(&format!(
             "using saved Router configuration in {}",
             path.display()
@@ -484,7 +484,7 @@ fn save_config(
     }
     let serialized = serde_saphyr::to_string(&value)?;
     // Reject invalid edits before replacing a working configuration.
-    let _: bitrouter_sdk::config::Config = serde_saphyr::from_str(&serialized)?;
+    let _: crate::config::Config = serde_saphyr::from_str(&serialized)?;
     let parent = path.parent().context("configuration path has no parent")?;
     if !parent.exists() {
         crate::paths::ensure_home_directory(parent)?;
@@ -512,6 +512,11 @@ pub async fn run(flags: OnboardingFlags, output: &Output) -> Result<()> {
 }
 
 async fn run_inner(flags: OnboardingFlags, output: &Output) -> Result<()> {
+    #[cfg(not(feature = "harness"))]
+    anyhow::ensure!(
+        flags.harnesses.is_empty() && flags.after != Some(AfterAction::Launch),
+        "agent configuration and native launch require the harness feature"
+    );
     flags
         .resources
         .validate(!flags.yes && crate::prompt::terminal())?;
@@ -555,7 +560,7 @@ async fn run_headless(
     // Catalog ACP adapters are built in. No native CLI installation is required.
     let path = config_path(flags.config.as_deref())?;
     let existing_agent = if path.is_file() && !flags.force {
-        let config: bitrouter_sdk::config::Config =
+        let config: crate::config::Config =
             serde_saphyr::from_str(&std::fs::read_to_string(&path)?)?;
         config.chat.agent
     } else {
@@ -652,7 +657,7 @@ async fn apply_flag_credentials(
             None if headless => skipped.push(provider.clone()),
             None => match login_provider_with_options(
                 provider,
-                bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
+                crate::gateway::providers::auth::store::DEFAULT_ACCOUNT,
                 ProviderLoginOptions::default(),
             )
             .await
@@ -699,7 +704,7 @@ async fn seed_cloud_api_key(key: &str, manager: Arc<CredentialManager>) -> Resul
 async fn seed_provider_api_key(provider: &str, key: &str) -> Result<()> {
     login_provider_with_options(
         provider,
-        bitrouter_ai::auth::store::DEFAULT_ACCOUNT,
+        crate::gateway::providers::auth::store::DEFAULT_ACCOUNT,
         ProviderLoginOptions {
             import_existing: false,
             no_browser: true,
@@ -817,18 +822,17 @@ async fn interactive_credentials(
 
     let path = config_path(flags.config.as_deref())?;
     let registry = if path.is_file() && !flags.force {
-        serde_saphyr::from_str::<bitrouter_sdk::config::Config>(&std::fs::read_to_string(path)?)?
-            .registry
+        serde_saphyr::from_str::<crate::config::Config>(&std::fs::read_to_string(path)?)?.registry
     } else {
-        bitrouter_sdk::config::RegistryConfig::default()
+        crate::config::RegistryConfig::default()
     };
     note("loading providers from the registry…");
-    let data = crate::bundled_registry::load(&registry).await;
+    let data = crate::gateway::catalog::bundled::load(&registry).await;
     let providers = data.as_ref().map(provider_choices).unwrap_or_default();
     for provider in &providers {
         if provider
             .env_credential_var()
-            .is_some_and(|var| crate::spawn::nonempty_env(&var).is_some())
+            .is_some_and(|var| crate::client::local_gateway::nonempty_env(&var).is_some())
         {
             configured.insert(provider.name.clone());
         }
@@ -940,6 +944,7 @@ async fn seed_cloud_interactive(manager: Arc<CredentialManager>) -> Result<()> {
     .context("BitRouter Cloud sign-in")
 }
 
+#[cfg(feature = "harness")]
 async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
     if !flags.harnesses.is_empty() {
         return Ok(flags
@@ -950,7 +955,7 @@ async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
             .map(String::from)
             .collect());
     }
-    let harnesses = crate::harness::CATALOG;
+    let harnesses = crate::harness::catalog::CATALOG;
     let mut items: Vec<_> = harnesses
         .iter()
         .map(|harness| crate::prompt::Item::new(harness.id, harness.description))
@@ -1020,6 +1025,7 @@ fn native_id(id: &str) -> Option<&'static str> {
 }
 
 /// Explicit opt-in to a native launcher, never the first-party Code UI.
+#[cfg(feature = "harness")]
 async fn finish_launch(
     path: &std::path::Path,
     report: OnboardingReport,
@@ -1064,7 +1070,7 @@ async fn finish_serve(
 /// Shell templates reference the caller's key without copying it into reports.
 /// The local skip-auth fallback is a placeholder; Codex uses its native launcher.
 fn build_snippet(listen: &str) -> Snippet {
-    let base_url = crate::spawn::derive_base_url(listen);
+    let base_url = crate::client::local_gateway::derive_base_url(listen);
     let token = "${BITROUTER_API_KEY:-bitrouter-local}";
     let v1 = {
         let trimmed = base_url.trim_end_matches('/');
@@ -1399,7 +1405,11 @@ mod tests {
         // With no BITROUTER_API_KEY exported, the local `skip_auth` placeholder
         // is templated into all three shapes.
         // (This test process does not set BITROUTER_API_KEY.)
-        if crate::spawn::nonempty_env(crate::harness::BITROUTER_API_KEY_ENV).is_some() {
+        if crate::client::local_gateway::nonempty_env(
+            crate::client::local_gateway::BITROUTER_API_KEY_ENV,
+        )
+        .is_some()
+        {
             return; // environment is non-hermetic; skip rather than false-fail
         }
         let snippet = build_snippet("127.0.0.1:4356");
@@ -1411,7 +1421,7 @@ mod tests {
         );
         assert!(snippet.anthropic.contains(&format!(
             "ANTHROPIC_AUTH_TOKEN=${{BITROUTER_API_KEY:-{}}}",
-            crate::harness::PLACEHOLDER_API_KEY
+            crate::client::local_gateway::PLACEHOLDER_API_KEY
         )));
         // OpenAI shape carries the /v1 suffix.
         assert!(
@@ -1436,14 +1446,14 @@ mod tests {
             .set(
                 "claude-code",
                 "default",
-                bitrouter_ai::auth::credentials::Credential::ClaudeCodeCli,
+                crate::gateway::providers::auth::credentials::Credential::ClaudeCodeCli,
             )
             .unwrap();
         store
             .set(
                 "openai",
                 "default",
-                bitrouter_ai::auth::credentials::Credential::api_key("sk-x"),
+                crate::gateway::providers::auth::credentials::Credential::api_key("sk-x"),
             )
             .unwrap();
 
@@ -1488,4 +1498,23 @@ mod tests {
         assert_eq!(v["configured"], true);
         Ok(())
     }
+}
+
+#[cfg(not(feature = "harness"))]
+async fn interactive_harness(flags: &OnboardingFlags) -> Result<Vec<String>> {
+    anyhow::ensure!(
+        flags.harnesses.is_empty(),
+        "agent configuration requires the harness feature"
+    );
+    Ok(Vec::new())
+}
+
+#[cfg(not(feature = "harness"))]
+async fn finish_launch(
+    _path: &std::path::Path,
+    _report: OnboardingReport,
+    _output: &Output,
+    _no_install: bool,
+) -> Result<()> {
+    anyhow::bail!("native harness launch requires the harness feature")
 }

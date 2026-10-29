@@ -9,71 +9,105 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use sea_orm::DatabaseConnection;
 
-use bitrouter_ai::auth::AuthAppliers;
-use bitrouter_ai::client::HttpTimeouts;
-use bitrouter_ai::protocol::OutboundDispatch;
-use bitrouter_sdk::App;
-use bitrouter_sdk::PromptTransform;
-use bitrouter_sdk::config::{Config, ConfigRoutingTable};
-use bitrouter_sdk::invocation;
-use bitrouter_sdk::language_model::operations::{HookStage, OperationScope};
-use bitrouter_sdk::language_model::server_tools::advisor::AdvisorToolset;
-use bitrouter_sdk::language_model::server_tools::approval::AllowAll;
-use bitrouter_sdk::language_model::server_tools::config::ServerToolLoopConfig;
-use bitrouter_sdk::language_model::server_tools::declarations::ServerToolDeclarationsHook;
-use bitrouter_sdk::language_model::server_tools::declarations::forwarded_tools;
-use bitrouter_sdk::language_model::server_tools::fusion::FusionToolset;
-use bitrouter_sdk::language_model::server_tools::fusion::alias::FusionAliasConfig;
-use bitrouter_sdk::language_model::server_tools::loop_controller::ServerToolLoop;
-use bitrouter_sdk::language_model::server_tools::mcp_toolset::McpRouterToolset;
-use bitrouter_sdk::language_model::server_tools::nested::{NestedRunner, PipelineNestedRunner};
-use bitrouter_sdk::language_model::server_tools::sub_agent::SubAgentToolset;
-use bitrouter_sdk::language_model::server_tools::toolset::{RouterToolset, ToolsetRegistry};
-use bitrouter_sdk::language_model::server_tools::web_fetch::backend::WebFetchBackend;
-use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+use crate::commands::invocation;
+use crate::config::Config;
+use crate::config::routing_table::ConfigRoutingTable;
+#[cfg(feature = "server-tools")]
+use crate::config::server_tools::web_fetch::{
     DEFAULT_MAX_CONTENT_TOKENS, WebFetchBackendConfig, WebFetchSettings,
 };
-use bitrouter_sdk::language_model::server_tools::web_fetch::http::{
-    HttpFetchBackend, HttpFetchEngine,
-};
-use bitrouter_sdk::language_model::server_tools::web_fetch::toolset::WebFetchToolset;
-use bitrouter_sdk::language_model::server_tools::web_search::backend::WebSearchBackend;
-use bitrouter_sdk::language_model::server_tools::web_search::config::{
+#[cfg(feature = "server-tools")]
+use crate::config::server_tools::web_search::{
     DEFAULT_MAX_RESULTS, WebSearchBackendConfig, WebSearchSettings,
 };
-use bitrouter_sdk::language_model::server_tools::web_search::http::{
-    HttpEngine, HttpSearchBackend,
+use crate::gateway::assembly::{App, PromptTransform};
+#[cfg(feature = "mcp")]
+use crate::gateway::mcp::aggregating_executor::AggregatingExecutor;
+#[cfg(feature = "mcp")]
+use crate::gateway::mcp::caching_executor::{CacheTtls, CachingExecutor};
+#[cfg(feature = "mcp")]
+use crate::gateway::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
+#[cfg(feature = "mcp")]
+use crate::gateway::mcp::rmcp_executor::RmcpExecutor;
+use crate::gateway::model::client::HttpTimeouts;
+use crate::gateway::model::protocol::OutboundDispatch;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::builder::PipelineBuilder;
+use crate::gateway::pipeline::executor::HttpExecutor;
+use crate::gateway::pipeline::operations::HookStage;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::advisor::AdvisorToolset;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::approval::AllowAll;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::config::ServerToolLoopConfig;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::declarations::{
+    ServerToolDeclarationsHook, forwarded_tools,
 };
-use bitrouter_sdk::language_model::server_tools::web_search::nested::NestedSearchBackend;
-use bitrouter_sdk::language_model::server_tools::web_search::toolset::WebSearchToolset;
-use bitrouter_sdk::language_model::{HttpExecutor, PipelineBuilder};
-use bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor;
-use bitrouter_sdk::mcp::caching_executor::{CacheTtls, CachingExecutor};
-use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
-use bitrouter_sdk::mcp::rmcp_executor::RmcpExecutor;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::fusion::FusionToolset;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::fusion::alias::FusionAliasConfig;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::loop_controller::ServerToolLoop;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::mcp_toolset::McpRouterToolset;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::nested::{NestedRunner, PipelineNestedRunner};
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::sub_agent::SubAgentToolset;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::toolset::{RouterToolset, ToolsetRegistry};
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::web_fetch::backend::WebFetchBackend;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::web_fetch::http::{HttpFetchBackend, HttpFetchEngine};
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::web_fetch::toolset::WebFetchToolset;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::web_search::backend::WebSearchBackend;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::web_search::http::{HttpEngine, HttpSearchBackend};
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::web_search::nested::NestedSearchBackend;
+#[cfg(feature = "server-tools")]
+use crate::gateway::pipeline::server_tools::web_search::toolset::WebSearchToolset;
+use crate::gateway::providers::auth::AuthAppliers;
+use bitrouter_ai::types::OperationScope;
 
-use bitrouter_sdk::MetricsRenderer;
-use bitrouter_telemetry::OTEL_ENABLED;
-use bitrouter_telemetry::otel::{
-    ContentCaptureMode, MetricsConfig, OtelConfig, OtelExporter, OtelObserveHook,
-};
+use crate::gateway::observability::metrics::MetricsRenderer;
+use crate::telemetry::OTEL_ENABLED;
+use crate::telemetry::config::{ContentCaptureMode, MetricsConfig, OtelConfig};
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+use crate::telemetry::exporter::{OtelExporter, OtelObserveHook};
 
-use crate::acp_runtime::AcpRuntime;
 use crate::auth::AuthHook;
 use crate::continuation::{ContinuationKeySource, ContinuationRegistry, ContinuationRuntime};
-use crate::daemon::{NoopObserveStatus, ObserveStatusPayload, ObserveStatusProvider};
-use crate::eval::EvalService;
-use crate::eval::settlement::{EvalSettlementRecorder, PendingEvalDecisionStore};
-use crate::eval::store::EvalStore;
+#[cfg(feature = "core")]
+use crate::core::eval::EvalService;
+#[cfg(feature = "core")]
+use crate::core::eval::publisher::TrajectoryOutboxPublisher;
+#[cfg(feature = "core")]
+use crate::core::eval::settlement::EvalSettlementRecorder;
+#[cfg(feature = "core")]
+use crate::core::eval::store::EvalStore;
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+use crate::daemon::ObserveStatusPayload;
+use crate::daemon::{NoopObserveStatus, ObserveStatusProvider};
+use crate::gateway::observability::decision::PendingEvalDecisionStore;
+use crate::gateway::observability::prediction::PredictiveResponseObserver;
+use crate::gateway::observability::settlement::PolicySettlementRecorder;
+#[cfg(feature = "harness")]
+use crate::harness::acp::runtime::AcpRuntime;
 use crate::metering::tariff::CaptureTariffs;
 use crate::metering::{MeteringRecorder, MeteringStore, ModelPricing, PricingTable};
 use crate::policy::{PolicyHook, PolicyStore};
 use crate::session_identity::SessionContextHook;
-use crate::trajectory::publisher::TrajectoryOutboxPublisher;
 use crate::trajectory::settlement::TrajectorySettlementRecorder;
 use crate::trajectory::store::TrajectoryStore;
 use crate::trajectory::{canonical::Canonicalizer, correlation::TrajectoryRuntime};
-use crate::workflow_state::response_observer::PredictiveResponseObserver;
 
 /// A running application plus the database connection it was assembled
 /// over (the caller keeps the connection for management commands — key
@@ -84,6 +118,7 @@ pub struct Assembled {
     /// The shared database connection.
     pub db: DatabaseConnection,
     /// In-memory API-principal-scoped ACP route leases.
+    #[cfg(feature = "harness")]
     pub acp_runtime: Arc<AcpRuntime>,
     /// The policy store wired into the language_model pipeline. Held by the
     /// caller (the daemon) so `bro reload` / SIGHUP can call
@@ -95,8 +130,12 @@ pub struct Assembled {
     pub policy_runtime: Arc<crate::policy_lock::PolicyRuntime>,
     /// Canonical checkpoint evolution. Mode is owner-scoped and disabled until
     /// explicitly enabled; this handle shares the serving routing snapshots.
-    pub evolution: crate::evolution::runtime::EvolutionRuntime,
+    #[cfg(feature = "core")]
+    pub evolution: crate::core::evolution::runtime::EvolutionRuntime,
+    /// Canonical gateway request tracking; capture registration shares its runtime epoch.
+    pub gateway_requests: crate::gateway::observability::requests::GatewayRequestTracker,
     /// Generic eval exchange used by the local CLI and REST control plane.
+    #[cfg(feature = "core")]
     pub eval_service: EvalService,
     /// Always-active encrypted provider continuation registry.
     pub continuation_registry: ContinuationRegistry,
@@ -105,6 +144,7 @@ pub struct Assembled {
     #[cfg(test)]
     pub(crate) response_observer: PredictiveResponseObserver,
     /// Durable publisher shared by request settlement and startup/shutdown drains.
+    #[cfg(feature = "core")]
     pub trajectory_outbox_publisher: Option<TrajectoryOutboxPublisher>,
     /// Concrete handle on the routing table. The pipeline above also
     /// holds the same `Arc` (via `&dyn RoutingTable`), but reload code
@@ -123,6 +163,7 @@ pub struct Assembled {
     /// can hand it to the `tracing-opentelemetry` bridge layer at
     /// subscriber-init time (the bridge captures its tracer eagerly).
     /// `None` when OTel is disabled in config.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub otel_exporter: Option<Arc<OtelExporter>>,
     /// Captured `OtelExporter::new` failure message, when one occurred.
     /// Surfaced as a `tracing::error!` line by the binary after the full
@@ -164,11 +205,13 @@ pub(crate) fn resolved_upstream_timeouts(
 /// observe-side `OtelStatus` lives in the plugin (no daemon dep); this
 /// adapter does the field-by-field copy so neither crate has to import
 /// the other's type.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 struct OtelExporterStatus {
     exporter: Arc<OtelExporter>,
 }
 
 #[async_trait::async_trait]
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 impl ObserveStatusProvider for OtelExporterStatus {
     fn status(&self) -> ObserveStatusPayload {
         let s = self.exporter.status();
@@ -234,16 +277,47 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry
 /// This belongs to the product host, not the SDK parser: trusted custom hosts
 /// may still explicitly install the compatibility guardrails plugin.
 pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    crate::db::validate_backend_availability(&config.database.url)?;
+    let tools = &config.server_tools;
+    anyhow::ensure!(
+        cfg!(feature = "server-tools")
+            || (tools.mcp_servers.is_empty()
+                && !tools.advisor
+                && !tools.subagent
+                && tools.fusion.is_none()
+                && tools.web_search.is_none()
+                && tools.web_fetch.is_none()),
+        "selected server_tools require the server-tools feature"
+    );
+    anyhow::ensure!(
+        cfg!(feature = "mcp") || config.mcp_servers.is_empty(),
+        "configured MCP servers require the mcp feature"
+    );
+    anyhow::ensure!(
+        cfg!(feature = "harness") || !config.agent_api.enabled,
+        "agent_api.enabled requires the harness feature"
+    );
+    validate_telemetry_availability(config)?;
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
         "plugins.bitrouter-guardrails requires migration: the default bro no longer \
          includes the guardrails matcher. Compile the regex extension into a custom host, \
-         register it through bitrouter_sdk::extension::ExtensionApi, and bind it through \
+         register it through crate::gateway::extensions::registry::ExtensionApi, and bind it through \
          routers.<id>.checks.request. The request-check capability checks input \
          only and does not replace global or output block/redact protection. Review \
          every protected entry point and output requirement before explicitly removing \
          the old key, including empty/null configuration; see docs/GUARDRAILS_EXTENSION.md."
     );
+    Ok(())
+}
+
+/// Reject explicit export when this artifact has no OTLP transport, before
+/// resolving installation or credential state. Enabled exporters retain their
+/// existing initialization and failure policy at the owning call site.
+pub(crate) fn validate_telemetry_availability(config: &Config) -> Result<()> {
+    if !OTEL_ENABLED {
+        build_otel_config(config, || None)?;
+    }
     Ok(())
 }
 
@@ -342,13 +416,9 @@ pub fn ignored_config_file_warnings(config: &Config) -> Vec<String> {
 /// environment there would be noise at best and misleading at worst. Every
 /// runtime surface wants both.
 ///
-/// Public because `bro acp serve|prompt|chat` never builds an `App`: it
-/// takes its exporter straight from
-/// `build_otel_exporter_standalone_with_credentials`, which reads the same
-/// config. A guard covering only the daemon would leave those surfaces exactly
-/// as silent as before, on paths the skill documents as honouring the same
-/// telemetry configuration. `acp_cli::serve` calls it directly; the other
-/// three reach it through `acp_cli::build_observability`.
+/// Public because standalone ACP surfaces never build an `App`. They report
+/// these warnings directly, whether or not an exporter is compiled in; a guard
+/// covering only daemon assembly would leave their configuration mistakes silent.
 pub fn ignored_config_warnings(config: &Config) -> Vec<String> {
     ignored_config_file_warnings(config)
         .into_iter()
@@ -401,9 +471,9 @@ pub async fn build_app_with_path(
 pub async fn build_app_with_extensions(
     config: &Config,
     config_path: Option<&std::path::Path>,
-    register: impl FnOnce(&mut bitrouter_sdk::extension::ExtensionApi) -> Result<()>,
+    register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<Assembled> {
-    let mut extensions = bitrouter_sdk::extension::ExtensionApi::new();
+    let mut extensions = crate::gateway::extensions::registry::ExtensionApi::new();
     register(&mut extensions).context("registering extensions")?;
     let native = extensions
         .into_registrations()
@@ -416,7 +486,7 @@ async fn assemble_app(
     config_path: Option<&std::path::Path>,
     native: std::collections::HashMap<
         String,
-        bitrouter_sdk::extension::request_check::Registration,
+        crate::gateway::extensions::registry::registration::Registration,
     >,
 ) -> Result<Assembled> {
     let mut effective_config = config.clone();
@@ -434,13 +504,13 @@ async fn assemble_app(
                     decision.api_key_env
                 )
             })?;
-            let executor = bitrouter_sdk::decision_model::typesafe::TypeSafeExecutor::new(
+            let executor = crate::gateway::model::decision::typesafe::TypeSafeExecutor::new(
                 &decision.base_url,
                 &credential,
                 std::time::Duration::from_millis(decision.timeout_ms),
                 decision.max_response_bytes,
             )?;
-            Ok::<_, anyhow::Error>(bitrouter_sdk::decision_model::DecisionRuntime {
+            Ok::<_, anyhow::Error>(crate::gateway::model::decision::DecisionRuntime {
                 model: decision.model.clone(),
                 executor: Arc::new(executor),
                 policy: decision.policy.clone(),
@@ -463,6 +533,7 @@ async fn assemble_app(
     // Validate and construct ingress aliases before opening the database or
     // performing any other startup work. A custom transform must not run ahead
     // of Stage 0 and shadow `@preset` or reserved `bitrouter/` addresses.
+    #[cfg(feature = "server-tools")]
     let fusion_alias = build_fusion_alias(config)?;
 
     // ---- database + migrations ----
@@ -473,10 +544,11 @@ async fn assemble_app(
     // SQL — so it lands identically on whichever backend is configured.
     let db = crate::db::connect(&config.database.url)
         .await
-        .with_context(|| format!("connecting to database {}", config.database.url))?;
+        .context("connecting to database")?;
     crate::db::run_migrations(&db)
         .await
         .context("running database migrations")?;
+    #[cfg(feature = "harness")]
     let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
     // continuation route matching and the HTTP executor. This lets mapped
@@ -542,7 +614,7 @@ async fn assemble_app(
     if let Ok(store) = crate::provider_credentials::load_default() {
         crate::providers::apply::activate_stored_credential_providers(&mut resolved, &store);
     }
-    bitrouter_sdk::config::discover_models(&mut resolved).await;
+    crate::config::discover_models(&mut resolved).await;
     let routing_table = Arc::new(match config_path {
         Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),
         None => ConfigRoutingTable::from_config(resolved),
@@ -597,21 +669,22 @@ async fn assemble_app(
     // subscriber is not installed yet (it depends on the exporter being
     // built first), so a tracing line here would be dropped. The binary
     // surfaces this once the subscriber is up.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let (otel_exporter, otel_init_error): (Option<Arc<OtelExporter>>, Option<String>) =
-        match build_otel_config(config)? {
-            Some(plan) => {
+        match build_otel_config(config, telemetry_install_id)? {
+            Some((otel_config, bearer_plan)) => {
                 // Resolve the LIVE account-bearer source per the plan. Only the
                 // telemetry opt-in with `attribution: auto`/`account` and no
                 // explicit token wants one; `anonymous` (and every other
                 // exporter path) is `StaticOnly` and never reads the credential
                 // store. Best-effort: a `None` source means the export proceeds
                 // anonymously — for `account` we additionally warn.
-                let bearer: Option<Arc<dyn bitrouter_telemetry::otel::TelemetryBearer>> =
-                    match plan.bearer_plan {
+                let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
+                    match bearer_plan {
                         BearerPlan::LiveSource { warn_if_unmet } => {
                             let source = crate::cloud::cloud_bearer_source(
                                 Arc::clone(&cloud_manager),
-                                plan.config.endpoint.clone(),
+                                otel_config.endpoint.clone(),
                             )
                             .await;
                             if source.is_none() && warn_if_unmet {
@@ -626,7 +699,7 @@ async fn assemble_app(
                         }
                         BearerPlan::StaticOnly => None,
                     };
-                match OtelExporter::new(plan.config, bearer) {
+                match OtelExporter::new(otel_config, bearer) {
                     Ok(exporter) => (Some(Arc::new(exporter)), None),
                     Err(e) => (
                         None,
@@ -636,16 +709,22 @@ async fn assemble_app(
             }
             None => (None, None),
         };
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
         Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
         None => Arc::new(NoopObserveStatus {
             compiled_in: OTEL_ENABLED,
         }),
     };
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    let (observe_provider, otel_init_error): (Arc<dyn ObserveStatusProvider>, Option<String>) =
+        (Arc::new(NoopObserveStatus { compiled_in: false }), None);
     // Two handles to the same exporter: one moves into the pipeline as an
     // `ObserveHook`, the other lands on `Assembled` so the binary can hand
     // it to the `tracing-opentelemetry` bridge layer.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let otel_for_hook = otel_exporter.clone();
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let otel_for_assembled = otel_exporter;
 
     // Optional MCP pure-routing pipeline — wired only when the config
@@ -682,29 +761,32 @@ async fn assemble_app(
         }
     }
 
-    let mcp_routing = if config.mcp_servers.is_empty() {
-        None
-    } else {
-        Some(Arc::new(
-            ConfigMcpRoutingTable::from_configs(config.mcp_servers.iter().map(|(k, v)| {
-                let agg = McpServerAggregateConfig {
-                    aggregate: v.aggregate,
-                    tool_prefix: v.tool_prefix.clone().unwrap_or_else(|| format!("{k}__")),
-                };
-                (k.clone(), v.clone(), agg)
-            }))
-            .context("building the MCP routing table from config.mcp_servers")?,
-        ))
-    };
+    #[cfg(feature = "mcp")]
+    let mcp_routing: Option<Arc<dyn crate::gateway::mcp::RoutingTable>> =
+        if config.mcp_servers.is_empty() {
+            None
+        } else {
+            Some(Arc::new(
+                ConfigMcpRoutingTable::from_configs(config.mcp_servers.iter().map(|(k, v)| {
+                    let agg = McpServerAggregateConfig {
+                        aggregate: v.aggregate,
+                        tool_prefix: v.tool_prefix.clone().unwrap_or_else(|| format!("{k}__")),
+                    };
+                    (k.clone(), v.clone(), agg)
+                }))
+                .context("building the MCP routing table from config.mcp_servers")?,
+            ))
+        };
     // The MCP executor stack — composed innermost-out so a single
     // `/mcp tools/list` with cold caches dials N servers once, after which
     // it's all cache hits:
     //   AggregatingExecutor → CachingExecutor → RmcpExecutor
     // Caches sit at the leaves so a single-server `notifications/*` only
     // invalidates that server's slice.
+    #[cfg(feature = "mcp")]
     let mcp_executor = mcp_routing.as_ref().map(|_| {
         let rmcp: Arc<RmcpExecutor> = Arc::new(RmcpExecutor::new().with_protocol_version(
-            bitrouter_sdk::mcp::upstream_protocol_version(config.mcp.upstream_protocol),
+            crate::gateway::mcp::upstream_protocol_version(config.mcp.upstream_protocol),
         ));
         let inner_for_cache: Arc<RmcpExecutor> = rmcp.clone();
         if config.mcp.cache.enabled {
@@ -713,12 +795,17 @@ async fn assemble_app(
                 CachingExecutor::new(inner_for_cache, ttls)
                     .with_invalidation(rmcp.invalidation_receiver()),
             );
-            Arc::new(AggregatingExecutor::new(cached)) as Arc<dyn bitrouter_sdk::mcp::Executor>
+            Arc::new(AggregatingExecutor::new(cached)) as Arc<dyn crate::gateway::mcp::Executor>
         } else {
             Arc::new(AggregatingExecutor::new(inner_for_cache))
-                as Arc<dyn bitrouter_sdk::mcp::Executor>
+                as Arc<dyn crate::gateway::mcp::Executor>
         }
     });
+
+    #[cfg(not(feature = "mcp"))]
+    let mcp_routing: Option<Arc<dyn crate::gateway::mcp::RoutingTable>> = None;
+    #[cfg(not(feature = "mcp"))]
+    let mcp_executor: Option<Arc<dyn crate::gateway::mcp::Executor>> = None;
 
     // Nested-completion runner for the advisor / sub-agent / fusion server tools
     // — built when any of them is configured. Their nested calls run on a
@@ -728,11 +815,13 @@ async fn assemble_app(
     // nested completion is billed to the same caller as the parent request (no
     // auth or policy hooks — a nested call is a sub-operation of an
     // already-authorised request, and the parent principal rides the caller).
+    #[cfg(feature = "server-tools")]
     let server_tools_enabled = config.server_tools.fusion.is_some()
         || config.server_tools.advisor
         || config.server_tools.subagent
         || config.server_tools.web_search.is_some()
         || config.server_tools.web_fetch.is_some();
+    #[cfg(feature = "server-tools")]
     let nested_runner: Option<Arc<dyn NestedRunner>> = if server_tools_enabled {
         let mut sub = PipelineBuilder::new();
         sub.routing_table(routing_table.clone())
@@ -759,22 +848,27 @@ async fn assemble_app(
     // fusion) is enabled. Reuses the MCP executor/routing built above; here
     // BitRouter is an MCP *client* that executes the model's tool calls inside
     // the LLM loop (distinct from the `/mcp` gateway above).
+    #[cfg(feature = "server-tools")]
     let server_tool_loop =
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
     let policy_decision_recorder =
-        crate::workflow_state::decision::PolicyDecisionJsonlRecorder::from_env()
+        crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder::from_env()
             .map_err(anyhow::Error::from)?
             .map(Arc::new);
     if policy_decision_recorder.is_some() {
         tracing::info!(
-            env = crate::workflow_state::decision::POLICY_DECISION_JSONL_ENV,
+            env = crate::gateway::routing::workflow::decision::POLICY_DECISION_JSONL_ENV,
             "policy decision JSONL recording enabled"
         );
     }
     let pending_eval_decisions = PendingEvalDecisionStore::default();
+    #[cfg(feature = "core")]
     let eval_store = EvalStore::new(db.clone());
+    #[cfg(feature = "core")]
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
+    #[cfg(feature = "core")]
+    let mut trajectory_outbox_publisher = None;
     let trajectory_services = if config.trajectory.enabled {
         let trajectory_store = TrajectoryStore::new(db.clone());
         let retention = chrono::TimeDelta::try_days(i64::from(config.trajectory.retention_days))
@@ -796,21 +890,32 @@ async fn assemble_app(
                 "pruned retained trajectory history at startup"
             );
         }
-        let publisher = TrajectoryOutboxPublisher::new(
-            trajectory_store.clone(),
-            eval_store.clone(),
-            config.eval.clone(),
-            config.trajectory.outbox_batch_size,
-        )?;
-        let startup_publication = publisher.drain_pending().await?;
-        if startup_publication.attempted > 0 {
-            tracing::info!(
-                attempted = startup_publication.attempted,
-                delivered = startup_publication.delivered,
-                failed = startup_publication.failed,
-                "drained durable trajectory evaluation outbox at startup"
-            );
-        }
+        let notify_outbox = {
+            #[cfg(feature = "core")]
+            {
+                let publisher = TrajectoryOutboxPublisher::new(
+                    trajectory_store.clone(),
+                    eval_store.clone(),
+                    config.eval.clone(),
+                    config.trajectory.outbox_batch_size,
+                )?;
+                let startup_publication = publisher.drain_pending().await?;
+                if startup_publication.attempted > 0 {
+                    tracing::info!(
+                        attempted = startup_publication.attempted,
+                        delivered = startup_publication.delivered,
+                        failed = startup_publication.failed,
+                        "drained durable trajectory evaluation outbox at startup"
+                    );
+                }
+                trajectory_outbox_publisher = Some(publisher.clone());
+                Some(Arc::new(move || publisher.kick()) as Arc<dyn Fn() + Send + Sync>)
+            }
+            #[cfg(not(feature = "core"))]
+            {
+                None
+            }
+        };
         let home = match config_path.and_then(std::path::Path::parent) {
             Some(home) => home.to_path_buf(),
             None => std::env::current_dir().context("resolve trajectory key home")?,
@@ -821,20 +926,17 @@ async fn assemble_app(
             Canonicalizer::new(correlation_key.clone()),
         ));
         let settlement =
-            TrajectorySettlementRecorder::new(trajectory_store, publisher.clone(), correlation_key);
-        Some((runtime, settlement, publisher))
+            TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key);
+        Some((runtime, settlement))
     } else {
         None
     };
     let trajectory_runtime = trajectory_services
         .as_ref()
-        .map(|(runtime, _, _)| runtime.clone());
-    let trajectory_for_eval = trajectory_services
+        .map(|(runtime, _)| runtime.clone());
+    let trajectory_for_settlement = trajectory_services
         .as_ref()
-        .map(|(_, settlement, _)| settlement.clone());
-    let trajectory_outbox_publisher = trajectory_services
-        .as_ref()
-        .map(|(_, _, publisher)| publisher.clone());
+        .map(|(_, settlement)| settlement.clone());
     let policy_runtime = crate::policy_lock::PolicyRuntime::new(
         config,
         config_path,
@@ -845,22 +947,43 @@ async fn assemble_app(
     .await
     .context("loading policy-lock.yaml")?;
     let policy_runtime_for_selector = policy_runtime.clone();
-    let evolution = crate::evolution::runtime::EvolutionRuntime::new(
+    #[cfg(feature = "core")]
+    let evolution = crate::core::evolution::runtime::EvolutionRuntime::new(
         db.clone(),
         routing_table.clone(),
         policy_runtime.clone(),
     );
-    let evolution_for_hooks = evolution.clone();
-    let judge_costs = crate::evolution::costs::JudgeCosts::new(db.clone());
+    let block_policies = crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
+        db.clone(),
+        routing_table.clone(),
+        policy_runtime.clone(),
+    );
+    let canonical_binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
+        db.clone(),
+        routing_table.clone(),
+        policy_runtime.clone(),
+    );
+    let gateway_requests =
+        crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone());
+    let gateway_requests_for_hooks = gateway_requests.clone();
+    let judge_costs = crate::gateway::metering::judge::JudgeCosts::new(db.clone());
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
-    let eval_store_for_recorder = eval_service.store().clone();
+    #[cfg(feature = "core")]
+    let untracked_recorder = Some(Arc::new(EvalSettlementRecorder::new(
+        eval_service.store().clone(),
+        pending_eval_decisions.clone(),
+    ))
+        as Arc<dyn crate::gateway::pipeline::settlement::SettlementRecorder>);
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
-    let acp_runtime_for_session = Arc::clone(&acp_runtime);
+    #[cfg(feature = "harness")]
+    let session_context = SessionContextHook::new(Arc::clone(&acp_runtime));
+    #[cfg(not(feature = "harness"))]
+    let session_context = SessionContextHook::default();
     let request_checks_for_pipeline = request_checks.clone();
     let app = App::builder()
         .skip_auth(config.server.skip_auth)
@@ -873,7 +996,7 @@ async fn assemble_app(
             lm.served_operations(OperationScope::Both);
             lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
             lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
-            lm.require_hook::<crate::evolution::costs::JudgeCosts>(
+            lm.require_hook::<crate::gateway::metering::judge::JudgeCosts>(
                 HookStage::PreResolution,
                 OperationScope::Both,
             );
@@ -896,7 +1019,8 @@ async fn assemble_app(
             lm.model_selector(policy_runtime_for_selector);
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
-            lm.route_hook(evolution_for_hooks.clone());
+            lm.route_hook(canonical_binding.clone());
+            lm.route_hook(block_policies.clone());
             let metering_recorder =
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
                     .with_reconciliation_provider("bitrouter");
@@ -910,6 +1034,7 @@ async fn assemble_app(
             // declaration (or the one the fusion alias injected) off the prompt
             // and stashes it, before auth, so the toolsets can read it
             // regardless of credential state.
+            #[cfg(feature = "server-tools")]
             if server_tools_enabled {
                 lm.pre_resolution_hook(ServerToolDeclarationsHook);
             }
@@ -922,15 +1047,14 @@ async fn assemble_app(
             // explicit routes and provider continuations retain precedence.
             // The pipeline runs bound external checks after these local hooks.
             lm.pre_resolution_hook_for(AuthHook::new(db_for_hooks.clone()), OperationScope::Both);
-            lm.pre_resolution_hook_for(
-                SessionContextHook::new(acp_runtime_for_session),
-                OperationScope::Both,
-            );
+            lm.pre_resolution_hook_for(session_context, OperationScope::Both);
             lm.pre_resolution_hook(private_context);
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
-            lm.router_preparation_hook(evolution_for_hooks.clone());
+            lm.router_preparation_hook(gateway_requests_for_hooks.clone());
+            lm.router_preparation_hook(block_policies);
+            lm.router_preparation_hook(canonical_binding);
             lm.pre_request_hook_for(
                 PolicyHook::new(policy_store.clone(), Some(metering_store_for_policy)),
                 OperationScope::Both,
@@ -938,27 +1062,31 @@ async fn assemble_app(
             // OpenTelemetry exporter — register the *same* Arc as a hook
             // here. Construction happened above so `Assembled.observe`
             // can hold a query handle on it.
+            #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
             if let Some(exporter) = otel_for_hook {
                 lm.observe_hook_for(OtelObserveHook::new(exporter), OperationScope::Both);
             }
             lm.observe_hook(response_observer);
-            lm.observe_hook(evolution_for_hooks.clone());
+            lm.observe_hook(gateway_requests_for_hooks.clone());
             lm.observe_hook(judge_costs.clone());
             // OSS metering recorder — writes one `requests` row per
             // settled request with the estimated µUSD from the pricing
             // table. The policy module reads back through `MeteringStore`
             // for spend caps.
             lm.settlement_recorder_for(metering_recorder, OperationScope::Both);
-            lm.settlement_recorder(evolution_for_hooks);
+            lm.settlement_recorder(gateway_requests_for_hooks);
             lm.settlement_recorder(judge_costs);
-            let eval_recorder =
-                EvalSettlementRecorder::new(eval_store_for_recorder, pending_eval_decisions);
-            let eval_recorder = match trajectory_for_eval {
-                Some(trajectory) => eval_recorder.with_trajectory(trajectory),
-                None => eval_recorder,
-            };
-            lm.settlement_recorder_for(eval_recorder, OperationScope::Both);
+            lm.settlement_recorder_for(
+                PolicySettlementRecorder::new(
+                    pending_eval_decisions,
+                    trajectory_for_settlement,
+                    #[cfg(feature = "core")]
+                    untracked_recorder,
+                ),
+                OperationScope::Both,
+            );
             // Server-side tool loop (router-executed MCP tools), when configured.
+            #[cfg(feature = "server-tools")]
             if let Some(server_loop) = server_tool_loop {
                 lm.server_tool_loop(server_loop);
             }
@@ -966,6 +1094,7 @@ async fn assemble_app(
     // The bitrouter/fusion model alias: an ingress prompt transform that
     // rewrites the alias onto a real outer model and attaches the Fusion
     // declaration. Wired only when `server_tools.fusion` resolves an alias.
+    #[cfg(feature = "server-tools")]
     let app = match fusion_alias {
         Some(transform) => app.prompt_transform(transform),
         None => app,
@@ -1012,26 +1141,33 @@ async fn assemble_app(
     Ok(Assembled {
         app,
         db,
+        #[cfg(feature = "harness")]
         acp_runtime,
         policy_store: policy_store_for_reload,
         policy_runtime,
+        #[cfg(feature = "core")]
         evolution,
+        gateway_requests,
+        #[cfg(feature = "core")]
         eval_service,
         continuation_registry,
         #[cfg(test)]
         pending_eval_decisions: pending_eval_decisions_for_tests,
         #[cfg(test)]
         response_observer: response_observer_for_tests,
+        #[cfg(feature = "core")]
         trajectory_outbox_publisher,
         routing_table: routing_table_for_reload,
         upstream_executor: executor_for_reload,
         observe: observe_provider,
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
         otel_exporter: otel_for_assembled,
         otel_init_error,
         ignored_config,
     })
 }
 
+#[cfg(feature = "server-tools")]
 fn build_fusion_alias(config: &Config) -> Result<Option<Arc<dyn PromptTransform>>> {
     let Some(settings) = config.server_tools.fusion.as_ref() else {
         return Ok(None);
@@ -1062,10 +1198,10 @@ pub async fn merge_registry_into(config: &mut Config) {
     if !config.inherit_defaults || !config.registry.enabled {
         return;
     }
-    crate::bundled_registry::enable_logged_in(config);
+    crate::gateway::catalog::bundled::enable_logged_in(config);
     // Supplement the public registry with the model/provider baseline shipped in this
     // binary. Explicitly disabled/custom registries keep their own policy.
-    let Some(data) = crate::bundled_registry::load(&config.registry).await else {
+    let Some(data) = crate::gateway::catalog::bundled::load(&config.registry).await else {
         crate::providers::apply::apply_builtin_defaults(config);
         return;
     };
@@ -1081,10 +1217,11 @@ pub async fn merge_registry_into(config: &mut Config) {
 /// tool names cannot collide with the caller's own tools. When `nested_runner`
 /// is provided, the enabled advisor / sub-agent / fusion toolsets are added over
 /// it (each advertised only when the request declares it).
+#[cfg(feature = "server-tools")]
 fn build_server_tool_loop(
     config: &Config,
-    mcp_routing: &Option<Arc<ConfigMcpRoutingTable>>,
-    mcp_executor: &Option<Arc<dyn bitrouter_sdk::mcp::Executor>>,
+    mcp_routing: &Option<Arc<dyn crate::gateway::mcp::RoutingTable>>,
+    mcp_executor: &Option<Arc<dyn crate::gateway::mcp::Executor>>,
     nested_runner: Option<Arc<dyn NestedRunner>>,
 ) -> Option<Arc<ServerToolLoop>> {
     let settings = &config.server_tools;
@@ -1093,7 +1230,7 @@ fn build_server_tool_loop(
     // MCP-backed server tools.
     if !settings.mcp_servers.is_empty() {
         if let (Some(routing), Some(executor)) = (mcp_routing, mcp_executor) {
-            let routing: Arc<dyn bitrouter_sdk::mcp::RoutingTable> = routing.clone();
+            let routing: Arc<dyn crate::gateway::mcp::RoutingTable> = routing.clone();
             for name in &settings.mcp_servers {
                 let Some(server) = config.mcp_servers.get(name) else {
                     tracing::warn!(server = %name,
@@ -1186,6 +1323,7 @@ fn build_server_tool_loop(
 /// engine's conventional environment variable; one whose key cannot be resolved
 /// is skipped with a warning. The native backend reuses the shared nested runner
 /// (so it is skipped when none was built).
+#[cfg(feature = "server-tools")]
 fn build_web_search_backends(
     settings: &WebSearchSettings,
     nested_runner: &Option<Arc<dyn NestedRunner>>,
@@ -1259,6 +1397,7 @@ fn build_web_search_backends(
 /// explicit `api_key` (with `${VAR}` already substituted) or the engine's
 /// conventional environment variable; one whose key cannot be resolved is
 /// skipped with a warning.
+#[cfg(feature = "server-tools")]
 fn build_web_fetch_backends(settings: &WebFetchSettings) -> Vec<Arc<dyn WebFetchBackend>> {
     if settings.backends.is_empty() {
         return Vec::new();
@@ -1297,11 +1436,12 @@ fn build_web_fetch_backends(settings: &WebFetchSettings) -> Vec<Arc<dyn WebFetch
 
 /// Resolve a BYOK backend's API key: the explicit value if non-empty, else
 /// the conventional environment variable. Logs and returns `None` when unset.
+#[cfg(feature = "server-tools")]
 fn resolve_byok_key(explicit: &Option<String>, env_var: &str, backend: &str) -> Option<String> {
     if let Some(key) = explicit.as_ref().filter(|k| !k.is_empty()) {
         return Some(key.clone());
     }
-    match bitrouter_sdk::config::env_lookup(env_var) {
+    match crate::config::env_lookup(env_var) {
         Some(key) if !key.is_empty() => Some(key),
         _ => {
             tracing::warn!(
@@ -1331,8 +1471,10 @@ fn build_auth_appliers(
         .map(|s| s.path().to_path_buf())
         .context("resolving credential store path")?;
     let account_store = Arc::new(
-        bitrouter_ai::auth::file::backend::FileCredentialStore::new(&store_path)
-            .map_err(|failure| bitrouter_ai::error::ModelError::CredentialStorage { failure })?,
+        crate::gateway::providers::auth::file::backend::FileCredentialStore::new(&store_path)
+            .map_err(
+                |failure| crate::gateway::model::error::ModelError::CredentialStorage { failure },
+            )?,
     );
     let refresh_client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -1344,9 +1486,9 @@ fn build_auth_appliers(
     // Register the hosted applier through the application Cloud glue.
     crate::cloud::register_if_configured(config, &mut appliers, cloud_manager)?;
     if config.providers.contains_key("github-copilot") {
-        let applier = bitrouter_ai::providers::copilot::CopilotAuthApplier::new(
+        let applier = crate::gateway::providers::copilot::CopilotAuthApplier::new(
             refresh_client.clone(),
-            bitrouter_ai::providers::copilot::exchange::TOKEN_EXCHANGE_URL,
+            crate::gateway::providers::copilot::exchange::TOKEN_EXCHANGE_URL,
             account_store.clone(),
         );
         appliers.register("github-copilot", Arc::new(applier));
@@ -1357,8 +1499,9 @@ fn build_auth_appliers(
     // when no stored key is present. It is `x-api-key`-only; the Claude
     // Pro/Max subscription lives in the separate `claude-code` provider below.
     if config.providers.contains_key("anthropic") {
-        let applier =
-            bitrouter_ai::providers::anthropic::AnthropicApiKeyApplier::new(account_store.clone());
+        let applier = crate::gateway::providers::anthropic::AnthropicApiKeyApplier::new(
+            account_store.clone(),
+        );
         appliers.register("anthropic", Arc::new(applier));
     }
     // The Claude Pro/Max subscription applier (OAuth / live `~/.claude`
@@ -1369,56 +1512,58 @@ fn build_auth_appliers(
             store_path.clone(),
             crate::providers::import::claude_code::ClaudeCodeStore::system(),
         )
-        .map_err(|failure| bitrouter_ai::error::ModelError::CredentialStorage { failure })?;
-        let registration = bitrouter_ai::providers::login::find("anthropic")
+        .map_err(|failure| {
+            crate::gateway::model::error::ModelError::CredentialStorage { failure }
+        })?;
+        let registration = crate::gateway::providers::login::find("anthropic")
             .context("Claude OAuth registration is missing")?;
         let claude_refresh_client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .user_agent(concat!("bitrouter-providers/", env!("CARGO_PKG_VERSION")))
             .build()
             .context("building Claude OAuth HTTP client")?;
-        let session = bitrouter_ai::auth::store::OAuthSession::new(
+        let session = crate::gateway::providers::auth::store::OAuthSession::new(
             Arc::new(backend),
-            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+            Arc::new(crate::gateway::providers::auth::oauth::RefreshGrant::new(
                 claude_refresh_client,
                 registration.auth.token_endpoint,
                 registration.auth.client_id,
             )),
-            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+            crate::gateway::providers::auth::oauth::REFRESH_WINDOW,
         );
-        let applier = bitrouter_ai::providers::claude_code::ClaudeCodeAuthApplier::new(session)
+        let applier = crate::gateway::providers::claude_code::ClaudeCodeAuthApplier::new(session)
             .with_fallback_token(crate::providers::claude_code::env_oauth_token());
         appliers.register("claude-code", Arc::new(applier));
     }
     if config.providers.contains_key("openai-codex") {
-        let registration = bitrouter_ai::providers::login::find("openai-codex")
+        let registration = crate::gateway::providers::login::find("openai-codex")
             .context("openai-codex OAuth registration is missing")?;
-        let session = bitrouter_ai::auth::store::OAuthSession::new(
+        let session = crate::gateway::providers::auth::store::OAuthSession::new(
             account_store.clone(),
-            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+            Arc::new(crate::gateway::providers::auth::oauth::RefreshGrant::new(
                 refresh_client.clone(),
                 registration.auth.token_endpoint,
                 registration.auth.client_id,
             )),
-            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+            crate::gateway::providers::auth::oauth::REFRESH_WINDOW,
         );
-        let applier = bitrouter_ai::providers::codex::OpenAiCodexAuthApplier::new(session);
+        let applier = crate::gateway::providers::codex::OpenAiCodexAuthApplier::new(session);
         appliers.register("openai-codex", Arc::new(applier));
     }
     // The SuperGrok subscription applier (OAuth imported from the Grok CLI
     // session). Registered under `supergrok`, distinct from the metered `xai`
     // API-key provider.
     if config.providers.contains_key("supergrok") {
-        let session = bitrouter_ai::auth::store::OAuthSession::new(
+        let session = crate::gateway::providers::auth::store::OAuthSession::new(
             account_store.clone(),
-            Arc::new(bitrouter_ai::auth::oauth::RefreshGrant::new(
+            Arc::new(crate::gateway::providers::auth::oauth::RefreshGrant::new(
                 refresh_client.clone(),
-                bitrouter_ai::providers::supergrok::TOKEN_ENDPOINT,
-                bitrouter_ai::providers::supergrok::CLIENT_ID,
+                crate::gateway::providers::supergrok::TOKEN_ENDPOINT,
+                crate::gateway::providers::supergrok::CLIENT_ID,
             )),
-            bitrouter_ai::auth::oauth::REFRESH_WINDOW,
+            crate::gateway::providers::auth::oauth::REFRESH_WINDOW,
         );
-        let applier = bitrouter_ai::providers::supergrok::SuperGrokAuthApplier::new(session);
+        let applier = crate::gateway::providers::supergrok::SuperGrokAuthApplier::new(session);
         appliers.register("supergrok", Arc::new(applier));
     }
 
@@ -1467,7 +1612,7 @@ mod pricing_assembly_tests {
 
     #[test]
     fn provider_native_model_id_reuses_registry_pricing() -> anyhow::Result<()> {
-        let config = bitrouter_sdk::config::parse_with(
+        let config = crate::config::parse_with(
             r#"
 providers:
   example:
@@ -1557,11 +1702,12 @@ enum BearerPlan {
 /// opt-in, the `otel:` block, env vars), including the live account-bearer
 /// plan. Returns `None` when nothing opts telemetry in; telemetry failures are
 /// surfaced as warnings, never as session failures.
+#[cfg(all(feature = "harness", any(feature = "otel-http", feature = "otel-grpc")))]
 pub(crate) async fn build_otel_exporter_standalone_with_credentials(
     config: &Config,
     cloud_credentials: &crate::cloud::StandaloneCloudCredentials,
 ) -> Option<Arc<OtelExporter>> {
-    let plan = match build_otel_config(config) {
+    let (otel_config, bearer_plan) = match build_otel_config(config, telemetry_install_id) {
         Ok(Some(plan)) => plan,
         Ok(None) => return None,
         Err(e) => {
@@ -1569,11 +1715,10 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
             return None;
         }
     };
-    let bearer: Option<Arc<dyn bitrouter_telemetry::otel::TelemetryBearer>> = match plan.bearer_plan
-    {
+    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> = match bearer_plan {
         BearerPlan::LiveSource { warn_if_unmet } => {
             let source = cloud_credentials
-                .telemetry_bearer(&plan.config.endpoint)
+                .telemetry_bearer(&otel_config.endpoint)
                 .await;
             if source.is_none() && warn_if_unmet {
                 tracing::warn!(
@@ -1586,7 +1731,7 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
         }
         BearerPlan::StaticOnly => None,
     };
-    match OtelExporter::new(plan.config, bearer) {
+    match OtelExporter::new(otel_config, bearer) {
         Ok(exporter) => Some(Arc::new(exporter)),
         Err(e) => {
             tracing::warn!("telemetry: failed to initialise OpenTelemetry: {e}");
@@ -1595,13 +1740,20 @@ pub(crate) async fn build_otel_exporter_standalone_with_credentials(
     }
 }
 
-/// An exporter config plus the account-bearer resolution plan for it. Returned
-/// by [`build_otel_config`] so the async `OtelExporter::new` call site can decide
-/// whether to build a live bearer source (which needs `.await` + network I/O,
-/// neither appropriate inside this pure config builder).
-struct OtelConfigPlan {
-    config: OtelConfig,
-    bearer_plan: BearerPlan,
+/// Resolve optional attribution only after a selected exporter is available.
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+fn telemetry_install_id() -> Option<String> {
+    crate::paths::install_id()
+        .map_err(|error| tracing::warn!("telemetry: could not resolve install id: {error:#}"))
+        .ok()
+}
+
+fn require_otel_transport(source: &str) -> Result<()> {
+    anyhow::ensure!(
+        OTEL_ENABLED,
+        "{source} requires an OTLP transport: enable the otel-http or otel-grpc feature"
+    );
+    Ok(())
 }
 
 /// Build OpenTelemetry configuration from the app config. Returns `None` when
@@ -1611,10 +1763,13 @@ struct OtelConfigPlan {
 /// first-party opt-in) > `plugins.bitrouter-telemetry.otel` > an
 /// `OTEL_EXPORTER_OTLP_ENDPOINT`-only opt-in.
 ///
-/// This stays pure (no credential-store / network I/O): the account bearer is no
-/// longer snapshotted here — it is resolved live per export by a bearer source
-/// the async call site builds according to the returned [`BearerPlan`].
-fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
+/// The installation-ID resolver runs only after a supported first-party opt-in
+/// is selected. Preflight supplies a side-effect-free resolver. Account bearer
+/// resolution remains at the exporter call site, following the returned plan.
+fn build_otel_config(
+    config: &Config,
+    install_id: impl FnOnce() -> Option<String>,
+) -> Result<Option<(OtelConfig, BearerPlan)>> {
     // Named for the crate that reads it, like `plugins.bitrouter-guardrails`.
     // It was `bitrouter-observe` until the OTLP renderer moved out of the SDK;
     // the rename is safe to have made because `ignored_config_warnings` reports an
@@ -1637,11 +1792,7 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
         let opt_in = serde_json::from_value::<TelemetryOptIn>(tel_value.clone())
             .context("plugins.bitrouter-telemetry.telemetry failed to parse")?;
         if opt_in.enabled {
-            // Best-effort install id: a missing home just means anonymous
-            // attribution downstream, never a failure to export.
-            let install_id = crate::paths::install_id()
-                .map_err(|e| tracing::warn!("telemetry: could not resolve install id: {e:#}"))
-                .ok();
+            require_otel_transport("plugins.bitrouter-telemetry.telemetry.enabled")?;
             // Decide the live-bearer plan from attribution + whether an explicit
             // static token is present. The account bearer is NOT snapshotted
             // here anymore — when no explicit token is set and attribution is
@@ -1651,11 +1802,8 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
             let has_explicit =
                 opt_in.bearer_token.is_some() || std::env::var("BITROUTER_TELEMETRY_TOKEN").is_ok();
             let bearer_plan = telemetry_bearer_plan(opt_in.attribution, has_explicit);
-            let cfg = build_telemetry_otel_config(opt_in, install_id);
-            return Ok(Some(OtelConfigPlan {
-                config: cfg,
-                bearer_plan,
-            }));
+            let cfg = build_telemetry_otel_config(opt_in, install_id());
+            return Ok(Some((cfg, bearer_plan)));
         }
     }
 
@@ -1666,10 +1814,8 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
     if let Some(otel_value) = telemetry.and_then(|c| c.get("otel")) {
         let cfg = serde_json::from_value::<OtelConfig>(otel_value.clone())
             .context("plugins.bitrouter-telemetry.otel failed to parse")?;
-        return Ok(Some(OtelConfigPlan {
-            config: cfg,
-            bearer_plan: BearerPlan::StaticOnly,
-        }));
+        require_otel_transport("plugins.bitrouter-telemetry.otel")?;
+        return Ok(Some((cfg, BearerPlan::StaticOnly)));
     }
 
     // 2. Env-var-only opt-in.
@@ -1680,10 +1826,8 @@ fn build_otel_config(config: &Config) -> Result<Option<OtelConfigPlan>> {
     // key name v0 never had. `plugins.bitrouter-telemetry.otlp_endpoint` has
     // never existed in a released config, so there was nothing to preserve.
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
-        return Ok(Some(OtelConfigPlan {
-            config: OtelConfig::default(),
-            bearer_plan: BearerPlan::StaticOnly,
-        }));
+        require_otel_transport("OTEL_EXPORTER_OTLP_ENDPOINT")?;
+        return Ok(Some((OtelConfig::default(), BearerPlan::StaticOnly)));
     }
 
     Ok(None)
@@ -1793,7 +1937,7 @@ fn otlp_traces_endpoint(endpoint: &str) -> String {
 ///
 /// Only the **static** explicit token lands in `OtelConfig.bearer_token` here.
 /// The signed-in account bearer is NO LONGER snapshotted into the config — it is
-/// resolved live per export by a [`bitrouter_telemetry::otel::TelemetryBearer`]
+/// resolved live per export by a `TelemetryBearer`
 /// source the async call site builds (refresh-aware), so account attribution
 /// survives token expiry without a daemon restart. `attribution: anonymous`
 /// still drops even the explicit token (the opt-out guarantee).
@@ -2131,7 +2275,9 @@ mod sqlite_path_tests {
 
 #[cfg(test)]
 mod otel_config_tests {
-    use super::{BearerPlan, Config, build_otel_config};
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    use super::BearerPlan;
+    use super::{Config, build_otel_config};
 
     /// Build a `Config` carrying a single `bitrouter-telemetry` plugin value.
     /// Constructed directly (no YAML round-trip) so the test never touches
@@ -2146,6 +2292,59 @@ mod otel_config_tests {
     }
 
     #[test]
+    fn first_party_activation_checks_transport_before_resolving_installation() -> anyhow::Result<()>
+    {
+        let config = config_with_telemetry(serde_json::json!({
+            "telemetry": { "enabled": true, "attribution": "anonymous" },
+            // The first-party opt-in wins; this lower-priority block is not read.
+            "otel": { "sampler": "not_a_real_sampler" }
+        }));
+        let resolutions = std::cell::Cell::new(0);
+        let result = build_otel_config(&config, || {
+            resolutions.set(resolutions.get() + 1);
+            Some("fixture-installation".to_owned())
+        });
+        if super::OTEL_ENABLED {
+            let (export, _) = result?
+                .ok_or_else(|| anyhow::anyhow!("first-party opt-in did not select export"))?;
+            assert_eq!(resolutions.get(), 1);
+            assert_eq!(
+                export.resource_attributes["bitrouter.install_id"],
+                "fixture-installation"
+            );
+        } else {
+            let error = result
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("unavailable export was accepted"))?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("plugins.bitrouter-telemetry.telemetry.enabled")
+            );
+            assert!(error.to_string().contains("otel-http or otel-grpc"));
+            assert_eq!(resolutions.get(), 0);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    #[test]
+    fn disabled_first_party_block_does_not_hide_generic_export() -> anyhow::Result<()> {
+        let config = config_with_telemetry(serde_json::json!({
+            "telemetry": { "enabled": false },
+            "otel": { "endpoint": "http://collector:4318", "bearer_token": "private-token" }
+        }));
+        let error = super::validate_host_configuration(&config)
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("generic export opt-in was ignored"))?;
+        let message = error.to_string();
+        assert!(message.contains("plugins.bitrouter-telemetry.otel"));
+        assert!(message.contains("otel-http or otel-grpc"));
+        assert!(!message.contains("private-token"));
+        Ok(())
+    }
+
+    #[test]
     fn malformed_otel_block_is_a_hard_error() {
         // `sampler` is a closed enum — an unknown variant fails to parse.
         // An explicit opt-in must surface that, not silently fall through.
@@ -2153,22 +2352,23 @@ mod otel_config_tests {
             "otel": { "sampler": "not_a_real_sampler" }
         }));
         assert!(
-            build_otel_config(&config).is_err(),
+            build_otel_config(&config, || None).is_err(),
             "a malformed otel block must be a hard error",
         );
     }
 
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     #[test]
-    fn valid_otel_block_parses() {
+    fn valid_otel_block_parses() -> anyhow::Result<()> {
         let config = config_with_telemetry(serde_json::json!({
             "otel": { "endpoint": "http://collector:4318" }
         }));
-        let plan = build_otel_config(&config)
-            .expect("valid otel block is Ok")
-            .expect("valid otel block yields Some");
-        assert_eq!(plan.config.endpoint, "http://collector:4318");
+        let (config, bearer_plan) = build_otel_config(&config, || None)?
+            .ok_or_else(|| anyhow::anyhow!("valid otel block must select an exporter"))?;
+        assert_eq!(config.endpoint, "http://collector:4318");
         // The generic `otel` block never reads the credential store.
-        assert_eq!(plan.bearer_plan, BearerPlan::StaticOnly);
+        assert_eq!(bearer_plan, BearerPlan::StaticOnly);
+        Ok(())
     }
 
     #[test]
@@ -2181,7 +2381,7 @@ mod otel_config_tests {
             "otlp_endpoint": "http://legacy:4318"
         }));
         assert!(
-            build_otel_config(&config)
+            build_otel_config(&config, || None)
                 .expect("an unknown sub-key is not an error")
                 .is_none(),
             "otlp_endpoint must no longer wire an exporter"
@@ -2199,7 +2399,7 @@ mod otel_config_tests {
             serde_json::json!({ "otel": { "endpoint": "http://collector:4318" } }),
         );
         assert!(
-            build_otel_config(&config)
+            build_otel_config(&config, || None)
                 .expect("an unread plugin block is not an error")
                 .is_none()
         );
@@ -2322,14 +2522,14 @@ mod otel_config_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "server-tools"))]
 mod server_tools_tests {
     use std::sync::Arc;
 
-    use bitrouter_sdk::language_model::server_tools::nested::{
+    use crate::gateway::pipeline::server_tools::nested::{
         NestedOutcome, NestedRequest, NestedRunner,
     };
-    use bitrouter_sdk::language_model::server_tools::toolset::ToolContext;
+    use crate::gateway::pipeline::server_tools::toolset::ToolContext;
 
     use super::{Config, build_fusion_alias, build_server_tool_loop};
 
@@ -2381,13 +2581,11 @@ mod server_tools_tests {
     #[test]
     fn assembly_rejects_a_fusion_alias_that_hijacks_reserved_routing() {
         let mut config = Config::default();
-        config.server_tools.fusion = Some(
-            bitrouter_sdk::language_model::server_tools::fusion::config::FusionSettings {
-                alias: Some("bitrouter/auto".to_string()),
-                outer_model: Some("anthropic/claude-opus-4.8".to_string()),
-                ..Default::default()
-            },
-        );
+        config.server_tools.fusion = Some(crate::config::server_tools::fusion::FusionSettings {
+            alias: Some("bitrouter/auto".to_string()),
+            outer_model: Some("anthropic/claude-opus-4.8".to_string()),
+            ..Default::default()
+        });
 
         let result = build_fusion_alias(&config);
         let error = match result {
@@ -2408,9 +2606,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_nested_backend_builds_loop() {
-        use bitrouter_sdk::language_model::server_tools::web_search::config::{
-            WebSearchBackendConfig, WebSearchSettings,
-        };
+        use crate::config::server_tools::web_search::{WebSearchBackendConfig, WebSearchSettings};
         // A native (nested) backend resolves over the runner and builds the loop.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
@@ -2427,9 +2623,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_search_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use bitrouter_sdk::language_model::server_tools::web_search::config::{
-            WebSearchBackendConfig, WebSearchSettings,
-        };
+        use crate::config::server_tools::web_search::{WebSearchBackendConfig, WebSearchSettings};
         // An HTTP backend with an explicit key resolves with no nested runner.
         let mut cfg = Config::default();
         cfg.server_tools.web_search = Some(WebSearchSettings {
@@ -2444,9 +2638,7 @@ mod server_tools_tests {
 
     #[test]
     fn web_fetch_http_backend_with_explicit_key_builds_loop_without_runner() {
-        use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
-            WebFetchBackendConfig, WebFetchSettings,
-        };
+        use crate::config::server_tools::web_fetch::{WebFetchBackendConfig, WebFetchSettings};
         // A web_fetch-only config (no advisor/subagent/fusion/web_search) must
         // still build the server-tool loop, proving server_tools_enabled covers
         // web_fetch. An HTTP backend with an explicit key resolves without a
@@ -2464,9 +2656,7 @@ mod server_tools_tests {
 
     #[test]
     fn assembles_web_fetch_exa_backend_from_explicit_key() {
-        use bitrouter_sdk::language_model::server_tools::web_fetch::config::{
-            WebFetchBackendConfig, WebFetchSettings,
-        };
+        use crate::config::server_tools::web_fetch::{WebFetchBackendConfig, WebFetchSettings};
         // An HTTP backend with an explicit key resolves without needing an env
         // var, mirroring the sibling web_search assembly test's approach.
         let backends = super::build_web_fetch_backends(&WebFetchSettings {
@@ -2483,22 +2673,27 @@ mod server_tools_tests {
 
 #[cfg(test)]
 mod trajectory_assembly_tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
+    #[cfg(feature = "core")]
+    use std::collections::BTreeSet;
 
+    use crate::gateway::caller::CallerContext;
+    use crate::gateway::pipeline::types::PipelineRequest;
     use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-    use bitrouter_sdk::caller::CallerContext;
-    use bitrouter_sdk::language_model::PipelineRequest;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::{Config, build_app_with_path};
-    use crate::eval::types::EvalScope;
+    use crate::gateway::routing::workflow::predictive::compiled_predictor_contract;
     use crate::policy_lock::{
         CertificateSource, PolicyCertificate, PolicyDefinition, PolicyLock, PromotionVerdict,
         RouteOwner, deterministic_yaml, semantic_digest,
     };
-    use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
-    use crate::workflow_state::predictive::compiled_predictor_contract;
+    #[cfg(feature = "core")]
+    use crate::trajectory::guard::IncompleteHistoryAction;
+    use crate::trajectory::guard::ProgressGuardPolicy;
+    #[cfg(feature = "core")]
+    use bitrouter_ai::eval::EvalScope;
 
     async fn assemble_named_policy(
         trajectory_enabled: bool,
@@ -2550,7 +2745,7 @@ presets:
 "#,
             upstream_uri = upstream.uri(),
         );
-        let config = bitrouter_sdk::config::parse_with(&yaml, |_| None)?;
+        let config = crate::config::parse_with(&yaml, |_| None)?;
         let guarded = progress_guard.is_some();
         const ROUTE_KEY: &str = "semantic_route/v1|unknown|unknown|guarded";
         const TEST_DIGEST: &str =
@@ -2627,6 +2822,7 @@ presets:
             .ok_or_else(|| anyhow::anyhow!("assembled App has no language model pipeline"))?
             .execute(request)
             .await?;
+        #[cfg(feature = "core")]
         if let Some(publisher) = &assembled.trajectory_outbox_publisher {
             publisher.wait_for_idle().await;
         }
@@ -2634,6 +2830,25 @@ presets:
         Ok((assembled, digest))
     }
 
+    #[cfg(not(feature = "core"))]
+    #[tokio::test]
+    async fn no_core_cleans_untracked_observation_without_eval_writes() -> anyhow::Result<()> {
+        use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+
+        for trajectory_enabled in [false, true] {
+            let (assembled, _) = assemble_named_policy(trajectory_enabled, None).await?;
+            assert!(assembled.pending_eval_decisions.is_empty());
+            assert_eq!(assembled.response_observer.buffered_request_count(), 0);
+            let row = assembled.db.query_one(Statement::from_string(
+                DatabaseBackend::Sqlite,
+                "SELECT (SELECT COUNT(*) FROM eval_subjects) + (SELECT COUNT(*) FROM eval_results) AS count".to_owned(),
+            )).await?.ok_or_else(|| anyhow::anyhow!("missing eval count"))?;
+            assert_eq!(row.try_get::<i64>("", "count")?, 0);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn disabled_trajectory_preserves_named_policy_request_eval() -> anyhow::Result<()> {
         let (assembled, digest) = assemble_named_policy(false, None).await?;
@@ -2665,6 +2880,7 @@ presets:
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn unguarded_policy_preserves_request_eval_when_trajectory_is_enabled()
     -> anyhow::Result<()> {
@@ -2690,6 +2906,7 @@ presets:
         Ok(())
     }
 
+    #[cfg(feature = "core")]
     #[tokio::test]
     async fn guarded_policy_emits_only_episode_eval_without_pending_decision() -> anyhow::Result<()>
     {
@@ -2750,6 +2967,7 @@ presets:
                 .await?;
 
         assert!(!disabled.policy_runtime.trajectory_is_active());
+        #[cfg(feature = "core")]
         assert!(disabled.trajectory_outbox_publisher.is_none());
         assert!(!disabled_home.path().join("correlation.key").exists());
 
@@ -2760,6 +2978,7 @@ presets:
             build_app_with_path(&config, Some(&enabled_home.path().join("bitrouter.yaml"))).await?;
 
         assert!(enabled.policy_runtime.trajectory_is_active());
+        #[cfg(feature = "core")]
         assert_eq!(
             enabled
                 .trajectory_outbox_publisher
@@ -2775,10 +2994,12 @@ presets:
     async fn enabled_guarded_policy_persists_its_first_route_atomically() -> anyhow::Result<()> {
         use std::collections::{BTreeMap, BTreeSet};
 
+        use crate::config::PresetConfig;
+        use crate::gateway::caller::CallerContext;
+        use crate::gateway::pipeline::context::PipelineContext;
+        use crate::gateway::pipeline::routing::ModelSelector;
+        use crate::gateway::pipeline::types::PipelineRequest;
         use bitrouter_ai::types::{ApiProtocol, GenerationParams, Message, Prompt, Role};
-        use bitrouter_sdk::caller::CallerContext;
-        use bitrouter_sdk::config::PresetConfig;
-        use bitrouter_sdk::language_model::{ModelSelector, PipelineContext, PipelineRequest};
 
         use crate::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
         use crate::trajectory::correlation::CorrelatedRequest;
@@ -2897,7 +3118,7 @@ presets:
         crate::db::run_migrations(&db).await?;
         let runtime = TrajectoryRuntime::new(
             TrajectoryStore::new(db.clone()),
-            Canonicalizer::new(CorrelationKey::from_bytes([51; 32])?),
+            Canonicalizer::new(CorrelationKey::from_bytes(rand::random())?),
         );
         let root = runtime
             .begin_request(

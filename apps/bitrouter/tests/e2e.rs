@@ -17,12 +17,12 @@
 mod decision;
 
 use axum_test::TestServer;
+use bitrouter::config;
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::http::{AppState, build_router};
+use bitrouter::gateway::pipeline::types::PipelineRequest;
 use bitrouter::metering::entities::requests;
 use bitrouter_ai::types::{Content, GenerationParams, Message, Prompt, ProviderMetadata, Role};
-use bitrouter_sdk::caller::CallerContext;
-use bitrouter_sdk::config;
-use bitrouter_sdk::language_model::PipelineRequest;
-use bitrouter_sdk::server::{AppState, build_router};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -421,7 +421,7 @@ async fn e2e_assembled_pipeline_routes_to_mock_provider() -> anyhow::Result<()> 
 
 #[tokio::test]
 async fn e2e_assembled_mcp_route_enforces_virtual_key_auth() {
-    use bitrouter_sdk::mcp::transport::{McpServerConfig, McpTransport};
+    use bitrouter::config::mcp::{McpServerConfig, McpTransport};
     use http::Request;
     use std::collections::HashMap;
     use tower::ServiceExt;
@@ -1142,13 +1142,13 @@ plugins:
 #[tokio::test]
 async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     use async_trait::async_trait;
-    use bitrouter_sdk::App;
-    use bitrouter_sdk::language_model::HookDecision;
-    use bitrouter_sdk::mcp::transport::McpTransport;
-    use bitrouter_sdk::mcp::{
+    use bitrouter::config::mcp::McpTransport;
+    use bitrouter::gateway::assembly::App;
+    use bitrouter::gateway::mcp::{
         Executor, McpContext, McpRequest, McpResponse, McpTarget, PreRequestHook, RoutingTable,
         ServerSelector,
     };
+    use bitrouter::gateway::pipeline::hooks::HookDecision;
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -1161,8 +1161,8 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
         async fn resolve(
             &self,
             selector: &ServerSelector,
-            _caller: &bitrouter_sdk::caller::CallerContext,
-        ) -> bitrouter_sdk::Result<McpTarget> {
+            _caller: &bitrouter::gateway::caller::CallerContext,
+        ) -> bitrouter::gateway::error::Result<McpTarget> {
             match selector {
                 ServerSelector::Direct(name) if name == "known" => Ok(McpTarget::Direct {
                     server_name: name.clone(),
@@ -1172,9 +1172,11 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
                         env: Default::default(),
                     },
                 }),
-                ServerSelector::Direct(name) => Err(bitrouter_sdk::BitrouterError::NotFound(
-                    format!("unknown mcp server '{name}'"),
-                )),
+                ServerSelector::Direct(name) => {
+                    Err(bitrouter::gateway::error::BitrouterError::NotFound(
+                        format!("unknown mcp server '{name}'"),
+                    ))
+                }
                 ServerSelector::Aggregate => Ok(McpTarget::Aggregate { members: vec![] }),
             }
         }
@@ -1186,7 +1188,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
             &self,
             target: &McpTarget,
             request: &McpRequest,
-        ) -> bitrouter_sdk::Result<McpResponse> {
+        ) -> bitrouter::gateway::error::Result<McpResponse> {
             let server = match target {
                 McpTarget::Direct { server_name, .. } => server_name.clone(),
                 McpTarget::Aggregate { .. } => "<aggregate>".to_string(),
@@ -1217,7 +1219,10 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     struct VerifyModernClientContext;
     #[async_trait]
     impl PreRequestHook for VerifyModernClientContext {
-        async fn check(&self, context: &mut McpContext) -> bitrouter_sdk::Result<HookDecision> {
+        async fn check(
+            &self,
+            context: &mut McpContext,
+        ) -> bitrouter::gateway::error::Result<HookDecision> {
             if context
                 .headers()
                 .get("mcp-protocol-version")
@@ -1225,7 +1230,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
                 == Some("2026-07-28")
             {
                 let client = context.client_context().ok_or_else(|| {
-                    bitrouter_sdk::BitrouterError::internal(
+                    bitrouter::gateway::error::BitrouterError::internal(
                         "modern downstream context did not reach the hook boundary",
                     )
                 })?;
@@ -1236,7 +1241,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
                         .and_then(|info| info.get("name"))
                         != Some(&serde_json::json!("downstream-only"))
                 {
-                    return Err(bitrouter_sdk::BitrouterError::internal(
+                    return Err(bitrouter::gateway::error::BitrouterError::internal(
                         "hook observed the wrong downstream client context",
                     ));
                 }
@@ -1249,24 +1254,27 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     // need a Pipeline to satisfy AppState.language_model.
     struct UnusedLmExecutor;
     #[async_trait]
-    impl bitrouter_sdk::language_model::Executor for UnusedLmExecutor {
+    impl bitrouter::gateway::pipeline::executor::Executor for UnusedLmExecutor {
         async fn execute(
             &self,
-            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _target: &bitrouter::gateway::pipeline::types::RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
-            Err(bitrouter_sdk::BitrouterError::internal(
+            _ctx: &bitrouter::gateway::pipeline::context::PipelineContext,
+        ) -> bitrouter::gateway::error::Result<bitrouter::gateway::pipeline::types::ExecutionResult>
+        {
+            Err(bitrouter::gateway::error::BitrouterError::internal(
                 "unused in this test",
             ))
         }
         async fn execute_stream(
             &self,
-            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _target: &bitrouter::gateway::pipeline::types::RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
-            Err(bitrouter_sdk::BitrouterError::internal(
+            _ctx: &bitrouter::gateway::pipeline::context::PipelineContext,
+        ) -> bitrouter::gateway::error::Result<
+            bitrouter::gateway::pipeline::executor::StreamPartStream,
+        > {
+            Err(bitrouter::gateway::error::BitrouterError::internal(
                 "unused in this test",
             ))
         }
@@ -1277,7 +1285,7 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
     let app = App::builder()
         .language_model(|lm| {
             lm.routing_table(Arc::new(
-                bitrouter_sdk::language_model::StaticRoutingTable::new(),
+                bitrouter::gateway::pipeline::routing::StaticRoutingTable::new(),
             ))
             .executor(Arc::new(UnusedLmExecutor));
         })
@@ -1706,22 +1714,23 @@ async fn e2e_mcp_route_invokes_the_pure_routing_pipeline() {
 #[tokio::test]
 async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     use async_trait::async_trait;
-    use bitrouter_ai::types::{ApiProtocol, AuthScheme, FinishReason, GenerateResult, Usage};
-    use bitrouter_sdk::App;
-    use bitrouter_sdk::language_model::types::{ExecutionResult, RoutingTarget};
+    use bitrouter::gateway::assembly::App;
+    use bitrouter::gateway::model::target::AuthScheme;
+    use bitrouter::gateway::pipeline::types::{ExecutionResult, RoutingTarget};
+    use bitrouter_ai::types::{ApiProtocol, FinishReason, GenerateResult, Usage};
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
 
     struct EchoLmExecutor;
     #[async_trait]
-    impl bitrouter_sdk::language_model::Executor for EchoLmExecutor {
+    impl bitrouter::gateway::pipeline::executor::Executor for EchoLmExecutor {
         async fn execute(
             &self,
             target: &RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<ExecutionResult> {
+            _ctx: &bitrouter::gateway::pipeline::context::PipelineContext,
+        ) -> bitrouter::gateway::error::Result<ExecutionResult> {
             Ok(ExecutionResult {
                 provider_id: target.provider_name.clone(),
                 model_id: target.service_id.clone(),
@@ -1755,13 +1764,17 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
             &self,
             _target: &RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
-            Err(bitrouter_sdk::BitrouterError::internal("unused"))
+            _ctx: &bitrouter::gateway::pipeline::context::PipelineContext,
+        ) -> bitrouter::gateway::error::Result<
+            bitrouter::gateway::pipeline::executor::StreamPartStream,
+        > {
+            Err(bitrouter::gateway::error::BitrouterError::internal(
+                "unused",
+            ))
         }
     }
 
-    let table = Arc::new(bitrouter_sdk::language_model::StaticRoutingTable::new());
+    let table = Arc::new(bitrouter::gateway::pipeline::routing::StaticRoutingTable::new());
     table.insert(
         "gpt-5.5",
         vec![RoutingTarget {
@@ -1826,19 +1839,23 @@ async fn e2e_responses_id_encodes_bitrouter_request_id_header() {
     let json: Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(
         json["id"],
-        bitrouter_ai::protocol::responses::encode_gateway_continuation_id("bench-req-001").unwrap()
+        bitrouter::gateway::model::protocol::responses::encode_gateway_continuation_id(
+            "bench-req-001"
+        )
+        .unwrap()
     );
 }
 
+#[cfg(feature = "mcp")]
 #[tokio::test]
 async fn e2e_mcp_aggregate_and_sse_endpoints() {
     use async_trait::async_trait;
-    use bitrouter_sdk::App;
-    use bitrouter_sdk::mcp::transport::McpTransport;
-    use bitrouter_sdk::mcp::{
+    use bitrouter::config::mcp::McpTransport;
+    use bitrouter::gateway::assembly::App;
+    use bitrouter::gateway::http::{RouterOptions, build_router_with_options};
+    use bitrouter::gateway::mcp::{
         AggregateMember, Executor, McpRequest, McpResponse, McpTarget, RoutingTable, ServerSelector,
     };
-    use bitrouter_sdk::server::{RouterOptions, build_router_with_options};
     use http::Request;
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -1852,8 +1869,8 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
         async fn resolve(
             &self,
             selector: &ServerSelector,
-            _caller: &bitrouter_sdk::caller::CallerContext,
-        ) -> bitrouter_sdk::Result<McpTarget> {
+            _caller: &bitrouter::gateway::caller::CallerContext,
+        ) -> bitrouter::gateway::error::Result<McpTarget> {
             let stub = McpTransport::Stdio {
                 command: "/bin/true".into(),
                 args: vec![],
@@ -1889,7 +1906,7 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
             &self,
             target: &McpTarget,
             request: &McpRequest,
-        ) -> bitrouter_sdk::Result<McpResponse> {
+        ) -> bitrouter::gateway::error::Result<McpResponse> {
             let server = match target {
                 McpTarget::Direct { server_name, .. } => server_name.clone(),
                 McpTarget::Aggregate { .. } => unreachable!("AggregatingExecutor must intercept"),
@@ -1906,29 +1923,36 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
 
     struct UnusedLmExecutor;
     #[async_trait]
-    impl bitrouter_sdk::language_model::Executor for UnusedLmExecutor {
+    impl bitrouter::gateway::pipeline::executor::Executor for UnusedLmExecutor {
         async fn execute(
             &self,
-            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _target: &bitrouter::gateway::pipeline::types::RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::ExecutionResult> {
-            Err(bitrouter_sdk::BitrouterError::internal("unused"))
+            _ctx: &bitrouter::gateway::pipeline::context::PipelineContext,
+        ) -> bitrouter::gateway::error::Result<bitrouter::gateway::pipeline::types::ExecutionResult>
+        {
+            Err(bitrouter::gateway::error::BitrouterError::internal(
+                "unused",
+            ))
         }
         async fn execute_stream(
             &self,
-            _target: &bitrouter_sdk::language_model::RoutingTarget,
+            _target: &bitrouter::gateway::pipeline::types::RoutingTarget,
             _prompt: &bitrouter_ai::types::Prompt,
-            _ctx: &bitrouter_sdk::language_model::PipelineContext,
-        ) -> bitrouter_sdk::Result<bitrouter_sdk::language_model::StreamPartStream> {
-            Err(bitrouter_sdk::BitrouterError::internal("unused"))
+            _ctx: &bitrouter::gateway::pipeline::context::PipelineContext,
+        ) -> bitrouter::gateway::error::Result<
+            bitrouter::gateway::pipeline::executor::StreamPartStream,
+        > {
+            Err(bitrouter::gateway::error::BitrouterError::internal(
+                "unused",
+            ))
         }
     }
 
     let app = App::builder()
         .language_model(|lm| {
             lm.routing_table(Arc::new(
-                bitrouter_sdk::language_model::StaticRoutingTable::new(),
+                bitrouter::gateway::pipeline::routing::StaticRoutingTable::new(),
             ))
             .executor(Arc::new(UnusedLmExecutor));
         })
@@ -1936,7 +1960,8 @@ async fn e2e_mcp_aggregate_and_sse_endpoints() {
             // The pipeline-level executor is the real AggregatingExecutor,
             // wrapping our canned StaticToolsExecutor at the leaves.
             let inner: Arc<StaticToolsExecutor> = Arc::new(StaticToolsExecutor);
-            let agg = bitrouter_sdk::mcp::aggregating_executor::AggregatingExecutor::new(inner);
+            let agg =
+                bitrouter::gateway::mcp::aggregating_executor::AggregatingExecutor::new(inner);
             m.routing_table(Arc::new(TwoServerTable))
                 .executor(Arc::new(agg));
         })

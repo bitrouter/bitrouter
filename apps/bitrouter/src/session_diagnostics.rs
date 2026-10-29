@@ -1,5 +1,6 @@
 //! Process session-log diagnostics shared by launchers and non-terminal clients.
 
+#[cfg(feature = "harness")]
 use anyhow::{Context, Result};
 
 /// This process's session log, once the subscriber has opened one.
@@ -24,6 +25,7 @@ pub fn remember_session_log(path: std::path::PathBuf) {
 ///
 /// The path is this process's, so it is read here; the tail is *rendered* by
 /// the crate, which is why nothing below names a widget.
+#[cfg(feature = "harness")]
 pub(crate) fn write_session_log_tail(out: &mut impl std::io::Write) -> Result<()> {
     let Some(path) = SESSION_LOG.get() else {
         return Ok(());
@@ -55,6 +57,7 @@ pub(crate) fn write_session_log_tail(out: &mut impl std::io::Write) -> Result<()
 ///
 /// The launch error outranks this, so a tail that cannot be written is
 /// dropped rather than replacing the reason the launch failed.
+#[cfg(feature = "harness")]
 pub(crate) fn report_failed_launch() {
     let _ = write_session_log_tail(&mut std::io::stderr());
 }

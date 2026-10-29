@@ -9,7 +9,7 @@ use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use tokio::process::{Child, Command};
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 
 fn command(home: &Path) -> Command {

@@ -1,0 +1,13 @@
+inherit_defaults: false
+server:
+  listen: '127.0.0.1:0'
+  skip_auth: true
+database:
+  url: 'sqlite:///tmp/bitrouter-p0-baseline-format7-capture-v3/bitrouter.db?mode=rwc'
+providers:
+  mock:
+    api_base: 'http://127.0.0.1:53210'
+    api_key: fixture
+    api_protocol:
+      - '*': chat_completions
+    models: [{id: test-model}]

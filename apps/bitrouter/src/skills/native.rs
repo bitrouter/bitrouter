@@ -1,17 +1,25 @@
 //! Read existing skill directories without an installation index or version store.
 
-use anyhow::{Context, Result, ensure};
+#[cfg(feature = "harness")]
+use crate::gateway::caller::CallerContext;
+#[cfg(feature = "harness")]
+use crate::skills::format;
+#[cfg(feature = "harness")]
+use crate::skills::library::SkillDirectory;
+use anyhow::Result;
+#[cfg(feature = "harness")]
+use anyhow::{Context, ensure};
+#[cfg(feature = "harness")]
 use async_trait::async_trait;
-use bitrouter_orchestrator::harness::skills::format;
-use bitrouter_orchestrator::harness::skills::library::{
-    LocalScope, LocalSkill, LocalSkillCatalog, SkillDirectory,
-};
-use bitrouter_sdk::caller::CallerContext;
+#[cfg(feature = "harness")]
+use bitrouter_ai::harness::skills::{LocalScope, LocalSkill, LocalSkillCatalog};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "harness")]
 use super::files;
 
+#[cfg(feature = "harness")]
 pub(crate) struct Library {
     roots: Result<Vec<PathBuf>, String>,
 }
@@ -31,6 +39,7 @@ pub(super) fn global_roots() -> Result<Vec<PathBuf>> {
     Ok(roots)
 }
 
+#[cfg(feature = "harness")]
 impl Library {
     pub fn runtime() -> Self {
         Self {
@@ -39,6 +48,7 @@ impl Library {
     }
 }
 
+#[cfg(feature = "harness")]
 pub(super) fn scan(
     roots: &[PathBuf],
     scope: LocalScope,
@@ -106,6 +116,7 @@ pub(super) fn scan(
     Ok(catalog)
 }
 
+#[cfg(feature = "harness")]
 #[async_trait]
 impl SkillDirectory for Library {
     async fn catalog(
@@ -208,7 +219,7 @@ pub(super) fn directory_id(path: &Path) -> String {
     )
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "harness"))]
 mod tests {
     use super::*;
 

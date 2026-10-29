@@ -80,8 +80,12 @@ pub struct CommandsReport {
     pub commands: Vec<CommandRow>,
 }
 
+#[cfg(feature = "harness")]
+use crate::commands::chat::Command;
+#[cfg(feature = "harness")]
+use crate::commands::chat::PromptCommand;
+#[cfg(feature = "harness")]
 use agent_client_protocol::schema::v1::{AvailableCommand, AvailableCommandInput};
-use bitrouter_orchestrator::acp::commands::{Command, PromptCommand};
 
 /// Everything this session offers, in precedence order.
 ///
@@ -91,6 +95,7 @@ use bitrouter_orchestrator::acp::commands::{Command, PromptCommand};
 /// Takes ACP's own [`AvailableCommand`] rather than the SDK's translated
 /// `AgentCommand` because only the former carries `input`, and the hint is
 /// worth showing for a command that takes an argument.
+#[cfg(feature = "harness")]
 pub fn commands_report(
     bitrouter: &[Command],
     config: &[PromptCommand],
@@ -144,6 +149,7 @@ pub fn commands_report(
 /// `AvailableCommandInput` is `#[non_exhaustive]`: a variant this build does
 /// not know about yields no hint rather than failing to compile against a
 /// newer schema.
+#[cfg(feature = "harness")]
 fn hint_of(command: &AvailableCommand) -> Option<String> {
     match command.input.as_ref()? {
         AvailableCommandInput::Unstructured(input) => Some(input.hint.clone()),
@@ -151,7 +157,7 @@ fn hint_of(command: &AvailableCommand) -> Option<String> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "harness"))]
 mod tests {
     use super::*;
 

@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use axum_test::TestServer;
-use bitrouter_sdk::config;
-use bitrouter_sdk::extension::request_check::{Callback, Decision};
-use bitrouter_sdk::server::{AppState, build_router};
+use bitrouter::config;
+use bitrouter::gateway::http::{AppState, build_router};
+use bitrouter_ai::extension::request_check::{Callback, Decision};
 use serde_json::{Value, json};
 use std::sync::Arc;
 use wiremock::matchers::{method, path};
@@ -468,8 +468,8 @@ async fn regex_extensions_preserve_decisions_and_router_bindings() -> Result<()>
 #[tokio::test]
 async fn unified_entry_preserves_router_binding_order_and_leaves_unbound_checks_inert() -> Result<()>
 {
-    use bitrouter_sdk::config::router::RouterRequestCheck;
-    use bitrouter_sdk::extension::request_check::{
+    use bitrouter::config::router::RouterRequestCheck;
+    use bitrouter_ai::extension::request_check::{
         Callback as CheckCallback, Decision as CheckDecision,
     };
     use std::sync::{Arc, mpsc};
@@ -601,7 +601,7 @@ async fn undeclared_registrations_stay_inactive_with_sorted_startup_diagnostics(
 
 #[tokio::test]
 async fn unified_entry_registration_failure_precedes_database_startup() -> Result<()> {
-    use bitrouter_sdk::extension::request_check::Decision as CheckDecision;
+    use bitrouter_ai::extension::request_check::Decision as CheckDecision;
     use std::sync::Arc;
 
     let directory = tempfile::tempdir()?;
@@ -667,7 +667,7 @@ async fn unified_entry_registration_failure_precedes_database_startup() -> Resul
 
 #[tokio::test]
 async fn unified_entry_binding_failures_precede_database_startup() -> Result<()> {
-    use bitrouter_sdk::extension::request_check::Decision as CheckDecision;
+    use bitrouter_ai::extension::request_check::Decision as CheckDecision;
     use std::sync::Arc;
 
     for (case, diagnostic, bound) in [
@@ -718,7 +718,7 @@ async fn unified_entry_binding_failures_precede_database_startup() -> Result<()>
 #[tokio::test]
 async fn native_failures_and_unbound_registration_never_dispatch_unintended_work() -> Result<()> {
     use bitrouter::request_checks::RequestCheckRuntime;
-    use bitrouter_sdk::extension::request_check::{
+    use bitrouter_ai::extension::request_check::{
         Callback as CheckCallback, Decision as CheckDecision,
     };
     use std::sync::{

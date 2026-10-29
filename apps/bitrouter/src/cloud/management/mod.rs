@@ -46,8 +46,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::cloud::account::manager::CredentialManager;
+use crate::gateway::providers::hosted::credentials::CredentialKind;
 use anyhow::Context;
-use bitrouter_ai::providers::hosted::credentials::CredentialKind;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
 use reqwest::{Method, StatusCode};
 use serde::Serialize;

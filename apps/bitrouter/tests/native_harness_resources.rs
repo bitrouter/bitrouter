@@ -1,22 +1,30 @@
 //! Production SQLite persistence with real MCP HTTP, using scripted model output.
-use bitrouter_ai::types::AuthScheme;
+use bitrouter::config::mcp::{McpServerConfig, McpTransport};
+use bitrouter::gateway::assembly::App;
+use bitrouter::gateway::caller::CallerContext;
+use bitrouter::gateway::model::target::AuthScheme;
+use bitrouter::gateway::pipeline::executor::{MockExecutor, MockResponse};
+use bitrouter::gateway::pipeline::routing::StaticRoutingTable;
+use bitrouter::gateway::pipeline::types::RoutingTarget;
+use bitrouter::harness::agent::AgentConfigExt;
+use bitrouter::harness::resources::HarnessConfig;
+use bitrouter::harness::service::ThreadService;
+use bitrouter::harness::storage::{ExecutionRecord, ExecutionStore};
+use bitrouter::harness::thread::ThreadRequest;
+use bitrouter::harness::thread::ThreadTarget;
+use bitrouter::harness::turn::ApprovalAnswer;
+use bitrouter::harness::turn::TurnRequest;
+use bitrouter_ai::harness::agent::AgentConfig;
+use bitrouter_ai::harness::thread::PermissionProfile;
+use bitrouter_ai::harness::turn::TurnSnapshot;
+use bitrouter_ai::harness::turn::TurnStatus;
 use bitrouter_ai::types::{ApiProtocol, FinishReason, StreamPart, Usage};
-use bitrouter_orchestrator::agent::AgentConfig;
-use bitrouter_orchestrator::harness::HarnessConfig;
-use bitrouter_orchestrator::service::ThreadService;
-use bitrouter_orchestrator::store::{ExecutionRecord, ExecutionStore};
-use bitrouter_orchestrator::thread::{PermissionProfile, ThreadRequest, ThreadTarget};
-use bitrouter_orchestrator::turn::{ApprovalAnswer, TurnRequest, TurnSnapshot, TurnStatus};
-use bitrouter_sdk::language_model::{
-    MockExecutor, MockResponse, RoutingTarget, StaticRoutingTable,
-};
-use bitrouter_sdk::{App, caller::CallerContext};
 use rmcp::model::ProtocolVersion;
 use sea_orm::{ConnectionTrait, Statement};
 use std::sync::Arc;
 use std::time::Duration;
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/harness_resources/mcp_fixture.rs"]
+#[path = "harness_resources/mcp_fixture.rs"]
 mod fixture;
 
 fn app(executor: MockExecutor) -> Result<Arc<App>, Box<dyn std::error::Error>> {
@@ -63,7 +71,7 @@ async fn wait(
         loop {
             let view = service.read_turn(target, &CallerContext::local(), turn_id)?;
             if view.status == wanted || view.status.terminal() {
-                return Ok::<_, bitrouter_orchestrator::service::ServiceError>(view);
+                return Ok::<_, bitrouter::harness::service::ServiceError>(view);
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }

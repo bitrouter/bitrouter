@@ -10,16 +10,21 @@ use std::sync::{Arc, Mutex};
 
 use axum_test::TestServer;
 use bitrouter::auth::{NewApiKey, db as auth_db, generate};
-use bitrouter::eval::store::EvalStore;
-use bitrouter::metering::{ChargeStatus, MeteringStore, PricingSource, TimeWindow};
+use bitrouter::config;
+#[cfg(feature = "core")]
+use bitrouter::core::eval::store::EvalStore;
+use bitrouter::gateway::http::AppState;
+use bitrouter::gateway::http::build_router;
+#[cfg(feature = "core")]
+use bitrouter::metering::{ChargeStatus, PricingSource};
+use bitrouter::metering::{MeteringStore, TimeWindow};
 use bitrouter::policy_lock::{PolicyDefinition, PolicyLock, deterministic_yaml};
 use bitrouter::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
 use bitrouter::trajectory::health::reduce;
-use bitrouter::trajectory::replay::replay_episode;
 use bitrouter::trajectory::store::{EpisodeAudit, TrajectoryStore};
-use bitrouter::trajectory::types::{HistoryCompleteness, RequestStatus, TrajectoryEventKind};
-use bitrouter_sdk::config;
-use bitrouter_sdk::server::{AppState, build_router};
+#[cfg(feature = "core")]
+use bitrouter::trajectory::types::RequestStatus;
+use bitrouter::trajectory::types::{HistoryCompleteness, TrajectoryEventKind};
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -957,13 +962,7 @@ async fn normalized_outcome(
                 .cloned()
         })
         .collect();
-    let snapshot = replay_episode(
-        &store,
-        owner,
-        &episodes[0],
-        &BTreeSet::from(["strong".to_owned()]),
-    )
-    .await?;
+    let snapshot = reduce(&events, &BTreeSet::from(["strong".to_owned()]))?;
     Ok(NormalizedOutcome {
         completeness: snapshot.health.completeness,
         request_count: snapshot.health.request_count,
@@ -1068,6 +1067,7 @@ async fn trajectory_outbox_state(
     Ok((row.try_get("", "total")?, row.try_get("", "delivered")?))
 }
 
+#[cfg(feature = "core")]
 fn assert_json_keys_absent(value: &Value, forbidden: &[&str]) {
     match value {
         Value::Object(object) => {
@@ -1085,6 +1085,78 @@ fn assert_json_keys_absent(value: &Value, forbidden: &[&str]) {
     }
 }
 
+#[cfg(not(feature = "core"))]
+#[tokio::test]
+async fn core_disabled_outbox_survives_retries_restart_and_retention() -> anyhow::Result<()> {
+    let harness = HttpHarness::with_guarded_missing_route().await?;
+    let assembled = harness.assemble().await?;
+    let first_server = server(&assembled);
+    let owner = "pending-owner";
+    let bearer = add_owner(&assembled.db, owner).await?;
+    post_guarded_missing_route(&first_server, &bearer).await?;
+
+    let store = TrajectoryStore::new(assembled.db.clone());
+    let pending = store.pending_outbox(owner).await?;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].attempts, 0);
+    let payload = serde_json::to_value(&pending[0].payload)?;
+    let events = events_for_only_episode(&assembled.db, owner).await?;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == TrajectoryEventKind::RequestSettled)
+            .count(),
+        1
+    );
+    assert_eq!(
+        trajectory_request_statuses(&assembled.db, owner).await?,
+        ["failed"]
+    );
+    assert_eq!(trajectory_outbox_state(&assembled.db, owner).await?, (1, 0));
+    assert_eq!(table_row_count(&assembled.db, "eval_subjects").await?, 0);
+    assert_eq!(table_row_count(&assembled.db, "eval_results").await?, 0);
+    let usage = MeteringStore::new(assembled.db.clone())
+        .export_usage(TimeWindow::ThisMonth)
+        .await?;
+    assert_eq!(usage.len(), 1);
+    assert_eq!(
+        usage[0].usage_origin,
+        bitrouter_ai::types::UsageOrigin::Unknown
+    );
+    assert_eq!(usage[0].final_charge_micro_usd, None);
+    drop(first_server);
+    drop(store);
+    drop(assembled);
+
+    let restarted = harness.assemble().await?;
+    let restarted_server = server(&restarted);
+    post_guarded_missing_route(&restarted_server, &bearer).await?;
+    let restarted_store = TrajectoryStore::new(restarted.db.clone());
+    let pending_after = restarted_store.pending_outbox(owner).await?;
+    assert_eq!(pending_after.len(), 1);
+    assert_eq!(pending_after[0].outbox_id, pending[0].outbox_id);
+    assert_eq!(pending_after[0].attempts, 0);
+    assert_eq!(serde_json::to_value(&pending_after[0].payload)?, payload);
+    assert_eq!(events_for_only_episode(&restarted.db, owner).await?, events);
+    assert_eq!(
+        MeteringStore::new(restarted.db.clone())
+            .export_usage(TimeWindow::ThisMonth)
+            .await?
+            .len(),
+        1
+    );
+    assert_eq!(table_row_count(&restarted.db, "eval_subjects").await?, 0);
+    assert_eq!(
+        restarted_store
+            .prune_before("2999-01-01T00:00:00Z", false, 10)
+            .await?,
+        Default::default()
+    );
+    assert_eq!(trajectory_outbox_state(&restarted.db, owner).await?, (1, 0));
+    Ok(())
+}
+
+#[cfg(feature = "core")]
 #[tokio::test]
 async fn guarded_named_policy_routing_failure_is_terminally_settled() -> anyhow::Result<()> {
     let harness = HttpHarness::with_guarded_missing_route().await?;
@@ -1464,13 +1536,16 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
     assert_eq!(before_restart.completeness, HistoryCompleteness::Complete);
     assert_eq!(before_restart.request_count, 2);
     assert_eq!(before_restart.settled_request_count, 2);
-    let published = first_app
-        .trajectory_outbox_publisher
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("trajectory publisher missing"))?
-        .drain_after_active_worker()
-        .await?;
-    assert_eq!(published.failed, 0);
+    #[cfg(feature = "core")]
+    {
+        let published = first_app
+            .trajectory_outbox_publisher
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("trajectory publisher missing"))?
+            .drain_after_active_worker()
+            .await?;
+        assert_eq!(published.failed, 0);
+    }
     for surface in trajectory_durable_surfaces(&first_app.db, owner).await? {
         assert!(
             !surface.contains("provider-only-response-"),
@@ -1544,13 +1619,16 @@ async fn streaming_responses_terminal_id_continues_episode_across_restart() -> a
     assert_eq!(after_restart.completeness, HistoryCompleteness::Complete);
     assert_eq!(after_restart.request_count, 3);
     assert_eq!(after_restart.settled_request_count, 3);
-    let published = restarted_app
-        .trajectory_outbox_publisher
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("restarted trajectory publisher missing"))?
-        .drain_after_active_worker()
-        .await?;
-    assert_eq!(published.failed, 0);
+    #[cfg(feature = "core")]
+    {
+        let published = restarted_app
+            .trajectory_outbox_publisher
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("restarted trajectory publisher missing"))?
+            .drain_after_active_worker()
+            .await?;
+        assert_eq!(published.failed, 0);
+    }
     for surface in trajectory_durable_surfaces(&restarted_app.db, owner).await? {
         assert!(
             !surface.contains("provider-only-response-"),

@@ -13,6 +13,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  packaged-gateway:
+    uses: ./.github/workflows/gateway-artifacts.yml
+    with:
+      plan: '{"releases":[{"app_name":"bitrouter"}]}'
+      cargo-profile: dev
+
   repository-hygiene:
     name: repository-hygiene
     runs-on: ubuntu-latest
@@ -37,6 +43,58 @@ jobs:
             printf '%s\n' "$python_files"
             exit 1
           fi
+
+  core-sdk:
+    name: independent core SDK (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      BITROUTER_BUILD_REVISION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.97.0"
+          components: rustfmt, clippy
+      - name: build and verify independent core consumer
+        shell: bash
+        run: |
+          manifest=apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml
+          cargo fmt --manifest-path "$manifest" -- --check
+          cargo clippy --locked --manifest-path "$manifest" --features core --all-targets --target-dir target/sdk-consumer -- -D warnings
+          cargo test --locked --manifest-path "$manifest" --features core --target-dir target/sdk-consumer
+          cargo build --locked --manifest-path "$manifest" --features core --bin bitrouter-core-sdk-consumer --target-dir target/sdk-consumer
+          cargo tree --locked --manifest-path "$manifest" --features core -e normal,build --prefix none > core-consumer-tree.txt
+          if grep -Eq '^(bitrouter|axum|sea-orm|sea-orm-migration|sqlx[^ ]*|ratatui[^ ]*|crossterm|opentelemetry[^ ]*|agent-client-protocol[^ ]*|rmcp) v' core-consumer-tree.txt; then
+            echo '::error::independent core consumer links a service implementation'; exit 1
+          fi
+      - name: run SDK harness against the official core-only process
+        shell: bash
+        run: |
+          cargo build --locked -p bitrouter --no-default-features --features core --bin bro
+          suffix=""
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then suffix=".exe"; fi
+          mkdir -p "$RUNNER_TEMP/core-sdk-artifact"
+          cp "target/debug/bro$suffix" "$RUNNER_TEMP/core-sdk-artifact/bro$suffix"
+          core_binary="$RUNNER_TEMP/core-sdk-artifact/bro$suffix"
+          consumer_binary="$PWD/target/sdk-consumer/debug/bitrouter-core-sdk-consumer$suffix"
+          if [[ "$RUNNER_OS" == 'Windows' ]]; then
+            core_binary="$(cygpath -m "$core_binary")"
+            consumer_binary="$(cygpath -m "$consumer_binary")"
+          fi
+          export BITROUTER_TEST_CORE_BINARY="$core_binary"
+          export BITROUTER_TEST_CORE_SDK_CONSUMER_BINARY="$consumer_binary"
+          export BITROUTER_TEST_EXPECTED_REVISION="$BITROUTER_BUILD_REVISION"
+          cargo test --locked -p bitrouter --no-default-features --test core_sdk \
+            independent_core_sdk_preserves_harness_authority -- --ignored --exact --nocapture
 
   fmt:
     name: fmt
@@ -79,19 +137,30 @@ jobs:
         include:
           - os: macos-latest
             retries: "0"
+            # Fixtures plus a measured cold all-features build take 61 minutes.
+            # Leave time for the full suite; per-test deadlines still apply.
+            timeout: 90
           - os: windows-latest
             # Windows also exposes the trajectory timestamp race under load.
             retries: "2"
+            timeout: 45
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ matrix.timeout }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
       - uses: taiki-e/install-action@nextest
+      - name: build process fixtures before macOS test deadlines
+        if: runner.os == 'macOS'
+        run: >-
+          cargo build --locked -p bitrouter --all-features --jobs 2
+          --example harness_mcp_fixture --example pty_acp_fixture --example acp_codex_skill_fixture --example acp_claude_skill_fixture --example mcp_skills_fixture --example onboarding_fixture --example managed_effect_fixture
       - run: >-
           cargo nextest run --workspace --all-features
           --no-fail-fast
           --retries "${{ matrix.retries }}"
+        env:
+          BITROUTER_TEST_EXAMPLES_DIR: ${{ runner.os == 'macOS' && format('{0}/target/debug/examples', github.workspace) || '' }}
 
   # A cold all-features build used to compile and link every large application
   # test target on one runner. Split by Cargo target so each runner has bounded
@@ -139,9 +208,14 @@ jobs:
           cache-save-if: false
           cache-workspace-crates: true
       - uses: taiki-e/install-action@nextest
+      - name: build MCP fixture before library test deadlines
+        if: matrix.target == 'lib'
+        run: cargo build --locked -p bitrouter --all-features --jobs 2 --example harness_mcp_fixture
       - env:
-          TEST_BUILD_JOBS: ${{ matrix.build_jobs }}
           TEST_TARGET_FLAGS: ${{ matrix.flags }}
+          BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
+          TEST_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
+          CARGO_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
         shell: bash
         run: |
           read -r -a target_flags <<< "$TEST_TARGET_FLAGS"
@@ -159,14 +233,43 @@ jobs:
             retries: "0"
             targets: >-
               --test acp --test acp_checkpoints --test native_acp --test cloud_api --test daemon --test e2e
-              --test full_stack --test configuration_state --test extension_host --test subscription
-              --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration
+              --test full_stack --test configuration_state --test extension_host --test subscription --test feature_ingress --test database_backends --test database_capture
+              --test router_continuation --test router_migration_cli --test request_checks --test guardrails_migration --test harness_sdk --test artifact_build_metadata --test host_lifecycle
+          - shard: gateway
+            retries: "0"
+            targets: >-
+              --test gateway_anthropic_authority --test gateway_decision_model
+              --test gateway_decisions --test gateway_model_boundary
+              --test gateway_routing_assessment --test gateway_routing_plan
+          - shard: models
+            retries: "0"
+            targets: >-
+              --test model_projection_attributes
+              --test model_ingress_admission
+              --test model_explicit_login
+              --test model_decisions
+              --test model_responses_reasoning
+              --test model_file_store
+              --test model_admitted_conversions
+              --test model_hosted
+              --test model_auth
+              --test model_retirement
+              --test model_content_boundaries
+              --test model_invocation
+              --test model_hosted_login
+              --test model_anthropic
+              --test model_providers
+              --test model_google_chat
+              --test model_projection_admission
           - shard: observability
             retries: "0"
             targets: >-
               --test agent_trace_generalization --test observe_hierarchy
               --test workflow_state_real_agent_e2e
-              --test workflow_state_replay
+              --test workflow_state_replay --test gateway_workflow --test telemetry_ingress_log_target --test source_boundaries
+          - shard: core-scheduling
+            retries: "0"
+            targets: --test core_contract --test core_execution
           - shard: optimization
             retries: "0"
             targets: >-
@@ -184,8 +287,9 @@ jobs:
             retries: "0"
             build_jobs: "1"
             targets: >-
-              --test managed_daemon --test management_cli --test mcp_config_pty
+              --test background_cli --test connected_agents --test managed_daemon --test management_cli --test mcp_config --test mcp_config_pty
               --test onboarding_pty --test orchestrator_core --test skills_lifecycle
+              --test native_evolution_cli --test mcp_skill_host --test mcp_skills_gateway --test acp_skill_delivery
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -196,13 +300,20 @@ jobs:
           cache-save-if: ${{ matrix.shard == 'interfaces' }}
           cache-workspace-crates: true
       - uses: taiki-e/install-action@nextest
+      - name: build CLI fixtures before process deadlines
+        if: contains(fromJSON('["interfaces","control-plane","cli-orchestration"]'), matrix.shard)
+        run: >-
+          cargo build --locked -p bitrouter --all-features --jobs 2
+          --example harness_mcp_fixture --example pty_acp_fixture --example acp_codex_skill_fixture
+          --example acp_claude_skill_fixture --example mcp_skills_fixture --example onboarding_fixture --example managed_effect_fixture
       - name: run integration shard
         shell: bash
         env:
           TEST_RETRIES: ${{ matrix.retries }}
-          TEST_TARGETS: ${{ matrix.targets }}
           TEST_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
           CARGO_BUILD_JOBS: ${{ matrix.build_jobs || '2' }}
+          TEST_TARGETS: ${{ matrix.targets }}
+          BITROUTER_TEST_EXAMPLES_DIR: ${{ contains(fromJSON('["interfaces","control-plane","cli-orchestration"]'), matrix.shard) && format('{0}/target/debug/examples', github.workspace) || '' }}
         run: |
           read -r -a test_targets <<< "$TEST_TARGETS"
           cargo nextest run -p bitrouter --all-features --build-jobs "$TEST_BUILD_JOBS" \
@@ -237,257 +348,381 @@ jobs:
           done
 
   feature-isolation:
-    name: feature-isolation
+    name: public-library-boundaries
     runs-on: ubuntu-latest
-    # The SDK's default dependency tree is a shipped promise: a consumer that
-    # wants pure routing must not pay for the axum HTTP server. The whole
-    # OpenTelemetry stack is a stronger promise still — it must not reach
-    # `bitrouter-sdk` under ANY feature combination, because it lives in
-    # `bitrouter-telemetry` and the SDK owns only the contract that crate
-    # renders. Every capability that pulls weight sits behind a default-off
-    # feature, and each feature must build on its own.
-    #
-    # `cargo tree` is the tool here, and it mishandles a bad name in *two*
-    # different ways depending on which flag carries it. Both make a typo (or a
-    # crate rename) pass silently, so both need a guard:
-    #
-    #   1. `-i <pkg>` — exits 101 both when the package is absent from the
-    #      selected tree AND when the name matches no package at all, with a
-    #      byte-identical message. Guard: every negative assertion below is
-    #      preceded by a positive one proving the name resolves somewhere.
-    #
-    #   2. `-p <crate>` — the sharper one. An unknown package spec is silently
-    #      ignored and `cargo tree` falls back to the **whole workspace**
-    #      default tree: `cargo tree -p bitrouter-guardrailz -e normal -i axum`
-    #      exits **0**, prints a full workspace-wide inverted tree, and writes
-    #      nothing to stderr. Because it both succeeds and produces output,
-    #      exit status alone cannot catch it — the `-i` guard above is no help
-    #      here. In the crate loop below, a typo'd or renamed crate therefore
-    #      stops asserting anything about that crate and silently asserts about
-    #      the workspace instead. Today both `axum` and `opentelemetry` are in
-    #      the workspace default tree (apps/bitrouter enables
-    #      `bitrouter-telemetry/otel-http` unconditionally), so the failure is
-    #      a *misleading* one: the job
-    #      blames a crate that does not exist for a dependency it never had.
-    #      Drop either from the workspace default tree and the same typo flips
-    #      to the opposite failure — a negative assertion that passes forever
-    #      without checking anything. Guard: assert workspace membership via
-    #      `cargo metadata` before using a name in `-p`.
-    #
-    # Literal `-p bitrouter-sdk` / `-p bitrouter-telemetry` uses are covered
-    # already: the `cargo check -p` steps above exit 101 on an unknown package
-    # spec (unlike `cargo tree`).
     steps:
       - uses: actions/checkout@v6
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo check -p bitrouter-ai --no-default-features
-      - run: cargo test -p bitrouter-ai --no-default-features
-      - run: cargo test -p bitrouter-ai --no-default-features --features pkce
-      - run: cargo test -p bitrouter-ai --no-default-features --features hosted-login
-      - run: cargo test -p bitrouter-ai --no-default-features --features file-store
-      - name: model integration stays independent of gateway and agent runtime
+      - name: verify final workspace membership
+        run: |
+          cargo metadata --no-deps --format-version 1 | jq -e '
+            [.packages[].name] | sort ==
+            ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-sdk", "dist-helper"]'
+      - name: contracts and client build independently
+        run: |
+          cargo test -p bitrouter-ai
+          cargo test -p bitrouter-ai --all-features
+          cargo test -p bitrouter-sdk
+          cargo test -p bitrouter-sdk --all-features
+          cargo test -p bitrouter-guardrails --all-features
+      - name: inspect isolated production dependency closures
         shell: bash
         run: |
-          cargo tree --locked -p bitrouter-ai --all-features -e normal,build --prefix none > ai-tree.txt
-          if grep -Eq '^(bitrouter(-sdk|-providers|-core|-orchestrator(-core)?)?|axum|agent-client-protocol(-[^ ]*)?|rmcp) v' ai-tree.txt; then
-            echo '::error::model integration pulls gateway or agent runtime dependencies'; exit 1
+          # Successful checks above prove package membership. Inspect forward
+          # trees: an unknown inverted dependency must not count as evidence.
+          for flags in '' '--all-features'; do
+            cargo tree --locked -p bitrouter-ai $flags -e normal,build --prefix none > ai-tree.txt
+            if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
+              echo '::error::AI public contracts pulled runtime dependencies'; exit 1
+            fi
+            cargo tree --locked -p bitrouter-sdk $flags -e normal,build --prefix none > sdk-tree.txt
+            if grep -Eq '^(bitrouter|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' sdk-tree.txt; then
+              echo '::error::HTTP SDK pulled service, execution or UI dependencies'; exit 1
+            fi
+          done
+          cargo tree --locked -p bitrouter-guardrails --all-features -e normal,build --prefix none > guardrails-tree.txt
+          if grep -Eq '^(bitrouter(-sdk)?|axum|opentelemetry[^ ]*) v' guardrails-tree.txt; then
+            echo '::error::matcher depends on its host implementation'; exit 1
           fi
-      - run: cargo check -p bitrouter-sdk --no-default-features
-      - run: cargo check -p bitrouter-sdk --no-default-features --features config_file
-      - run: cargo check -p bitrouter-guardrails
-      - run: cargo check -p bitrouter-guardrails --no-default-features --features sdk
-      - name: guardrails and the default host have separate dependency trees
-        shell: bash
-        run: |
           cargo tree --locked -p bitrouter -e normal,build --prefix none > host-tree.txt
           if grep -Eq '^bitrouter-guardrails v' host-tree.txt; then
-            echo '::error::default bro links the guardrails implementation'; exit 1
+            echo '::error::default bro links the optional matcher'; exit 1
           fi
-      - run: cargo check -p bitrouter-sdk --no-default-features --features server
-      - run: cargo check -p bitrouter-orchestrator --no-default-features
-      - run: cargo check -p bitrouter-orchestrator --no-default-features --features acp
-      - name: the native orchestrator does not load the ACP runtime by default
+      - name: preserve prehashed manifests in an independent SDK consumer
+        run: |
+          mkdir -p target/sdk-manifest-fidelity
+          cargo run --locked -p bitrouter --no-default-features --features core \
+            --example sdk_manifest_fixture > target/sdk-manifest-fidelity/manifest.json
+          export BITROUTER_TEST_MANIFEST_FIXTURE="$PWD/target/sdk-manifest-fidelity/manifest.json"
+          cargo test --locked \
+            --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml \
+            --target-dir target/sdk-consumer --test manifest_fidelity -- \
+            --ignored --exact server_prehashed_manifest_survives_isolated_bind_and_restore
+
+  application-features:
+    name: application-features (${{ matrix.features }})
+    runs-on: ubuntu-latest
+    env:
+      BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
+    strategy:
+      fail-fast: false
+      matrix:
+        features:
+          - ''
+          - core
+          - harness
+          - core,harness
+          - mcp
+          - server-tools
+          - guardrails
+          - otel-http
+          - otel-grpc
+          - otel-http,otel-grpc
+          - harness,otel-http
+          - db-postgres
+          - db-mysql
+          - mcp,server-tools,otel-http,db-postgres,db-mysql
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: build selected profile without workspace feature unification
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: |
+          # Check production before dev-dependencies can unify extra features.
+          cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bro
+          cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
+          cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
+          if grep -Eq '^(ratatui(-[^ ]*)?|crossterm) v' profile-tree.txt; then
+                 echo '::error::headless profile pulled terminal dependencies'; exit 1
+          fi
+          case ",$PROFILE_FEATURES," in
+            *,harness,*) ;;
+            *) if grep -Eq '^agent-client-protocol[^ ]* v' profile-tree.txt; then
+                 echo '::error::profile without harness pulled ACP runtime'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,harness,*) ;;
+            *) if grep -Eq '^jsonschema v' profile-tree.txt; then
+                 echo '::error::profile without harness pulled result validation'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,mcp,*|*,server-tools,*|*,harness,*) ;;
+            *) if grep -Eq '^(rmcp|process-wrap) v' profile-tree.txt; then
+                 echo '::error::profile without MCP pulled its transport runtime'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,otel-http,*|*,otel-grpc,*) ;;
+            *) if grep -Eq '^(opentelemetry[^ ]*|tracing-opentelemetry) v' profile-tree.txt; then
+                 echo '::error::profile without OTLP pulled exporter dependencies'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,otel-grpc,*) ;;
+            *) if grep -Eq '^tonic v' profile-tree.txt; then
+                 echo '::error::profile without gRPC pulled tonic'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,db-postgres,*) ;;
+            *) if grep -Eq '^sqlx-postgres v' profile-tree.txt; then
+                 echo '::error::profile without PostgreSQL pulled its driver'; exit 1
+               fi ;;
+          esac
+          case ",$PROFILE_FEATURES," in
+            *,db-mysql,*) ;;
+            *) if grep -Eq '^sqlx-mysql v' profile-tree.txt; then
+                 echo '::error::profile without MySQL pulled its driver'; exit 1
+               fi ;;
+          esac
+
+      - name: prebuild selected-profile protocol fixtures
+        if: contains(matrix.features, 'harness') || matrix.features == 'mcp'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo build --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --jobs 2 --example onboarding_fixture --example pty_acp_fixture --example harness_mcp_fixture
+
+      - name: verify gateway behavior without learning services
+        if: matrix.features == '' || matrix.features == 'harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test core_disabled --test trajectory_progress_control --test gateway_workflow --test feature_ingress
+
+      - name: verify noninteractive setup and source boundaries
+        if: matrix.features == '' || matrix.features == 'harness' || matrix.features == 'core,harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test onboarding --test source_boundaries
+
+      - name: verify unavailable telemetry before startup side effects
+        if: matrix.features == '' || matrix.features == 'harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test telemetry_disabled --jobs 2 -- --test-threads=2
+
+      - name: verify host handoff and shutdown draining
+        if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'core,harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test host_lifecycle --jobs 2 -- --test-threads=2
+
+      - uses: taiki-e/install-action@nextest
+        if: matrix.features == '' || matrix.features == 'core' || matrix.features == 'harness' || matrix.features == 'core,harness'
+
+      - name: verify base contracts without harness
+        if: matrix.features == ''
+        run: >-
+          cargo nextest run -p bitrouter --no-default-features
+          --lib --bin bro --build-jobs 2 --test-threads 2
+          -E 'test(client::agent_local::) | test(providers::cli_install::) | test(skills::) | test(skills_init_tests) | test(config::yaml::) | test(daemon::tests::opaque_session) | binary(bro)'
+
+      - name: verify stored history without live capture
+        if: matrix.features == '' || matrix.features == 'core'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib --test acp_checkpoints --test daemon --build-jobs 2 --test-threads 2
+          -E 'test(acp_trajectory::) | test(storage::acp_history::) | test(gateway::routing::blocks::) | test(core::evolution::) | binary(acp_checkpoints) | binary(daemon)'
+
+      - name: verify headless ACP, capture and shared transcript behavior
+        if: matrix.features == 'harness' || matrix.features == 'core,harness'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: >-
+          cargo nextest run -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --lib --test acp --test database_capture --build-jobs 2 --test-threads 2
+          -E 'test(presentation::) | test(output::plain::) | test(text_presenter_tests) | test(agent_sessions::) | test(agent_api::) | test(commands::tests::) | test(onboarding::tests::) | test(acp_trajectory::live_tests::) | test(acp_trajectory::checkpoint::tests::live::) | test(harness::resources::mcp::) | test(harness::service::core_disabled_tests::) | test(harness::service::recovery::tests::baseline_) | test(harness::service::recovery::tests::historical::) | test(harness::agent::native::replay_tests::) | test(harness::acp::native::core_disabled_tests::) | test(harness::permission::) | test(harness::local::) | test(harness::result_contract::) | binary(acp) | binary(database_capture)'
+
+      - name: verify scheduler acknowledgements and recovery without harness
+        if: matrix.features == 'core'
+        run: >-
+          cargo nextest run --locked -p bitrouter --no-default-features --features core
+          --test core_contract --test core_execution --build-jobs 2 --test-threads 2
+
+      - name: verify execution SDK against the headless service
+        if: matrix.features == 'core,harness'
+        run: >-
+          cargo test -p bitrouter --no-default-features --features core,harness
+          --test harness_sdk --jobs 2
+
+      - name: verify database feature availability
+        if: matrix.features == 'db-postgres' || matrix.features == 'db-mysql'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test feature_ingress
+
+      - name: verify optional server tools
+        if: matrix.features == 'server-tools' || matrix.features == 'mcp'
+        env:
+          PROFILE_FEATURES: ${{ matrix.features }}
+        run: |
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --test feature_ingress
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --lib server_tool
+
+      - name: verify MCP discovery and process cleanup without harness
+        if: matrix.features == 'mcp'
+        run: >-
+          cargo test -p bitrouter --no-default-features --features mcp
+          --test harness_mcp_check --jobs 2 -- --test-threads=2
+
+  artifact-profiles:
+    name: artifact profiles (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: preserve full, minimum and harness executables from the same revision
         shell: bash
         run: |
-          cargo tree --locked -p bitrouter-orchestrator --no-default-features -e normal,build --prefix none > orchestrator-tree.txt
-          if grep -Eq '^agent-client-protocol[^ ]* v' orchestrator-tree.txt; then
-            echo '::error::ACP runtime dependencies reached the native orchestrator default tree'; exit 1
-          fi
-      - name: the ACP runtime stays outside the SDK
+          mkdir -p "$RUNNER_TEMP/profile-full" "$RUNNER_TEMP/profile-gateway" "$RUNNER_TEMP/profile-harness"
+          cargo build --locked -p bitrouter --bin bro --jobs 2
+          cp target/debug/bro "$RUNNER_TEMP/profile-full/bro"
+          cargo build --locked -p bitrouter --no-default-features --bin bro --jobs 2
+          cp target/debug/bro "$RUNNER_TEMP/profile-gateway/bro"
+          cargo build --locked -p bitrouter --no-default-features --features harness --bin bro --jobs 2
+          cp target/debug/bro "$RUNNER_TEMP/profile-harness/bro"
+      - name: verify real daemon profile transitions and artifact metadata
         shell: bash
+        env:
+          BITROUTER_TEST_FULL_BINARY: ${{ runner.temp }}/profile-full/bro
+          BITROUTER_TEST_GATEWAY_BINARY: ${{ runner.temp }}/profile-gateway/bro
+          BITROUTER_TEST_HARNESS_BINARY: ${{ runner.temp }}/profile-harness/bro
         run: |
-          cargo tree --locked -p bitrouter-sdk --all-features -e normal,build --prefix none > sdk-tree.txt
-          if grep -Eq '^agent-client-protocol[^ ]* v' sdk-tree.txt; then
-            echo '::error::ACP runtime dependencies reached bitrouter-sdk'; exit 1
-          fi
-      - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-http
-      - run: cargo check -p bitrouter-telemetry --no-default-features --features otel-grpc
-      - run: cargo check -p bitrouter-telemetry --no-default-features --features otel,server
-      - name: the OpenTelemetry stack never reaches the SDK
-        # The gate the telemetry crate exists for, and the strongest form of
-        # it: not "off by default" but absent at every feature combination.
-        # `--all-features` is the whole point — a feature that quietly pulled
-        # the stack back into the foundation crate would pass a default-tree
-        # check and fail this one.
-        #
-        # Scope, because the first draft got this wrong and failed on its first
-        # CI run. Only crates that can be in the SDK's tree *solely* because of
-        # the OTLP renderer belong here. `tracing-subscriber`, `tonic` and
-        # `dashmap` were on the list and do not qualify: they are
-        # general-purpose, and something unrelated may legitimately want them.
-        # `tracing-subscriber` promptly proved it — `agent-client-protocol-conductor`
-        # pulls it, so the over-broad list failed on a dependency that has
-        # nothing to do with telemetry.
-        #
-        # The semver argument this job serves was never about tree membership
-        # anyway. It is about *public* dependencies, and
-        # `public-api-deps.txt` below is what guards those. A crate can sit in
-        # the tree transitively forever without costing a semver commitment;
-        # only appearing in a public signature does that. Do not conflate them
-        # again by re-widening this list.
-        #
-        # `tonic` and `dashmap` keep their guard in "telemetry default tree
-        # stays lean" and "transports stay isolated", where the question asked
-        # is one they can actually answer.
+          cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_build_metadata
+          cargo test --locked -p bitrouter --no-default-features --jobs 2 --test artifact_profiles -- --ignored --test-threads=1
+          # Core seeds published state and dispatches the original judge attempt.
+          # Serving/replay requests use the preserved full/minimum binaries.
+          cargo test --locked -p bitrouter --jobs 2 --test artifact_profiles gateway_state:: -- --ignored --test-threads=1
+      - name: validate local measurement fixture and interruption cleanup
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/measurement-target
+          BITROUTER_MEASUREMENT_TEST_BINARY: ${{ runner.temp }}/profile-gateway/bro
         run: |
-          for pkg in opentelemetry opentelemetry_sdk opentelemetry-otlp \
-                     opentelemetry-semantic-conventions tracing-opentelemetry; do
-            if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
-            fi
-            if cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg reached bitrouter-sdk — the OTLP renderer belongs in bitrouter-telemetry; see docs/TELEMETRY_CRATE_SPEC.md"; exit 1
-            fi
-          done
-      - name: SDK default tree stays lean
-        # Just `axum` now: the OTel names moved to their own steps above, and
-        # `tower` is not a valid subject here — `reqwest` puts it in the
-        # default tree regardless of the `server` feature.
+          cargo fmt --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml -- --check
+          cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2
+          cargo test --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --jobs 2 --test cancellation -- --ignored --test-threads=1
+          cargo clippy --locked --manifest-path apps/bitrouter/tests/fixtures/gateway_measurements/Cargo.toml --all-targets --jobs 2 -- -D warnings
+
+  database-backends:
+    name: database (${{ matrix.backend }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: postgres
+            image: postgres:17
+            port: 5432
+            feature: db-postgres
+            url: postgres://fixture:fixture-password@127.0.0.1:5432/bitrouter_test
+            healthcheck: pg_isready -U fixture -d bitrouter_test
+          - backend: mysql
+            image: mysql:8.4
+            port: 3306
+            feature: db-mysql
+            url: mysql://fixture:fixture-password@127.0.0.1:3306/bitrouter_test
+            healthcheck: mysql --host=127.0.0.1 --user=fixture --password=fixture-password --database=bitrouter_test --execute='SELECT 1'
+    services:
+      database:
+        image: ${{ matrix.image }}
+        env:
+          # Each official image consumes its own initialization variables.
+          POSTGRES_USER: fixture
+          POSTGRES_PASSWORD: fixture-password
+          POSTGRES_DB: bitrouter_test
+          MYSQL_ROOT_PASSWORD: fixture-password
+          MYSQL_USER: fixture
+          MYSQL_PASSWORD: fixture-password
+          MYSQL_DATABASE: bitrouter_test
+        ports:
+          - ${{ matrix.port }}:${{ matrix.port }}
+        options: >-
+          --health-cmd "${{ matrix.healthcheck }}"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: exercise migrations and gateway persistence on the selected backend
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES"
+          --test database_backends -- --include-ignored --test-threads=1
+
+      - name: exercise retained core and capture records on the selected backend
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+          PROFILE_FEATURES: ${{ matrix.feature }}
+        run: >-
+          cargo test -p bitrouter --no-default-features --features "$PROFILE_FEATURES,core,harness"
+          --test database_backends --test database_capture -- --include-ignored --test-threads=1
+
+      - name: verify MySQL transaction snapshot boundaries
+        if: matrix.backend == 'mysql'
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
         run: |
-          for pkg in axum; do
-            if ! cargo tree -p bitrouter-sdk --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
-            fi
-            if cargo tree -p bitrouter-sdk --no-default-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg is in bitrouter-sdk's default tree"; exit 1
-            fi
-          done
-      - name: telemetry default tree stays lean
-        run: |
-          for pkg in opentelemetry opentelemetry_sdk opentelemetry-otlp \
-                     tracing-opentelemetry tracing-subscriber tonic dashmap axum; do
-            if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
-            fi
-            if cargo tree -p bitrouter-telemetry --no-default-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg is in bitrouter-telemetry's default tree"; exit 1
-            fi
-          done
-      - name: transports stay isolated
-        run: |
-          for pkg in tonic axum; do
-            if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg resolves in no tree at all — misspelled in this list?"; exit 1
-            fi
-            if cargo tree -p bitrouter-telemetry --no-default-features --features otel-http -e normal -i "$pkg" >/dev/null 2>&1; then
-              echo "::error::$pkg leaked into the otel-http tree"; exit 1
-            fi
-          done
-      - name: consumers stay lean when consumed on their own
-        # Scope, stated exactly, because the obvious reading of this step is
-        # wrong and the wrong reading is the reassuring one.
-        #
-        # `cargo tree -p <crate>` resolves that crate's features IN ISOLATION —
-        # what a downstream gets from `cargo add bitrouter-guardrails`. That is
-        # a real shipped promise and this step guards it: pull the hook crate
-        # on its own and no axum, no OpenTelemetry.
-        #
-        # It is NOT a claim that the workspace product has no OTel stack:
-        # `apps/bitrouter` enables `bitrouter-telemetry/otel-http` explicitly.
-        # Cargo unifies enabled features of shared dependencies in a workspace
-        # build. These checks describe each listed package resolved alone;
-        # the separate host/service tree checks above guard their actual
-        # product boundary, and cargo-dist builds each application separately.
-        #
-        # `bitrouter-sdk` is in the crate loop now that the OTel stack is not
-        # its to carry: `cargo add bitrouter-sdk` must pull neither.
-        run: |
-          if ! cargo tree -p bitrouter-sdk --all-features -e normal -i axum >/dev/null 2>&1; then
-            echo "::error::axum resolves in no tree at all — misspelled?"; exit 1
-          fi
-          if ! cargo tree -p bitrouter-telemetry --all-features -e normal -i opentelemetry >/dev/null 2>&1; then
-            echo "::error::opentelemetry resolves in no tree at all — misspelled?"; exit 1
-          fi
-          for crate in bitrouter-ai bitrouter-sdk bitrouter-guardrails dist-helper; do
-            # `cargo tree -p` ignores an unknown spec and exits 0 (see the job
-            # comment), so prove membership before trusting anything below.
-            if ! cargo metadata --no-deps --format-version 1 \
-                 | jq -e --arg c "$crate" '.packages[] | select(.name == $c)' >/dev/null; then
-              echo "::error::unknown workspace crate: $crate"; exit 1
-            fi
-            for pkg in axum opentelemetry; do
-              if cargo tree -p "$crate" -e normal -i "$pkg" >/dev/null 2>&1; then
-                echo "::error::$crate must not depend on $pkg when resolved on its own (a workspace build unifies features and legitimately does link it)"; exit 1
-              fi
-            done
-          done
-      - name: "the OTel core without a transport is a compile error"
-        run: |
-          if out=$(cargo check -p bitrouter-telemetry --features __otel-core --message-format=short 2>&1); then
-            echo "::error::expected the transport-less build to fail"; printf '%s\n' "$out"; exit 1
-          fi
-          printf '%s\n' "$out" | grep -qF 'the OpenTelemetry stack needs a transport' || {
-            echo "::error::failed, but not with the transport compile_error"; printf '%s\n' "$out"; exit 1; }
+          cargo test -p bitrouter --no-default-features --features db-mysql \
+          --lib mysql_tests -- --ignored --test-threads=1
+          cargo test -p bitrouter --no-default-features --features db-mysql,core,harness \
+          --lib mysql_tests -- --ignored --test-threads=1
+
+  telemetry-transports:
+    name: telemetry (${{ matrix.transport }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - transport: otel-http
+            targets: --test telemetry_ingress_log_target --test observe_hierarchy --test full_stack
+          - transport: otel-grpc
+            targets: --test telemetry_grpc_transport
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo test -p bitrouter --no-default-features --features ${{ matrix.transport }} ${{ matrix.targets }}
 
   sdk-public-api:
     name: sdk-public-api
     runs-on: ubuntu-latest
-    # The SDK owns the observability contract without owning any renderer of
-    # it, and that only means something while the hard constraint holds:
-    #
-    #   No `opentelemetry*` or `tracing_opentelemetry` type may appear in any
-    #   public `bitrouter-sdk` signature.
-    #
-    # `feature-isolation` now proves the stronger version — the stack is not in
-    # the SDK's tree at any feature combination — so this job's `opentelemetry`
-    # grep is the *forward* guard, not the live one: it is what catches the
-    # next change that pulls a renderer back in. Keep it.
-    #
-    # "Signature" is broader than function returns — public struct fields, enum
-    # variant payloads, trait method signatures, generic bounds, associated
-    # types, type aliases, and re-exports all count. `cargo public-api` prints
-    # one fully-qualified line per public item with rustdoc's own resolution
-    # already applied, so all of those collapse into the same grep.
-    #
-    # `--simplified` omits blanket impls. That is load-bearing, not cosmetic:
-    # `opentelemetry` has `impl<T> FutureExt for T`, which rustdoc attaches to
-    # every documented type in the crate. Without the flag the listing carries
-    # hundreds of `impl<T> opentelemetry::context::future_ext::FutureExt for
-    # <every SDK type>` lines that this crate never authored, and the gate
-    # below would be permanently red. The flag drops them structurally — no
-    # allow-list, so a real `opentelemetry` leak still cannot hide behind one.
-    #
-    # The same listing feeds a committed manifest of the foreign crates the
-    # public API reaches. A guard that only greps cannot see *unintended*
-    # public API growth, which is how a public foreign type gets added in the
-    # first place; the manifest makes that specific change show up in review
-    # as a one-line diff.
-    #
-    # Linux-only on purpose: the SDK has `#[cfg(unix)]` items, so a Windows
-    # runner would produce a different (correct, but non-matching) listing.
-    # This is not folded into `feature-isolation` — that job is stable-only,
-    # and rustdoc JSON needs nightly.
+    # Keep the check identity while covering both sides of the new client boundary.
+    # Dependency trees are checked separately; these listings also inspect public
+    # fields, bounds, associated types and signatures rather than only imports.
     steps:
       - uses: actions/checkout@v6
       - name: read the pins
         id: pin
         shell: bash
         run: |
-          # Single source of truth: the pins live beside the baseline they
-          # describe, so a human regenerating locally uses the same versions
-          # this job runs on. Both are load-bearing — rustdoc's JSON format and
-          # `cargo public-api`'s rendering each change across releases, and
-          # either would rewrite the whole baseline.
           pins=crates/bitrouter-sdk/public-api.pins
           for key in toolchain tool; do
             value="$(sed -n "s/^$key=//p" "$pins" | tr -d '[:space:]')"
@@ -499,101 +734,89 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: stable
-          # This step exists only to build the helper binary below; the nightly
-          # step is the one whose cache is worth keeping.
           cache: false
-      # Built on stable. It shells out to `cargo rustdoc` itself and picks the
-      # toolchain up from the `+<pin>` on the invocation further down.
       - name: install the pinned cargo-public-api
         run: cargo install --locked "${{ steps.pin.outputs.tool }}"
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ steps.pin.outputs.toolchain }}
-      - name: render the SDK's public API
+      - name: verify public contract and client surfaces
         shell: bash
         run: |
-          cargo "+${{ steps.pin.outputs.toolchain }}" public-api \
-            -p bitrouter-sdk --all-features --simplified > "$RUNNER_TEMP/public-api.txt"
-      - name: the listing is real
-        shell: bash
-        run: |
-          # The gates below are negative assertions over this one file, and an
-          # empty or otel-less listing would satisfy every one of them
-          # vacuously — exactly the silent pass this job exists to prevent.
-          # Prove the surface under test is in the listing before trusting
-          # anything the listing does not say.
-          #
-          # Both sentinels name the observability contract, which is what the
-          # negative gates are ultimately about. They are ungated, so unlike
-          # their predecessors they cannot go missing because a feature stopped
-          # resolving — if they are absent, the listing itself is broken.
-          for sentinel in \
-            'pub mod bitrouter_sdk::observe' \
-            'pub fn bitrouter_sdk::observe::schema::is_reserved_attribute_key'; do
-            if ! grep -qF "$sentinel" "$RUNNER_TEMP/public-api.txt"; then
-              echo "::error::'$sentinel' is missing — the listing is not real; do not trust the negative gates below"
+          for package in bitrouter-ai bitrouter-sdk; do
+            listing="$RUNNER_TEMP/$package-public-api.txt"
+            cargo "+${{ steps.pin.outputs.toolchain }}" public-api \
+              -p "$package" --all-features --simplified > "$listing"
+            # --simplified excludes foreign blanket impls rustdoc attaches to
+            # every type. Real authored fields and bounds remain in the listing.
+            if [[ "$package" == bitrouter-ai ]]; then
+              sentinels=(
+                'pub struct bitrouter_ai::protocol::chat_completions::ChatRequest'
+                'pub struct bitrouter_ai::gateway::ModelsResponse'
+                'pub mod bitrouter_ai::extension'
+                'pub struct bitrouter_ai::control::reload::ReloadInput'
+                'pub struct bitrouter_ai::control::requests::RequestFilters'
+                'pub struct bitrouter_ai::control::status::StatusReport'
+                'pub enum bitrouter_ai::control::action::Action'
+                'pub struct bitrouter_ai::control::error::ErrorEnvelope'
+                'pub struct bitrouter_ai::eval::EvalSubject'
+                'pub struct bitrouter_ai::eval::AdmissionOutcome'
+                'pub struct bitrouter_ai::core::evidence::NativeAttemptReport'
+                'pub enum bitrouter_ai::core::evidence::NativeTokenCost'
+                'pub struct bitrouter_ai::core::protocol::ClientMessage'
+                'pub enum bitrouter_ai::core::protocol::ServerMessage'
+                'pub struct bitrouter_ai::core::protocol::ErrorEnvelope'
+                'pub struct bitrouter_ai::core::checkpoint::CheckpointBatch'
+                'pub struct bitrouter_ai::core::responses::CreateRequest'
+                'pub struct bitrouter_ai::core::responses::FunctionOutput'
+              )
+              forbidden='extension::request_check::Registration|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+            else
+              sentinels=(
+                'pub struct bitrouter_sdk::gateway::GatewayClient'
+                'bitrouter_sdk::gateway::GatewayClient::chat_completions'
+                'bitrouter_sdk::gateway::GatewayClient::stream_responses'
+                'pub struct bitrouter_sdk::control::ControlClient'
+                'bitrouter_sdk::control::ControlClient::reload'
+                'bitrouter_sdk::control::ControlClient::operation'
+                'bitrouter_sdk::gateway::GatewayClient::submit_eval_result'
+                'bitrouter_sdk::gateway::GatewayClient::eval_snapshot'
+                'bitrouter_sdk::gateway::GatewayClient::core_capabilities'
+                'bitrouter_sdk::gateway::GatewayClient::managed_responses'
+                'bitrouter_sdk::gateway::GatewayClient::stream_managed_responses'
+                'bitrouter_sdk::gateway::GatewayClient::core_channel'
+                'pub struct bitrouter_sdk::core::CoreChannel'
+                'pub struct bitrouter_sdk::core::CoreSender'
+                'pub struct bitrouter_sdk::core::CoreReceiver'
+              )
+              forbidden='bitrouter::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::|tokio_tungstenite|tungstenite::'
+            fi
+            for sentinel in "${sentinels[@]}"; do
+              if ! grep -qF "$sentinel" "$listing"; then
+                echo "::error::$package public API listing is missing '$sentinel'"
+                exit 1
+              fi
+            done
+            if hits="$(grep -niE "$forbidden" "$listing")"; then
+              echo "::error::runtime ownership leaked into $package's public API"
+              printf '%s\n' "$hits"
               exit 1
             fi
+            # A public re-export can hide its foreign origin in the listing.
+            # Consumers import each contract from its owning public module.
+            if hits="$(grep -rnE '^[[:space:]]*pub use[[:space:]]' "crates/$package/src/")"; then
+              echo "::error::$package contains a public forwarding export"
+              printf '%s\n' "$hits"
+              exit 1
+            fi
+            crate_name="${package//-/_}"
+            grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' "$listing" \
+              | cut -d: -f1 | sort -u \
+              | grep -vxE "$crate_name|core|std|alloc" > "$RUNNER_TEMP/$package-public-api-deps.txt"
+            diff -u \
+              <(grep -v '^#' "crates/$package/public-api-deps.txt") \
+              "$RUNNER_TEMP/$package-public-api-deps.txt"
           done
-      - name: no opentelemetry type in the SDK's public API
-        shell: bash
-        run: |
-          # Case-insensitive so it catches both the module paths
-          # (`opentelemetry_sdk::…`, `tracing_opentelemetry::…`) and the type
-          # names (`OpenTelemetryLayer`). `tracing_opentelemetry` contains
-          # `opentelemetry`, so one pattern covers both crates.
-          if hits="$(grep -niE 'opentelemetry' "$RUNNER_TEMP/public-api.txt")"; then
-            echo "::error::opentelemetry types leaked into bitrouter-sdk's public API — see docs/TELEMETRY_CRATE_SPEC.md"
-            printf '%s\n' "$hits"
-            exit 1
-          fi
-      - name: no re-export of an OTel type out of the SDK
-        shell: bash
-        run: |
-          # The one thing the listing grep above cannot see. `cargo public-api`
-          # renders a bare re-export under its *local* path — re-exporting
-          # `opentelemetry_sdk::trace::SdkTracer` from a module named `otel`
-          # prints `pub use bitrouter_sdk::observe::SdkTracer`, with the origin crate
-          # nowhere in the line. Types whose *name* carries "OpenTelemetry"
-          # (e.g. `OpenTelemetrySpanExt`) do trip the grep; neutrally-named
-          # ones do not. The baseline gate still catches the added line, but it
-          # would not say why the line matters — so pin it at the source.
-          #
-          # Verbatim `pub use` only: `pub(crate) use` is not public API, and a
-          # re-export laundered through a local alias is out of reach of any
-          # lexical check. That residual is the baseline gate's job.
-          if hits="$(grep -rnE '^[[:space:]]*pub use[[:space:]]+(::)?(opentelemetry|tracing_opentelemetry)' crates/bitrouter-sdk/src/)"; then
-            echo "::error::bitrouter-sdk re-exports an OpenTelemetry type — see docs/TELEMETRY_CRATE_SPEC.md"
-            printf '%s\n' "$hits"
-            exit 1
-          fi
-      # Gates 1-3 above answer "is an OTel type public?". This one answers the
-      # broader question a grep structurally cannot: "did the SDK gain a public
-      # dependency nobody noticed?" That is not hypothetical — `tracing_core`
-      # became public surface here via a generic bound, and no `opentelemetry`
-      # grep would ever have seen it.
-      #
-      # We track the foreign-crate *set*, not the full item listing. The full
-      # listing is ~8.5k lines of which ~22% is auto-derived marker impls
-      # (`Sync`/`Unpin`/`RefUnwindSafe`/…), so adding one public struct writes
-      # six lines of noise into review and the real signal drowns. The set
-      # changes on exactly the semver-relevant event and is silent otherwise.
-      - name: the SDK's public dependency surface is unchanged
-        shell: bash
-        run: |
-          # Path roots only: the regex is greedy from the word boundary, so
-          # `bitrouter_sdk::observe::SpanAttributes` yields `bitrouter_sdk`, not
-          # `observe`. Generic params (`S`, `T`) start uppercase and never match.
-          grep -oE '\b[a-z_][a-z0-9_]*(::[a-zA-Z_][a-zA-Z0-9_]*)+' "$RUNNER_TEMP/public-api.txt" \
-            | cut -d: -f1 | sort -u \
-            | grep -vxE 'bitrouter_sdk|core|std|alloc' > "$RUNNER_TEMP/public-api-deps.txt"
-          if ! diff -u \
-            <(grep -v '^#' crates/bitrouter-sdk/public-api-deps.txt) \
-            "$RUNNER_TEMP/public-api-deps.txt"
-          then
-            echo "::error::bitrouter-sdk's public dependency surface changed. A '+' line means an upstream breaking release in that crate now becomes a BitRouter breaking release — confirm that is intended, then update crates/bitrouter-sdk/public-api-deps.txt (regeneration command in crates/bitrouter-sdk/public-api.pins)."
-            exit 1
-          fi
 
   dist:
     name: dist

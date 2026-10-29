@@ -1,15 +1,21 @@
 //! Session command discovery and configured prompt expansion for the CLI.
 
-use crate::actions::{ACTIONS, Requires};
-use bitrouter_orchestrator::acp::client::{AcpClient, RouteMethod};
-use bitrouter_orchestrator::acp::commands::Command;
+use crate::actions::ACTIONS;
+#[cfg(feature = "harness")]
+use crate::actions::Requires;
+#[cfg(feature = "harness")]
+use crate::commands::chat::Command;
+#[cfg(feature = "harness")]
+use crate::harness::acp::client::{AcpClient, RouteMethod};
 
 /// What `/route` says at a session with no route surface to open a picker over.
+#[cfg(feature = "harness")]
 const NOT_ROUTABLE: &str = "this session cannot be rerouted (the controller advertises no route \
                             control: running direct, or without a trusted local daemon binding)";
 /// What `/route reset` says at the same session. Distinct from [`NOT_ROUTABLE`]
 /// because a controller may advertise `set` without `reset`, and a reader told
 /// "cannot be rerouted" would not know which of the two they had.
+#[cfg(feature = "harness")]
 const NOT_RESETTABLE: &str = "this session has no route lease to drop (the controller advertises \
                               no route reset)";
 
@@ -37,6 +43,7 @@ pub fn summary_for(action: &str) -> &'static str {
 /// Resolved once, at launch, and handed to the reducer as plain data. A row
 /// whose requirement is unmet is still returned — with the reason — because a
 /// control the session cannot run should say why rather than vanish.
+#[cfg(feature = "harness")]
 pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
     let capability = client.route_control();
     offered_route_commands(
@@ -48,6 +55,7 @@ pub fn offered_commands(client: &AcpClient) -> Vec<Command> {
 
 /// Resolve the same command inventory for a supervised client's negotiated
 /// snapshot without granting that presentation a direct controller handle.
+#[cfg(feature = "harness")]
 pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<Command> {
     ACTIONS
         .iter()
@@ -82,8 +90,8 @@ pub(crate) fn offered_route_commands(list: bool, set: bool, reset: bool) -> Vec<
 ///
 /// It cannot live in the SDK: the check needs the app-owned `ACTIONS` table.
 pub fn prompt_commands(
-    config: &bitrouter_sdk::config::ChatConfig,
-) -> anyhow::Result<Vec<bitrouter_orchestrator::acp::commands::PromptCommand>> {
+    config: &crate::config::ChatConfig,
+) -> anyhow::Result<Vec<crate::commands::chat::PromptCommand>> {
     let mut seen: Vec<&str> = Vec::new();
     let mut commands = Vec::with_capacity(config.commands.len());
     for command in &config.commands {
@@ -112,7 +120,7 @@ pub fn prompt_commands(
                 row.id
             );
         }
-        if let Some((alias, target)) = bitrouter_orchestrator::acp::commands::ALIASES
+        if let Some((alias, target)) = crate::commands::chat::ALIASES
             .iter()
             .find(|(alias, _)| *alias == name)
         {
@@ -126,7 +134,7 @@ pub fn prompt_commands(
             "`chat.commands` defines `/{name}` twice"
         );
         seen.push(name);
-        commands.push(bitrouter_orchestrator::acp::commands::PromptCommand {
+        commands.push(crate::commands::chat::PromptCommand {
             name: name.to_string(),
             description: command.description.clone(),
             template: command.prompt.clone(),
@@ -146,7 +154,7 @@ mod tests {
     /// the two sets cannot overlap.
     #[test]
     fn a_config_command_may_not_shadow_a_bitrouter_one() {
-        use bitrouter_sdk::config::{ChatConfig, PromptCommandConfig};
+        use crate::config::{ChatConfig, PromptCommandConfig};
 
         let entry = |name: &str| PromptCommandConfig {
             name: name.to_string(),

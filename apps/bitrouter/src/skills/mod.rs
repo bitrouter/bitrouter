@@ -1,12 +1,22 @@
-//! Existing local skill directories and explicit native/ACP delivery.
-//! Acquisition belongs to external installers; no installation index or version store.
+//! CLI inspection and scaffolding for installed Agent Skills.
+//!
+//! This module owns the shared format parser and offline discovery rules,
+//! selects CLI roots and renders reports. Installing skills remains the
+//! ecosystem's responsibility.
+//! The managed harness publishes metadata and returns versioned materials to
+//! Core. Ordinary `bro skills list` does not activate a skill or execute scripts.
 
 pub mod cli;
+#[cfg(feature = "harness")]
 pub mod delivery;
 pub mod directory;
 pub mod explain;
 mod files;
+pub mod format;
+pub mod library;
+pub mod mcp;
 pub(crate) mod native;
+pub mod protocol;
 pub mod root;
 
 /// Errors from `SKILL.md` parsing and skills-directory reads.
@@ -27,8 +37,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Validate with the same rules used by the production harness.
 pub fn validate_skill_name(name: &str) -> Result<()> {
-    bitrouter_orchestrator::harness::skills::validate_skill_name(name)
-        .map_err(|_| Error::InvalidSkillName(name.to_string()))
+    format::validate_skill_name(name).map_err(|_| Error::InvalidSkillName(name.to_string()))
 }
 
 #[cfg(test)]

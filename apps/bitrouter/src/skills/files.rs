@@ -1,21 +1,31 @@
 //! Bounded directory manifests and verified reads; payload files are never executed.
 
+#[cfg(feature = "harness")]
 use std::collections::BTreeSet;
 use std::fs::OpenOptions;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+#[cfg(feature = "harness")]
+use anyhow::Context;
+use anyhow::{Result, ensure};
+#[cfg(feature = "harness")]
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "harness")]
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "harness")]
 pub(super) const MAX_BYTES: u64 = 32 * 1024 * 1024;
+#[cfg(feature = "harness")]
 pub(super) const MAX_FILES: usize = 1024;
+#[cfg(feature = "harness")]
 const MAX_SKILL_BYTES: u64 = 256 * 1024;
+#[cfg(feature = "harness")]
 pub(super) const MAX_DIRECTORIES: usize = 4096;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[cfg(feature = "harness")]
 pub(super) struct BundleFile {
     pub path: String,
     pub bytes: u64,
@@ -25,6 +35,7 @@ pub(super) struct BundleFile {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[cfg(feature = "harness")]
 pub(super) struct Metadata {
     pub digest: String,
     pub bytes: u64,
@@ -32,6 +43,7 @@ pub(super) struct Metadata {
     pub files: Vec<BundleFile>,
 }
 
+#[cfg(feature = "harness")]
 fn valid_digest(value: &str) -> bool {
     value.len() == 64
         && value
@@ -39,6 +51,7 @@ fn valid_digest(value: &str) -> bool {
             .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
 }
 
+#[cfg(feature = "harness")]
 impl Metadata {
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -106,6 +119,7 @@ pub(super) fn relative(path: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(feature = "harness")]
 fn digest(directories: &[String], files: &[BundleFile]) -> String {
     let mut hash = Sha256::new();
     hash.update(b"bitrouter-skill-bundle-v1\0");
@@ -124,6 +138,7 @@ fn digest(directories: &[String], files: &[BundleFile]) -> String {
     hex::encode(hash.finalize())
 }
 
+#[cfg(feature = "harness")]
 pub(super) fn executable(metadata: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -183,11 +198,13 @@ pub(super) fn read_regular(root: &Path, path: &Path, limit: u64) -> Result<Vec<u
     Ok(data)
 }
 
+#[cfg(feature = "harness")]
 struct Inventory {
     directories: Vec<String>,
     files: Vec<(String, PathBuf, bool)>,
 }
 
+#[cfg(feature = "harness")]
 fn files(root: &Path) -> Result<Inventory> {
     let mut stack = vec![root.to_path_buf()];
     let mut output = Vec::new();
@@ -253,6 +270,7 @@ fn files(root: &Path) -> Result<Inventory> {
     })
 }
 
+#[cfg(feature = "harness")]
 pub(super) fn inspect(root: &Path) -> Result<Metadata> {
     let mut bytes = 0u64;
     let mut entries = Vec::new();

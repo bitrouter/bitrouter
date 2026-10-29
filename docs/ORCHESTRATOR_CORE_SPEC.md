@@ -793,7 +793,7 @@ implicitly covered by this audit.
 | --- | --- |
 | [SDK routing](../crates/bitrouter-sdk/src/language_model/routing.rs), [pipeline](../crates/bitrouter-sdk/src/language_model/pipeline.rs) | Reuse model routing, capability checks, fallback and settlement; expose the shared plan/execution seam |
 | [PolicyRuntime](../apps/bitrouter/src/policy_lock.rs) | Reuse named policy/model-effort selection; support explicit core signals without selecting twice |
-| [Online workflow projection](../apps/bitrouter/src/workflow_state/online.rs) | Preserve inferred diagnostics; add a typed native fact path rather than treating inferred state as runtime truth |
+| [Online workflow projection](https://github.com/bitrouter/bitrouter/blob/d93ed73be2411992cc44e3234b6e7b11df1effb2/apps/bitrouter/src/workflow_state/online.rs) | Preserve inferred diagnostics; add a typed native fact path rather than treating inferred state as runtime truth |
 | [Continuation](../apps/bitrouter/src/continuation.rs) | Preserve origin/credential/causal compatibility and actual adjustments |
 | [PromptTransform](../crates/bitrouter-sdk/src/app.rs) | HTTP-only today; factor required common preparation so native calls get equivalent behavior |
 | [SubAgentToolset](../crates/bitrouter-sdk/src/language_model/server_tools/sub_agent.rs), [NestedRunner](../crates/bitrouter-sdk/src/language_model/server_tools/nested.rs) | Existing self-contained nested completion is not a persistent agent scheduler; use an injected adapter for managed delegation |

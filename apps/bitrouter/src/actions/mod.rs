@@ -7,6 +7,7 @@
 //! while the independent upstream MCP gateway remains in `bitrouter-sdk`.
 
 pub mod administration;
+
 pub mod commands;
 pub mod models;
 pub mod requests;
@@ -14,6 +15,7 @@ pub mod route;
 pub mod session;
 pub mod skills;
 pub mod status;
+#[cfg(feature = "harness")]
 pub(crate) mod supervised;
 
 /// A typed action failed.
@@ -112,7 +114,11 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         id: "route_set",
-        cli_leaf: Some("agents route set"),
+        cli_leaf: if cfg!(feature = "harness") {
+            Some("agents route set")
+        } else {
+            None
+        },
         session_command: Some("route"),
         effect: Effect::Write {
             inverse: "route_reset",
@@ -122,7 +128,11 @@ pub const ACTIONS: &[ActionSpec] = &[
     },
     ActionSpec {
         id: "route_reset",
-        cli_leaf: Some("agents route reset"),
+        cli_leaf: if cfg!(feature = "harness") {
+            Some("agents route reset")
+        } else {
+            None
+        },
         session_command: Some("route reset"),
         effect: Effect::Write {
             inverse: "route_set",

@@ -77,7 +77,7 @@ impl CliReport for PolicyReport {
             h.line("  configuration: saved only")?;
             h.line(&format!(
                 "  inspect `{} status` before assuming the running daemon changed",
-                bitrouter_sdk::invocation::name()
+                crate::commands::invocation::name()
             ))?;
         }
         Ok(())

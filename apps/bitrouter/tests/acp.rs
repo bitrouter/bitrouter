@@ -14,13 +14,14 @@
 
 #![cfg(unix)] // bash stubs are Unix-only
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 
 use std::collections::HashMap;
 
-use bitrouter_sdk::config::Config;
-use bitrouter_sdk::config::agent::{AcpAgentConfig, AcpTransport};
+use bitrouter::config::Config;
+use bitrouter::config::agent::AcpAgentConfig;
+use bitrouter::config::agent::AcpTransport;
 
 // ===== process working directory =====
 //
@@ -148,7 +149,7 @@ async fn prompt_ndjson() {
         config: stub_config(),
         agent_id: "stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -325,13 +326,13 @@ async fn result_line_for(script: &str) -> serde_json::Value {
         config: stub_config_with(script),
         agent_id: "stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
     };
-    let contract =
-        bitrouter::result_contract::ResultContract::from_flag(OK_SCHEMA).expect("valid schema");
+    let contract = bitrouter::harness::result_contract::ResultContract::from_flag(OK_SCHEMA)
+        .expect("valid schema");
     let result = bitrouter::acp_cli::prompt(
         ctx,
         "do the task",
@@ -395,7 +396,7 @@ async fn routing_fails_fast_on_dead_daemon() {
     // credential resolves to the placeholder regardless of the environment.
     cfg.server.skip_auth = true;
 
-    let opts = bitrouter::acp_cli::RoutingOptions {
+    let opts = bitrouter::commands::agent_options::RoutingOptions {
         direct: false,
         // Loopback discard port — nothing serves `/health`, so the liveness
         // probe fails deterministically. `base_url` set means no auto-start.
@@ -429,7 +430,7 @@ async fn routing_direct_skips_daemon_and_reports_no_via() {
         home: base.path().to_path_buf(),
     };
     let mut cfg = Config::default();
-    let opts = bitrouter::acp_cli::RoutingOptions {
+    let opts = bitrouter::commands::agent_options::RoutingOptions {
         direct: true,
         base_url: Some("http://127.0.0.1:9".to_string()),
         model: None,
@@ -465,7 +466,7 @@ async fn routing_returns_and_applies_one_endpoint_plan() -> anyhow::Result<()> {
     };
     let mut config = Config::default();
     config.server.skip_auth = true;
-    let options = bitrouter::acp_cli::RoutingOptions {
+    let options = bitrouter::commands::agent_options::RoutingOptions {
         direct: false,
         base_url: Some(daemon.uri()),
         model: Some("logical/model".to_string()),
@@ -530,7 +531,7 @@ async fn unpinned_codex_acp_never_receives_cli_config_arguments() -> anyhow::Res
             },
         },
     );
-    let options = bitrouter::acp_cli::RoutingOptions {
+    let options = bitrouter::commands::agent_options::RoutingOptions {
         direct: false,
         base_url: Some("http://127.0.0.1:9".to_string()),
         model: Some("logical/model".to_string()),
@@ -928,7 +929,7 @@ async fn prompt_headless_denies_permission_and_completes() {
         config: cfg,
         agent_id: "perm-stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -1022,7 +1023,7 @@ async fn headless(
         config: stub_config_with(&script),
         agent_id: "stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -1039,9 +1040,9 @@ async fn headless(
 }
 
 fn policy(
-    mode: bitrouter_orchestrator::acp::permission::Mode,
-) -> bitrouter_orchestrator::acp::permission::Policy {
-    bitrouter_orchestrator::acp::permission::Policy {
+    mode: bitrouter::harness::acp::permission::Mode,
+) -> bitrouter::harness::acp::permission::Policy {
+    bitrouter::harness::acp::permission::Policy {
         mode,
         ..Default::default()
     }
@@ -1052,7 +1053,7 @@ fn policy(
 #[tokio::test]
 async fn prompt_approve_all_selects_the_allow_option() {
     let options = bitrouter::acp_cli::PromptOptions {
-        policy: policy(bitrouter_orchestrator::acp::permission::Mode::ApproveAll),
+        policy: policy(bitrouter::harness::acp::permission::Mode::ApproveAll),
         ..Default::default()
     };
     let (tally, output) = headless(permission_stub("execute"), "run it", options).await;
@@ -1085,7 +1086,7 @@ async fn prompt_approve_all_selects_the_allow_option() {
 #[tokio::test]
 async fn prompt_approve_reads_reads_the_kind() {
     let reads = || bitrouter::acp_cli::PromptOptions {
-        policy: policy(bitrouter_orchestrator::acp::permission::Mode::ApproveReads),
+        policy: policy(bitrouter::harness::acp::permission::Mode::ApproveReads),
         ..Default::default()
     };
     let (tally, output) = headless(permission_stub("read"), "read it", reads()).await;
@@ -1102,8 +1103,8 @@ async fn prompt_approve_reads_reads_the_kind() {
 #[tokio::test]
 async fn prompt_permission_policy_title_head_wins() {
     let options = bitrouter::acp_cli::PromptOptions {
-        policy: bitrouter_orchestrator::acp::permission::Policy {
-            mode: bitrouter_orchestrator::acp::permission::Mode::ApproveAll,
+        policy: bitrouter::harness::acp::permission::Policy {
+            mode: bitrouter::harness::acp::permission::Mode::ApproveAll,
             auto_deny: vec!["write".to_string()],
             ..Default::default()
         },
@@ -1118,7 +1119,7 @@ async fn prompt_permission_policy_title_head_wins() {
 #[tokio::test]
 async fn prompt_format_quiet_prints_only_the_text() {
     let options = bitrouter::acp_cli::PromptOptions {
-        format: bitrouter::acp_cli::PromptFormat::Quiet,
+        format: bitrouter::commands::agent_options::PromptFormat::Quiet,
         ..Default::default()
     };
     let (_, output) = headless(BASH_STUB.to_string(), "hello", options).await;
@@ -1130,7 +1131,7 @@ async fn prompt_format_quiet_prints_only_the_text() {
 #[tokio::test]
 async fn prompt_format_text_renders_the_transcript() {
     let options = bitrouter::acp_cli::PromptOptions {
-        format: bitrouter::acp_cli::PromptFormat::Text,
+        format: bitrouter::commands::agent_options::PromptFormat::Text,
         ..Default::default()
     };
     let (_, output) = headless(BASH_STUB.to_string(), "hello", options).await;
@@ -1174,7 +1175,7 @@ async fn prompt_turn_timeout_fails_the_turn_instead_of_hanging() {
         agent_id: "stub",
         // One second, plus the client's three-second cooperative-cancel grace.
         options: bitrouter::acp_cli::launch_options(Some(1)),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -1220,7 +1221,7 @@ async fn prompt_fails_fast_when_the_harness_dies_mid_turn() {
         config: stub_config_with(DYING_STUB),
         agent_id: "stub",
         options: bitrouter::acp_cli::launch_options(None),
-        routing: bitrouter::acp_cli::RoutingOptions {
+        routing: bitrouter::commands::agent_options::RoutingOptions {
             direct: true,
             ..Default::default()
         },
@@ -1493,6 +1494,11 @@ async fn run_on_a_pipe_is_plain_text() -> anyhow::Result<()> {
         .env("HOME", dir.path())
         .env("BITROUTER_HOME", dir.path())
         .current_dir(dir.path())
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", dir.path())
+        .env("USERPROFILE", dir.path())
+        .env("BITROUTER_HOME", dir.path().join("runtime"))
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

@@ -25,14 +25,14 @@ impl CliReport for ObserveStatusReport {
                 Health::Down,
                 &format!(
                     "{} observe — daemon stopped",
-                    bitrouter_sdk::invocation::name()
+                    crate::commands::invocation::name()
                 ),
             )?;
             h.field("compiled", if s.compiled_in { "yes" } else { "no" })?;
             h.field("socket", &self.socket)?;
             return h.note(&format!(
                 "Run `{} start` to launch the daemon, then re-run this command.",
-                bitrouter_sdk::invocation::name()
+                crate::commands::invocation::name()
             ));
         }
         let (health, headline) = if s.exporter_wired {
@@ -47,7 +47,10 @@ impl CliReport for ObserveStatusReport {
         };
         h.status_block(
             health,
-            &format!("{} observe — {headline}", bitrouter_sdk::invocation::name()),
+            &format!(
+                "{} observe — {headline}",
+                crate::commands::invocation::name()
+            ),
         )?;
         h.field("compiled", if s.compiled_in { "yes" } else { "no" })?;
         h.field("wired", if s.exporter_wired { "yes" } else { "no" })?;

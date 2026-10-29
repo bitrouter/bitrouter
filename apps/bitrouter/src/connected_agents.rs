@@ -3,7 +3,9 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Result, bail, ensure};
+#[cfg(feature = "harness")]
+use anyhow::ensure;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::daemon::{self, DaemonCommand, DaemonResponse};
@@ -75,6 +77,7 @@ pub struct Instance {
 }
 
 impl Instance {
+    #[cfg(feature = "harness")]
     fn key(&self) -> String {
         format!("{}:{}", self.kind.name(), self.id)
     }
@@ -101,17 +104,21 @@ pub struct Report {
 }
 
 /// References to the actual native owners, shared with the host listeners.
+#[cfg(feature = "harness")]
 #[derive(Clone)]
 pub struct NativeOwners {
-    pub threads: bitrouter_orchestrator::service::ThreadService,
-    pub acp: bitrouter_orchestrator::acp::native::NativeAcpServer,
+    pub threads: crate::harness::service::ThreadService,
+    pub acp: crate::harness::acp::native::NativeAcpServer,
+    #[cfg(feature = "core")]
     pub managed: crate::orchestrator_api::ManagedCoreApi,
+    #[cfg(feature = "core")]
     pub(crate) managed_native: crate::managed_task::owner::Owner,
 }
 
-pub async fn snapshot(
+#[cfg(feature = "harness")]
+pub(crate) async fn snapshot(
     instance: &str,
-    supervisor: Option<&crate::supervisor::Supervisor>,
+    supervisor: Option<&crate::harness::supervisor::Supervisor>,
     native: Option<&NativeOwners>,
     after: Option<&str>,
     limit: usize,
@@ -185,7 +192,9 @@ pub async fn snapshot(
                 resource_binding: None,
             });
         }
+        #[cfg(feature = "core")]
         rows.extend(native.managed.connected_sessions().await?);
+        #[cfg(feature = "core")]
         for report in native.managed_native.active_sessions().await? {
             let Some(grant) = report.grant else {
                 continue;
@@ -220,7 +229,7 @@ pub async fn snapshot(
         "managed_native_session",
     ] {
         coverage.push(Coverage {
-            source: source.into(), status: if native.is_some() { "observed" } else { "unavailable" }.into(),
+            source: source.into(), status: if native.is_some() && (matches!(source, "native_worker" | "native_acp_attachment") || cfg!(feature = "core")) { "observed" } else { "unavailable" }.into(),
             detail: match source {
                 "native_worker" => "Resident TurnWorker guards across daemon callers; cold/loaded Threads and queued Turns excluded",
                 "native_acp_attachment" => "Live session attachments only; initialized connections without a session are outside this view",
@@ -236,11 +245,11 @@ pub async fn snapshot(
                 id: run.run_id.clone(),
                 agent: run.agent_id,
                 state: match (run.process, run.turn) {
-                    (crate::supervisor::ProcessState::Stopping, _) => "stopping",
-                    (_, crate::supervisor::TurnState::Idle) => "idle",
-                    (_, crate::supervisor::TurnState::Submitting) => "submitting",
-                    (_, crate::supervisor::TurnState::Working) => "working",
-                    (_, crate::supervisor::TurnState::Cancelling) => "cancelling",
+                    (crate::client::sessions::wire::ProcessState::Stopping, _) => "stopping",
+                    (_, crate::client::sessions::wire::TurnState::Idle) => "idle",
+                    (_, crate::client::sessions::wire::TurnState::Submitting) => "submitting",
+                    (_, crate::client::sessions::wire::TurnState::Working) => "working",
+                    (_, crate::client::sessions::wire::TurnState::Cancelling) => "cancelling",
                 }
                 .into(),
                 thread_id: None,
@@ -450,7 +459,7 @@ impl CliReport for Report {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "harness"))]
 mod tests {
     use super::*;
 

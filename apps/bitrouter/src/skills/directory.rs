@@ -1,6 +1,6 @@
 //! Direct file operations in a selected local skill directory.
+use crate::skills::format;
 use anyhow::{Context, Result, ensure};
-use bitrouter_orchestrator::harness::skills::format;
 use serde::Serialize;
 use std::path::PathBuf;
 
@@ -90,6 +90,7 @@ pub struct Row {
     pub directory: PathBuf,
     pub directory_id: Option<String>,
     pub valid: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
 }
 #[derive(Serialize)]

@@ -1,11 +1,15 @@
 //! Human renderers for safe live-administration reports.
 
-use crate::actions::administration::{
-    AgentsReport, ObserveReport, PolicyReport, PolicyView, ProvidersReport,
-};
+use crate::commands::invocation;
 use crate::output::CliReport;
 use crate::output::human::{Health, Human, Table};
-use bitrouter_sdk::invocation;
+use {
+    bitrouter_ai::control::administration::AgentsReport,
+    bitrouter_ai::control::administration::ObserveReport,
+    bitrouter_ai::control::administration::PolicyReport,
+    bitrouter_ai::control::administration::PolicyView,
+    bitrouter_ai::control::administration::ProvidersReport,
+};
 
 fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
@@ -154,8 +158,8 @@ impl CliReport for PolicyReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actions::administration::ProviderEntry;
     use crate::output::{Format, Output};
+    use bitrouter_ai::control::administration::ProviderEntry;
 
     #[test]
     fn provider_report_does_not_render_an_api_base() -> anyhow::Result<()> {

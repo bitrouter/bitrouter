@@ -1,0 +1,2137 @@
+//! Application-owned YAML configuration.
+//!
+//! The [`Config`] type is the parsed shape of a `bitrouter.yaml` file. Top
+//! level keys: `server`, `database`, `providers`, `models`, `routers`,
+//! `checkers`, `presets`, `variants`; per-plugin config lives under `plugins`. Load a file with
+//! [`load`]; build a [`RoutingTable`](crate::gateway::pipeline::routing::RoutingTable) over
+//! it with [`ConfigRoutingTable`](routing_table::ConfigRoutingTable).
+//!
+//! The `providers` schema is **registry-style**: `api_protocol` and
+//! `rate_limits` are glob-prefix [`pattern::PatternMap`] lists, so a local
+//! `bitrouter.yaml` and an external provider registry can share one schema.
+//!
+//! ```no_run
+//! # async fn run() -> bitrouter::gateway::error::Result<()> {
+//! use bitrouter::config::load;
+//! use bitrouter::config::routing_table::ConfigRoutingTable;
+//! let config = load("./bitrouter.yaml").await?;
+//! let routing = ConfigRoutingTable::from_config(config);
+//! # let _ = routing; Ok(()) }
+//! ```
+
+/// Opt-in path for core workflow trace capture.
+pub(crate) const WORKFLOW_TRACE_JSONL_ENV: &str = "BITROUTER_WORKFLOW_TRACE_JSONL";
+
+use bitrouter_ai::control::ControlScope;
+#[cfg(doc)]
+use bitrouter_ai::routing::SortOrder;
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
+use std::time::Duration;
+use {bitrouter_ai::routing::PolicyModelTarget, bitrouter_ai::routing::RoutingConfig};
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::gateway::error::{BitrouterError, Result};
+use crate::gateway::model::client::HttpTimeouts;
+use crate::gateway::pipeline::types::OutboundHeaderRule;
+use bitrouter_ai::types::{ApiProtocol, ModelCompatibility, ProtocolList};
+
+pub mod agent;
+pub mod checker;
+pub mod decision;
+pub mod mcp;
+pub mod pattern;
+pub mod presets;
+pub mod router;
+pub mod routing_table;
+pub mod server_tools;
+pub mod skills;
+pub(crate) mod yaml;
+
+#[cfg(test)]
+mod tests;
+
+use pattern::PatternMap;
+use presets::PresetResolution;
+
+/// Retained native-model, onboarding-launch and headless prompt defaults.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ChatConfig {
+    /// Saved harness for an explicit onboarding native launch; bare `bro` starts the daemon.
+    pub agent: Option<String>,
+    /// Default daemon-routable model for native tasks and Threads.
+    pub model: Option<String>,
+    /// Prompt-expansion commands.
+    ///
+    /// `/name args` in a `bro run` or `bro acp prompt` input
+    /// sends `prompt` with `$ARGUMENTS` replaced by everything typed after the
+    /// name.
+    ///
+    /// There is deliberately no key that *runs* anything. A command here
+    /// produces a prompt and nothing else, which is what lets the registry be
+    /// open — user-authored, unreviewed — while the registry of commands that
+    /// reach BitRouter's own ports stays closed and guarded.
+    pub commands: Vec<PromptCommandConfig>,
+}
+
+/// One user-authored command that expands to a prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+pub struct PromptCommandConfig {
+    /// What to type after the slash. May not be a name BitRouter answers —
+    /// that is rejected when the config is loaded, not resolved at runtime.
+    pub name: String,
+    /// One line for `/commands`.
+    #[serde(default)]
+    pub description: String,
+    /// The prompt to send. `$ARGUMENTS` is replaced by whatever was typed
+    /// after the name; a template that uses it twice gets it twice.
+    pub prompt: String,
+}
+
+/// The top-level configuration.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct Config {
+    /// HTTP server settings.
+    pub server: ServerConfig,
+    /// Opt-in, read-only operator control API settings.
+    pub control: ControlConfig,
+    /// Opt-in privileged BRO coding task API, separate from inference and control.
+    pub agent_api: AgentApiConfig,
+    /// Typed decision backend for native context routing. Absent means the
+    /// conservative compiler runs without remote semantic judgments.
+    pub decision_model: Option<decision::DecisionModelConfig>,
+    /// The interactive session's own configuration.
+    pub chat: ChatConfig,
+    /// Outbound / upstream HTTP settings (the client that calls providers).
+    pub upstream: UpstreamConfig,
+    /// Database connection settings.
+    pub database: DatabaseConfig,
+    /// Generic evaluation exchange authorities and admission scopes.
+    pub eval: EvalConfig,
+    /// Durable trajectory progress-control and local operations settings.
+    pub trajectory: TrajectoryConfig,
+    /// Opt-in local storage of observable ACP conversation content.
+    pub acp_recording: AcpRecordingConfig,
+    /// Durable provider continuation mapping lifecycle.
+    pub continuation: ContinuationConfig,
+    /// Upstream providers, keyed by provider id.
+    pub providers: HashMap<String, ProviderConfig>,
+    /// Explicit virtual-model definitions (Strategy 2.2). Optional —
+    /// when absent, bare model names fall through to Strategy 3 auto-cascade.
+    pub models: HashMap<String, VirtualModel>,
+    /// Named request routers, addressed as `bitrouter/<id>`.
+    pub routers: HashMap<String, router::RouterConfig>,
+    /// Compiled request-check extensions, keyed by the ids referenced from named routers.
+    pub checkers: HashMap<String, checker::CheckerConfig>,
+    /// `@preset` definitions.
+    pub presets: HashMap<String, PresetConfig>,
+    /// `:variant` definitions.
+    pub variants: HashMap<String, VariantConfig>,
+    /// Plugin config, keyed by plugin / bundle id.
+    pub plugins: HashMap<String, serde_json::Value>,
+    /// Top-level MCP gateway settings (aggregation, caching). All fields
+    /// default — `mcp:` is optional in `bitrouter.yaml`.
+    pub mcp: McpConfig,
+    /// Upstream MCP servers, keyed by server id. The id is what appears in
+    /// `POST /mcp/{id}` and what the `mcp` pipeline's routing table looks up.
+    /// Empty by default — when empty, the binary does not mount the MCP route.
+    pub mcp_servers: HashMap<String, crate::config::mcp::McpServerConfig>,
+    /// Explicit native MCP skill source grants. Empty grants no sources.
+    pub skills: skills::SkillsConfig,
+    /// Server-side tool loop: MCP server ids whose tools BitRouter injects into
+    /// LLM requests and executes itself. Empty by default — the pipeline stays
+    /// single-shot.
+    pub server_tools: crate::config::server_tools::ServerToolsConfig,
+    /// Upstream ACP agents, keyed by agent id. Surfaced by the
+    /// `bro agents` CLI (list / check / install). Empty by default.
+    pub agents: HashMap<String, agent::AcpAgentConfig>,
+    /// Whether providers inherit workspace defaults.
+    pub inherit_defaults: bool,
+    /// Public registry integration: whether to fetch + merge the registry's
+    /// BYOK providers, where to fetch it from, and the provider-class priority
+    /// ladder used to order the auto-cascade.
+    pub registry: RegistryConfig,
+    /// Adaptive model-policy settings. A file-backed config resolves the
+    /// optional path relative to its own directory; when omitted the app looks
+    /// for `policy-lock.yaml` next to `bitrouter.yaml`. The SDK only carries
+    /// this declaration -- loading and evolving policy locks belongs to the
+    /// BitRouter app layer.
+    pub policy: PolicyConfig,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            server: ServerConfig::default(),
+            control: ControlConfig::default(),
+            agent_api: AgentApiConfig::default(),
+            decision_model: None,
+            chat: ChatConfig::default(),
+            upstream: UpstreamConfig::default(),
+            database: DatabaseConfig::default(),
+            eval: EvalConfig::default(),
+            trajectory: TrajectoryConfig::default(),
+            acp_recording: AcpRecordingConfig::default(),
+            continuation: ContinuationConfig::default(),
+            providers: HashMap::new(),
+            models: HashMap::new(),
+            routers: HashMap::new(),
+            checkers: HashMap::new(),
+            presets: HashMap::new(),
+            variants: HashMap::new(),
+            plugins: HashMap::new(),
+            mcp: McpConfig::default(),
+            mcp_servers: HashMap::new(),
+            skills: crate::config::skills::SkillsConfig::default(),
+            server_tools: Default::default(),
+            agents: HashMap::new(),
+            inherit_defaults: true,
+            registry: RegistryConfig::default(),
+            policy: PolicyConfig::default(),
+        }
+    }
+}
+
+impl Config {
+    /// Validate named router ids, selection boundaries, and legacy conflicts.
+    ///
+    /// Callers that construct or mutate [`Config`] directly must run this
+    /// before activation. Config-backed routing also runs it at first
+    /// resolution so infallible table constructors cannot bypass validation.
+    pub fn validate_router_config(&self) -> Result<()> {
+        for grant in self.skills.mcp_sources.values() {
+            grant.validate().map_err(BitrouterError::bad_request)?;
+        }
+        if let Some(decision) = &self.decision_model {
+            decision.validate()?;
+        }
+        for (name, provider) in &self.providers {
+            if !provider.active {
+                continue;
+            }
+            if let Some(message) = crate::gateway::providers::retired::provider_message(name) {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}: {message}"
+                )));
+            }
+            if let Some(protocol) = provider
+                .api_protocol
+                .values()
+                .flat_map(|list| list.as_slice())
+                .find(|protocol| {
+                    crate::gateway::providers::retired::protocol_message(protocol.as_str())
+                        .is_some()
+                })
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}.api_protocol: retired protocol '{protocol}'; select Chat Completions and a verified endpoint explicitly"
+                )));
+            }
+            for (index, model) in provider.models.iter().enumerate() {
+                if let Some(protocol) = model.api_protocol.as_ref().and_then(|list| {
+                    list.as_slice().iter().find(|protocol| {
+                        crate::gateway::providers::retired::protocol_message(protocol.as_str())
+                            .is_some()
+                    })
+                }) {
+                    return Err(BitrouterError::bad_request(format!(
+                        "providers.{name}.models[{index}].api_protocol: retired protocol '{protocol}'; select Chat Completions and a verified endpoint explicitly"
+                    )));
+                }
+            }
+            if provider.api_protocol.is_empty()
+                && (provider.models.is_empty()
+                    || provider
+                        .models
+                        .iter()
+                        .any(|model| model.api_protocol.is_none()))
+                && let Some(message) = crate::gateway::providers::retired::protocol_message(
+                    infer_protocol(&provider.api_base).as_str(),
+                )
+            {
+                return Err(BitrouterError::bad_request(format!(
+                    "providers.{name}.api_base: {message}"
+                )));
+            }
+        }
+        router::validate_router_config(self)
+    }
+
+    /// Resolve a raw model selector through canonical routers and legacy
+    /// preset compatibility syntax.
+    pub fn resolve_router(&self, raw_model: &str) -> Result<PresetResolution> {
+        self.validate_router_config()?;
+        if let Some((provider, _)) = raw_model.split_once(':')
+            && let Some(message) = crate::gateway::providers::retired::provider_message(provider)
+        {
+            return Err(BitrouterError::bad_request(message));
+        }
+        presets::resolve_routers(
+            raw_model,
+            &self.routers,
+            &self.presets,
+            &self.variants,
+            &self.checkers,
+        )
+    }
+
+    /// Redaction-safe inventory of canonical and legacy router definitions.
+    pub fn router_inventory(&self) -> Result<Vec<router::RouterInventoryEntry>> {
+        router::router_inventory(self)
+    }
+
+    /// Policy bindings from normalized router definitions.
+    ///
+    /// The optional base model deliberately preserves legacy parsing behavior
+    /// so read and validation consumers can distinguish a valid binding from
+    /// one whose missing model must be reported at their existing boundary.
+    pub fn router_policy_bindings(&self) -> impl Iterator<Item = (&str, &str, Option<&str>)> {
+        let routers = self.routers.iter().filter_map(|(id, config)| {
+            router::EffectiveRouterDefinition::from_router(config)
+                .into_policy_binding()
+                .map(|(policy, base_model)| (id.as_str(), policy, base_model))
+        });
+        let presets = self.presets.iter().filter_map(|(id, preset)| {
+            router::EffectiveRouterDefinition::from_legacy_preset(preset)
+                .into_policy_binding()
+                .map(|(policy, base_model)| (id.as_str(), policy, base_model))
+        });
+        routers.chain(presets)
+    }
+}
+
+/// Scoped operator administration API settings.
+///
+/// The control API is deliberately separate from the inference listener and
+/// the local control socket. It is disabled by default, may bind only to a
+/// loopback address, and authenticates named credentials when configured.
+/// Otherwise `BITROUTER_CONTROL_TOKEN` grants read-only access.
+/// [`ServerConfig::skip_auth`] never applies to it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ControlConfig {
+    /// Whether to start the HTTP control listener.
+    pub enabled: bool,
+    /// Loopback `host:port` to listen on.
+    pub listen: String,
+    /// Explicit operator credentials. Empty keeps the legacy read-only token.
+    pub credentials: Vec<ControlCredentialConfig>,
+}
+
+/// A token reference only; configuration never stores the bearer value.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ControlCredentialConfig {
+    /// Non-secret operator identifier used for ownership and audit events.
+    pub id: String,
+    /// Host environment variable that contains this credential's bearer token.
+    pub token_env: String,
+    /// Explicit management authority, unrelated to inference authentication.
+    pub scopes: Vec<ControlScope>,
+}
+
+impl Default for ControlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:4358".to_string(),
+            credentials: Vec::new(),
+        }
+    }
+}
+
+/// Privileged HTTP access to the BRO task service. The app validates a
+/// loopback listener, nonempty token environment variable, and workspace
+/// allowlist before binding; `server.skip_auth` never grants this authority.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentApiConfig {
+    /// Whether to bind the task HTTP listener.
+    pub enabled: bool,
+    /// Loopback host and port, distinct from inference and control.
+    pub listen: String,
+    /// Environment variable containing the dedicated task bearer token.
+    pub token_env: String,
+    /// Exact server-owned workspace paths admitted for task submission.
+    pub workspaces: Vec<std::path::PathBuf>,
+}
+
+impl Default for AgentApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:4359".into(),
+            token_env: String::new(),
+            workspaces: Vec::new(),
+        }
+    }
+}
+
+/// Largest accepted durable evaluation publication batch.
+pub const MAX_TRAJECTORY_OUTBOX_BATCH_SIZE: usize = 1_000;
+
+/// Largest continuation rows deleted by one bounded prune operation.
+pub const MAX_CONTINUATION_PRUNE_BATCH_SIZE: usize = 10_000;
+
+/// Always-active durable provider continuation lifecycle settings.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ContinuationConfig {
+    /// Days before a continuation becomes unusable.
+    pub retention_days: u32,
+    /// Maximum expired rows removed by one prune operation.
+    pub prune_batch_size: usize,
+}
+
+impl Default for ContinuationConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: 30,
+            prune_batch_size: 1_000,
+        }
+    }
+}
+
+/// Local ACP conversation content recording, independent of routing evidence.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct AcpRecordingConfig {
+    /// Store observable session messages and tool results until explicitly deleted.
+    /// No content is recorded or sent to an evaluator by default.
+    pub enabled: bool,
+}
+
+/// Durable trajectory progress-control settings.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct TrajectoryConfig {
+    /// Explicit opt-in for durable trajectory routing and settlement.
+    pub enabled: bool,
+    /// Age boundary used by startup retention, in whole days.
+    pub retention_days: u32,
+    /// Maximum durable outbox rows attempted in one publication batch.
+    pub outbox_batch_size: usize,
+}
+
+impl Default for TrajectoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            retention_days: 30,
+            outbox_batch_size: 100,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+/// Generic evaluation exchange configuration.
+pub struct EvalConfig {
+    /// Trusted evaluator authorities keyed by stable authority id.
+    pub authorities: HashMap<String, EvalAuthorityConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+/// Identity and metric scope admitted for one evaluator authority.
+pub struct EvalAuthorityConfig {
+    /// Evaluator class this authority may claim.
+    pub kind: EvalAuthorityKind,
+    /// Virtual-key record ids authorized for submissions.
+    pub api_key_ids: Vec<String>,
+    /// Authenticated user ids authorized for submissions.
+    pub user_ids: Vec<String>,
+    /// Exact metric ids, namespace wildcards, or `*` accepted from this authority.
+    pub allowed_metrics: Vec<String>,
+    /// Whether submissions may declare hard violations.
+    pub allow_hard_fail: bool,
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+/// Evaluator trust class configured by the operator.
+pub enum EvalAuthorityKind {
+    /// Benchmark- or task-native verifier.
+    TaskNative,
+    /// Human review.
+    Human,
+    /// Enterprise-owned private evaluator.
+    Enterprise,
+    /// Agent-driven review.
+    Agentic,
+    /// Evaluator without a stronger domain-specific class.
+    #[default]
+    Generic,
+}
+
+/// Current routing-policy artifact configuration.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct PolicyConfig {
+    /// Override for the policy lock. Relative paths are resolved against the
+    /// directory containing the parsed `bitrouter.yaml`. `None` means the
+    /// sibling `policy-lock.yaml` default.
+    pub path: Option<PathBuf>,
+    /// Runtime authority for adaptive routing and active policy publication.
+    /// `writeback` is accepted as a migration alias for older configuration.
+    #[serde(alias = "writeback")]
+    pub mode: PolicyRuntimeMode,
+}
+
+/// Process-owned routing-policy behavior.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PolicyRuntimeMode {
+    /// Route from the static lock while continuing to record evidence. Learned
+    /// database state cannot affect live routing or replace the active lock.
+    #[default]
+    #[serde(alias = "locked")]
+    Frozen,
+    /// Permit explicit validated publication to atomically replace the active
+    /// lock. Request-time routing remains identical to frozen mode.
+    #[serde(alias = "evolve")]
+    Adaptive,
+}
+
+impl PolicyRuntimeMode {
+    /// Disable legacy request-time learning in every process mode. Thresholds
+    /// and tier names remain compiler inputs only.
+    pub fn apply_to_adequacy(self, configured: &AdequacyConfig) -> AdequacyConfig {
+        let _ = self;
+        let mut effective = configured.clone();
+        effective.enabled = false;
+        effective.explore_enabled = false;
+        effective
+    }
+}
+
+/// Default base URL for the public registry distribution artifacts — the raw
+/// files on bitrouter OSS `main` under `dist/registry/`. The
+/// application catalog integration reads it through [`RegistryConfig`].
+pub const DEFAULT_REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry";
+
+/// Runtime public registry integration settings — the top-level `registry:`
+/// block in `bitrouter.yaml`.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct RegistryConfig {
+    /// Whether to fetch the registry and merge its BYOK providers into the
+    /// routing table. Default `true`. Also gated by
+    /// [`inherit_defaults`](Config::inherit_defaults) — either being false
+    /// disables the merge.
+    pub enabled: bool,
+    /// Base URL of the registry `dist/` artifacts. Defaults to
+    /// [`DEFAULT_REGISTRY_URL`]. Point it at a pinned `reg-<timestamp>` tag or
+    /// an internal mirror for reproducible deployments.
+    pub url: String,
+    /// Provider-class priority, highest first. A provider's auto-cascade rank
+    /// is its class's index here; a per-provider [`ProviderConfig::priority`]
+    /// overrides it, and a class absent from this list ranks last. Defaults to
+    /// [`ProviderClass::default_priority`].
+    pub provider_priority: Vec<ProviderClass>,
+}
+
+impl Default for RegistryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            url: DEFAULT_REGISTRY_URL.to_string(),
+            provider_priority: ProviderClass::default_priority(),
+        }
+    }
+}
+
+/// Frozen named-policy inputs consumed by the shared semantic action selector.
+/// This is the internal table projection of a versioned lock, not a top-level
+/// configuration entry or an ingress transform.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct PolicyTableConfig {
+    /// The predictor strategy used for `fingerprints`. Active policy routing
+    /// uses only canonical source-independent `semantic_route/v1` keys.
+    pub key_strategy: PolicyKeyStrategy,
+    /// Tier name → the model id every request on that tier is routed to. The
+    /// value is fed straight into the routing table, so it may be a bare
+    /// canonical id (resolved via the cascade/registry) or an explicit
+    /// `provider:model` id (a Strategy-1 direct route). The section is inert
+    /// while this map is empty.
+    pub tiers: HashMap<String, PolicyModelTarget>,
+    /// Canonical `semantic_route/v1|<task-family>|<role>|<risk>` key → tier name.
+    /// Lookup first tries the exact key, then the same role/risk under the
+    /// `unknown` task-family baseline, then [`default_tier`](Self::default_tier).
+    pub fingerprints: HashMap<String, String>,
+    /// Tier applied to any fingerprint not listed in
+    /// [`fingerprints`](Self::fingerprints). When unset, an unmapped fingerprint
+    /// is left on the model the caller requested (the transform no-ops).
+    pub default_tier: Option<String>,
+    /// Tool-use guardrail target: the tier a request carrying tools is clamped
+    /// up to when the tier it would otherwise get is not in
+    /// [`tool_safe_tiers`](Self::tool_safe_tiers). When unset, the guardrail is
+    /// disabled and tool requests route by fingerprint like any other.
+    pub tool_use_tier: Option<String>,
+    /// Tiers known to handle tool calls reliably. A tool-carrying request whose
+    /// chosen tier is in this list is left as-is; one whose tier is absent is
+    /// clamped to [`tool_use_tier`](Self::tool_use_tier).
+    pub tool_safe_tiers: Vec<String>,
+    /// Offline compiler thresholds. Serving always disables request-time
+    /// adequacy mutation; publication replaces the complete signed policy.
+    pub adequacy: AdequacyConfig,
+}
+
+/// Request-key family used by `policy_table.fingerprints`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PolicyKeyStrategy {
+    /// The canonical source-independent predictive route strategy.
+    #[default]
+    AgentTrace,
+}
+
+impl Serialize for PolicyKeyStrategy {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str("agent_trace")
+    }
+}
+
+impl<'de> Deserialize<'de> for PolicyKeyStrategy {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "agent_trace" => Ok(Self::AgentTrace),
+            "workflow_state" | "legacy_fingerprint" => Err(serde::de::Error::custom(format!(
+                "policy_table.key_strategy: '{value}' is no longer supported; use 'agent_trace' with canonical semantic_route/v1 routes"
+            ))),
+            _ => Err(serde::de::Error::unknown_variant(&value, &["agent_trace"])),
+        }
+    }
+}
+
+impl schemars::JsonSchema for PolicyKeyStrategy {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("PolicyKeyStrategy")
+    }
+
+    fn json_schema(_generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "Active policy routing uses canonical source-independent semantic_route/v1 predictive keys.",
+            "enum": ["agent_trace"],
+        })
+    }
+}
+
+/// Parse the one canonical predictive policy-key shape.
+///
+/// The returned tuple is `(task_family, next_step_role, risk)`. Keeping this
+/// boundary in the SDK lets configuration validation and the runtime predictor
+/// share one public wire contract without making observed telemetry routable.
+pub fn parse_semantic_route_key(value: &str) -> Option<(&str, &str, &str)> {
+    let mut segments = value.split('|');
+    let (Some(namespace), Some(task_family), Some(role), Some(risk), None) = (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) else {
+        return None;
+    };
+    if namespace != "semantic_route/v1"
+        || !matches!(
+            task_family,
+            "code:generation"
+                | "code:debugging"
+                | "code:review"
+                | "code:sql_database"
+                | "code:frontend_ui"
+                | "code:devops_config"
+                | "code:repository_analysis"
+                | "agent:multi_step_planning"
+                | "agent:workflow_execution"
+                | "agent:web_research"
+                | "agent:memory_operations"
+                | "agent:general"
+                | "unknown"
+        )
+        || !matches!(
+            role,
+            "orchestrate" | "implement" | "mechanical" | "verify" | "finalize" | "unknown"
+        )
+        || !matches!(risk, "normal" | "context" | "guarded")
+    {
+        return None;
+    }
+    Some((task_family, role, risk))
+}
+
+/// Online adequacy-learning settings — the `policy_table.adequacy` block.
+///
+/// In adaptive process mode, the daemon watches every request a downgrade
+/// produced and counts the ones that hard-fail (an upstream error or a stream
+/// error). Once a fingerprint accumulates
+/// [`escalation_threshold`](Self::escalation_threshold) such failures it is
+/// *pinned*: subsequent requests with that fingerprint route to
+/// [`escalation_tier`](Self::escalation_tier) instead of the cheap tier the
+/// static table would pick. A pin decays after
+/// [`pin_cooldown_secs`](Self::pin_cooldown_secs) so the downgrade is re-tried
+/// later. This is a safety net layered on the static table — it never downgrades
+/// on its own, only escalates a downgrade that is failing.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct AdequacyConfig {
+    /// Legacy input compatibility only. Effective activation is derived from
+    /// [`PolicyConfig::mode`] and this field is omitted from new output.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
+    pub enabled: bool,
+    /// Tier a pinned fingerprint escalates to. When unset, falls back to
+    /// [`PolicyTableConfig::default_tier`]. Must resolve to a defined tier when
+    /// [`enabled`](Self::enabled).
+    pub escalation_tier: Option<String>,
+    /// Number of *consecutive* hard failures on a downgraded fingerprint before
+    /// it is pinned to the escalation tier (a clean outcome resets the tally).
+    /// Default `1` — escalate on the first failure (conservative / sticky).
+    pub escalation_threshold: u32,
+    /// How long, in seconds, a pin lasts before the downgrade is re-attempted.
+    /// `0` means the pin never decays (until the process restarts or the row is
+    /// cleared). Default `1800` (30 minutes).
+    pub pin_cooldown_secs: u64,
+    /// Number of recent endpoint outcomes retained for provider reliability.
+    /// Default `23`, a prime-sized window that avoids aligning with short
+    /// benchmark batch cadences.
+    pub reliability_window_size: u32,
+    /// Consecutive transient provider failures that immediately open the
+    /// endpoint circuit. Default `2`.
+    pub reliability_consecutive_failures: u32,
+    /// Rolling transient-failure percentage that opens the circuit once the
+    /// reliability window is full. Default `35`.
+    pub reliability_error_rate_percent: u32,
+    /// Seconds an open provider circuit waits before admitting exactly one
+    /// half-open probe. Default `300`.
+    pub reliability_cooldown_secs: u64,
+    /// Aggressive downgrade *discovery*: in adaptive process mode, the daemon
+    /// periodically trials [`explore_tier`](Self::explore_tier)
+    /// on fingerprints the static table routes to the escalation tier (i.e. ones
+    /// the operator did *not* downgrade), and locks a fingerprint to the cheap
+    /// tier once it survives [`explore_threshold`](Self::explore_threshold)
+    /// trials — so safe downgrades are found automatically rather than only
+    /// hand-configured. A trial that fails escalates and stops (the same pin as
+    /// the safety path). This is the *aggressive* half — it routes traffic the
+    /// operator left at the capable tier to a cheaper one on a fraction of
+    /// requests. Legacy input is accepted, but process mode is authoritative
+    /// and this field is omitted from new output.
+    #[serde(skip_serializing)]
+    #[schemars(skip)]
+    pub explore_enabled: bool,
+    /// The cheap tier exploration trials toward. Must resolve to a defined tier
+    /// when [`explore_enabled`](Self::explore_enabled). Required to explore.
+    pub explore_tier: Option<String>,
+    /// Trial cadence: roughly one in `explore_interval` eligible requests is a
+    /// trial (the rest stay on the escalation tier). Default `5`.
+    pub explore_interval: u32,
+    /// Consecutive adequate trials before a fingerprint is locked to the cheap
+    /// tier (the learned downgrade). Default `3`.
+    pub explore_threshold: u32,
+    /// Deprecated compatibility field. Session identity is diagnostic-only and
+    /// cannot participate in policy routing; explicit YAML configuration is
+    /// rejected rather than accepted as a no-op.
+    #[serde(
+        skip_serializing_if = "session_downgrade_budget_is_zero",
+        deserialize_with = "reject_session_downgrade_budget"
+    )]
+    #[schemars(skip)]
+    pub max_downgraded_requests_per_session: u32,
+    /// Distinct benchmark tasks that must finish successfully after using a
+    /// cheap replacement before a request-level lock becomes active. `0` keeps
+    /// the legacy request-only behavior. Default `0`.
+    pub min_semantic_successes_for_lock: u32,
+    /// Whether the opening turn is eligible for aggressive exploration. Default
+    /// `false`, because opening/planning errors tend to propagate through the
+    /// whole task and make this state high leverage.
+    pub explore_opening: bool,
+    /// Minimum distinct benchmark-task successes required before an opening
+    /// request-level lock becomes active. This is combined with
+    /// [`min_semantic_successes_for_lock`](Self::min_semantic_successes_for_lock)
+    /// by taking the stricter threshold. Default `1`.
+    pub min_semantic_successes_for_opening: u32,
+}
+
+fn reject_session_downgrade_budget<'de, D>(_: D) -> std::result::Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Err(serde::de::Error::custom(
+        "policy_table.adequacy.max_downgraded_requests_per_session is no longer supported: session identity is diagnostic-only; remove this setting",
+    ))
+}
+
+fn session_downgrade_budget_is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+impl Default for AdequacyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            escalation_tier: None,
+            escalation_threshold: 1,
+            pin_cooldown_secs: 1800,
+            reliability_window_size: 23,
+            reliability_consecutive_failures: 2,
+            reliability_error_rate_percent: 35,
+            reliability_cooldown_secs: 300,
+            explore_enabled: false,
+            explore_tier: None,
+            explore_interval: 5,
+            explore_threshold: 3,
+            max_downgraded_requests_per_session: 0,
+            min_semantic_successes_for_lock: 0,
+            explore_opening: false,
+            min_semantic_successes_for_opening: 1,
+        }
+    }
+}
+
+/// A provider's routing-preference class. Its position in
+/// [`RegistryConfig::provider_priority`] is its rank (earlier = preferred); the
+/// default ladder, highest first, is: first-party subscription ▸ gateway
+/// subscription ▸ first-party token API ▸ bitrouter-cloud ▸ third-party token
+/// API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderClass {
+    /// A first-party / official upstream billed by flat-rate subscription
+    /// (e.g. a first-party coding plan).
+    FirstPartySubscription,
+    /// A gateway / aggregator billed by subscription.
+    GatewaySubscription,
+    /// A first-party / official upstream billed pay-as-you-go per token.
+    FirstPartyApi,
+    /// The bitrouter hosted gateway.
+    BitrouterCloud,
+    /// A third-party / community reseller billed pay-as-you-go per token.
+    ThirdPartyApi,
+}
+
+impl ProviderClass {
+    /// The default priority ladder, highest first.
+    pub fn default_priority() -> Vec<ProviderClass> {
+        vec![
+            ProviderClass::FirstPartySubscription,
+            ProviderClass::GatewaySubscription,
+            ProviderClass::FirstPartyApi,
+            ProviderClass::BitrouterCloud,
+            ProviderClass::ThirdPartyApi,
+        ]
+    }
+}
+
+/// Top-level MCP gateway settings.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Aggregation (fan-out) endpoint settings.
+    pub aggregate: McpAggregateConfig,
+    /// List-call cache settings.
+    pub cache: McpCacheConfig,
+    /// MCP startup lifecycle and protocol version for upstream servers.
+    pub upstream_protocol: McpUpstreamProtocol,
+}
+
+/// `mcp.upstream_protocol` — the startup lifecycle and protocol version the
+/// gateway uses when dialing upstream MCP servers.
+///
+/// `auto` (the default) starts with modern `server/discover` and uses rmcp's
+/// classified legacy fallback. `latest` forces the legacy `initialize` path;
+/// `2026-07-28` is the explicit spelling of the modern preference.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpUpstreamProtocol {
+    /// Prefer `server/discover` and `2026-07-28`, falling back through rmcp's
+    /// compatibility path when the upstream identifies itself as legacy.
+    #[default]
+    Auto,
+    /// Use the legacy `initialize` lifecycle with the latest version the MCP
+    /// SDK treats as current — today `2025-11-25`.
+    Latest,
+    /// Use `server/discover` and the modern `2026-07-28` lifecycle. rmcp falls
+    /// back after its discovery timeout or a correlated JSON-RPC error it
+    /// classifies as legacy; transport failures, malformed or uncorrelated
+    /// responses, and modern rejection codes fail the connection. Opting in
+    /// also lets upstreams answer `tools/call` with MRTR `input_required` or a
+    /// Tasks `task` handle; neither is a shape this gateway can carry, so both
+    /// surface as explicit errors (see `docs/MCP_2026_07_28_SPEC.md` D1).
+    #[serde(rename = "2026-07-28")]
+    V2026_07_28,
+}
+
+/// `mcp.aggregate` — the virtual aggregate endpoint.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct McpAggregateConfig {
+    /// When `true` (the default), mount the aggregate route. When `false`,
+    /// only per-server routes (`/mcp/{server}`) are mounted.
+    pub enabled: bool,
+    /// HTTP path for the aggregate endpoint. Default `/mcp`.
+    pub route: String,
+}
+
+impl Default for McpAggregateConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            route: "/mcp".to_string(),
+        }
+    }
+}
+
+/// `mcp.cache` — the TTL cache wrapping cheap list calls.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct McpCacheConfig {
+    /// When `false`, the cache layer is not installed.
+    pub enabled: bool,
+    /// TTL for `tools/list`. `0` disables for this method.
+    pub tools_list_ttl_secs: u64,
+    /// TTL for `resources/list`. `0` disables for this method.
+    pub resources_list_ttl_secs: u64,
+    /// TTL for `resources/templates/list`. `0` disables for this method.
+    pub resources_templates_list_ttl_secs: u64,
+    /// TTL for `prompts/list`. `0` disables for this method.
+    pub prompts_list_ttl_secs: u64,
+    /// LRU safety bound — max entries per server.
+    pub max_entries_per_server: usize,
+}
+
+impl Default for McpCacheConfig {
+    fn default() -> Self {
+        // Defaults below are kept in lockstep with `mcp::CacheTtls::default()`.
+        // `mcp_cache_config_defaults_match_cache_ttls` (caching_executor tests)
+        // fails the build if these drift apart.
+        Self {
+            enabled: true,
+            tools_list_ttl_secs: 60,
+            resources_list_ttl_secs: 60,
+            resources_templates_list_ttl_secs: 300,
+            prompts_list_ttl_secs: 300,
+            max_entries_per_server: 64,
+        }
+    }
+}
+
+/// HTTP server settings.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ServerConfig {
+    /// `host:port` to listen on.
+    pub listen: String,
+    /// Unix control socket path.
+    pub control_socket: String,
+    /// Log filter for the daemon, in `tracing-subscriber` `EnvFilter` syntax —
+    /// a bare level (`debug`) or a per-target list (`info,bitrouter=debug`).
+    ///
+    /// `RUST_LOG` overrides this when set, following the Rust convention. The
+    /// filter is resolved once at startup, so changing it needs a restart —
+    /// `bro reload` will not pick it up. Applies to `bro serve`
+    /// (and therefore `start`); other subcommands install their subscriber
+    /// before any config is read and honour `RUST_LOG` only.
+    pub log_level: String,
+    /// SDK-level flag: when `true`, credential-less requests are admitted with
+    /// a synthesised local caller. Code default is **`false`** — only the
+    /// config file produced by `bro init` writes `true`.
+    pub skip_auth: bool,
+    /// Deny dispatch when any routed tariff cannot guarantee complete known-price
+    /// coverage. Decisions caching remains unverified and fails this admission.
+    pub require_known_pricing: bool,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            listen: "0.0.0.0:4356".to_string(),
+            control_socket: "./bitrouter.sock".to_string(),
+            log_level: "info".to_string(),
+            skip_auth: false,
+            require_known_pricing: false,
+        }
+    }
+}
+
+/// Outbound / upstream HTTP settings — the client BitRouter uses to call
+/// providers. Distinct from [`ServerConfig`], which is the inbound listen
+/// socket. Currently just [`timeouts`](Self::timeouts); grouped under
+/// `upstream:` so future outbound knobs have a home.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct UpstreamConfig {
+    /// Global upstream timeout defaults. A provider may override any field
+    /// under `providers.<id>.timeouts:`.
+    pub timeouts: TimeoutConfig,
+    /// Optional delay schedule before advancing through a retryable fallback
+    /// chain, in milliseconds. The first value applies before the second
+    /// candidate, the second before the third, and the last value repeats when
+    /// the chain is longer than the schedule. Empty (the default) preserves
+    /// immediate fallback.
+    pub fallback_backoff_ms: Vec<u64>,
+}
+
+/// Upstream HTTP timeout knobs, in seconds. Every field is optional; an unset
+/// field inherits the level above — a provider override inherits the resolved
+/// global value, and an unset global inherits the built-in default
+/// ([`HttpTimeouts::default`]). `total_secs` is opt-in at every level: unset ⇒
+/// no overall wall-clock cap (the right default for long agentic streams).
+///
+/// Used both as the top-level `upstream.timeouts` block and as the per-provider
+/// `providers.<id>.timeouts` override; timeouts are **not** inherited via a
+/// provider's `derives:` chain.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct TimeoutConfig {
+    /// TCP connect timeout, seconds.
+    pub connect_secs: Option<u64>,
+    /// Idle (per-read) timeout, seconds — fires when the upstream sends no
+    /// bytes for this long, including mid-stream. The effective stream-idle
+    /// guard.
+    pub read_secs: Option<u64>,
+    /// Idle pooled-connection eviction, seconds.
+    pub pool_idle_secs: Option<u64>,
+    /// TCP keepalive probe interval, seconds.
+    pub tcp_keepalive_secs: Option<u64>,
+    /// Overall wall-clock cap for the entire request/stream, seconds. Opt-in:
+    /// unset ⇒ no cap. Setting it bounds total stream duration, so keep it
+    /// generous for reasoning / agentic providers.
+    pub total_secs: Option<u64>,
+}
+
+impl TimeoutConfig {
+    /// Resolve this (partial) config over a base [`HttpTimeouts`]: every set
+    /// field overrides the base, every unset field inherits it.
+    pub fn apply_to(&self, base: HttpTimeouts) -> HttpTimeouts {
+        HttpTimeouts {
+            connect: self
+                .connect_secs
+                .map(Duration::from_secs)
+                .unwrap_or(base.connect),
+            read: self.read_secs.map(Duration::from_secs).unwrap_or(base.read),
+            pool_idle: self
+                .pool_idle_secs
+                .map(Duration::from_secs)
+                .unwrap_or(base.pool_idle),
+            tcp_keepalive: self
+                .tcp_keepalive_secs
+                .map(Duration::from_secs)
+                .unwrap_or(base.tcp_keepalive),
+            total: self.total_secs.map(Duration::from_secs).or(base.total),
+        }
+    }
+}
+
+/// Database connection settings.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct DatabaseConfig {
+    /// Connection URL (e.g. `sqlite://./bitrouter.db`).
+    pub url: String,
+}
+
+impl Default for DatabaseConfig {
+    fn default() -> Self {
+        Self {
+            url: "sqlite://./bitrouter.db".to_string(),
+        }
+    }
+}
+
+/// A rate limit for one `(provider, pattern)` bucket. Limits are keyed
+/// per-`(provider, matched pattern)` — two patterns with different RPMs get
+/// independent windows.
+#[derive(Debug, Clone, Copy, Default, Deserialize, schemars::JsonSchema)]
+pub struct RateLimit {
+    /// Requests-per-minute ceiling for this bucket.
+    #[serde(default)]
+    pub requests_per_minute: Option<u32>,
+    /// Tokens-per-minute ceiling for this bucket.
+    #[serde(default)]
+    pub tokens_per_minute: Option<u32>,
+}
+
+/// Per-model pricing as written in config: micro-USD per token.
+///
+/// The top-level rates are the **base bracket**. [`context_tiers`] optionally
+/// raises the per-token rate once a request's input (prompt) token count
+/// crosses a threshold — some upstreams bill a steeper rate above a context
+/// length (e.g. a higher rate past 128k input tokens). Empty ⇒ flat pricing.
+///
+/// [`context_tiers`]: PricingConfig::context_tiers
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+pub struct PricingConfig {
+    /// Published tariff's processing profile. A mismatch with the effective
+    /// endpoint makes application price evidence unavailable.
+    #[serde(default)]
+    pub endpoint_profile: Option<bitrouter_ai::catalog::types::PricingEndpointProfile>,
+    /// Micro-USD per uncached prompt token (base bracket). `None` means the
+    /// provider did not publish a rate; explicit `0` remains free.
+    #[serde(default)]
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-read prompt token (base bracket).
+    #[serde(default)]
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-write prompt token (base bracket).
+    #[serde(default)]
+    pub cache_write_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per completion (output) token (base bracket).
+    #[serde(default)]
+    pub output_micro_usd_per_token: Option<f64>,
+    /// Optional higher context brackets, applied by total input-token count.
+    /// The selected bracket's rates apply to the whole request (a step
+    /// function); the consumer's bracket pick is order-independent.
+    #[serde(default)]
+    pub context_tiers: Vec<PricingTierConfig>,
+}
+
+/// One higher context-pricing bracket in config — see
+/// [`PricingConfig::context_tiers`].
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+pub struct PricingTierConfig {
+    /// Exclusive lower bound on total input tokens: a request whose input
+    /// size is strictly greater than this enters the bracket (a base bracket
+    /// documented as "≤ 128k" is written as `above_input_tokens: 128000`).
+    pub above_input_tokens: u64,
+    /// Micro-USD per uncached prompt token for this bracket. `None` inherits
+    /// the base rate.
+    #[serde(default)]
+    pub input_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-read prompt token for this bracket. `None` inherits
+    /// the base rate.
+    #[serde(default)]
+    pub cache_read_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per cache-write prompt token for this bracket. `None` inherits
+    /// the base rate.
+    #[serde(default)]
+    pub cache_write_micro_usd_per_token: Option<f64>,
+    /// Micro-USD per completion (output) token for this bracket. `None`
+    /// inherits the base rate.
+    #[serde(default)]
+    pub output_micro_usd_per_token: Option<f64>,
+}
+
+/// One upstream provider entry — registry-style.
+///
+/// `Debug` redacts `api_key` (v0 audit S9) so a future `tracing::error!(?config, …)`
+/// can't dump the platform credential straight into structured logs.
+#[derive(Clone, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ProviderConfig {
+    /// Upstream API base URL.
+    pub api_base: String,
+    /// Upstream API key (often a `${VAR}` reference).
+    pub api_key: String,
+    /// Additional headers applied to every inference request for this
+    /// provider. A string is shorthand for a static default. The expanded
+    /// form can opt into forwarding the same inbound header, which overrides
+    /// the default for that request.
+    pub headers: BTreeMap<String, ProviderHeaderConfig>,
+    /// Glob-prefix `api_protocol` pattern list — each pattern maps to an
+    /// ordered set of supported wire protocols (the head is the preferred
+    /// default). Precedence: per-model override > longest matching pattern >
+    /// host-inferred default. A bare protocol string still parses to a
+    /// one-element set, so single-protocol providers are unchanged.
+    pub api_protocol: PatternMap<ProtocolList>,
+    /// Optional per-protocol base-URL override, keyed by protocol name
+    /// ([`ApiProtocol::as_str`]). When one provider serves different protocols
+    /// at different paths under a single host — e.g. OpenAI-style under
+    /// `BASE/v1` and Anthropic Messages under `BASE/anthropic` — give each
+    /// protocol's base here; protocol-native routing copies the chosen
+    /// protocol's base onto the routing target. Protocols absent here use
+    /// [`api_base`](Self::api_base).
+    pub protocol_endpoints: HashMap<String, String>,
+    /// Glob-prefix `rate_limits` pattern list, keyed per matched pattern.
+    pub rate_limits: PatternMap<RateLimit>,
+    /// Declared model entries. Empty + `auto_discover` triggers discovery.
+    pub models: Vec<ProviderModel>,
+    /// When `true` and `models` is empty, discover models from the provider's
+    /// `/models` endpoint at startup and on reload.
+    pub auto_discover: bool,
+    /// Whether this provider is active / routable.
+    pub active: bool,
+    /// Free-form tags, used by `RoutingPrefs.require_tags` filtering.
+    pub tags: Vec<String>,
+    /// Inherit defaults from another provider in this config (acceptance F20 /
+    /// v0 `derives`). The named provider's `headers`, `api_protocol`,
+    /// `rate_limits`, `models`, `tags` and `auto_discover` flow into *this*
+    /// provider's empty fields; explicit fields here win. Resolved by
+    /// [`resolve_derivations`] after the config is parsed.
+    pub derives: Option<String>,
+    /// Multiple credentials for this one provider — e.g. two
+    /// subscriptions to the same upstream. When non-empty, the routing
+    /// table expands the provider into one routing target per account;
+    /// [`account_strategy`](Self::account_strategy) decides their
+    /// order. Empty = a single-credential provider keyed off the
+    /// top-level [`api_key`](Self::api_key) (the common case).
+    pub accounts: Vec<ProviderAccount>,
+    /// How the per-account targets are ordered when `accounts` is set.
+    pub account_strategy: AccountStrategy,
+    /// Routing-preference class. Set by the public registry merge (or
+    /// directly in config), then mapped to a numeric rank via
+    /// [`RegistryConfig::provider_priority`]. `None` ⇒ unclassed: the provider
+    /// sorts after every classed one in the auto-cascade (Strategy 3). Plain
+    /// configs leave this `None`, preserving the alphabetical default order.
+    pub class: Option<ProviderClass>,
+    /// Explicit routing priority (lower = preferred). When set it overrides the
+    /// class-derived rank, so an operator can pin one provider ahead of others
+    /// regardless of class. `None` ⇒ derive the rank from [`class`](Self::class).
+    pub priority: Option<i32>,
+    /// Per-provider upstream timeout overrides. Each set field layers over the
+    /// resolved global [`UpstreamConfig::timeouts`]; unset fields inherit it.
+    /// Not inherited via [`derives`](Self::derives).
+    pub timeouts: TimeoutConfig,
+}
+
+/// One provider header entry in `bitrouter.yaml`.
+///
+/// A scalar string is shorthand for a static default with passthrough
+/// disabled. The mapping form supports an optional `default` and an explicit
+/// inbound `passthrough` switch.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum ProviderHeaderConfig {
+    /// Static value; equivalent to `{ default: value, passthrough: false }`.
+    Static(String),
+    /// Expanded default/passthrough policy.
+    Policy(ProviderHeaderPolicy),
+}
+
+impl ProviderHeaderConfig {
+    fn default_value(&self) -> Option<&str> {
+        match self {
+            Self::Static(value) => Some(value),
+            Self::Policy(policy) => policy.default.as_deref(),
+        }
+    }
+
+    fn passthrough(&self) -> bool {
+        match self {
+            Self::Static(_) => false,
+            Self::Policy(policy) => policy.passthrough,
+        }
+    }
+}
+
+/// Expanded provider header behavior.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProviderHeaderPolicy {
+    /// Static value used when no allowed inbound value is present.
+    pub default: Option<String>,
+    /// Allow the inbound request's value(s) to override the static default.
+    pub passthrough: bool,
+}
+
+/// One credential within a multi-account provider. An account varies
+/// only the credential (and optionally the base URL) — the protocol,
+/// model catalog, and rate limits are the provider's.
+#[derive(Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct ProviderAccount {
+    /// This account's API key (often a `${VAR}` reference).
+    pub api_key: String,
+    /// Optional per-account `api_base` override. Empty inherits the
+    /// provider's `api_base` — set it only for multi-region / multi-org
+    /// deployments where each account lives on a different host.
+    pub api_base: String,
+    /// Optional human label, surfaced in the request log so an operator
+    /// can see which account served a request. Defaults to
+    /// `account-<n>` (1-based) when empty.
+    pub label: String,
+}
+
+impl std::fmt::Debug for ProviderAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Redact the key for the same reason `ProviderConfig` does.
+        f.debug_struct("ProviderAccount")
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("api_base", &self.api_base)
+            .field("label", &self.label)
+            .finish()
+    }
+}
+
+/// How a multi-account provider's per-account targets are ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountStrategy {
+    /// Accounts in declared order — the first is primary; routing drops
+    /// to the next on a retryable failure (5xx / 429 / timeout) or a
+    /// payment / credit-exhaustion error. The default.
+    #[default]
+    Failover,
+    /// Accounts ordered with a process-random rotation so the primary
+    /// (and therefore the load) spreads evenly across accounts. The
+    /// remaining accounts still act as failover targets for that
+    /// request.
+    Balance,
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("api_base", &self.api_base)
+            .field(
+                "api_key",
+                &if self.api_key.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .field("api_protocol", &self.api_protocol)
+            .field("protocol_endpoints", &self.protocol_endpoints)
+            .field("rate_limits", &self.rate_limits)
+            .field("models", &self.models)
+            .field("auto_discover", &self.auto_discover)
+            .field("active", &self.active)
+            .field("tags", &self.tags)
+            .field("derives", &self.derives)
+            .field("accounts", &self.accounts)
+            .field("account_strategy", &self.account_strategy)
+            .field("class", &self.class)
+            .field("priority", &self.priority)
+            .finish()
+    }
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self {
+            api_base: String::new(),
+            api_key: String::new(),
+            headers: BTreeMap::new(),
+            api_protocol: PatternMap::new(),
+            protocol_endpoints: HashMap::new(),
+            rate_limits: PatternMap::new(),
+            models: Vec::new(),
+            auto_discover: false,
+            active: true,
+            tags: Vec::new(),
+            derives: None,
+            accounts: Vec::new(),
+            account_strategy: AccountStrategy::default(),
+            class: None,
+            priority: None,
+            timeouts: TimeoutConfig::default(),
+        }
+    }
+}
+
+impl ProviderConfig {
+    fn outbound_headers(&self) -> Result<Vec<OutboundHeaderRule>> {
+        let mut names = HashSet::new();
+        let mut rules = Vec::with_capacity(self.headers.len());
+        for (name, config) in &self.headers {
+            let rule = OutboundHeaderRule::new(name, config.default_value(), config.passthrough())?;
+            if !names.insert(rule.name().clone()) {
+                return Err(BitrouterError::bad_request(format!(
+                    "duplicate provider header '{}'",
+                    rule.name().as_str()
+                )));
+            }
+            rules.push(rule);
+        }
+        Ok(rules)
+    }
+
+    /// Resolve either the registry's canonical model id or its provider-native
+    /// dispatch id to the same metadata entry. Explicit `provider:model`
+    /// routes commonly use the native id, but must retain the registry's
+    /// protocol, pricing, and compatibility contract.
+    pub(crate) fn model_config(&self, model_id: &str) -> Option<&ProviderModel> {
+        self.models.iter().find(|model| {
+            model.id == model_id || model.provider_model_id.as_deref() == Some(model_id)
+        })
+    }
+
+    /// Whether a concrete model positively advertises `capability`.
+    ///
+    /// This intentionally distinguishes an explicit declaration from legacy
+    /// model entries whose capability list is empty/unknown. Callers that
+    /// grant a policy exception (for example, a tool-safe economy tier) must
+    /// use positive evidence rather than treating unknown as supported.
+    pub fn model_supports_capability(
+        &self,
+        model_id: &str,
+        capability: bitrouter_ai::types::Capability,
+    ) -> bool {
+        self.model_config(model_id)
+            .is_some_and(|model| model.capabilities.contains(&capability))
+    }
+
+    /// The API key for provider-level operations that aren't tied to a
+    /// specific routed request — currently model discovery's `/models`
+    /// probe. Returns the top-level [`api_key`](Self::api_key), or the
+    /// first account's key when the provider is account-based and has
+    /// no top-level key.
+    pub fn primary_api_key(&self) -> &str {
+        if !self.api_key.is_empty() {
+            return &self.api_key;
+        }
+        self.accounts
+            .iter()
+            .map(|a| a.api_key.as_str())
+            .find(|k| !k.is_empty())
+            .unwrap_or("")
+    }
+}
+
+impl ProviderConfig {
+    /// The ordered set of wire protocols `model_id` can be served under, most
+    /// preferred first: a per-model override wins, else the longest matching
+    /// `api_protocol` pattern, else the single host-inferred default. The
+    /// router prefers whichever member matches the inbound request (native
+    /// routing) and otherwise falls back to the head.
+    pub fn protocols_for(&self, model_id: &str) -> Vec<ApiProtocol> {
+        if let Some(m) = self.model_config(model_id)
+            && let Some(list) = &m.api_protocol
+            && !list.is_empty()
+        {
+            return list.as_slice().to_vec();
+        }
+        if let Some(list) = self.api_protocol.resolve(model_id)
+            && !list.is_empty()
+        {
+            return list.as_slice().to_vec();
+        }
+        vec![infer_protocol(&self.api_base)]
+    }
+
+    /// The preferred (default) wire protocol for `model_id` — the head of
+    /// [`protocols_for`](Self::protocols_for). Used when the inbound protocol
+    /// is not one the upstream supports. Falls back to the host-inferred
+    /// protocol for a model with an (unusual) empty protocol set.
+    pub fn protocol_for(&self, model_id: &str) -> ApiProtocol {
+        self.protocols_for(model_id)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| infer_protocol(&self.api_base))
+    }
+
+    /// The base-URL override for `protocol`, if this provider serves that
+    /// protocol at a non-default path — see
+    /// [`protocol_endpoints`](Self::protocol_endpoints).
+    pub fn endpoint_for(&self, protocol: &ApiProtocol) -> Option<&str> {
+        self.protocol_endpoints
+            .get(protocol.as_str())
+            .map(String::as_str)
+    }
+}
+
+/// Infer a wire protocol from a provider's api-base host.
+pub fn infer_protocol(api_base: &str) -> ApiProtocol {
+    let host = api_base.to_ascii_lowercase();
+    if host.contains("anthropic.com") {
+        ApiProtocol::Messages
+    } else if (host.contains("generativelanguage.googleapis.com")
+        && !host.trim_end_matches('/').ends_with("/openai"))
+        || (host.contains("aiplatform.googleapis.com") && host.contains("publishers/google"))
+    {
+        // A historical native base needs explicit migration rather than an
+        // invented Chat endpoint. The retired identifier remains provenance.
+        ApiProtocol::Custom("generate_content".into())
+    } else {
+        ApiProtocol::ChatCompletions
+    }
+}
+
+/// One model entry under a provider.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct ProviderModel {
+    /// The id this model is addressed by — a canonical `<org>/<model>` id when
+    /// the entry comes from the provider registry, or the upstream id for a
+    /// hand-written config. This is the **match key** the auto-cascade compares
+    /// the requested model against.
+    pub id: String,
+    /// The provider's own upstream model id — what is sent on the wire. When
+    /// `None`, [`id`](Self::id) is used for both matching and dispatch (the
+    /// hand-written-config case, where the two coincide). The registry merge
+    /// sets this so a canonical [`id`](Self::id) routes to the provider's
+    /// upstream name (e.g. `anthropic/claude-sonnet-4.6` → `claude-sonnet-4-6`).
+    #[serde(default)]
+    pub provider_model_id: Option<String>,
+    /// Per-model protocol override (highest precedence) — an ordered set of
+    /// supported protocols, or a bare string for a single one.
+    #[serde(default)]
+    pub api_protocol: Option<ProtocolList>,
+    /// Per-model rate-limit override.
+    #[serde(default)]
+    pub rate_limits: Option<RateLimit>,
+    /// Per-model pricing.
+    #[serde(default)]
+    pub pricing: Option<PricingConfig>,
+    /// Independent complete tariffs by outbound wire. Missing buckets never inherit
+    /// ordinary generation rates; Decisions requires its own tariff.
+    #[serde(default)]
+    pub pricing_by_protocol: HashMap<ApiProtocol, PricingConfig>,
+
+    /// Features this concrete provider/model route explicitly advertises.
+    /// An empty list means unknown, not unsupported. Runtime routing preserves
+    /// legacy unknown entries; policy code that grants a capability-specific
+    /// exception requires a positive declaration.
+    #[serde(default)]
+    pub capabilities: Vec<bitrouter_ai::types::Capability>,
+    /// Concrete route token limits. Missing fields remain unknown. In
+    /// particular, an input limit does not imply a combined context window.
+    #[serde(default)]
+    pub token_limits: bitrouter_ai::core::evidence::ModelTokenLimits,
+    /// Explicit support for a provider input-token counting endpoint. Managed
+    /// requests require a successful count when enabled; ordinary calls do not
+    /// invoke it. API wire compatibility alone does not enable counting.
+    #[serde(default)]
+    pub input_token_counting: Option<bitrouter_ai::core::evidence::InputTokenCounting>,
+    /// Positively verified qualitative effort levels for this exact route.
+    /// Absence means unknown, not unsupported.
+    #[serde(default)]
+    pub reasoning_effort: Option<bitrouter_ai::types::ReasoningEffortConfig>,
+    /// Provider/model request-shape quirks that do not change model semantics.
+    #[serde(default)]
+    pub compatibility: ModelCompatibility,
+}
+
+impl ProviderModel {
+    /// Exact wire override, otherwise ordinary pricing for generation only.
+    pub fn pricing_for(&self, protocol: &ApiProtocol) -> Option<&PricingConfig> {
+        self.pricing_by_protocol.get(protocol).or_else(|| {
+            if protocol.operation() == bitrouter_ai::types::ModelOperation::Generation {
+                self.pricing.as_ref()
+            } else {
+                None
+            }
+        })
+    }
+}
+
+/// An explicit virtual-model definition (Strategy 2).
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct VirtualModel {
+    /// How this virtual model's [`endpoints`](Self::endpoints) are ordered
+    /// into the fallback chain. See [`VirtualModelStrategy`]. Defaults to
+    /// [`Priority`](VirtualModelStrategy::Priority).
+    #[serde(default)]
+    pub strategy: VirtualModelStrategy,
+    /// The endpoints this virtual model maps to. Their meaning depends on
+    /// [`strategy`](Self::strategy): under `priority` they are an *ordered*
+    /// preference list; under `cascade` the order is a starting point that
+    /// the cascade ordering then re-sorts.
+    pub endpoints: Vec<VirtualEndpoint>,
+    /// Optional pricing for the virtual model.
+    #[serde(default)]
+    pub pricing: Option<PricingConfig>,
+}
+
+/// How a [`VirtualModel`]'s endpoints are ordered into its fallback chain
+/// (Strategy 2). Mirrors the typed-enum + serde pattern of
+/// [`AccountStrategy`].
+///
+/// Both strategies build a chain that `execute_with_fallback` walks: a
+/// retryable failure (5xx / 408 / 429 / timeout / credit-exhaustion) always
+/// advances to the next endpoint — that failover-on-error behaviour is a
+/// property of *any* chain and is shared by both. They differ only in the
+/// **order** the endpoints take in that chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VirtualModelStrategy {
+    /// Endpoints are tried in **declared YAML order** — the first is the
+    /// preferred endpoint, the rest are failover targets reached only when a
+    /// preceding one fails with a retryable error. Routing preferences
+    /// (`sort` / `only` / `ignore`) do **not** reorder or filter the chain:
+    /// the operator's declared priority is authoritative. This is the
+    /// default and matches the historical (pre-typed-`strategy`) behaviour.
+    #[default]
+    Priority,
+    /// Endpoints are treated as an unordered candidate set and **re-ordered by
+    /// the request's [`SortOrder`]** (the same cascade ordering Strategy-3
+    /// auto-cascade applies to providers), and filtered by `only` / `ignore` /
+    /// `require_tags`.
+    /// Use this when the endpoints are interchangeable and you want
+    /// cost/latency-aware (or, today, alphabetical) selection rather than a
+    /// fixed priority order. `Latency` / `Cost` have no metrics source yet, so
+    /// they currently fall back to alphabetical-by-provider — the same honest
+    /// limitation Strategy-3 documents.
+    Cascade,
+}
+
+/// One endpoint of a virtual model.
+#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+pub struct VirtualEndpoint {
+    /// The provider id this endpoint routes to.
+    pub provider: String,
+    /// The service / model id at that provider.
+    pub service_id: String,
+}
+
+/// An `@preset` definition.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct PresetConfig {
+    /// Substitute the request's model with this one.
+    pub model: Option<String>,
+    /// Name of a policy in `policy-lock.yaml`. Only requests that explicitly
+    /// select this preset opt into adaptive model selection.
+    pub policy: Option<String>,
+    /// Prepend / replace the system prompt.
+    pub system_prompt: Option<String>,
+    /// Generation-parameter overrides, merged shallowly into the request.
+    pub params: serde_json::Map<String, serde_json::Value>,
+    /// Routing knobs fed into the cascade.
+    pub routing: RoutingConfig,
+}
+
+/// A `:variant` definition — a routing modifier only.
+#[derive(Debug, Clone, Default, Deserialize, schemars::JsonSchema)]
+#[serde(default)]
+pub struct VariantConfig {
+    /// Routing knobs fed into the cascade.
+    pub routing: RoutingConfig,
+}
+
+// ===== `${VAR}` substitution + loader =====
+
+/// Replace every `${VAR}` reference with the value resolved by `lookup`, an
+/// unresolved variable being an error (config F8: `${VAR}` substitution).
+///
+/// A `${VAR:-default}` reference uses `default` when `VAR` is unset instead of
+/// erroring — so a registry `api_base` can carry a fallback (e.g.
+/// `${AWS_REGION:-us-east-1}`). The `:-` split is on its first occurrence; a
+/// bare `${VAR}` is unchanged (real env names never contain `:-`).
+///
+/// Substitution is **YAML-comment-aware**: a `${VAR}` that falls inside a `#`
+/// comment is left literal and never looked up — so a commented-out example
+/// (e.g. the `bro init` starter config) that references an unset variable
+/// does not break loading. A `#` begins a comment only when it is at the start
+/// of a line or preceded by whitespace and is not inside a quoted scalar
+/// (matching YAML), so URL fragments (`host/p#x`) and quoted `#` stay literal
+/// value text and any `${VAR}` around them is still substituted. References in
+/// real values — quoted or plain — are substituted exactly as before.
+///
+/// Limitations (acceptable for config files): quoted-scalar state is tracked
+/// per line (reset at each newline), and block scalars (`|` / `>`) are not
+/// modelled, so a `#` inside multi-line block-scalar content could be mistaken
+/// for a comment.
+pub fn substitute_with<F>(input: &str, lookup: F) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut out = String::with_capacity(input.len());
+    let mut iter = input.char_indices().peekable();
+    // Whether the previous char was a line break / start-of-input or inline
+    // whitespace — the precondition for a `#` to begin a comment.
+    let mut after_ws = true;
+    let mut in_squote = false;
+    let mut in_dquote = false;
+    let mut in_comment = false;
+
+    while let Some((idx, c)) = iter.next() {
+        // Any line break ends a comment / quoted scalar for this scanner —
+        // `\n`, `\r\n`, and a lone `\r` (old-Mac) all reset state.
+        if c == '\n' || c == '\r' {
+            out.push(c);
+            in_comment = false;
+            in_squote = false;
+            in_dquote = false;
+            after_ws = true;
+            continue;
+        }
+        if in_comment {
+            out.push(c);
+            continue;
+        }
+        // `${...}` reference — substituted everywhere except inside a comment,
+        // including inside quoted scalars. `$` and `{` are ASCII (1 byte each),
+        // so the variable name begins at `idx + 2`.
+        if c == '$' && matches!(iter.peek(), Some((_, '{'))) {
+            let after_brace = &input[idx + 2..];
+            match after_brace.find('}') {
+                Some(rel) => {
+                    let token = &after_brace[..rel];
+                    // `${VAR:-default}` falls back to `default` when `VAR` is
+                    // unset; a bare `${VAR}` still errors on an unset variable.
+                    let (name, default) = match token.split_once(":-") {
+                        Some((n, d)) => (n, Some(d)),
+                        None => (token, None),
+                    };
+                    let value = match lookup(name) {
+                        Some(v) => v,
+                        None => match default {
+                            Some(d) => d.to_string(),
+                            None => {
+                                return Err(BitrouterError::bad_request(format!(
+                                    "config references undefined environment variable '{name}'"
+                                )));
+                            }
+                        },
+                    };
+                    out.push_str(&value);
+                    // Advance the iterator past `{name}` (up to and including `}`).
+                    let resume = idx + 2 + rel + 1;
+                    while let Some(&(j, _)) = iter.peek() {
+                        if j < resume {
+                            iter.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    after_ws = false;
+                    continue;
+                }
+                None => {
+                    // No closing brace anywhere — emit `$` literally and keep
+                    // scanning (the `{` and following chars copy normally),
+                    // matching the historical passthrough of a dangling `${`.
+                    out.push('$');
+                    after_ws = false;
+                    continue;
+                }
+            }
+        }
+        // Comment start: `#` at line start / after whitespace, outside quotes.
+        if c == '#' && after_ws && !in_squote && !in_dquote {
+            in_comment = true;
+            out.push(c);
+            continue;
+        }
+        // Track quoted-scalar state so a `#` inside quotes isn't read as a
+        // comment. (Substitution still happens inside quotes — handled above.)
+        if c == '\'' && !in_dquote {
+            in_squote = !in_squote;
+        } else if c == '"' && !in_squote {
+            in_dquote = !in_dquote;
+        }
+        out.push(c);
+        after_ws = matches!(c, ' ' | '\t');
+    }
+    Ok(out)
+}
+
+/// Replace every `${VAR}` occurrence with the value of environment variable
+/// `VAR`. An undefined variable is an error. Used by the config loader.
+/// Reads via [`env_lookup`] so daemon-side overrides (installed by the
+/// CLI's `bro reload`) take precedence over the live process env.
+pub fn substitute_env(input: &str) -> Result<String> {
+    substitute_with(input, env_lookup)
+}
+
+/// Process-global env-var override map. Read by [`env_lookup`] before
+/// falling back to [`std::env::var`]. Written by [`set_env_overrides`]
+/// — the daemon calls that when the CLI sends a `Reload { env }`
+/// command, so a freshly-`export`ed API key in the user's shell
+/// propagates into the running daemon without restarting it.
+///
+/// `RwLock` (not unsafe `set_var`) keeps things `#![forbid(unsafe_code)]`
+/// clean and avoids the cross-thread soundness footgun of mutating the
+/// real process env while other threads might be reading it.
+static ENV_OVERRIDES: std::sync::OnceLock<
+    std::sync::RwLock<std::collections::HashMap<String, String>>,
+> = std::sync::OnceLock::new();
+
+fn overrides() -> &'static std::sync::RwLock<std::collections::HashMap<String, String>> {
+    ENV_OVERRIDES.get_or_init(|| std::sync::RwLock::new(std::collections::HashMap::new()))
+}
+
+/// Replace the in-memory override map atomically. Subsequent
+/// [`env_lookup`] / [`substitute_env`] calls — and
+/// the application's `providers::apply::zero_config`, which resolves through
+/// `env_lookup` — see the new values. Empty map clears all overrides.
+pub fn set_env_overrides(values: std::collections::HashMap<String, String>) {
+    let mut w = overrides().write().expect("env override lock poisoned");
+    *w = values;
+}
+
+/// Resolve an env var name to a value. Checks the in-memory override
+/// map first; falls back to [`std::env::var`]. Returns `None` for an
+/// unknown name. This is the function every config-loading path goes
+/// through — `${VAR}` substitution in YAML, `zero_config`'s
+/// "is this provider's key set" check, etc.
+pub fn env_lookup(name: &str) -> Option<String> {
+    if let Some(rw) = ENV_OVERRIDES.get()
+        && let Ok(guard) = rw.read()
+        && let Some(value) = guard.get(name)
+    {
+        return Some(value.clone());
+    }
+    std::env::var(name).ok()
+}
+
+/// Parse a config from a YAML string, applying `${VAR}` substitution first.
+pub fn parse(yaml: &str) -> Result<Config> {
+    parse_with(yaml, |name| std::env::var(name).ok())
+}
+
+/// Parse a config from a YAML string, resolving `${VAR}` via `lookup`. Useful
+/// for tests that must not mutate process-global environment state.
+pub fn parse_with<F>(yaml: &str, lookup: F) -> Result<Config>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let substituted = substitute_with(yaml, lookup)?;
+    let mut config: Config = serde_saphyr::from_str(&substituted)
+        .map_err(|e| BitrouterError::bad_request(format!("invalid bitrouter.yaml: {e}")))?;
+    resolve_derivations(&mut config)?;
+    config.validate_router_config()?;
+    validate_trajectory_config(&config.trajectory)?;
+    validate_continuation_config(&config.continuation)?;
+    // SSRF defence (v0 audit S4): refuse a config that asks bitrouter to
+    // route at a loopback / private / metadata URL. A typo or a malicious
+    // YAML otherwise has the executor send every upstream request — and
+    // any API keys / prompt bodies — into the host's internal network.
+    // Validated post-`resolve_derivations` so an inherited `api_base` is
+    // checked against the *effective* value.
+    for (id, provider) in &config.providers {
+        provider.outbound_headers().map_err(|error| {
+            BitrouterError::bad_request(format!("provider '{id}' has invalid headers: {error}"))
+        })?;
+        for model in &provider.models {
+            if let Some(reasoning_effort) = &model.reasoning_effort {
+                if !model
+                    .capabilities
+                    .contains(&bitrouter_ai::types::Capability::Reasoning)
+                {
+                    return Err(BitrouterError::bad_request(format!(
+                        "provider '{id}' model '{}' reasoning_effort requires the reasoning capability",
+                        model.id
+                    )));
+                }
+                reasoning_effort.validate().map_err(|error| {
+                    BitrouterError::bad_request(format!(
+                        "provider '{id}' model '{}' has invalid {error}",
+                        model.id
+                    ))
+                })?;
+            }
+        }
+        if !provider.api_base.is_empty() {
+            crate::config::url_validator::validate_upstream_url(&provider.api_base).map_err(
+                |e| BitrouterError::bad_request(format!("provider '{id}' api_base rejected: {e}")),
+            )?;
+        }
+        // A per-account `api_base` override reaches the executor exactly like
+        // the provider-level one (`build_targets` copies it onto the routing
+        // target), so it needs the same SSRF gate — otherwise an `accounts`
+        // entry is an unchecked back door to the host's internal network. An
+        // empty override inherits the (already-validated) provider `api_base`.
+        for account in &provider.accounts {
+            if !account.api_base.is_empty() {
+                crate::config::url_validator::validate_upstream_url(&account.api_base).map_err(
+                    |e| {
+                        let who = if account.label.is_empty() {
+                            format!("provider '{id}' account")
+                        } else {
+                            format!("provider '{id}' account '{}'", account.label)
+                        };
+                        BitrouterError::bad_request(format!("{who} api_base rejected: {e}"))
+                    },
+                )?;
+            }
+        }
+    }
+    Ok(config)
+}
+
+fn validate_trajectory_config(config: &TrajectoryConfig) -> Result<()> {
+    if config.retention_days == 0 {
+        return Err(BitrouterError::bad_request(
+            "trajectory.retention_days must be positive".to_owned(),
+        ));
+    }
+    if config.outbox_batch_size == 0 || config.outbox_batch_size > MAX_TRAJECTORY_OUTBOX_BATCH_SIZE
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "trajectory.outbox_batch_size must be between 1 and {MAX_TRAJECTORY_OUTBOX_BATCH_SIZE}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_continuation_config(config: &ContinuationConfig) -> Result<()> {
+    if config.retention_days == 0 {
+        return Err(BitrouterError::bad_request(
+            "continuation.retention_days must be positive".to_owned(),
+        ));
+    }
+    if config.prune_batch_size == 0 || config.prune_batch_size > MAX_CONTINUATION_PRUNE_BATCH_SIZE {
+        return Err(BitrouterError::bad_request(format!(
+            "continuation.prune_batch_size must be between 1 and {MAX_CONTINUATION_PRUNE_BATCH_SIZE}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate one policy-table definition independently of the top-level config.
+/// Policy lock loading reuses this so inline legacy tables and named lock
+/// policies enforce identical tier/guardrail/adequacy invariants.
+pub fn validate_policy_table_config(policy: &PolicyTableConfig) -> Result<()> {
+    for fingerprint in policy.fingerprints.keys() {
+        if parse_semantic_route_key(fingerprint).is_none() {
+            return Err(BitrouterError::bad_request(format!(
+                "policy_table fingerprint '{fingerprint}' is not a canonical semantic_route/v1|<task-family>|<role>|<risk> key"
+            )));
+        }
+    }
+    if policy.tiers.is_empty() {
+        return Ok(());
+    }
+    let check = |role: &str, tier: &str| -> Result<()> {
+        if policy.tiers.contains_key(tier) {
+            Ok(())
+        } else {
+            Err(BitrouterError::bad_request(format!(
+                "policy_table {role} references unknown tier '{tier}'"
+            )))
+        }
+    };
+    for (fingerprint, tier) in &policy.fingerprints {
+        check(&format!("fingerprint '{fingerprint}'"), tier)?;
+    }
+    if let Some(tier) = &policy.default_tier {
+        check("default_tier", tier)?;
+    }
+    if let Some(tier) = &policy.tool_use_tier {
+        check("tool_use_tier", tier)?;
+    }
+    for tier in &policy.tool_safe_tiers {
+        check("tool_safe_tiers entry", tier)?;
+    }
+    // The guardrail clamps a non-tool-safe tier *up* to `tool_use_tier`, so that
+    // target must itself be declared tool-safe — otherwise the floor it clamps
+    // to is not actually safe for tool-carrying requests.
+    if let Some(tier) = &policy.tool_use_tier
+        && !policy.tool_safe_tiers.iter().any(|t| t == tier)
+    {
+        return Err(BitrouterError::bad_request(format!(
+            "policy_table tool_use_tier '{tier}' must also be listed in tool_safe_tiers"
+        )));
+    }
+    // Adequacy learning escalates a pinned fingerprint to its escalation tier
+    // (or the default tier), so that target must exist and resolve to a defined
+    // tier when learning is enabled.
+    let adequacy = &policy.adequacy;
+    if adequacy.reliability_window_size == 0 {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_window_size must be positive".to_string(),
+        ));
+    }
+    if adequacy.reliability_consecutive_failures == 0 {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_consecutive_failures must be positive".to_string(),
+        ));
+    }
+    if !(1..=100).contains(&adequacy.reliability_error_rate_percent) {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.reliability_error_rate_percent must be between 1 and 100"
+                .to_string(),
+        ));
+    }
+    if let Some(tier) = &adequacy.escalation_tier {
+        check("adequacy.escalation_tier", tier)?;
+    }
+    if adequacy.enabled && adequacy.escalation_tier.is_none() && policy.default_tier.is_none() {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy is enabled but no escalation target is set: \
+             set adequacy.escalation_tier or default_tier"
+                .to_string(),
+        ));
+    }
+    // Exploration trials toward `explore_tier`, which must exist and be a defined
+    // tier when exploration is enabled.
+    if let Some(tier) = &adequacy.explore_tier {
+        check("adequacy.explore_tier", tier)?;
+    }
+    if adequacy.explore_enabled && adequacy.explore_tier.is_none() {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.explore_enabled is set but adequacy.explore_tier is not"
+                .to_string(),
+        ));
+    }
+    // Exploration rides on the adequacy ledger, which is only wired when learning
+    // is enabled — so `explore_enabled` without `enabled` would be silently inert.
+    if adequacy.explore_enabled && !adequacy.enabled {
+        return Err(BitrouterError::bad_request(
+            "policy_table.adequacy.explore_enabled requires adequacy.enabled".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve every provider's `derives` chain: any field this provider left
+/// empty / default flows from the named ancestor. Cycles are a 400.
+/// Resolution walks the chain depth-first; multi-level inheritance works.
+pub fn resolve_derivations(config: &mut Config) -> Result<()> {
+    let ids: Vec<String> = config.providers.keys().cloned().collect();
+    for id in ids {
+        let mut seen: Vec<String> = vec![id.clone()];
+        resolve_one_derivation(&mut config.providers, &id, &mut seen)?;
+    }
+    Ok(())
+}
+
+fn resolve_one_derivation(
+    providers: &mut HashMap<String, ProviderConfig>,
+    id: &str,
+    seen: &mut Vec<String>,
+) -> Result<()> {
+    let derives_target = providers.get(id).and_then(|p| p.derives.clone());
+    let Some(parent_id) = derives_target else {
+        return Ok(());
+    };
+    if seen.contains(&parent_id) {
+        return Err(BitrouterError::bad_request(format!(
+            "provider '{id}' derives chain has a cycle through '{parent_id}'"
+        )));
+    }
+    if !providers.contains_key(&parent_id) {
+        return Err(BitrouterError::bad_request(format!(
+            "provider '{id}' derives from unknown provider '{parent_id}'"
+        )));
+    }
+    seen.push(parent_id.clone());
+    resolve_one_derivation(providers, &parent_id, seen)?;
+    let parent = providers.get(&parent_id).cloned().expect("checked above");
+    let child = providers.get_mut(id).expect("we own this entry");
+    // Inherit each empty field from the parent. Explicit non-empty fields on
+    // the child win. `api_base` / `api_key` are NOT inherited — they are
+    // intrinsic to the child (you almost always want different endpoints).
+    if child.api_protocol.is_empty() {
+        child.api_protocol = parent.api_protocol.clone();
+    }
+    if child.headers.is_empty() {
+        child.headers = parent.headers.clone();
+    }
+    if child.protocol_endpoints.is_empty() {
+        child.protocol_endpoints = parent.protocol_endpoints.clone();
+    }
+    if child.rate_limits.is_empty() {
+        child.rate_limits = parent.rate_limits.clone();
+    }
+    if child.models.is_empty() {
+        child.models = parent.models.clone();
+    }
+    if !parent.tags.is_empty() && child.tags.is_empty() {
+        child.tags = parent.tags.clone();
+    }
+    // auto_discover propagates only when the child didn't explicitly set it;
+    // since it's a bool with default false, we propagate when child is false
+    // AND parent is true.
+    if !child.auto_discover && parent.auto_discover {
+        child.auto_discover = true;
+    }
+    // The `derives` link itself doesn't carry into the resolved form; clearing
+    // it makes repeated calls idempotent.
+    child.derives = None;
+    Ok(())
+}
+
+/// Load and parse `bitrouter.yaml` from disk.
+pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
+    let path = path.as_ref();
+    let raw = tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| BitrouterError::internal(format!("reading config {}: {e}", path.display())))?;
+    parse(&raw)
+}
+
+/// Best-effort model discovery. For every provider with
+/// `auto_discover: true` and no declared `models`, `GET {api_base}/models` and
+/// populate the model list from the response (`{ "data": [{ "id": … }] }`,
+/// the Chat Completions / Messages shape). A provider whose discovery call fails is
+/// left as-is with a WARN — discovery never aborts startup.
+///
+/// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
+/// unreachable provider can't stall a `bro reload` for the OS-level
+/// connect window (minutes). Discovery is best-effort; a 5s overall cap is
+/// well above any healthy `/models` round-trip and far below the default.
+pub async fn discover_models(config: &mut Config) {
+    if let Err(error) = config.validate_router_config() {
+        tracing::warn!(%error, "invalid configuration; model discovery skipped");
+        return;
+    }
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(2))
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+    for (provider_id, provider) in config.providers.iter_mut() {
+        if !provider.active || !provider.auto_discover || !provider.models.is_empty() {
+            continue;
+        }
+        let url = format!("{}/models", provider.api_base.trim_end_matches('/'));
+        let result = async {
+            let resp = client
+                .get(&url)
+                .bearer_auth(provider.primary_api_key())
+                .send()
+                .await
+                .ok()?;
+            if !resp.status().is_success() {
+                return None;
+            }
+            let json: serde_json::Value = resp.json().await.ok()?;
+            let ids: Vec<String> = json
+                .get("data")?
+                .as_array()?
+                .iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from))
+                .collect();
+            Some(ids)
+        }
+        .await;
+        match result {
+            Some(ids) if !ids.is_empty() => {
+                tracing::info!(provider = %provider_id, count = ids.len(), "auto-discovered models");
+                provider.models = ids
+                    .into_iter()
+                    .map(|id| ProviderModel {
+                        id,
+                        provider_model_id: None,
+                        api_protocol: None,
+                        rate_limits: None,
+                        pricing: None,
+                        pricing_by_protocol: HashMap::new(),
+                        capabilities: Vec::new(),
+                        token_limits: Default::default(),
+                        input_token_counting: None,
+                        reasoning_effort: None,
+                        compatibility: ModelCompatibility::default(),
+                    })
+                    .collect();
+            }
+            _ => {
+                tracing::warn!(
+                    provider = %provider_id,
+                    %url,
+                    "auto_discover: model discovery failed — provider left with no models"
+                );
+            }
+        }
+    }
+}
+
+pub mod schema;
+pub mod url_validator;

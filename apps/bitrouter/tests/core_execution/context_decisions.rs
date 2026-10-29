@@ -1,0 +1,463 @@
+use super::*;
+use bitrouter::gateway::model::decision::DecisionRuntime;
+use bitrouter::gateway::model::decision::policy::{DecisionPolicy, DecisionPricing};
+use bitrouter::gateway::model::decision::typesafe::TypeSafeExecutor;
+use bitrouter::storage::checkpoint::snapshot::context::FEATURE;
+use bitrouter::storage::checkpoint::snapshot::context::inspection::InspectionExt;
+use bitrouter_ai::core::protocol::ContextMode;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+async fn setup_decision(
+    server: &MockServer,
+    harness: Arc<Harness>,
+    responses: Vec<MockResponse>,
+) -> Result<(CoreSession, Arc<RecordingExecutor>), Box<dyn std::error::Error>> {
+    let (app, executor) = decision_app(server, responses)?;
+    let session =
+        bind_app_with_features(app, harness, Limits::default(), vec![FEATURE.into()]).await?;
+    Ok((session, executor))
+}
+
+fn decision_app(
+    server: &MockServer,
+    responses: Vec<MockResponse>,
+) -> Result<(Arc<App>, Arc<RecordingExecutor>), Box<dyn std::error::Error>> {
+    let executor = Arc::new(RecordingExecutor {
+        mock: MockExecutor::new(responses),
+        agent_once: Mutex::new(Default::default()),
+        prompts: Mutex::new(Vec::new()),
+        calls: AtomicUsize::new(0),
+    });
+    let table = StaticRoutingTable::new();
+    table.insert("fixture-model", vec![target("first")]);
+    let app = App::builder()
+        .language_model(|builder| {
+            builder
+                .routing_table(Arc::new(table))
+                .executor(executor.clone());
+        })
+        .decision_model(DecisionRuntime {
+            model: "fixture-decision".into(),
+            executor: Arc::new(TypeSafeExecutor::new(
+                &server.uri(),
+                "fixture-key",
+                Duration::from_secs(10),
+                8192,
+            )?),
+            policy: DecisionPolicy {
+                target_context_bytes: 1,
+                retain_recent_groups: 0,
+                ..Default::default()
+            },
+            pricing: Some(DecisionPricing {
+                input_usd_per_million: 0.1,
+                output_usd_per_million: 0.0,
+            }),
+        })
+        .build()?;
+    Ok((Arc::new(app), executor))
+}
+
+fn task() -> TaskInput {
+    let mut task = input();
+    task.routing.context = ContextMode::Auto;
+    task.context_limit_bytes = Some(512 * 1024);
+    task
+}
+
+async fn read_result(session: &CoreSession, harness: &Harness) -> TestResult {
+    session
+        .start("start", session.head().await.state_revision, task())
+        .await?;
+    session.drive().await?;
+    let command = harness
+        .sent
+        .lock()
+        .await
+        .first()
+        .ok_or("missing tool dispatch")?
+        .clone();
+    let mut observation = result(&command);
+    if session
+        .snapshot()
+        .await
+        .manifest
+        .workspace_revision
+        .is_none()
+    {
+        observation.workspace_revision = None;
+    }
+    observation.output = "optional-archive-sentinel: unrelated migration notes ".repeat(128);
+    session.tool_result("read_result", observation).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn workers_compile_shared_references_and_return_recallable_conclusions() -> TestResult {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor) = setup_decision(
+        &server,
+        harness.clone(),
+        vec![
+            output(vec![call("read")]),
+            output(vec![call("hold-root")]),
+            output(vec![text("parent complete")]),
+        ],
+    )
+    .await?;
+    read_result(&session, &harness).await?;
+    session.drive().await?;
+    let before = session.snapshot().await;
+    let root = before.agent_id.clone();
+    let root_task = before
+        .root_turn()
+        .ok_or("missing root")?
+        .agent_turn_id
+        .clone();
+    let shared = before.context_store.work[&root_task]
+        .evidence
+        .iter()
+        .find(|id| {
+            before.context_store.evidence.get(*id).is_some_and(|block| {
+                serde_json::to_string(block)
+                    .is_ok_and(|value| value.contains("optional-archive-sentinel"))
+            })
+        })
+        .cloned()
+        .ok_or("missing source evidence")?;
+    let mut task = work("shared-context child");
+    task.fresh_context = false;
+    let child = session
+        .collaborate(
+            "spawn",
+            session.head().await.state_revision,
+            &root,
+            Action::Spawn { task },
+        )
+        .await?
+        .assigned_ids["agent_id"]
+        .clone();
+    executor.agent_once.lock().await.insert(
+        child.clone(),
+        vec![text("child observed the retained source")],
+    );
+    session.drive().await?;
+    let state = session.snapshot().await;
+    let child_state = &state.agents[&child];
+    let child_task = &child_state
+        .turn
+        .as_ref()
+        .ok_or("missing child")?
+        .agent_turn_id;
+    let child_work = &state.context_store.work[child_task];
+    assert!(child_work.shared_evidence.contains(&shared));
+    assert!(!serde_json::to_string(&child_state.history)?.contains("optional-archive-sentinel"));
+    let prompts = executor.prompts.lock().await;
+    let child_prompt = prompts
+        .iter()
+        .find(|prompt| {
+            prompt.system.as_ref().is_some_and(|system| {
+                system.starts_with(&format!("You are agent {child} for this task."))
+            })
+        })
+        .ok_or("missing child prompt")?;
+    assert!(serde_json::to_string(child_prompt)?.contains("optional-archive-sentinel"));
+    assert!(serde_json::to_string(child_prompt)?.contains("Related-task evidence"));
+    assert_shared_result(&state, &root_task, child_task)?;
+    drop(prompts);
+    // The root is deliberately still awaiting a tool. Context delivery alone
+    // cannot execute it or inject the worker's transcript into root history.
+    assert_eq!(harness.sent.lock().await.len(), 2);
+    assert!(
+        state.agents[&root]
+            .turn
+            .as_ref()
+            .is_some_and(|turn| turn.invocations.iter().any(|call| call.result.is_none()))
+    );
+    session.disconnect().await;
+    Ok(())
+}
+
+fn assert_shared_result(state: &SessionSnapshot, root_task: &str, child_task: &str) -> TestResult {
+    let child = &state.context_store.work[child_task];
+    assert_eq!(child.result_evidence.len(), 1);
+    let reference = &child.result_evidence[0];
+    assert!(
+        state.context_store.work[root_task]
+            .shared_evidence
+            .contains(reference)
+    );
+    assert!(state.agents[&state.agent_id].mailbox.iter().any(|mail| {
+        mail.content["evidence_refs"]
+            .as_array()
+            .is_some_and(|refs| refs.iter().any(|value| value.as_str() == Some(reference)))
+    }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn full_tool_exchange_remains_recallable_without_automatic_omission() -> TestResult {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let harness = Arc::new(Harness::new(None, None));
+    let (session, executor) = setup_decision(
+        &server,
+        harness.clone(),
+        vec![
+            output(vec![call("first_read")]),
+            output(vec![call("second_read")]),
+            output(vec![text("completed")]),
+        ],
+    )
+    .await?;
+    read_result(&session, &harness).await?;
+    session.drive().await?;
+    {
+        let prompts = executor.prompts.lock().await;
+        assert!(
+            serde_json::to_string(prompts.last().ok_or("missing selected prompt")?)?
+                .contains("optional-archive-sentinel")
+        );
+    }
+    let snapshot = session.snapshot().await;
+    let block = snapshot
+        .context_store
+        .evidence
+        .values()
+        .find(|block| {
+            block
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .any(|content| matches!(content, Content::ToolCall { .. }))
+        })
+        .ok_or("missing source group")?;
+    assert_eq!(block.messages.len(), 2);
+    session
+        .collaborate(
+            "recall",
+            session.head().await.state_revision,
+            &snapshot.agent_id,
+            Action::Context(
+                bitrouter::storage::checkpoint::snapshot::context::action::ContextAction::Recall {
+                    block_ids: vec![block.block_id.clone()],
+                },
+            ),
+        )
+        .await?;
+    let second = harness
+        .sent
+        .lock()
+        .await
+        .last()
+        .ok_or("missing second tool")?
+        .clone();
+    session
+        .tool_result("second_result", result(&second))
+        .await?;
+    session.drive().await?;
+    let prompts = executor.prompts.lock().await;
+    let last = prompts.last().ok_or("missing recalled prompt")?;
+    let wire = serde_json::to_string(last)?;
+    assert!(wire.contains("optional-archive-sentinel"));
+    assert!(wire.contains("first_read"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn published_derivations_do_not_replace_exact_sources_or_full_context() -> TestResult {
+    use bitrouter::storage::checkpoint::snapshot::context::evidence::SourceSpan;
+    for (extract, changed, unknown) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (false, false, true),
+        (true, false, true),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let harness = Arc::new(Harness::new(None, None));
+        let (session, executor) = setup_decision(
+            &server,
+            harness.clone(),
+            vec![
+                output(vec![call("first_read")]),
+                output(vec![call("second_read")]),
+                output(vec![text("completed")]),
+            ],
+        )
+        .await?;
+        if unknown {
+            let mut update = signal_update(&session, Vec::new()).await;
+            update.workspace_revision = None;
+            update.manifest.workspace_revision = None;
+            session.signals("unknown_workspace", update).await?;
+        }
+        read_result(&session, &harness).await?;
+        session.drive().await?;
+        let snapshot = session.snapshot().await;
+        let block = snapshot
+            .context_store
+            .evidence
+            .values()
+            .find(|block| !block.protected)
+            .ok_or("missing optional group")?;
+        let action = if extract {
+            bitrouter::storage::checkpoint::snapshot::context::action::ContextAction::Extract {
+                block_id: block.block_id.clone(),
+                spans: vec![SourceSpan {
+                    message_index: 1,
+                    content_index: 0,
+                    start: 0,
+                    end: 8,
+                }],
+            }
+        } else {
+            bitrouter::storage::checkpoint::snapshot::context::action::ContextAction::Publish {
+                block_ids: vec![block.block_id.clone()],
+                summary: "summary-only-sentinel".into(),
+            }
+        };
+        session
+            .collaborate(
+                "derive",
+                session.head().await.state_revision,
+                &snapshot.agent_id,
+                Action::Context(action),
+            )
+            .await?;
+        let second = harness
+            .sent
+            .lock()
+            .await
+            .last()
+            .ok_or("missing second read")?
+            .clone();
+        let mut observation = result(&second);
+        if unknown {
+            observation.workspace_revision = None;
+        }
+        if changed {
+            observation.workspace_revision = Some("workspace-v3".into());
+        }
+        session.tool_result("second_result", observation).await?;
+        if changed {
+            let mut update = signal_update(&session, Vec::new()).await;
+            update.workspace_revision = Some("workspace-v3".into());
+            update.manifest.workspace_revision = update.workspace_revision.clone();
+            session.signals("workspace_changed", update).await?;
+        }
+        session.drive().await?;
+        let prompts = executor.prompts.lock().await;
+        let wire = serde_json::to_string(prompts.last().ok_or("missing final prompt")?)?;
+        assert!(wire.contains("optional-archive-sentinel"));
+        assert!(!wire.contains("Exact source extract"));
+        let final_state = session.snapshot().await;
+        assert_eq!(
+            final_state.context_store.evidence.get(&block.block_id),
+            Some(block)
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn routing_inspection_reports_the_serving_model_without_automatic_workflow_classification()
+-> TestResult {
+    use bitrouter_ai::harness::inspection::RoutingPhase;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/systemone"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let (session, _) = setup_decision(
+        &server,
+        Arc::new(Harness::new(None, None)),
+        vec![output(vec![text("done")])],
+    )
+    .await?;
+    let mut task = input();
+    task.routing.model = bitrouter_ai::core::protocol::ModelMode::Policy;
+    task.routing.context = ContextMode::Auto;
+    session
+        .start("work", session.head().await.state_revision, task)
+        .await?;
+    session.drive().await?;
+    let mut state = session.snapshot().await;
+    let inspection = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+        .ok_or("inspection missing")?;
+    let routing = inspection
+        .tasks
+        .first()
+        .and_then(|task| task.routing.as_ref())
+        .ok_or("routing missing")?;
+    assert_eq!(routing.phase, RoutingPhase::Finished);
+    assert!(routing.workflow.is_none());
+    assert_eq!(routing.model.as_deref(), Some("first:fixture-model"));
+    let root_id = state.agent_id.clone();
+    let turn = state
+        .agents
+        .get_mut(&root_id)
+        .and_then(|agent| agent.turn.as_mut())
+        .ok_or("root missing")?;
+    turn.status = bitrouter_ai::harness::inspection::AgentStatus::Runnable;
+    turn.final_answer = None;
+    let preparing = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+        .ok_or("preparation inspection missing")?;
+    let routing = preparing
+        .tasks
+        .first()
+        .and_then(|task| task.routing.as_ref())
+        .ok_or("preparation routing missing")?;
+    assert_eq!(
+        routing.phase,
+        bitrouter_ai::harness::inspection::RoutingPhase::Preparing
+    );
+    assert!(routing.workflow.is_none() && routing.model.is_none());
+    // The same runnable boundary waits for dependencies when a final answer
+    // exists and a child has unfinished work.
+    let mut child = state.agents.get(&root_id).ok_or("root missing")?.clone();
+    child.agent_id = "waiting-child".into();
+    child.parent_id = Some(root_id.clone());
+    child.turn.as_mut().ok_or("child turn missing")?.status =
+        bitrouter_ai::harness::inspection::AgentStatus::Runnable;
+    state.agents.insert(child.agent_id.clone(), child);
+    state
+        .agents
+        .get_mut(&root_id)
+        .and_then(|agent| agent.turn.as_mut())
+        .ok_or("root missing")?
+        .final_answer = Some("waiting for child".into());
+    let waiting = bitrouter_ai::harness::inspection::Inspection::capture(&state)
+        .ok_or("waiting inspection missing")?;
+    let routing = waiting
+        .tasks
+        .first()
+        .and_then(|task| task.routing.as_ref())
+        .ok_or("waiting routing missing")?;
+    assert_eq!(
+        routing.phase,
+        bitrouter_ai::harness::inspection::RoutingPhase::Waiting
+    );
+    assert!(routing.model.is_some());
+    session.disconnect().await;
+    Ok(())
+}

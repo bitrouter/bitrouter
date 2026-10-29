@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use bitrouter::actions::administration::Administration;
-use bitrouter::actions::status::{DaemonStatus, StatusReport};
 use bitrouter::daemon::{self, DaemonCommand, DaemonReloader, DaemonResponse};
 use bitrouter::paths::ConfigSource;
 use bitrouter::reload::{AppReloader, ReloadSource};
 use serde_json::Value;
+use {bitrouter::actions::status::DaemonStatus, bitrouter_ai::control::status::StatusReport};
 
 struct RunningFixture {
     directory: tempfile::TempDir,
@@ -74,9 +74,11 @@ impl RunningFixture {
                 reloader.clone(),
                 assembled.observe,
                 daemon::AcpControlPlane {
+                    #[cfg(feature = "harness")]
                     runtime: assembled.acp_runtime,
                     metering: bitrouter::metering::MeteringStore::new(assembled.db),
                     inventory: None,
+                    #[cfg(feature = "core")]
                     evolution: None,
                 },
                 Some(administration),
@@ -155,6 +157,29 @@ fn configuration(report: &StatusReport) -> Result<Value> {
         .get("config_state")
         .context("daemon omitted config state")?;
     Ok(state.clone())
+}
+
+#[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+#[tokio::test]
+async fn unavailable_export_reload_preserves_live_configuration() -> Result<()> {
+    let fixture = RunningFixture::start().await?;
+    let before = fixture.status(&fixture.source).await?;
+    let initial_config = yaml("127.0.0.1:14356", "old-private-api-key");
+    tokio::fs::write(
+        &fixture.source,
+        format!(
+            "{}plugins:\n  bitrouter-telemetry:\n    telemetry: {{ enabled: true, attribution: account }}\n",
+            yaml("127.0.0.1:14356", "replacement-private-api-key")
+        ),
+    )
+    .await?;
+    ensure!(fixture.reloader.reload().await.is_err());
+    let after = fixture.status(&fixture.source).await?;
+    ensure!(after.running && after.listen == before.listen);
+    ensure!(configuration(&after)?["saved"] == "invalid");
+    tokio::fs::write(&fixture.source, initial_config).await?;
+    ensure!(configuration(&fixture.status(&fixture.source).await?)?["running"] == "in_sync");
+    Ok(())
 }
 
 #[tokio::test]

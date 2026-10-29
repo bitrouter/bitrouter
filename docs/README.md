@@ -38,10 +38,11 @@ the CLI-only contract and implementation record define the current product.
   Stage plan, independent review findings, validation evidence and remaining gates.
 - [`ORCHESTRATOR_CORE_ACCEPTANCE.md`](ORCHESTRATOR_CORE_ACCEPTANCE.md) —
   A01–A23 source/test evidence and remaining core/harness integration exit criteria.
-- [`BITROUTER_AI_REFACTOR_SPEC.md`](BITROUTER_AI_REFACTOR_SPEC.md) — **design
-  baseline; phased implementation started.** Recorded Core native integration, conversion admission,
-  catalog/auth boundaries, data-driven ACP relocation and alpha API migration;
-  implementation contracts, acceptance criteria and remaining review items.
+- [`BITROUTER_AI_REFACTOR_SPEC.md`](BITROUTER_AI_REFACTOR_SPEC.md) — **historical
+  extraction baseline; target ownership superseded by the service refactor plan.**
+  Recorded Core native integration, conversion admission, catalog/auth boundaries,
+  data-driven ACP relocation and alpha API migration. Behavioral/fidelity
+  requirements remain applicable.
 - [`MODEL_HISTORY_COMPATIBILITY_AUDIT.md`](MODEL_HISTORY_COMPATIBILITY_AUDIT.md) —
   Baseline model-history replay, conversion, omission and synthesis rules;
   evidence and boundaries for the proposed `bitrouter-ai` extraction.

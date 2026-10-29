@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, ensure};
 use portable_pty::{CommandBuilder, PtySize};
 
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 
 #[path = "support/terminal.rs"]

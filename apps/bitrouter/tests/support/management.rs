@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::process::{Child, Command};
 
-#[path = "../../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "example_binary.rs"]
 pub(super) mod example_binary;
 
 pub struct Fixture {
@@ -99,7 +99,7 @@ impl Fixture {
             value["agents"] = json!({"stub":{"name":"stub","transport":{"type":"stdio","command":executable,
                 "env":{"BITROUTER_PTY_SCENARIO":scenario,"BITROUTER_PTY_CAPTURE":capture,"BITROUTER_PTY_CONTROL":control}}}});
             if scenario == "control-settings" {
-                let (package, version) = bitrouter::harness::by_id("claude-acp")
+                let (package, version) = bitrouter::harness::catalog::by_id("claude-acp")
                     .and_then(|harness| harness.maintained_adapter_identity())
                     .context("fixture routing identity missing")?;
                 // Exercise the production route bridge with a Cargo peer. This

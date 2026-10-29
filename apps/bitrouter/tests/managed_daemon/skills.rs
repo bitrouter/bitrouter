@@ -153,9 +153,11 @@ async fn managed_cli_child_inherits_required_selector_but_waits_for_its_own_skil
     let settled = wait_owner_finished(&client, "required-child-input").await?;
     ensure!(
         settled.released
-            && settled.run.as_ref().is_some_and(
-                |run| run.status == bitrouter_orchestrator::core::session::RunStatus::Completed
-            )
+            && settled
+                .run
+                .as_ref()
+                .is_some_and(|run| run.status
+                    == bitrouter::storage::checkpoint::snapshot::RunStatus::Completed)
     );
     ensure!(children.load(Ordering::SeqCst) == 1);
     ensure!(
@@ -275,9 +277,11 @@ async fn managed_cli_reads_bound_supporting_files_into_verified_model_data_and_c
     let settled = wait_owner_finished(&client, "supporting-input").await?;
     ensure!(
         settled.released
-            && settled.run.as_ref().is_some_and(
-                |run| run.status == bitrouter_orchestrator::core::session::RunStatus::Completed
-            )
+            && settled
+                .run
+                .as_ref()
+                .is_some_and(|run| run.status
+                    == bitrouter::storage::checkpoint::snapshot::RunStatus::Completed)
     );
     ensure!(calls.load(Ordering::SeqCst) == 2);
     let http = upstream
@@ -898,8 +902,8 @@ async fn cold_explain_of_a_lost_managed_owner_never_restores_or_reports_an_unobs
 async fn fixture_at(api: Option<std::net::SocketAddr>) -> Result<(Fixture, MockServer, PathBuf)> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST")).and(path("/v1/systemone")).respond_with(|request: &wiremock::Request| {
-        let Ok(request) = serde_json::from_slice::<bitrouter_sdk::decision_model::types::DecisionRequest>(&request.body) else { return ResponseTemplate::new(400); };
-        use bitrouter_sdk::decision_model::types::{Answer, Question};
+        let Ok(request) = serde_json::from_slice::<bitrouter::gateway::model::decision::types::DecisionRequest>(&request.body) else { return ResponseTemplate::new(400); };
+        use bitrouter::gateway::model::decision::types::{Answer, Question};
         let mut answers = std::collections::BTreeMap::new();
         for (id, question) in request.questions {
             let answer = match question {
@@ -1170,7 +1174,7 @@ async fn managed_cli_rejects_unavailable_required_uris_without_reads_or_models()
                     .run
                     .as_ref()
                     .is_some_and(|run| run.status
-                        == bitrouter_orchestrator::core::session::RunStatus::Failed),
+                        == bitrouter::storage::checkpoint::snapshot::RunStatus::Failed),
             "{settled:?}"
         );
     }
@@ -1248,9 +1252,11 @@ async fn managed_cli_reuses_its_persisted_mcp_root_after_the_resource_peer_disco
     let settled = wait_owner_finished(&client, "cached-mcp-input").await?;
     ensure!(
         settled.released
-            && settled.run.as_ref().is_some_and(
-                |run| run.status == bitrouter_orchestrator::core::session::RunStatus::Completed
-            ),
+            && settled
+                .run
+                .as_ref()
+                .is_some_and(|run| run.status
+                    == bitrouter::storage::checkpoint::snapshot::RunStatus::Completed),
         "{settled:?}"
     );
     ensure!(calls.load(Ordering::SeqCst) == 2);
@@ -1294,7 +1300,7 @@ async fn managed_cli_reuses_its_persisted_mcp_root_after_the_resource_peer_disco
         .iter()
         .find(|candidate| {
             matches!(&candidate.source,
-        bitrouter_orchestrator::core::skills::SkillSource::Mcp(held) if held == &original)
+        bitrouter::storage::skills::SkillSource::Mcp(held) if held == &original)
         })
         .context("original MCP binding")?;
     ensure!(
@@ -1515,9 +1521,9 @@ async fn managed_cli_denial_and_cancellation_never_read_unapproved_mcp_instructi
         ensure!(!settled.resident && settled.released);
         ensure!(settled.run.as_ref().is_some_and(|run| run.status
             == if deny {
-                bitrouter_orchestrator::core::session::RunStatus::Failed
+                bitrouter::storage::checkpoint::snapshot::RunStatus::Failed
             } else {
-                bitrouter_orchestrator::core::session::RunStatus::Cancelled
+                bitrouter::storage::checkpoint::snapshot::RunStatus::Cancelled
             }));
         ensure!(
             requests(&journal)?
@@ -1597,7 +1603,7 @@ async fn a_corrupt_required_mcp_root_fails_before_the_model_request() -> Result<
         .find(|candidate| {
             matches!(
                 candidate.source,
-                bitrouter_orchestrator::core::skills::SkillSource::Mcp(_)
+                bitrouter::storage::skills::SkillSource::Mcp(_)
             )
         })
         .context("MCP candidate")?;
@@ -1723,11 +1729,11 @@ async fn task_run_waits_for_explicit_skill_consent_and_delivers_verified_user_da
         .context("consent ID")?;
     // A v18 task-run would auto-allow this exact input. Reject that wire
     // contract before it can answer a newly introduced consent request.
-    let packet = bitrouter::agent_local::ThreadCommand {
+    let packet = bitrouter::client::agent_local::ThreadCommand {
         version: 18,
         command_id: "legacy-auto-allow".into(),
         server_instance_id: Some(boot.into()),
-        operation: bitrouter::agent_local::Operation::Input {
+        operation: bitrouter::client::agent_local::Operation::Input {
             thread_id: thread.into(),
             turn_id: turn.into(),
             request_id: request.into(),
@@ -1736,8 +1742,10 @@ async fn task_run_waits_for_explicit_skill_consent_and_delivers_verified_user_da
         },
     };
     let mut legacy = BufReader::new(
-        tokio::net::UnixStream::connect(bitrouter::agent_local::socket_path(&fixture.socket))
-            .await?,
+        tokio::net::UnixStream::connect(bitrouter::client::agent_local::socket_path(
+            &fixture.socket,
+        ))
+        .await?,
     );
     use tokio::io::AsyncWriteExt;
     legacy
@@ -2115,7 +2123,7 @@ async fn cli_requires_an_unlisted_rootless_mcp_uri_and_delivers_its_exact_held_e
 #[path = "skills/integration.rs"]
 mod integration;
 
-fn selection_failure(snapshot: &bitrouter_orchestrator::core::session::SessionSnapshot) -> bool {
+fn selection_failure(snapshot: &bitrouter::storage::checkpoint::snapshot::SessionSnapshot) -> bool {
     snapshot
         .context_store
         .work

@@ -1,6 +1,6 @@
 [package]
 name = "bitrouter-sdk"
-description = "BitRouter SDK: per-protocol pipelines, hook traits, provider adapters"
+description = "HTTP client for the BitRouter service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,83 +10,31 @@ rust-version.workspace = true
 # CI artifacts for the `sdk-public-api` job, not crate content: consumers who
 # download the crate have no use for the public-dependency manifest or its
 # toolchain pins.
-#
-# `span-schema.json` is deliberately NOT on this list even though it is
-# generated the same way. It is the interop surface itself — the declaration a
-# deployment implements when it renders BitRouter's telemetry, whether through
-# `bitrouter-telemetry`'s OTLP exporter or anything else — so it ships with the
-# crate.
 exclude = ["public-api-deps.txt", "public-api.pins"]
-
-[dependencies]
-bitrouter-ai.workspace = true
-async-trait.workspace = true
-serde.workspace = true
-sha2.workspace = true
-hex = { workspace = true, optional = true }
-serde_json.workspace = true
-thiserror.workspace = true
-futures.workspace = true
-futures-core.workspace = true
-tokio = { workspace = true, features = ["sync", "rt", "macros", "time"] }
-# `rt` feature: `tokio_util::task::TaskTracker`, used to run non-streaming
-# requests to completion after a client disconnect (see `Pipeline::execute_detached`).
-tokio-util = { workspace = true, features = ["rt"] }
-tracing.workspace = true
-http.workspace = true
-pin-project-lite.workspace = true
-async-stream.workspace = true
-reqwest.workspace = true
-eventsource-stream.workspace = true
-fluent-uri.workspace = true
-url.workspace = true
-uuid.workspace = true
-schemars.workspace = true
-base64.workspace = true
-
-# `server` feature
-axum = { workspace = true, optional = true }
-tower = { workspace = true, optional = true }
-# `config_file` feature
-serde-saphyr = { workspace = true, optional = true }
-
-# `mcp` feature — official Rust MCP SDK.
-# <https://github.com/modelcontextprotocol/rust-sdk>
-rmcp = { workspace = true, optional = true }
 
 [features]
 default = []
-# axum HTTP server + SSE handlers + admin endpoints.
-server = ["dep:axum", "dep:tower", "tokio/signal"]
-# yaml config loading (serde-saphyr + tokio::fs)
-config_file = ["dep:serde-saphyr", "dep:hex", "tokio/fs"]
-# rmcp-backed `RmcpExecutor` + `ConfigMcpRoutingTable` for the `mcp`
-# pure-routing pipeline. Without this feature the SDK still exposes
-# `mcp::Pipeline`, hook traits, and the `McpTransport` enum, so a consumer
-# can plug in a custom Executor without pulling rmcp.
-mcp = ["dep:rmcp", "tokio/process"]
-# Conformance helpers for renderers' test suites: `span_def_for`,
-# `value_type_matches` and `render_json`, which resolve an exported span to its
-# declaration, check an emitted value's type against the declared one, and
-# render the committed artifact. They have no production callers — a renderer
-# emits against the schema, it does not read it back — so they are gated rather
-# than shipped as public API nobody calls (CLAUDE.md rule 4). Carries no
-# dependency: `serde` is already unconditional. A renderer enables it under
-# `[dev-dependencies]`; `bitrouter-telemetry` is the one in this workspace.
-testing = []
+# Client transport only; this does not enable the application's scheduler.
+core = ["dep:tokio-tungstenite", "futures-util/sink"]
+
+[dependencies]
+bitrouter-ai.workspace = true
+async-stream.workspace = true
+futures-core.workspace = true
+futures-util = "0.3"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time"] }
+uuid.workspace = true
+url.workspace = true
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"], optional = true }
 
 [dev-dependencies]
-wiremock = "0.6"
-tokio = { workspace = true, features = [
-    "sync",
-    "rt",
-    "macros",
-    "time",
-    "rt-multi-thread",
-    "test-util",
-] }
-tempfile.workspace = true
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+axum.workspace = true
+bytes.workspace = true
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "sync", "time", "io-util"] }

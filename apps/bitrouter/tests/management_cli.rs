@@ -22,12 +22,12 @@ mod evolution;
 
 #[tokio::test]
 async fn management_protocol_versions_reject_new_operations_before_effects() -> Result<()> {
-    use bitrouter::daemon::{DaemonCommand, DaemonResponse};
-    use bitrouter::supervisor::{
+    use bitrouter::client::sessions::wire::{
         ControlFence, SessionCommand, SessionRequest, SessionResponse, SessionScope,
     };
+    use bitrouter::daemon::{DaemonCommand, DaemonResponse};
     let fixture = Fixture::new(None, None).await?;
-    let socket = bitrouter::agent_local::socket_path(&fixture.socket);
+    let socket = bitrouter::client::agent_local::socket_path(&fixture.socket);
     let stream = tokio::net::UnixStream::connect(&socket).await?;
     let mut stream = BufReader::new(stream);
     let mut old_create = serde_json::to_vec(
@@ -40,10 +40,13 @@ async fn management_protocol_versions_reject_new_operations_before_effects() -> 
     let rejected: Value = serde_json::from_str(&line)?;
     assert_eq!(rejected["type"], "unsupported_version");
     assert_eq!(rejected["supported"], 19);
-    let capabilities =
-        bitrouter::agent_local::request(&socket, bitrouter::agent_local::Operation::Capabilities)
-            .await?;
-    let bitrouter::agent_local::ReplyResult::Capabilities { operations, .. } = capabilities else {
+    let capabilities = bitrouter::client::agent_local::request(
+        &socket,
+        bitrouter::client::agent_local::Operation::Capabilities,
+    )
+    .await?;
+    let bitrouter::client::agent_local::ReplyResult::Capabilities { operations, .. } = capabilities
+    else {
         anyhow::bail!("missing native capabilities")
     };
     for operation in ["load_thread", "close_thread", "recover_thread"] {
@@ -119,7 +122,7 @@ async fn management_protocol_versions_reject_new_operations_before_effects() -> 
 #[tokio::test]
 async fn headless_foreground_owner_retains_worktree_claim_against_cli_background_start()
 -> Result<()> {
-    use bitrouter::supervisor::{PermissionPolicy, Presentation, StartRunRequest};
+    use bitrouter::client::sessions::wire::{PermissionPolicy, Presentation, StartRunRequest};
     let fixture = Fixture::new(Some("minimal"), None).await?;
     let git = tokio::process::Command::new("git")
         .args(["init", "--quiet"])
@@ -140,7 +143,7 @@ async fn headless_foreground_owner_retains_worktree_claim_against_cli_background
             agent_id: "stub".into(),
             prompt: None,
             cwd: fixture.workspace.clone(),
-            routing: bitrouter::acp_cli::RoutingOptions {
+            routing: bitrouter::commands::agent_options::RoutingOptions {
                 direct: true,
                 ..Default::default()
             },
@@ -379,7 +382,7 @@ async fn lost_acp_ack_retries_the_exact_fence_and_can_be_inspected_without_repla
             let mut line = String::new();
             reader.read_line(&mut line).await?;
             let command: bitrouter::daemon::DaemonCommand = serde_json::from_str(&line)?;
-            let is_mutation = matches!(&command, bitrouter::daemon::DaemonCommand::Sessions { request } if matches!(&request.command, bitrouter::supervisor::SessionCommand::Mutate(_)));
+            let is_mutation = matches!(&command, bitrouter::daemon::DaemonCommand::Sessions { request } if matches!(&request.command, bitrouter::client::sessions::wire::SessionCommand::Mutate(_)));
             let response = bitrouter::daemon::send_command(&actual, &command).await?;
             let drop_ack = if is_mutation {
                 let mut captured = capture
@@ -513,8 +516,8 @@ async fn lost_acp_ack_retries_the_exact_fence_and_can_be_inspected_without_repla
 
 #[tokio::test]
 async fn acp_cli_rejects_control_boot_change_during_authorization_before_mutation() -> Result<()> {
+    use bitrouter::client::sessions::wire::SessionCommand;
     use bitrouter::daemon::{DaemonCommand, DaemonResponse};
-    use bitrouter::supervisor::SessionCommand;
     use std::sync::atomic::{AtomicUsize, Ordering};
     let fixture = Fixture::new(Some("minimal"), None).await?;
     let run = fixture

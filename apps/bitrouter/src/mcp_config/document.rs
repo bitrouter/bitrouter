@@ -3,10 +3,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use crate::config;
+use crate::config::mcp::McpServerConfig;
 use anyhow::{Context, Result, ensure};
-use bitrouter_sdk::config;
-use bitrouter_sdk::mcp::config_routing::{ConfigMcpRoutingTable, McpServerAggregateConfig};
-use bitrouter_sdk::mcp::transport::McpServerConfig;
 use serde_json::Value;
 
 use super::bad;
@@ -166,10 +165,20 @@ pub(super) fn validate_candidate(raw: &str) -> Result<config::Config> {
             "MCP map keys and entry names must match"
         );
     }
-    ConfigMcpRoutingTable::from_configs(parsed.mcp_servers.clone().into_iter().map(|(key, cfg)| {
-        let aggregate = McpServerAggregateConfig { aggregate: cfg.aggregate, tool_prefix: cfg.tool_prefix.clone().unwrap_or_else(|| format!("{key}__")) };
-        (key, cfg, aggregate)
-    })).map_err(|_| bad("invalid MCP name, transport, URL, aggregate label or duplicate tool prefix (values omitted)"))?;
+    let mut prefixes = std::collections::HashMap::new();
+    for (key, entry) in &parsed.mcp_servers {
+        entry
+            .validate()
+            .map_err(|_| bad("invalid MCP name, transport or URL (values omitted)"))?;
+        let prefix = entry
+            .tool_prefix
+            .clone()
+            .unwrap_or_else(|| format!("{key}__"));
+        config::mcp::validate_aggregate_member(key, entry.aggregate, &prefix, &mut prefixes)
+            .map_err(|_| {
+                bad("invalid MCP aggregate label or duplicate tool prefix (values omitted)")
+            })?;
+    }
     Ok(parsed)
 }
 

@@ -772,10 +772,10 @@ mod tests {
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::Duration;
 
+    use crate::gateway::providers::hosted::credentials::StoredCredential;
     use axum::Router;
     use axum::body::{Body, Bytes};
     use axum::routing::get;
-    use bitrouter_ai::providers::hosted::credentials::StoredCredential;
     use clap::Parser;
     use serde_json::json;
     use wiremock::matchers::{body_json, body_string, header, method, path, query_param};

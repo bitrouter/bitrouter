@@ -12,18 +12,19 @@ pub mod types;
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::storage::capture::{CaptureEvent, CaptureKind};
+
 use anyhow::{Context, Result, ensure};
-use bitrouter_orchestrator::acp::capture::{CaptureEvent, CaptureKind};
 use sea_orm::sea_query::{Expr, OnConflict};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter,
-    QueryOrder, Set, TransactionTrait,
+    QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::entities::{connections, events, sessions};
 use super::{CANONICAL_VERSION, CanonicalEvent, CanonicalStore, SessionIdentity};
+use crate::storage::capture::{connections, events, sessions};
 use entities::{checkpoints, heads, members, resources, revisions};
 use types::*;
 
@@ -83,6 +84,17 @@ async fn session(db: &impl ConnectionTrait, key: &str) -> Result<sessions::Model
 }
 
 async fn lock_session(tx: &DatabaseTransaction, key: &str) -> Result<sessions::Model> {
+    let row = lock_session_metadata(tx, key)
+        .await?
+        .context("recorded native session not found")?;
+    ensure!(!row.deleted, "recorded ACP content was deleted");
+    Ok(row)
+}
+
+async fn lock_session_metadata(
+    tx: &DatabaseTransaction,
+    key: &str,
+) -> Result<Option<sessions::Model>> {
     // A write locks the row on every supported database, including SQLite.
     // Do not inspect rows_affected: MySQL may report zero for an unchanged value.
     sessions::Entity::update_many()
@@ -93,7 +105,13 @@ async fn lock_session(tx: &DatabaseTransaction, key: &str) -> Result<sessions::M
         .filter(sessions::Column::SessionKey.eq(key))
         .exec(tx)
         .await?;
-    session(tx, key).await
+    // A no-op UPDATE locks the row but does not advance MySQL's older read
+    // view. Validation must use the current row, including its deletion fence.
+    // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
+    Ok(sessions::Entity::find_by_id(key)
+        .lock_exclusive()
+        .one(tx)
+        .await?)
 }
 
 async fn manifest(
@@ -105,6 +123,41 @@ async fn manifest(
         .one(db)
         .await?
         .context("checkpoint not found")?;
+    let cp = decode_manifest(&row, identity, id)?;
+    for segment in &cp.segments {
+        session(db, &segment.identity.key()?).await?;
+    }
+    Ok(cp)
+}
+
+/// Mutation callers acquire every session dependency before checkpoint rows.
+/// Reuse those current rows rather than acquiring a session after a dependent.
+async fn locked_manifest(
+    tx: &DatabaseTransaction,
+    identity: &SessionIdentity,
+    id: &str,
+    locked_sessions: &BTreeMap<String, sessions::Model>,
+) -> Result<Checkpoint> {
+    let row = checkpoints::Entity::find_by_id(id)
+        .lock_exclusive()
+        .one(tx)
+        .await?
+        .context("checkpoint not found")?;
+    let cp = decode_manifest(&row, identity, id)?;
+    for segment in &cp.segments {
+        let current = locked_sessions
+            .get(&segment.identity.key()?)
+            .context("checkpoint session dependency was not locked")?;
+        ensure!(!current.deleted, "recorded ACP content was deleted");
+    }
+    Ok(cp)
+}
+
+fn decode_manifest(
+    row: &checkpoints::Model,
+    identity: &SessionIdentity,
+    id: &str,
+) -> Result<Checkpoint> {
     ensure!(
         row.session_key == identity.key()?,
         "checkpoint belongs to a different native session"
@@ -127,9 +180,6 @@ async fn manifest(
         digest(&(identity, cp.watermark, &cp.prefix_digest))? == id,
         "checkpoint ID mismatch"
     );
-    for segment in &cp.segments {
-        session(db, &segment.identity.key()?).await?;
-    }
     Ok(cp)
 }
 
@@ -240,18 +290,22 @@ impl CanonicalStore {
         precondition(&tx).await?;
         // Stable lock ordering prevents two overlapping fork freezes from
         // acquiring parent/child locks in opposite orders.
+        let mut locked_sessions = BTreeMap::new();
         for (key, expected) in &dependencies {
+            let current = lock_session(&tx, key).await?;
             ensure!(
-                lock_session(&tx, key).await? == *expected,
+                current == *expected,
                 "session changed while freezing; retry with a fresh prefix"
             );
+            locked_sessions.insert(key.clone(), current);
         }
         if checkpoints::Entity::find_by_id(&checkpoint_id)
+            .lock_exclusive()
             .one(&tx)
             .await?
             .is_some()
         {
-            let existing = manifest(&tx, identity, &checkpoint_id).await?;
+            let existing = locked_manifest(&tx, identity, &checkpoint_id, &locked_sessions).await?;
             tx.commit().await?;
             self.observe_checkpoint_resources(identity, &checkpoint_id)
                 .await?;
@@ -262,6 +316,7 @@ impl CanonicalStore {
             .filter(checkpoints::Column::Deleted.eq(false))
             .filter(checkpoints::Column::Watermark.lt(expected_watermark))
             .order_by_desc(checkpoints::Column::Watermark)
+            .lock_exclusive()
             .one(&tx)
             .await?;
         let cp = Checkpoint {
@@ -584,9 +639,9 @@ pub(super) async fn delete_dependents(tx: &DatabaseTransaction, key: &str) -> Re
             .one(tx)
             .await?
         {
-            crate::evolution::store::records::Entity::delete_many()
-                .filter(crate::evolution::store::records::Column::SessionKey.eq(cp.session_key))
-                .filter(crate::evolution::store::records::Column::Kind.eq("judge_job"))
+            crate::storage::evolution::records::Entity::delete_many()
+                .filter(crate::storage::evolution::records::Column::SessionKey.eq(cp.session_key))
+                .filter(crate::storage::evolution::records::Column::Kind.eq("judge_job"))
                 .exec(tx)
                 .await?;
         }

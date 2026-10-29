@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 use anyhow::{Context, Result, bail, ensure};
+use bitrouter::client::sessions::wire;
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -21,7 +22,7 @@ const PTY_TIMEOUT: Duration = Duration::from_secs(15);
 const REMOTE_FIXTURE_TOKEN: &str = "remote-a12-fixture-token-0123456789";
 const MOCK_DAEMON_CONFIG: &str =
     "server:\n  listen: 127.0.0.1:0\n  skip_auth: true\nregistry:\n  enabled: false\n";
-#[path = "../../../crates/bitrouter-orchestrator/tests/support/example_binary.rs"]
+#[path = "support/example_binary.rs"]
 mod example_binary;
 #[path = "background_cli/lifecycle.rs"]
 mod lifecycle;
@@ -67,7 +68,7 @@ impl Drop for MockAcp {
         let Ok(text) = std::fs::read_to_string(&self.config_path) else {
             return;
         };
-        let Ok(config) = bitrouter_sdk::config::parse_with(&text, |_| None) else {
+        let Ok(config) = bitrouter::config::parse_with(&text, |_| None) else {
             return;
         };
         let source = bitrouter::paths::ConfigSource::File(self.config_path.clone());
@@ -110,24 +111,24 @@ impl MockAcp {
         Ok(bitrouter::daemon::socket_path_for(&source, &config))
     }
 
-    async fn supervised_runs(&self) -> Result<Vec<bitrouter::supervisor::RunSnapshot>> {
+    async fn supervised_runs(&self) -> Result<Vec<bitrouter::client::sessions::wire::RunSnapshot>> {
         let socket = self.supervisor_socket().await?;
-        let grant = bitrouter::supervisor::authorize(
+        let grant = bitrouter::client::sessions::authorize(
             &socket,
             "pty-observer",
-            [bitrouter::supervisor::SessionScope::Peek]
+            [bitrouter::client::sessions::wire::SessionScope::Peek]
                 .into_iter()
                 .collect(),
         )
         .await?;
-        match bitrouter::supervisor::request(
+        match bitrouter::client::sessions::request(
             &socket,
             &grant,
-            bitrouter::supervisor::SessionCommand::PeekAll,
+            bitrouter::client::sessions::wire::SessionCommand::PeekAll,
         )
         .await?
         {
-            bitrouter::supervisor::SessionResponse::Runs { runs } => Ok(runs),
+            bitrouter::client::sessions::wire::SessionResponse::Runs { runs } => Ok(runs),
             _ => bail!("supervisor omitted its run inventory"),
         }
     }
@@ -941,8 +942,14 @@ async fn background_cli_returns_before_settlement_and_run_survives_client_exit()
         .iter()
         .find(|run| run.run_id == run_id)
         .context("accepted run missing after CLI exited")?;
-    assert_eq!(run.process, bitrouter::supervisor::ProcessState::Running);
-    assert_eq!(run.turn, bitrouter::supervisor::TurnState::Working);
+    assert_eq!(
+        run.process,
+        bitrouter::client::sessions::wire::ProcessState::Running
+    );
+    assert_eq!(
+        run.turn,
+        bitrouter::client::sessions::wire::TurnState::Working
+    );
     assert!(run.lease.is_none());
     mock.wait_for_request("session/prompt")?;
     mock.release()?;
@@ -951,8 +958,8 @@ async fn background_cli_returns_before_settlement_and_run_survives_client_exit()
             let runs = mock.supervised_runs().await?;
             if runs.iter().any(|run| {
                 run.run_id == run_id
-                    && run.review == bitrouter::supervisor::ReviewState::Unread
-                    && run.turn == bitrouter::supervisor::TurnState::Idle
+                    && run.review == bitrouter::client::sessions::wire::ReviewState::Unread
+                    && run.turn == bitrouter::client::sessions::wire::TurnState::Idle
             }) {
                 break;
             }

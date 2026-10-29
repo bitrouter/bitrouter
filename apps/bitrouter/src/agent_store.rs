@@ -1,10 +1,20 @@
 //! App-owned transactional storage for the BRO native execution runtime.
 
-use bitrouter_orchestrator::store::{
-    AcceptedKey, ExecutionHead, ExecutionIndexPage, ExecutionOwner, ExecutionPage, ExecutionRecord,
-    ExecutionStore, OwnerClaim, RUNTIME_FORMAT_VERSION, StoredExecution, ThreadHistoryChunk,
-    owner_time_ms, push_history_event, validate_owner_id, validate_runtime_format,
-};
+use crate::harness::storage::AcceptedKey;
+use crate::harness::storage::ExecutionHead;
+use crate::harness::storage::ExecutionIndexPage;
+use crate::harness::storage::ExecutionPage;
+use crate::harness::storage::ExecutionRecord;
+use crate::harness::storage::ExecutionStore;
+use crate::harness::storage::RUNTIME_FORMAT_VERSION;
+use crate::harness::storage::StoredExecution;
+use crate::harness::storage::ThreadHistoryChunk;
+use crate::harness::storage::owner_time_ms;
+use crate::harness::storage::push_history_event;
+use crate::harness::storage::validate_owner_id;
+use crate::harness::storage::validate_runtime_format;
+use bitrouter_ai::harness::runtime::ExecutionOwner;
+use bitrouter_ai::harness::runtime::OwnerClaim;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
     QueryOrder, QuerySelect, Set, TransactionTrait,
@@ -827,8 +837,8 @@ mod tests {
     #[tokio::test]
     async fn v1_upgrade_rolls_back_corruption_and_preserves_bytes_after_reopen()
     -> anyhow::Result<()> {
+        use crate::storage::checkpoint::sha256;
         use base64::{Engine, engine::general_purpose::STANDARD};
-        use bitrouter_orchestrator::core::checkpoint::sha256;
 
         let directory = tempfile::tempdir()?;
         let url = format!("sqlite://{}/upgrade.db", directory.path().display());
@@ -1284,8 +1294,9 @@ mod tests {
     }
 
     fn history_event(seq: u64, text: &str) -> ExecutionRecord {
-        use bitrouter_orchestrator::thread::{ThreadChange, ThreadEvent};
-        use bitrouter_orchestrator::turn::TurnReceipt;
+        use bitrouter_ai::harness::thread::ThreadChange;
+        use bitrouter_ai::harness::thread::ThreadEvent;
+        use bitrouter_ai::harness::turn::TurnReceipt;
         ExecutionRecord::ThreadEvent {
             event: ThreadEvent {
                 server_instance_id: "first-process".into(),
@@ -1298,7 +1309,7 @@ mod tests {
                         thread_id: "thread".into(),
                         turn_id: format!("turn-{seq}"),
                         queue_order: seq,
-                        status: bitrouter_orchestrator::turn::TurnStatus::Queued,
+                        status: bitrouter_ai::harness::turn::TurnStatus::Queued,
                     },
                     user_item_id: format!("user-{seq}"),
                     prompt: text.into(),

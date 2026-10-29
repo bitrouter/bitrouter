@@ -3,7 +3,7 @@
 use super::*;
 use crate::auth::{db, entities::api_keys, keys};
 use crate::orchestrator_api::{Entry, channel::RemotePort, output};
-use bitrouter_orchestrator::core::protocol::OwnershipGrant;
+use bitrouter_ai::core::protocol::{Limits, OwnershipGrant};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 use serde_json::json;
 
@@ -35,7 +35,7 @@ async fn fixture() -> Result<(ManagedCoreApi, Principal, Create), Box<dyn std::e
         .await
         .map_err(|error| error.0)?;
     let api = ManagedCoreApi::new(
-        Arc::new(bitrouter_sdk::App::builder().build()?),
+        Arc::new(crate::gateway::assembly::App::builder().build()?),
         connection,
         "core".into(),
     );
@@ -79,9 +79,7 @@ async fn fixture() -> Result<(ManagedCoreApi, Principal, Create), Box<dyn std::e
             ready: true,
             job: Some(Job {
                 operation_id: "replay".into(),
-                fingerprint: bitrouter_orchestrator::core::checkpoint::sha256(&serde_json::to_vec(
-                    &create,
-                )?),
+                fingerprint: crate::storage::checkpoint::sha256(&serde_json::to_vec(&create)?),
                 progress,
             }),
             recovery_evidence: Vec::new(),
