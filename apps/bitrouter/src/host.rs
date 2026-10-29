@@ -371,7 +371,14 @@ async fn serve_with_options(
         let managed_native = crate::managed_task::owner::Owner::new(
             app.clone(), assembled.db.clone(), cfg.clone(), native_harness_config(&cfg, home),
         );
-        let reloader: Arc<dyn daemon::DaemonReloader> = Arc::new(reloader);
+        let reloader = Arc::new(reloader);
+        let registry_stop = tokio_util::sync::CancellationToken::new();
+        let _registry_stop_guard = registry_stop.clone().drop_guard();
+        let registry_ready = Arc::new(tokio::sync::Notify::new());
+        let registry_worker = tokio::spawn(crate::gateway::catalog::refresh::run(
+            reloader.clone(), registry_ready.clone(), registry_stop.clone(),
+        ));
+        let reloader: Arc<dyn daemon::DaemonReloader> = reloader;
 
         let inference_listener = tokio::net::TcpListener::bind(&listen)
             .await
@@ -682,6 +689,7 @@ async fn serve_with_options(
                         crate::VERSION,
                         locator_socket.display()
                     );
+                    registry_ready.notify_one();
                     if let Some(remote_listen) = remote_listen {
                         println!(
                             "bitrouter {} — remote control on {remote_listen}",
@@ -826,6 +834,10 @@ async fn serve_with_options(
             control_shutdown_tx,
         )
         .await;
+        registry_stop.cancel();
+        if let Err(error) = registry_worker.await {
+            tracing::warn!(%error, "registry refresh worker ended unexpectedly");
+        }
         #[cfg(feature = "core")]
         evolution_stop.cancel();
         #[cfg(feature = "core")]

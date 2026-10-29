@@ -218,6 +218,7 @@ async fn native_thread_consent_precedes_real_mcp_reads_and_model_data_in_both_pe
                 chat_google_extensions: false,
                 reasoning_effort: None,
                 model_constraints: Default::default(),
+                registry: None,
                 account_label: None,
                 api_key_override: None,
                 api_base_override: None,

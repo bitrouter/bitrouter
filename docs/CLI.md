@@ -884,6 +884,14 @@ is sufficient; `chat.agent` is optional. The bare result has `action: ensure_sta
 Detection does not verify provider login
 or connectivity. Explicit remote contexts require an administration subcommand.
 
+Interactive setup lists every active, public provider from the registry in one
+alphabetical list. BitRouter Cloud (`bitrouter`) is an ordinary provider row.
+Startup uses that source's valid cache or the source-bound packaged default as
+whole alternatives, so a fresh installation has a default catalog offline.
+Custom sources never borrow the packaged default. Background refresh starts
+after readiness and updates subsequent routes; disable it with
+`registry.auto_refresh: false`. Configured credentials are marked.
+
 When setup is missing, stdin and stderr must both be terminals. First-run setup
 continues to background startup after saving. Without those terminals, missing
 setup produces an actionable error and a nonzero exit; it never waits for input.
@@ -1460,9 +1468,10 @@ required; npm obtains the pinned adapter on first use. No `agents:` entry is
 needed for either built-in id.
 
 Codex and Claude subscription login metadata and model defaults also ship in
-the binary. With the default public registry, missing provider/model entries
-are filled from this snapshot; published metadata takes precedence. A custom
-registry URL or `registry.enabled: false` opts out. A stored subscription login
+the binary. With the default public registry, the packaged document is used
+only when no usable source-bound cache exists; remote and packaged inventories
+are never merged. A custom registry URL or `registry.enabled: false` opts out.
+A stored subscription login
 auto-enables its provider, so no manual `providers:` entry is required.
 
 When `openai-codex` is active, Codex ACP can use its native default model

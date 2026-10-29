@@ -1,32 +1,50 @@
-name: chutes
-metadata:
-  headquarters: US
-  name: Chutes
-  privacy_policy_url: https://chutes.ai/privacy
-  slug: chutes
-  status_page_url: https://status.chutes.ai
-  terms_of_service_url: https://chutes.ai/terms
-api_protocol:
-  - "*": openai
-api_base: https://llm.chutes.ai/v1
-rate_limits:
-  - "*":
-      requests_per_minute: 30
-models:
-  - id: xiaomi/mimo-v2-flash
-    provider_model_id: XiaomiMiMo/MiMo-V2-Flash-TEE
-    pricing:
-      input_tokens:
-        no_cache: 0.09
-        cache_read: 0.045
-      output_tokens:
-        text: 0.29
-    capabilities:
-      - reasoning
-      - tools
-status: active
-weight: 1
-auth_scheme: x-api-key
-community: true
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://llm.chutes.ai/v1",
+  "billing": "usage",
+  "status": "active",
+  "weight": 1,
+  "community": true,
+  "metadata": {
+    "headquarters": "US",
+    "name": "Chutes",
+    "privacy_policy_url": "https://chutes.ai/privacy",
+    "slug": "chutes",
+    "status_page_url": "https://status.chutes.ai",
+    "terms_of_service_url": "https://chutes.ai/terms"
+  },
+  "models": [
+    {
+      "provider_model_id": "XiaomiMiMo/MiMo-V2-Flash-TEE",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 30
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.045,
+              "no_cache": 0.09
+            },
+            "output_tokens": {
+              "text": 0.29
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ]
+    }
+  ],
+  "name": "chutes",
+  "auth": {
+    "kind": "bearer",
+    "env": "CHUTES_API_KEY"
+  }
+}

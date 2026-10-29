@@ -96,6 +96,7 @@ async fn pre_hook_blocks_forbidden_request() -> TestResult {
 
 fn target() -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: "p".to_string(),
         service_id: "m".to_string(),
         api_base: "https://example.invalid".to_string(),

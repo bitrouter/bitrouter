@@ -1,77 +1,367 @@
-name: xai
-metadata:
-  headquarters: US
-  name: xAI
-  privacy_policy_url: https://x.ai/legal/privacy-policy
-  slug: xai
-  status_page_url: https://status.x.ai
-  terms_of_service_url: https://x.ai/legal/terms-of-service
-api_base: https://api.x.ai/v1
-api_protocol:
-  - "*": [responses, openai]
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-# Catalog source: https://models.dev/api.json (provider key `xai`); >200k tier on Grok 4 family doubles the base price listed here.
-# Pricing is per 1M tokens.
-models:
-  # Official model and pricing: https://docs.x.ai/developers/models/grok-4.6
-  - id: x-ai/grok-4.6
-    provider_model_id: grok-4.6
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.5
-      output_tokens:
-        text: 6
-    capabilities:
-      - reasoning
-      - tools
-  - id: x-ai/grok-4.5
-    provider_model_id: grok-4.5
-    # Pricing from the xAI API catalog ($2.00 in / $6.00 out per 1M, $0.50
-    # cached input). 500k-token context window.
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.3
-      output_tokens:
-        text: 6
-    capabilities:
-      - reasoning
-      - tools
-  - id: x-ai/grok-4.3
-    provider_model_id: grok-4.3
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.2
-      output_tokens:
-        text: 2.5
-    capabilities:
-      - reasoning
-      - tools
-  - id: x-ai/grok-build-0.1
-    provider_model_id: grok-build-0.1
-    # Pricing from the xAI catalog ($1.00 in / $0.20 cached / $2.00 out per 1M).
-    pricing:
-      input_tokens:
-        no_cache: 1
-        cache_read: 0.2
-      output_tokens:
-        text: 2
-    capabilities:
-      - tools
-  - id: x-ai/grok-4.7
-    provider_model_id: grok-4.7
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.5
-      output_tokens:
-        text: 6
-status: active
-weight: 1
-submitted_at: 2026-05-25
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://api.x.ai/v1",
+  "billing": "usage",
+  "submitted_at": "2026-05-25T00:00:00Z",
+  "metadata": {
+    "headquarters": "US",
+    "name": "xAI",
+    "privacy_policy_url": "https://x.ai/legal/privacy-policy",
+    "slug": "xai",
+    "status_page_url": "https://status.x.ai",
+    "terms_of_service_url": "https://x.ai/legal/terms-of-service"
+  },
+  "models": [
+    {
+      "provider_model_id": "grok-4.6",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.6"
+    },
+    {
+      "provider_model_id": "grok-4.5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.5"
+    },
+    {
+      "provider_model_id": "grok-4.3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.3"
+    },
+    {
+      "provider_model_id": "grok-4.20-0309-non-reasoning",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.20"
+    },
+    {
+      "provider_model_id": "grok-build-0.1",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1
+            },
+            "output_tokens": {
+              "text": 2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1
+            },
+            "output_tokens": {
+              "text": 2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-build-0.1"
+    },
+    {
+      "provider_model_id": "grok-4.20-multi-agent-0309",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.20-multi-agent"
+    },
+    {
+      "provider_model_id": "grok-4.7",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.7"
+    }
+  ],
+  "name": "xai",
+  "weight": 1,
+  "status": "active",
+  "auth": {
+    "kind": "bearer",
+    "env": "XAI_API_KEY"
+  }
+}

@@ -1,151 +1,881 @@
-name: alibaba
-display_name: Alibaba Cloud Model Studio (International)
-metadata:
-  headquarters: CN
-  datacenters:
-    - SG
-  name: Alibaba Cloud
-  privacy_policy_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy
-  slug: alibaba-cloud
-  status_page_url: https://status.alibabacloud.com
-  terms_of_service_url: https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use
-# Source: Alibaba Cloud Model Studio, International deployment scope
-# (Singapore-hosted), served on a fixed DashScope-compatible base URL.
-api_base: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
-protocol_endpoints:
-  anthropic: https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1
-api_protocol:
-  - "*": [openai, responses, anthropic]
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-models:
-  # Official pricing: https://www.qwencloud.com/models/qwen3.8-2.4t-a95b
-  - id: qwen/qwen3.8-2.4t-a95b
-    provider_model_id: qwen3.8-2.4t-a95b
-    reasoning_effort:
-      levels: [low, medium, xhigh]
-      default: xhigh
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.17
-        cache_write: 2.5
-      output_tokens:
-        text: 6
-    capabilities: [reasoning, tools]
-  # Official pricing: https://www.qwencloud.com/models/qwen3.8-27b
-  - id: qwen/qwen3.8-27b
-    provider_model_id: qwen3.8-27b
-    reasoning_effort:
-      levels: [low, medium, xhigh]
-      default: xhigh
-    pricing:
-      input_tokens:
-        no_cache: 0.5
-        cache_read: 0.05
-        cache_write: 0.625
-      output_tokens:
-        text: 3
-    capabilities: [reasoning, tools]
-  # Official pricing: https://www.qwencloud.com/models/qwen3.8-max
-  # Official function-calling docs: https://docs.qwencloud.com/developer-guides/text-generation/function-calling
-  - id: qwen/qwen3.8-max
-    provider_model_id: qwen3.8-max
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.25
-        cache_write: 2.5
-      output_tokens:
-        text: 6
-    capabilities: [tools]
-  - id: qwen/qwen3.7-max
-    provider_model_id: qwen3.7-max
-    pricing:
-      input_tokens:
-        no_cache: 2.5
-        cache_read: 0.5
-        cache_write: 3.125
-      output_tokens:
-        text: 7.5
-  - id: qwen/qwen3.7-plus
-    provider_model_id: qwen3.7-plus
-    pricing:
-      input_tokens:
-        no_cache: 0.5
-        cache_read: 0.05
-        cache_write: 0.625
-      output_tokens:
-        text: 3
-      context_tiers:
-        - above_input_tokens: 256000
-          input_tokens:
-            no_cache: 1.2
-          output_tokens:
-            text: 4.8
-  - id: qwen/qwen3.6-plus
-    provider_model_id: qwen3.6-plus
-    pricing:
-      input_tokens:
-        no_cache: 0.5
-        cache_read: 0.05
-        cache_write: 0.625
-      output_tokens:
-        text: 3
-      context_tiers:
-        - above_input_tokens: 256000
-          input_tokens:
-            no_cache: 2
-          output_tokens:
-            text: 6
-  - id: z-ai/glm-5.2
-    provider_model_id: glm-5.2
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-        cache_read: 0.28
-        cache_write: 0
-      output_tokens:
-        text: 4.4
-  - id: qwen/qwen3.8-flash
-    provider_model_id: qwen3.8-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-        cache_read: 0.016
-        cache_write: 0.2
-      output_tokens:
-        text: 0.47
-  - id: moonshotai/kimi-k3
-    provider_model_id: kimi-k3
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-      output_tokens:
-        text: 15
-  - id: qwen/qwen3.7-flash
-    provider_model_id: qwen3.7-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.03
-        cache_read: 0.003
-        cache_write: 0.0375
-      output_tokens:
-        text: 0.13
-  - id: qwen/qwen3.8-omni-flash
-    provider_model_id: qwen3.8-omni-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-        cache_read: 0.016
-      output_tokens:
-        text: 0.47
-status: active
-weight: 1
-submitted_at: 2026-05-25
-auth_scheme: x-api-key
-auto_sync:
-  feed: models_dev
-  key: alibaba
+{
+  "api_base": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  "billing": "usage",
+  "status": "active",
+  "weight": 1,
+  "display_name": "Alibaba Cloud Model Studio (International)",
+  "metadata": {
+    "datacenters": [
+      "SG"
+    ],
+    "headquarters": "CN",
+    "name": "Alibaba Cloud",
+    "privacy_policy_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-privacy-policy",
+    "slug": "alibaba-cloud",
+    "status_page_url": "https://status.alibabacloud.com",
+    "terms_of_service_url": "https://www.alibabacloud.com/help/en/legal/latest/alibaba-cloud-international-website-terms-of-use-alibaba-cloud-international-website-terms-of-use"
+  },
+  "models": [
+    {
+      "provider_model_id": "qwen3.8-2.4t-a95b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-2.4t-a95b"
+    },
+    {
+      "provider_model_id": "qwen3.8-27b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "xhigh",
+            "levels": [
+              "low",
+              "medium",
+              "xhigh"
+            ]
+          },
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-27b"
+    },
+    {
+      "provider_model_id": "qwen3.8-max",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ]
+    },
+    {
+      "provider_model_id": "qwen3.7-max",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 3.125,
+              "no_cache": 2.5
+            },
+            "output_tokens": {
+              "text": 7.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.7-max"
+    },
+    {
+      "provider_model_id": "qwen3.7-plus",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.7-plus"
+    },
+    {
+      "provider_model_id": "qwen3.6-plus",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 6
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 6
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 256000,
+                "input_tokens": {
+                  "no_cache": 2
+                },
+                "output_tokens": {
+                  "text": 6
+                }
+              }
+            ],
+            "input_tokens": {
+              "cache_read": 0.05,
+              "cache_write": 0.625,
+              "no_cache": 0.5
+            },
+            "output_tokens": {
+              "text": 3
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.6-plus"
+    },
+    {
+      "provider_model_id": "glm-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.28,
+              "cache_write": 0,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.28,
+              "cache_write": 0,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.28,
+              "cache_write": 0,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    },
+    {
+      "provider_model_id": "qwen3.8-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "cache_write": 0.2,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "cache_write": 0.2,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "cache_write": 0.2,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-flash"
+    },
+    {
+      "provider_model_id": "kimi-k3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3"
+    },
+    {
+      "provider_model_id": "qwen3.7-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003,
+              "cache_write": 0.0375,
+              "no_cache": 0.03
+            },
+            "output_tokens": {
+              "text": 0.13
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003,
+              "cache_write": 0.0375,
+              "no_cache": 0.03
+            },
+            "output_tokens": {
+              "text": 0.13
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.003,
+              "cache_write": 0.0375,
+              "no_cache": 0.03
+            },
+            "output_tokens": {
+              "text": 0.13
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.7-flash"
+    },
+    {
+      "provider_model_id": "qwen3.8-omni-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://dashscope-intl.aliyuncs.com/api/v2/apps/anthropic-compatible-mode/v1",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-omni-flash"
+    }
+  ],
+  "name": "alibaba",
+  "submitted_at": "2026-05-25T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "ALIBABA_API_KEY"
+  }
+}

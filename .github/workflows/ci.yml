@@ -143,7 +143,9 @@ jobs:
           - os: windows-latest
             # Windows also exposes the trajectory timestamp race under load.
             retries: "2"
-            timeout: 45
+            # A cold build and full suite took 43 minutes before cache upload.
+            # Leave time for post-job cleanup; per-test deadlines still apply.
+            timeout: 60
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
     steps:
@@ -241,6 +243,7 @@ jobs:
               --test gateway_anthropic_authority --test gateway_decision_model
               --test gateway_decisions --test gateway_model_boundary
               --test gateway_routing_assessment --test gateway_routing_plan
+              --test registry_lifecycle
           - shard: models
             retries: "0"
             targets: >-
@@ -357,9 +360,10 @@ jobs:
         run: |
           cargo metadata --no-deps --format-version 1 | jq -e '
             [.packages[].name] | sort ==
-            ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-sdk", "dist-helper"]'
-      - name: contracts and client build independently
+            ["bitrouter", "bitrouter-ai", "bitrouter-guardrails", "bitrouter-registry", "bitrouter-sdk", "dist-helper"]'
+      - name: contracts, registry and client build independently
         run: |
+          cargo test -p bitrouter-registry --all-features
           cargo test -p bitrouter-ai
           cargo test -p bitrouter-ai --all-features
           cargo test -p bitrouter-sdk
@@ -445,8 +449,13 @@ jobs:
           esac
           case ",$PROFILE_FEATURES," in
             *,harness,*) ;;
-            *) if grep -Eq '^jsonschema v' profile-tree.txt; then
-                 echo '::error::profile without harness pulled result validation'; exit 1
+            *)
+               # Registry admission validates its wire schema in every profile.
+               # The application must still keep harness result validation optional.
+               cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" \
+                 -e normal,build -i jsonschema --depth 1 --prefix none > profile-schema-owners.txt
+               if grep -Ev '^(jsonschema|bitrouter-registry) v' profile-schema-owners.txt; then
+                 echo '::error::profile without harness pulled schema validation outside registry'; exit 1
                fi ;;
           esac
           case ",$PROFILE_FEATURES," in
@@ -843,6 +852,38 @@ jobs:
               exit 1
             fi
           done
+
+  registry-live-lifecycle:
+    name: live registry sync and host consumption
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      BITROUTER_TEST_DIST_HELPER_BINARY: ${{ github.workspace }}/target/debug/dist-helper
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: build the production registry producer
+        run: cargo build --locked -p dist-helper --jobs 2
+      - name: sync the public provider and route through its exact artifact
+        # Public model listing only; inference, credentials and host state are
+        # test-owned. No account secret or paid provider request is needed.
+        env:
+          BITROUTER_TEST_REGISTRY_EVIDENCE_DIR: ${{ runner.temp }}/registry-closed-loop
+        run: >-
+          cargo test --locked -p bitrouter --no-default-features --jobs 2
+          --test registry_lifecycle
+          live_sync::provider_sync_artifact_is_consumed_by_official_host_and_routes_requests
+          -- --ignored --exact --nocapture
+      - name: preserve sync, byte identity and routing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry-provider-closed-loop
+          path: ${{ runner.temp }}/registry-closed-loop
+          if-no-files-found: warn
 
   msrv:
     name: msrv

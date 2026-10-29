@@ -1,56 +1,103 @@
-- id: x-ai/grok-4.5
-  name: 'xAI: Grok 4.5'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 500000
-  release_date: 2026-07-08
-  open_weights: false
-  family: grok
-- id: x-ai/grok-4.6
-  name: 'xAI: Grok 4.6'
-  description: xAI flagship for coding, reasoning, knowledge work, and agentic tool use.
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 500000
-  release_date: 2026-08-12
-  knowledge_cutoff: 2026-02
-  open_weights: false
-  family: grok
-- id: x-ai/grok-4.3
-  name: 'xAI: Grok 4.3'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 30000
-  release_date: 2026-05-01
-  open_weights: false
-  family: grok
-- id: x-ai/grok-build-0.1
-  name: 'xAI: Grok Build 0.1'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 256000
-  open_weights: false
-  family: grok
-- id: x-ai/grok-4.7
-  name: 'SpaceXAI: Grok 4.7'
-  input_modalities:
-  - file
-  - image
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 500000
-  max_output_tokens: 450000
-  release_date: 2026-09-21
+[
+  {
+    "family": "grok",
+    "id": "x-ai/grok-4.5",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "max_input_tokens": 500000,
+    "name": "xAI: Grok 4.5",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-07-08",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "description": "xAI flagship for coding, reasoning, knowledge work, and agentic tool use.",
+    "family": "grok",
+    "id": "x-ai/grok-4.6",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "knowledge_cutoff": "2026-02",
+    "max_input_tokens": 500000,
+    "name": "xAI: Grok 4.6",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-08-12",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "family": "grok",
+    "id": "x-ai/grok-4.3",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 30000,
+    "name": "xAI: Grok 4.3",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-05-01",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "family": "grok",
+    "id": "x-ai/grok-build-0.1",
+    "input_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 256000,
+    "name": "xAI: Grok Build 0.1",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "x-ai/grok-4.7",
+    "input_modalities": [
+      "file",
+      "image",
+      "text"
+    ],
+    "max_input_tokens": 500000,
+    "max_output_tokens": 450000,
+    "name": "SpaceXAI: Grok 4.7",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-21",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  }
+]

@@ -1,35 +1,64 @@
-- id: minimax/minimax-m2.7
-  deprecation_date: 2026-11-23
-  name: 'MiniMax: M2.7'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 196608
-  max_output_tokens: 196608
-  release_date: 2026-03-18
-  open_weights: true
-  family: minimax
-- id: minimax/minimax-m3
-  name: 'MiniMax: M3'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 512000
-  release_date: 2026-06-01
-  open_weights: true
-  family: minimax
-- id: minimax/minimax-m3.1-flash
-  name: 'MiniMax: MiniMax M3.1 Flash'
-  input_modalities:
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 524288
-  release_date: 2026-10-19
+[
+  {
+    "family": "minimax",
+    "id": "minimax/minimax-m2.7",
+    "input_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 196608,
+    "max_output_tokens": 196608,
+    "name": "MiniMax: M2.7",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-03-18",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z",
+      "expires_at": "2026-11-23T00:00:00Z"
+    }
+  },
+  {
+    "family": "minimax",
+    "id": "minimax/minimax-m3",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 512000,
+    "name": "MiniMax: M3",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-06-01",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "minimax/minimax-m3.1-flash",
+    "name": "MiniMax: MiniMax M3.1 Flash",
+    "input_modalities": [
+      "image",
+      "text",
+      "video"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 524288,
+    "release_date": "2026-10-19",
+    "curation": {
+      "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-28T19:35:49Z"
+    }
+  }
+]

@@ -70,6 +70,10 @@ fn record_native_dispatch(
     target: &RoutingTarget,
     ctx: &PipelineContext,
 ) -> Result<()> {
+    crate::metering::tariff::admit_registry_request_pricing(target, prompt, ctx)?;
+    if let Some(attempts) = ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>() {
+        attempts.dispatched(target.registry.is_some());
+    }
     if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
         let plan = runtime
             .continuation_plan(prompt, ctx.caller(), target)
@@ -820,6 +824,17 @@ fn build_http_client_set(
 }
 
 impl HttpExecutor {
+    fn auth_applier(
+        &self,
+        target: &RoutingTarget,
+    ) -> Option<&Arc<dyn crate::gateway::providers::auth::AuthApplier>> {
+        if target.registry.as_ref().is_some_and(|selected| {
+            !matches!(selected.auth["kind"].as_str(), Some("oauth" | "native"))
+        }) {
+            return None;
+        }
+        self.auth_appliers.lookup(&target.provider_name)
+    }
     /// Build an executor with the given upstream timeout configuration and the
     /// default [`OutboundDispatch::builtin`] registry. Use
     /// [`with_dispatch`](Self::with_dispatch) instead when you want to
@@ -954,7 +969,18 @@ impl HttpExecutor {
         target: &RoutingTarget,
         transport: &Arc<dyn crate::gateway::model::protocol::Transport>,
     ) -> Result<AppliedAuth> {
-        if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
+        if let Some(selected) = &target.registry
+            && matches!(
+                selected.auth["kind"].as_str(),
+                Some("none" | "bearer" | "header")
+            )
+        {
+            return crate::gateway::catalog::execution::authenticate_static(
+                selected, target, request,
+            )
+            .map_err(Into::into);
+        }
+        if let Some(applier) = self.auth_applier(target) {
             applier
                 .apply_with_authority(request, &target.model_target())
                 .await
@@ -963,6 +989,15 @@ impl HttpExecutor {
                         .into()
                 })
         } else {
+            if target
+                .registry
+                .as_ref()
+                .is_some_and(|s| matches!(s.auth["kind"].as_str(), Some("oauth" | "native")))
+            {
+                return Err(crate::gateway::error::BitrouterError::bad_request(
+                    "registry authentication handler is unavailable; sign in with a supported provider or upgrade BitRouter",
+                ));
+            }
             let request = transport.authorise(request, &target.model_target()).await?;
             let credential = target
                 .api_key_override
@@ -984,7 +1019,7 @@ impl HttpExecutor {
         body: &mut serde_json::Value,
         target: &RoutingTarget,
     ) -> Result<()> {
-        if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
+        if let Some(applier) = self.auth_applier(target) {
             applier
                 .prepare_body(body, &target.model_target())
                 .await
@@ -1021,6 +1056,7 @@ impl HttpExecutor {
         serde_json::Value,
         bitrouter_ai::conversion::ConversionReport,
     )> {
+        crate::gateway::catalog::execution::validate_generation(target, prompt)?;
         let plan = native_continuation_plan(target, prompt, ctx)?;
         let mut upstream = match plan.as_ref() {
             Some(plan) => plan
@@ -1096,7 +1132,7 @@ impl HttpExecutor {
         ctx: &PipelineContext,
     ) -> std::result::Result<serde_json::Value, &'static str> {
         let mut expected = rendered.clone();
-        if let Some(applier) = self.auth_appliers.lookup(&target.provider_name) {
+        if let Some(applier) = self.auth_applier(target) {
             applier
                 .normalize_managed_body(&mut expected, &target.model_target())
                 .map_err(|_| "provider_body_normalization_failed")?;
@@ -1296,7 +1332,7 @@ impl HttpExecutor {
         rejected_authorization: Option<&reqwest::header::HeaderValue>,
         ctx: &PipelineContext,
     ) -> Result<bool> {
-        let Some(applier) = self.auth_appliers.lookup(&target.provider_name) else {
+        let Some(applier) = self.auth_applier(target) else {
             return Ok(false);
         };
         native_work::observe(
@@ -1385,6 +1421,11 @@ impl HttpExecutor {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
+            if let Some(attempts) =
+                ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>()
+            {
+                attempts.dispatched(target.registry.is_some());
+            }
             let response = client
                 .send(request, &cancellation)
                 .await
@@ -1669,7 +1710,7 @@ impl Executor for HttpExecutor {
         {
             return Some(false);
         }
-        match self.auth_appliers.lookup(&target.provider_name) {
+        match self.auth_applier(target) {
             Some(applier) => applier.output_token_limit_support(&target.model_target()),
             None => Some(true),
         }
@@ -1711,8 +1752,7 @@ impl Executor for HttpExecutor {
     ) -> Result<ExecutionResult> {
         if crate::gateway::providers::codex::requires_streaming(&target.model_target())
             || self
-                .auth_appliers
-                .lookup(&target.provider_name)
+                .auth_applier(target)
                 .is_some_and(|applier| applier.requires_streaming(&target.model_target()))
         {
             return self.execute_streaming_generation(target, prompt, ctx).await;
@@ -1755,7 +1795,7 @@ impl Executor for HttpExecutor {
                 target.provider_name == "openai-codex",
             )?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-            if self.auth_appliers.lookup(&target.provider_name).is_some() {
+            if self.auth_applier(target).is_some() {
                 native_work::observe(
                     ctx,
                     NativeProviderWorkKind::AuthenticationPreparation,
@@ -1926,6 +1966,7 @@ impl Executor for HttpExecutor {
     }
 
     fn preflight_decisions(&self, target: &RoutingTarget, request: &DecisionRequest) -> Result<()> {
+        crate::gateway::catalog::execution::validate_decisions(target, request)?;
         let (client, _) = self.client_for(target, false);
         client.render_decision_request(&target.model_target(), request)?;
         Ok(())
@@ -2422,6 +2463,7 @@ mod beta_forward_tests {
 
     fn target(proto: ApiProtocol) -> RoutingTarget {
         RoutingTarget {
+            registry: None,
             provider_name: "anthropic".into(),
             service_id: "claude-haiku".into(),
             api_base: "https://api.anthropic.com/v1".into(),
@@ -3340,6 +3382,7 @@ mod provider_continuation_tests {
 
     fn responses_target(provider: &str) -> RoutingTarget {
         RoutingTarget {
+            registry: None,
             provider_name: provider.into(),
             service_id: "gpt-5".into(),
             api_base: "https://api.example/v1".into(),
@@ -3578,6 +3621,7 @@ mod client_selection_tests {
 
     fn target(provider: &str) -> RoutingTarget {
         RoutingTarget {
+            registry: None,
             provider_name: provider.into(),
             service_id: "m".into(),
             api_base: "https://api.example.com".into(),
@@ -3703,6 +3747,7 @@ mod client_selection_tests {
         })
         .expect("build executor");
         let target = RoutingTarget {
+            registry: None,
             provider_name: "slow".into(),
             service_id: "m".into(),
             api_base: format!("http://{addr}/v1"),
@@ -3833,6 +3878,7 @@ mod openai_codex_stream_bridge_tests {
 
         let executor = HttpExecutor::with_defaults().expect("build executor");
         let target = RoutingTarget {
+            registry: None,
             provider_name: "openai-codex".into(),
             service_id: "gpt-5.6-terra".into(),
             api_base: format!("http://{addr}"),

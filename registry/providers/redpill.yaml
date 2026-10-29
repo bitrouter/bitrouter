@@ -1,46 +1,78 @@
-name: redpill
-display_name: RedPill (Phala Network)
-metadata:
-  headquarters: SG
-  name: RedPill
-  privacy_policy_url: https://redpill.ai/privacy
-  slug: redpill
-  terms_of_service_url: https://redpill.ai/terms
-api_base: https://api.redpill.ai/v1
-api_protocol:
-  - "*": openai
-auth_scheme: bearer
-kind: gateway
-doc_url: https://docs.redpill.ai/get-started/introduction
-# RedPill is Phala Network's confidential AI gateway. Verified 2026-09-05
-# against public `GET https://api.redpill.ai/v1/models`. Prices below are
-# converted from per-token catalog values to USD per 1M tokens.
-models:
-  # Catalog and model page: https://redpill.ai/models/deepseek/deepseek-v4-pro-0813
-  - id: moonshotai/kimi-k3
-    provider_model_id: moonshotai/kimi-k3
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 1.5
-      output_tokens:
-        text: 15
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-      - image_input
-  - id: z-ai/glm-5.2
-    provider_model_id: z-ai/glm-5.2
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-        cache_read: 0.26
-      output_tokens:
-        text: 4.4
-    capabilities:
-      - reasoning
-      - tools
-status: active
-weight: 1
-submitted_at: 2026-07-08
+{
+  "api_base": "https://api.redpill.ai/v1",
+  "billing": "usage",
+  "weight": 1,
+  "display_name": "RedPill (Phala Network)",
+  "doc_url": "https://docs.redpill.ai/get-started/introduction",
+  "kind": "aggregator",
+  "metadata": {
+    "headquarters": "SG",
+    "name": "RedPill",
+    "privacy_policy_url": "https://redpill.ai/privacy",
+    "slug": "redpill",
+    "terms_of_service_url": "https://redpill.ai/terms"
+  },
+  "models": [
+    {
+      "provider_model_id": "moonshotai/kimi-k3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.5,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3"
+    },
+    {
+      "provider_model_id": "z-ai/glm-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    }
+  ],
+  "name": "redpill",
+  "status": "active",
+  "submitted_at": "2026-07-08T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "REDPILL_API_KEY"
+  }
+}

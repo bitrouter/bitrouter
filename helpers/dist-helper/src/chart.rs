@@ -1,18 +1,15 @@
 //! Registry chart SVG rendered from the committed `dist/registry` artifacts.
 //!
-//! The README embeds these files from an orphan `charts` branch, so nothing here
-//! is committed to `main`; CI regenerates them whenever `registry/` changes. The
-//! input is `dist/registry/{models,providers}.json` — the same published contract
-//! the docs site reads — so the chart can never disagree with the catalog.
+//! The README chart consumes the complete committed Registry v1 document.
 
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
-/// One canonical model as published in `dist/registry/models.json`.
+/// One chart row derived from a curated Registry v1 model.
 #[derive(Debug, Deserialize)]
 struct ModelEntry {
     id: String,
@@ -24,11 +21,6 @@ struct ModelEntry {
 #[derive(Debug, Deserialize)]
 struct ProviderEntry {
     billing: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Envelope<T> {
-    data: Vec<T>,
 }
 
 /// A lab's models, sorted by how many providers route to them.
@@ -51,22 +43,49 @@ struct Totals {
 }
 
 pub fn generate(root: &Path, out_dir: &Path) -> Result<()> {
-    let dist = root.join("dist").join("registry");
-    let models: Envelope<ModelEntry> = read_json(&dist.join("models.json"))?;
-    let providers: Envelope<ProviderEntry> = read_json(&dist.join("providers.json"))?;
-
-    let groups = group_by_lab(&models.data)?;
+    let document = bitrouter_registry::document::Document::parse(
+        &fs::read(root.join("dist/registry/v1/registry.json"))?,
+        &bitrouter_registry::document::ReaderPolicy::default(),
+    )?;
+    let models = document
+        .models()
+        .iter()
+        .map(|model| {
+            let id = model["id"].as_str().context("curated ID")?;
+            let providers = document
+                .providers()
+                .iter()
+                .filter(|p| {
+                    p["status"] == "active"
+                        && p["models"].as_array().is_some_and(|m| {
+                            m.iter()
+                                .any(|m| m["status"] == "active" && m["canonical_id"] == id)
+                        })
+                })
+                .map(|_| serde::de::IgnoredAny)
+                .collect();
+            Ok(ModelEntry {
+                id: id.into(),
+                name: model["name"].as_str().unwrap_or(id).into(),
+                providers,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let providers = document
+        .providers()
+        .iter()
+        .map(bitrouter_registry::json::project::<ProviderEntry>)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let groups = group_by_lab(&models)?;
     let totals = Totals {
-        models: models.data.len(),
-        providers: providers.data.len(),
-        routes: models.data.iter().map(|m| m.providers.len()).sum(),
+        models: models.len(),
+        providers: providers.len(),
+        routes: models.iter().map(|m| m.providers.len()).sum(),
         subscription_providers: providers
-            .data
             .iter()
             .filter(|p| p.billing.as_deref() == Some("subscription"))
             .count(),
     };
-
     fs::create_dir_all(out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
 
     for theme in [Theme::light(), Theme::dark()] {
@@ -85,32 +104,16 @@ pub fn generate(root: &Path, out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
-    let raw = fs::read_to_string(path).with_context(|| {
-        format!(
-            "reading {} - run `cargo run -p dist-helper -- registry build` first",
-            path.display()
-        )
-    })?;
-    serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))
-}
-
 /// Group models by their id namespace, taking each lab's display label from the
 /// `"Lab: Model"` prefix already in `name` so no hardcoded lab table can drift.
 fn group_by_lab(models: &[ModelEntry]) -> Result<Vec<LabGroup>> {
     let mut groups: Vec<LabGroup> = Vec::new();
     for model in models {
-        let (_, short_id) = model
+        let (namespace, short_id) = model
             .id
             .split_once('/')
             .with_context(|| format!("model id {} is not `namespace/model`", model.id))?;
-        let Some((label, _)) = model.name.split_once(": ") else {
-            bail!(
-                "model {} has name {:?}, expected a `Lab: Model` prefix",
-                model.id,
-                model.name
-            );
-        };
+        let label = model.name.split_once(": ").map_or(namespace, |p| p.0);
         let row = ModelRow {
             name: short_id.to_string(),
             routes: model.providers.len(),

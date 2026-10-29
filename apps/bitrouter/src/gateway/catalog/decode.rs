@@ -1,129 +1,112 @@
-//! Service admission for published and historical catalog payloads.
+//! Registry v1 admission followed by a deliberately lossy UI projection.
+//! Complete raw documents, rather than this projection, are retained in caches.
 
-use bitrouter_ai::catalog::types::{CanonicalModel, RegistryData, RegistryProvider};
-use serde::Deserialize;
+use super::RegistryData;
+use bitrouter_ai::catalog::types::{CanonicalModel, RegistryProvider};
+use bitrouter_registry::document::{Document, ReaderPolicy, integer};
+use registry_json as serde_json;
+use serde_json::json;
 
-#[derive(Deserialize)]
-struct Payload {
-    #[serde(deserialize_with = "deserialize_providers")]
-    providers: Vec<RegistryProvider>,
-    canonical: Vec<CanonicalModel>,
+pub(crate) fn from_slice(bytes: &[u8]) -> anyhow::Result<RegistryData> {
+    project(Document::parse(bytes, &ReaderPolicy::default())?)
 }
 
-pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<RegistryData, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let payload = Payload::deserialize(deserializer)?;
-    Ok(RegistryData {
-        providers: payload.providers,
-        canonical: payload.canonical,
-    })
-}
-
-pub(super) fn from_slice(bytes: &[u8]) -> Result<RegistryData, serde_json::Error> {
-    let mut decoder = serde_json::Deserializer::from_slice(bytes);
-    let data = deserialize(&mut decoder)?;
-    decoder.end()?;
-    Ok(data)
-}
-
-fn retired_protocol_value(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::String(name) => {
-            crate::gateway::providers::retired::protocol_message(name).is_some()
-        }
-        serde_json::Value::Array(values) => values.iter().any(retired_protocol_value),
-        serde_json::Value::Object(fields) => fields.values().any(retired_protocol_value),
-        _ => false,
-    }
-}
-
-fn deserialize_providers<'de, D>(deserializer: D) -> Result<Vec<RegistryProvider>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    providers_from_values(Vec::<serde_json::Value>::deserialize(deserializer)?)
-        .map_err(serde::de::Error::custom)
-}
-
-/// Filter retired entries before decoding the current protocol vocabulary.
-/// Diagnostics contain counts only; the caller's snapshot bytes are untouched.
-pub(crate) fn providers_from_values(
-    values: Vec<serde_json::Value>,
-) -> Result<Vec<RegistryProvider>, serde_json::Error> {
+pub(crate) fn project(document: Document) -> anyhow::Result<RegistryData> {
     let mut providers = Vec::new();
-    let mut retired_providers = 0usize;
-    let mut retired_models = 0usize;
-    for mut value in values {
-        let retired = value
-            .get("name")
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|name| {
-                crate::gateway::providers::retired::provider_message(name).is_some()
-            })
-            || value
-                .get("api_protocol")
-                .is_some_and(retired_protocol_value);
-        if retired {
-            retired_providers += 1;
-            continue;
-        }
-        if let Some(models) = value
-            .get_mut("models")
-            .and_then(serde_json::Value::as_array_mut)
-        {
-            let before = models.len();
-            models.retain(|model| {
-                !model
-                    .get("api_protocol")
-                    .is_some_and(retired_protocol_value)
-            });
-            retired_models += before - models.len();
-            if before > 0 && models.is_empty() {
-                retired_providers += 1;
-                continue;
+    let policy = ReaderPolicy::default();
+    for provider in document.providers() {
+        let mut value = json!({"name":provider["name"],"status":provider["status"],"models":[]});
+        for key in ["display_name", "api_base", "doc_url", "community"] {
+            if let Some(v) = provider.get(key) {
+                value[key] = v.clone();
             }
         }
-        providers.push(serde_json::from_value(value)?);
+        // Unknown executable vocabularies disable only this provider. They
+        // remain fully intact in document, including their nested metadata.
+        let access = provider["access"].as_str();
+        let auth = provider.get("auth");
+        let known_auth = auth.is_some_and(|a| {
+            matches!(
+                a["kind"].as_str(),
+                Some("none" | "bearer" | "header" | "oauth" | "native")
+            )
+        });
+        if !policy.supports(provider)
+            || !known_auth
+            || access
+                .is_some_and(|s| !matches!(s, "api_key" | "local_oauth" | "local_pkce" | "private"))
+        {
+            tracing::warn!(code="registry.unsupported_feature", provider=?provider["name"], observed_auth=?provider["auth"]["kind"], observed_access=?provider["access"], field="/data/providers", recovery="upgrade BitRouter or use a supported registry revision", "registry provider execution contract unavailable");
+            value["status"] = json!("unavailable");
+        }
+        if matches!(
+            access,
+            Some("api_key" | "local_oauth" | "local_pkce" | "private")
+        ) {
+            value["access"] = provider["access"].clone();
+        }
+        if known_auth {
+            value["auth"] = provider["auth"].clone();
+        }
+        value["billing"] = json!(if provider["billing"] == "subscription" {
+            "subscription"
+        } else {
+            "usage_token"
+        });
+        match provider["kind"].as_str() {
+            Some("first_party") => value["kind"] = json!("first_party"),
+            Some("aggregator") => value["kind"] = json!("gateway"),
+            _ => {}
+        }
+        let mut models = Vec::new();
+        for offer in provider["models"].as_array().into_iter().flatten() {
+            for interface in offer["interfaces"].as_array().into_iter().flatten() {
+                if !super::execution::supported(interface, &policy) {
+                    tracing::warn!(code="registry.unsupported_interface", provider=?provider["name"], model=?offer["provider_model_id"], observed_protocol=?interface["protocol"], observed_operation=?interface["operation"], observed_profile=?interface["protocol_profile"], field="/data/providers/models/interfaces", supported="chat_completions|messages|responses/generation/default; decisions/decisions/default", recovery="upgrade BitRouter or use a supported registry revision", "registry interface retained with execution disabled");
+                }
+            }
+            let native = offer["provider_model_id"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("admitted native ID missing"))?;
+            let id = offer["canonical_id"].as_str().map(str::to_owned).unwrap_or(
+                bitrouter_registry::selector::encode(
+                    provider["name"].as_str().unwrap_or_default(),
+                    native,
+                )?,
+            );
+            let protocols = offer["interfaces"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|i| super::execution::supported(i, &policy))
+                .filter_map(|i| match i["protocol"].as_str() {
+                    Some("chat_completions") => Some("openai"),
+                    Some("messages") => Some("anthropic"),
+                    Some("responses") => Some("responses"),
+                    Some("decisions") => Some("decisions"),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            models.push(json!({"id":id,"provider_model_id":native,"api_protocol":protocols}));
+        }
+        value["models"] = json!(models);
+        providers.push(bitrouter_registry::json::project::<RegistryProvider>(
+            &value,
+        )?);
     }
-    if retired_providers > 0 || retired_models > 0 {
-        tracing::warn!(
-            retired_providers,
-            retired_models,
-            "retired native-protocol catalog entries quarantined"
-        );
-    }
-    Ok(providers)
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-    type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
-
-    #[test]
-    fn old_catalog_quarantines_native_entries_but_keeps_supported_models() -> TestResult {
-        let original = json!({"providers":[
-        {"name":"google-ai","status":"active","models":[{"api_protocol":"antigravity"}]},
-        {"name":"vertex","status":"active","models":[{"api_protocol":"google"}]},
-        {"name":"legacy-google","status":"active","api_protocol":[{"*":"google"}]},
-        {"name":"mixed","status":"active","models":[
-            {"id":"org/native","provider_model_id":"old","api_protocol":"google"},
-            {"id":"org/chat","provider_model_id":"chat","api_protocol":"openai"}
-        ]}
-    ],"canonical":[{"id":"google/historical"},{"id":"org/chat"}]});
-        let bytes = serde_json::to_vec(&original)?;
-        let parsed = super::from_slice(&bytes)?;
-        assert_eq!(parsed.providers.len(), 1);
-        assert_eq!(parsed.providers[0].name, "mixed");
-        assert_eq!(parsed.providers[0].models.len(), 1);
-        assert_eq!(parsed.providers[0].models[0].provider_model_id, "chat");
-        assert_eq!(parsed.canonical.len(), 2);
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&bytes)?,
-            original
-        );
-        Ok(())
-    }
+    let canonical = document
+        .models()
+        .iter()
+        .map(|m| CanonicalModel {
+            id: m["id"].as_str().unwrap_or_default().into(),
+            max_input_tokens: integer(&m["max_input_tokens"]),
+            max_output_tokens: integer(&m["max_output_tokens"]),
+            context_window: integer(&m["context_window"]),
+        })
+        .collect();
+    Ok(RegistryData {
+        providers,
+        canonical,
+        document: Some(document.into_value()),
+    })
 }

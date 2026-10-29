@@ -1,57 +1,104 @@
-- id: z-ai/glm-5.3
-  name: 'Zhipu: GLM-5.3'
-  description: Z.ai flagship reasoning model for complex software engineering and long-horizon agent tasks.
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 131072
-  release_date: 2026-08-14
-  open_weights: false
-  family: glm
-- id: z-ai/glm-5.3-flash
-  name: 'Zhipu: GLM-5.3 Flash'
-  description: Open-weight native multimodal MoE for efficient coding, professional work, and long-horizon agent tasks.
-  input_modalities:
-  - text
-  - image
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 131072
-  release_date: 2026-08-26
-  open_weights: true
-  family: glm
-- id: z-ai/glm-5.2
-  name: 'Zhipu: GLM-5.2'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 131072
-  release_date: 2026-06-13
-  open_weights: true
-  family: glm
-- id: z-ai/glm-5.3-flashx
-  name: 'Z.ai: GLM 5.3 FlashX'
-  input_modalities:
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 131072
-  release_date: 2026-09-18
-- id: z-ai/glm-5.3-prime
-  name: 'Z.ai: GLM 5.3 Prime'
-  input_modalities:
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 131072
-  release_date: 2026-09-23
+[
+  {
+    "description": "Z.ai flagship reasoning model for complex software engineering and long-horizon agent tasks.",
+    "family": "glm",
+    "id": "z-ai/glm-5.3",
+    "input_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "name": "Zhipu: GLM-5.3",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-08-14",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "description": "Open-weight native multimodal MoE for efficient coding, professional work, and long-horizon agent tasks.",
+    "family": "glm",
+    "id": "z-ai/glm-5.3-flash",
+    "input_modalities": [
+      "text",
+      "image",
+      "video"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "name": "Zhipu: GLM-5.3 Flash",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-08-26",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "family": "glm",
+    "id": "z-ai/glm-5.2",
+    "input_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "name": "Zhipu: GLM-5.2",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-06-13",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "z-ai/glm-5.3-flashx",
+    "input_modalities": [
+      "image",
+      "text",
+      "video"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "name": "Z.ai: GLM 5.3 FlashX",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-18",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "z-ai/glm-5.3-prime",
+    "input_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 131072,
+    "name": "Z.ai: GLM 5.3 Prime",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-23",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  }
+]

@@ -1,88 +1,85 @@
-//! Fetch a complete catalog only under the caller's explicit network policy.
+//! Dedicated, credential-free HTTP transport for one complete Registry v1 file.
 
-use std::time::Duration;
+use super::RegistryData;
+use bitrouter_registry::document::MAX_DOCUMENT_BYTES;
+use std::{net::IpAddr, time::Duration};
 
-use super::decode::providers_from_values;
-use bitrouter_ai::catalog::types::{CanonicalModel, Envelope, RegistryData};
-
-/// Network permission for a requested catalog refresh.
+/// Explicit permission to download catalog data.
 #[derive(Debug, Clone, Copy)]
 pub enum NetworkPolicy {
-    /// Reject discovery without issuing HTTP requests.
+    /// No request is issued.
     Offline,
-    /// Allow bounded requests using the caller's client and source URL.
-    Allowed {
-        /// Overall timeout for each artifact, including reading its body.
-        request_timeout: Duration,
-    },
+    /// A bounded complete GET; production uses fifteen seconds.
+    Allowed { request_timeout: Duration },
 }
-
-/// Failures while fetching a catalog. Partial results are never published.
 #[derive(Debug, thiserror::Error)]
 pub enum FetchError {
-    /// The caller forbids network discovery.
-    #[error("catalog refresh is disabled by network policy")]
+    #[error("catalog refresh disabled by network policy")]
     Offline,
-    /// The base URL is not a plain HTTP(S) catalog location.
-    #[error("invalid catalog source URL")]
+    #[error("invalid registry document URL; use HTTPS or an explicit literal loopback mirror")]
     InvalidSource,
-    /// A transport/status failure, without response body contents.
-    #[error("catalog request failed: {0}")]
-    Network(#[source] reqwest::Error),
-    /// An artifact is not valid catalog JSON.
-    #[error("invalid catalog JSON: {0}")]
-    Parse(#[source] serde_json::Error),
+    #[error("registry download failed; retaining the last admitted document")]
+    Network,
+    #[error("registry response must be HTTP 200 and fit the document resource budget")]
+    Incomplete,
+    #[error("{0}")]
+    Parse(#[source] anyhow::Error),
 }
 
-/// Fetch both artifacts using only the supplied client, URL and network policy.
+/// Fetch with an isolated client. The caller's inference client is deliberately
+/// not reused: redirects, ambient headers and credentials are not authorized.
 pub async fn fetch_registry(
-    client: &reqwest::Client,
-    base: &str,
+    _client: &reqwest::Client,
+    source: &str,
     policy: NetworkPolicy,
 ) -> Result<RegistryData, FetchError> {
     let NetworkPolicy::Allowed { request_timeout } = policy else {
         return Err(FetchError::Offline);
     };
-    let url = reqwest::Url::parse(base).map_err(|_| FetchError::InvalidSource)?;
-    if !matches!(url.scheme(), "http" | "https")
-        || url.host_str().is_none()
+    let url = reqwest::Url::parse(source).map_err(|_| FetchError::InvalidSource)?;
+    let loopback = url
+        .host_str()
+        .and_then(|s| s.trim_matches(['[', ']']).parse::<IpAddr>().ok())
+        .is_some_and(|ip| ip.is_loopback());
+    if url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
-        || url.query().is_some()
         || url.fragment().is_some()
+        || (url.scheme() != "https" && !(url.scheme() == "http" && loopback))
         || request_timeout.is_zero()
     {
         return Err(FetchError::InvalidSource);
     }
-    let base = base.trim_end_matches('/');
-    let providers: Envelope<serde_json::Value> =
-        fetch_envelope(client, &format!("{base}/providers.json"), request_timeout).await?;
-    let models: Envelope<CanonicalModel> =
-        fetch_envelope(client, &format!("{base}/models.json"), request_timeout).await?;
-    Ok(RegistryData {
-        providers: providers_from_values(providers.data).map_err(FetchError::Parse)?,
-        canonical: models.data,
-    })
-}
-
-async fn fetch_envelope<T: serde::de::DeserializeOwned>(
-    client: &reqwest::Client,
-    url: &str,
-    timeout: Duration,
-) -> Result<Envelope<T>, FetchError> {
-    let body = client
+    let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(request_timeout.min(Duration::from_secs(15)));
+    if loopback {
+        builder = builder.no_proxy();
+    }
+    let client = builder.build().map_err(|_| FetchError::Network)?;
+    let mut response = client
         .get(url)
-        .timeout(timeout)
         .header(
             reqwest::header::USER_AGENT,
             concat!("bitrouter/", env!("CARGO_PKG_VERSION")),
         )
         .send()
         .await
-        .and_then(reqwest::Response::error_for_status)
-        .map_err(FetchError::Network)?
-        .bytes()
-        .await
-        .map_err(FetchError::Network)?;
-    serde_json::from_slice(&body).map_err(FetchError::Parse)
+        .map_err(|_| FetchError::Network)?;
+    if response.status() != reqwest::StatusCode::OK
+        || response
+            .content_length()
+            .is_some_and(|len| len > MAX_DOCUMENT_BYTES as u64)
+    {
+        return Err(FetchError::Incomplete);
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| FetchError::Network)? {
+        if chunk.len() > MAX_DOCUMENT_BYTES.saturating_sub(bytes.len()) {
+            return Err(FetchError::Incomplete);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    super::decode::from_slice(&bytes).map_err(FetchError::Parse)
 }

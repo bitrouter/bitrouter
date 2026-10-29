@@ -126,6 +126,7 @@ mod tests {
 
     fn target() -> crate::gateway::pipeline::types::RoutingTarget {
         crate::gateway::pipeline::types::RoutingTarget {
+            registry: None,
             provider_name: "execution-provider".into(),
             service_id: "served-model".into(),
             api_base: "https://api.openai.com/v1".into(),

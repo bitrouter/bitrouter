@@ -1,142 +1,351 @@
-name: novita
-display_name: Novita AI
-metadata:
-  headquarters: US
-  name: Novita AI
-  slug: novita
-api_base: https://api.novita.ai/openai
-api_protocol:
-  - "*": openai
-kind: gateway
-# Catalog source: https://models.dev/api.json (provider key `novita-ai`,
-# api=https://api.novita.ai/openai). OpenAI-compatible inference cloud; USD
-# pricing per 1M tokens. Refreshed by the daily models_dev auto_sync.
-models:
-  # Dated revision in the live catalog: https://api.novita.ai/openai/models
-  - id: qwen/qwen3.7-max
-    provider_model_id: qwen/qwen3.7-max
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.25
-        cache_write: 1.5625
-      output_tokens:
-        text: 3.75
-  - id: minimax/minimax-m2.7
-    provider_model_id: minimax/minimax-m2.7
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-      output_tokens:
-        text: 1.2
-  - id: z-ai/glm-5.2
-    provider_model_id: zai-org/glm-5.2
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-        cache_read: 0.26
-      output_tokens:
-        text: 4.4
-  - id: openai/gpt-oss-120b
-    provider_model_id: openai/gpt-oss-120b
-    pricing:
-      input_tokens:
-        no_cache: 0.05
-      output_tokens:
-        text: 0.25
-  - id: moonshotai/kimi-k2.7-code
-    provider_model_id: moonshotai/kimi-k2.7-code
-    pricing:
-      input_tokens:
-        no_cache: 0.95
-        cache_read: 0.19
-      output_tokens:
-        text: 4
-  - id: moonshotai/kimi-k3
-    provider_model_id: moonshotai/kimi-k3
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-      output_tokens:
-        text: 15
-  - id: deepseek/deepseek-v4.1-flash
-    provider_model_id: deepseek/deepseek-v4.1-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.006
-      output_tokens:
-        text: 1.2
-  - id: minimax/minimax-m3
-    provider_model_id: minimax/minimax-m3
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.06
-      output_tokens:
-        text: 1.2
-  - id: qwen/qwen3.8-2.4t-a95b
-    provider_model_id: qwen/qwen3.8-2.4t-a95b
-    pricing:
-      input_tokens:
-        no_cache: 2.0
-        cache_read: 0.25
-      output_tokens:
-        text: 6.0
-  - id: qwen/qwen3.8-27b
-    provider_model_id: qwen/qwen3.8-27b
-    pricing:
-      input_tokens:
-        no_cache: 0.42
-        cache_read: 0.085
-      output_tokens:
-        text: 3.0
-  - id: qwen/qwen3.8-flash
-    provider_model_id: qwen/qwen3.8-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-        cache_read: 0.016
-      output_tokens:
-        text: 0.47
-  - id: qwen/qwen3.8-max
-    provider_model_id: qwen/qwen3.8-max
-    pricing:
-      input_tokens:
-        no_cache: 2.0
-        cache_read: 0.25
-      output_tokens:
-        text: 6.0
-  - id: deepseek/deepseek-v4.1-flash-1017
-    provider_model_id: deepseek/deepseek-v4.1-flash-1017
-    pricing:
-      input_tokens:
-        no_cache: 0.3
-        cache_read: 0.006
-      output_tokens:
-        text: 1.2
-  - id: minimax/minimax-m3.1-flash
-    provider_model_id: minimax/minimax-m3.1-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-        cache_read: 0.015
-      output_tokens:
-        text: 0.6
-  - id: moonshotai/kimi-k3.1-pro
-    provider_model_id: moonshotai/kimi-k3.1-pro
-    pricing:
-      input_tokens:
-        no_cache: 2.0
-        cache_read: 0.2
-        cache_write: 2.0
-      output_tokens:
-        text: 10.0
-status: active
-weight: 1
-submitted_at: 2026-07-07
-auto_sync:
-  feed: models_dev
-  key: novita-ai
+{
+  "api_base": "https://api.novita.ai/openai",
+  "billing": "usage",
+  "weight": 1,
+  "display_name": "Novita AI",
+  "kind": "aggregator",
+  "metadata": {
+    "headquarters": "US",
+    "name": "Novita AI",
+    "slug": "novita"
+  },
+  "models": [
+    {
+      "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "deepseek/deepseek-v4.1-flash-1017"
+    },
+    {
+      "provider_model_id": "qwen/qwen3.7-max",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 1.5625,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 3.75
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.7-max"
+    },
+    {
+      "provider_model_id": "minimax/minimax-m2.7",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m2.7"
+    },
+    {
+      "provider_model_id": "zai-org/glm-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.26,
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    },
+    {
+      "provider_model_id": "openai/gpt-oss-120b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.05
+            },
+            "output_tokens": {
+              "text": 0.25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-oss-120b"
+    },
+    {
+      "provider_model_id": "moonshotai/kimi-k2.7-code",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.19,
+              "no_cache": 0.95
+            },
+            "output_tokens": {
+              "text": 4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k2.7-code"
+    },
+    {
+      "provider_model_id": "moonshotai/kimi-k3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3"
+    },
+    {
+      "provider_model_id": "deepseek/deepseek-v4.1-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.006,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "deepseek/deepseek-v4.1-flash"
+    },
+    {
+      "provider_model_id": "minimax/minimax-m3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.06,
+              "no_cache": 0.3
+            },
+            "output_tokens": {
+              "text": 1.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3"
+    },
+    {
+      "provider_model_id": "qwen/qwen3.8-2.4t-a95b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-2.4t-a95b"
+    },
+    {
+      "provider_model_id": "qwen/qwen3.8-27b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.085,
+              "no_cache": 0.42
+            },
+            "output_tokens": {
+              "text": 3.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-27b"
+    },
+    {
+      "provider_model_id": "qwen/qwen3.8-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.016,
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.47
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-flash"
+    },
+    {
+      "provider_model_id": "qwen/qwen3.8-max",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2.0
+            },
+            "output_tokens": {
+              "text": 6.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ]
+    },
+    {
+      "provider_model_id": "minimax/minimax-m3.1-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.15,
+              "cache_read": 0.015
+            },
+            "output_tokens": {
+              "text": 0.6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "minimax/minimax-m3.1-flash"
+    },
+    {
+      "provider_model_id": "moonshotai/kimi-k3.1-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 2.0,
+              "cache_read": 0.2,
+              "cache_write": 2.0
+            },
+            "output_tokens": {
+              "text": 10.0
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3.1-pro"
+    }
+  ],
+  "name": "novita",
+  "status": "active",
+  "submitted_at": "2026-07-07T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "NOVITA_API_KEY"
+  }
+}

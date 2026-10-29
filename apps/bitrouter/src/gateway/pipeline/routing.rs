@@ -44,6 +44,9 @@ pub struct RoutingPrefs {
     /// the gateway's request capability projection.
     /// Empty (the default) imposes no capability constraint.
     pub require_capabilities: Vec<Capability>,
+    /// Request facts that must hold on the same registry interface, after
+    /// preset/policy defaults have been applied. Contains no prompt content.
+    pub registry_requirements: Option<crate::gateway::catalog::execution::RequestRequirements>,
     /// The inbound wire protocol the request arrived on, if known. A
     /// protocol-native [`RoutingTable`] prefers, for each chosen target, the
     /// protocol matching this when the upstream supports it (a faithful

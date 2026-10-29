@@ -1,23 +1,40 @@
-# Official release: https://api-docs.deepseek.com/updates/#date-2026-07-31
-# Limits: https://api-docs.deepseek.com/quick_start/pricing
-# Official model version and limits: https://api-docs.deepseek.com/quick_start/pricing
-- id: deepseek/deepseek-v4.1-flash
-  name: 'DeepSeek: DeepSeek V4.1 Flash'
-  input_modalities:
-  - image
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 384000
-  release_date: 2026-09-10
-- id: deepseek/deepseek-v4.1-flash-1017
-  name: 'DeepSeek: DeepSeek V4.1 Flash 1017'
-  input_modalities:
-  - image
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 393216
-  release_date: 2026-10-17
+[
+  {
+    "id": "deepseek/deepseek-v4.1-flash",
+    "input_modalities": [
+      "image",
+      "text"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 384000,
+    "name": "DeepSeek: DeepSeek V4.1 Flash",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-10",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "deepseek/deepseek-v4.1-flash-1017",
+    "input_modalities": [
+      "image",
+      "text"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 393216,
+    "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-10-17",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  }
+]

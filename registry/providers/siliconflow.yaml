@@ -1,62 +1,129 @@
-name: siliconflow
-display_name: SiliconFlow
-metadata:
-  headquarters: CN
-  name: SiliconFlow
-  slug: siliconflow
-api_base: https://api.siliconflow.com/v1
-api_protocol:
-  - "*": openai
-kind: gateway
-# Catalog source: https://models.dev/api.json (provider key `siliconflow`,
-# api=https://api.siliconflow.com/v1). International endpoint; pricing is USD per
-# 1M tokens. Refreshed by the daily models_dev auto_sync. The China endpoint
-# (api.siliconflow.cn, RMB) is a separate `siliconflow-cn` provider if wanted.
-models:
-  # Verified 2026-09-05 against the live catalog and official launch pricing:
-  # https://www.siliconflow.com/blog/deepseek-v4-pro-0813-now-live-on-siliconflow-enhanced-agent-capabilities-for-production-workflows
-  # Verified 2026-09-05 against the live catalog and official launch pricing:
-  # https://www.siliconflow.com/blog/deepseek-v4-flash-0731-now-live-on-siliconflow
-  - id: z-ai/glm-5.2
-    provider_model_id: zai-org/GLM-5.2
-    pricing:
-      input_tokens:
-        no_cache: 1.4
-      output_tokens:
-        text: 4.4
-  - id: openai/gpt-oss-120b
-    provider_model_id: openai/gpt-oss-120b
-    pricing:
-      input_tokens:
-        no_cache: 0.05
-      output_tokens:
-        text: 0.45
-  - id: qwen/qwen3.8-2.4t-a95b
-    provider_model_id: Qwen/Qwen3.8-2.4T-A95B
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.25
-      output_tokens:
-        text: 6
-  - id: moonshotai/kimi-k2.7-code
-    provider_model_id: moonshotai/Kimi-K2.7-Code
-    pricing:
-      input_tokens:
-        no_cache: 0.85916
-        cache_read: 0.17993
-      output_tokens:
-        text: 3.8
-  - id: moonshotai/kimi-k3
-    provider_model_id: moonshotai/Kimi-K3
-    pricing:
-      input_tokens:
-        no_cache: 2.7
-        cache_read: 0.27
-      output_tokens:
-        text: 13.5
-status: active
-weight: 1
-submitted_at: 2026-07-07
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://api.siliconflow.com/v1",
+  "billing": "usage",
+  "weight": 1,
+  "display_name": "SiliconFlow",
+  "kind": "aggregator",
+  "metadata": {
+    "headquarters": "CN",
+    "name": "SiliconFlow",
+    "slug": "siliconflow"
+  },
+  "models": [
+    {
+      "provider_model_id": "zai-org/GLM-5.2",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 1.4
+            },
+            "output_tokens": {
+              "text": 4.4
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "z-ai/glm-5.2"
+    },
+    {
+      "provider_model_id": "openai/gpt-oss-120b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.05
+            },
+            "output_tokens": {
+              "text": 0.45
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-oss-120b"
+    },
+    {
+      "provider_model_id": "Qwen/Qwen3.8-2.4T-A95B",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "qwen/qwen3.8-2.4t-a95b"
+    },
+    {
+      "provider_model_id": "moonshotai/Kimi-K2.7-Code",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.17993,
+              "no_cache": 0.85916
+            },
+            "output_tokens": {
+              "text": 3.8
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k2.7-code"
+    },
+    {
+      "provider_model_id": "moonshotai/Kimi-K3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.27,
+              "no_cache": 2.7
+            },
+            "output_tokens": {
+              "text": 13.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "moonshotai/kimi-k3"
+    }
+  ],
+  "name": "siliconflow",
+  "status": "active",
+  "submitted_at": "2026-07-07T00:00:00Z",
+  "auth": {
+    "kind": "bearer",
+    "env": "SILICONFLOW_API_KEY"
+  }
+}

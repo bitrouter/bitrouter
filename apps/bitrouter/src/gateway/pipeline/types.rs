@@ -236,6 +236,8 @@ fn is_reserved_provider_header(name: &http::HeaderName) -> bool {
 /// otherwise leak the upstream credential into structured logs.
 #[derive(Clone)]
 pub struct RoutingTarget {
+    /// Exact public interface and auth contract frozen by Registry v1 routing.
+    pub registry: Option<std::sync::Arc<crate::gateway::catalog::execution::SelectedInterface>>,
     /// Provider id (config key).
     pub provider_name: String,
     /// Model / service id at the provider (may differ from the request model).

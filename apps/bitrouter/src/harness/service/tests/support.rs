@@ -36,6 +36,7 @@ use bitrouter_ai::harness::turn::TurnStatus;
 
 fn routing_target() -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: "fixture".into(),
         service_id: "fixture-model".into(),
         api_base: "https://example.invalid".into(),

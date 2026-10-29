@@ -106,6 +106,7 @@ fn map_auth(provider: &str, auth: &RegistryAuth) -> Result<AuthScheme, LoadError
         ),
     };
     match auth.kind {
+        RegistryAuthKind::None => Ok(AuthScheme::None),
         RegistryAuthKind::Bearer => Ok(AuthScheme::Bearer {
             env: auth.env.clone().ok_or_else(|| missing("env"))?,
         }),

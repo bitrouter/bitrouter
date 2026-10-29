@@ -42,6 +42,7 @@ impl RequiredFinalizer for Capture {
 
 fn target(key: &str) -> RoutingTarget {
     RoutingTarget {
+        registry: None,
         provider_name: PROVIDER_ID.into(),
         service_id: "claude-opus-4-7".into(),
         api_base: "https://api.anthropic.com/v1".into(),

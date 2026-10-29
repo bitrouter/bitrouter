@@ -241,6 +241,9 @@ pub struct UsagePricingTier {
 /// Route-local pricing used only for conservative stream-usage selection.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct UsagePricing {
+    /// Exact interface tariff, used only after endpoint/profile admission.
+    #[serde(with = "bitrouter_registry::json::optional_document")]
+    pub registry_price: Option<registry_json::Value>,
     /// Pricing for the lowest context range.
     pub base: UsagePricingBracket,
     /// Optional higher context brackets.
@@ -303,9 +306,31 @@ impl UsagePricing {
             .map_or(&self.base, |tier| &tier.bracket)
     }
 
-    fn nominal_cost(&self, usage: &Usage) -> Option<f64> {
+    fn nominal_cost(&self, usage: &Usage) -> Option<num_rational::BigRational> {
         if usage.web_search_count > 0 {
             return None;
+        }
+        if let Some(price) = &self.registry_price {
+            use bitrouter_registry::{
+                document::ReaderPolicy,
+                pricing::{TokenUsage, charge},
+            };
+            let n = usage.normalized_buckets().ok()?;
+            let tokens = TokenUsage {
+                uncached_input: Some(n.uncached_input_tokens),
+                cache_read: Some(n.cache_read_tokens),
+                cache_write: Some(n.cache_write_tokens),
+                non_reasoning_output: Some(n.output_tokens),
+                reasoning_output: Some(n.reasoning_tokens),
+            };
+            return charge(
+                price,
+                &tokens,
+                &Default::default(),
+                price["endpoint_profile"].as_str(),
+                &ReaderPolicy::default(),
+            )
+            .ok();
         }
         let bracket = self.bracket_for(usage.prompt_tokens);
         let input_rate = valid_rate(bracket.input_micro_usd_per_token)?;
@@ -328,7 +353,9 @@ impl UsagePricing {
             + usage.cache_write_tokens as f64 * cache_write_rate
             + text_output as f64 * output_rate
             + usage.reasoning_tokens as f64 * reasoning_rate;
-        cost.is_finite().then_some(cost)
+        cost.is_finite()
+            .then(|| num_rational::BigRational::from_float(cost))
+            .flatten()
     }
 }
 
@@ -365,7 +392,7 @@ pub struct UsageAccumulator {
     usage: Usage,
     seen: bool,
     pricing: Option<UsagePricing>,
-    priced_winner: Option<(f64, Usage)>,
+    priced_winner: Option<(num_rational::BigRational, Usage)>,
     every_snapshot_priced: bool,
     /// Total `char` count of `TextDelta` + `ReasoningDelta` text observed.
     delta_chars: u64,
@@ -715,6 +742,7 @@ mod tests {
 
     fn asymmetric_pricing() -> UsagePricing {
         UsagePricing {
+            registry_price: None,
             base: UsagePricingBracket {
                 input_micro_usd_per_token: Some(1.0),
                 output_micro_usd_per_token: Some(10.0),

@@ -374,6 +374,7 @@ impl RoutingTable for LivePricing {
     }
     fn usage_pricing(&self, _: &str, _: &RoutingTarget) -> Option<UsagePricing> {
         Some(UsagePricing {
+            registry_price: None,
             base: UsagePricingBracket {
                 input_micro_usd_per_token: Some(100.0),
                 output_micro_usd_per_token: Some(1.0),
@@ -420,6 +421,7 @@ async fn native_stream_uses_frozen_rates_including_unknown()
     for frozen in [
         None,
         Some(UsagePricing {
+            registry_price: None,
             base: UsagePricingBracket {
                 input_micro_usd_per_token: Some(1.0),
                 output_micro_usd_per_token: Some(100.0),

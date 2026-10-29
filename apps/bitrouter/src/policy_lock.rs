@@ -2243,57 +2243,18 @@ fn route_supports_capability(
     route: &str,
     capability: bitrouter_ai::types::Capability,
 ) -> bool {
-    let Some((provider_id, model_id)) = route.split_once(':') else {
-        return false;
-    };
-    config.providers.get(provider_id).is_some_and(|provider| {
-        provider.active
-            && (provider.model_supports_capability(model_id, capability)
-                || embedded_catalog_supports_capability(provider_id, model_id, capability))
+    crate::config::routing_table::resolve_route_chain(
+        config,
+        route,
+        &crate::gateway::pipeline::routing::RoutingPrefs::default(),
+    )
+    .ok()
+    .is_some_and(|targets| {
+        !targets.is_empty()
+            && targets
+                .iter()
+                .all(|target| target.model_constraints.capabilities.contains(&capability))
     })
-}
-
-fn embedded_catalog_supports_capability(
-    provider_id: &str,
-    model_id: &str,
-    capability: bitrouter_ai::types::Capability,
-) -> bool {
-    let Ok(catalog) =
-        serde_json::from_str::<serde_json::Value>(include_str!("../registry-dist/models.json"))
-    else {
-        return false;
-    };
-    catalog
-        .get("data")
-        .and_then(serde_json::Value::as_array)
-        .is_some_and(|models| {
-            models.iter().any(|model| {
-                let canonical_match =
-                    model.get("id").and_then(serde_json::Value::as_str) == Some(model_id);
-                model
-                    .get("providers")
-                    .and_then(serde_json::Value::as_array)
-                    .is_some_and(|providers| {
-                        providers.iter().any(|provider| {
-                            provider.get("provider").and_then(serde_json::Value::as_str)
-                                == Some(provider_id)
-                                && (canonical_match
-                                    || provider
-                                        .get("provider_model_id")
-                                        .and_then(serde_json::Value::as_str)
-                                        == Some(model_id))
-                                && provider
-                                    .get("capabilities")
-                                    .and_then(serde_json::Value::as_array)
-                                    .is_some_and(|capabilities| {
-                                        capabilities
-                                            .iter()
-                                            .any(|item| item.as_str() == Some(capability.as_str()))
-                                    })
-                        })
-                    })
-            })
-        })
 }
 
 pub fn default_history_dir(active_path: &Path) -> PathBuf {
@@ -5811,7 +5772,7 @@ presets:
     }
 
     #[tokio::test]
-    async fn initialize_uses_embedded_cloud_capabilities_for_tool_safety() -> anyhow::Result<()> {
+    async fn initialize_does_not_borrow_tool_support_from_frozen_registry() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let config_path = dir.path().join("bitrouter.yaml");
         tokio::fs::write(
@@ -5843,10 +5804,7 @@ presets:
         .await?;
         let loaded = load(&update.path).await?;
 
-        assert_eq!(
-            loaded.document.policies["auto"].tool_safe_tiers,
-            ["strong", "economy"]
-        );
+        assert_eq!(loaded.document.policies["auto"].tool_safe_tiers, ["strong"]);
         Ok(())
     }
 

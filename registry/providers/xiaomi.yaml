@@ -1,105 +1,574 @@
-name: xiaomi
-metadata:
-  headquarters: CN
-  name: Xiaomi
-  privacy_policy_url: https://mimo.mi.com/docs/terms/privacy-policy
-  slug: xiaomi
-  terms_of_service_url: https://mimo.mi.com/docs/terms/user-agreement
-api_base: https://api.xiaomimimo.com/v1
-protocol_endpoints:
-  anthropic: https://api.xiaomimimo.com/anthropic
-api_protocol:
-  - "*": [openai, responses, anthropic]
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-# Catalog source: https://models.dev/api.json (provider key `xiaomi`, api=https://api.xiaomimimo.com/v1); mimo-v2.5 family has a higher >256k context tier not represented here.
-# Pricing is per 1M tokens.
-models:
-  - id: xiaomi/mimo-v2.5-pro
-    provider_model_id: mimo-v2.5-pro
-    pricing:
-      input_tokens:
-        no_cache: 0.435
-        cache_read: 0.0036
-      output_tokens:
-        text: 0.87
-    capabilities:
-      - reasoning
-      - tools
-  - id: xiaomi/mimo-v2.5
-    provider_model_id: mimo-v2.5
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.0028
-      output_tokens:
-        text: 0.28
-    capabilities:
-      - reasoning
-      - tools
-  - id: xiaomi/mimo-v2-pro
-    provider_model_id: mimo-v2-pro
-    deprecation_date: 2026-06-30
-    pricing:
-      input_tokens:
-        no_cache: 0.435
-        cache_read: 0.0036
-      output_tokens:
-        text: 0.87
-    capabilities:
-      - reasoning
-      - tools
-  - id: xiaomi/mimo-v2-omni
-    provider_model_id: mimo-v2-omni
-    deprecation_date: 2026-06-30
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.0028
-      output_tokens:
-        text: 0.28
-    capabilities:
-      - reasoning
-      - tools
-  - id: xiaomi/mimo-v2-flash
-    provider_model_id: mimo-v2-flash
-    deprecation_date: 2026-06-30
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.0028
-      output_tokens:
-        text: 0.28
-    capabilities:
-      - reasoning
-      - tools
-  - id: xiaomi/mimo-v2.6-flash
-    provider_model_id: mimo-v2.6-flash
-    pricing:
-      input_tokens:
-        no_cache: 0.14
-        cache_read: 0.0028
-      output_tokens:
-        text: 0.28
-  - id: xiaomi/mimo-v2.6-pro
-    provider_model_id: mimo-v2.6-pro
-    pricing:
-      input_tokens:
-        no_cache: 0.435
-        cache_read: 0.0036
-      output_tokens:
-        text: 0.87
-  - id: xiaomi/mimo-v2.6-pro-ultraspeed
-    provider_model_id: mimo-v2.6-pro-ultraspeed
-    pricing:
-      input_tokens:
-        no_cache: 4.35
-        cache_read: 0.036
-      output_tokens:
-        text: 8.7
-status: active
-weight: 1
-submitted_at: 2026-05-25
-auto_sync:
-  feed: models_dev
+{
+  "api_base": "https://api.xiaomimimo.com/v1",
+  "billing": "usage",
+  "status": "active",
+  "metadata": {
+    "headquarters": "CN",
+    "name": "Xiaomi",
+    "privacy_policy_url": "https://mimo.mi.com/docs/terms/privacy-policy",
+    "slug": "xiaomi",
+    "terms_of_service_url": "https://mimo.mi.com/docs/terms/user-agreement"
+  },
+  "models": [
+    {
+      "provider_model_id": "mimo-v2.5-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.xiaomimimo.com/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.5-pro"
+    },
+    {
+      "provider_model_id": "mimo-v2.5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.xiaomimimo.com/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.5"
+    },
+    {
+      "provider_model_id": "mimo-v2-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.xiaomimimo.com/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ]
+    },
+    {
+      "provider_model_id": "mimo-v2-omni",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.xiaomimimo.com/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ]
+    },
+    {
+      "provider_model_id": "mimo-v2-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.xiaomimimo.com/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ]
+    },
+    {
+      "provider_model_id": "mimo-v2.6-flash",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.xiaomimimo.com/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0028,
+              "no_cache": 0.14
+            },
+            "output_tokens": {
+              "text": 0.28
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.6-flash"
+    },
+    {
+      "provider_model_id": "mimo-v2.6-pro",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.xiaomimimo.com/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.0036,
+              "no_cache": 0.435
+            },
+            "output_tokens": {
+              "text": 0.87
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.6-pro"
+    },
+    {
+      "provider_model_id": "mimo-v2.6-pro-ultraspeed",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.036,
+              "no_cache": 4.35
+            },
+            "output_tokens": {
+              "text": 8.7
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.036,
+              "no_cache": 4.35
+            },
+            "output_tokens": {
+              "text": 8.7
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "base_url": "https://api.xiaomimimo.com/anthropic",
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.036,
+              "no_cache": 4.35
+            },
+            "output_tokens": {
+              "text": 8.7
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "xiaomi/mimo-v2.6-pro-ultraspeed"
+    }
+  ],
+  "name": "xiaomi",
+  "submitted_at": "2026-05-25T00:00:00Z",
+  "weight": 1,
+  "auth": {
+    "kind": "bearer",
+    "env": "XIAOMI_API_KEY"
+  }
+}

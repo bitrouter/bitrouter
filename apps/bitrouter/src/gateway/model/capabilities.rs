@@ -15,7 +15,18 @@ pub(crate) fn required_capabilities(prompt: &Prompt) -> Vec<Capability> {
     if prompt.response_format.is_some() {
         caps.push(Capability::StructuredOutputs);
     }
-    if !prompt.tools.is_empty() {
+    if !prompt.tools.is_empty()
+        || prompt
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|content| {
+                matches!(
+                    content,
+                    Content::ToolCall { .. } | Content::ToolResult { .. }
+                )
+            })
+    {
         caps.push(Capability::Tools);
     }
     if prompt.params.reasoning_effort.is_some() {

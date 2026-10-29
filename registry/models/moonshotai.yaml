@@ -1,37 +1,66 @@
-- id: moonshotai/kimi-k2.7-code
-  deprecation_date: 2026-11-23
-  name: 'Kimi: K2.7 Code'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 262144
-  max_output_tokens: 32768
-  release_date: 2026-06-12
-  knowledge_cutoff: 2025-01
-  open_weights: true
-  family: kimi-k2
-- id: moonshotai/kimi-k3
-  name: 'Kimi: K3'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 131072
-  release_date: 2026-07-16
-  open_weights: true
-  family: kimi-k3
-- id: moonshotai/kimi-k3.1-pro
-  name: 'MoonshotAI: Kimi K3.1 Pro'
-  input_modalities:
-  - image
-  - text
-  - video
-  output_modalities:
-  - text
-  max_input_tokens: 1048576
-  max_output_tokens: 943718
-  release_date: 2026-10-23
+[
+  {
+    "family": "kimi-k2",
+    "id": "moonshotai/kimi-k2.7-code",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "knowledge_cutoff": "2025-01",
+    "max_input_tokens": 262144,
+    "max_output_tokens": 32768,
+    "name": "Kimi: K2.7 Code",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-06-12",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z",
+      "expires_at": "2026-11-23T00:00:00Z"
+    }
+  },
+  {
+    "family": "kimi-k3",
+    "id": "moonshotai/kimi-k3",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 131072,
+    "name": "Kimi: K3",
+    "open_weights": true,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-07-16",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "moonshotai/kimi-k3.1-pro",
+    "name": "MoonshotAI: Kimi K3.1 Pro",
+    "input_modalities": [
+      "image",
+      "text",
+      "video"
+    ],
+    "output_modalities": [
+      "text"
+    ],
+    "max_input_tokens": 1048576,
+    "max_output_tokens": 943718,
+    "release_date": "2026-10-23",
+    "curation": {
+      "reason": "Reviewed main catalog addition; current canonical identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-28T19:35:49Z"
+    }
+  }
+]

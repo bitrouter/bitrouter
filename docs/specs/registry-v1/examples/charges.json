@@ -1,0 +1,41 @@
+{
+  "description": "Exact usage charges, not invoice rounding or real commercial tariffs",
+  "cases": [
+    {
+      "kind": "metered",
+      "counter": "3",
+      "quantity": 1000,
+      "amount": "0.20",
+      "expected_usd": "0.0006"
+    },
+    {
+      "kind": "metered",
+      "counter": "1",
+      "quantity": 1000,
+      "amount": "0.50",
+      "expected_usd": "0.0005"
+    },
+    {
+      "kind": "token",
+      "rates": {
+        "input_tokens": {
+          "no_cache": 1.25,
+          "cache_read": 0.1,
+          "cache_write": 0
+        },
+        "output_tokens": {
+          "text": 3,
+          "reasoning": 3
+        }
+      },
+      "counters": {
+        "no_cache": 800,
+        "cache_read": 200,
+        "cache_write": 0,
+        "text": 100,
+        "reasoning": 20
+      },
+      "expected_usd": "0.00138"
+    }
+  ]
+}

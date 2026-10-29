@@ -96,6 +96,11 @@ pub struct PromptCommandConfig {
 #[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    /// Recommendation records from the admitted registry, evaluated at current
+    /// UTC when selecting an automatic model. Never part of local YAML.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub registry_models: Option<Vec<registry_json::Value>>,
     /// HTTP server settings.
     pub server: ServerConfig,
     /// Opt-in, read-only operator control API settings.
@@ -169,6 +174,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            registry_models: None,
             server: ServerConfig::default(),
             control: ControlConfig::default(),
             agent_api: AgentApiConfig::default(),
@@ -517,15 +523,14 @@ impl PolicyRuntimeMode {
     }
 }
 
-/// Default base URL for the public registry distribution artifacts — the raw
-/// files on bitrouter OSS `main` under `dist/registry/`. The
+/// Default complete Registry v1 document, pinned to this beta contract on the
+/// dedicated publication branch. The
 /// application catalog integration reads it through [`RegistryConfig`].
-pub const DEFAULT_REGISTRY_URL: &str =
-    "https://raw.githubusercontent.com/bitrouter/bitrouter/main/dist/registry";
+pub const DEFAULT_REGISTRY_URL: &str = bitrouter_registry::document::DEFAULT_SOURCE_URL;
 
 /// Runtime public registry integration settings — the top-level `registry:`
 /// block in `bitrouter.yaml`.
-#[derive(Debug, Clone, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct RegistryConfig {
     /// Whether to fetch the registry and merge its BYOK providers into the
@@ -533,10 +538,12 @@ pub struct RegistryConfig {
     /// [`inherit_defaults`](Config::inherit_defaults) — either being false
     /// disables the merge.
     pub enabled: bool,
-    /// Base URL of the registry `dist/` artifacts. Defaults to
-    /// [`DEFAULT_REGISTRY_URL`]. Point it at a pinned `reg-<timestamp>` tag or
-    /// an internal mirror for reproducible deployments.
-    pub url: String,
+    /// Exact complete document URL, defaulting to [`DEFAULT_REGISTRY_URL`].
+    /// An immutable Git commit URL pins a snapshot; a custom mirror is isolated
+    /// from the packaged default and every other source's cache.
+    pub url: Option<String>,
+    /// Download compatible updates in the background. Startup uses local data.
+    pub auto_refresh: bool,
     /// Provider-class priority, highest first. A provider's auto-cascade rank
     /// is its class's index here; a per-provider [`ProviderConfig::priority`]
     /// overrides it, and a class absent from this list ranks last. Defaults to
@@ -548,9 +555,17 @@ impl Default for RegistryConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            url: DEFAULT_REGISTRY_URL.to_string(),
+            url: None,
+            auto_refresh: true,
             provider_priority: ProviderClass::default_priority(),
         }
+    }
+}
+
+impl RegistryConfig {
+    /// Exact source identity, including query, revision and trailing slash.
+    pub fn source(&self) -> &str {
+        self.url.as_deref().unwrap_or(DEFAULT_REGISTRY_URL)
     }
 }
 
@@ -1140,6 +1155,13 @@ pub struct PricingTierConfig {
 #[derive(Clone, Deserialize, schemars::JsonSchema)]
 #[serde(default)]
 pub struct ProviderConfig {
+    /// Operator-verified processing/project profile for registry tariffs.
+    /// Registry declarations alone do not establish deployment eligibility.
+    pub registry_endpoint_profile: Option<String>,
+    /// Admitted provider metadata used only by the registry execution selector.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub registry: Option<registry_json::Value>,
     /// Upstream API base URL.
     pub api_base: String,
     /// Upstream API key (often a `${VAR}` reference).
@@ -1329,6 +1351,8 @@ impl std::fmt::Debug for ProviderConfig {
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
+            registry_endpoint_profile: None,
+            registry: None,
             api_base: String::new(),
             api_key: String::new(),
             headers: BTreeMap::new(),
@@ -2076,6 +2100,8 @@ pub async fn load(path: impl AsRef<std::path::Path>) -> Result<Config> {
 /// populate the model list from the response (`{ "data": [{ "id": … }] }`,
 /// the Chat Completions / Messages shape). A provider whose discovery call fails is
 /// left as-is with a WARN — discovery never aborts startup.
+/// Registry-owned inventories use their declared execution contracts instead
+/// of generic discovery, including when a provider is withheld or unsupported.
 ///
 /// The HTTP client is built with bounded `connect_timeout` + `timeout` so an
 /// unreachable provider can't stall a `bro reload` for the OS-level
@@ -2092,7 +2118,11 @@ pub async fn discover_models(config: &mut Config) {
         .build()
         .unwrap_or_else(|_| reqwest::Client::new());
     for (provider_id, provider) in config.providers.iter_mut() {
-        if !provider.active || !provider.auto_discover || !provider.models.is_empty() {
+        if !provider.active
+            || !provider.auto_discover
+            || !provider.models.is_empty()
+            || provider.registry.is_some()
+        {
             continue;
         }
         let url = format!("{}/models", provider.api_base.trim_end_matches('/'));

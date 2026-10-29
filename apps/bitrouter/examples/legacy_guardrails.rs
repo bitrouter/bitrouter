@@ -34,6 +34,7 @@ async fn main() -> Result<()> {
     routing.insert(
         "guarded",
         vec![RoutingTarget {
+            registry: None,
             provider_name: "legacy-example".into(),
             service_id,
             api_base,

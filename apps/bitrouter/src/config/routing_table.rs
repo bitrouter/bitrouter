@@ -59,6 +59,7 @@ fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
         })
         .collect();
     UsagePricing {
+        registry_price: None,
         base,
         context_tiers,
     }
@@ -117,7 +118,10 @@ impl ConfigRoutingTable {
     /// Snapshot the current `Config` — used by the daemon reload integration
     /// test to assert the table adopted a hot-reloaded config.
     pub fn snapshot_config(&self) -> Config {
-        self.config.read().expect("config lock poisoned").clone()
+        self.config
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     /// Capture configuration and its process-local generation together. App
@@ -202,6 +206,19 @@ fn build_targets(
     inbound: Option<&ApiProtocol>,
     operation: ModelOperation,
 ) -> Result<Vec<RoutingTarget>> {
+    if provider.registry.is_some() {
+        return build_registry_targets(
+            provider_id,
+            provider,
+            model_id,
+            false,
+            &RoutingPrefs {
+                inbound_protocol: inbound.cloned(),
+                operation,
+                ..Default::default()
+            },
+        );
+    }
     // Protocol-native routing: prefer the inbound protocol when this upstream
     // supports it (a faithful same-protocol round-trip), else the provider's
     // configured default head.
@@ -257,6 +274,7 @@ fn build_targets(
             .map(str::to_string)
             .unwrap_or_else(|| provider.api_base.clone());
         return Ok(vec![RoutingTarget {
+            registry: None,
             provider_name: provider_id.to_string(),
             service_id: service_id.to_string(),
             api_base,
@@ -301,6 +319,7 @@ fn build_targets(
                     .unwrap_or_else(|| provider.api_base.clone())
             };
             RoutingTarget {
+                registry: None,
                 provider_name: provider_id.to_string(),
                 service_id: service_id.to_string(),
                 api_base,
@@ -327,6 +346,53 @@ fn build_targets(
 /// provider's preferred head. `protocols` is non-empty —
 /// [`ProviderConfig::protocols_for`](crate::config::ProviderConfig::protocols_for)
 /// always yields at least one.
+fn build_registry_targets(
+    provider_id: &str,
+    provider: &crate::config::ProviderConfig,
+    model_id: &str,
+    native_only: bool,
+    prefs: &RoutingPrefs,
+) -> Result<Vec<RoutingTarget>> {
+    let Some((projected, selected)) =
+        crate::gateway::catalog::execution::select(provider, model_id, native_only, prefs)
+    else {
+        return Ok(vec![]);
+    };
+    let Some(model) = projected.models.first() else {
+        return Ok(vec![]);
+    };
+    let mut targets = build_targets(
+        provider_id,
+        &projected,
+        &model.id,
+        prefs.inbound_protocol.as_ref(),
+        prefs.operation,
+    )?;
+    for target in &mut targets {
+        target.registry = Some(selected.clone());
+    }
+    Ok(targets)
+}
+
+fn build_targets_for_prefs(
+    provider_id: &str,
+    provider: &crate::config::ProviderConfig,
+    model_id: &str,
+    prefs: &RoutingPrefs,
+) -> Result<Vec<RoutingTarget>> {
+    if provider.registry.is_some() {
+        build_registry_targets(provider_id, provider, model_id, false, prefs)
+    } else {
+        build_targets(
+            provider_id,
+            provider,
+            model_id,
+            prefs.inbound_protocol.as_ref(),
+            prefs.operation,
+        )
+    }
+}
+
 fn select_protocol(
     protocols: &[ApiProtocol],
     inbound: Option<&ApiProtocol>,
@@ -365,7 +431,7 @@ fn balance_offset(provider_id: &str, n: usize) -> usize {
     let mut counters = COUNTERS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
-        .expect("balance counter lock poisoned");
+        .unwrap_or_else(|p| p.into_inner());
     let counter = counters.entry(provider_id.to_string()).or_insert(0);
     let offset = *counter % n;
     *counter = counter.wrapping_add(1);
@@ -427,13 +493,7 @@ fn resolve_virtual_model(
         }
         endpoints.push((
             endpoint.provider.clone(),
-            build_targets(
-                &endpoint.provider,
-                provider,
-                &endpoint.service_id,
-                prefs.inbound_protocol.as_ref(),
-                prefs.operation,
-            )?,
+            build_targets_for_prefs(&endpoint.provider, provider, &endpoint.service_id, prefs)?,
         ));
     }
 
@@ -469,6 +529,13 @@ pub fn resolve_route_chain(
     model: &str,
     caller_prefs: &RoutingPrefs,
 ) -> Result<Vec<RoutingTarget>> {
+    if bitrouter_registry::selector::decode(model)
+        .map_err(|e| BitrouterError::bad_request(e.to_string()))?
+        .is_some()
+    {
+        config.validate_router_config()?;
+        return resolve_clean_route_chain(config, model, caller_prefs);
+    }
     // ---- Stage 0: resolve named definition / legacy variant, derive prefs ----
     let resolution = config.resolve_router(model)?;
     let clean = resolution.clean_model;
@@ -485,19 +552,29 @@ fn resolve_clean_route_chain(
     clean: &str,
     prefs: &RoutingPrefs,
 ) -> Result<Vec<RoutingTarget>> {
+    if let Some(native) = bitrouter_registry::selector::decode(clean)
+        .map_err(|e| BitrouterError::bad_request(e.to_string()))?
+    {
+        let provider = config
+            .providers
+            .get(&native.provider)
+            .filter(|p| p.active)
+            .ok_or_else(|| BitrouterError::NotFound("native provider unavailable".into()))?;
+        if provider.registry.is_some() {
+            return build_registry_targets(&native.provider, provider, &native.model, true, prefs)
+                .and_then(|chain| require_compatible_chain(chain, prefs.operation));
+        }
+        return Err(BitrouterError::NotFound(
+            "native selector requires a declared registry inventory entry".into(),
+        ));
+    }
     // ---- Strategy 1: provider:model_id direct route ----
     if let Some((provider_id, model_id)) = clean.split_once(':')
         && let Some(provider) = config.providers.get(provider_id)
         && provider.active
     {
-        return build_targets(
-            provider_id,
-            provider,
-            model_id,
-            prefs.inbound_protocol.as_ref(),
-            prefs.operation,
-        )
-        .and_then(|chain| require_compatible_chain(chain, prefs.operation));
+        return build_targets_for_prefs(provider_id, provider, model_id, prefs)
+            .and_then(|chain| require_compatible_chain(chain, prefs.operation));
     }
 
     // ---- Strategy 2: explicit virtual model ----
@@ -540,13 +617,7 @@ fn resolve_clean_route_chain(
             chain.push((
                 provider_rank(provider, order),
                 provider_id.clone(),
-                build_targets(
-                    provider_id,
-                    provider,
-                    clean,
-                    prefs.inbound_protocol.as_ref(),
-                    prefs.operation,
-                )?,
+                build_targets_for_prefs(provider_id, provider, clean, prefs)?,
             ));
         }
     }
@@ -611,6 +682,13 @@ fn require_compatible_chain(
 /// shared by route resolution and model listing prevents the catalog from
 /// advertising a bare selector that routing will reject.
 fn provider_requires_pin(provider: &crate::config::ProviderConfig) -> bool {
+    if provider
+        .registry
+        .as_ref()
+        .is_some_and(|p| p["billing"] == "subscription")
+    {
+        return true;
+    }
     matches!(
         provider.class,
         Some(
@@ -672,7 +750,28 @@ pub fn list_models_for(config: &Config) -> Vec<ModelInfo> {
             continue;
         }
         for model in &provider.models {
-            let selector = if provider_requires_pin(provider) {
+            if provider.registry.is_some()
+                && crate::gateway::catalog::execution::select(
+                    provider,
+                    model.provider_model_id.as_deref().unwrap_or(&model.id),
+                    true,
+                    &RoutingPrefs::default(),
+                )
+                .is_none()
+                && crate::gateway::catalog::execution::select(
+                    provider,
+                    model.provider_model_id.as_deref().unwrap_or(&model.id),
+                    true,
+                    &RoutingPrefs {
+                        operation: ModelOperation::Decisions,
+                        ..Default::default()
+                    },
+                )
+                .is_none()
+            {
+                continue;
+            }
+            let selector = if provider_requires_pin(provider) && !model.id.contains(":~native/") {
                 format!("{provider_id}:{}", model.id)
             } else {
                 model.id.clone()
@@ -704,7 +803,7 @@ impl RoutingTable for ConfigRoutingTable {
         &self,
         model: &str,
     ) -> Result<crate::gateway::pipeline::routing::ModelResolution> {
-        let config = self.config.read().expect("config lock poisoned");
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         let resolution = config.resolve_router(model)?;
         Ok(crate::gateway::pipeline::routing::ModelResolution {
             clean_model: resolution.clean_model,
@@ -725,8 +824,13 @@ impl RoutingTable for ConfigRoutingTable {
     ) -> Result<Vec<RoutingTarget>> {
         // The resolution is synchronous; the read guard is dropped before we
         // return (no `.await` is held across it).
-        let config = self.config.read().expect("config lock poisoned");
-        resolve_route_chain(&config, model, prefs)
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
+        registry_route_result(
+            &config,
+            model,
+            prefs,
+            resolve_route_chain(&config, model, prefs),
+        )
     }
 
     async fn route_resolved(
@@ -735,9 +839,14 @@ impl RoutingTable for ConfigRoutingTable {
         prefs: &RoutingPrefs,
         _caller: &CallerContext,
     ) -> Result<Vec<RoutingTarget>> {
-        let config = self.config.read().expect("config lock poisoned");
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         config.validate_router_config()?;
-        resolve_clean_route_chain(&config, model, prefs)
+        registry_route_result(
+            &config,
+            model,
+            prefs,
+            resolve_clean_route_chain(&config, model, prefs),
+        )
     }
 
     fn usage_pricing(&self, _model: &str, target: &RoutingTarget) -> Option<UsagePricing> {
@@ -756,7 +865,10 @@ impl RoutingTable for ConfigRoutingTable {
     }
 
     fn canonical_model_id(&self, model: &str, target: &RoutingTarget) -> Option<String> {
-        let config = self.config.read().expect("config lock poisoned");
+        if let Some(selected) = &target.registry {
+            return selected.canonical_id.clone();
+        }
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         let provider = config.providers.get(&target.provider_name)?;
         provider
             .models
@@ -773,7 +885,7 @@ impl RoutingTable for ConfigRoutingTable {
     }
 
     fn list_models(&self) -> Vec<ModelInfo> {
-        let config = self.config.read().expect("config lock poisoned");
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         list_models_for(&config)
     }
 
@@ -807,15 +919,60 @@ impl RoutingTable for ConfigRoutingTable {
         // legacy `@preset:variant` and return its prompt defaults. The
         // synchronous part is wrapped in a brief read-lock; no `.await` is
         // held across it.
-        let config = self.config.read().expect("config lock poisoned");
+        let config = self.config.read().unwrap_or_else(|p| p.into_inner());
         let resolution = config.resolve_router(model)?;
         Ok(resolution.overrides)
     }
 }
 
+fn registry_route_result(
+    config: &Config,
+    model: &str,
+    prefs: &RoutingPrefs,
+    result: Result<Vec<RoutingTarget>>,
+) -> Result<Vec<RoutingTarget>> {
+    if result.as_ref().is_ok_and(|chain| !chain.is_empty()) {
+        return result;
+    }
+    let clean = config
+        .resolve_router(model)
+        .map(|r| r.clean_model)
+        .unwrap_or_else(|_| model.into());
+    let native = bitrouter_registry::selector::decode(&clean).ok().flatten();
+    let direct = clean.split_once(':');
+    let known = config.providers.iter().any(|(id, provider)| {
+        let (filter, wanted, native_only) = if let Some(native) = &native {
+            (Some(native.provider.as_str()), native.model.as_str(), true)
+        } else if let Some((id, model)) = direct {
+            (Some(id), model, false)
+        } else {
+            (None, clean.as_str(), false)
+        };
+        filter.is_none_or(|filter| filter == id)
+            && provider.registry.as_ref().is_some_and(|raw| {
+                raw["models"].as_array().is_some_and(|offers| {
+                    offers.iter().any(|offer| {
+                        offer["provider_model_id"] == wanted
+                            || (!native_only && offer["canonical_id"] == wanted)
+                    })
+                })
+            })
+    });
+    if known {
+        return Err(BitrouterError::bad_request(format!(
+            "registry.unsupported_interface: no available interface for model '{clean}' and operation {:?}; verify model availability and request requirements, or upgrade BitRouter/use a supported registry revision",
+            prefs.operation
+        )));
+    }
+    result
+}
+
 /// Merge `extra`'s knobs additively into `base` (caller prefs refine defaults).
 fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
     base.operation = extra.operation;
+    if extra.registry_requirements.is_some() {
+        base.registry_requirements = extra.registry_requirements.clone();
+    }
     if extra.sort != SortOrder::default() {
         base.sort = extra.sort;
     }

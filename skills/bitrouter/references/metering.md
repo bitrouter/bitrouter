@@ -38,8 +38,12 @@ providers:
 
 An omitted context-tier rate inherits the base rate. Registry models use the
 registry's per-million-token `input_tokens.no_cache`, `cache_read`,
-`cache_write`, and `output_tokens.text` fields; BitRouter converts those into
-the same internal rate representation.
+`cache_write`, and `output_tokens.text` fields. Registry v1 amounts stay exact
+decimal rationals through calculation; evidence retains numerator/denominator
+and scope, while integer micro-USD is a rounded operational estimate. Rates
+are frozen with the selected protocol, operation and endpoint. Unknown tariff
+kinds, meters, eligibility, usage origins or unproven retry totals produce
+unavailable pricing rather than a zero or a price borrowed from another wire.
 
 ## What is persisted
 

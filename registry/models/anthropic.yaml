@@ -1,113 +1,195 @@
-- id: anthropic/claude-fable-5
-  name: 'Anthropic: Claude Fable 5'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-06-09
-  knowledge_cutoff: 2026-01-31
-  open_weights: false
-  family: claude-fable
-- id: anthropic/claude-haiku-4.5
-  name: 'Anthropic: Claude Haiku 4.5'
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 200000
-  max_output_tokens: 8192
-  release_date: 2025-10-15
-  knowledge_cutoff: 2025-02-28
-  open_weights: false
-  family: claude-haiku
-- id: anthropic/claude-opus-5
-  name: 'Anthropic: Claude Opus 5'
-  description: Anthropic's Claude Opus 5.
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-07-24
-  knowledge_cutoff: 2026-05-31
-  open_weights: false
-  family: claude-opus
-- id: anthropic/claude-sonnet-5
-  name: 'Anthropic: Claude Sonnet 5'
-  description: Anthropic's Claude Sonnet 5.
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-06-30
-  knowledge_cutoff: 2026-01-31
-  open_weights: false
-  family: claude-sonnet
-- id: anthropic/claude-sonnet-4.6
-  deprecation_date: 2026-10-29
-  name: 'Anthropic: Claude Sonnet 4.6'
-  description: Anthropic's Claude Sonnet 4.6.
-  input_modalities:
-  - text
-  - image
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-02-17
-  knowledge_cutoff: 2025-08-31
-  open_weights: false
-  family: claude-sonnet
-- id: anthropic/claude-fable-5.1
-  name: 'Anthropic: Claude Fable 5.1'
-  input_modalities:
-  - file
-  - image
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-09-01
-- id: anthropic/claude-opus-5.5
-  name: 'Anthropic: Claude Opus 5.5'
-  input_modalities:
-  - file
-  - image
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-09-22
-- id: anthropic/claude-sonnet-5.5
-  name: 'Anthropic: Claude Sonnet 5.5'
-  input_modalities:
-  - file
-  - image
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-09-28
-- id: anthropic/claude-haiku-5.5
-  name: 'Anthropic: Claude Haiku 5.5'
-  input_modalities:
-  - file
-  - image
-  - text
-  output_modalities:
-  - text
-  max_input_tokens: 1000000
-  max_output_tokens: 128000
-  release_date: 2026-10-07
+[
+  {
+    "family": "claude-fable",
+    "id": "anthropic/claude-fable-5",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "knowledge_cutoff": "2026-01-31",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "name": "Anthropic: Claude Fable 5",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-06-09",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "family": "claude-haiku",
+    "id": "anthropic/claude-haiku-4.5",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "knowledge_cutoff": "2025-02-28",
+    "max_input_tokens": 200000,
+    "max_output_tokens": 8192,
+    "name": "Anthropic: Claude Haiku 4.5",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2025-10-15",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "description": "Anthropic's Claude Opus 5.",
+    "family": "claude-opus",
+    "id": "anthropic/claude-opus-5",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "knowledge_cutoff": "2026-05-31",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "name": "Anthropic: Claude Opus 5",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-07-24",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "description": "Anthropic's Claude Sonnet 5.",
+    "family": "claude-sonnet",
+    "id": "anthropic/claude-sonnet-5",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "knowledge_cutoff": "2026-01-31",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "name": "Anthropic: Claude Sonnet 5",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-06-30",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "release_date": "2026-02-17",
+    "description": "Anthropic's Claude Sonnet 4.6.",
+    "family": "claude-sonnet",
+    "id": "anthropic/claude-sonnet-4.6",
+    "input_modalities": [
+      "text",
+      "image"
+    ],
+    "knowledge_cutoff": "2025-08-31",
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "name": "Anthropic: Claude Sonnet 4.6",
+    "open_weights": false,
+    "output_modalities": [
+      "text"
+    ],
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "anthropic/claude-fable-5.1",
+    "input_modalities": [
+      "file",
+      "image",
+      "text"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "name": "Anthropic: Claude Fable 5.1",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-01",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "anthropic/claude-opus-5.5",
+    "input_modalities": [
+      "file",
+      "image",
+      "text"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "name": "Anthropic: Claude Opus 5.5",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-22",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "anthropic/claude-sonnet-5.5",
+    "input_modalities": [
+      "file",
+      "image",
+      "text"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "name": "Anthropic: Claude Sonnet 5.5",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-09-28",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  },
+  {
+    "id": "anthropic/claude-haiku-5.5",
+    "input_modalities": [
+      "file",
+      "image",
+      "text"
+    ],
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 128000,
+    "name": "Anthropic: Claude Haiku 5.5",
+    "output_modalities": [
+      "text"
+    ],
+    "release_date": "2026-10-07",
+    "curation": {
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "checked_at": "2026-10-22T17:30:00Z"
+    }
+  }
+]

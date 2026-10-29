@@ -1,69 +1,213 @@
-name: claude-code
-display_name: Claude Code (subscription)
-metadata:
-  headquarters: US
-  name: Anthropic
-  privacy_policy_url: https://www.anthropic.com/privacy
-  slug: anthropic
-  status_page_url: https://status.anthropic.com
-  terms_of_service_url: https://www.anthropic.com/legal/consumer-terms
-kind: first_party
-access: local_oauth
-billing: subscription
-api_base: https://api.anthropic.com/v1
-api_protocol:
-  - "*": anthropic
-rate_limits: []
-models:
-  - id: anthropic/claude-sonnet-5
-    provider_model_id: claude-sonnet-5
-    reasoning_effort: &claude_full_effort
-      levels: [low, medium, high, xhigh, max]
-      default: high
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-      - image_input
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: claude-sonnet-4-6
-    reasoning_effort: &claude_max_effort
-      levels: [low, medium, high, max]
-      default: high
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-      - image_input
-  - id: anthropic/claude-haiku-4.5
-    provider_model_id: claude-haiku-4-5
-    capabilities:
-      - reasoning
-      - structured_outputs
-      - tools
-  - id: anthropic/claude-fable-5
-    provider_model_id: claude-fable-5
-    reasoning_effort: *claude_full_effort
-    capabilities: [reasoning]
-  - id: anthropic/claude-opus-5
-    provider_model_id: claude-opus-5
-    reasoning_effort: *claude_full_effort
-    capabilities: [reasoning]
-  - id: anthropic/claude-fable-5.1
-    provider_model_id: claude-fable-5-1
-  - id: anthropic/claude-opus-5.5
-    provider_model_id: claude-opus-5-5
-  - id: anthropic/claude-sonnet-5.5
-    provider_model_id: claude-sonnet-5-5
-  - id: anthropic/claude-haiku-5.5
-    provider_model_id: claude-haiku-5-5
-status: active
-weight: 1
-community: false
-auth_scheme: x-api-key
-auth:
-  kind: oauth
-  handler: anthropic
-auto_sync:
-  feed: models_dev
-  key: anthropic
+{
+  "access": "local_oauth",
+  "api_base": "https://api.anthropic.com/v1",
+  "weight": 1,
+  "auth": {
+    "handler": "anthropic",
+    "kind": "oauth",
+    "params": {}
+  },
+  "status": "active",
+  "name": "claude-code",
+  "billing": "subscription",
+  "community": false,
+  "display_name": "Claude Code (subscription)",
+  "kind": "first_party",
+  "metadata": {
+    "headquarters": "US",
+    "name": "Anthropic",
+    "privacy_policy_url": "https://www.anthropic.com/privacy",
+    "slug": "anthropic",
+    "status_page_url": "https://status.anthropic.com",
+    "terms_of_service_url": "https://www.anthropic.com/legal/consumer-terms"
+  },
+  "models": [
+    {
+      "provider_model_id": "claude-opus-4-8",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-4.8"
+    },
+    {
+      "provider_model_id": "claude-sonnet-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-5"
+    },
+    {
+      "provider_model_id": "claude-sonnet-4-6",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools",
+            "image_input"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-4.6"
+    },
+    {
+      "provider_model_id": "claude-haiku-4-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning",
+            "structured_outputs",
+            "tools"
+          ]
+        }
+      ],
+      "canonical_id": "anthropic/claude-haiku-4.5"
+    },
+    {
+      "provider_model_id": "claude-fable-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-fable-5"
+    },
+    {
+      "provider_model_id": "claude-opus-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation",
+          "capabilities": [
+            "reasoning"
+          ],
+          "reasoning_effort": {
+            "default": "high",
+            "levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-5"
+    },
+    {
+      "provider_model_id": "claude-fable-5-1",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "anthropic/claude-fable-5.1"
+    },
+    {
+      "provider_model_id": "claude-opus-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-5.5"
+    },
+    {
+      "provider_model_id": "claude-sonnet-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-5.5"
+    },
+    {
+      "provider_model_id": "claude-haiku-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "messages",
+          "operation": "generation"
+        }
+      ],
+      "canonical_id": "anthropic/claude-haiku-5.5"
+    }
+  ]
+}

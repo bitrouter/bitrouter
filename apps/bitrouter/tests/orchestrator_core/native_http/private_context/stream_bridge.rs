@@ -58,6 +58,7 @@ fn configured_app(
     routes.insert(
         "bridge",
         vec![RoutingTarget {
+            registry: None,
             provider_name: "openai-codex".into(),
             service_id: "served".into(),
             api_base: upstream.into(),

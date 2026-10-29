@@ -1,194 +1,872 @@
-name: aws-bedrock
-display_name: Amazon Bedrock
-metadata:
-  headquarters: US
-  name: Amazon Web Services
-  privacy_policy_url: https://aws.amazon.com/privacy/
-  slug: amazon-bedrock
-  status_page_url: https://health.aws.amazon.com/health/status
-  terms_of_service_url: https://aws.amazon.com/service-terms/
-kind: first_party
-# Amazon Bedrock via its OpenAI-compatible `bedrock-mantle` endpoints (Chat
-# Completions + Responses) over SSE, authenticated with a Bedrock API key
-# (bearer, `AWS_BEARER_TOKEN_BEDROCK`). The region defaults to us-east-1;
-# override with AWS_REGION. This replaces the removed `bitrouter-bedrock` crate:
-# Bedrock's native Converse API frames streams as a binary event-stream (needs
-# the AWS SDK), but the mantle endpoints are plain HTTP+JSON+SSE, so Bedrock is
-# an ordinary registry provider now. Capabilities that only exist on the native
-# `bedrock-runtime` API — cross-region inference profiles, Guardrails,
-# structured outputs, and any model not yet on mantle — are not served here.
-api_protocol:
-  - "*": [openai, responses]
-rate_limits:
-  - "*":
-      requests_per_minute: 60
-api_base: https://bedrock-mantle.${AWS_REGION:-us-east-1}.api.aws/v1
-doc_url: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
-auth:
-  kind: bearer
-  env: AWS_BEARER_TOKEN_BEDROCK
-status: active
-weight: 1
-submitted_at: 2026-07-06
-models:
-  - id: anthropic/claude-fable-5
-    provider_model_id: anthropic.claude-fable-5
-    pricing:
-      input_tokens:
-        no_cache: 10
-        cache_read: 1
-        cache_write: 12.5
-      output_tokens:
-        text: 50
-  - id: anthropic/claude-sonnet-4.6
-    provider_model_id: anthropic.claude-sonnet-4-6
-    pricing:
-      input_tokens:
-        no_cache: 3
-        cache_read: 0.3
-        cache_write: 3.75
-      output_tokens:
-        text: 15
-  - id: openai/gpt-oss-120b
-    provider_model_id: openai.gpt-oss-120b
-    pricing:
-      input_tokens:
-        no_cache: 0.15
-      output_tokens:
-        text: 0.6
-  - id: x-ai/grok-4.3
-    provider_model_id: xai.grok-4.3
-    pricing:
-      input_tokens:
-        no_cache: 1.25
-        cache_read: 0.2
-      output_tokens:
-        text: 2.5
-  - id: anthropic/claude-sonnet-5
-    provider_model_id: anthropic.claude-sonnet-5
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-        cache_write: 2.5
-      output_tokens:
-        text: 10
-  - id: openai/gpt-5.6-luna
-    provider_model_id: openai.gpt-5.6-luna
-    pricing:
-      input_tokens:
-        no_cache: 0.22
-        cache_read: 0.022
-        cache_write: 0.275
-      output_tokens:
-        text: 1.32
-  - id: openai/gpt-5.6-sol
-    provider_model_id: openai.gpt-5.6-sol
-    pricing:
-      input_tokens:
-        no_cache: 5.5
-        cache_read: 0.55
-        cache_write: 6.88
-      output_tokens:
-        text: 33
-  - id: openai/gpt-5.6-terra
-    provider_model_id: openai.gpt-5.6-terra
-    pricing:
-      input_tokens:
-        no_cache: 2.2
-        cache_read: 0.22
-        cache_write: 2.75
-      output_tokens:
-        text: 13.2
-  - id: anthropic/claude-opus-5
-    provider_model_id: anthropic.claude-opus-5
-    pricing:
-      input_tokens:
-        no_cache: 5
-        cache_read: 0.5
-        cache_write: 6.25
-      output_tokens:
-        text: 25
-  - id: x-ai/grok-4.6
-    provider_model_id: xai.grok-4.6
-    pricing:
-      input_tokens:
-        no_cache: 2.2
-        cache_read: 0.55
-      output_tokens:
-        text: 6.6
-  - id: anthropic/claude-fable-5.1
-    provider_model_id: anthropic.claude-fable-5-1
-    pricing:
-      input_tokens:
-        no_cache: 10
-        cache_read: 0.25
-        cache_write: 12.5
-      output_tokens:
-        text: 50
-  - id: openai/gpt-6-astra
-    provider_model_id: openai.gpt-6-astra
-    pricing:
-      input_tokens:
-        no_cache: 11
-        cache_read: 1.1
-        cache_write: 13.75
-      output_tokens:
-        text: 55
-  - id: anthropic/claude-opus-5.5
-    provider_model_id: anthropic.claude-opus-5-5
-    pricing:
-      input_tokens:
-        no_cache: 4
-        cache_read: 0.2
-        cache_write: 5
-      output_tokens:
-        text: 20
-  - id: openai/gpt-6-luna
-    provider_model_id: openai.gpt-6-luna
-    pricing:
-      input_tokens:
-        no_cache: 0.11
-        cache_read: 0.011
-        cache_write: 0.1375
-      output_tokens:
-        text: 0.55
-  - id: openai/gpt-6-sol
-    provider_model_id: openai.gpt-6-sol
-    pricing:
-      input_tokens:
-        no_cache: 2.2
-        cache_read: 0.22
-        cache_write: 2.75
-      output_tokens:
-        text: 11
-  - id: anthropic/claude-sonnet-5.5
-    provider_model_id: anthropic.claude-sonnet-5-5
-    pricing:
-      input_tokens:
-        no_cache: 2
-        cache_read: 0.2
-        cache_write: 2.5
-      output_tokens:
-        text: 10
-  - id: openai/gpt-6.1-sol
-    provider_model_id: openai.gpt-6.1-sol
-    pricing:
-      input_tokens:
-        no_cache: 2.2
-        cache_read: 0.11
-        cache_write: 2.75
-      output_tokens:
-        text: 11
-  - id: anthropic/claude-haiku-5.5
-    provider_model_id: anthropic.claude-haiku-5-5
-    pricing:
-      input_tokens:
-        no_cache: 0.1
-        cache_read: 0.01
-        cache_write: 0.125
-      output_tokens:
-        text: 0.5
-auto_sync:
-  feed: models_dev
-  key: amazon-bedrock
+{
+  "api_base": "https://bedrock-mantle.us-east-1.api.aws/v1",
+  "billing": "usage",
+  "auth": {
+    "env": "AWS_BEARER_TOKEN_BEDROCK",
+    "kind": "bearer"
+  },
+  "submitted_at": "2026-07-06T00:00:00Z",
+  "display_name": "Amazon Bedrock",
+  "doc_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html",
+  "kind": "first_party",
+  "metadata": {
+    "headquarters": "US",
+    "name": "Amazon Web Services",
+    "privacy_policy_url": "https://aws.amazon.com/privacy/",
+    "slug": "amazon-bedrock",
+    "status_page_url": "https://health.aws.amazon.com/health/status",
+    "terms_of_service_url": "https://aws.amazon.com/service-terms/"
+  },
+  "models": [
+    {
+      "provider_model_id": "anthropic.claude-fable-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "output_tokens": {
+              "text": 50
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "output_tokens": {
+              "text": 50
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-fable-5"
+    },
+    {
+      "provider_model_id": "anthropic.claude-opus-4-8",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "output_tokens": {
+              "text": 25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "output_tokens": {
+              "text": 25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-4.8"
+    },
+    {
+      "provider_model_id": "anthropic.claude-sonnet-4-6",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "cache_write": 3.75,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.3,
+              "cache_write": 3.75,
+              "no_cache": 3
+            },
+            "output_tokens": {
+              "text": 15
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-4.6"
+    },
+    {
+      "provider_model_id": "openai.gpt-oss-120b",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "no_cache": 0.15
+            },
+            "output_tokens": {
+              "text": 0.6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-oss-120b"
+    },
+    {
+      "provider_model_id": "xai.grok-4.3",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "no_cache": 1.25
+            },
+            "output_tokens": {
+              "text": 2.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.3"
+    },
+    {
+      "provider_model_id": "anthropic.claude-sonnet-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-5"
+    },
+    {
+      "provider_model_id": "openai.gpt-5.6-luna",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.022,
+              "cache_write": 0.275,
+              "no_cache": 0.22
+            },
+            "output_tokens": {
+              "text": 1.32
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.022,
+              "cache_write": 0.275,
+              "no_cache": 0.22
+            },
+            "output_tokens": {
+              "text": 1.32
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-5.6-luna"
+    },
+    {
+      "provider_model_id": "openai.gpt-5.6-sol",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.55,
+              "cache_write": 6.88,
+              "no_cache": 5.5
+            },
+            "output_tokens": {
+              "text": 33
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.55,
+              "cache_write": 6.88,
+              "no_cache": 5.5
+            },
+            "output_tokens": {
+              "text": 33
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-5.6-sol"
+    },
+    {
+      "provider_model_id": "openai.gpt-5.6-terra",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 13.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 13.2
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-5.6-terra"
+    },
+    {
+      "provider_model_id": "anthropic.claude-opus-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "output_tokens": {
+              "text": 25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.5,
+              "cache_write": 6.25,
+              "no_cache": 5
+            },
+            "output_tokens": {
+              "text": 25
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-5"
+    },
+    {
+      "provider_model_id": "xai.grok-4.6",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.55,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 6.6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.55,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 6.6
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "x-ai/grok-4.6"
+    },
+    {
+      "provider_model_id": "anthropic.claude-fable-5-1",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "output_tokens": {
+              "text": 50
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.25,
+              "cache_write": 12.5,
+              "no_cache": 10
+            },
+            "output_tokens": {
+              "text": 50
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-fable-5.1"
+    },
+    {
+      "provider_model_id": "openai.gpt-6-astra",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.1,
+              "cache_write": 13.75,
+              "no_cache": 11
+            },
+            "output_tokens": {
+              "text": 55
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 1.1,
+              "cache_write": 13.75,
+              "no_cache": 11
+            },
+            "output_tokens": {
+              "text": 55
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6-astra"
+    },
+    {
+      "provider_model_id": "anthropic.claude-opus-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5,
+              "no_cache": 4
+            },
+            "output_tokens": {
+              "text": 20
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 5,
+              "no_cache": 4
+            },
+            "output_tokens": {
+              "text": 20
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-opus-5.5"
+    },
+    {
+      "provider_model_id": "openai.gpt-6-luna",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.011,
+              "cache_write": 0.1375,
+              "no_cache": 0.11
+            },
+            "output_tokens": {
+              "text": 0.55
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.011,
+              "cache_write": 0.1375,
+              "no_cache": 0.11
+            },
+            "output_tokens": {
+              "text": 0.55
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6-luna"
+    },
+    {
+      "provider_model_id": "openai.gpt-6-sol",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 11
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.22,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 11
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6-sol"
+    },
+    {
+      "provider_model_id": "anthropic.claude-sonnet-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.2,
+              "cache_write": 2.5,
+              "no_cache": 2
+            },
+            "output_tokens": {
+              "text": 10
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-sonnet-5.5"
+    },
+    {
+      "provider_model_id": "openai.gpt-6.1-sol",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 11
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.11,
+              "cache_write": 2.75,
+              "no_cache": 2.2
+            },
+            "output_tokens": {
+              "text": 11
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "openai/gpt-6.1-sol"
+    },
+    {
+      "provider_model_id": "anthropic.claude-haiku-5-5",
+      "status": "active",
+      "interfaces": [
+        {
+          "protocol": "chat_completions",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        },
+        {
+          "protocol": "responses",
+          "operation": "generation",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
+          "pricing": {
+            "input_tokens": {
+              "cache_read": 0.01,
+              "cache_write": 0.125,
+              "no_cache": 0.1
+            },
+            "output_tokens": {
+              "text": 0.5
+            },
+            "kind": "token",
+            "currency": "USD"
+          }
+        }
+      ],
+      "canonical_id": "anthropic/claude-haiku-5.5"
+    }
+  ],
+  "name": "aws-bedrock",
+  "weight": 1,
+  "status": "active"
+}

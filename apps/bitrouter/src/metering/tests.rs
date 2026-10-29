@@ -36,6 +36,7 @@ fn ctx(api_key: &str, prompt: u64, completion: u64) -> SettlementContext {
         request_id: format!("r-{api_key}-{prompt}-{completion}"),
         caller: CallerContext::new(api_key, format!("u-{api_key}")),
         target: Some(crate::gateway::pipeline::types::RoutingTarget {
+            registry: None,
             model_constraints: Default::default(),
             provider_name: "openai".into(),
             service_id: "gpt-5".into(),

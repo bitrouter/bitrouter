@@ -1,199 +1,45 @@
 # BitRouter Registry
 
-The source catalog of **models** and **providers** that BitRouter blesses by
-default. It is generated into `dist/registry/{models,providers}.json` and
-consumed by BitRouter — both the hosted service and the
-[open-source distribution](https://github.com/bitrouter/bitrouter).
+The model/provider registry uses the tracked [Registry v1 beta protocol](../docs/specs/registry-v1/README.md). Recommendations and provider inventories have independent membership. Public model/provider artifacts are complete documents at `dist/registry/v1/registry.json`; the same-revision beta stream is in its revision subdirectory. Agent/runtime catalogs retain their independent contract and existing artifact paths.
 
-## What this is — and isn't
+## Registry v1 operations
 
-This is **not** a general-purpose database of every AI model, like
-[models.dev](https://models.dev). It is a *curated* catalog with one purpose:
-picking good defaults for **agentic and coding** workloads.
+The normative model/provider protocol is
+[`docs/specs/registry-v1/README.md`](../docs/specs/registry-v1/README.md).
+`registry build` and `registry validate` are deterministic offline contributor
+checks; they do not claim a fresh OpenRouter audit. `registry sync` always fetches
+the complete OpenRouter identity list and gates the complete candidate before
+writing any source. `--report` writes JSON, including required-feed failures.
 
-- **`models/`** — the canonical catalog: the models BitRouter supports by
-  default.
-- **`providers/`** — where those models (and more) can actually be served:
-  first-party APIs, gateways, and coding-plan subscriptions, including
-  **BYOK / BYO-subscription** providers that offer models *beyond* the curated
-  set.
-- **`agents/`** — the canonical catalog of **ACP-compatible coding agents**
-  BitRouter drives and routes by default (Claude Code, Codex, opencode, …).
-- **`runtimes/`** — where those agents actually execute. Today that is `local`
-  (a child process on this machine); container and remote-sandbox runtimes are
-  specified in `docs/AGENT_REGISTRY_SPEC.md` but not implemented.
+Own-provider model feeds currently cover OpenAI, Anthropic, OpenRouter, and
+BitRouter. OpenAI, Anthropic, and BitRouter listings are account-scoped merge
+feeds: a missing account-visible model cannot prove global withdrawal. New
+heterogeneous offers have empty interfaces until endpoint support is verified;
+unknown prices stay absent. The remaining providers retain manually maintained
+inventories until a documented own-provider feed is configured. Third-party
+models.dev data is not used as provider membership authority.
 
-`agents` / `runtimes` is the same relationship as `models` / `providers`: a
-model is routable because an active **provider** serves it, and an agent is
-launchable because an active **runtime** can run it.
+Trusted CI binds `OPENAI_REGISTRY_API_KEY`, `ANTHROPIC_REGISTRY_API_KEY`, and
+`BITROUTER_REGISTRY_API_KEY` to GitHub repository secrets with those exact names.
+They are independent listing credentials; local inference keys are not inherited.
+OpenRouter's public full-list endpoint uses explicit `auth: {kind: none}`.
+Missing required secrets fail the run, while an independently validated public
+feed can still produce a reviewable proposal after the global audit passes.
+The workflow uploads the exact public identity response and JSON report.
 
-Being listed in `models/` is an editorial decision. A model that is *not*
-curated can still be served by any provider that lists it — it just isn't part
-of the blessed default catalog.
+The v1 migration retained every native provider offer. Five delisted canonical
+bindings (`qwen/qwen3.8-max`, `deepseek/deepseek-v3.1`, and Xiaomi's
+`mimo-v2-flash`, `mimo-v2-omni`, `mimo-v2-pro`) are explicitly unbound;
+historical correspondence remains in `model-identities.yaml`. This migration
+is a reviewed source change, not an automatic sync rule. Azure now requires an
+explicit concrete local endpoint; Bedrock's registry endpoint is the concrete
+`us-east-1` default. Registry URLs do not interpolate environment templates.
 
-Maintainers curate which versioned model families BitRouter follows in
-`model-discovery.yaml`. Within those explicitly selected families, the daily
-registry sync uses OpenRouter's public `GET /api/v1/models` catalog to keep the
-canonical list current: it retains the two newest version numbers by default
-and every eligible variant belonging to those versions. A family may set its own
-`retain_versions` when a different compatibility window is required. Family-specific
-`exclude_variants` regexes apply to the matcher's `variant` capture; matching
-models still establish the version's age, but are never added and are removed
-if already canonical. OpenRouter routing aliases such as `:batch`, `:free`, and
-`~...-latest` are not canonical models.
-Explicit production-health retirements live in the same file as
-`retired_models`; these tombstones override discovery while an upstream catalog
-continues to advertise a broken or withdrawn model.
-
-When a version falls outside its configured retention window, every canonical
-model in that version receives the same `deprecation_date`, 30 days in the future. Once
-that date arrives, the sync removes those canonical IDs and all matching
-provider routes. A `deprecation_date` on an individual provider model remains a
-provider-local lifecycle marker and never triggers global removal.
-New discoveries already outside the retention window are omitted instead of
-being added with an immediate deprecation notice.
-
-## How models are curated
-
-Default models are chosen by performance on **three independent benchmarks** —
-independent meaning **not authored or curated by any model vendor**, so no
-provider is grading a field it competes in:
-
-- **Terminal-Bench 2.1** — from the **Laude Institute** and **Stanford** with the
-  open-source Terminal-Bench community. 89 curated command-line agent tasks
-  (software engineering, sysadmin, data processing, security); each runs in a
-  Docker container against pytest checks with all-or-nothing scoring.
-  [paper](https://arxiv.org/abs/2601.11868) ·
-  [leaderboard](https://artificialanalysis.ai/evaluations/terminalbench-v2-1)
-- **SkillsBench** — from **BenchFlow** (a research consortium spanning Stanford,
-  CMU, Berkeley, and Oxford). ~86 tasks across 11 domains measuring how
-  effectively an agent *uses skills* — the modular instructions, scripts, and
-  resources it loads on demand. [site](https://www.skillsbench.ai/) ·
-  [repo](https://github.com/benchflow-ai/skillsbench)
-- **DeepSWE** — from **Datacurve**. 113 *original*, long-horizon software-
-  engineering tasks across 91 repositories and 5 languages
-  (TypeScript, Go, Python, JavaScript, Rust), written from scratch — not scraped
-  from public pull requests — to resist training-data contamination and reward
-  real problem-solving. [site](https://deepswe.datacurve.ai/) ·
-  [repo](https://github.com/datacurve-ai/deep-swe)
-
-We **deliberately do not** rank on benchmarks authored or curated by first-party
-model providers — for example **SWE-bench Verified** (the subset verified by
-OpenAI) and **GDPval** (OpenAI). When a model vendor curates a benchmark that
-features its own models, independence is harder to guarantee, so we lean on
-evaluations run by parties without a model of their own in the race.
-
-## Relationship to BitRouter OSS
-
-The registry is **fetched at runtime, not compiled in**. The build emits
-`dist/registry/{providers,models}.json`; BitRouter pulls them over the network
-and caches them under `$XDG_CACHE_HOME/bitrouter/`.
-
-At runtime, a model is routable because a **configured provider serves it** —
-`GET /v1/models` is the de-duplicated union of every active provider's models.
-The curated `models/` catalog is the *default blessed set*, **not** a routing
-gate. Two consequences:
-
-- **You don't edit this catalog to use your own model.** An OSS user adds a
-  model by configuring a **provider** in their local `bitrouter.yaml` (BYOK: an
-  env-keyed provider that lists the model, or `auto_discover`). It becomes
-  routable immediately, with no change here and no rebuild.
-- **Editing this catalog is an upstream contribution** — it changes the blessed
-  default catalog itself.
-
-## Contributing
-
-Source lives in two places; `dist/registry/` is generated — never hand-edit it.
-
-- **`registry/models/<vendor>.yaml`** — one file per vendor, a YAML sequence of
-  canonical models. Every id is `<vendor>/<model>` (lowercase). Include only
-  facts you can verify (modalities, context/output limits, release date,
-  `open_weights`); omit what you can't.
-- **`registry/providers/<name>.yaml`** — one provider per file: the models it
-  serves, transport, auth, pricing, and `billing`. A provider **may list models
-  beyond the curated catalog** (BYOK / BYO-subscription extras) — those are
-  allowed and surface as non-failing *advisories*, not errors.
-- **`registry/agents/<vendor>.yaml`** — a YAML sequence of ACP agents. See
-  *Agents and runtimes* below.
-- **`registry/runtimes/<name>.yaml`** — one machine class per file: the agents
-  it can run and how it invokes each.
-
-### Model benchmarks
-
-A model may carry a `benchmarks:` block recording independent-benchmark
-results, keyed by benchmark. Today that is **Terminal-Bench 2.1**; the shape is
-extensible so the other curation benchmarks can follow.
-
-```yaml
-- id: openai/gpt-5.6-sol
-  # …other model fields…
-  benchmarks:
-    terminal_bench_2_1:
-      accuracy: 88.0        # % of the 89 tasks passed (0–100)
-      cost_per_task: 0.75   # USD, average per task
-      time_per_task: 4.35   # minutes, average per task
-      measured_by: bitrouter        # `bitrouter`, or a third-party source name
-      harness: terminus-2           # agent harness the run used
-      config: max                   # reasoning-effort / config label
-      as_of: 2026-07-17             # snapshot date (YYYY-MM-DD)
-      source_url: https://…         # required when `measured_by` is a third party
-```
-
-The three metrics are **optional and provenance-first**. A raw score is
-meaningless on its own — the same model on the same benchmark version swings by
-double digits across harness and reasoning-effort — so `harness` + `config` pin
-a run for reproducibility, and `measured_by` (with `source_url`) keeps a cited
-third-party number from being mistaken for one we ran. Per the "omit what you
-can't verify" rule above, **leave the metrics unset until measured**: we fill
-them from our own Terminal-Bench 2.1 runs (the open harness routed through
-BitRouter, `measured_by: bitrouter`), not from unverified figures.
-
-### Provider variants — one file per distinct endpoint
-
-A provider file is **one routable endpoint with its own commercial terms**, not a
-datacenter. A vendor gets more than one file only along two orthogonal axes:
-
-- **Entity / region.** The default is *global* — **no suffix**. "International"
-  is a commercial tier (USD, global signup), **not** a geography, so it never
-  gets a suffix. Add a suffixed variant only when the vendor exposes a genuinely
-  distinct public endpoint with distinct commercial or legal terms — a different
-  base URL **and** a different currency, account/KYC, or data-residency
-  jurisdiction. A different datacenter for the *same* product (latency only) is
-  **not** a variant.
-  - `_cn` — mainland China: separate legal entity, RMB, mainland real-name
-    account, non-interchangeable keys. This is the one geographic split that is
-    near-universal among Chinese vendors and always a distinct endpoint.
-  - Other region suffixes (`_eu`, `_us`, `_apac`, …) are allowed **only** when
-    such an endpoint really exists (e.g. a dedicated EU-residency host). Most
-    providers will only ever have the default and maybe `_cn`. Do not reserve
-    region slots the vendor doesn't offer, and do not split one product across
-    per-city gateways (this is why Alibaba's endpoint-less `_hk`/`_jp`/`_eu`
-    entries were removed).
-- **Billing.** Independent of region: `usage_token` (the default) vs
-  `subscription` (a flat-rate plan). Prefer the plan's real product name when it
-  has one (`claude-code`, not `anthropic_coding_plan`); the `billing:` field
-  carries the semantics regardless.
-
-The name equals the filename stem and the env-var root (`{NAME}_API_KEY`); use
-lowercase region codes. In `metadata`, `headquarters` is the home country of the
-company behind the brand — **identical across all of that brand's variants** —
-while `datacenters` is where the specific variant serves from (so a Chinese
-vendor's international endpoint is `headquarters: CN` with `datacenters: [SG]`,
-not `headquarters: SG`).
-
-### Pricing and sourcing
-
-- **All pricing is USD per 1M tokens.** Convert any RMB (or other-currency) rate
-  to USD and record the source and conversion in a comment — never leave a
-  non-USD number in a price field. (`usage_token` providers must price every
-  model; `subscription` providers price none — see the validator rules below.)
-- **Prefer the models.dev feed when the provider is listed there.** Set
-  `auto_sync: { feed: models_dev }` so the daily sync keeps the catalog and
-  pricing current. The sync key defaults to the provider `name`; set `key:`
-  explicitly when the models.dev key differs (e.g. `siliconflow_cn` uses
-  `key: siliconflow-cn`). Providers absent from models.dev are maintained by
-  hand from the vendor's published model + price list, and the comment header
-  should say so.
+Provider feed references:
+- [OpenAI model listing](https://developers.openai.com/api/reference/resources/models/methods/list)
+- [Anthropic model listing and cursor contract](https://platform.claude.com/docs/en/api/models/list)
+- [OpenRouter complete listing](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)
+- [BitRouter API](https://docs.bitrouter.ai)
 
 ### Agents and runtimes
 
@@ -297,41 +143,3 @@ contributed agent reads until someone runs the suite.
 
 The **lifecycle** tier (`session/new` → prompt → cancel) is specified in
 `docs/AGENT_REGISTRY_SPEC.md` §9 but not implemented, so no record carries it.
-
-### Status lifecycle
-
-`status` gates routing: **only `active` is served**; `staging`, `suspended`, and
-`withdrawn` are not. Use `staging` for a provider scaffolded from research but not
-yet confirmed against the live API — keep a `# VERIFY BEFORE ACTIVATING` header
-listing the exact fields a human must check (model ids via `GET /v1/models`,
-prices, env var, base URL) before flipping it to `active`.
-
-When model retirement removes an active provider's last model, registry sync
-sets its static catalog to `models: []` and its status to `suspended`. Providers
-with `auto_sync` or local OAuth/PKCE access may discover models later and retain
-their active status. Other lifecycle statuses are preserved. Restore a static
-provider to `active` only after adding and verifying its replacement models.
-
-The validator (`cargo run -p dist-helper -- registry validate`) enforces:
-
-- Model ids and provider model ids are lowercase `<org>/<model>`.
-- Every id in `models/<vendor>.yaml` has org-prefix `<vendor>/`.
-- `billing: subscription` providers carry **no** per-token pricing;
-  `billing: usage_token` (the default) providers price **every** model they list.
-
-Before submitting:
-
-```sh
-cargo run -p dist-helper -- registry validate   # advisories about non-curated
-                                                 # provider models and unpinned
-                                                 # agent invocations are expected
-cargo run -p dist-helper -- registry build      # regenerate dist/registry
-```
-
-The docs site's `supported-*` tables are generated in the **bitrouter-docs**
-repo from the committed `dist/registry/` artifacts — there is no `registry docs`
-step here.
-
-Commit `dist/registry/` alongside your source changes. The daily automated sync
-updates configured canonical model families first, then refreshes provider
-catalogs from their `auto_sync` feeds.
