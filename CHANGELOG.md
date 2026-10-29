@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0-alpha.35]
+
 ### Added
+
+- Publish `bitrouter-registry`, the shared Registry v1 validation, feed sync,
+  identity reconciliation, native selector, and exact pricing library.
+- Support Registry v1 source selection, complete source-bound caches, background
+  refresh, and atomic routing updates with recoverable compatibility errors.
+- Add opt-in PostgreSQL coordination for shared gateway authority, admission,
+  idempotency, budgets, leases, recovery, and settlement across `bro` processes.
 
 - Native BRO ACP v1 and draft v2 via bare `bro acp serve --model MODEL`, backed
   by the daemon's existing ThreadService. Unexpected disconnect preserves work
