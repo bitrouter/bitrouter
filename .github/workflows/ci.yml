@@ -144,9 +144,10 @@ jobs:
           - os: windows-latest
             # Windows also exposes the trajectory timestamp race under load.
             retries: "2"
-            # Cold builds, the full suite and post-job cache upload exceeded
-            # 45 minutes after all tests passed. Keep per-test deadlines intact.
-            timeout: 75
+            # Cold fixture/test builds consumed 52 minutes, leaving the suite
+            # incomplete at the 75-minute cap. Keep test deadlines and retries
+            # unchanged while reserving time for the full suite and cleanup.
+            timeout: 120
     runs-on: ${{ matrix.os }}
     timeout-minutes: ${{ matrix.timeout }}
     steps:
@@ -338,7 +339,9 @@ jobs:
           - owned_choice_receipt_capacity_refuses_before_socket_send_and_keeps_clean_release
           - owned_choice_two_pending_intents_keep_both_outcome_acks_near_receipt_capacity
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    # A macOS cold dist build exhausted two hours before starting a test.
+    # The separate campaign step and its execution deadlines stay bounded below.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 180 || 120 }}
     env:
       CAPACITY_CASE: ${{ matrix.case }}
       BITROUTER_TEST_CHECKPOINT_TIMING: "1"
@@ -1129,7 +1132,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # macOS exhausted 45 minutes compiling the last profile test after the
+    # preceding 14 tests passed. Reserve cold-build time for all selected gates.
+    timeout-minutes: ${{ matrix.os == 'macos-latest' && 90 || 45 }}
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"

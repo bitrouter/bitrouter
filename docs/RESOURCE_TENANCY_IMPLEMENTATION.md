@@ -3,7 +3,7 @@
 This tracks implementation of the contracts in [M0](RESOURCE_TENANCY_M0.md).
 The original baseline was `38ddfd231f053beae9b52a61443a3706688628e0`.
 The stack now continues merged service/crate, native-agent and Registry v1 work
-through main `25c8239049c0da80d08f3c152dc35710e62199bd`, followed by the
+through main `fe90ab784b2b09ab73bbd43fb947f818c9bf7dbb` (alpha.35), followed by the
 HTTP/2 (#994) and shared-concurrency (#995) changes.
 All stages stay in the same stacked change. A checked stage requires runtime
 evidence and independent review; fixtures alone do not satisfy runtime gates.
