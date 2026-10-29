@@ -42,17 +42,18 @@ pub struct OtelMetrics {
 
 impl OtelMetrics {
     /// Create new metrics with the given configuration.
-    pub fn new(
+    pub(super) fn new(
         config: &OtelConfig,
         resource: Resource,
         api_key_limiter: Arc<CardinalityLimiter>,
         user_id_limiter: Arc<CardinalityLimiter>,
+        runtime: ProcessorRuntime,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Transport (OTLP/HTTP vs OTLP/gRPC) is chosen at compile time by the
         // crate's feature flags — see `crate::telemetry::transport`.
         let exporter = crate::telemetry::transport::metric_exporter(config)?;
 
-        let reader = PeriodicReader::builder(exporter, ProcessorRuntime::new())
+        let reader = PeriodicReader::builder(exporter, runtime)
             .with_interval(Duration::from_millis(config.metrics.export_interval_ms))
             .build();
 
@@ -189,11 +190,13 @@ impl OtelMetrics {
 
     /// Flush pending metrics and shut down the meter provider. The caller
     /// drives this — see the note on [`OtelMetrics`].
-    pub fn shutdown(&self) {
-        // Both calls are best-effort; surfacing an error here would just
-        // double-log the SDK's own warning.
-        let _ = self.provider.force_flush();
-        let _ = self.provider.shutdown();
+    pub(super) fn shutdown(&self, flush: bool) -> super::exporter::ProviderShutdown {
+        // Preserve both outcomes, and request shutdown even after flush fails.
+        // https://docs.rs/opentelemetry_sdk/0.32.1/opentelemetry_sdk/metrics/struct.SdkMeterProvider.html
+        super::exporter::ProviderShutdown {
+            flush_failed: flush && self.provider.force_flush().is_err(),
+            shutdown_failed: self.provider.shutdown().is_err(),
+        }
     }
 
     fn build_base_attributes(&self, ctx: &PipelineContext) -> Vec<KeyValue> {
@@ -467,7 +470,8 @@ mod tests {
             )),
         );
         metrics.record_stream_part(&StreamPart::TextEnd { id: "0".into() });
-        metrics.shutdown();
+        let shutdown = metrics.shutdown(true);
+        assert!(!shutdown.flush_failed && !shutdown.shutdown_failed);
 
         let captured = match captured.lock() {
             Ok(guard) => guard,

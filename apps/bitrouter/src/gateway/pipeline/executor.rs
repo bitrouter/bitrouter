@@ -37,6 +37,7 @@ use tokio_util::sync::CancellationToken;
 
 mod input_count;
 mod response_body;
+mod shared;
 mod stream_bridge;
 
 use stream_bridge::BridgeCapture;
@@ -715,6 +716,7 @@ pub struct HttpExecutor {
     clients: RwLock<HttpClientSet>,
     dispatch: Arc<OutboundDispatch>,
     auth_appliers: AuthAppliers,
+    shared_authority: bool,
 }
 
 struct HttpClientSet {
@@ -867,7 +869,14 @@ impl HttpExecutor {
             clients: RwLock::new(clients),
             dispatch,
             auth_appliers,
+            shared_authority: false,
         })
+    }
+
+    #[cfg(feature = "multi-instance")]
+    pub(crate) fn require_shared_authority(mut self) -> Self {
+        self.shared_authority = true;
+        self
     }
 
     /// Replace the global/per-provider timeout clients in-place. Existing
@@ -911,7 +920,7 @@ impl HttpExecutor {
             Ok(guard) => guard,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if managed {
+        if managed || self.shared_authority {
             let client = guard
                 .managed_provider_clients
                 .get(&target.provider_name)
@@ -1148,6 +1157,8 @@ impl HttpExecutor {
         apply_provider_headers(&mut applied, input.target, input.ctx, false);
         merge_outbound_trace_headers(&mut applied, input.trace_headers);
         inject_outbound_request_id(&mut applied, input.ctx)?;
+        #[cfg(feature = "multi-instance")]
+        let shared_credential = applied.shared_credential()?;
         let (request, credential_authority) = applied.into_parts();
         if input.target.headers.iter().any(|rule| {
             is_continuation_scope_header(rule.name().as_str())
@@ -1263,14 +1274,20 @@ impl HttpExecutor {
         input
             .ctx
             .record_credential_authority(credential_authority.clone());
-        Ok(match credential_authority {
+        let applied = match credential_authority {
             Some(authority) => crate::gateway::providers::auth::AppliedAuth::proven_with_scheme(
                 request,
                 authority.credential().clone(),
                 authority.effective_scheme(),
             ),
             None => crate::gateway::providers::auth::AppliedAuth::unproven(request),
-        })
+        };
+        #[cfg(feature = "multi-instance")]
+        let applied = match shared_credential {
+            Some(stamp) => applied.bind_shared_credential(stamp),
+            None => applied,
+        };
+        Ok(applied)
     }
 
     async fn refresh_auth_after_unauthorized(
@@ -1331,8 +1348,8 @@ impl HttpExecutor {
         request: &DecisionRequest,
         transport: &Arc<dyn crate::gateway::model::protocol::Transport>,
         ctx: &PipelineContext,
-    ) -> Result<(String, UpstreamErrorScrubber, u64)> {
-        let (client, _) = self.client_for(target, false);
+    ) -> Result<(String, UpstreamErrorScrubber, u64, shared::Attempt)> {
+        let (client, _) = self.client_for(target, shared::has_admission(ctx));
         let cancellation = CancellationToken::new();
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -1360,6 +1377,8 @@ impl HttpExecutor {
                 })
                 .await
                 .map_err(|error| scrubber.scrub_error(error))?;
+            let mut attempt =
+                shared::Attempt::begin(self.shared_authority, &request, target, ctx).await?;
             let (request, _) = request.into_parts();
             scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
@@ -1371,13 +1390,21 @@ impl HttpExecutor {
                 .await
                 .map_err(|error| scrubber.scrub_error(error.into()))?;
             let status = response.status();
+            if !status.is_success() {
+                attempt.rejected(status.as_u16()).await?;
+            }
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
-            let text = ModelClient::read_body(response, &cancellation)
+            let text = response_body::read(response, ctx)
                 .await
-                .map_err(|error| scrubber.scrub_error(error.into()))?;
+                .map_err(|error| scrubber.scrub_error(error))?;
             if status.is_success() {
-                return Ok((text, scrubber, started.elapsed().as_millis() as u64));
+                return Ok((
+                    text,
+                    scrubber,
+                    started.elapsed().as_millis() as u64,
+                    attempt,
+                ));
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !refreshed
@@ -1682,7 +1709,12 @@ impl Executor for HttpExecutor {
         prompt: &Prompt,
         ctx: &PipelineContext,
     ) -> Result<ExecutionResult> {
-        if crate::gateway::providers::codex::requires_streaming(&target.model_target()) {
+        if crate::gateway::providers::codex::requires_streaming(&target.model_target())
+            || self
+                .auth_appliers
+                .lookup(&target.provider_name)
+                .is_some_and(|applier| applier.requires_streaming(&target.model_target()))
+        {
             return self.execute_streaming_generation(target, prompt, ctx).await;
         }
         let (adapter, transport) = self
@@ -1701,7 +1733,8 @@ impl Executor for HttpExecutor {
         let (client, _) = self.client_for(
             target,
             ctx.extension::<super::native::NativeManagedRequest>()
-                .is_some(),
+                .is_some()
+                || shared::has_admission(ctx),
         );
 
         let initial_gate = native_work::gate_duration(ctx);
@@ -1713,7 +1746,7 @@ impl Executor for HttpExecutor {
                     ContinuationFailure::BindingChanged,
                 )
             })?;
-        let (text, successful_authority, storage_allowed, effort_bound) = loop {
+        let (text, successful_authority, storage_allowed, effort_bound, mut shared_attempt) = loop {
             let mut body = self.render_execution_request(
                 adapter.as_ref(),
                 target,
@@ -1754,6 +1787,8 @@ impl Executor for HttpExecutor {
                 .build_authenticated_request(&request_input)
                 .await
                 .map_err(|error| error_scrubber.scrub_error(error))?;
+            let mut shared_attempt =
+                shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
             let (request, authority) = applied.into_parts();
             let wire: Option<serde_json::Value> = request
                 .body()
@@ -1788,6 +1823,9 @@ impl Executor for HttpExecutor {
             .await?;
 
             let status = response.status();
+            if !status.is_success() {
+                shared_attempt.rejected(status.as_u16()).await?;
+            }
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
             let text = response_body::read(response, ctx)
@@ -1795,7 +1833,13 @@ impl Executor for HttpExecutor {
                 .map_err(|error| error_scrubber.scrub_error(error))?;
 
             if status.is_success() {
-                break (text, authority, storage_allowed, effort_bound);
+                break (
+                    text,
+                    authority,
+                    storage_allowed,
+                    effort_bound,
+                    shared_attempt,
+                );
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
@@ -1822,6 +1866,13 @@ impl Executor for HttpExecutor {
             })
         })?;
         if target.api_protocol == ApiProtocol::Responses {
+            if shared_attempt.is_shared()
+                && let Some((failure, usage)) =
+                    crate::gateway::model::protocol::responses::failed_terminal(&json)
+            {
+                shared_attempt.complete(false, usage.as_ref()).await?;
+                return Err(error_scrubber.scrub_error(failure.into()));
+            }
             validate_nonstream_responses_terminal(&json)
                 .map_err(|error| error_scrubber.scrub_error(error))?;
         }
@@ -1834,6 +1885,21 @@ impl Executor for HttpExecutor {
         let mut result =
             crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
                 .map_err(|error| error_scrubber.scrub_error(error.into()))?;
+        if shared_attempt.is_shared() && result.finish_reason.is_none() {
+            return Err(BitrouterError::UpstreamInvalidResponse {
+                message: "shared response has no provider terminal".into(),
+                usage: result.usage.clone().map(Box::new),
+            });
+        }
+        shared_attempt
+            .complete(
+                !matches!(
+                    result.finish_reason,
+                    Some(bitrouter_ai::types::FinishReason::Error(_))
+                ),
+                result.usage.as_ref(),
+            )
+            .await?;
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
         {
@@ -1874,14 +1940,20 @@ impl Executor for HttpExecutor {
         self.preflight_decisions(target, request)?;
         let transport: Arc<dyn crate::gateway::model::protocol::Transport> =
             Arc::new(DecisionsTransport);
-        let (text, scrubber, elapsed) = self.execute_json(target, request, &transport, ctx).await?;
-        let result = ModelClient::parse_decision_response(&text, request).map_err(|error| {
-            let error = scrubber.redactor.scrub_error(error);
-            if error.is_completed_decision_failure() {
-                ctx.record_decision_failure_usage(error.decision_usage().cloned());
+        let (text, scrubber, elapsed, mut attempt) =
+            self.execute_json(target, request, &transport, ctx).await?;
+        let result = match ModelClient::parse_decision_response(&text, request) {
+            Ok(result) => result,
+            Err(error) => {
+                let error = scrubber.redactor.scrub_error(error);
+                if error.is_completed_decision_failure() {
+                    ctx.record_decision_failure_usage(error.decision_usage().cloned());
+                    attempt.complete(false, error.decision_usage()).await?;
+                }
+                return Err(BitrouterError::from(error));
             }
-            BitrouterError::from(error)
-        })?;
+        };
+        attempt.complete(true, Some(&result.usage)).await?;
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
@@ -2327,6 +2399,7 @@ mod beta_forward_tests {
             stream: false,
         };
         PipelineContext::new(PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: "t".into(),
             original_model: "claude".into(),
             model: "claude".into(),
@@ -2841,6 +2914,98 @@ mod beta_forward_tests {
                     trace_headers: None,
                 })
                 .await?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "multi-instance")]
+    struct SharedCredentialFixture(bool);
+
+    #[cfg(feature = "multi-instance")]
+    #[async_trait]
+    impl crate::gateway::providers::auth::AuthApplier for SharedCredentialFixture {
+        async fn apply(
+            &self,
+            mut request: reqwest::Request,
+            _: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<reqwest::Request> {
+            request.headers_mut().insert(
+                "x-api-key",
+                http::HeaderValue::from_static("shared-fixture-key"),
+            );
+            Ok(request)
+        }
+
+        async fn apply_with_authority(
+            &self,
+            request: reqwest::Request,
+            target: &crate::gateway::model::target::ModelTarget,
+        ) -> crate::gateway::model::error::Result<AppliedAuth> {
+            let mut applied = AppliedAuth::unproven(self.apply(request, target).await?)
+                .bind_shared_credential(crate::gateway::shared::credentials::CredentialStamp {
+                    id: "shared-fixture-account".into(),
+                    pool_id: "shared-fixture-pool".into(),
+                    version: 17,
+                });
+            if self.0 {
+                applied.headers_mut().insert(
+                    "x-api-key",
+                    http::HeaderValue::from_static("changed-after-binding"),
+                );
+            }
+            Ok(applied)
+        }
+    }
+
+    #[cfg(feature = "multi-instance")]
+    #[tokio::test]
+    async fn executor_preserves_shared_stamp_and_rejects_mutated_auth() -> Result<()> {
+        for mutate in [false, true] {
+            let target = target(ApiProtocol::Messages);
+            let executor = HttpExecutor::with_dispatch_and_auth(
+                Default::default(),
+                OutboundDispatch::builtin(),
+                AuthAppliers::new().with(
+                    &target.provider_name,
+                    Arc::new(SharedCredentialFixture(mutate)),
+                ),
+            )?;
+            let ctx = ctx_with_beta(None);
+            let (adapter, transport) = executor
+                .dispatch
+                .lookup(&target.api_protocol)
+                .ok_or_else(|| BitrouterError::internal("fixture dispatch missing"))?;
+            let body = adapter.render_request_for_target(
+                ctx.require_generation_prompt()?,
+                &target.model_target(),
+            )?;
+            let (client, _) = executor.client_for(&target, false);
+            let result = executor
+                .build_authenticated_request(&RequestBuildInput {
+                    client: &client,
+                    url: "https://example.invalid/messages",
+                    body: &body,
+                    managed_expected: None,
+                    target: &target,
+                    transport,
+                    ctx: &ctx,
+                    trace_headers: None,
+                })
+                .await;
+            if mutate {
+                assert!(result.is_err());
+            } else {
+                let applied = result?;
+                let stamp = applied
+                    .shared_credential()?
+                    .ok_or_else(|| BitrouterError::internal("shared stamp lost"))?;
+                assert_eq!(stamp.version, 17);
+                assert_eq!(stamp.pool_id, "shared-fixture-pool");
+                assert!(
+                    applied.into_parts().1.is_none(),
+                    "fixture deliberately has no continuation authority"
+                );
+            }
         }
         Ok(())
     }

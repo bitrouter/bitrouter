@@ -423,3 +423,51 @@ async fn shortcut_conflicts_and_relative_paths_have_explicit_cli_contracts() -> 
     );
     Ok(())
 }
+
+#[cfg(all(feature = "multi-instance", feature = "mcp"))]
+#[tokio::test]
+async fn local_mcp_commands_preserve_shared_process_source_before_input() -> Result<()> {
+    for mode in ["shared", "${MCP_FIXTURE_MODE}"] {
+        let home = tempfile::tempdir()?;
+        let path = home.path().join("shared.yaml");
+        let original = format!(
+            "inherit_defaults: false\nregistry:\n  enabled: false\nserver:\n  skip_auth: false\ndatabase:\n  url: 'postgres://fixture@127.0.0.1:1/fixture'\ngateway_state:\n  mode: '{mode}'\n  namespace: fixture\n  deployment_key_env: MCP_FIXTURE_DEPLOYMENT_KEY\n"
+        );
+        std::fs::write(&path, &original)?;
+        let mut add = cli(
+            home.path(),
+            &path,
+            &["add", "fixture", "--url", "https://example.invalid/mcp"],
+        );
+        add.env("MCP_FIXTURE_MODE", "shared");
+        let rejected = result(add, None, false).await?;
+        ensure!(
+            rejected["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("local MCP configuration"))
+        );
+        ensure!(std::fs::read_to_string(&path)? == original);
+
+        // Keep stdin open: source admission must finish without reading entry input.
+        let mut command = cli(home.path(), &path, &["add", "fixture", "--from", "-"]);
+        command
+            .env("MCP_FIXTURE_MODE", "shared")
+            .stdin(Stdio::piped());
+        let mut child = command.spawn()?;
+        let input = child.stdin.take().context("held entry input")?;
+        let rejected =
+            tokio::time::timeout(std::time::Duration::from_secs(5), child.wait_with_output())
+                .await??;
+        drop(input);
+        ensure!(!rejected.status.success());
+        let report: Value = serde_json::from_slice(&rejected.stdout)?;
+        ensure!(
+            report["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("local MCP configuration"))
+        );
+        ensure!(std::fs::read_to_string(&path)? == original);
+        ensure!(std::fs::read_dir(home.path())?.count() == 1);
+    }
+    Ok(())
+}

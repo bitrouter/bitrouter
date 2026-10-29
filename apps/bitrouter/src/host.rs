@@ -7,6 +7,25 @@ use crate::tracing_filter::resolve_env_filter;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
+/// Explicit stock CLI bootstrap, without daemon or local-home discovery.
+#[cfg(feature = "multi-instance")]
+pub async fn initialize_shared(
+    config: &std::path::Path,
+    plan: &std::path::Path,
+    operator_id: &str,
+    operation_id: &str,
+    global_principals: bool,
+) -> Result<bitrouter_ai::gateway::operator::BootstrapReceipt> {
+    crate::gateway::shared::bootstrap::run(
+        config,
+        plan,
+        operator_id,
+        operation_id,
+        global_principals,
+    )
+    .await
+}
+
 async fn supervise_http_shutdown<Http, Control, Hup, Term>(
     http: Http,
     control: Control,
@@ -114,7 +133,7 @@ async fn request_daemon_shutdown(socket: &std::path::Path) -> Result<daemon::Dae
 /// `server.log_level` takes effect. Resolution happens once here — a later
 /// `bro reload` re-reads the config but cannot re-install the
 /// subscriber, so a changed `log_level` needs a restart.
-fn init_serve_tracing_subscriber(
+pub(crate) fn init_serve_tracing_subscriber(
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))] exporter: Option<
         &crate::telemetry::exporter::OtelExporter,
     >,
@@ -152,13 +171,54 @@ pub async fn serve_with_extensions(
     source: &crate::paths::ConfigSource,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
 ) -> Result<()> {
-    serve_with_options(source, false, register).await
+    let selected = crate::config::shared_process::select(source).await?;
+    #[cfg(not(feature = "multi-instance"))]
+    let crate::config::shared_process::Selection::Local(selected) = selected;
+    #[cfg(feature = "multi-instance")]
+    let selected = match selected {
+        crate::config::shared_process::Selection::Local(selected) => selected,
+        #[cfg(feature = "multi-instance")]
+        crate::config::shared_process::Selection::Shared(_) => {
+            anyhow::bail!("shared gateway runs through bro serve without compiled extension hosts")
+        }
+    };
+    serve_with_options(source, false, register, selected).await
 }
 
 /// Run the bundled CLI host. Only a child launched by `bro start` may be
 /// replaced automatically by `bro update`.
 pub async fn serve_cli(source: &crate::paths::ConfigSource, managed_child: bool) -> Result<()> {
-    serve_with_options(source, managed_child, |_| Ok(())).await
+    let selected = crate::config::shared_process::select(source).await?;
+    #[cfg(not(feature = "multi-instance"))]
+    let crate::config::shared_process::Selection::Local(selected) = selected;
+    #[cfg(feature = "multi-instance")]
+    let selected = match selected {
+        crate::config::shared_process::Selection::Local(selected) => selected,
+        #[cfg(feature = "multi-instance")]
+        crate::config::shared_process::Selection::Shared(process) => {
+            anyhow::ensure!(
+                !managed_child,
+                "shared gateway must run as a foreground service, not a managed local daemon"
+            );
+            return crate::gateway::shared::runtime::serve(*process).await;
+        }
+    };
+    serve_with_options(source, managed_child, |_| Ok(()), selected).await
+}
+
+/// Reject cold shared startup before a local launcher creates files or children.
+/// A verified running local owner can be reused without parsing saved edits.
+/// Shared services use foreground serve.
+pub async fn validate_local_daemon_source(source: &crate::paths::ConfigSource) -> Result<()> {
+    let selected = crate::config::shared_process::select(source).await?;
+    #[cfg(feature = "multi-instance")]
+    anyhow::ensure!(
+        matches!(selected, crate::config::shared_process::Selection::Local(_)),
+        "shared gateway must run through foreground serve, not local daemon commands"
+    );
+    #[cfg(not(feature = "multi-instance"))]
+    drop(selected);
+    Ok(())
 }
 
 /// Reject unavailable environment-driven startup work before a launcher changes
@@ -177,6 +237,7 @@ async fn serve_with_options(
     source: &crate::paths::ConfigSource,
     cli_owned: bool,
     register: impl FnOnce(&mut crate::gateway::extensions::registry::ExtensionApi) -> Result<()>,
+    selected: Option<Box<crate::config::shared_process::LocalInput>>,
 ) -> Result<()> {
     validate_startup_features()?;
     if let Some(located) = crate::daemon_locator::locate_source(source).await? {
@@ -197,7 +258,8 @@ async fn serve_with_options(
     std::env::set_current_dir(home)
         .with_context(|| format!("chdir to bitrouter home {}", home.display()))?;
 
-    let startup_configuration = crate::reload::load_configuration_baseline(source).await?;
+    let startup_configuration =
+        crate::reload::load_selected_configuration_baseline(source, selected).await?;
     let mut cfg = startup_configuration.config().clone();
     // Auto-enable the `claude-code` subscription provider when the user has
     // signed in (a `claude-code` credential is in the OAuth store). Runs before

@@ -56,6 +56,16 @@ impl Snapshot {
         } else {
             None
         };
+        let root = value(raw.as_deref().unwrap_or("{}"))?;
+        let mode = root
+            .pointer("/gateway_state/mode")
+            .and_then(Value::as_str)
+            .map(config::substitute_env)
+            .transpose()?;
+        ensure!(
+            mode.as_deref().is_none_or(|mode| mode == "local"),
+            "local MCP configuration commands cannot edit shared gateway process configuration"
+        );
         Ok(Self { path, raw })
     }
 
@@ -157,6 +167,13 @@ pub(super) fn validate_candidate(raw: &str) -> Result<config::Config> {
     // Like `config validate`, unset variables are placeholders, not endpoint evidence.
     let parsed = config::parse_with(raw, |name| Some(config::env_lookup(name).unwrap_or_else(|| "https://env-placeholder.invalid".into())))
         .map_err(|_| bad("complete candidate configuration is invalid; inspect it with $EDITOR or config validate (values omitted)"))?;
+    ensure!(
+        matches!(
+            parsed.gateway_state,
+            config::gateway_state::GatewayStateConfig::Local {}
+        ),
+        "local MCP configuration commands require gateway_state.mode=local"
+    );
     crate::assemble::validate_host_configuration(&parsed)
         .map_err(|_| bad("candidate violates host configuration rules (values omitted)"))?;
     for (key, entry) in &parsed.mcp_servers {

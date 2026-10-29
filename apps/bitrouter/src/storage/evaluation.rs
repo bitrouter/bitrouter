@@ -1,6 +1,9 @@
 //! Shared validation and semantic digests for persisted evaluation evidence.
 //! No evaluator service, admission authority or storage connection is constructed here.
 
+#[cfg(feature = "multi-instance")]
+pub(crate) mod shared;
+
 use bitrouter_ai::eval::{
     EVAL_SCHEMA_VERSION, EvalExperimentRef, EvalSubject, EvaluationResult, EvidenceItem,
     ExperimentArm, ROUTE_MEASUREMENT_SCHEMA_VERSION, RouteActionCandidate,
@@ -45,13 +48,13 @@ pub(crate) fn route_decision_measurement(
     Ok(measurement)
 }
 
-#[cfg(any(feature = "core", test))]
+#[cfg(any(feature = "core", feature = "multi-instance", test))]
 pub(crate) fn subject_digest(value: &EvalSubject) -> Result<String> {
     validate_subject(value)?;
     canonical_digest(value)
 }
 
-#[cfg(feature = "core")]
+#[cfg(any(feature = "core", feature = "multi-instance"))]
 pub(crate) fn result_digest(value: &EvaluationResult) -> Result<String> {
     validate_result(value)?;
     canonical_digest(value)

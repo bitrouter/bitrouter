@@ -420,6 +420,7 @@ jobs:
           - otel-http,otel-grpc
           - harness,otel-http
           - db-postgres
+          - multi-instance
           - db-mysql
           - mcp,server-tools,otel-http,db-postgres,db-mysql
     steps:
@@ -467,7 +468,7 @@ jobs:
                fi ;;
           esac
           case ",$PROFILE_FEATURES," in
-            *,db-postgres,*) ;;
+            *,db-postgres,*|*,multi-instance,*) ;;
             *) if grep -Eq '^sqlx-postgres v' profile-tree.txt; then
                  echo '::error::profile without PostgreSQL pulled its driver'; exit 1
                fi ;;

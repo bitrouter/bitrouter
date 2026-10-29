@@ -80,6 +80,8 @@ async-stream = "0.3"
 # http server (sdk `server` feature)
 axum = { version = "0.8", features = ["json"] }
 tower = "0.5"
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false }
 
 # http client
 reqwest = { version = "0.13", default-features = false, features = [

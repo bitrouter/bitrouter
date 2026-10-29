@@ -4,6 +4,11 @@
 //! `apps/bitrouter` **lib** (above the SDK and the plugins), wiring the builtin
 //! hooks onto the `language_model` pipeline from config.
 
+#[cfg(feature = "multi-instance")]
+mod shared_writers;
+#[cfg(test)]
+mod writers_tests;
+
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -182,6 +187,128 @@ pub struct Assembled {
     pub ignored_config: Vec<String>,
 }
 
+/// Authority already validated and loaded for one immutable shared generation.
+/// The coordinator owns migrations, publication and process lifecycle.
+#[cfg(feature = "multi-instance")]
+pub(crate) struct SharedAssembly {
+    pub continuation: crate::gateway::shared::continuation::SharedContinuationDb,
+    pub telemetry: Arc<crate::gateway::shared::telemetry::Telemetry>,
+    pub auth_appliers: AuthAppliers,
+    pub correlation_key: crate::trajectory::canonical::CorrelationKey,
+    pub policies: Vec<crate::policy::Policy>,
+    pub policy_lock: Option<crate::policy_lock::PolicyLock>,
+}
+
+#[cfg(feature = "multi-instance")]
+pub(crate) async fn build_shared_app(
+    config: &Config,
+    inputs: &SharedAssembly,
+) -> Result<Assembled> {
+    validate_shared_assembly(config, inputs.continuation.database())?;
+    shared_writers::validate_policies(&inputs.policies)?;
+    let crate::config::gateway_state::GatewayStateConfig::Shared(shared) = &config.gateway_state
+    else {
+        anyhow::bail!("shared assembly requires explicit shared process configuration");
+    };
+    anyhow::ensure!(
+        shared.namespace == inputs.continuation.namespace(),
+        "shared assembly namespace differs from its injected authority"
+    );
+    assemble_app(config, None, Default::default(), Some(inputs)).await
+}
+
+#[cfg(feature = "multi-instance")]
+fn validate_shared_assembly(config: &Config, database: &DatabaseConnection) -> Result<()> {
+    use sea_orm::{ConnectionTrait, DatabaseBackend};
+
+    anyhow::ensure!(
+        matches!(
+            config.gateway_state,
+            crate::config::gateway_state::GatewayStateConfig::Shared(_)
+        ),
+        "shared assembly requires explicit shared process configuration"
+    );
+    anyhow::ensure!(
+        !config.inherit_defaults && !config.registry.enabled,
+        "shared assembly requires a complete published routing snapshot"
+    );
+    anyhow::ensure!(
+        config.mcp_servers.is_empty(),
+        "shared assembly does not support MCP server workers"
+    );
+    let tools = &config.server_tools;
+    anyhow::ensure!(
+        tools.mcp_servers.is_empty()
+            && !tools.advisor
+            && !tools.subagent
+            && tools.fusion.is_none()
+            && tools.web_search.is_none()
+            && tools.web_fetch.is_none(),
+        "shared assembly does not support server tool execution"
+    );
+    anyhow::ensure!(
+        config.decision_model.is_none() && config.checkers.is_empty() && !config.agent_api.enabled,
+        "shared assembly requires published routing without local decision, extension or harness execution"
+    );
+    anyhow::ensure!(
+        database.get_database_backend() == DatabaseBackend::Postgres,
+        "shared assembly requires an injected PostgreSQL connection"
+    );
+    Ok(())
+}
+
+#[cfg(all(test, feature = "multi-instance"))]
+mod shared_assembly_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn shared_assembly_rejects_a_local_database_before_initialization() -> Result<()> {
+        let config = crate::config::parse_with(
+            r#"
+inherit_defaults: false
+registry:
+  enabled: false
+database:
+  url: "postgres://127.0.0.1/not-opened"
+gateway_state:
+  mode: shared
+  namespace: assembly-test
+  deployment_key_env: BITROUTER_ASSEMBLY_TEST_KEY
+"#,
+            |_| None,
+        )?;
+        let database = crate::db::connect("sqlite::memory:").await?;
+        let error = validate_shared_assembly(&config, &database)
+            .err()
+            .context("shared construction accepted a local database")?;
+        assert_eq!(
+            error.to_string(),
+            "shared assembly requires an injected PostgreSQL connection"
+        );
+        let mut forbidden = config.clone();
+        forbidden.mcp_servers = serde_json::from_value(serde_json::json!({
+            "unstarted": { "name":"unstarted", "transport": { "type":"http", "url":"http://127.0.0.1:1/mcp" } }
+        }))?;
+        let error = validate_shared_assembly(&forbidden, &database)
+            .err()
+            .context("shared MCP worker accepted")?;
+        assert_eq!(
+            error.to_string(),
+            "shared assembly does not support MCP server workers"
+        );
+        forbidden = config;
+        forbidden.server_tools.advisor = true;
+        let error = validate_shared_assembly(&forbidden, &database)
+            .err()
+            .context("shared tool execution accepted")?;
+        assert_eq!(
+            error.to_string(),
+            "shared assembly does not support server tool execution"
+        );
+        Ok(())
+    }
+}
+
 pub(crate) fn resolved_upstream_timeouts(
     config: &Config,
 ) -> (
@@ -214,23 +341,7 @@ struct OtelExporterStatus {
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 impl ObserveStatusProvider for OtelExporterStatus {
     fn status(&self) -> ObserveStatusPayload {
-        let s = self.exporter.status();
-        ObserveStatusPayload {
-            compiled_in: s.compiled_in,
-            exporter_wired: s.exporter_wired,
-            endpoint: s.endpoint,
-            header_count: s.header_count,
-            service_name: s.service_name,
-            resource_attribute_count: s.resource_attribute_count,
-            sampler: s.sampler,
-            sampler_arg: s.sampler_arg,
-            metrics_enabled: s.metrics_enabled,
-            api_key_count: s.api_key_count,
-            api_key_cap: s.api_key_cap,
-            user_id_count: s.user_id_count,
-            user_id_cap: s.user_id_cap,
-            active_spans: s.active_spans,
-        }
+        otel_status(&self.exporter)
     }
 
     async fn shutdown(&self) {
@@ -245,6 +356,27 @@ impl ObserveStatusProvider for OtelExporterStatus {
         if let Err(e) = tokio::task::spawn_blocking(move || exporter.shutdown()).await {
             tracing::warn!(error = %e, "OTel exporter shutdown task panicked");
         }
+    }
+}
+
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+pub(crate) fn otel_status(exporter: &OtelExporter) -> ObserveStatusPayload {
+    let s = exporter.status();
+    ObserveStatusPayload {
+        compiled_in: s.compiled_in,
+        exporter_wired: s.exporter_wired,
+        endpoint: s.endpoint,
+        header_count: s.header_count,
+        service_name: s.service_name,
+        resource_attribute_count: s.resource_attribute_count,
+        sampler: s.sampler,
+        sampler_arg: s.sampler_arg,
+        metrics_enabled: s.metrics_enabled,
+        api_key_count: s.api_key_count,
+        api_key_cap: s.api_key_cap,
+        user_id_count: s.user_id_count,
+        user_id_cap: s.user_id_cap,
+        active_spans: s.active_spans,
     }
 }
 
@@ -277,6 +409,21 @@ pub const KNOWN_PLUGIN_IDS: &[&str] = &["bitrouter-policy", "bitrouter-telemetry
 /// This belongs to the product host, not the SDK parser: trusted custom hosts
 /// may still explicitly install the compatibility guardrails plugin.
 pub fn validate_host_configuration(config: &Config) -> Result<()> {
+    validate_host_configuration_inner(config, true)
+}
+
+fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -> Result<()> {
+    config
+        .gateway_state
+        .validate(&config.database.url, config.server.skip_auth)?;
+    anyhow::ensure!(
+        cfg!(feature = "multi-instance")
+            || matches!(
+                config.gateway_state,
+                crate::config::gateway_state::GatewayStateConfig::Local {}
+            ),
+        "gateway_state.mode=shared requires the multi-instance feature"
+    );
     crate::db::validate_backend_availability(&config.database.url)?;
     let tools = &config.server_tools;
     anyhow::ensure!(
@@ -297,7 +444,9 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
         cfg!(feature = "harness") || !config.agent_api.enabled,
         "agent_api.enabled requires the harness feature"
     );
-    validate_telemetry_availability(config)?;
+    if resolve_telemetry {
+        validate_telemetry_availability(config)?;
+    }
     anyhow::ensure!(
         !config.plugins.contains_key("bitrouter-guardrails"),
         "plugins.bitrouter-guardrails requires migration: the default bro no longer \
@@ -478,7 +627,14 @@ pub async fn build_app_with_extensions(
     let native = extensions
         .into_registrations()
         .context("registering extensions")?;
-    assemble_app(config, config_path, native).await
+    assemble_app(
+        config,
+        config_path,
+        native,
+        #[cfg(feature = "multi-instance")]
+        None,
+    )
+    .await
 }
 
 async fn assemble_app(
@@ -488,11 +644,24 @@ async fn assemble_app(
         String,
         crate::gateway::extensions::registry::registration::Registration,
     >,
+    #[cfg(feature = "multi-instance")] shared: Option<&SharedAssembly>,
 ) -> Result<Assembled> {
+    #[cfg(feature = "multi-instance")]
+    let is_shared = shared.is_some();
+    #[cfg(not(feature = "multi-instance"))]
+    let is_shared = false;
+    anyhow::ensure!(
+        is_shared
+            || matches!(
+                config.gateway_state,
+                crate::config::gateway_state::GatewayStateConfig::Local {}
+            ),
+        "shared gateway requires the managed shared serving lifecycle"
+    );
     let mut effective_config = config.clone();
     crate::policy_lock::apply_defaults(&mut effective_config, config_path);
     let config = &effective_config;
-    validate_host_configuration(config)?;
+    validate_host_configuration_inner(config, !is_shared)?;
     config.validate_router_config()?;
     let decision_runtime = config
         .decision_model
@@ -523,7 +692,11 @@ async fn assemble_app(
         .filter(|id| !config.checkers.contains_key(*id))
         .collect::<Vec<_>>();
     inactive.sort();
-    let mut ignored_config = ignored_config_warnings(config);
+    let mut ignored_config = if is_shared {
+        ignored_config_file_warnings(config)
+    } else {
+        ignored_config_warnings(config)
+    };
     ignored_config.extend(inactive.into_iter().map(|id| {
         format!("request-check registration '{id}' is inactive: no checkers.{id} declaration")
     }));
@@ -542,25 +715,61 @@ async fn assemble_app(
     // first-run conveniences (a SQLite file URL is created on demand).
     // The schema is applied from `crate::db::migration` — Rust code, not
     // SQL — so it lands identically on whichever backend is configured.
-    let db = crate::db::connect(&config.database.url)
-        .await
-        .context("connecting to database")?;
-    crate::db::run_migrations(&db)
-        .await
-        .context("running database migrations")?;
+    #[cfg(feature = "multi-instance")]
+    let shared_db = shared.map(|inputs| inputs.continuation.database().clone());
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_db: Option<DatabaseConnection> = None;
+    let db = match shared_db {
+        Some(database) => database,
+        None => {
+            let database = crate::db::connect(&config.database.url)
+                .await
+                .context("connecting to database")?;
+            crate::db::run_migrations(&database)
+                .await
+                .context("running database migrations")?;
+            database
+        }
+    };
     #[cfg(feature = "harness")]
     let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
     // continuation route matching and the HTTP executor. This lets mapped
     // Responses requests preflight the provider's stable credential authority
     // and lets transport return the exact proof used by the sent request.
-    let cloud_manager = crate::cloud::default_manager()?;
-    let auth_appliers = build_auth_appliers(config, Arc::clone(&cloud_manager))?;
-    let runtime_home = match config_path.and_then(std::path::Path::parent) {
-        Some(home) => home.to_path_buf(),
-        None => std::env::current_dir().context("resolve continuation key home")?,
+    let cloud_manager = if is_shared {
+        None
+    } else {
+        Some(crate::cloud::default_manager()?)
     };
-    let continuation_keys = ContinuationKeySource::lazy(runtime_home);
+    #[cfg(feature = "multi-instance")]
+    let shared_auth = shared.map(|inputs| inputs.auth_appliers.clone());
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_auth: Option<AuthAppliers> = None;
+    let auth_appliers = match shared_auth {
+        Some(auth) => auth,
+        None => build_auth_appliers(
+            config,
+            cloud_manager
+                .clone()
+                .context("local credential manager is unavailable")?,
+        )?,
+    };
+    #[cfg(feature = "multi-instance")]
+    let shared_continuation =
+        shared.map(|inputs| ContinuationKeySource::fixed(inputs.continuation.key()));
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_continuation: Option<ContinuationKeySource> = None;
+    let continuation_keys = match shared_continuation {
+        Some(keys) => keys,
+        None => {
+            let runtime_home = match config_path.and_then(std::path::Path::parent) {
+                Some(home) => home.to_path_buf(),
+                None => std::env::current_dir().context("resolve continuation key home")?,
+            };
+            ContinuationKeySource::lazy(runtime_home)
+        }
+    };
     let private_context =
         crate::continuation::native_context::PrivateContextPolicy::new(continuation_keys.clone());
     let continuation_registry = ContinuationRegistry::new(
@@ -569,14 +778,26 @@ async fn assemble_app(
         config.continuation.retention_days,
         config.continuation.prune_batch_size,
     )?;
-    let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
-    if continuation_pruned > 0 {
-        tracing::info!(
-            deleted_rows = continuation_pruned,
-            "pruned expired provider continuations at startup"
-        );
+    #[cfg(feature = "multi-instance")]
+    let continuation_registry = if let Some(inputs) = shared {
+        ContinuationRegistry::new_shared(
+            inputs.continuation.clone(),
+            config.continuation.retention_days,
+            config.continuation.prune_batch_size,
+        )?
+    } else {
+        continuation_registry
+    };
+    if !is_shared {
+        let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
+        if continuation_pruned > 0 {
+            tracing::info!(
+                deleted_rows = continuation_pruned,
+                "pruned expired provider continuations at startup"
+            );
+        }
+        continuation_registry.start_reconciler();
     }
-    continuation_registry.start_reconciler();
     let continuation_runtime = ContinuationRuntime::with_auth_appliers(
         continuation_registry.clone(),
         auth_appliers.clone(),
@@ -606,15 +827,17 @@ async fn assemble_app(
     // Fill empty fields on built-in providers from the compiled-in catalog
     // (api_base / api_protocol / api_key-from-env). No-op when
     // `inherit_defaults: false`, and never overrides user-set fields.
-    crate::providers::apply::apply_builtin_defaults(&mut resolved);
-    // Subscription / "use your Claude Code session" logins persist their
-    // credential in the store (not the config), so apply_builtin_defaults would
-    // mark a keyless provider like `anthropic` inactive. Re-activate any
-    // provider that has a stored credential so it stays routable.
-    if let Ok(store) = crate::provider_credentials::load_default() {
-        crate::providers::apply::activate_stored_credential_providers(&mut resolved, &store);
+    if !is_shared {
+        crate::providers::apply::apply_builtin_defaults(&mut resolved);
+        // Subscription / "use your Claude Code session" logins persist their
+        // credential in the store (not the config), so apply_builtin_defaults would
+        // mark a keyless provider like `anthropic` inactive. Re-activate any
+        // provider that has a stored credential so it stays routable.
+        if let Ok(store) = crate::provider_credentials::load_default() {
+            crate::providers::apply::activate_stored_credential_providers(&mut resolved, &store);
+        }
+        crate::config::discover_models(&mut resolved).await;
     }
-    crate::config::discover_models(&mut resolved).await;
     let routing_table = Arc::new(match config_path {
         Some(path) => ConfigRoutingTable::from_config_with_path(resolved, path),
         None => ConfigRoutingTable::from_config(resolved),
@@ -634,15 +857,20 @@ async fn assemble_app(
     let (global_timeouts, provider_timeouts) = resolved_upstream_timeouts(config);
     let dispatch = OutboundDispatch::builtin();
 
-    let executor = Arc::new(
-        HttpExecutor::with_provider_timeouts(
-            global_timeouts,
-            provider_timeouts,
-            dispatch,
-            auth_appliers,
-        )
-        .context("building the upstream HTTP executor")?,
-    );
+    let executor = HttpExecutor::with_provider_timeouts(
+        global_timeouts,
+        provider_timeouts,
+        dispatch,
+        auth_appliers,
+    )
+    .context("building the upstream HTTP executor")?;
+    #[cfg(feature = "multi-instance")]
+    let executor = if shared.is_some() {
+        executor.require_shared_authority()
+    } else {
+        executor
+    };
+    let executor = Arc::new(executor);
     let executor_for_reload = executor.clone();
 
     // ---- pricing, metering, policy — all derived from config ----
@@ -653,7 +881,14 @@ async fn assemble_app(
     let metering_for_native_costs = metering_store.clone();
     let pricing_for_recorder = pricing.clone();
     let pricing_for_native = pricing.clone();
-    let policy_store: Arc<PolicyStore> = Arc::new(load_policy_store(config).await?);
+    #[cfg(feature = "multi-instance")]
+    let shared_policies = shared.map(|inputs| PolicyStore::from_policies(inputs.policies.clone()));
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_policies: Option<PolicyStore> = None;
+    let policy_store: Arc<PolicyStore> = Arc::new(match shared_policies {
+        Some(policies) => policies,
+        None => load_policy_store(config).await?,
+    });
     let policy_store_for_reload = policy_store.clone();
 
     // Metrics are now pushed via OTLP, not pulled from /metrics
@@ -669,56 +904,82 @@ async fn assemble_app(
     // subscriber is not installed yet (it depends on the exporter being
     // built first), so a tracing line here would be dropped. The binary
     // surfaces this once the subscriber is up.
+    #[cfg(all(
+        feature = "multi-instance",
+        any(feature = "otel-http", feature = "otel-grpc")
+    ))]
+    let injected_exporter = shared.map(|inputs| inputs.telemetry.exporter());
+    #[cfg(all(
+        not(feature = "multi-instance"),
+        any(feature = "otel-http", feature = "otel-grpc")
+    ))]
+    let injected_exporter: Option<Option<Arc<OtelExporter>>> = None;
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let (otel_exporter, otel_init_error): (Option<Arc<OtelExporter>>, Option<String>) =
-        match build_otel_config(config, telemetry_install_id)? {
-            Some((otel_config, bearer_plan)) => {
-                // Resolve the LIVE account-bearer source per the plan. Only the
-                // telemetry opt-in with `attribution: auto`/`account` and no
-                // explicit token wants one; `anonymous` (and every other
-                // exporter path) is `StaticOnly` and never reads the credential
-                // store. Best-effort: a `None` source means the export proceeds
-                // anonymously — for `account` we additionally warn.
-                let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
-                    match bearer_plan {
-                        BearerPlan::LiveSource { warn_if_unmet } => {
-                            let source = crate::cloud::cloud_bearer_source(
-                                Arc::clone(&cloud_manager),
-                                otel_config.endpoint.clone(),
-                            )
-                            .await;
-                            if source.is_none() && warn_if_unmet {
-                                tracing::warn!(
-                                    "telemetry: attribution=account but no signed-in session \
+        match injected_exporter {
+            Some(exporter) => (exporter, None),
+            None => match build_otel_config(config, telemetry_install_id)? {
+                Some((otel_config, bearer_plan)) => {
+                    // Resolve the LIVE account-bearer source per the plan. Only the
+                    // telemetry opt-in with `attribution: auto`/`account` and no
+                    // explicit token wants one; `anonymous` (and every other
+                    // exporter path) is `StaticOnly` and never reads the credential
+                    // store. Best-effort: a `None` source means the export proceeds
+                    // anonymously — for `account` we additionally warn.
+                    let bearer: Option<Arc<dyn crate::telemetry::bearer::TelemetryBearer>> =
+                        match bearer_plan {
+                            BearerPlan::LiveSource { warn_if_unmet } => {
+                                let source = match cloud_manager.as_ref() {
+                                    Some(manager) => {
+                                        crate::cloud::cloud_bearer_source(
+                                            Arc::clone(manager),
+                                            otel_config.endpoint.clone(),
+                                        )
+                                        .await
+                                    }
+                                    None => None,
+                                };
+                                if source.is_none() && warn_if_unmet {
+                                    tracing::warn!(
+                                        "telemetry: attribution=account but no signed-in session \
                                      is available — exporting anonymously (sign in with `{} \
                                      cloud login`)",
-                                    invocation::name()
-                                );
+                                        invocation::name()
+                                    );
+                                }
+                                source
                             }
-                            source
-                        }
-                        BearerPlan::StaticOnly => None,
-                    };
-                match OtelExporter::new(otel_config, bearer) {
-                    Ok(exporter) => (Some(Arc::new(exporter)), None),
-                    Err(e) => (
-                        None,
-                        Some(format!("failed to initialise OpenTelemetry: {e}")),
-                    ),
+                            BearerPlan::StaticOnly => None,
+                        };
+                    match OtelExporter::new(otel_config, bearer) {
+                        Ok(exporter) => (Some(Arc::new(exporter)), None),
+                        Err(e) => (
+                            None,
+                            Some(format!("failed to initialise OpenTelemetry: {e}")),
+                        ),
+                    }
                 }
-            }
-            None => (None, None),
+                None => (None, None),
+            },
         };
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
-    let observe_provider: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
+    let default_observe: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
         Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
         None => Arc::new(NoopObserveStatus {
             compiled_in: OTEL_ENABLED,
         }),
     };
     #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
-    let (observe_provider, otel_init_error): (Arc<dyn ObserveStatusProvider>, Option<String>) =
-        (Arc::new(NoopObserveStatus { compiled_in: false }), None);
+    let default_observe: Arc<dyn ObserveStatusProvider> =
+        Arc::new(NoopObserveStatus { compiled_in: false });
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    let otel_init_error = None;
+    #[cfg(feature = "multi-instance")]
+    let observe_provider = shared
+        .map(|inputs| inputs.telemetry.observe())
+        .unwrap_or(default_observe);
+    #[cfg(not(feature = "multi-instance"))]
+    let observe_provider = default_observe;
     // Two handles to the same exporter: one moves into the pipeline as an
     // `ObserveHook`, the other lands on `Assembled` so the binary can hand
     // it to the `tracing-opentelemetry` bridge layer.
@@ -852,10 +1113,13 @@ async fn assemble_app(
     let server_tool_loop =
         build_server_tool_loop(config, &mcp_routing, &mcp_executor, nested_runner);
 
-    let policy_decision_recorder =
+    let policy_decision_recorder = if is_shared {
+        None
+    } else {
         crate::gateway::routing::workflow::decision::PolicyDecisionJsonlRecorder::from_env()
             .map_err(anyhow::Error::from)?
-            .map(Arc::new);
+            .map(Arc::new)
+    };
     if policy_decision_recorder.is_some() {
         tracing::info!(
             env = crate::gateway::routing::workflow::decision::POLICY_DECISION_JSONL_ENV,
@@ -877,9 +1141,13 @@ async fn assemble_app(
             .checked_sub_signed(retention)
             .ok_or_else(|| anyhow::anyhow!("trajectory retention cutoff exceeds time range"))?
             .to_rfc3339();
-        let pruned = trajectory_store
-            .prune_before(&cutoff, false, config.trajectory.outbox_batch_size)
-            .await?;
+        let pruned = if is_shared {
+            crate::trajectory::store::PruneSummary::default()
+        } else {
+            trajectory_store
+                .prune_before(&cutoff, false, config.trajectory.outbox_batch_size)
+                .await?
+        };
         if pruned != crate::trajectory::store::PruneSummary::default() {
             tracing::info!(
                 cutoff,
@@ -893,40 +1161,56 @@ async fn assemble_app(
         let notify_outbox = {
             #[cfg(feature = "core")]
             {
-                let publisher = TrajectoryOutboxPublisher::new(
-                    trajectory_store.clone(),
-                    eval_store.clone(),
-                    config.eval.clone(),
-                    config.trajectory.outbox_batch_size,
-                )?;
-                let startup_publication = publisher.drain_pending().await?;
-                if startup_publication.attempted > 0 {
-                    tracing::info!(
-                        attempted = startup_publication.attempted,
-                        delivered = startup_publication.delivered,
-                        failed = startup_publication.failed,
-                        "drained durable trajectory evaluation outbox at startup"
-                    );
+                if is_shared {
+                    None
+                } else {
+                    let publisher = TrajectoryOutboxPublisher::new(
+                        trajectory_store.clone(),
+                        eval_store.clone(),
+                        config.eval.clone(),
+                        config.trajectory.outbox_batch_size,
+                    )?;
+                    let startup_publication = publisher.drain_pending().await?;
+                    if startup_publication.attempted > 0 {
+                        tracing::info!(
+                            attempted = startup_publication.attempted,
+                            delivered = startup_publication.delivered,
+                            failed = startup_publication.failed,
+                            "drained durable trajectory evaluation outbox at startup"
+                        );
+                    }
+                    trajectory_outbox_publisher = Some(publisher.clone());
+                    Some(Arc::new(move || publisher.kick()) as Arc<dyn Fn() + Send + Sync>)
                 }
-                trajectory_outbox_publisher = Some(publisher.clone());
-                Some(Arc::new(move || publisher.kick()) as Arc<dyn Fn() + Send + Sync>)
             }
             #[cfg(not(feature = "core"))]
             {
                 None
             }
         };
-        let home = match config_path.and_then(std::path::Path::parent) {
-            Some(home) => home.to_path_buf(),
-            None => std::env::current_dir().context("resolve trajectory key home")?,
+        #[cfg(feature = "multi-instance")]
+        let shared_correlation = shared.map(|inputs| inputs.correlation_key.clone());
+        #[cfg(not(feature = "multi-instance"))]
+        let shared_correlation: Option<crate::trajectory::canonical::CorrelationKey> = None;
+        let correlation_key = match shared_correlation {
+            Some(key) => key,
+            None => {
+                let home = match config_path.and_then(std::path::Path::parent) {
+                    Some(home) => home.to_path_buf(),
+                    None => std::env::current_dir().context("resolve trajectory key home")?,
+                };
+                crate::paths::get_or_create_correlation_key(&home)?
+            }
         };
-        let correlation_key = crate::paths::get_or_create_correlation_key(&home)?;
         let runtime = Arc::new(TrajectoryRuntime::new(
             trajectory_store.clone(),
             Canonicalizer::new(correlation_key.clone()),
         ));
-        let settlement =
-            TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key);
+        // Shared guard entry still uses this runtime marker; the shared engine
+        // owns its durable start/settlement path rather than this local recorder.
+        let settlement = (!is_shared).then(|| {
+            TrajectorySettlementRecorder::new(trajectory_store, notify_outbox, correlation_key)
+        });
         Some((runtime, settlement))
     } else {
         None
@@ -936,16 +1220,32 @@ async fn assemble_app(
         .map(|(runtime, _)| runtime.clone());
     let trajectory_for_settlement = trajectory_services
         .as_ref()
-        .map(|(_, settlement)| settlement.clone());
-    let policy_runtime = crate::policy_lock::PolicyRuntime::new(
-        config,
-        config_path,
-        policy_decision_recorder.clone(),
-        pending_eval_decisions.clone(),
-        trajectory_runtime,
-    )
-    .await
-    .context("loading policy-lock.yaml")?;
+        .and_then(|(_, settlement)| settlement.clone());
+    #[cfg(feature = "multi-instance")]
+    let shared_policy_runtime = shared
+        .map(|inputs| {
+            crate::policy_lock::PolicyRuntime::from_document(
+                config,
+                inputs.policy_lock.clone(),
+                pending_eval_decisions.clone(),
+                trajectory_runtime.clone(),
+            )
+        })
+        .transpose()?;
+    #[cfg(not(feature = "multi-instance"))]
+    let shared_policy_runtime: Option<Arc<crate::policy_lock::PolicyRuntime>> = None;
+    let policy_runtime = match shared_policy_runtime {
+        Some(runtime) => runtime,
+        None => crate::policy_lock::PolicyRuntime::new(
+            config,
+            config_path,
+            policy_decision_recorder.clone(),
+            pending_eval_decisions.clone(),
+            trajectory_runtime,
+        )
+        .await
+        .context("loading policy-lock.yaml")?,
+    };
     let policy_runtime_for_selector = policy_runtime.clone();
     #[cfg(feature = "core")]
     let evolution = crate::core::evolution::runtime::EvolutionRuntime::new(
@@ -953,35 +1253,46 @@ async fn assemble_app(
         routing_table.clone(),
         policy_runtime.clone(),
     );
-    let block_policies = crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
-        db.clone(),
-        routing_table.clone(),
-        policy_runtime.clone(),
-    );
-    let canonical_binding = crate::gateway::observability::binding::CanonicalRequestBinding::new(
-        db.clone(),
-        routing_table.clone(),
-        policy_runtime.clone(),
-    );
+    let block_policies = (!is_shared).then(|| {
+        crate::gateway::routing::blocks::runtime::BlockPolicyRouter::new(
+            db.clone(),
+            routing_table.clone(),
+            policy_runtime.clone(),
+        )
+    });
+    let canonical_binding = (!is_shared).then(|| {
+        crate::gateway::observability::binding::CanonicalRequestBinding::new(
+            db.clone(),
+            routing_table.clone(),
+            policy_runtime.clone(),
+        )
+    });
     let gateway_requests =
         crate::gateway::observability::requests::GatewayRequestTracker::new(db.clone());
     let gateway_requests_for_hooks = gateway_requests.clone();
-    let judge_costs = crate::gateway::metering::judge::JudgeCosts::new(db.clone());
+    let judge_costs =
+        (!is_shared).then(|| crate::gateway::metering::judge::JudgeCosts::new(db.clone()));
     #[cfg(test)]
     let pending_eval_decisions_for_tests = pending_eval_decisions.clone();
     let response_observer = PredictiveResponseObserver::new(pending_eval_decisions.clone());
     #[cfg(test)]
     let response_observer_for_tests = response_observer.clone();
     #[cfg(feature = "core")]
-    let untracked_recorder = Some(Arc::new(EvalSettlementRecorder::new(
-        eval_service.store().clone(),
-        pending_eval_decisions.clone(),
-    ))
-        as Arc<dyn crate::gateway::pipeline::settlement::SettlementRecorder>);
+    let untracked_recorder = (!is_shared).then(|| {
+        Arc::new(EvalSettlementRecorder::new(
+            eval_service.store().clone(),
+            pending_eval_decisions.clone(),
+        )) as Arc<dyn crate::gateway::pipeline::settlement::SettlementRecorder>
+    });
     let db_for_hooks = db.clone();
     let db_for_mcp_auth = db.clone();
     #[cfg(feature = "harness")]
-    let session_context = SessionContextHook::new(Arc::clone(&acp_runtime));
+    let session_context = if is_shared {
+        // A replica-local ACP route lease is not shared gateway authority.
+        SessionContextHook::default()
+    } else {
+        SessionContextHook::new(Arc::clone(&acp_runtime))
+    };
     #[cfg(not(feature = "harness"))]
     let session_context = SessionContextHook::default();
     let request_checks_for_pipeline = request_checks.clone();
@@ -989,19 +1300,38 @@ async fn assemble_app(
         .skip_auth(config.server.skip_auth)
         .metrics_renderer(metrics_renderer)
         .language_model(move |lm| {
+            #[cfg(feature = "multi-instance")]
+            if is_shared {
+                lm.owned_drain();
+            }
             lm.routing_table(routing_table).executor(executor);
-            lm.native_cost_estimator(pricing_for_native);
-            lm.native_cost_source(Arc::new(metering_for_native_costs));
+            if !is_shared {
+                lm.native_cost_estimator(pricing_for_native);
+                lm.native_cost_source(Arc::new(metering_for_native_costs));
+            }
             lm.native_private_context(Arc::new(private_context.clone()));
             lm.served_operations(OperationScope::Both);
             lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
             lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
-            lm.require_hook::<crate::gateway::metering::judge::JudgeCosts>(
-                HookStage::PreResolution,
-                OperationScope::Both,
-            );
+            if !is_shared {
+                lm.require_hook::<crate::gateway::metering::judge::JudgeCosts>(
+                    HookStage::PreResolution,
+                    OperationScope::Both,
+                );
+                lm.require_hook::<MeteringRecorder>(HookStage::Settlement, OperationScope::Both);
+            }
+            #[cfg(feature = "multi-instance")]
+            if is_shared {
+                lm.require_hook::<shared_writers::RequestScope>(
+                    HookStage::PreResolution,
+                    OperationScope::Both,
+                );
+                lm.require_hook::<shared_writers::DiscardPending>(
+                    HookStage::Settlement,
+                    OperationScope::Both,
+                );
+            }
             lm.require_hook::<PolicyHook>(HookStage::PreRequest, OperationScope::Both);
-            lm.require_hook::<MeteringRecorder>(HookStage::Settlement, OperationScope::Both);
             lm.require_hook::<CaptureTariffs>(HookStage::Route, OperationScope::Both);
             lm.require_hook::<ContinuationRuntime>(
                 HookStage::Finalization,
@@ -1019,15 +1349,25 @@ async fn assemble_app(
             lm.model_selector(policy_runtime_for_selector);
             lm.route_hook(continuation_for_route);
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
-            lm.route_hook(canonical_binding.clone());
-            lm.route_hook(block_policies.clone());
-            let metering_recorder =
-                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
-                    .with_reconciliation_provider("bitrouter");
+            if let Some(binding) = &canonical_binding {
+                lm.route_hook(binding.clone());
+            }
+            if let Some(policies) = &block_policies {
+                lm.route_hook(policies.clone());
+            }
+            // Tariffs are dispatch inputs in both modes. Shared accounting is
+            // projected from the engine's immutable attempt facts, not requests.
             lm.route_hook_for(
-                metering_recorder.tariff_capture(config.server.require_known_pricing),
+                CaptureTariffs::new(
+                    pricing_for_recorder.clone(),
+                    config.server.require_known_pricing,
+                ),
                 OperationScope::Both,
             );
+            let metering_recorder = (!is_shared).then(|| {
+                MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
+                    .with_reconciliation_provider("bitrouter")
+            });
             lm.required_finalizer(continuation_for_finalization);
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
@@ -1040,7 +1380,13 @@ async fn assemble_app(
             }
             // Reserved judge IDs are checked even before auth, so an early
             // rejection cannot overwrite an existing attempt's metering row.
-            lm.pre_resolution_hook_for(judge_costs.clone(), OperationScope::Both);
+            if let Some(costs) = &judge_costs {
+                lm.pre_resolution_hook_for(costs.clone(), OperationScope::Both);
+            }
+            #[cfg(feature = "multi-instance")]
+            if is_shared {
+                lm.pre_resolution_hook_for(shared_writers::RequestScope, OperationScope::Both);
+            }
             // Authenticate and normalize the selector before freezing the router
             // binding and applying its defaults. Session normalization may apply a
             // API-principal-scoped route lease before Stage 2 model selection;
@@ -1052,11 +1398,20 @@ async fn assemble_app(
             lm.pre_resolution_hook(continuation_for_pre_request);
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
-            lm.router_preparation_hook(gateway_requests_for_hooks.clone());
-            lm.router_preparation_hook(block_policies);
-            lm.router_preparation_hook(canonical_binding);
+            if !is_shared {
+                lm.router_preparation_hook(gateway_requests_for_hooks.clone());
+            }
+            if let Some(policies) = block_policies {
+                lm.router_preparation_hook(policies);
+            }
+            if let Some(binding) = canonical_binding {
+                lm.router_preparation_hook(binding);
+            }
             lm.pre_request_hook_for(
-                PolicyHook::new(policy_store.clone(), Some(metering_store_for_policy)),
+                PolicyHook::new(
+                    policy_store.clone(),
+                    (!is_shared).then_some(metering_store_for_policy),
+                ),
                 OperationScope::Both,
             );
             // OpenTelemetry exporter — register the *same* Arc as a hook
@@ -1067,24 +1422,40 @@ async fn assemble_app(
                 lm.observe_hook_for(OtelObserveHook::new(exporter), OperationScope::Both);
             }
             lm.observe_hook(response_observer);
-            lm.observe_hook(gateway_requests_for_hooks.clone());
-            lm.observe_hook(judge_costs.clone());
-            // OSS metering recorder — writes one `requests` row per
-            // settled request with the estimated µUSD from the pricing
-            // table. The policy module reads back through `MeteringStore`
-            // for spend caps.
-            lm.settlement_recorder_for(metering_recorder, OperationScope::Both);
-            lm.settlement_recorder(gateway_requests_for_hooks);
-            lm.settlement_recorder(judge_costs);
-            lm.settlement_recorder_for(
-                PolicySettlementRecorder::new(
-                    pending_eval_decisions,
-                    trajectory_for_settlement,
-                    #[cfg(feature = "core")]
-                    untracked_recorder,
-                ),
-                OperationScope::Both,
-            );
+            if !is_shared {
+                lm.observe_hook(gateway_requests_for_hooks.clone());
+            }
+            if let Some(costs) = &judge_costs {
+                lm.observe_hook(costs.clone());
+            }
+            // Only local serving owns these legacy durable gateway writers.
+            if let Some(recorder) = metering_recorder {
+                lm.settlement_recorder_for(recorder, OperationScope::Both);
+            }
+            if !is_shared {
+                lm.settlement_recorder(gateway_requests_for_hooks);
+            }
+            if let Some(costs) = judge_costs {
+                lm.settlement_recorder(costs);
+            }
+            #[cfg(feature = "multi-instance")]
+            if is_shared {
+                lm.settlement_recorder_for(
+                    shared_writers::DiscardPending::new(pending_eval_decisions.clone()),
+                    OperationScope::Both,
+                );
+            }
+            if !is_shared {
+                lm.settlement_recorder_for(
+                    PolicySettlementRecorder::new(
+                        pending_eval_decisions,
+                        trajectory_for_settlement,
+                        #[cfg(feature = "core")]
+                        untracked_recorder,
+                    ),
+                    OperationScope::Both,
+                );
+            }
             // Server-side tool loop (router-executed MCP tools), when configured.
             #[cfg(feature = "server-tools")]
             if let Some(server_loop) = server_tool_loop {

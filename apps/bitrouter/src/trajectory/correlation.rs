@@ -200,7 +200,7 @@ fn correlation_evidence(
     }
 }
 
-fn native_parent_id(
+pub(crate) fn native_parent_id(
     protocol: &ApiProtocol,
     prompt: &Prompt,
 ) -> std::result::Result<Option<String>, InvalidCorrelationEvidence> {
@@ -220,7 +220,7 @@ fn native_parent_id(
     Ok(Some(native_parent_id.to_owned()))
 }
 
-fn protocol_name(protocol: &ApiProtocol) -> &str {
+pub(crate) fn protocol_name(protocol: &ApiProtocol) -> &str {
     match protocol {
         ApiProtocol::ChatCompletions => "chat_completions",
         ApiProtocol::Messages => "messages",

@@ -23,7 +23,7 @@ manual path even when they share its installation directory.
 - **Full-profile Homebrew / `cargo install` / npm** installations delegate to
   `brew upgrade bitrouter`, `cargo install bitrouter --force`, or
   `npm i -g bitrouter@latest`.
-- **Gateway / custom profiles** currently have no matching release
+- **Gateway / gateway-shared / custom profiles** currently have no matching release
   installer/receipt channel. Every install method, including `--check`, returns
   `status: "delegated"` with a `manual_reason` and a source-install command:
   `cargo install bitrouter --force --no-default-features`, followed by
@@ -31,8 +31,9 @@ manual path even when they share its installation directory.
   Use the exact command printed for that binary; a generic full installer or
   package-manager upgrade would change its capabilities. An empty feature set
   is the gateway profile; it keeps `--no-default-features` and omits `--features`.
-  Enabling only `core` is a custom profile. Cargo installs into its
-  configured bin directory, so select that binary explicitly if the current
+  The `gateway-shared` profile retains exactly `db-postgres,multi-instance`;
+  its source command includes both normalized feature names. Enabling only
+  `core` is a custom profile. Cargo installs into its configured bin directory, so select that binary explicitly if the current
   installation is elsewhere.
 - A gateway release archive is also a manual update path: download the archive
   and checksum for the same release and target, verify and extract it, then
@@ -40,6 +41,13 @@ manual path even when they share its installation directory.
   `profile: "gateway"` and an empty feature list. `bro update` does not download
   these archives automatically. Keep active-work and explicit restart checks;
   never substitute a full-product archive for a missing gateway asset.
+- Shared gateway archives are named `bitrouter-gateway-shared-<target>.tar.gz`
+  (`.zip` on Windows), with a matching `.sha256` file. Require
+  `profile: "gateway-shared"` and exactly `["db-postgres", "multi-instance"]`
+  in both `manifest.json` and `bro --json build-info`. Use the owning service
+  manager for shared rollout/drain; this profile does not gain a local-daemon
+  handoff or a release-installer receipt. `bro update` keeps delegating to the
+  exact-feature source command rather than installing the full distribution.
 - For these source installs, a semver `--tag` (optionally prefixed with `v`)
   becomes an exact Cargo `--version` requirement. Other tags select the official
   Git repository with a shell-quoted `--tag`. The manual reason names the
@@ -48,7 +56,7 @@ manual path even when they share its installation directory.
   `Standard` native-argument-passing setting to preserve embedded quotes without
   changing the caller's setting. Without a tag (including with `--stable`),
   Cargo's registry version selection applies; the release installer's prerelease
-  channel is unavailable for gateway/custom profiles.
+  channel is unavailable for gateway/gateway-shared/custom profiles.
 - JSON results include `current_artifact`, the identity of the invoking
   executable. `target_artifact`, when present, describes the independently
   verified installed executable. `target_version` retains its existing meaning
@@ -80,6 +88,6 @@ manual path even when they share its installation directory.
 `bro status` shows a one-line "↑ <version> available" nudge for a supported
 full-profile release channel (checked at most once per day). Cached checks
 must match the profile, target and effective features. Legacy caches without
-artifact identity are treated as unknown, and gateway/custom installations
+artifact identity are treated as unknown, and gateway/gateway-shared/custom installations
 never reuse or advertise full-profile release checks. Disable the nudge with
 `BITROUTER_NO_UPDATE_CHECK=1`.

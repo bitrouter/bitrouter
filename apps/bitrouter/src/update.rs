@@ -851,6 +851,13 @@ mod tests {
         for (identity, features) in [
             (artifact(DistributionProfile::Gateway, &[]), vec![]),
             (
+                artifact(
+                    DistributionProfile::GatewayShared,
+                    &["db-postgres", "multi-instance"],
+                ),
+                vec!["db-postgres", "multi-instance"],
+            ),
+            (
                 artifact(DistributionProfile::Custom, &["core"]),
                 vec!["core"],
             ),
@@ -1214,6 +1221,10 @@ mod tests {
         for identity in [
             full_artifact(),
             artifact(DistributionProfile::Gateway, &[]),
+            artifact(
+                DistributionProfile::GatewayShared,
+                &["db-postgres", "multi-instance"],
+            ),
             artifact(DistributionProfile::Custom, &["core"]),
         ] {
             assert!(!cache_matches(&legacy, &identity));
@@ -1246,6 +1257,10 @@ mod tests {
 
         for reduced in [
             artifact(DistributionProfile::Gateway, &[]),
+            artifact(
+                DistributionProfile::GatewayShared,
+                &["db-postgres", "multi-instance"],
+            ),
             artifact(DistributionProfile::Custom, &["core"]),
         ] {
             assert!(!cache_matches(&cache, &reduced));

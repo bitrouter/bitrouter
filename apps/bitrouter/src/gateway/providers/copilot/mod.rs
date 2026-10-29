@@ -89,7 +89,7 @@ impl CopilotAuthApplier {
     ) -> Result<CopilotAuth> {
         // Keep the selected store lease through exchange. This is an ephemeral
         // derived token; the long-lived GitHub credential is never overwritten.
-        let transaction = if target.explicit_credential().is_some() {
+        let mut transaction = if target.explicit_credential().is_some() {
             None
         } else {
             let key = CredentialKey {
@@ -108,17 +108,35 @@ impl CopilotAuthApplier {
             )
         };
         let github = if let Some(access) = target.explicit_credential() {
-            OAuthToken {
+            Ok(OAuthToken {
                 access_token: access.into(),
                 expires_at: 0,
                 refresh_token: None,
-            }
+            })
         } else {
             match transaction.as_ref().and_then(|transaction| transaction.credential()) {
                 Some(credential) => credential.as_oauth().filter(|token| token.is_valid() && !token.access_token.is_empty()).cloned(),
                 None => target.fallback_credential().map(|access_token| OAuthToken { access_token: access_token.into(), expires_at: 0, refresh_token: None }),
-            }.ok_or_else(|| ModelError::Provider { status: 401, message: "selected GitHub Copilot account requires usable OAuth; explicitly authorize this account".into() })?
+            }.ok_or_else(|| ModelError::Provider { status: 401, message: "selected GitHub Copilot account requires usable OAuth; explicitly authorize this account".into() })
         };
+        let result = match github {
+            Ok(github) => self.obtain_cached_auth(&github, rejected).await,
+            Err(error) => Err(error),
+        };
+        if let Some(transaction) = transaction.as_mut() {
+            transaction
+                .release()
+                .await
+                .map_err(|failure| ModelError::CredentialStorage { failure })?;
+        }
+        result
+    }
+
+    async fn obtain_cached_auth(
+        &self,
+        github: &OAuthToken,
+        rejected: Option<&str>,
+    ) -> Result<CopilotAuth> {
         let authority =
             CredentialAuthority::derive("github-copilot/stored-github-token", &github.access_token);
         let mut cache = self.cache.lock().await;

@@ -1978,6 +1978,34 @@ fn openai_policy_violation(error: Option<&serde_json::Value>, message: &str) -> 
         || normalized.contains("content policy violation")
 }
 
+/// Validate provider failure independently of parsing successful output. A
+/// failed response is terminal evidence, including any independently valid
+/// usage, rather than an inference with an unknown outcome.
+/// <https://developers.openai.com/api/reference/resources/responses/streaming-events#response.failed>
+pub(crate) fn failed_terminal(body: &serde_json::Value) -> Option<(ModelError, Option<Usage>)> {
+    if body.get("status")?.as_str()? != "failed" || body.get("id")?.as_str()?.is_empty() {
+        return None;
+    }
+    let error = body.get("error")?;
+    let message = error.get("message")?.as_str()?;
+    let error_type = error
+        .get("type")
+        .or_else(|| error.get("code"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let failure = if openai_policy_violation(Some(error), message) {
+        ModelError::PolicyViolation {
+            message: message.to_owned(),
+        }
+    } else {
+        ModelError::Provider {
+            status: openai_error_status(error_type),
+            message: message.to_owned(),
+        }
+    };
+    Some((failure, body.get("usage").and_then(parse_usage)))
+}
+
 // Responses has no native finish-reason *string* to preserve: its terminal
 // signal is the response `status` (`completed` / `incomplete` / `failed`), a
 // small closed set that the unified [`FinishReason`] enum reproduces exactly on
@@ -3549,7 +3577,7 @@ fn render_responses_usage(usage: &Usage) -> serde_json::Value {
     obj
 }
 
-fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
+pub(crate) fn parse_usage(value: &serde_json::Value) -> Option<Usage> {
     let input = value.get("input_tokens").and_then(|v| v.as_u64())?;
     let output = value
         .get("output_tokens")
@@ -3653,6 +3681,10 @@ fn block_marker_id(item: &serde_json::Value, event: &serde_json::Value) -> Strin
 }
 
 impl StreamDecoder for ResponsesStreamDecoder {
+    fn pending_terminal(&self) -> Option<StreamPart> {
+        self.successful_terminal.clone()
+    }
+
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>> {
         let data = event.data.trim();
         if data.is_empty() {
@@ -3999,6 +4031,20 @@ impl StreamDecoder for ResponsesStreamDecoder {
                 });
             }
             "error" | "response.failed" => {
+                if event_type == "response.failed" {
+                    let invalid = || ModelError::InvalidResponse {
+                        message: "Responses failure has invalid terminal identity or status".into(),
+                        usage: None,
+                    };
+                    let response = json.get("response").ok_or_else(invalid)?;
+                    let (failure, _) = failed_terminal(response).ok_or_else(invalid)?;
+                    if self.created_id.as_deref().is_some_and(|id| {
+                        response.get("id").and_then(serde_json::Value::as_str) != Some(id)
+                    }) {
+                        return Err(invalid());
+                    }
+                    return Err(failure);
+                }
                 // Map OpenAI's `error.type` to an HTTP status so 4xx upstream
                 // errors don't always 502 here (which would trigger fallback
                 // retries). Spec:

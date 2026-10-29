@@ -180,6 +180,22 @@ impl PredictiveResponseObserver {
             terminal.then(|| buffer.finalize())
         };
         if let Some(observation) = observation {
+            #[cfg(feature = "multi-instance")]
+            if let Some(admission) =
+                context.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+                && admission
+                    .retain_response_observation(
+                        &context.request_id,
+                        &context.caller,
+                        &invocation,
+                        observation,
+                    )
+                    .is_err()
+            {
+                // Optional evidence failure must not relabel provider outcome.
+                // Do not expose identity, response content or nested diagnostics.
+                tracing::warn!("shared response observation was not retained");
+            }
             self.pending
                 .observe(&invocation, context.caller.user_id(), observation);
             self.streams
@@ -226,6 +242,20 @@ impl ObserveHook for PredictiveResponseObserver {
             && let Some(prompt) = context.generation_prompt()
         {
             let observation = classify_content(&generation.content, &prompt.tools);
+            #[cfg(feature = "multi-instance")]
+            if let Some(admission) =
+                context.extension::<crate::gateway::shared::admitted::SharedAdmission>()
+                && admission
+                    .retain_response_observation(
+                        context.request_id(),
+                        context.caller(),
+                        &invocation,
+                        observation,
+                    )
+                    .is_err()
+            {
+                tracing::warn!("shared response observation was not retained");
+            }
             self.pending
                 .observe(&invocation, context.caller().user_id(), observation);
             self.clear_stream(&invocation);
@@ -2204,6 +2234,7 @@ mod tests {
         invocation: &EvalInvocation,
     ) -> PipelineContext {
         let mut context = PipelineContext::new(PipelineRequest {
+            extensions: http::Extensions::new(),
             request_id: request_id.into(),
             original_model: "model".into(),
             model: "model".into(),

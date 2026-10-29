@@ -9,6 +9,28 @@ the CLI-only contract and implementation record define the current product.
 
 ## Contents
 
+- [Gateway multi-instance contract](GATEWAY_MULTI_INSTANCE_SPEC.md),
+  [progress ledger](GATEWAY_MULTI_INSTANCE_PROGRESS.md), and
+  [final acceptance record](GATEWAY_MULTI_INSTANCE_ACCEPTANCE.md) — implemented
+  P1 shared PostgreSQL authority, admission, recovery, credentials and trajectory
+  guards. Local acceptance is complete with recorded performance costs; the
+  acceptance record links raw evidence, hosted results and delivery limits.
+
+- [Service refactor source inventory](BITROUTER_SERVICE_REFACTOR_INVENTORY.md) —
+  revision-scoped reconciliation of baseline modules with actual destinations;
+  coverage and remaining gaps are explicit, separate from acceptance results.
+
+- [`DISTRIBUTION.md`](DISTRIBUTION.md) — full and gateway profiles, archive
+  identity/checksums, profile-preserving updates and packaged SDK acceptance.
+- [`BITROUTER_SERVICE_REFACTOR_PLAN.md`](BITROUTER_SERVICE_REFACTOR_PLAN.md) —
+  **P0 integration tracked in [#984](https://github.com/bitrouter/bitrouter/pull/984).** Complete package/module
+  migration inventory, lightweight AI contracts, HTTP SDK, application-owned
+  telemetry, feature dependencies, P0 single-instance delivery and acceptance,
+  capability-aware daemon compatibility, profile-preserving updates, and the
+  separate P1 gateway multi-instance milestone.
+- [`BITROUTER_SERVICE_REFACTOR_PROGRESS.md`](BITROUTER_SERVICE_REFACTOR_PROGRESS.md)
+  — P0 baseline, implementation stages, review evidence and acceptance ledger.
+
 - [`CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md`](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md) —
   **current convergence contract.** Retains native/ACP orchestration and resource
   capabilities behind a CLI, removes first-party TUI entry points, and defines

@@ -1624,6 +1624,12 @@ struct ChatStreamDecoder {
 }
 
 impl StreamDecoder for ChatStreamDecoder {
+    fn pending_terminal(&self) -> Option<StreamPart> {
+        self.pending_finish
+            .clone()
+            .map(|reason| StreamPart::Finish { reason })
+    }
+
     fn decode(&mut self, event: &SseEvent) -> Result<Vec<StreamPart>> {
         let data = event.data.trim();
         let named_error = event.event.as_deref() == Some("error");

@@ -11,6 +11,8 @@ pub struct FeatureSelection {
     pub features: Vec<String>,
     /// Rust variant name used when generating the typed contract expression.
     pub profile: &'static str,
+    /// Stable wire/archive spelling, which can differ from the Rust variant.
+    pub wire_profile: &'static str,
 }
 
 impl FeatureSelection {
@@ -87,14 +89,22 @@ impl FeatureSelection {
                 .get_key_value("default")
                 .map(|(name, _)| name.as_str()),
         )?;
-        let profile = if features.is_empty() {
-            "Gateway"
+        let (profile, wire_profile) = if features.is_empty() {
+            ("Gateway", "gateway")
         } else if features == defaults {
-            "Full"
+            ("Full", "full")
+        } else if features == ["db-postgres", "multi-instance"] {
+            // The named distribution is intentionally exact. Extra capability
+            // selections remain custom, even when they include shared mode.
+            ("GatewayShared", "gateway-shared")
         } else {
-            "Custom"
+            ("Custom", "custom")
         };
-        Ok(Self { features, profile })
+        Ok(Self {
+            features,
+            profile,
+            wire_profile,
+        })
     }
 }
 
@@ -151,7 +161,7 @@ impl BuildMetadata {
             "source_revision": self.source_revision,
             "target": self.target,
             "features": self.selection.features,
-            "profile": self.selection.profile.to_ascii_lowercase(),
+            "profile": self.selection.wire_profile,
             "handoff_build_id": handoff_build_id,
         })
     }

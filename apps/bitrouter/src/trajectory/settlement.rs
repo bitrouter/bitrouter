@@ -170,6 +170,43 @@ fn build_settlement(
     if let Some(prediction) = prediction {
         prediction.write_namespaced(&mut structural, &mut categorical);
     }
+    let evidence = TrajectoryEvidence {
+        routing_evidence: routing.to_vec(),
+        structural,
+        categorical,
+        digests: BTreeMap::new(),
+        route_measurement: None,
+    };
+    let status = if metering.error_code.is_some() {
+        RequestStatus::Failed
+    } else {
+        RequestStatus::Settled
+    };
+    build_from_evidence(
+        owner_user_id,
+        request,
+        events,
+        sequence,
+        evidence,
+        captured_at,
+        status,
+    )
+}
+
+/// Builds the immutable event and evaluation outbox from caller-supplied facts.
+///
+/// Replay callers must supply the original history prefix, sequence, evidence,
+/// timestamp and terminal status. Storage adapters retain responsibility for
+/// validating persistence authority and comparing an existing settlement.
+pub(crate) fn build_from_evidence(
+    owner_user_id: &str,
+    request: &super::types::StoredRequest,
+    events: &[TrajectoryEvent],
+    sequence: u64,
+    evidence: TrajectoryEvidence,
+    captured_at: String,
+    status: RequestStatus,
+) -> Result<Settlement> {
     let event_seed = canonical_digest(&(
         owner_user_id,
         request.episode_id.as_str(),
@@ -185,13 +222,7 @@ fn build_settlement(
         request_id: Some(request.request_id.clone()),
         sequence,
         kind: TrajectoryEventKind::RequestSettled,
-        evidence: TrajectoryEvidence {
-            routing_evidence: routing.to_vec(),
-            structural,
-            categorical,
-            digests: BTreeMap::new(),
-            route_measurement: None,
-        },
+        evidence,
         captured_at: captured_at.clone(),
         content_digest: String::new(),
     };
@@ -220,11 +251,7 @@ fn build_settlement(
     };
     Ok(Settlement {
         event,
-        status: if metering.error_code.is_some() {
-            RequestStatus::Failed
-        } else {
-            RequestStatus::Settled
-        },
+        status,
         outbox: Some(outbox),
     })
 }
@@ -278,7 +305,7 @@ mod tests {
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 
     use super::{
-        TrajectorySettlementDisposition, TrajectorySettlementRecorder,
+        TrajectorySettlementDisposition, TrajectorySettlementRecorder, build_from_evidence,
         build_operational_evaluation, build_settlement,
     };
     #[cfg(feature = "core")]
@@ -302,7 +329,10 @@ mod tests {
     use crate::trajectory::correlation::TrajectoryRuntime;
     use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
     use crate::trajectory::store::{CorrelateAndBegin, GuardedRouteInput, TrajectoryStore};
-    use crate::trajectory::types::{KeyedDigest, RequestStatus, canonical_digest};
+    use crate::trajectory::types::{
+        HistoryCompleteness, KeyedDigest, RequestStatus, StoredRequest, TRAJECTORY_SCHEMA_VERSION,
+        TrajectoryEvent, TrajectoryEventKind, TrajectoryEvidence, canonical_digest,
+    };
 
     #[cfg(feature = "core")]
     fn notify(publisher: TrajectoryOutboxPublisher) -> Option<Arc<dyn Fn() + Send + Sync>> {
@@ -311,6 +341,277 @@ mod tests {
 
     const POLICY_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn evidence_builder_matches_complete_local_output() -> anyhow::Result<()> {
+        let prediction = pending_decision("request-1").observation_snapshot();
+        let routing = vec![bitrouter_ai::eval::EvidenceItem {
+            evidence_id: "plan-1".into(),
+            kind: "routing.plan".into(),
+            digest: canonical_digest(&"plan-1")?,
+            redacted: true,
+            attributes: BTreeMap::from([("model".into(), "model".into())]),
+        }];
+        for failed in [false, true] {
+            for (head_at, expected_at) in [
+                ("2026-08-01T00:00:00Z", "2026-08-01T00:00:00.100Z"),
+                ("2026-08-01T00:00:00.200Z", "2026-08-01T00:00:00.200Z"),
+            ] {
+                let (request, events) = evidence_builder_prefix(head_at)?;
+                let (metering, mut evidence, status) = if failed {
+                    (
+                        routing_failure_metering("request-1", 100),
+                        TrajectoryEvidence {
+                            structural: BTreeMap::from([("settlement.duration_ms".into(), 100)]),
+                            categorical: BTreeMap::from([
+                                ("settlement.usage_origin".into(), "unknown".into()),
+                                ("settlement.outcome".into(), "failed".into()),
+                                ("settlement.error_code".into(), "not_found".into()),
+                            ]),
+                            digests: BTreeMap::new(),
+                            route_measurement: None,
+                            routing_evidence: Vec::new(),
+                        },
+                        RequestStatus::Failed,
+                    )
+                } else {
+                    (
+                        metering("request-1"),
+                        TrajectoryEvidence {
+                            structural: BTreeMap::from([
+                                ("settlement.duration_ms".into(), 100),
+                                ("settlement.prompt_tokens".into(), 10),
+                                ("settlement.completion_tokens".into(), 5),
+                                ("settlement.reasoning_tokens".into(), 0),
+                                ("settlement.cache_read_tokens".into(), 0),
+                                ("settlement.cache_write_tokens".into(), 0),
+                                ("settlement.total_tokens".into(), 15),
+                                ("settlement.cost_micro_usd".into(), 70),
+                            ]),
+                            categorical: BTreeMap::from([
+                                ("settlement.usage_origin".into(), "provider_reported".into()),
+                                ("settlement.outcome".into(), "settled".into()),
+                                ("settlement.provider".into(), "provider".into()),
+                                ("settlement.model".into(), "model".into()),
+                                ("settlement.finish_reason".into(), "stop".into()),
+                            ]),
+                            digests: BTreeMap::new(),
+                            route_measurement: None,
+                            routing_evidence: routing.clone(),
+                        },
+                        RequestStatus::Settled,
+                    )
+                };
+                let observation = if failed { None } else { Some(&prediction) };
+                if let Some(observation) = observation {
+                    observation
+                        .write_namespaced(&mut evidence.structural, &mut evidence.categorical);
+                }
+                let local = build_settlement(
+                    "owner-a",
+                    &request,
+                    &events,
+                    3,
+                    &metering,
+                    observation,
+                    &evidence.routing_evidence,
+                )?;
+                let supplied = build_from_evidence(
+                    "owner-a",
+                    &request,
+                    &events,
+                    3,
+                    evidence,
+                    expected_at.into(),
+                    status,
+                )?;
+                assert_eq!(serde_json::to_vec(&local)?, serde_json::to_vec(&supplied)?);
+                assert_eq!(local.event.captured_at, expected_at);
+                let outbox = local
+                    .outbox
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("settlement outbox missing"))?;
+                assert_eq!(outbox.created_at, expected_at);
+                assert_eq!(outbox.topic, super::TRAJECTORY_EVAL_TOPIC);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn evidence_builder_replays_original_prefix_and_keeps_history_validation() -> anyhow::Result<()>
+    {
+        let (mut request, prefix) = evidence_builder_prefix("2026-08-01T00:00:00.200Z")?;
+        let first = build_settlement(
+            "owner-a",
+            &request,
+            &prefix,
+            3,
+            &metering("request-1"),
+            None,
+            &[],
+        )?;
+        request.status = first.status.clone();
+        request.settlement_event_id = Some(first.event.event_id.clone());
+        let mut later = prefix[0].clone();
+        later.event_id = "start-request-2".into();
+        later.request_id = Some("request-2".into());
+        later.sequence = 4;
+        later.captured_at = "2026-08-01T00:00:01Z".into();
+        later.content_digest = later.semantic_digest()?;
+        let mut current = prefix.clone();
+        current.push(first.event.clone());
+        current.push(later);
+        crate::trajectory::health::reduce(&current, &BTreeSet::new())?;
+
+        let replay = build_from_evidence(
+            "owner-a",
+            &request,
+            &current[..prefix.len()],
+            3,
+            first.event.evidence.clone(),
+            first.event.captured_at.clone(),
+            first.status.clone(),
+        )?;
+        assert_eq!(serde_json::to_vec(&first)?, serde_json::to_vec(&replay)?);
+
+        let mut corrupt = prefix.clone();
+        corrupt[0].content_digest = canonical_digest(&"different-content")?;
+        for (events, sequence, timestamp, expected_error) in [
+            (current, 5, "2026-08-01T00:00:01Z", "settles more than once"),
+            (
+                prefix.clone(),
+                4,
+                "2026-08-01T00:00:01Z",
+                "expected sequence 3",
+            ),
+            (
+                prefix.clone(),
+                3,
+                "2026-08-01T00:00:00Z",
+                "timestamps regress",
+            ),
+            (
+                prefix[..1].to_vec(),
+                2,
+                "2026-08-01T00:00:01Z",
+                "settles before route intent",
+            ),
+            (
+                corrupt,
+                3,
+                "2026-08-01T00:00:01Z",
+                "content_digest does not match",
+            ),
+        ] {
+            let error = build_from_evidence(
+                "owner-a",
+                &request,
+                &events,
+                sequence,
+                first.event.evidence.clone(),
+                timestamp.into(),
+                first.status.clone(),
+            )
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("invalid history was accepted"))?;
+            assert!(error.to_string().contains(expected_error), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn evidence_builder_preserves_absent_measurements_without_metering() -> anyhow::Result<()> {
+        let (request, events) = evidence_builder_prefix("2026-08-01T00:00:00Z")?;
+        let evidence = TrajectoryEvidence {
+            structural: BTreeMap::new(),
+            categorical: BTreeMap::from([
+                ("settlement.outcome".into(), "failed".into()),
+                ("settlement.usage_origin".into(), "unknown".into()),
+            ]),
+            digests: BTreeMap::new(),
+            route_measurement: None,
+            routing_evidence: Vec::new(),
+        };
+        let settlement = build_from_evidence(
+            "owner-a",
+            &request,
+            &events,
+            3,
+            evidence.clone(),
+            "2026-08-01T00:00:01Z".into(),
+            RequestStatus::Failed,
+        )?;
+        assert_eq!(settlement.event.evidence, evidence);
+        assert_eq!(settlement.status, RequestStatus::Failed);
+        let envelope = settlement
+            .outbox
+            .as_ref()
+            .and_then(|outbox| outbox.payload.evaluation.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("settlement evaluation missing"))?;
+        for metric in [
+            "latency.ms",
+            "cost.usd_micros",
+            "trajectory.total_tokens",
+            "trajectory.cost.usd_micros",
+        ] {
+            assert!(!envelope.result.metrics.contains_key(metric));
+        }
+        Ok(())
+    }
+
+    fn evidence_builder_prefix(
+        head_at: &str,
+    ) -> anyhow::Result<(StoredRequest, Vec<TrajectoryEvent>)> {
+        let input = correlate_input("request-1", "episode-1");
+        let mut start = TrajectoryEvent {
+            schema_version: TRAJECTORY_SCHEMA_VERSION,
+            event_id: input.event_id.clone(),
+            owner_user_id: "owner-a".into(),
+            episode_id: input.new_episode_id.clone(),
+            request_id: Some(input.request_id.clone()),
+            sequence: 1,
+            kind: TrajectoryEventKind::RequestStarted,
+            evidence: TrajectoryEvidence {
+                structural: BTreeMap::from([("request.canonical_input_bytes".into(), 10)]),
+                categorical: BTreeMap::from([
+                    ("history.completeness".into(), "complete".into()),
+                    ("correlation.source".into(), "explicit_root".into()),
+                ]),
+                digests: BTreeMap::new(),
+                route_measurement: None,
+                routing_evidence: Vec::new(),
+            },
+            captured_at: input.captured_at.clone(),
+            content_digest: String::new(),
+        };
+        start.content_digest = start.semantic_digest()?;
+        let route_input = input
+            .guarded_route
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("fixture route missing"))?;
+        let batch = crate::trajectory::store::build_guarded_route_batch(
+            &[],
+            &start,
+            HistoryCompleteness::Complete,
+            route_input,
+        )?;
+        assert!(batch.guard_event.is_none());
+        let mut route = batch.route_event;
+        route.captured_at = head_at.into();
+        route.content_digest = route.semantic_digest()?;
+        let request = StoredRequest {
+            request_id: input.request_id,
+            episode_id: input.new_episode_id,
+            start_event_id: input.event_id,
+            settlement_event_id: None,
+            full_input_digest: input.full_input_digest,
+            native_parent_id: input.native_parent_id,
+            protocol: input.protocol,
+            status: RequestStatus::Started,
+        };
+        Ok((request, vec![start, route]))
+    }
 
     #[tokio::test]
     async fn recorder_reports_closed_dispositions_and_persists_prediction_observation()
