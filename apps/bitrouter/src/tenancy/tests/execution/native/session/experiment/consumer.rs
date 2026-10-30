@@ -77,6 +77,7 @@ async fn actual_native_assignment_receipt_ack_freeze_and_cohort_survive_key_rota
 
 // Fixed campaign: every one of the 128 actual runs must complete, even after
 // both arms first appear. No caller chooses IDs, redraws or replaces a failure.
+#[cfg(bitrouter_capacity_tests)]
 #[tokio::test]
 async fn native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort() -> Result<()> {
     #[derive(Clone, Copy, Debug)]

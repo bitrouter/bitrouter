@@ -10,6 +10,9 @@ the CLI-only contract and implementation record define the current product.
 
 ## Contents
 
+- [CI test organization](CI.md) — shared test artifacts, platform and feature
+  checks, distribution acceptance and opt-in capacity campaigns.
+
 - [Protocol specifications](specs/README.md) — tracked interoperability contracts.
   [Registry v1](specs/registry-v1/README.md) is the first protocol, currently
   `1.0.0-beta.6`, with [conformance requirements](specs/registry-v1/conformance.md).

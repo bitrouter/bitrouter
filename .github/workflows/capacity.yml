@@ -1,0 +1,41 @@
+name: Capacity campaigns
+'on':
+  workflow_dispatch: {}
+  schedule:
+  - cron: 40 2 * * 6
+permissions:
+  contents: read
+concurrency:
+  group: capacity-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  CARGO_BUILD_JOBS: '2'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_TEST_DEBUG: '0'
+  RUSTFLAGS: --cfg bitrouter_capacity_tests -Dwarnings
+jobs:
+  capacity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - name: Build capacity harness once without release LTO
+      run: |
+        cargo build --locked -p bitrouter --all-features --bin bro --examples --profile ci-capacity --jobs 2
+        cargo nextest run --locked -p bitrouter --all-features --lib --test core_execution --cargo-profile ci-capacity --build-jobs 2 --no-run
+    - name: Run isolated full-capacity and long-history campaigns
+      env:
+        BITROUTER_TEST_BRO: ${{ github.workspace }}/target/ci-capacity/bro
+        BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/ci-capacity/examples
+      run: |
+        cargo nextest run --locked -p bitrouter --all-features --lib --test core_execution --cargo-profile ci-capacity --test-threads 1 --retries 0 --no-tests fail -E 'test(tenancy::tests::execution::native::session::choice::headroom::) | test(capacity::tree_limits::) | test(=tenancy::tests::execution::native::session::experiment::consumer::native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort) | test(native_checkpoint_capacity_failure_reports_the_resource_cause) | test(native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery)'
+        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
+        cargo nextest run --locked -p bitrouter --all-features --lib --cargo-profile ci-capacity --test-threads 1 --run-ignored only --retries 0 --no-tests fail -E 'test(=offline::recovery::tests::saturation::actual_full_operation_ledger_is_archived_and_fresh_target_keeps_independent_history)'

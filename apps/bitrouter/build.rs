@@ -27,6 +27,9 @@ use sha2::{Digest, Sha256};
 mod build_artifact;
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Test-only campaigns stay outside ordinary builds, including --all-features.
+    // https://doc.rust-lang.org/cargo/reference/build-scripts.html#rustc-check-cfg
+    println!("cargo::rustc-check-cfg=cfg(bitrouter_capacity_tests)");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
     let dest = PathBuf::from(std::env::var("OUT_DIR")?);
     let manifest_path = manifest.join("Cargo.toml");

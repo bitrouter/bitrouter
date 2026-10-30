@@ -209,3 +209,13 @@ lto = "thin"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Large, opt-in test campaigns need faster serialization, not release linking.
+# https://doc.rust-lang.org/cargo/reference/profiles.html
+[profile.ci-capacity]
+inherits = "test"
+opt-level = 1
+debug = 0
+lto = false
+debug-assertions = true
+overflow-checks = true

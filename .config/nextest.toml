@@ -11,6 +11,16 @@
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
 
+# CI archives the already-built examples as well as the Cargo test executables.
+# https://nexte.st/docs/ci-features/archiving/#adding-extra-files-to-an-archive
+[profile.ci]
+archive.include = [
+    { path = "debug/examples", relative-to = "target", depth = 1, on-missing = "error" },
+]
+
+[profile.ci.junit]
+path = "junit.xml"
+
 # These cases serialize and validate full 32-agent checkpoint histories. Avoid
 # competing large fixtures on small CI hosts; each case still overlaps four
 # model futures and keeps the ordinary timeout and all product limits.

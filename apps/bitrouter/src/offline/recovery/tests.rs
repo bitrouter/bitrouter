@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::{ffi::OsStr, io::Read, os::unix::fs::PermissionsExt, process::Stdio};
 use tokio::io::AsyncReadExt;
 mod fixture;
+#[cfg(bitrouter_capacity_tests)]
 mod saturation;
 mod selected_files;
 
@@ -81,7 +82,10 @@ impl Fixture {
         let source_result = async {
             let provision = fixture::provision(&source_live).await?;
             if saturate {
+                #[cfg(bitrouter_capacity_tests)]
                 saturation::fill(&source_live, &provision).await?;
+                #[cfg(not(bitrouter_capacity_tests))]
+                anyhow::bail!("saturation requires the opt-in capacity test build");
             }
             Ok::<_, anyhow::Error>(provision)
         }

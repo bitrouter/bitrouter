@@ -697,6 +697,7 @@ async fn native_core_tool_effect_still_requires_native_approval()
     Ok(())
 }
 
+#[cfg(bitrouter_capacity_tests)]
 #[tokio::test]
 async fn native_checkpoint_capacity_failure_reports_the_resource_cause()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -734,6 +735,7 @@ async fn native_checkpoint_capacity_failure_reports_the_resource_cause()
     Ok(())
 }
 
+#[cfg(bitrouter_capacity_tests)]
 #[tokio::test]
 async fn native_long_tool_loop_completes_beyond_old_checkpoint_capacity()
 -> Result<(), Box<dyn std::error::Error>> {
