@@ -43,10 +43,12 @@ under `docs/specs/` still trigger the code checks.
 
 ## Platform and feature coverage
 
-Linux runs the common workspace behavior once, with all features. The feature
-matrix checks isolated production binaries before test dependencies can unify
-features, then checks test targets and dependency boundaries. Public-library
-checks retain their independent feature closures.
+Linux runs the common workspace behavior once, with all features. One feature
+job checks the 17 production configurations and their dependency boundaries in
+sequence, without dev-dependencies unifying extra features. Test targets and
+examples compile once with all features; their reduced-feature compatibility
+and the observation benchmark are checked by Distribution acceptance.
+Public-library checks retain their independent feature closures.
 
 macOS runs Unix socket permissions, signal draining and terminal behavior.
 Windows runs named-pipe behavior and the platform-only file replacement,

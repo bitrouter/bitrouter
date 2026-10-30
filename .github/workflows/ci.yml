@@ -522,35 +522,24 @@ jobs:
     needs:
     - build-linux
   application-features:
-    name: feature compile (${{ matrix.batch }})
+    name: feature compile
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        include:
-        - batch: 0
-          features: '["", "harness", "server-tools", "otel-grpc", "db-postgres", "db-mysql"]'
-        - batch: 1
-          features: '["http2", "core,harness", "guardrails", "otel-http,otel-grpc", "multi-instance", "mcp,server-tools,otel-http,db-postgres,db-mysql"]'
-        - batch: 2
-          features: '["core", "mcp", "otel-http", "harness,otel-http", "multi-instance,http2"]'
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: 1.99.1
         cache-on-failure: false
-        cache-key: complete-v1-${{ matrix.batch }}
+        cache-key: production-v1
     - name: Check isolated production feature closures
       shell: bash
       env:
-        FEATURES: ${{ matrix.features }}
+        FEATURES: '["", "http2", "core", "harness", "core,harness", "mcp", "server-tools", "guardrails", "otel-http", "otel-grpc", "otel-http,otel-grpc", "harness,otel-http",
+          "db-postgres", "multi-instance", "multi-instance,http2", "db-mysql", "mcp,server-tools,otel-http,db-postgres,db-mysql"]'
       run: |
         while IFS= read -r PROFILE_FEATURES; do
-        # Check production before dev-dependencies can unify extra features.
+        # Keep dev-dependencies out of the production feature closure.
         cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --bin bro
-        cargo check --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" --all-targets
         cargo tree --locked -p bitrouter --no-default-features --features "$PROFILE_FEATURES" -e normal,build --prefix none > profile-tree.txt
         # Only the minimal gateway distributions promise an h2-free
         # production closure. Other features (such as otel-grpc) may need h2.
