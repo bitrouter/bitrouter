@@ -18,5 +18,14 @@ status=0
 if [[ -f target/nextest/ci/junit.xml ]]; then
   cp target/nextest/ci/junit.xml "ci-evidence/$label-junit.xml"
 fi
+if (( status != 0 )); then
+  # Process fixtures retain final child logs outside the checkout on failure.
+  # Keep that evidence with JUnit before the hosted runner is discarded.
+  shopt -s nullglob
+  logs=("${TMPDIR:-/tmp}"/bitrouter-process-cleanup-failure-*.log)
+  if (( ${#logs[@]} > 0 )); then
+    cp "${logs[@]}" "ci-evidence/$label/"
+  fi
+fi
 du -sh target > "ci-evidence/$label-disk.txt"
 exit "$status"
