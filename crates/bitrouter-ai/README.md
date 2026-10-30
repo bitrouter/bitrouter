@@ -57,7 +57,8 @@ approval and commit authority; the SDK supplies HTTP/SSE transport.
 Protocol conversion, history admission, provider calls, authentication, catalog
 refresh and persistence belong to the application gateway. Telemetry batching,
 sampling and OTLP export also belong to the application. This crate starts no
-runtime, performs no I/O and depends on neither the service nor the SDK.
+runtime, opens no listeners or network clients, and depends on neither the
+service nor the SDK. The optional Axum binding consumes host-supplied bodies.
 
 ## Features
 
@@ -65,8 +66,38 @@ runtime, performs no I/O and depends on neither the service nor the SDK.
 - `schema`: optional schemars definitions for public schema-bearing contracts.
 - `testing`: pure observation-schema helpers used by conformance suites.
 
+- `axum`: optional request extraction, bounded JSON/SSE replies and public error
+  presentation for ordinary Axum handlers. Axum default features are disabled.
+
 All feature combinations remain free of HTTP clients, async runtimes, databases,
-terminal libraries and telemetry exporters.
+terminal libraries and telemetry exporters. The `axum` feature adds only the
+HTTP framework/body/stream dependencies needed for this optional binding.
+
+## Axum consumers
+
+Use `axum::extract::Json<protocol::chat_completions::ChatRequest>` from this crate
+for a typed, bounded request with redacted gateway rejections. The framework's
+own `axum::Json<ChatRequest>` remains usable when custom rejection is unnecessary.
+`axum::response::Reply::json` serializes with an explicit byte limit; its
+`chat_stream`, `messages_stream` and `responses_stream` constructors accept
+standard streams of public `stream::StreamItem` values and caller-selected
+`axum::error::Error` values. Public DTOs retain their original owning modules.
+
+SSE adapters preserve event names, IDs and protocol payloads. They require an
+explicit `ProtocolEnd`, retain named terminal payloads until that end, and never
+infer success from EOF, usage or finish_reason. Incomplete and failed Responses
+terminals remain distinct. On errors the relay emits an error or fails the body;
+it never synthesizes a successful terminal. Keepalive timers are host-owned.
+
+The SDK's `chat_reply`, `messages_reply` and `responses_reply` produce compatible
+streams with validated metadata. Applications explicitly map SDK errors to safe
+public presentation and select any outgoing headers. See the independent
+[Axum gateway example](../bitrouter-sdk/examples/axum_gateway.rs) and
+[ownership/acceptance contract](../../docs/AI_AXUM_ADAPTER.md).
+
+The optional adapter does not select routes, authenticate callers, retry requests,
+spawn tasks or own receipt delivery. In the application, all terminal bytes are
+prepared before the existing receipt gate and immediately yielded after it.
 
 ## Alpha API migration
 
@@ -76,6 +107,8 @@ conversion admission move there too; their data contracts remain here. Ordinary
 service consumers use the gateway HTTP API and the service-client SDK. Trusted
 custom hosts may use the application-owned runtime explicitly; there are no
 forwarding exports in AI.
+The new `stream` module contains only public SSE data/termination contracts;
+it does not restore the former provider/runtime stream implementation.
 
 Request-check authors retain `Input`, `Decision` and `Callback` here. The
 concrete `Registration` record and its collection belong to application

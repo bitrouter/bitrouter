@@ -1898,7 +1898,7 @@ async fn stream_response(
     let mut encoder = adapter.stream_encoder(&request_id, &prepared.model_id);
     let mut parts = prepared.parts;
 
-    let frame_stream = async_stream::stream! {
+    let frame_stream = async_stream::try_stream! {
         while let Some(item) = parts.next().await {
             match item {
                 Ok(prepared) => {
@@ -1923,12 +1923,12 @@ async fn stream_response(
                                             for frame in encoder
                                                 .encode_stream_error(&authorization_error.stream_error())
                                             {
-                                                yield frame;
+                                                yield frame.to_wire()?.into_bytes();
                                             }
                                             return;
                                         }
                                         for frame in encoder.encode_stream_error(&error.stream_error()) {
-                                            yield frame;
+                                            yield frame.to_wire()?.into_bytes();
                                         }
                                         return;
                                     }
@@ -1942,12 +1942,12 @@ async fn stream_response(
                                             for frame in encoder
                                                 .encode_stream_error(&authorization_error.stream_error())
                                             {
-                                                yield frame;
+                                                yield frame.to_wire()?.into_bytes();
                                             }
                                             return;
                                         }
                                         for frame in encoder.encode_stream_error(&error.stream_error()) {
-                                            yield frame;
+                                            yield frame.to_wire()?.into_bytes();
                                         }
                                         return;
                                     }
@@ -1961,16 +1961,38 @@ async fn stream_response(
                                             for frame in encoder
                                                 .encode_stream_error(&authorization_error.stream_error())
                                             {
-                                                yield frame;
+                                                yield frame.to_wire()?.into_bytes();
                                             }
                                             return;
                                         }
                                         for frame in encoder.encode_stream_error(&error.stream_error()) {
-                                            yield frame;
+                                            yield frame.to_wire()?.into_bytes();
                                         }
                                         return;
                                     }
                                 }
+                                // Encode every byte before authorizing the last frame.
+                                let frames = match frames
+                                    .into_iter()
+                                    .map(|frame| frame.to_wire().map(String::into_bytes))
+                                    .collect::<std::result::Result<Vec<_>, _>>()
+                                {
+                                    Ok(frames) => frames,
+                                    Err(_) => {
+                                        let error = BitrouterError::UpstreamInvalidResponse {
+                                            message: "terminal wire encoding failed".into(),
+                                            usage: None,
+                                        };
+                                        let error = match permit.fail(error.clone()).await {
+                                            Ok(()) => error,
+                                            Err(error) => error,
+                                        };
+                                        for frame in encoder.encode_stream_error(&error.stream_error()) {
+                                            yield frame.to_wire()?.into_bytes();
+                                        }
+                                        return;
+                                    }
+                                };
                                 let Some(last) = frames.len().checked_sub(1) else {
                                     // Zero wire frames cannot prove delivery.
                                     let error = BitrouterError::internal(
@@ -1981,12 +2003,12 @@ async fn stream_response(
                                         for frame in
                                             encoder.encode_stream_error(&authorization_error.stream_error())
                                         {
-                                            yield frame;
+                                            yield frame.to_wire()?.into_bytes();
                                         }
                                         return;
                                     }
                                     for frame in encoder.encode_stream_error(&error.stream_error()) {
-                                        yield frame;
+                                        yield frame.to_wire()?.into_bytes();
                                     }
                                     return;
                                 };
@@ -1997,7 +2019,7 @@ async fn stream_response(
                                         && let Err(error) = permit.deliver().await
                                     {
                                         for error_frame in encoder.encode_stream_error(&error.stream_error()) {
-                                            yield error_frame;
+                                            yield error_frame.to_wire()?.into_bytes();
                                         }
                                         return;
                                     }
@@ -2006,7 +2028,7 @@ async fn stream_response(
                                 return;
                             }
                             for frame in frames {
-                                yield frame;
+                                yield frame.to_wire()?.into_bytes();
                             }
                         }
                         Err(error) => {
@@ -2015,12 +2037,12 @@ async fn stream_response(
                                     permit.fail(error.clone()).await
                             {
                                 for frame in encoder.encode_stream_error(&authorization_error.stream_error()) {
-                                    yield frame;
+                                    yield frame.to_wire()?.into_bytes();
                                 }
                                 return;
                             }
                             for f in encoder.encode_stream_error(&error.stream_error()) {
-                                yield f;
+                                yield f.to_wire()?.into_bytes();
                             }
                             return;
                         }
@@ -2030,7 +2052,7 @@ async fn stream_response(
                     // HTTP status is immutable after streaming begins. Emit a
                     // typed protocol-shaped terminal event instead.
                     for f in encoder.encode_stream_error(&e.stream_error()) {
-                        yield f;
+                        yield f.to_wire()?.into_bytes();
                     }
                     return;
                 }
@@ -2039,29 +2061,23 @@ async fn stream_response(
         match encoder.finish().map_err(BitrouterError::from) {
             Ok(frames) => {
                 for f in frames {
-                    yield f;
+                    yield f.to_wire()?.into_bytes();
                 }
             }
             Err(error) => {
                 for f in encoder.encode_stream_error(&error.stream_error()) {
-                    yield f;
+                    yield f.to_wire()?.into_bytes();
                 }
             }
         }
     };
 
-    let with_keepalive = SseKeepaliveStream::new(frame_stream, keepalive);
-    let byte_stream =
-        with_keepalive.map(|frame: SseFrame| Ok::<_, Infallible>(frame.to_wire().into_bytes()));
-
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .body(Body::from_stream(byte_stream))
-        .unwrap_or_else(|e| {
-            BitrouterError::internal(format!("building stream response: {e}")).into_response()
-        })
+    let with_keepalive = SseKeepaliveStream::with_frame(frame_stream, keepalive, || {
+        SseFrame::Comment("keepalive".into())
+            .to_wire()
+            .map(String::into_bytes)
+    });
+    bitrouter_ai::axum::response::Reply::sse_body(Body::from_stream(with_keepalive)).into_response()
 }
 
 impl IntoResponse for BitrouterError {
@@ -3178,6 +3194,94 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
                 .unwrap();
         assert_eq!(value, serde_json::json!({"error": "bad temperature"}));
+    }
+
+    #[tokio::test]
+    async fn wire_encoding_failure_ends_body_before_later_success() -> anyhow::Result<()> {
+        use bitrouter_ai::types::{FinishReason, StreamPart};
+        let executor = MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "\0".repeat(bitrouter_ai::wire::DEFAULT_JSON_LIMIT / 6),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Stop,
+            },
+        ])]);
+        let response = build_router(test_state_with_executor(Arc::new(executor)))
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"model":"gpt-5.5", "messages":[], "stream":true})
+                            .to_string(),
+                    ))?,
+            )
+            .await?;
+        anyhow::ensure!(response.status() == StatusCode::OK);
+        let mut body = response.into_body().into_data_stream();
+        let mut saw_error = false;
+        while let Some(frame) = body.next().await {
+            match frame {
+                Ok(bytes) => anyhow::ensure!(!bytes.windows(6).any(|window| window == b"[DONE]")),
+                Err(_) => {
+                    saw_error = true;
+                    break;
+                }
+            }
+        }
+        anyhow::ensure!(saw_error, "oversized encoded output must fail the body");
+        anyhow::ensure!(
+            body.next().await.is_none(),
+            "body resumed after wire failure"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn oversized_terminal_is_replaced_before_success_delivery() -> anyhow::Result<()> {
+        use bitrouter_ai::types::{FinishReason, StreamPart};
+        // The ordinary delta fits. Only serialization of the terminal's
+        // escaped finish reason exceeds the wire bound.
+        let executor = MockExecutor::new(vec![MockResponse::Stream(vec![
+            StreamPart::TextDelta {
+                text: "prefix".into(),
+            },
+            StreamPart::Finish {
+                reason: FinishReason::Other(
+                    "\0".repeat(bitrouter_ai::wire::DEFAULT_JSON_LIMIT / 6),
+                ),
+            },
+        ])]);
+        let response = build_router(test_state_with_executor(Arc::new(executor)))
+            .oneshot(
+                Request::post("/v1/chat/completions")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"model":"gpt-5.5", "messages":[], "stream":true})
+                            .to_string(),
+                    ))?,
+            )
+            .await?;
+        anyhow::ensure!(response.status() == StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 64 * 1024).await?;
+        let wire = std::str::from_utf8(&bytes)?;
+        anyhow::ensure!(wire.contains("prefix"));
+        anyhow::ensure!(wire.contains("upstream_invalid_response"));
+        for data in wire.lines().filter_map(|line| line.strip_prefix("data: ")) {
+            // The application retains its error-then-DONE compatibility trailer.
+            if data == "[DONE]" {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(data)?;
+            if let Some(choices) = value["choices"].as_array() {
+                anyhow::ensure!(
+                    choices
+                        .iter()
+                        .all(|choice| choice["finish_reason"].is_null())
+                );
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]

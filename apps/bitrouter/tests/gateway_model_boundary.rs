@@ -62,7 +62,8 @@ fn model_diagnostics_are_sanitized_by_sdk_before_sse() -> bitrouter::gateway::er
                 .encode_stream_error(&public)
                 .iter()
                 .map(SseFrame::to_wire)
-                .collect::<String>();
+                .collect::<std::result::Result<String, _>>()
+                .map_err(|error| BitrouterError::internal(error.to_string()))?;
             assert!(!wire.contains("secret"), "{protocol:?}: {wire}");
             assert!(wire.contains(message), "{protocol:?}: {wire}");
             assert!(wire.contains(code), "{protocol:?}: {wire}");
@@ -91,7 +92,8 @@ fn rate_limit_presentation_survives_all_sse_codecs() -> bitrouter::gateway::erro
             .encode_stream_error(&public)
             .iter()
             .map(SseFrame::to_wire)
-            .collect::<String>();
+            .collect::<std::result::Result<String, _>>()
+            .map_err(|error| BitrouterError::internal(error.to_string()))?;
         assert!(
             wire.contains("upstream_rate_limited"),
             "{protocol:?}: {wire}"

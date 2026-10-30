@@ -15,7 +15,7 @@ use crate::{
 };
 use axum::{
     body::{Body, Bytes},
-    http::{StatusCode, header},
+    response::IntoResponse,
     response::Response,
 };
 use bitrouter_ai::types::ApiProtocol;
@@ -41,7 +41,12 @@ async fn frames(
     let last = frames.len().checked_sub(1);
     let mut total = 0usize;
     for (index, frame) in frames.into_iter().enumerate() {
-        let wire = frame.to_wire();
+        let wire = frame
+            .to_wire()
+            .map_err(|_| BitrouterError::UpstreamInvalidResponse {
+                message: "tenant wire encoding failed".into(),
+                usage: None,
+            })?;
         total = total
             .checked_add(wire.len())
             .ok_or(BitrouterError::UpstreamUnavailable)?;
@@ -155,7 +160,7 @@ pub(super) fn stream(
                 if let Some(adapter)=inbound_adapter_for(&inbound) {
                     let mut encoder=adapter.stream_encoder(&request_id,&model_id);
                     for frame in encoder.encode_stream_error(&error.stream_error()) {
-                        let bytes=frame.to_wire();
+                        let bytes=match frame.to_wire() { Ok(bytes)=>bytes, Err(_)=>{yield Err(std::io::Error::other("terminal error encoding failed"));return;} };
                         for part in bytes.as_bytes().chunks(CHUNK){yield Ok::<_,std::io::Error>(Bytes::copy_from_slice(part));}
                     }
                 }
@@ -165,53 +170,19 @@ pub(super) fn stream(
             yield Ok::<_,std::io::Error>(wire.bytes);
         }
     };
-    let mut response = Response::new(Body::from_stream(stream));
-    *response.status_mut() = StatusCode::OK;
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("text/event-stream"),
-    );
-    response.headers_mut().insert(
-        header::CACHE_CONTROL,
-        header::HeaderValue::from_static("no-store"),
-    );
-    Ok(response)
+    Ok(bitrouter_ai::axum::response::Reply::sse_body(Body::from_stream(stream)).into_response())
 }
 
 /// Serialize before authorizing the JSON terminal. A bounded writer prevents
 /// both an oversized success response and a silent truncation after activation.
 pub(super) fn json(value: &serde_json::Value) -> Result<Response> {
-    struct Buffer(Vec<u8>);
-    impl std::io::Write for Buffer {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if self
-                .0
-                .len()
-                .checked_add(bytes.len())
-                .is_none_or(|length| length > BODY)
-            {
-                return Err(std::io::Error::other("tenant JSON output limit"));
-            }
-            self.0.extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut buffer = Buffer(Vec::new());
-    serde_json::to_writer(&mut buffer, value).map_err(|_| {
+    let reply = bitrouter_ai::axum::response::Reply::json(value, BODY).map_err(|_| {
         BitrouterError::UpstreamInvalidResponse {
             message: "tenant JSON output exceeds the bounded delivery buffer".into(),
             usage: None,
         }
     })?;
-    let mut response = Response::new(Body::from(buffer.0));
-    response.headers_mut().insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static("application/json"),
-    );
-    Ok(response)
+    Ok(reply.into_response())
 }
 
 pub(super) fn bounded_json(

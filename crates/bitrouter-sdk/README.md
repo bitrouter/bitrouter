@@ -32,6 +32,33 @@ that distinction is unnecessary. Default wire-payload diagnostics redact their
 contents. A Responses `response.failed` event remains a typed terminal response with its
 failure status/error. A top-level stream error is an SDK `Error::Stream`.
 
+## Building another HTTP gateway
+
+`chat_reply`, `messages_reply` and `responses_reply` select JSON/SSE from the
+request's stream flag. They return `gateway::reply::Reply` with bounded,
+allowlisted metadata and a `Body::Json` or `Body::Stream`. The stream yields
+`bitrouter_ai::stream::StreamItem`, retaining explicit `ProtocolEnd` alongside
+typed data events. Its protocol end is not a receipt or settlement decision.
+The existing `stream_*` methods keep their event-only behavior; `ServerEvent`
+is owned by `bitrouter_ai::stream` so framework adapters use the same contract;
+the existing SDK path remains available as a compatibility type alias.
+
+Enable `bitrouter-ai`'s `axum` feature in the consuming application and compose
+its `axum::response::Reply` with your handlers. Map SDK errors to safe public
+errors yourself; neither headers nor private diagnostics are forwarded by the
+adapter. The SDK itself has no production Axum dependency.
+
+The [Axum gateway example](examples/axum_gateway.rs) demonstrates all three
+generation protocols and Decisions using a shared connection pool:
+
+```sh
+BITROUTER_URL=http://127.0.0.1:4356 cargo run -p bitrouter-sdk --example axum_gateway
+```
+
+It listens on loopback port 4357; deployment identity, middleware and business
+logic remain application-owned. Public reply methods do not add tenant dispatch
+authority or substitute for a strict execution/receipt API.
+
 Use `with_options` and `TransportOptions` to configure connect/read/total timeouts
 and response/event byte limits. System/environment proxy discovery is disabled
 by default; opt in with `system_proxy` when required. The default total timeout is disabled; the read

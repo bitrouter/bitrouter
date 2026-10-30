@@ -13,6 +13,9 @@ the CLI-only contract and implementation record define the current product.
 - [CI test organization](CI.md) — shared test artifacts, platform and feature
   checks, distribution acceptance and opt-in capacity campaigns.
 
+- [AI Axum adapter](AI_AXUM_ADAPTER.md) — optional public protocol bindings,
+  explicit SDK stream termination, dependency boundaries and delivery gates.
+
 - [Protocol specifications](specs/README.md) — tracked interoperability contracts.
   [Registry v1](specs/registry-v1/README.md) is the first protocol, currently
   `1.0.0-beta.6`, with [conformance requirements](specs/registry-v1/conformance.md).

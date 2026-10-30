@@ -633,11 +633,15 @@ jobs:
     - name: inspect isolated production dependency closures
       shell: bash
       run: |
+        cargo check --locked -p bitrouter-ai --no-default-features --features axum --lib
         # Successful checks above prove package membership. Inspect forward
         # trees: an unknown inverted dependency must not count as evidence.
         for flags in '' '--no-default-features' '--all-features'; do
           cargo tree --locked -p bitrouter-ai $flags -e normal,build --prefix none > ai-tree.txt
-          if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
+          if [[ "$flags" != '--all-features' ]] && grep -Eq '^(axum|axum-core|hyper|hyper-util) v' ai-tree.txt; then
+            echo '::error::default AI contracts pulled HTTP framework dependencies'; exit 1
+          fi
+          if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
             echo '::error::AI public contracts pulled runtime dependencies'; exit 1
           fi
           cargo tree --locked -p bitrouter-sdk $flags -e normal,build --prefix none > sdk-tree.txt
@@ -693,6 +697,8 @@ jobs:
           # every type. Real authored fields and bounds remain in the listing.
           if [[ "$package" == bitrouter-ai ]]; then
             sentinels=(
+              'pub struct bitrouter_ai::axum::response::Reply'
+              'pub enum bitrouter_ai::stream::ProtocolEnd'
               'pub struct bitrouter_ai::protocol::chat_completions::ChatRequest'
               'pub struct bitrouter_ai::gateway::ModelsResponse'
               'pub mod bitrouter_ai::extension'
@@ -712,10 +718,11 @@ jobs:
               'pub struct bitrouter_ai::core::responses::CreateRequest'
               'pub struct bitrouter_ai::core::responses::FunctionOutput'
             )
-            forbidden='extension::request_check::Registration|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|axum|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
+            forbidden='extension::request_check::Registration|ExtensionApi|NativeExecutionControl|NativePrivateContextRuntime|CommitGate|VerifiedBatch|CheckpointBatchExt|HarnessManifestExt|ClientMessageExt|ToolResultLimitsExt|::capture_cache|::commitment\(|ToolResultOutput::(from_untyped_value|to_provider_string)|DataContent::(to_url|from_url)|Source::synthesize_id|GenerationParams::(extras_for_protocol|extra_value_for_protocol)|Prompt::required_capabilities|ModelTokenLimits::output_reservation_covers_model|NativeRoute::requires_input_count|Limits::within|Capabilities::negotiate|bitrouter::|bitrouter_sdk::|reqwest::|tokio::|sea_orm|sqlx|ratatui|crossterm|opentelemetry|tracing_subscriber|agent_client_protocol|rmcp::'
           else
             sentinels=(
               'pub struct bitrouter_sdk::gateway::GatewayClient'
+              'bitrouter_sdk::gateway::GatewayClient::chat_reply'
               'bitrouter_sdk::gateway::GatewayClient::chat_completions'
               'bitrouter_sdk::gateway::GatewayClient::stream_responses'
               'pub struct bitrouter_sdk::control::ControlClient'
@@ -762,6 +769,11 @@ jobs:
             <(grep -v '^#' "crates/$package/public-api-deps.txt") \
             "$RUNNER_TEMP/$package-public-api-deps.txt"
         done
+        cargo "+${{ steps.pin.outputs.toolchain }}" public-api \
+          -p bitrouter-ai --no-default-features --simplified > "$RUNNER_TEMP/ai-default-public-api.txt"
+        if grep -nE 'axum::|axum_core::|http::|futures_core::|tokio::|reqwest::' "$RUNNER_TEMP/ai-default-public-api.txt"; then
+          echo '::error::default AI API leaked optional HTTP/runtime bindings'; exit 1
+        fi
     needs:
     - changes
     if: needs.changes.outputs.code == 'true'

@@ -35,14 +35,19 @@ pub enum SseFrame {
 
 impl SseFrame {
     /// Render the frame to its on-wire byte form.
-    pub fn to_wire(&self) -> String {
+    ///
+    /// # Errors
+    /// Rejects invalid SSE fields and output beyond the gateway wire bound.
+    pub fn to_wire(&self) -> Result<String, bitrouter_ai::wire::Error> {
         match self {
-            SseFrame::Event { event, data } => match event {
-                Some(name) => format!("event: {name}\ndata: {data}\n\n"),
-                None => format!("data: {data}\n\n"),
+            SseFrame::Event { event, data } => bitrouter_ai::wire::Frame::Event {
+                event: event.as_deref(),
+                id: None,
+                data,
             },
-            SseFrame::Comment(text) => format!(":{text}\n\n"),
+            SseFrame::Comment(text) => bitrouter_ai::wire::Frame::Comment(text),
         }
+        .encode(bitrouter_ai::wire::DEFAULT_JSON_LIMIT)
     }
 }
 
@@ -51,13 +56,13 @@ mod tests {
     use super::SseFrame;
 
     #[test]
-    fn sse_frame_wire_format() {
+    fn sse_frame_wire_format() -> Result<(), bitrouter_ai::wire::Error> {
         assert_eq!(
             SseFrame::Event {
                 event: None,
                 data: "{}".to_string()
             }
-            .to_wire(),
+            .to_wire()?,
             "data: {}\n\n"
         );
         assert_eq!(
@@ -65,12 +70,13 @@ mod tests {
                 event: Some("message".to_string()),
                 data: "x".to_string()
             }
-            .to_wire(),
+            .to_wire()?,
             "event: message\ndata: x\n\n"
         );
         assert_eq!(
-            SseFrame::Comment("keepalive".to_string()).to_wire(),
+            SseFrame::Comment("keepalive".to_string()).to_wire()?,
             ":keepalive\n\n"
         );
+        Ok(())
     }
 }

@@ -801,10 +801,16 @@ dependencies = [
 name = "bitrouter-ai"
 version = "1.0.0-alpha.35"
 dependencies = [
+ "axum",
+ "futures-core",
+ "futures-util",
+ "http-body-util",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
+ "tower",
 ]
 
 [[package]]

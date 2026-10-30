@@ -4,7 +4,8 @@ use bitrouter_ai::harness::turn::TurnSnapshot;
 use futures_util::StreamExt;
 
 use crate::error::{Error, Result, ServiceFailure};
-use crate::stream::{EventStream, ServerEvent, SseDecoder};
+use crate::stream::{EventStream, SseDecoder};
+use bitrouter_ai::stream::ServerEvent;
 
 pub(super) fn check_thread(actual: &str, expected: &str) -> Result<()> {
     if actual != expected {

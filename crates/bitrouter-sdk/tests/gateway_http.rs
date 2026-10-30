@@ -22,6 +22,9 @@ type TestResult<T = ()> = Result<T, Box<dyn StdError + Send + Sync>>;
 #[path = "gateway_http/execution.rs"]
 mod execution;
 
+#[path = "gateway_http/relay.rs"]
+mod relay;
+
 struct Reply {
     status: u16,
     headers: Vec<(&'static str, String)>,

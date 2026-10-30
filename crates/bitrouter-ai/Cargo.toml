@@ -15,6 +15,8 @@ default = []
 testing = []
 # Public contract schemas without a service/runtime dependency.
 schema = ["dep:schemars"]
+# Optional HTTP boundary bindings; no listener or runtime features.
+axum = ["dep:axum", "dep:futures-core", "dep:futures-util"]
 
 [dependencies]
 serde.workspace = true
@@ -28,3 +30,11 @@ serde.workspace = true
 serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order", "raw_value"] }
 thiserror.workspace = true
 schemars = { workspace = true, optional = true }
+axum = { version = "0.8", default-features = false, features = ["json"], optional = true }
+futures-core = { workspace = true, optional = true }
+futures-util = { version = "0.3", default-features = false, features = ["alloc"], optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+http-body-util = "0.1"
+tower = { workspace = true, features = ["util"] }
