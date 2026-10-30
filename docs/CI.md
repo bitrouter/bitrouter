@@ -10,9 +10,13 @@ process and database integration tests remain in PR CI.
 `build-linux` compiles the workspace tests and examples with two build jobs and
 without debug information. It publishes a nextest archive for the exact GitHub
 revision. The module, integration, process-contract and database jobs download
-that artifact and run its executables without invoking Cargo or rustc. The
+that artifact and run its executables without invoking Cargo. The
 archive includes process fixtures; a missing fixture is an error, not permission
 to rebuild during a test deadline.
+
+The coding-judge integration test intentionally compiles tiny temporary Rust
+programs to verify executed pass/fail evidence. Rustc remains available for that
+bounded fixture; workspace and example rebuilds are forbidden.
 
 All artifact consumers use Ubuntu 24.04 and verify both the revision and the
 original workspace path. Some tests embed Cargo paths, so arbitrary relocation
@@ -21,8 +25,10 @@ shares the actual executables within one run. See [nextest archives](https://nex
 
 Consumers retain JUnit, elapsed time, maximum resident memory and disk usage in
 their evidence artifacts. `/usr/bin/time` reports process resource accounting,
-not the peak memory of the entire VM or database service containers. Concurrent
-tests are limited to two; database and ignored process parents run serially.
+not the peak memory of the entire VM or database service containers. Module
+tests use four slots on the standard four-CPU Linux runner; integration tests use
+two, and database and ignored process parents run serially. Builds stay at two
+jobs because their memory demand is much higher than test execution.
 Only the listed ignored parents run: internal fault-injection children must not
 be selected with a blanket `--run-ignored all`.
 

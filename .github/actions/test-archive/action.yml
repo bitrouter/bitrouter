@@ -32,8 +32,9 @@ runs:
           "BITROUTER_TEST_GATEWAY_BINARY=$GITHUB_WORKSPACE/target/debug/bro" \
           "BITROUTER_OWNED_CAPTURE_FIXTURE=$GITHUB_WORKSPACE/target/debug/examples/owned_capture_fixture" >> "$GITHUB_ENV"
         # A consumer must never silently turn a missing artifact into a rebuild.
+        # Keep rustc available: the coding judge verifies tiny temporary Rust
+        # programs as its behavior, without building any workspace crate.
         mkdir -p "$RUNNER_TEMP/ci-no-build"
         printf '#!/bin/sh\necho "CI test consumers must use prebuilt artifacts" >&2\nexit 97\n' > "$RUNNER_TEMP/ci-no-build/cargo"
         chmod +x "$RUNNER_TEMP/ci-no-build/cargo"
-        cp "$RUNNER_TEMP/ci-no-build/cargo" "$RUNNER_TEMP/ci-no-build/rustc"
         printf '%s\n' "$RUNNER_TEMP/ci-no-build" >> "$GITHUB_PATH"

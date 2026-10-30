@@ -960,9 +960,25 @@ async fn assert_windows_descendant_cleanup(action: &str) -> Result<(), Box<dyn s
         }
         _ => return Err("unknown cleanup action".into()),
     }
-    let ticks = std::fs::read(workspace.path().join("ticks.txt"))?;
+    let ticks_path = workspace.path().join("ticks.txt");
+    // Aborting the future drops the job guard, but Windows termination and
+    // pending I/O cancellation finish asynchronously. Observe file release
+    // within a fixed bound; the stability assertion still rejects a live writer.
+    // https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess
+    let ticks = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match std::fs::read(&ticks_path) {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) if action == "drop" && error.raw_os_error() == Some(32) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await??;
     tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(ticks, std::fs::read(workspace.path().join("ticks.txt"))?);
+    assert_eq!(ticks, std::fs::read(&ticks_path)?);
     Ok(())
 }
 
