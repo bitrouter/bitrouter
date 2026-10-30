@@ -108,6 +108,71 @@ fn source_directory_swap_and_crash_recovery_keep_complete_transactions() -> Resu
     assert!(!transaction.exists());
     Ok(())
 }
+
+#[test]
+fn published_candidate_matches_reloaded_sources_and_audit_digest() -> Result<()> {
+    let root = fixture()?;
+    let original = Sources::load(root.path())?;
+    let mut candidate = original.clone();
+    // Feed adapters and discovery insert fields in a different order from the
+    // YAML reader. Include nested objects, arrays, and an exact decimal lexeme.
+    let metadata = bitrouter_registry::document::parse_json(
+        br#"{"z":[{"z":true,"a":0.100000000000000000000000001},"second"],"a":"first"}"#,
+    )?;
+    let manifest = candidate
+        .files
+        .get_mut(&candidate.manifest)
+        .context("manifest")?;
+    manifest["as_of"] = json!("2026-10-22T01:00:00Z");
+    manifest["future"] = metadata.clone();
+    manifest["data"] = json!({"future_index":metadata});
+    candidate
+        .files
+        .get_mut(&root.path().join("registry/models/org.yaml"))
+        .context("models")?[0]["future"] = metadata.clone();
+    let provider = candidate
+        .files
+        .get_mut(&root.path().join("registry/providers/test.yaml"))
+        .context("provider")?;
+    provider["future"] = metadata.clone();
+    provider["models"][0]["future"] = metadata.clone();
+    provider["defaults"] = json!({"interfaces":[{"protocol":"messages","operation":"generation"}]});
+    provider["models"][0]
+        .as_object_mut()
+        .context("model")?
+        .remove("interfaces");
+    candidate
+        .files
+        .get_mut(&candidate.identities)
+        .context("identities")?[0]["future"] = metadata.clone();
+
+    let outputs = build_outputs(root.path(), &candidate)?;
+    let digest = candidate.digest()?;
+    let document = candidate.document()?;
+    let output_hash = Sha256::digest(rendered(&document)?);
+    candidate.publish(&original, &outputs)?;
+
+    validate(root.path())?;
+    build(root.path(), true)?;
+    let reloaded = Sources::load(root.path())?;
+    assert_eq!(digest, reloaded.digest()?);
+    assert_eq!(outputs, build_outputs(root.path(), &reloaded)?);
+    for path in output_paths(root.path()) {
+        assert_eq!(output_hash, Sha256::digest(fs::read(path)?));
+    }
+    let published = reloaded.document()?;
+    assert_eq!(published.value()["future"], metadata);
+    assert_eq!(published.value()["data"]["future_index"], metadata);
+    assert_eq!(published.models()[0]["future"], metadata);
+    assert_eq!(published.providers()[0]["future"], metadata);
+    assert_eq!(published.providers()[0]["models"][0]["future"], metadata);
+    assert_eq!(
+        published.value()["future"]["z"][0]["a"].to_string(),
+        "0.100000000000000000000000001"
+    );
+    Ok(())
+}
+
 #[test]
 fn numeric_retention_uses_eligible_versions_and_trailing_zero_equivalence() -> Result<()> {
     let root = fixture()?;
