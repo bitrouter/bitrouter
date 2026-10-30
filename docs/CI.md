@@ -53,8 +53,9 @@ platform tests execute. Pure Keychain output parsing also runs on Linux.
 An all-feature binary cannot exercise `cfg(not(feature = ...))` branches or
 prove that an absent feature produces no side effects. Those runtime contracts,
 isolated SDK consumers, live registry lifecycle and packaged gateway acceptance
-remain in **Distribution acceptance**, available manually, weekly and on version
-tags. The release workflow retains its existing packaged target matrix.
+remain in **Distribution acceptance**, available manually and weekly. Version
+tags also run the feature/consumer contracts, while the release workflow alone
+builds and verifies the packaged target matrix against its actual dist artifacts.
 
 ## Capacity campaigns
 

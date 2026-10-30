@@ -389,6 +389,7 @@ jobs:
     with:
       plan: '{"releases":[{"app_name":"bitrouter"}]}'
       cargo-profile: dev
+    if: github.event_name != 'push'
   registry-live-lifecycle:
     name: live registry sync and host consumption
     runs-on: ubuntu-latest
