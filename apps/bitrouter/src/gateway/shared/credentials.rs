@@ -168,11 +168,12 @@ impl Credentials {
         Ok(account.value.stamp)
     }
 
-    #[cfg(test)]
+    /// Read a versioned snapshot without acquiring a refresh lease. The caller
+    /// must bind this exact stamp to its request and fence it before dispatch.
     pub async fn load(&self, slot: &CredentialKey) -> Result<(CredentialStamp, Credential)> {
         let store = self.authority.store();
         store
-            .bounded(async {
+            .retry(|| async {
                 let tx = store.begin().await?;
                 self.authority.fence(&tx).await?;
                 let result = self.load_in(&tx, slot).await?;

@@ -189,35 +189,52 @@ impl Store {
         Fut: Future<Output = Result<T>>,
     {
         let deadline = tokio::time::Instant::now() + self.transaction_timeout;
-        self.bounded_until(deadline, async {
-            let mut delay_ms = 5_u64;
-            loop {
-                if tokio::time::Instant::now() >= deadline {
-                    // Timeout polls its inner future first. Yield to its expired
-                    // timer without invoking another callback after a late wake.
-                    return std::future::pending().await;
-                }
-                match operation().await {
-                    Err(error) if retryable_abort(&error) => {
-                        // Contending replicas need more than four short retries.
-                        // The existing outer deadline bounds all attempts and
-                        // backoff together; no provider I/O is repeated here.
-                        let pause = rand::random_range(delay_ms..=delay_ms * 2);
-                        tokio::time::sleep(Duration::from_millis(pause)).await;
-                        delay_ms = (delay_ms * 2).min(50);
+        let mut aborted = 0_u64;
+        let result = self
+            .bounded_until(deadline, async {
+                let mut delay_ms = 5_u64;
+                loop {
+                    if tokio::time::Instant::now() >= deadline {
+                        // Timeout polls its inner future first. Yield to its expired
+                        // timer without invoking another callback after a late wake.
+                        return std::future::pending().await;
                     }
-                    Err(error) => {
-                        tracing::debug!(
-                            class = database_failure_class(&error),
-                            "shared transaction returned an error"
-                        );
-                        return Err(error);
+                    match operation().await {
+                        Err(error) if retryable_abort(&error) => {
+                            aborted = aborted.saturating_add(1);
+                            // Contending replicas need more than four short retries.
+                            // The existing outer deadline bounds all attempts and
+                            // backoff together; no provider I/O is repeated here.
+                            let pause = rand::random_range(delay_ms..=delay_ms * 2);
+                            tokio::time::sleep(Duration::from_millis(pause)).await;
+                            delay_ms = (delay_ms * 2).min(50);
+                        }
+                        Err(error) => {
+                            tracing::debug!(
+                                class = database_failure_class(&error),
+                                "shared transaction returned an error"
+                            );
+                            return Err(error);
+                        }
+                        Ok(value) => return Ok(value),
                     }
-                    Ok(value) => return Ok(value),
                 }
-            }
-        })
-        .await
+            })
+            .await;
+        if result.as_ref().is_err_and(|error| {
+            error
+                .chain()
+                .any(|cause| cause.is::<tokio::time::error::Elapsed>())
+        }) {
+            // The callback's compile-time type identifies the transaction path
+            // without logging SQL, caller input, credentials or database errors.
+            tracing::warn!(
+                operation = std::any::type_name::<F>(),
+                aborted,
+                "shared transaction retry budget exhausted"
+            );
+        }
+        result
     }
 
     pub async fn begin(&self) -> Result<DatabaseTransaction> {

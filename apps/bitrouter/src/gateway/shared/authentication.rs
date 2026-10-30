@@ -26,6 +26,8 @@ use super::credentials::{Credentials, observation::Observation};
 use super::publication::{CredentialBinding, PreparedConfiguration};
 
 #[cfg(test)]
+mod concurrency_tests;
+#[cfg(test)]
 pub(super) mod tests;
 
 /// Build one complete registry before publishing a serving snapshot. Every
@@ -141,6 +143,28 @@ struct BoundStore {
 
 #[async_trait]
 impl CredentialStore for BoundStore {
+    async fn read(
+        &self,
+        key: &CredentialKey,
+    ) -> std::result::Result<Option<Credential>, StoreError> {
+        if key.provider != self.mechanism {
+            return Err(StoreError::Conflict);
+        }
+        let slot = self
+            .accounts
+            .get(&key.account)
+            .ok_or(StoreError::Conflict)?;
+        let (stamp, credential) = self
+            .credentials
+            .load(slot)
+            .await
+            .map_err(|_| StoreError::Unavailable)?;
+        if let Some(observation) = Observation::current() {
+            observation.record(&stamp)?;
+        }
+        Ok(Some(credential))
+    }
+
     async fn begin(
         &self,
         key: &CredentialKey,
@@ -256,9 +280,9 @@ struct StaticKey {
 
 impl StaticKey {
     async fn resolve(&self, target: &ModelTarget) -> Result<String> {
-        let mut transaction = self
+        let credential = self
             .store
-            .begin(&CredentialKey {
+            .read(&CredentialKey {
                 provider: target.provider_name.clone(),
                 account: target
                     .account_label
@@ -268,11 +292,10 @@ impl StaticKey {
             })
             .await
             .map_err(storage_error)?;
-        let key = match transaction.credential() {
-            Some(Credential::ApiKey { value }) if !value.is_empty() => Some(value.clone()),
+        let key = match credential {
+            Some(Credential::ApiKey { value }) if !value.is_empty() => Some(value),
             _ => None,
         };
-        transaction.release().await.map_err(storage_error)?;
         key.ok_or_else(|| {
             ModelError::invalid_credential("shared provider requires a stored API key")
         })

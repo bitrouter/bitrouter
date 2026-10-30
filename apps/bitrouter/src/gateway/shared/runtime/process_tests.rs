@@ -184,6 +184,18 @@ impl Fixture {
         extra: &[&str],
         operator: Option<(std::net::SocketAddr, &str)>,
     ) -> Result<usize> {
+        self.spawn_with_pool(action, address, extra, operator, (3, 1000))
+            .await
+    }
+
+    async fn spawn_with_pool(
+        &mut self,
+        action: &str,
+        address: std::net::SocketAddr,
+        extra: &[&str],
+        operator: Option<(std::net::SocketAddr, &str)>,
+        pool: (u32, u64),
+    ) -> Result<usize> {
         let index = self.children.len();
         let config = self.root.path().join(format!("gateway-{index}.json"));
         let mut document = json!({
@@ -191,8 +203,8 @@ impl Fixture {
             "database": {"url": "${FIXTURE_SHARED_DATABASE}"},
             "gateway_state": {
                 "mode": "shared", "namespace": self.authority.store().namespace(),
-                "deployment_key_env": "FIXTURE_SHARED_KEY", "pool_connections": 3,
-                "transaction_timeout_ms": 1000, "owner_lease_ms": 10000,
+                "deployment_key_env": "FIXTURE_SHARED_KEY", "pool_connections": pool.0,
+                "transaction_timeout_ms": pool.1, "owner_lease_ms": 10000,
                 "heartbeat_ms": 250, "worker_interval_ms": 100, "drain_timeout_ms": 2000
             }
         });

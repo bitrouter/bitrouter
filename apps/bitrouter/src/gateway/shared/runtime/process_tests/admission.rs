@@ -51,6 +51,9 @@ mod overload;
 #[path = "admission/continuation.rs"]
 mod continuation;
 
+#[path = "admission/concurrent_static.rs"]
+mod concurrent_static;
+
 #[path = "admission_tests.rs"]
 mod tests;
 

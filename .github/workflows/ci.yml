@@ -746,6 +746,20 @@ jobs:
           export BITROUTER_TEST_GATEWAY_BINARY="$GITHUB_WORKSPACE/target/debug/bro"
           cargo test --locked -p bitrouter --no-default-features --features multi-instance,http2 \
           --lib official_http2_tenant_and_account_concurrency_cross_replicas -- --ignored --test-threads=1
+          cargo test --locked -p bitrouter --no-default-features --features multi-instance,http2 \
+          --lib official_concurrent_static_ -- --ignored --test-threads=1
+
+      - name: verify PostgreSQL credential and transaction regressions
+        if: matrix.backend == 'postgres'
+        env:
+          BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+        run: |
+          cargo test --locked -p bitrouter --no-default-features --features multi-instance,http2 \
+          --lib gateway::shared::authentication::concurrency_tests:: -- --ignored --test-threads=1
+          cargo test --locked -p bitrouter --no-default-features --features multi-instance,http2 \
+          --lib gateway::shared::engine::admission::contention_tests:: -- --ignored --test-threads=1
+          cargo test --locked -p bitrouter --no-default-features --features multi-instance,http2 \
+          --lib gateway::shared::engine::guard::tests::snapshot:: -- --ignored --test-threads=1
 
   telemetry-transports:
     name: telemetry (${{ matrix.transport }})
