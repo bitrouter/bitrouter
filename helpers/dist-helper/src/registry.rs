@@ -17,6 +17,14 @@ use sha2::{Digest, Sha256};
 mod agents;
 mod discovery;
 
+fn ordered_source(value: &Value) -> Value {
+    let mut value = value.clone();
+    // The YAML reader sorts mapping keys. Match that order for in-memory feed
+    // candidates before projection or hashing so publication survives a reload.
+    value.sort_all_objects();
+    value
+}
+
 #[derive(Clone)]
 struct Sources {
     files: BTreeMap<PathBuf, Value>,
@@ -69,7 +77,7 @@ impl Sources {
             .context("registry parent")?
             .join("model-discovery.yaml");
         discovery::validate(&self.files[&policy])?;
-        let mut value = self.files[&self.manifest].clone();
+        let mut value = ordered_source(&self.files[&self.manifest]);
         let root = value
             .as_object_mut()
             .context("registry manifest must be an object")?;
@@ -97,7 +105,7 @@ impl Sources {
                 {
                     continue;
                 }
-                models.push(model.clone());
+                models.push(ordered_source(model));
             }
         }
         let mut providers = Vec::new();
@@ -145,7 +153,7 @@ impl Sources {
                 path.strip_prefix(self.manifest.parent().context("manifest parent missing")?)?;
             hash.update(relative.to_string_lossy().as_bytes());
             hash.update([0]);
-            hash.update(source::render(value)?);
+            hash.update(source::render(&ordered_source(value))?);
             hash.update([0]);
         }
         Ok(hex::encode(hash.finalize()))
@@ -770,7 +778,7 @@ fn reconcile_curated_availability(sources: &mut Sources) -> Result<()> {
     Ok(())
 }
 fn public_provider(value: &Value) -> Result<Value> {
-    let mut provider = value.clone();
+    let mut provider = ordered_source(value);
     inherit_interfaces(&mut provider)?;
     let object = provider.as_object_mut().context("provider object")?;
     object.remove("auto_sync");
