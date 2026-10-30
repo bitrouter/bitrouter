@@ -160,11 +160,12 @@ jobs:
           tests.workspace
         compression-level: 0
         retention-days: 2
+        overwrite: true
     - name: Upload test evidence
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-evidence
+        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
         path: ci-evidence/
         retention-days: 7
   test-linux:
@@ -185,7 +186,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-evidence
+        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
         path: ci-evidence/
         retention-days: 7
     strategy:
@@ -335,7 +336,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-evidence
+        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
         path: ci-evidence/
         retention-days: 7
   database-backends:
@@ -515,7 +516,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.job }}-${{ strategy.job-index }}-evidence
+        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
         path: ci-evidence/
         retention-days: 7
     needs:

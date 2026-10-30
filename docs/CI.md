@@ -24,7 +24,11 @@ is not supported. Dependency caches speed later builds; the uploaded archive
 shares the actual executables within one run. See [nextest archives](https://nexte.st/docs/ci-features/archiving/).
 
 Consumers retain JUnit, elapsed time, maximum resident memory and disk usage in
-their evidence artifacts. `/usr/bin/time` reports process resource accounting,
+their evidence artifacts, including retained gateway child logs on failure.
+Evidence names include the run attempt so retries preserve earlier failures.
+A rebuild replaces the revision's archive; retrying only a consumer reuses the
+existing build. See [artifact replacement](https://github.com/actions/upload-artifact#overwriting-an-artifact).
+`/usr/bin/time` reports process resource accounting,
 not the peak memory of the entire VM or database service containers. Module
 tests use four slots on the standard four-CPU Linux runner; integration tests use
 two, and database and ignored process parents run serially. Builds stay at two
