@@ -130,6 +130,8 @@ jobs:
     - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: 1.99.1
+        cache-on-failure: false
+        cache-key: complete-v1
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
@@ -177,7 +179,8 @@ jobs:
     - name: Run archived tests
       env:
         FILTER: ${{ matrix.filter }}
-      run: bash .github/scripts/ci-test.sh ordinary --test-threads 2 -E "$FILTER"
+        TEST_THREADS: ${{ matrix.threads }}
+      run: bash .github/scripts/ci-test.sh ordinary --test-threads "$TEST_THREADS" -E "$FILTER"
     - name: Upload test evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -191,8 +194,10 @@ jobs:
       matrix:
         include:
         - suite: modules
+          threads: 4
           filter: kind(lib) | kind(bin)
         - suite: integration
+          threads: 2
           filter: kind(test)
   test-process:
     name: test (Linux, process contracts)
@@ -397,12 +402,17 @@ jobs:
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
       run: |
-        bash .github/scripts/ci-test.sh db-7 --test-threads 1 --run-ignored all -E '(binary(=database_backends))'
+        bash .github/scripts/ci-test.sh db-7 --test-threads 1 --run-ignored only -E '(binary(=database_backends))'
     - name: exercise retained capture records on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
+        BACKEND: ${{ matrix.backend }}
       run: |
-        bash .github/scripts/ci-test.sh db-8 --test-threads 1 --run-ignored all -E '(binary(=database_capture))'
+        filter='binary(=database_capture) & test(=server_database_capture)'
+        if [[ "$BACKEND" == mysql ]]; then
+          filter='binary(=database_capture) & (test(=server_database_capture) | test(mysql_snapshot_races::))'
+        fi
+        bash .github/scripts/ci-test.sh db-8 --test-threads 1 --run-ignored only -E "$filter"
     - name: verify tenant eval conflicts preserve the transaction and creator
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
@@ -513,8 +523,6 @@ jobs:
   application-features:
     name: feature compile (${{ matrix.batch }})
     runs-on: ubuntu-latest
-    env:
-      BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -531,6 +539,8 @@ jobs:
     - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: 1.99.1
+        cache-on-failure: false
+        cache-key: complete-v1-${{ matrix.batch }}
     - name: Check isolated production feature closures
       shell: bash
       env:
@@ -844,6 +854,8 @@ jobs:
     - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: 1.99.1
+        cache-on-failure: false
+        cache-key: complete-v1
     - uses: taiki-e/install-action@v2
       with:
         tool: nextest@0.9.114
@@ -858,7 +870,7 @@ jobs:
         BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
       run: |
         read -r -a targets <<< "$TARGETS"
-        cargo nextest run --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 --test-threads 2 --retries 0 --no-tests fail -E "$FILTER"
+        cargo nextest run --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 --test-threads 2 --retries 0 --no-fail-fast --no-tests fail -E "$FILTER"
     needs:
     - changes
     if: needs.changes.outputs.code == 'true'

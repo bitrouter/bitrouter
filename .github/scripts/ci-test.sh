@@ -14,7 +14,7 @@ status=0
   --cargo-metadata "$PWD/target/nextest/cargo-metadata.json" \
   --binaries-metadata "$PWD/target/nextest/binaries-metadata.json" \
   --workspace-remap "$PWD" --target-dir-remap "$PWD/target" \
-  --profile ci --retries 0 --no-tests fail "$@" || status=$?
+  --profile ci --retries 0 --no-fail-fast --no-tests fail "$@" || status=$?
 if [[ -f target/nextest/ci/junit.xml ]]; then
   cp target/nextest/ci/junit.xml "ci-evidence/$label-junit.xml"
 fi
