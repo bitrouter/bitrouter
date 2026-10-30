@@ -344,13 +344,11 @@ jobs:
         - backend: postgres
           image: postgres:17
           port: 5432
-          feature: db-postgres
           url: postgres://fixture:fixture-password@127.0.0.1:5432/bitrouter_test
           healthcheck: pg_isready -U fixture -d bitrouter_test
         - backend: mysql
           image: mysql:8.4
           port: 3306
-          feature: db-mysql
           url: mysql://fixture:fixture-password@127.0.0.1:3306/bitrouter_test
           healthcheck: mysql --host=127.0.0.1 --user=fixture --password=fixture-password --database=bitrouter_test --execute='SELECT 1'
     services:
@@ -373,49 +371,41 @@ jobs:
     - name: verify eval ownership migration before populating the test database
       env:
         BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-2 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(server_migration030_preserves_legacy_resumes_and_refuses_owned_down)'
     - name: verify native continuation epoch durability before populating the test database
       env:
         BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-3 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000031_native_continuation_epoch::tests::server::server_migration031_epoch_is_permanent_exact_and_restartable)'
     - name: verify trajectory ownership migration before populating the test database
       env:
         BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-4 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000032_trajectory_storage_scope::tests::server_migration032_preserves_legacy_and_refuses_partial_down)'
     - name: verify HTTP continuation ownership before populating the test database
       env:
         BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-5 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000034_continuation_storage_scope::tests::server::server_migration034_preserves_legacy_bytes_exact_scopes_and_dependencies)'
     - name: verify native harness ownership before populating the test database
       env:
         BITROUTER_TEST_MIGRATION_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-6 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000036_native_harness_scope::tests::server_native36_legacy_resume_and_down_matrix)'
     - name: exercise migrations and gateway persistence on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-7 --test-threads 1 --run-ignored all -E '(binary(=database_backends))'
-    - name: exercise retained core and capture records on the selected backend
+    - name: exercise retained capture records on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
-        bash .github/scripts/ci-test.sh db-8 --test-threads 1 --run-ignored all -E '(binary(=database_backends) | binary(=database_capture))'
+        bash .github/scripts/ci-test.sh db-8 --test-threads 1 --run-ignored all -E '(binary(=database_capture))'
     - name: verify tenant eval conflicts preserve the transaction and creator
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-9 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(core::eval::store::scope_tests::server_immutable_conflicts_preserve_transaction_and_first_creator)'
     - name: provision isolated MySQL evaluation test databases
@@ -428,51 +418,43 @@ jobs:
     - name: verify tenant eval composites share one stable transaction
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-11 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(core::eval::store::owned_tests::server::)'
     - name: verify tenant trajectory scope and immutable replay on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-12 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=trajectory::store::owned::tests::server_owned_trajectory_store_preserves_transaction_and_scope)'
     - name: verify atomic trajectory and evaluation closure on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-13 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(tenancy::tests::execution::evaluation::trajectory::server::)'
     - name: verify Legacy capture and checkpoint isolation on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-14 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(db::migration::m20240101_000033_capture_legacy_scope::tests::server::)'
     - name: verify owned HTTP continuation consumers on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-15 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::tests::execution::http_continuation::server::server_http034_consumer_exact_cas_absence_race_and_restart)'
     - name: verify execution receipt migration and persistence on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-16 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000035_execution_receipts::tests::server::server_receipt035_exact_indexes_persistent_restart_and_populated_down)'
         bash .github/scripts/ci-test.sh db-16 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::receipts::store::tests::server::server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict)'
     - name: verify owned OAuth migration and compound receipts on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
       run: |
         bash .github/scripts/ci-test.sh db-17 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=db::migration::m20240101_000037_owned_oauth::tests::server::owned_oauth_additive_schema_real_commit_rollback_down_and_reconnect)'
         bash .github/scripts/ci-test.sh db-17 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::oauth::storage::tests::server::owned_oauth_slot_and_auxiliary_receipt_real_commit_rollback_reconnect)'
     - name: verify native harness consumers on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
         FIXTURE_BACKEND: ${{ matrix.backend }}
         FIXTURE_CONTAINER: ${{ job.services.database.id }}
       run: |
@@ -493,7 +475,6 @@ jobs:
     - name: verify owned capture actor and child on the selected backend
       env:
         BITROUTER_TEST_DATABASE_URL: ${{ matrix.url }}
-        PROFILE_FEATURES: ${{ matrix.feature }}
         BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
       run: |
         bash .github/scripts/ci-test.sh db-19 --test-threads 1 --run-ignored only -E '(kind(lib)) & test(=tenancy::tests::execution::native::capture::server::server_capture03_actor_facade_namespace_replay_and_reconnect)'
