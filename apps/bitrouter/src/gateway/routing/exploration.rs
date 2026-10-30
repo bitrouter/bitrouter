@@ -74,7 +74,17 @@ impl RouteExploration {
         let Some((assignment_unit, assignment_id)) = benchmark_identity.or(parent_identity) else {
             return Ok(None);
         };
-        let assignment_id_digest = digest(&assignment_id);
+        Ok(Some(self.assignment_for(assignment_unit, &assignment_id)))
+    }
+
+    /// Pure assignment shared with the checked native owner. The caller must
+    /// establish the identity; this calculation does not confer authority.
+    pub(crate) fn assignment_for(
+        &self,
+        assignment_unit: ExperimentAssignmentUnit,
+        assignment_id: &str,
+    ) -> EvalExperimentRef {
+        let assignment_id_digest = digest(assignment_id);
         let bucket_digest = Sha256::digest(
             format!(
                 "{ASSIGNMENT_DOMAIN}\0{}\0{}\0{}",
@@ -87,7 +97,7 @@ impl RouteExploration {
         let mut bucket_bytes = [0_u8; 8];
         bucket_bytes.copy_from_slice(&bucket_digest[..8]);
         let bucket = u64::from_be_bytes(bucket_bytes) % 1_000_000;
-        Ok(Some(EvalExperimentRef {
+        EvalExperimentRef {
             experiment_id: self.experiment_id.clone(),
             arm: if bucket < u64::from(self.challenger_exposure_ppm) {
                 ExperimentArm::Challenger
@@ -97,7 +107,7 @@ impl RouteExploration {
             assignment_unit,
             assignment_id_digest,
             challenger_propensity_ppm: self.challenger_exposure_ppm,
-        }))
+        }
     }
 }
 

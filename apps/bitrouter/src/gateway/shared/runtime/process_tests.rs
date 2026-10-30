@@ -5,6 +5,7 @@ mod cleanup;
 mod operator;
 mod operator_cli;
 
+use crate::runtime_crypto::DeploymentKey;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
@@ -17,7 +18,6 @@ use tokio::process::{Child, Command};
 
 use super::super::{
     authority::Authority,
-    crypto::DeploymentKey,
     publication::Configuration,
     schema,
     store::{self, Kind, Store},

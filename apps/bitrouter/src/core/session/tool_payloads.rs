@@ -4,6 +4,38 @@
 use super::*;
 use bitrouter_ai::core::protocol::ToolResultLimits;
 
+impl CoreSession {
+    pub(super) fn admitted_tool_result_limits(
+        &self,
+        state: &SessionSnapshot,
+        output_bytes: u64,
+    ) -> Result<ToolResultLimits, CoreError> {
+        let limits = admit(state, &self.shared.limits, output_bytes)?;
+        #[cfg(feature = "harness")]
+        let limits = if self.shared.owned.as_ref().is_some_and(|binding| {
+            state
+                .run
+                .as_ref()
+                .is_some_and(|run| binding.authority().experimental_model(&run.input.model))
+        }) {
+            // The experimental journal shares the original finite ACK budget.
+            // Freeze a smaller allowance before a NEW invocation; all five
+            // outcome/status slots still reserve this bound. Restored commands
+            // keep their original limits through limits() below.
+            ToolResultLimits {
+                artifact_bytes: limits.artifact_bytes.map(|bytes| bytes.min(64 * 1024)),
+                ..limits
+            }
+        } else {
+            limits
+        };
+        Ok(limits)
+    }
+}
+
+#[cfg(test)]
+mod tests;
+
 pub(super) fn admit(
     state: &SessionSnapshot,
     host: &Limits,

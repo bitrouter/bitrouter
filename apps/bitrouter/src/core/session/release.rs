@@ -171,6 +171,10 @@ impl CoreSession {
         let _input = self.shared.inputs.lock().await;
         validate_id(operation_id)?;
         let fingerprint = fingerprint(expected_revision)?;
+        #[cfg(feature = "harness")]
+        let owned = self.shared.owned.is_some();
+        #[cfg(not(feature = "harness"))]
+        let owned = false;
         if let Some(receipt) = self.replay(operation_id, &fingerprint).await? {
             return Ok(receipt);
         }
@@ -189,6 +193,13 @@ impl CoreSession {
             // A definite, paired tool result settles its effect even if the
             // original transport delivery lost its completion acknowledgement.
             if !settled(&live.state)
+                || (owned
+                    && live
+                        .state
+                        .context_store
+                        .decisions
+                        .values()
+                        .any(|entry| entry.outcome.is_none()))
                 || live
                     .model_controls
                     .iter()
@@ -214,7 +225,14 @@ impl CoreSession {
                     "release revision is stale",
                 ));
             }
-            if !settled(state) {
+            if !settled(state)
+                || (owned
+                    && state
+                        .context_store
+                        .decisions
+                        .values()
+                        .any(|entry| entry.outcome.is_none()))
+            {
                 return Err(reject(ErrorCode::Busy, "release boundary changed"));
             }
             let revision = head

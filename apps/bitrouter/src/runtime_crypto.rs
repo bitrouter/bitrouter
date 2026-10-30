@@ -1,4 +1,8 @@
-//! Deployment-key encryption with namespace, identity and revision binding.
+//! Application encryption primitives. Shared wire identities remain unchanged;
+//! local tenancy supplies independently framed, domain-separated identities.
+
+#[cfg(feature = "core")]
+pub(crate) mod trajectory;
 
 use anyhow::{Context, Result, ensure};
 use base64::Engine;
@@ -14,7 +18,7 @@ const MAX_SECRET_BYTES: usize = 1024 * 1024;
 const MAX_ENCODED_BYTES: usize = (MAX_SECRET_BYTES + 32) * 4 / 3 + 4;
 
 #[derive(Clone)]
-pub(super) struct DeploymentKey {
+pub(crate) struct DeploymentKey {
     secret: [u8; 32],
     id: String,
 }
@@ -39,8 +43,8 @@ impl DeploymentKey {
 
     /// Foundation helpers reconstruct peers in the same namespace. Retain one
     /// random deployment key per test process so those peers share authority.
-    #[cfg(test)]
-    pub(super) fn fixture() -> Result<Self> {
+    #[cfg(all(test, feature = "multi-instance"))]
+    pub(crate) fn fixture() -> Result<Self> {
         static SECRET: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
         Self::from_bytes(*SECRET.get_or_init(rand::random))
     }
@@ -81,7 +85,42 @@ impl DeploymentKey {
         Ok(hex::encode(mac.finalize().into_bytes()))
     }
 
+    #[cfg(any(test, feature = "multi-instance"))]
     pub fn seal(&self, identity: SecretIdentity<'_>, plaintext: &[u8]) -> Result<SealedSecret> {
+        self.seal_aad(&identity.aad(&self.id)?, plaintext)
+    }
+
+    /// Every field of `identity` is authenticated as structured JSON, without
+    /// concatenation or the shared backend's namespace/record length limits.
+    pub fn seal_bound(
+        &self,
+        purpose: &str,
+        identity: &impl Serialize,
+        plaintext: &[u8],
+    ) -> Result<SealedSecret> {
+        self.seal_aad(&self.bound_aad(purpose, identity)?, plaintext)
+    }
+
+    pub fn open_bound(
+        &self,
+        purpose: &str,
+        identity: &impl Serialize,
+        sealed: &SealedSecret,
+    ) -> Result<Vec<u8>> {
+        self.open_aad(&self.bound_aad(purpose, identity)?, sealed)
+    }
+
+    fn bound_aad(&self, purpose: &str, identity: &impl Serialize) -> Result<Vec<u8>> {
+        let aad =
+            serde_json::to_vec(&("bitrouter.tenancy.secret.v1", purpose, identity, self.id()))?;
+        ensure!(
+            aad.len() <= MAX_SECRET_BYTES,
+            "encryption identity exceeds byte limit"
+        );
+        Ok(aad)
+    }
+
+    fn seal_aad(&self, aad: &[u8], plaintext: &[u8]) -> Result<SealedSecret> {
         ensure!(
             plaintext.len() <= MAX_SECRET_BYTES,
             "shared secret exceeds byte limit"
@@ -97,7 +136,7 @@ impl DeploymentKey {
         self.key()?
             .seal_in_place_append_tag(
                 Nonce::assume_unique_for_key(nonce),
-                Aad::from(identity.aad(&self.id)?),
+                Aad::from(aad),
                 &mut ciphertext,
             )
             .map_err(|_| anyhow::anyhow!("encrypting shared secret failed"))?;
@@ -109,7 +148,12 @@ impl DeploymentKey {
         })
     }
 
+    #[cfg(any(test, feature = "multi-instance"))]
     pub fn open(&self, identity: SecretIdentity<'_>, sealed: &SealedSecret) -> Result<Vec<u8>> {
+        self.open_aad(&identity.aad(&self.id)?, sealed)
+    }
+
+    fn open_aad(&self, aad: &[u8], sealed: &SealedSecret) -> Result<Vec<u8>> {
         ensure!(
             sealed.format == 1 && sealed.key_id == self.id,
             "shared secret key or format mismatch"
@@ -128,7 +172,7 @@ impl DeploymentKey {
             .key()?
             .open_in_place(
                 Nonce::assume_unique_for_key(nonce),
-                Aad::from(identity.aad(&self.id)?),
+                Aad::from(aad),
                 &mut ciphertext,
             )
             .map_err(|_| anyhow::anyhow!("shared secret authentication failed"))?;
@@ -148,7 +192,7 @@ impl DeploymentKey {
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct SealedSecret {
+pub(crate) struct SealedSecret {
     format: u32,
     key_id: String,
     nonce: String,
@@ -166,12 +210,14 @@ impl std::fmt::Debug for SealedSecret {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct SecretIdentity<'a> {
+#[cfg(any(test, feature = "multi-instance"))]
+pub(crate) struct SecretIdentity<'a> {
     pub namespace: &'a str,
     pub record: &'a str,
     pub revision: u64,
 }
 
+#[cfg(any(test, feature = "multi-instance"))]
 impl SecretIdentity<'_> {
     fn aad(&self, key_id: &str) -> Result<Vec<u8>> {
         ensure!(
@@ -275,6 +321,77 @@ mod tests {
         let mut sealed = key.seal(identity, b"correlation-key")?;
         sealed.ciphertext.truncate(4);
         assert!(key.open(identity, &sealed).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn tenancy_binding_frames_full_ids_and_cannot_cross_legacy_domains() -> anyhow::Result<()> {
+        let key = DeploymentKey::from_bytes([7; 32])?;
+        let owner = "o".repeat(128);
+        let resource = "r".repeat(128);
+        let revision = "v".repeat(128);
+        let identity =
+            serde_json::json!(["installation", "tenant", owner, "route", resource, revision]);
+        let sealed = key.seal_bound("resource", &identity, b"private")?;
+        assert_eq!(key.open_bound("resource", &identity, &sealed)?, b"private");
+        assert!(key.open_bound("configuration", &identity, &sealed).is_err());
+        let mut other = identity.clone();
+        other[0] = serde_json::json!("other-installation");
+        assert!(key.open_bound("resource", &other, &sealed).is_err());
+        let left = serde_json::json!(["ab", "c"]);
+        let right = serde_json::json!(["a", "bc"]);
+        let sealed = key.seal_bound("resource", &left, b"private")?;
+        assert!(key.open_bound("resource", &right, &sealed).is_err());
+        assert!(
+            key.open(
+                SecretIdentity {
+                    namespace: "ab",
+                    record: "c",
+                    revision: 1
+                },
+                &sealed
+            )
+            .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn extracted_crypto_reads_the_existing_shared_ciphertext_format() -> anyhow::Result<()> {
+        use base64::Engine;
+        use ring::aead::{Aad, Nonce};
+        let key = DeploymentKey::from_bytes([7; 32])?;
+        // Construct the old wire format independently of the extracted seal API.
+        let aad = serde_json::to_vec(&(
+            "bitrouter.gateway.secret.v1",
+            "cluster",
+            "slot",
+            4_u64,
+            key.id(),
+        ))?;
+        let nonce = [11; 12];
+        let mut ciphertext = b"legacy-secret".to_vec();
+        key.key()?
+            .seal_in_place_append_tag(
+                Nonce::assume_unique_for_key(nonce),
+                Aad::from(aad),
+                &mut ciphertext,
+            )
+            .map_err(|_| anyhow::anyhow!("legacy fixture sealing failed"))?;
+        let wire = serde_json::json!({"format":1,"key_id":key.id(),
+            "nonce":super::STANDARD.encode(nonce),"ciphertext":super::STANDARD.encode(ciphertext)});
+        let sealed = serde_json::from_value(wire)?;
+        assert_eq!(
+            key.open(
+                SecretIdentity {
+                    namespace: "cluster",
+                    record: "slot",
+                    revision: 4
+                },
+                &sealed
+            )?,
+            b"legacy-secret"
+        );
         Ok(())
     }
 }

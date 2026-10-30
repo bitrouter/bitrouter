@@ -15,6 +15,7 @@ impl CoreSession {
         input: TaskInput,
     ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
+        self.check_owned()?;
         validate_id(operation_id)?;
         let fingerprint = digest(&json!({"type":"input.enqueue",
             "expected_state_revision":expected_revision,"input":input}))?;
@@ -24,6 +25,7 @@ impl CoreSession {
         validate_input(&input, &self.shared.limits)?;
         let run_id = id("run");
         self.transition_scoped(None, Some(&run_id), "input.enqueued", |state, head, _| {
+            self.check_owned()?;
             if head.state_revision != expected_revision {
                 return Err(reject(
                     ErrorCode::StaleRevision,
@@ -78,6 +80,7 @@ impl CoreSession {
         expected_revision: u64,
     ) -> Result<OperationReceipt, CoreError> {
         let _input = self.shared.inputs.lock().await;
+        self.check_owned()?;
         validate_id(operation_id)?;
         let fingerprint = digest(&json!({"type":"queue.resume",
             "expected_state_revision":expected_revision}))?;
@@ -99,6 +102,7 @@ impl CoreSession {
             ));
         }
         self.transition("queue.resumed", |state, head| {
+            self.check_owned()?;
             if head.state_revision != expected_revision {
                 return Err(reject(
                     ErrorCode::StaleRevision,
@@ -204,8 +208,12 @@ impl CoreSession {
         let Some(entry) = state.root_queue.pending.front() else {
             return Ok(false);
         };
+        if self.check_owned().is_err() {
+            return Ok(false);
+        }
         let outcome = self
             .transition_with_gate(None, "input.accepted", |state, head, dispatch| {
+                self.check_owned()?;
                 if !dispatch {
                     return Err(reject(
                         ErrorCode::CheckpointUnavailable,

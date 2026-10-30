@@ -454,7 +454,7 @@ impl Store {
             (1..=MAX_SCAN_ROWS).contains(&limit),
             "shared scan limit must be 1..256"
         );
-        self.bounded(async {
+        self.retry(|| async {
             let tx = self.begin().await?;
             let rows = entity::Entity::find()
                 .filter(entity::Column::Namespace.eq(&self.namespace))

@@ -498,3 +498,82 @@ async fn shutdown_cancels_background_work_and_preserves_the_uncertain_attempt() 
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn tenancy_host_does_not_discover_or_advance_legacy_work() -> Result<()> {
+    // Manual discovery would mutate checkpoint/cursor state without a model call;
+    // Automatic additionally has a real queued durable job ready to be claimed.
+    for mode in [EvolutionMode::Manual, EvolutionMode::Automatic] {
+        let fixture = fixture(mode).await?;
+        stop(&fixture, 2).await?;
+        if mode == EvolutionMode::Automatic {
+            discover(&fixture).await?;
+        }
+        let before_records = crate::storage::evolution::records::Entity::find()
+            .order_by_asc(crate::storage::evolution::records::Column::RecordId)
+            .all(&fixture.runtime.db)
+            .await?;
+        let before_checkpoints = fixture.canonical.checkpoints(&fixture.identity).await?;
+        let before_heads = crate::storage::capture::sessions::Entity::find()
+            .order_by_asc(crate::storage::capture::sessions::Column::SessionKey)
+            .all(&fixture.runtime.db)
+            .await?;
+        let stopped = CancellationToken::new();
+        let worker = EvolutionScheduler::start_legacy(
+            fixture.runtime.clone(),
+            Some(fixture.pipeline.clone()),
+            true,
+            crate::daemon_handoff::HandoffGate::default(),
+            stopped.clone(),
+        );
+        // This exercises the daemon's actual launch function, not its auth hook.
+        ensure!(worker.is_none(), "tenancy started a Legacy worker");
+        tokio::task::yield_now().await;
+        stopped.cancel();
+        ensure!(!fixture.runtime.worker_status().running);
+        ensure!(fixture.runtime.worker_status().last_started_at.is_none());
+        ensure!(fixture.calls.load(Ordering::SeqCst) == 0);
+        ensure!(
+            crate::storage::evolution::records::Entity::find()
+                .order_by_asc(crate::storage::evolution::records::Column::RecordId)
+                .all(&fixture.runtime.db)
+                .await?
+                == before_records
+        );
+        ensure!(
+            serde_json::to_value(fixture.canonical.checkpoints(&fixture.identity).await?)?
+                == serde_json::to_value(before_checkpoints)?
+        );
+        ensure!(
+            crate::storage::capture::sessions::Entity::find()
+                .order_by_asc(crate::storage::capture::sessions::Column::SessionKey)
+                .all(&fixture.runtime.db)
+                .await?
+                == before_heads
+        );
+        // Positive control: the same unmodified Legacy state is actionable.
+        let report = EvolutionScheduler::new(fixture.runtime.clone())
+            .tick(&fixture.pipeline)
+            .await?;
+        ensure!(report.errors.is_empty());
+        if mode == EvolutionMode::Manual {
+            ensure!(report.checkpoints_created == 1);
+        } else {
+            ensure!(report.jobs_completed == 1);
+        }
+        // Default local startup still owns and joins the same worker loop.
+        let local_stop = CancellationToken::new();
+        local_stop.cancel();
+        let task = EvolutionScheduler::start_legacy(
+            fixture.runtime.clone(),
+            Some(fixture.pipeline.clone()),
+            false,
+            crate::daemon_handoff::HandoffGate::default(),
+            local_stop,
+        )
+        .context("default local worker was suppressed")?;
+        task.await?;
+        ensure!(!fixture.runtime.worker_status().running);
+    }
+    Ok(())
+}

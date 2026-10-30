@@ -3,9 +3,9 @@
 use super::*;
 use crate::gateway::model::target::{AuthScheme, CredentialPriority};
 use crate::gateway::shared::{
-    authority::Authority, crypto::DeploymentKey, engine::Engine, schema, store::Store,
-    test_database::EmptyDatabase,
+    authority::Authority, engine::Engine, schema, store::Store, test_database::EmptyDatabase,
 };
+use crate::runtime_crypto::DeploymentKey;
 
 #[tokio::test]
 #[ignore = "requires PostgreSQL CREATEDB privilege"]

@@ -66,6 +66,9 @@ impl ControlAuth {
         let comparison_key = rand::random();
         for entry in entries {
             ensure!(valid_name(&entry.id, true), "invalid control credential ID");
+            if entry.scopes.contains(&ControlScope::Tenancy) {
+                bitrouter_ai::tenancy::identity::PrincipalId::for_control_credential(&entry.id)?;
+            }
             ensure!(
                 ids.insert(entry.id.clone()),
                 "duplicate control credential ID"
@@ -75,8 +78,10 @@ impl ControlAuth {
                 "invalid control credential token_env"
             );
             ensure!(
-                entry.scopes.contains(&ControlScope::Read),
-                "control credentials require control:read"
+                !entry.scopes.is_empty()
+                    && (!entry.scopes.contains(&ControlScope::Reload)
+                        || entry.scopes.contains(&ControlScope::Read)),
+                "control credentials require a scope; control:reload also requires control:read"
             );
             let unique_scopes: BTreeSet<_> = entry.scopes.iter().collect();
             ensure!(
@@ -218,5 +223,42 @@ mod tests {
         assert!(ControlAuth::from_lookup(&bad_env, |_| Some("a".repeat(32))).is_err());
         assert!(ControlAuth::from_lookup(&config(), |_| Some("short".into())).is_err());
         assert!(ControlAuth::from_lookup(&config(), |_| None).is_err());
+    }
+
+    #[test]
+    fn tenancy_operator_identity_is_bounded_and_survives_token_rotation() -> Result<()> {
+        use bitrouter_ai::tenancy::identity::PrincipalId;
+        let mut config = config();
+        config.credentials[0].scopes = vec![ControlScope::Tenancy];
+        for id in ["_Operator.one-2".into(), "x".repeat(119)] {
+            config.credentials[0].id = id.clone();
+            for token in ["a".repeat(32), "b".repeat(32)] {
+                let auth = ControlAuth::from_lookup(&config, |_| Some(token.clone()))?;
+                if token.starts_with('b') {
+                    assert!(auth.authenticate("a".repeat(32).as_bytes()).is_none());
+                }
+                let caller = auth
+                    .authenticate(token.as_bytes())
+                    .ok_or_else(|| anyhow::anyhow!("operator rejected"))?;
+                assert_eq!(
+                    PrincipalId::for_control_credential(caller.id())?.as_str(),
+                    format!("operator.{id}")
+                );
+            }
+        }
+        for length in [120, 256] {
+            config.credentials[0].id = "x".repeat(length);
+            assert!(ControlAuth::from_lookup(&config, |_| Some("a".repeat(32))).is_err());
+        }
+        config.credentials[0].scopes = vec![ControlScope::Read];
+        assert!(ControlAuth::from_lookup(&config, |_| Some("a".repeat(32))).is_ok());
+        assert_ne!(
+            PrincipalId::for_control_credential("Admin")?,
+            PrincipalId::for_control_credential("admin")?
+        );
+        for id in ["", "1operator", "operator:one", "operator/one", "操作员"] {
+            assert!(PrincipalId::for_control_credential(id).is_err());
+        }
+        Ok(())
     }
 }

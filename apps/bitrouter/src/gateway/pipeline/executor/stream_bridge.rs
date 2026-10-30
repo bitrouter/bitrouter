@@ -6,6 +6,9 @@ use bitrouter_ai::types::Content;
 
 #[derive(Default)]
 struct Source {
+    tenant_binding: Option<super::tenancy::BoundAuthentication>,
+    tenant_attempt: Option<bitrouter_ai::tenancy::identity::AttemptId>,
+    canonical_prompt: Option<[u8; 32]>,
     authority: Option<ContinuationAuthority>,
     storage_allowed: bool,
     effort_bound: bool,
@@ -18,6 +21,83 @@ struct Source {
 
 #[derive(Default)]
 pub(super) struct BridgeCapture(Mutex<Source>);
+
+fn tenant_native_responses(target: &RoutingTarget, ctx: &PipelineContext) -> bool {
+    target.api_protocol == ApiProtocol::Responses
+        && super::tenancy::has_execution(ctx)
+        && ctx
+            .extension::<super::super::native::NativeManagedRequest>()
+            .is_some()
+}
+
+fn stream_binding_error() -> BitrouterError {
+    super::super::native_continuation::continuation_error(ContinuationFailure::BindingChanged)
+}
+
+/// The bridge may force SSE without changing the admitted canonical request.
+/// Exhaustive fields prevent a future Prompt field from silently escaping this
+/// check. Borrowed comparison adds no prompt/history allocation.
+fn verify_native_stream_prompt(transport: &Prompt, canonical: &Prompt) -> Result<()> {
+    let Prompt {
+        model,
+        system,
+        system_provider_metadata,
+        messages,
+        tools,
+        params,
+        response_format,
+        tool_choice,
+        stream,
+    } = transport;
+    let Prompt {
+        model: expected_model,
+        system: expected_system,
+        system_provider_metadata: expected_metadata,
+        messages: expected_messages,
+        tools: expected_tools,
+        params: expected_params,
+        response_format: expected_format,
+        tool_choice: expected_choice,
+        stream: expected_stream,
+    } = canonical;
+    if (
+        model,
+        system,
+        system_provider_metadata,
+        messages,
+        tools,
+        params,
+        response_format,
+        tool_choice,
+    ) != (
+        expected_model,
+        expected_system,
+        expected_metadata,
+        expected_messages,
+        expected_tools,
+        expected_params,
+        expected_format,
+        expected_choice,
+    ) || (*expected_stream && !*stream)
+    {
+        return Err(stream_binding_error());
+    }
+    Ok(())
+}
+
+fn verify_native_stream_request(
+    transport: &Prompt,
+    canonical: &Prompt,
+    wire: Option<&serde_json::Value>,
+) -> Result<()> {
+    verify_native_stream_prompt(transport, canonical)?;
+    // Authenticated request bytes retain stream=true; the source proof does not
+    // substitute the canonical flag for the actual dispatch/send gate digest.
+    if wire.and_then(|body| body.get("stream")) != Some(&serde_json::Value::Bool(true)) {
+        return Err(stream_binding_error());
+    }
+    Ok(())
+}
 
 impl BridgeCapture {
     /// Full terminal output owns private continuation state. Stream policy must
@@ -76,17 +156,32 @@ impl BridgeCapture {
         request: &reqwest::Request,
         authority: Option<ContinuationAuthority>,
         prompt: &Prompt,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
     ) -> Result<()> {
         let wire: Option<serde_json::Value> = request
             .body()
             .and_then(reqwest::Body::as_bytes)
             .and_then(|bytes| serde_json::from_slice(bytes).ok());
+        let canonical_prompt = if tenant_native_responses(target, ctx) {
+            let canonical = ctx.generation_prompt().ok_or_else(stream_binding_error)?;
+            // The canonical prompt may be nonstreaming while its verified
+            // executor transport uses SSE. Prove that actual request separately.
+            verify_native_stream_request(prompt, canonical, wire.as_ref())?;
+            Some(
+                super::tenancy::native::prompt_digest(canonical)
+                    .ok_or_else(stream_binding_error)?,
+            )
+        } else {
+            None
+        };
         let effort = serde_json::to_value(prompt.params.reasoning_effort).map_err(|_| {
             crate::gateway::pipeline::native_continuation::continuation_error(
                 ContinuationFailure::BindingChanged,
             )
         })?;
         let mut source = self.source();
+        source.canonical_prompt = canonical_prompt;
         source.authority = authority;
         source.storage_allowed = wire
             .as_ref()
@@ -235,6 +330,39 @@ impl BridgeCapture {
             if !replayable {
                 super::super::native_continuation::mark_required_state(&mut folded.content);
             }
+            let prompt = if tenant_native_responses(target, ctx) {
+                let Some(canonical) = ctx.generation_prompt() else {
+                    return Ok(folded);
+                };
+                if verify_native_stream_prompt(prompt, canonical).is_err()
+                    || source.canonical_prompt.is_none()
+                    || super::tenancy::native::prompt_digest(canonical) != source.canonical_prompt
+                {
+                    // Keep already observed output/usage, but issue no proof
+                    // from a canonical view changed since request validation.
+                    return Ok(folded);
+                }
+                canonical
+            } else {
+                prompt
+            };
+            if let (Some(binding), Some(attempt), Some(authority)) = (
+                source.tenant_binding.as_ref(),
+                source.tenant_attempt.as_ref(),
+                source.authority.as_ref(),
+            ) {
+                binding.record_native_source(
+                    attempt.clone(),
+                    authority,
+                    prompt,
+                    &folded,
+                    super::tenancy::native::Storage {
+                        stored,
+                        replayable,
+                        effort_bound: source.effort_bound,
+                    },
+                );
+            }
             runtime.succeeded(prompt, target, source.authority.take(), &folded);
             runtime.stored_response(stored, replayable, source.effort_bound);
         }
@@ -258,7 +386,7 @@ impl HttpExecutor {
         Self::check_response_format(prompt, adapter, target)?;
 
         let mut error_scrubber = UpstreamErrorScrubber::new(None);
-        error_scrubber.capture_effective_target_key(target);
+        error_scrubber.capture_target(target, ctx);
         error_scrubber.redactor.capture_prompt_continuity(prompt);
         let url = transport.endpoint_url(&target.model_target(), true);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -267,19 +395,25 @@ impl HttpExecutor {
             target,
             ctx.extension::<super::super::native::NativeManagedRequest>()
                 .is_some()
-                || super::shared::has_admission(ctx),
+                || super::shared::has_admission(ctx)
+                || super::tenancy::has_execution(ctx),
         );
 
+        let mut http_source = if target.api_protocol == ApiProtocol::Responses {
+            HttpSource::new(prompt, ctx)
+        } else {
+            None
+        };
         let mut attempted_auth_refresh = false;
-        let (response, mut shared_attempt) = loop {
+        let (response, mut shared_attempt, mut tenant_attempt) = loop {
             let mut body =
                 self.render_execution_request(adapter.as_ref(), target, prompt, ctx, true)?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-            if self.auth_appliers.lookup(&target.provider_name).is_some() {
+            if self.needs_body_shaping(target, ctx)? {
                 native_work::observe(
                     ctx,
                     NativeProviderWorkKind::AuthenticationPreparation,
-                    self.shape_request_body(&mut body, target),
+                    self.shape_request_body(&mut body, target, ctx),
                     |_| None,
                 )
                 .await
@@ -309,20 +443,33 @@ impl HttpExecutor {
                 .map_err(|error| error_scrubber.scrub_error(error))?;
             let mut shared_attempt =
                 super::shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
-            let (request, authority) = applied.into_parts();
+            let tenant_binding = applied.tenant_binding();
+            let (mut request, authority, mut tenant_attempt) = applied.into_parts();
             if let Some(capture) = &capture {
-                capture.authenticated(&request, authority, prompt)?;
+                capture.authenticated(&request, authority.clone(), prompt, target, ctx)?;
             }
+            if let Some(source) = &mut http_source {
+                source.authenticated(&request, authority, prompt);
+            }
+
             error_scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
+            let mut native_attempt = None;
             let response = native_work::observe(
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
                 async {
                     record_native_dispatch(prompt, target, ctx)?;
+                    native_attempt = super::tenancy::admit_send(
+                        tenant_binding.as_ref(),
+                        &mut tenant_attempt,
+                        &mut request,
+                        target,
+                        ctx,
+                    )?;
                     client
                         .send(request, &CancellationToken::new())
                         .await
@@ -333,13 +480,21 @@ impl HttpExecutor {
             .await?;
 
             let status = response.status();
+            receipt::status(&mut tenant_attempt, status.as_u16())?;
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
             if status.is_success() {
-                if let Some(capture) = &capture {
-                    capture.source().scrubber = Some(error_scrubber.clone());
+                if let Some(source) = &mut http_source {
+                    source.binding = tenant_binding.clone();
+                    source.attempt = native_attempt.clone();
                 }
-                break (response, shared_attempt);
+                if let Some(capture) = &capture {
+                    let mut source = capture.source();
+                    source.scrubber = Some(error_scrubber.clone());
+                    source.tenant_binding = tenant_binding;
+                    source.tenant_attempt = native_attempt;
+                }
+                break (response, shared_attempt, tenant_attempt);
             }
             shared_attempt.rejected(status.as_u16()).await?;
             let text = response_body::read(response, ctx)
@@ -355,6 +510,7 @@ impl HttpExecutor {
                 attempted_auth_refresh = true;
                 continue;
             }
+            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             let scrubbed = error_scrubber.scrub_body(&text);
             return Err(classify_upstream_error(
                 status.as_u16(),
@@ -389,8 +545,9 @@ impl HttpExecutor {
                         };
                         match decoder.decode(&sse) {
                             Ok(parts) => {
+                                if let Err(error) = receipt::batch(&tenant_attempt, &parts, held_terminal.is_some()).and_then(|()| receipt::event(&mut tenant_attempt, &protocol, &sse)) { drop(tenant_attempt.take()); yield Err(error); return; }
                                 if let Err(error) = shared_attempt.observe_batch(&parts, held_terminal.is_some()) {
-                                    yield Err(error);
+                                    drop(tenant_attempt.take()); yield Err(error);
                                     return;
                                 }
                                 if let Some(part) = decoder.pending_terminal() {
@@ -398,12 +555,20 @@ impl HttpExecutor {
                                 }
                                 if let Some(capture) = &capture
                                     && let Err(error) = capture.terminal(&sse) {
+                                    drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(error));
+                                    return;
+                                }
+                                if let Some(source) = &mut http_source
+                                    && let Err(error) = source.terminal(&sse)
+                                {
+                                    drop(tenant_attempt.take());
                                     yield Err(error_scrubber.scrub_error(error));
                                     return;
                                 }
                                 for p in parts {
+                                    if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                                     terminal |= p.is_terminal();
-                                    if shared_attempt.is_shared() && p.is_terminal() { held_terminal = Some(p); continue; }
+                                    if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
                                     yield Ok(p);
                                 }
                             }
@@ -417,6 +582,13 @@ impl HttpExecutor {
                                 if matches!(&e, crate::gateway::model::error::ModelError::Provider { .. } | crate::gateway::model::error::ModelError::PolicyViolation { .. })
                                     && let Err(error) = shared_attempt.failed_stream().await
                                 {
+                                    drop(tenant_attempt.take()); yield Err(error);
+                                    return;
+                                }
+                                if matches!(&e, crate::gateway::model::error::ModelError::Provider { .. } | crate::gateway::model::error::ModelError::PolicyViolation { .. })
+                                    && let Err(error) = receipt::event(&mut tenant_attempt, &protocol, &sse).and_then(|()| receipt::complete(&mut tenant_attempt, false))
+                                {
+                                    drop(tenant_attempt.take());
                                     yield Err(error);
                                     return;
                                 }
@@ -425,7 +597,7 @@ impl HttpExecutor {
                                     yield Ok(StreamPart::Usage { usage: reported.clone() });
                                     if let BitrouterError::UpstreamInvalidResponse { usage, .. } = &mut error { *usage = Some(Box::new(reported)); }
                                 }
-                                yield Err(error_scrubber.scrub_error(error));
+                                drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(error));
                                 return;
                             }
                         }
@@ -438,39 +610,166 @@ impl HttpExecutor {
                             eventsource_stream::EventStreamError::Transport(error) => error,
                             other => stream_transport_error(false, &other),
                         };
-                        yield Err(error_scrubber.scrub_error(error));
+                        drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(error));
                         return;
                     }
                 }
             }
             match decoder.finish() {
                 Ok(parts) => {
+                    if let Err(error) = receipt::batch(&tenant_attempt, &parts, held_terminal.is_some()) { drop(tenant_attempt.take()); yield Err(error); return; }
                     if let Err(error) = shared_attempt.observe_batch(&parts, held_terminal.is_some()) {
-                        yield Err(error);
+                        drop(tenant_attempt.take()); yield Err(error);
                         return;
                     }
                     for p in parts {
+                        if let Some(source) = &mut http_source { source.delivered.observe(&p); }
                         terminal |= p.is_terminal();
-                        if shared_attempt.is_shared() && p.is_terminal() { held_terminal = Some(p); continue; }
+                        if (shared_attempt.is_shared() || tenant_attempt.is_some() || http_source.is_some()) && p.is_terminal() { held_terminal = Some(p); continue; }
                         yield Ok(p);
                     }
                 }
                 Err(e) => {
-                    yield Err(error_scrubber.scrub_error(classify_stream_decoder_error(e)));
+                    drop(tenant_attempt.take()); yield Err(error_scrubber.scrub_error(classify_stream_decoder_error(e)));
                     return;
                 }
             }
             if !terminal {
-                yield Err(BitrouterError::UpstreamInvalidResponse { message: "upstream stream ended without a model terminal part".into(), usage: None });
+                drop(tenant_attempt.take()); yield Err(BitrouterError::UpstreamInvalidResponse { message: "upstream stream ended without a model terminal part".into(), usage: None });
                 return;
             }
-            if let Err(error) = shared_attempt.finish_stream().await { yield Err(error); return; }
+            if let Some(part) = &held_terminal
+                && let Err(error) = receipt::complete(&mut tenant_attempt, receipt::successful(part))
+            {
+                drop(tenant_attempt.take());
+                yield Err(error);
+                return;
+            }
+            if let Err(error) = shared_attempt.finish_stream().await { drop(tenant_attempt.take()); yield Err(error); return; }
+            // Receipt completion is evidence, not publication authority. Preserve
+            // 034's original terminal/EOF proof and raw replayability before the
+            // exact actual-send permit leaves its producer.
+            if let Some(source)=http_source {source.publish();}
+            drop(tenant_attempt.take());
             if let Some(part) = held_terminal { yield Ok(part); }
         };
 
         Ok(Box::pin(
             crate::gateway::providers::google_chat::bind_stream(stream, target.model_target()),
         ))
+    }
+}
+
+// Only a fixed-size terminal commitment and bounded provider ID survive an
+// event. The normal 16MiB incremental ingress bound governs JSON decoding.
+struct HttpSource {
+    input: super::tenancy::http_continuation::Input,
+    binding: Option<super::tenancy::BoundAuthentication>,
+    attempt: Option<bitrouter_ai::tenancy::identity::AttemptId>,
+    authority: Option<ContinuationAuthority>,
+    allowed: bool,
+    effort_bound: bool,
+    delivered: crate::gateway::model::protocol::responses::StreamingAssistantTurnCommitment,
+    terminal: Option<(
+        String,
+        Option<crate::gateway::model::protocol::responses::AssistantTurnCommitment>,
+        bool,
+    )>,
+}
+impl HttpSource {
+    fn new(prompt: &Prompt, ctx: &PipelineContext) -> Option<Self> {
+        Some(Self {
+            input: super::tenancy::http_continuation::Input::new(prompt, ctx)?,
+            binding: None,
+            attempt: None,
+            authority: None,
+            allowed: false,
+            effort_bound: false,
+            delivered: Default::default(),
+            terminal: None,
+        })
+    }
+    fn authenticated(
+        &mut self,
+        request: &reqwest::Request,
+        authority: Option<ContinuationAuthority>,
+        prompt: &Prompt,
+    ) {
+        let wire = request
+            .body()
+            .and_then(reqwest::Body::as_bytes)
+            .and_then(|body| serde_json::from_slice::<serde_json::Value>(body).ok());
+        self.allowed = wire.as_ref().is_some_and(|body| {
+            body.get("store") != Some(&serde_json::Value::Bool(false))
+                && body.get("stream") == Some(&serde_json::Value::Bool(true))
+        });
+        self.effort_bound = wire.as_ref().is_some_and(|body| {
+            body.get("reasoning")
+                .and_then(|r| r.get("effort"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Null)
+                == serde_json::to_value(prompt.params.reasoning_effort)
+                    .unwrap_or(serde_json::Value::Null)
+        });
+        self.authority = authority;
+    }
+    fn terminal(&mut self, event: &SseEvent) -> Result<()> {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&event.data) else {
+            return Ok(());
+        };
+        if !matches!(
+            value
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .or(event.event.as_deref()),
+            Some("response.completed" | "response.incomplete")
+        ) {
+            return Ok(());
+        }
+        let response = value
+            .get("response")
+            .ok_or_else(|| BitrouterError::bad_request("HTTP continuation terminal missing"))?;
+        let id = response
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 512)
+            .ok_or_else(|| {
+                BitrouterError::bad_request("HTTP continuation terminal identifier invalid")
+            })?;
+        if self.terminal.is_some() {
+            return Err(BitrouterError::bad_request(
+                "HTTP continuation terminal repeated",
+            ));
+        }
+        self.terminal = Some((
+            id.into(),
+            crate::gateway::model::protocol::responses::output_replayable(response)
+                .then(|| {
+                    crate::gateway::model::protocol::responses::terminal_assistant_turn_commitment(
+                        response,
+                    )
+                })
+                .flatten(),
+            response.get("store") == Some(&serde_json::Value::Bool(true)),
+        ));
+        Ok(())
+    }
+    fn publish(self) {
+        if let (Some(binding), Some(attempt), Some(authority), Some((id, turn, stored))) =
+            (self.binding, self.attempt, self.authority, self.terminal)
+        {
+            binding.record_http_source(
+                self.input,
+                attempt,
+                &authority,
+                Some(&id),
+                super::tenancy::http_continuation::Output {
+                    delivered: self.delivered.finish(),
+                    reconstructible: turn,
+                    stored: stored && self.allowed && self.effort_bound,
+                },
+            );
+        }
     }
 }
 
@@ -511,6 +810,76 @@ mod lite_tests {
     use crate::gateway::model::protocol::OutboundAdapter;
     use crate::gateway::model::protocol::responses::ResponsesAdapter;
     use bitrouter_ai::types::Content;
+
+    #[test]
+    fn native_sse_binding_allows_only_the_transport_flag_and_requires_actual_sse()
+    -> anyhow::Result<()> {
+        use bitrouter_ai::types::{Message, Role};
+        let canonical = Prompt {
+            model: "literal-route".into(),
+            system: None,
+            system_provider_metadata: Default::default(),
+            messages: vec![Message::text(Role::User, "original")],
+            tools: Vec::new(),
+            params: Default::default(),
+            response_format: None,
+            tool_choice: None,
+            stream: false,
+        };
+        let wire = serde_json::json!({"stream":true});
+        let mut transport = canonical.clone();
+        transport.stream = true;
+        verify_native_stream_request(&transport, &canonical, Some(&wire))?;
+        // Forced-SSE providers can render stream=true from a canonical prompt
+        // without an intermediate stream=true Prompt clone.
+        verify_native_stream_request(&canonical, &canonical, Some(&wire))?;
+        for invalid in [
+            None,
+            Some(serde_json::json!({})),
+            Some(serde_json::json!({"stream":false})),
+        ] {
+            assert!(
+                verify_native_stream_request(&transport, &canonical, invalid.as_ref()).is_err()
+            );
+        }
+        for (field, changed) in [
+            ("model", serde_json::json!("other")),
+            ("system", serde_json::json!("changed instruction")),
+            (
+                "system_provider_metadata",
+                serde_json::json!({"provider":{"changed":true}}),
+            ),
+            (
+                "messages",
+                serde_json::to_value(vec![Message::text(Role::User, "changed")])?,
+            ),
+            (
+                "tools",
+                serde_json::json!([{"type":"function","name":"changed","parameters":{"type":"object"}}]),
+            ),
+            ("params", serde_json::json!({"max_tokens":7})),
+            (
+                "response_format",
+                serde_json::json!({"type":"json_schema","schema":{"type":"object"}}),
+            ),
+            ("tool_choice", serde_json::json!("required")),
+        ] {
+            let mut value = serde_json::to_value(&transport)?;
+            value[field] = changed;
+            let changed: Prompt = serde_json::from_value(value)?;
+            assert!(
+                verify_native_stream_request(&changed, &canonical, Some(&wire)).is_err(),
+                "{field}"
+            );
+        }
+        // The actual prompt proof stays exact; neither the hash function nor
+        // NativePrivateContextRuntime's final canonical equality is weakened.
+        assert_ne!(
+            super::super::tenancy::native::prompt_digest(&transport),
+            super::super::tenancy::native::prompt_digest(&canonical)
+        );
+        Ok(())
+    }
 
     fn event(value: serde_json::Value) -> SseEvent {
         SseEvent {

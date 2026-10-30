@@ -10,6 +10,7 @@ mod chart;
 mod distribution;
 mod registry;
 mod schema;
+mod tenancy;
 
 #[derive(Debug, Parser)]
 #[command(name = "dist-helper")]
@@ -45,6 +46,8 @@ enum Command {
     },
     /// Check every committed dist artifact managed by this helper.
     Check,
+    /// Validate proposed resource-tenancy wire fixtures and migration inputs.
+    TenancyContracts,
 }
 
 #[derive(Debug, Subcommand)]
@@ -114,6 +117,7 @@ async fn run(cli: Cli) -> Result<()> {
             schema::generate(&root, true)?;
             registry::build(&root, true)
         }
+        Command::TenancyContracts => tenancy::validate(&root),
     }
 }
 

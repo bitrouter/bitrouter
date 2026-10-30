@@ -255,3 +255,168 @@ async fn postgres_get_retries_serialization_abort_with_a_fresh_transaction() -> 
     .and_then(|result| result);
     database.finish(result).await
 }
+
+#[tokio::test]
+#[ignore = "requires PostgreSQL CREATEDB privilege"]
+async fn postgres_due_states_retries_serialization_abort_with_filtered_fresh_scan() -> Result<()> {
+    use serde_json::{Value, json};
+
+    let mut database = EmptyDatabase::create().await?;
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        // One connection requires cleanup of the aborted transaction before
+        // the production retry can begin another Serializable transaction.
+        let db = database.connect(1, Duration::from_secs(2)).await?;
+        let store = Store::new(db.clone(), "due-retry-test", Duration::from_secs(2))?;
+        let foreign = Store::new(db.clone(), "foreign-due-test", Duration::from_secs(2))?;
+        crate::gateway::shared::schema::initialize(&store).await?;
+        let tx = store.begin().await?;
+        let mut expected = Vec::new();
+        for (owner, kind, key, status, due, included) in [
+            (&store, Kind::Outbox, "first", "pending", Some(10), true),
+            (&store, Kind::Outbox, "tie-a", "retry", Some(20), true),
+            (&store, Kind::Outbox, "tie-b", "pending", Some(20), true),
+            (&store, Kind::Outbox, "boundary", "retry", Some(30), true),
+            (&store, Kind::Outbox, "future", "pending", Some(31), false),
+            (&store, Kind::Outbox, "undated", "pending", None, false),
+            (
+                &store,
+                Kind::Outbox,
+                "wrong-status",
+                "delivered",
+                Some(0),
+                false,
+            ),
+            (
+                &store,
+                Kind::Execution,
+                "wrong-kind",
+                "pending",
+                Some(0),
+                false,
+            ),
+            (&foreign, Kind::Outbox, "first", "pending", Some(0), false),
+        ] {
+            let value = json!({"key":key,"namespace":owner.namespace()});
+            ensure!(
+                owner
+                    .create(
+                        &tx,
+                        NewRecord {
+                            kind,
+                            key,
+                            status,
+                            due_at_ms: due,
+                            now_ms: 1,
+                            value: &value,
+                        }
+                    )
+                    .await?
+            );
+            if included {
+                expected.push(
+                    owner
+                        .read::<Value>(&tx, kind, key)
+                        .await?
+                        .context("seeded due fixture record missing")?,
+                );
+            }
+        }
+        tx.commit().await?;
+        expected.sort_by(|left, right| {
+            left.row
+                .due_at_ms
+                .cmp(&right.row.due_at_ms)
+                .then_with(|| left.row.id.cmp(&right.row.id))
+        });
+        ensure!(expected.len() == 4);
+
+        // The owned database's view injects a real SQLSTATE at SELECT, without
+        // a production hook, RLS or a race-dependent SSI schedule. Sequence
+        // increments survive rollback; the volatile set-returning function is
+        // executed once per scan, before the caller's filters/order/limit.
+        // https://www.postgresql.org/docs/current/sql-createfunction.html
+        // https://www.postgresql.org/docs/current/functions-sequence.html
+        db.execute_unprepared(
+            "ALTER TABLE gateway_shared_records RENAME TO due_fixture_records;
+             CREATE SEQUENCE due_read_attempts;
+             CREATE FUNCTION due_fixture_read() RETURNS SETOF due_fixture_records
+             LANGUAGE plpgsql VOLATILE AS $$
+             BEGIN
+                 IF current_setting('transaction_isolation') <> 'serializable' THEN
+                     RAISE EXCEPTION 'due_states changed the expected transaction isolation';
+                 END IF;
+                 IF nextval('due_read_attempts') = 1 THEN
+                     RAISE EXCEPTION 'fixture first due SELECT serialization abort'
+                         USING ERRCODE = '40001';
+                 END IF;
+                 RETURN QUERY SELECT * FROM due_fixture_records;
+             END;
+             $$;
+             CREATE VIEW gateway_shared_records AS SELECT * FROM due_fixture_read();",
+        )
+        .await?;
+
+        // Call the actual production scan without a fixture retry. The baseline
+        // fails here on 40001. A successful fresh scan must not substitute empty
+        // results, include another namespace/kind/status, or drop its row limit.
+        // Limit two also cuts the tied due-time group, exercising the ID order.
+        let actual = store
+            .due_states::<Value>(Kind::Outbox, &["pending", "retry"], 30, 2)
+            .await?;
+        ensure!(
+            actual.len() == 2,
+            "retried due scan lost its limit or pending rows"
+        );
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            ensure!(
+                actual.row == expected.row && actual.value == expected.value,
+                "retried due scan returned a different row or ordering"
+            );
+        }
+        let attempts = db
+            .query_one(Statement::from_string(
+                DatabaseBackend::Postgres,
+                "SELECT last_value FROM due_read_attempts",
+            ))
+            .await?
+            .context("due SELECT attempt count missing")?;
+        ensure!(
+            attempts.try_get::<i64>("", "last_value")? == 2,
+            "due scan did not make exactly one fresh transaction retry"
+        );
+
+        // An untruncated scan proves the due cutoff and NULL exclusion even
+        // though those rows sort beyond the first scan's limit. The cutoff is
+        // inclusive, and both requested statuses must survive filtering.
+        let all = store
+            .due_states::<Value>(Kind::Outbox, &["pending", "retry"], 30, 256)
+            .await?;
+        ensure!(
+            all.len() == expected.len(),
+            "due scan changed the filtered set"
+        );
+        for (actual, expected) in all.iter().zip(expected.iter()) {
+            ensure!(
+                actual.row == expected.row && actual.value == expected.value,
+                "full due scan changed a row or ordering"
+            );
+        }
+
+        // Exercise the single-status wrapper used by the process test's outbox
+        // poll. Its successful observation must still report pending work.
+        let pending = store.due::<Value>(Kind::Outbox, "pending", 30, 256).await?;
+        let wanted: Vec<_> = expected
+            .iter()
+            .filter(|row| row.status() == "pending")
+            .collect();
+        ensure!(pending.len() == wanted.len() && !pending.is_empty());
+        for (actual, expected) in pending.iter().zip(wanted) {
+            ensure!(actual.row == expected.row && actual.value == expected.value);
+        }
+        Ok(())
+    })
+    .await
+    .context("due serialization retry campaign deadline")
+    .and_then(|result| result);
+    database.finish(result).await
+}

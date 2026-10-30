@@ -11,6 +11,7 @@
 //! the outbound (provider) protocol is chosen per routing target.
 
 pub(crate) mod managed_profile;
+mod tenant_receipts;
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -165,9 +166,13 @@ impl App {
         let options = RouterOptions {
             omit_v1_models: false,
             mcp_aggregate_route: self.mcp_aggregate_route().map(String::from),
-            router_wrapper: wrapper,
+            router_wrapper: None,
         };
-        let router = build_router_with_options(state, options);
+        let router = self.owned_inference_router(build_router_with_options(state, options));
+        let router = match wrapper {
+            Some(wrapper) => wrapper(router),
+            None => router,
+        };
         tracing::info!(listen = ?listener.local_addr(), "bitrouter listening");
         // Graceful shutdown: on SIGINT/SIGTERM
         // stop accepting new connections and let in-flight requests finish.
@@ -1399,17 +1404,6 @@ async fn execute_input(
         Arc<crate::gateway::shared::admitted::SharedAdmission>,
     >,
 ) -> Response {
-    let adapter = if inbound == ApiProtocol::Decisions {
-        None
-    } else {
-        match inbound_adapter_for(&inbound) {
-            Some(adapter) => Some(adapter),
-            None => {
-                return BitrouterError::bad_request("unsupported inbound model protocol")
-                    .into_response();
-            }
-        }
-    };
     let (input, original_model) = match input {
         PipelineInput::Generation(prompt) => {
             let (prompt, original_model) =
@@ -1463,22 +1457,294 @@ async fn execute_input(
         admission.attach(&mut req);
     }
 
+    render_execution(
+        state.language_model.clone(),
+        req,
+        inbound,
+        input,
+        request_id,
+    )
+    .await
+}
+
+/// The tenant ingress has already checked its literal route namespace. Keep it
+/// separate from host aliases/transforms, then share the exact response renderer
+/// and detached/streaming lifecycle used by ordinary inference.
+pub(crate) async fn handle_tenant(
+    service: &crate::tenancy::Service,
+    submission: crate::tenancy::execution::Submission,
+    mut headers: HeaderMap,
+    inbound: ApiProtocol,
+    input: PipelineInput,
+    ingress: impl Send,
+) -> Response {
+    // The opaque capture capability is never observed or converted upstream.
+    headers.remove(crate::tenancy::execution::BLOCK_LINK_HEADER);
+    let raw_model = match &input {
+        PipelineInput::Generation(prompt) => &prompt.model,
+        PipelineInput::Decisions(request) => &request.model,
+    };
+    let execution = match service
+        .admit_execution(submission, raw_model, &inbound)
+        .await
+    {
+        Ok(execution) => execution,
+        Err(error) => return error.into_response(),
+    };
+    drop(ingress);
+    let pipeline = match execution.pipeline() {
+        Ok(pipeline) => pipeline,
+        Err(error) => {
+            drop(input);
+            return tenant_setup_failure(&execution, error).await;
+        }
+    };
+    let mut req = match &input {
+        PipelineInput::Generation(prompt) => PipelineRequest::new(
+            raw_model.clone(),
+            execution.caller(),
+            prompt.as_ref().clone(),
+        ),
+        PipelineInput::Decisions(request) => {
+            PipelineRequest::new_decisions(raw_model.clone(), execution.caller(), request.clone())
+        }
+    };
+    let request_id = execution.id().to_string();
+    req.request_id = request_id.clone();
+    req.original_model = raw_model.clone();
+    req.headers = headers;
+    req.inbound_protocol = Some(inbound.clone());
+    if let Err(error) = execution.attach(pipeline.clone(), &mut req) {
+        drop((req, input));
+        return tenant_setup_failure(&execution, error).await;
+    }
+    let registration = match req
+        .extensions
+        .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
+        .cloned()
+    {
+        Some(registration) => registration,
+        None => {
+            drop((req, input));
+            return tenant_setup_failure(&execution, BitrouterError::UpstreamUnavailable).await;
+        }
+    };
+    let receipt = match execution.receipt_owner() {
+        Ok(receipt) => receipt.clone(),
+        Err(error) => {
+            drop((req, input));
+            return tenant_setup_failure(&execution, error).await;
+        }
+    };
+    let (sender, mut receiver) = match crate::tenancy::receipts::output::channel(&receipt) {
+        Ok(channel) => channel,
+        Err(error) => {
+            drop((req, input, registration));
+            return tenant_setup_failure(&execution, error).await;
+        }
+    };
+    let Some(tasks) = pipeline.owned_tasks().cloned() else {
+        drop((req, input, registration));
+        return tenant_setup_failure(&execution, BitrouterError::UpstreamUnavailable).await;
+    };
+    let waiting_receipt = receipt.clone();
+    let waiting_id = request_id.clone();
+    tasks.spawn_execution(async move {
+        let streamed = input
+            .generation_prompt()
+            .is_some_and(|prompt| prompt.stream);
+        let prepared =
+            prepare_http_response(pipeline.clone(), req, inbound, input, request_id).await;
+        let PreparedHttpResponse {
+            response,
+            mut delivery,
+            ..
+        } = prepared;
+        let response = if !response.status().is_success() && delivery.is_none() {
+            match receipt
+                .finish_or_join(bitrouter_ai::tenancy::execution::Outcome::Failed)
+                .await
+            {
+                Ok(()) => response,
+                Err(code) => execution.reject(code).into_response(),
+            }
+        } else {
+            response
+        };
+        let response = tenant_failure(&execution, response);
+        let response_id = HeaderValue::from_str(execution.id().as_str()).ok();
+        let mut response = if streamed && response.status().is_success() {
+            response
+        } else {
+            match tenant_receipts::bounded_json(response, &pipeline, execution, registration) {
+                Ok(response) => response,
+                Err(error) => {
+                    if let Some(HttpDelivery::Success(permit) | HttpDelivery::Failed(permit, _)) =
+                        delivery.take()
+                    {
+                        delivery = Some(HttpDelivery::Failed(permit, error.clone()));
+                    }
+                    error.into_response()
+                }
+            }
+        };
+        if let Some(id) = response_id {
+            response
+                .headers_mut()
+                .insert(BITROUTER_REQUEST_ID_HEADER, id);
+        }
+        let _ = sender
+            .send(PreparedHttpResponse {
+                response,
+                delivery,
+                receipt: Some(Arc::downgrade(&receipt)),
+            })
+            .await;
+    });
+    match receiver.recv().await {
+        Some(prepared) => prepared.finish().await,
+        None => {
+            let _ = waiting_receipt
+                .finish_or_join(bitrouter_ai::tenancy::execution::Outcome::Failed)
+                .await;
+            let mut response = waiting_receipt.http_failure().map_or_else(
+                || BitrouterError::UpstreamUnavailable.into_response(),
+                IntoResponse::into_response,
+            );
+            if let Ok(id) = HeaderValue::from_str(&waiting_id) {
+                response
+                    .headers_mut()
+                    .insert(BITROUTER_REQUEST_ID_HEADER, id);
+            }
+            response
+        }
+    }
+}
+
+async fn tenant_setup_failure(
+    execution: &crate::tenancy::execution::TenantExecution,
+    error: BitrouterError,
+) -> Response {
+    let result = execution
+        .terminal_receipt(bitrouter_ai::tenancy::execution::Outcome::Failed)
+        .await;
+    let mut response = tenant_failure(execution, result.err().unwrap_or(error).into_response());
+    if let Ok(id) = HeaderValue::from_str(execution.id().as_str()) {
+        response
+            .headers_mut()
+            .insert(BITROUTER_REQUEST_ID_HEADER, id);
+    }
+    response
+}
+
+fn tenant_failure(
+    execution: &crate::tenancy::execution::TenantExecution,
+    response: Response,
+) -> Response {
+    if response.status().is_success() {
+        return response;
+    }
+    let Some(failure) = execution.failure() else {
+        return response;
+    };
+    let mut rejected = failure.into_response();
+    if let Some(request_id) = response.headers().get(BITROUTER_REQUEST_ID_HEADER) {
+        rejected
+            .headers_mut()
+            .insert(BITROUTER_REQUEST_ID_HEADER, request_id.clone());
+    }
+    rejected
+}
+
+enum HttpDelivery {
+    Success(crate::gateway::pipeline::execution::DeliveryPermit),
+    Failed(
+        crate::gateway::pipeline::execution::DeliveryPermit,
+        BitrouterError,
+    ),
+}
+struct PreparedHttpResponse {
+    response: Response,
+    delivery: Option<HttpDelivery>,
+    receipt: Option<std::sync::Weak<crate::tenancy::receipts::owner::Owner>>,
+}
+impl PreparedHttpResponse {
+    async fn finish(self) -> Response {
+        let result = match self.delivery {
+            Some(HttpDelivery::Success(permit)) => permit.deliver().await,
+            Some(HttpDelivery::Failed(permit, error)) => permit.fail(error).await,
+            None => Ok(()),
+        };
+        match result {
+            Ok(()) => self.response,
+            Err(error) => {
+                let mut response = match self.receipt.as_ref().and_then(std::sync::Weak::upgrade) {
+                    Some(receipt) => receipt
+                        .http_failure()
+                        .map_or_else(|| error.into_response(), IntoResponse::into_response),
+                    None => error.into_response(),
+                };
+                if let Some(id) = self.response.headers().get(BITROUTER_REQUEST_ID_HEADER) {
+                    response
+                        .headers_mut()
+                        .insert(BITROUTER_REQUEST_ID_HEADER, id.clone());
+                }
+                response
+            }
+        }
+    }
+}
+async fn render_execution(
+    pipeline: Arc<Pipeline>,
+    req: PipelineRequest,
+    inbound: ApiProtocol,
+    input: PipelineInput,
+    request_id: String,
+) -> Response {
+    prepare_http_response(pipeline, req, inbound, input, request_id)
+        .await
+        .finish()
+        .await
+}
+async fn prepare_http_response(
+    pipeline: Arc<Pipeline>,
+    req: PipelineRequest,
+    inbound: ApiProtocol,
+    input: PipelineInput,
+    request_id: String,
+) -> PreparedHttpResponse {
+    let adapter = if inbound == ApiProtocol::Decisions {
+        None
+    } else {
+        match inbound_adapter_for(&inbound) {
+            Some(adapter) => Some(adapter),
+            None => {
+                return PreparedHttpResponse {
+                    response: BitrouterError::bad_request("unsupported inbound model protocol")
+                        .into_response(),
+                    delivery: None,
+                    receipt: None,
+                };
+            }
+        }
+    };
+
+    let tenant = req
+        .extensions
+        .get::<Arc<crate::tenancy::execution::TenantExecution>>()
+        .is_some();
+    let mut delivery = None;
     let mut response = if input
         .generation_prompt()
         .is_some_and(|prompt| prompt.stream)
     {
-        stream_response(state.language_model.clone(), req, inbound.clone()).await
+        stream_response(pipeline.clone(), req, inbound.clone()).await
     } else {
         // `execute_detached`, not `execute`: a non-streaming request must run to
         // completion and settle even if the client disconnects (axum drops this
         // handler future on disconnect). The upstream bills us for the accepted
         // request regardless, so the customer must be billed too.
-        match state
-            .language_model
-            .clone()
-            .execute_detached_prepared(req)
-            .await
-        {
+        match pipeline.execute_detached_prepared(req).await {
             Ok(prepared) => {
                 let rendered = match &input {
                     PipelineInput::Generation(prompt) => {
@@ -1516,15 +1782,22 @@ async fn execute_input(
                                 .map_err(BitrouterError::from)
                         }),
                 };
+                let rendered = rendered.and_then(|json| {
+                    if tenant {
+                        tenant_receipts::json(&json)
+                    } else {
+                        Ok(Json(json).into_response())
+                    }
+                });
                 match rendered {
-                    Ok(json) => match prepared.delivery.deliver().await {
-                        Ok(()) => Json(json).into_response(),
-                        Err(error) => error.into_response(),
-                    },
-                    Err(e) => match prepared.delivery.fail(e.clone()).await {
-                        Ok(()) => e.into_response(),
-                        Err(authorization_error) => authorization_error.into_response(),
-                    },
+                    Ok(response) => {
+                        delivery = Some(HttpDelivery::Success(prepared.delivery));
+                        response
+                    }
+                    Err(error) => {
+                        delivery = Some(HttpDelivery::Failed(prepared.delivery, error.clone()));
+                        error.into_response()
+                    }
                 }
             }
             Err(e) => e.into_response(),
@@ -1537,7 +1810,11 @@ async fn execute_input(
             .headers_mut()
             .insert(BITROUTER_REQUEST_ID_HEADER, value);
     }
-    response
+    PreparedHttpResponse {
+        response,
+        delivery,
+        receipt: None,
+    }
 }
 
 fn add_inbound_protocol_hint(headers: &mut HeaderMap, inbound: &ApiProtocol) {
@@ -1586,16 +1863,38 @@ async fn stream_response(
         }
     };
     let request_id = req.request_id.clone();
+    let tenant = req
+        .extensions
+        .get::<Arc<crate::tenancy::execution::TenantExecution>>()
+        .cloned();
+    let registration = req
+        .extensions
+        .get::<Arc<crate::tenancy::execution::lifecycle::Registration>>()
+        .cloned();
     let keepalive = pipeline.keepalive_interval();
 
     // Route resolution and the upstream HTTP handshake happen before the SSE
     // response is constructed. Pre-stream failures therefore retain their real
     // HTTP status (notably upstream 429) instead of being trapped inside an
     // already-committed HTTP 200 event stream.
-    let prepared = match pipeline.execute_stream_prepared(req).await {
+    let prepared = match Arc::clone(&pipeline).execute_stream_prepared(req).await {
         Ok(prepared) => prepared,
         Err(error) => return error.into_response(),
     };
+    if let Some(execution) = tenant {
+        let Some(registration) = registration else {
+            return BitrouterError::UpstreamUnavailable.into_response();
+        };
+        return tenant_receipts::stream(
+            pipeline,
+            prepared,
+            execution,
+            registration,
+            inbound,
+            request_id,
+        )
+        .unwrap_or_else(IntoResponse::into_response);
+    }
     let mut encoder = adapter.stream_encoder(&request_id, &prepared.model_id);
     let mut parts = prepared.parts;
 

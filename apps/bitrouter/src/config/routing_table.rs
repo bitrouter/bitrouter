@@ -65,6 +65,24 @@ fn usage_pricing(pricing: &crate::config::PricingConfig) -> UsagePricing {
     }
 }
 
+// Pure projection shared with authenticated immutable routing artifacts.
+pub(crate) fn retained_usage_pricing(
+    config: &Config,
+    target: &RoutingTarget,
+) -> Option<UsagePricing> {
+    config
+        .providers
+        .get(&target.provider_name)?
+        .model_config(&target.service_id)?
+        .pricing_for(&target.api_protocol)
+        .filter(|pricing| {
+            pricing.endpoint_profile.is_none_or(|profile| {
+                matches_pricing_endpoint(profile, target.effective_api_base())
+            })
+        })
+        .map(usage_pricing)
+}
+
 /// A `RoutingTable` over an in-memory `bitrouter.yaml` config. Reloadable.
 pub struct ConfigRoutingTable {
     config: RwLock<Config>,
@@ -547,7 +565,7 @@ pub fn resolve_route_chain(
 }
 
 /// Resolve an effective model after Stage 0 has already run.
-fn resolve_clean_route_chain(
+pub(crate) fn resolve_clean_route_chain(
     config: &Config,
     clean: &str,
     prefs: &RoutingPrefs,
@@ -851,17 +869,7 @@ impl RoutingTable for ConfigRoutingTable {
 
     fn usage_pricing(&self, _model: &str, target: &RoutingTarget) -> Option<UsagePricing> {
         let config = self.config.read().ok()?;
-        config
-            .providers
-            .get(&target.provider_name)?
-            .model_config(&target.service_id)?
-            .pricing_for(&target.api_protocol)
-            .filter(|pricing| {
-                pricing.endpoint_profile.is_none_or(|profile| {
-                    matches_pricing_endpoint(profile, target.effective_api_base())
-                })
-            })
-            .map(usage_pricing)
+        retained_usage_pricing(&config, target)
     }
 
     fn canonical_model_id(&self, model: &str, target: &RoutingTarget) -> Option<String> {
@@ -968,7 +976,7 @@ fn registry_route_result(
 }
 
 /// Merge `extra`'s knobs additively into `base` (caller prefs refine defaults).
-fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
+pub(crate) fn merge_prefs(base: &mut RoutingPrefs, extra: &RoutingPrefs) {
     base.operation = extra.operation;
     if extra.registry_requirements.is_some() {
         base.registry_requirements = extra.registry_requirements.clone();

@@ -4,6 +4,7 @@
 //! `reload` / `status` / `requests` / `route` / `init` / `key sign` / `models` /
 //! `policy create` / `providers (list|login|logout)` / `agents` / `run` /
 //! `threads` / `launch` / `cloud` / `skills` / `mcp (list|show|add|edit|remove|check)` / `acp serve`.
+//! Resource configuration administration uses `tenancy` over the HTTP SDK.
 //! Cloud-account sign-in lives under
 //! `cloud (login|logout|whoami)`; per-provider credentials under
 //! `providers (login|logout)`. Daemon control runs over a local IPC endpoint
@@ -27,6 +28,8 @@ mod shared_operator;
 #[cfg(test)]
 #[path = "main/shared_tests.rs"]
 mod shared_tests;
+#[path = "commands/tenancy.rs"]
+mod tenancy;
 mod tracing_filter;
 #[cfg(windows)]
 #[path = "main/windows.rs"]
@@ -110,7 +113,7 @@ struct Cli {
     /// Compatibility spelling for `--human` when placed before the subcommand.
     #[arg(short = 'H', hide = true, conflicts_with = "json")]
     human_short: bool,
-    /// Run a supported read action against a named remote context. The
+    /// Run a supported administration action against a named remote context. The
     /// built-in `local` context keeps the normal local behavior.
     #[arg(long, global = true, hide = true, value_name = "NAME")]
     context: Option<String>,
@@ -235,6 +238,11 @@ enum Command {
     Shared {
         #[command(subcommand)]
         action: SharedAction,
+    },
+    /// Manage tenant configuration over explicit HTTP or inspect local DB evidence.
+    Tenancy {
+        #[command(subcommand)]
+        action: tenancy::Action,
     },
     /// Run a BRO-owned native coding task through the Thread server.
     Task {
@@ -2072,7 +2080,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
         )
         .into());
     }
-    let remote_context = if matches!(&command, Command::Shared { .. }) {
+    let remote_context = if matches!(&command, Command::Shared { .. } | Command::Tenancy { .. }) {
         None
     } else if matches!(&command, Command::Context { .. }) {
         if cli.context.as_deref().is_some_and(|name| name != "local") {
@@ -2096,6 +2104,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
     match command {
         Command::Shared { action } => run_shared(action, output).await,
+        Command::Tenancy { action } => tenancy::run(&action, cli.context.as_deref(), output).await,
         Command::BuildInfo => {
             output.emit(&bitrouter::artifact::current())?;
             Ok(())

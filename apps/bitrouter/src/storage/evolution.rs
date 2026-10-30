@@ -1,10 +1,10 @@
 //! Portable, compare-and-set persistence for jobs, assignments and block state.
 
 use anyhow::{Context, Result, ensure};
-use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction,
-    EntityTrait, QueryFilter, QuerySelect, Set, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
+    QueryFilter, QuerySelect, QueryTrait, Set, TransactionTrait,
 };
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -73,6 +73,7 @@ impl EvolutionStore {
         key: &str,
     ) -> Result<Option<(i64, T)>> {
         let row = records::Entity::find_by_id(self.id(kind, key)?)
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .one(db)
             .await?;
         self.decode_record(kind, row)
@@ -90,6 +91,7 @@ impl EvolutionStore {
         // the caller has acquired its authority row locks.
         // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
         let row = records::Entity::find_by_id(self.id(kind, key)?)
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .lock_exclusive()
             .one(tx)
             .await?;
@@ -113,6 +115,7 @@ impl EvolutionStore {
 
     pub async fn list<T: DeserializeOwned>(&self, kind: &str) -> Result<Vec<(String, i64, T)>> {
         records::Entity::find()
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .filter(records::Column::ScopeId.eq(&self.scope_id))
             .filter(records::Column::Kind.eq(kind))
             .all(&self.db)
@@ -149,30 +152,20 @@ impl EvolutionStore {
         session_key: Option<String>,
         body: &T,
     ) -> Result<(i64, T)> {
-        // RecordId is the sole unique key. MySQL needs a self-assignment
-        // polyfill; retain the first writer's scope, body and revision rather
-        // than replacing them with the retry's values.
-        // https://docs.rs/sea-query/0.32.7/sea_query/query/struct.OnConflict.html#method.do_nothing_on
-        records::Entity::insert(records::ActiveModel {
+        let statement = records::Entity::insert(records::ActiveModel {
             record_id: Set(self.id(kind, key)?),
             scope_id: Set(self.scope_id.clone()),
             kind: Set(kind.into()),
             session_key: Set(session_key),
             revision: Set(0),
             body: Set(serde_json::to_string(body)?),
-        })
-        .on_conflict(
-            OnConflict::column(records::Column::RecordId)
-                .do_nothing_on([records::Column::RecordId])
-                .to_owned(),
-        )
-        .do_nothing()
-        .exec(db)
-        .await?;
+        });
+        crate::storage::legacy::insert(db, statement.into_query()).await?;
         // A prior consistent read may predate the winning insert. Read the
         // current locked row instead of that MySQL repeatable-read snapshot.
         // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
         let row = records::Entity::find_by_id(self.id(kind, key)?)
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .lock_exclusive()
             .one(db)
             .await?
@@ -218,6 +211,7 @@ impl EvolutionStore {
     ) -> Result<(records::Model, T)> {
         let id = self.id(kind, key)?;
         records::Entity::update_many()
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .col_expr(
                 records::Column::Revision,
                 Expr::col(records::Column::Revision).into(),
@@ -229,6 +223,7 @@ impl EvolutionStore {
         // current revision after locking, even if this transaction read earlier.
         // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
         let row = records::Entity::find_by_id(&id)
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .lock_exclusive()
             .one(tx)
             .await?
@@ -255,10 +250,22 @@ impl EvolutionStore {
             .revision
             .checked_add(1)
             .context("evolution generation overflow")?;
-        let mut active: records::ActiveModel = row.into();
-        active.revision = Set(revision);
-        active.body = Set(serde_json::to_string(body)?);
-        active.update(tx).await?;
+        let updated = records::Entity::update_many()
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
+            .filter(records::Column::RecordId.eq(&row.record_id))
+            .filter(records::Column::ScopeId.eq(&self.scope_id))
+            .filter(records::Column::Revision.eq(row.revision))
+            .col_expr(records::Column::Revision, Expr::value(revision))
+            .col_expr(
+                records::Column::Body,
+                Expr::value(serde_json::to_string(body)?),
+            )
+            .exec(tx)
+            .await?;
+        ensure!(
+            updated.rows_affected == 1,
+            "evolution record changed before save"
+        );
         Ok(revision)
     }
 }

@@ -4,12 +4,12 @@ use super::*;
 use bitrouter::client::agent_local::{self, Operation, ReplyError, ReplyResult};
 use bitrouter_ai::harness::runtime::ErrorCode;
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
+use sea_orm_migration::MigratorTrait;
 use sha2::{Digest, Sha256};
 
 const THREAD: &str = "1149fbda-eb06-43b7-8d0e-108e857d9c2d";
 const OWNER: &str = "46c9adc1-3b84-42b3-8495-24d9b26e9e5f";
-const TABLES: [(&str, usize); 7] = [
-    ("seaql_migrations", 26),
+const TABLES: [(&str, usize); 6] = [
     ("bro_executions", 1),
     ("bro_execution_index", 1),
     ("bro_execution_records", 284),
@@ -20,6 +20,7 @@ const TABLES: [(&str, usize); 7] = [
 
 #[derive(Debug, PartialEq, Eq)]
 struct StoredState {
+    ledger: Vec<(String, i64)>,
     rows: Vec<Vec<String>>,
     original_owner: String,
     schema: Vec<String>,
@@ -29,10 +30,265 @@ struct StoredState {
 
 impl StoredState {
     fn preserved(&self, original: &Self) -> bool {
-        self.rows == original.rows
+        self.ledger == original.ledger
+            && self.rows == original.rows
             && self.original_owner == original.original_owner
             && self.schema == original.schema
     }
+
+    fn check_additive_migrations(&self, original: &Self) -> Result<()> {
+        ensure!(
+            self.rows == original.rows && self.original_owner == original.original_owner,
+            "migration changed historical records or the stopped owner"
+        );
+        for historical in &original.ledger {
+            ensure!(
+                self.ledger.contains(historical),
+                "migration rewrote historical ledger metadata"
+            );
+        }
+        let mut expected = bitrouter::db::migration::Migrator::migrations()
+            .iter()
+            .map(|migration| migration.name().to_owned())
+            .collect::<Vec<_>>();
+        expected.sort();
+        ensure!(
+            self.ledger
+                .iter()
+                .map(|(version, _)| version)
+                .eq(expected.iter()),
+            "migration ledger differs from the registered migrations"
+        );
+        for entry in &original.schema {
+            let expected = additive_schema_definition(entry)?;
+            ensure!(
+                self.schema.contains(&expected),
+                "migration changed historical schema beyond the allowed nullable ownership columns: {entry}"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn additive_schema_definition(entry: &str) -> Result<String> {
+    let mut definition: (String, String, String, Option<String>) = serde_json::from_str(entry)?;
+    if definition.0 != "table"
+        || ![
+            "eval_subjects",
+            "eval_results",
+            "eval_admission_events",
+            "eval_snapshots",
+            "trajectory_episodes",
+            "trajectory_events",
+            "trajectory_requests",
+            "trajectory_prefix_index",
+            "trajectory_outbox",
+            "acp_capture_connections",
+            "acp_canonical_sessions",
+            "acp_capture_events",
+            "checkpoint_evolution",
+            "acp_checkpoints",
+            "acp_checkpoint_members",
+            "acp_resource_observations",
+            "acp_assessment_revisions",
+            "acp_effective_assessments",
+            "provider_continuations",
+            "bro_managed_sessions",
+        ]
+        .contains(&definition.1.as_str())
+    {
+        return Ok(entry.to_owned());
+    }
+    // Independently allow only migration030/032/033/034/036's exact nullable additions. Keep
+    // every byte of the old column/constraint definitions and all old indexes.
+    // Do not derive the allowance from the migration being tested.
+    let sql = definition
+        .3
+        .as_deref()
+        .context("historical scoped table has no SQL definition")?;
+    // SQLite inserts added columns before an existing table-level primary key.
+    // Preserve that historical constraint, including its original whitespace.
+    let suffix = match definition.1.as_str() {
+        "trajectory_prefix_index" => ", PRIMARY KEY (\"owner_user_id\", \"full_input_digest\") )",
+        "acp_assessment_revisions" => ", PRIMARY KEY (\"revision_id\") )",
+        "acp_canonical_sessions" => ", PRIMARY KEY (\"session_key\") )",
+        "acp_capture_connections" => ", PRIMARY KEY (\"connection_id\") )",
+        "acp_capture_events" => ", PRIMARY KEY (\"connection_id\", \"sequence\") )",
+        "acp_checkpoint_members" => ", PRIMARY KEY (\"checkpoint_id\", \"session_key\") )",
+        "acp_checkpoints" => ", PRIMARY KEY (\"checkpoint_id\") )",
+        "acp_effective_assessments" => ", PRIMARY KEY (\"session_key\") )",
+        "acp_resource_observations" => ", PRIMARY KEY (\"observation_id\") )",
+        "provider_continuations" => {
+            ", CHECK (\"publication_state\" IN ('provisional', 'delivering', 'active')), CHECK (\"publication_generation\" <> ''), CHECK (\"publication_instance_id\" <> ''), CHECK (\"publication_lease_until\" <> '') )"
+        }
+        _ => ")",
+    };
+    let prefix = sql
+        .strip_suffix(suffix)
+        .context("historical scoped table has an unexpected closing definition")?;
+    let logical_identity = if [
+        "trajectory_episodes",
+        "trajectory_requests",
+        "trajectory_prefix_index",
+        "trajectory_outbox",
+    ]
+    .contains(&definition.1.as_str())
+    {
+        ", \"logical_identity_json\" varchar(8192) COLLATE BINARY"
+    } else {
+        ""
+    };
+    // The pinned v7 managed-session table has an inline primary key, so its
+    // original closing suffix remains ")". Only this table gets migration036's five
+    // additional columns after the three common nullable ownership columns.
+    let native_identity = if definition.1 == "bro_managed_sessions" {
+        ", \"session_principal_id\" varchar(128) COLLATE BINARY, \
+         \"logical_name\" varchar(128) COLLATE BINARY, \
+         \"harness_id\" varchar(128) COLLATE BINARY, \
+         \"session_id\" varchar(128) COLLATE BINARY, \
+         \"execution_revision\" varchar(128) COLLATE BINARY"
+    } else {
+        ""
+    };
+    definition.3 = Some(format!(
+        "{prefix}, \"installation_id\" varchar(128) COLLATE BINARY, \
+         \"tenant_id\" varchar(128) COLLATE BINARY, \
+         \"creator_principal_id\" varchar(128) COLLATE BINARY{logical_identity}{native_identity}{suffix}"
+    ));
+    Ok(serde_json::to_string(&definition)?)
+}
+
+#[test]
+fn native036_schema_allowance_is_exact_and_preserves_historical_definition() -> Result<()> {
+    // Literal SQL from the hash-pinned v7 artifact, not from migration036 or
+    // additive_schema_definition. The first comma preserves the old trailing
+    // space; SQLite inserts at the original closing parenthesis here.
+    const ORIGINAL: &str = r#"CREATE TABLE "bro_managed_sessions" ( "id" varchar NOT NULL PRIMARY KEY, "revision" bigint NOT NULL, "payload_bytes" bigint NOT NULL, "payload" text NOT NULL )"#;
+    const EXPECTED: &str = concat!(
+        r#"CREATE TABLE "bro_managed_sessions" ( "id" varchar NOT NULL PRIMARY KEY, "revision" bigint NOT NULL, "payload_bytes" bigint NOT NULL, "payload" text NOT NULL , "#,
+        r#""installation_id" varchar(128) COLLATE BINARY, "#,
+        r#""tenant_id" varchar(128) COLLATE BINARY, "#,
+        r#""creator_principal_id" varchar(128) COLLATE BINARY, "#,
+        r#""session_principal_id" varchar(128) COLLATE BINARY, "#,
+        r#""logical_name" varchar(128) COLLATE BINARY, "#,
+        r#""harness_id" varchar(128) COLLATE BINARY, "#,
+        r#""session_id" varchar(128) COLLATE BINARY, "#,
+        r#""execution_revision" varchar(128) COLLATE BINARY)"#,
+    );
+    let bytes = zstd::stream::decode_all(
+        include_bytes!("../fixtures/baseline-runtime-v7/database.sqlite.zst").as_slice(),
+    )?;
+    ensure!(
+        hex::encode(Sha256::digest(&bytes))
+            == "28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9"
+    );
+    ensure!(
+        bytes
+            .windows(ORIGINAL.len())
+            .any(|part| part == ORIGINAL.as_bytes())
+    );
+    let entry = |kind: &str, name: &str, sql: &str| -> Result<String> {
+        Ok(serde_json::to_string(&(kind, name, name, Some(sql)))?)
+    };
+    let original = entry("table", "bro_managed_sessions", ORIGINAL)?;
+    let expected = entry("table", "bro_managed_sessions", EXPECTED)?;
+    ensure!(additive_schema_definition(&original)? == expected);
+
+    // Satisfy the unchanged ledger guard without executing any migration. Only
+    // registry names are used here; expected DDL above is independent.
+    let mut ledger = bitrouter::db::migration::Migrator::migrations()
+        .iter()
+        .map(|migration| (migration.name().to_owned(), 17))
+        .collect::<Vec<_>>();
+    ledger.sort();
+    let before = StoredState {
+        ledger: ledger.clone(),
+        rows: vec![],
+        original_owner: OWNER.into(),
+        schema: vec![original],
+        owners: vec![],
+        authority: vec![],
+    };
+    let mut after = StoredState {
+        ledger,
+        rows: vec![],
+        original_owner: OWNER.into(),
+        schema: vec![expected],
+        owners: vec![],
+        authority: vec![],
+    };
+    // A positive control precedes every negative: unrelated fixture failure
+    // cannot masquerade as rejection of a malformed schema addition.
+    after.check_additive_migrations(&before)?;
+    for (from, to) in [
+        (r#", "session_id" varchar(128) COLLATE BINARY"#, ""),
+        (
+            r#""execution_revision" varchar(128) COLLATE BINARY)"#,
+            r#""execution_revision" varchar(128) COLLATE BINARY, "extra" text)"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY NOT NULL"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY DEFAULT NULL"#,
+        ),
+        (
+            r#""logical_name" varchar(128)"#,
+            r#""logical_name" varchar(129)"#,
+        ),
+        (
+            r#""harness_id" varchar(128) COLLATE BINARY"#,
+            r#""harness_id" varchar(128) COLLATE NOCASE"#,
+        ),
+        (r#""session_principal_id""#, r#""Session_principal_id""#),
+        (
+            r#""session_principal_id" varchar(128) COLLATE BINARY, "logical_name" varchar(128) COLLATE BINARY"#,
+            r#""logical_name" varchar(128) COLLATE BINARY, "session_principal_id" varchar(128) COLLATE BINARY"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY UNIQUE"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY CHECK (length(session_id) > 0)"#,
+        ),
+        (
+            r#""session_id" varchar(128) COLLATE BINARY"#,
+            r#""session_id" varchar(128) COLLATE BINARY REFERENCES bro_executions(id)"#,
+        ),
+        (r#""payload" text NOT NULL "#, r#""payload" blob NOT NULL "#),
+    ] {
+        let malformed = EXPECTED.replacen(from, to, 1);
+        ensure!(
+            malformed != EXPECTED,
+            "negative fixture did not change its target"
+        );
+        after.schema = vec![entry("table", "bro_managed_sessions", &malformed)?];
+        ensure!(
+            after.check_additive_migrations(&before).is_err(),
+            "accepted malformed native schema: {from} -> {to}"
+        );
+    }
+    for (kind, name) in [
+        ("table", "bro_managed_sessions_extra"),
+        ("table", "Bro_managed_sessions"),
+        ("index", "bro_managed_sessions"),
+    ] {
+        let other = entry(kind, name, ORIGINAL)?;
+        ensure!(additive_schema_definition(&other)? == other);
+    }
+    ensure!(
+        additive_schema_definition(&entry(
+            "table",
+            "bro_managed_sessions",
+            "CREATE TABLE broken(id);"
+        )?)
+        .is_err()
+    );
+    Ok(())
 }
 
 async fn strings(db: &DatabaseConnection, sql: String) -> Result<Vec<String>> {
@@ -74,6 +330,15 @@ pub(super) async fn table_rows(db: &DatabaseConnection, table: &str) -> Result<V
 }
 
 async fn read_state(db: &DatabaseConnection) -> Result<StoredState> {
+    let ledger = db
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "SELECT version, applied_at FROM seaql_migrations ORDER BY version",
+        ))
+        .await?
+        .into_iter()
+        .map(|row| Ok((row.try_get("", "version")?, row.try_get("", "applied_at")?)))
+        .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
     let mut rows = Vec::new();
     for (table, count) in TABLES {
         let values = table_rows(db, table).await?;
@@ -86,6 +351,7 @@ async fn read_state(db: &DatabaseConnection) -> Result<StoredState> {
         [OWNER.into()],
     )).await?.context("baseline stopped owner missing")?;
     Ok(StoredState {
+        ledger,
         rows,
         original_owner: owner.try_get("", "value")?,
         schema: strings(db, "SELECT json_array(type,name,tbl_name,sql) AS value FROM sqlite_schema WHERE name NOT GLOB 'sqlite_*' ORDER BY value".into()).await?,
@@ -95,14 +361,21 @@ async fn read_state(db: &DatabaseConnection) -> Result<StoredState> {
 }
 
 fn snapshot(fixture: &Fixture) -> Result<StoredState> {
-    let url = format!(
-        "sqlite://{}",
-        fixture.directory.path().join("profiles.db").display()
-    );
+    database_snapshot(fixture, "profiles.db", false)
+}
+
+fn database_snapshot(fixture: &Fixture, name: &str, migrate: bool) -> Result<StoredState> {
+    let url = format!("sqlite://{}", fixture.directory.path().join(name).display());
     fixture.runtime.block_on(async {
         tokio::time::timeout(COMMAND_TIMEOUT, async {
             let db = bitrouter::db::connect(&url).await?;
-            let result = read_state(&db).await;
+            let result = async {
+                if migrate {
+                    bitrouter::db::run_migrations(&db).await?;
+                }
+                read_state(&db).await
+            }
+            .await;
             let closed = db.close().await;
             let state = result?;
             closed?;
@@ -208,9 +481,24 @@ fn exercise_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
         hex::encode(Sha256::digest(&bytes))
             == "28e61cdbf75ad2a918404ea30a185915d59b2cf58e67d5ac5e3b7dbc902064e9"
     );
-    fs::write(fixture.directory.path().join("profiles.db"), bytes)?;
+    fs::write(fixture.directory.path().join("profiles.db"), &bytes)?;
     let before = snapshot(fixture)?;
+    ensure!(
+        before.ledger.len() == 26,
+        "baseline migration ledger changed"
+    );
+    // Derive the exact allowed schema additions on an independent fixture copy.
+    // The real binaries must apply migrations themselves to the untouched copy.
+    fs::write(fixture.directory.path().join("expected.db"), bytes)?;
+    let expected = database_snapshot(fixture, "expected.db", true)?;
+    expected.check_additive_migrations(&before)?;
     let (config, first_pid) = fixture.configure_and_start_full(binaries[0])?;
+    let migrated = snapshot(fixture)?;
+    migrated.check_additive_migrations(&before)?;
+    ensure!(
+        migrated.schema == expected.schema,
+        "startup schema differs from the registered migration result"
+    );
     // Two transitions share exactly the same historical database and config.
     // None submits new work or changes the old workspace paths/record payloads.
     for (step, index) in [0, 1, 0, 2, 0].into_iter().enumerate() {
@@ -233,13 +521,13 @@ fn exercise_transitions(fixture: &mut Fixture, binaries: [&Path; 3]) -> Result<(
         }
         let running = snapshot(fixture)?;
         ensure!(
-            running.preserved(&before),
+            running.preserved(&migrated),
             "profile step {step} changed stored facts while running"
         );
         fixture.stop_resident(pid)?;
         let after = snapshot(fixture)?;
         ensure!(
-            after.preserved(&before),
+            after.preserved(&migrated),
             "profile step {step} changed stored facts on shutdown"
         );
         if index != 0 {

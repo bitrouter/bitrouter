@@ -9,5 +9,6 @@ pub mod gateway;
 pub mod harness;
 pub mod operator;
 pub mod stream;
+pub mod tenancy;
 
 mod transport;

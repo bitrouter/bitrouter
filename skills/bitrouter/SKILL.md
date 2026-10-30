@@ -19,6 +19,8 @@ BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes Op
 
 `bro task managed` submits to the local daemon, which owns native tools/Core and the existing durable journal. Use `--request-id` for exact retries, `managed-status` for passive inspection, `managed-cancel` with the original boot/input key for cancellation, and `managed-answer` for explicit MCP skill consent; continuation requires confirmed release. Custom durable harness clients use the negotiated managed-core HTTP/WebSocket profile; see `references/managed-core.md` for binding, ACKs, results and current limits.
 
+For a stopped local SQLite DB, `bro tenancy offline snapshot/inventory/verify` produces partial DB evidence only; external OAuth/workspace state is excluded and cutover remains forbidden. `bro tenancy offline audit` serves only protected old-installation receipt GET/page from verified evidence using an outside projection and explicit control credentials. See `references/cli.md` for literal path flags, audit limits and interrupted-bundle handling.
+
 ## Activate in one pass
 ### 1. Probe
 ```bash
@@ -205,3 +207,5 @@ See [shared gateway configuration](references/shared-gateway.md).
   with `providers list|login|logout` + config/reload; diagnose via `status`, `route`, `models`, and logs.
 - **`bitrouter/<id>` selects a named router** before provider lookup; `auto` and
   `fusion` retain compatibility behavior. See `references/cli.md` for details.
+
+Offline `tenancy offline map` records bounded M0 mapping claims against verified snapshot evidence; it does not backfill or authorize cutover. See `references/cli.md`.

@@ -7,6 +7,7 @@ use bitrouter::agent_store::DatabaseExecutionStore;
 use bitrouter::db;
 use bitrouter::harness::storage::{ExecutionRecord, ExecutionStore};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
+use sea_orm_migration::MigratorTrait;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -96,11 +97,40 @@ async fn check_database(
         .try_get::<String>("", "integrity_check")?;
     ensure!(integrity == "ok", "{integrity}");
     let before = raw_state(connection).await?;
-    ensure!(before.ledger.len() == 26 && before.records.len() == 284);
+    ensure!(before.records.len() == 284);
     if let Some(original) = original.as_ref() {
         ensure!(before == *original, "reopening changed the baseline state");
+    } else {
+        ensure!(
+            before.ledger.len() == 26,
+            "baseline migration ledger changed"
+        );
     }
     db::run_migrations(connection).await?;
+    let migrated = raw_state(connection).await?;
+    ensure!(
+        migrated.records == before.records,
+        "migration rewrote baseline records"
+    );
+    for historical in &before.ledger {
+        ensure!(
+            migrated.ledger.contains(historical),
+            "migration rewrote historical ledger metadata"
+        );
+    }
+    let mut expected_migrations = db::migration::Migrator::migrations()
+        .iter()
+        .map(|migration| migration.name().to_owned())
+        .collect::<Vec<_>>();
+    expected_migrations.sort();
+    ensure!(
+        migrated
+            .ledger
+            .iter()
+            .map(|(version, _)| version)
+            .eq(expected_migrations.iter()),
+        "migration ledger differs from the registered migrations"
+    );
     let store = DatabaseExecutionStore::new(connection.clone());
     let owner = store.read_owner(OWNER).await.map_err(anyhow::Error::msg)?;
     ensure!(
@@ -182,9 +212,9 @@ async fn check_database(
     ensure!(accepted == 2);
     ensure!(store.read_owner(OWNER).await.map_err(anyhow::Error::msg)? == owner);
     ensure!(
-        raw_state(connection).await? == before,
-        "migration or reads changed baseline bytes"
+        raw_state(connection).await? == migrated,
+        "reads changed migrated baseline bytes"
     );
-    *original = Some(before);
+    *original = Some(migrated);
     Ok(())
 }

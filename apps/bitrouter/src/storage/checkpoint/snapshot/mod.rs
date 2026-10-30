@@ -186,6 +186,8 @@ pub struct RootRun {
     #[serde(default)]
     pub token_accounting:
         Option<crate::storage::checkpoint::snapshot::accounting::RunTokenAccounting>,
+    /// Known cumulative activity. If SessionSnapshot.activity_gaps contains this
+    /// run, this is only a lower bound, not a complete crash-interval measurement.
     pub active_ms: u64,
     /// Immutable authenticated clock handoffs for this run. Each source head
     /// precedes the session.restored checkpoint that accepted the measurement.
@@ -252,6 +254,15 @@ pub struct AgentState {
     pub last_scheduled: u64,
 }
 
+/// Missing cumulative activity during checked native retirement. The durable
+/// source and known lower bound are immutable even after the root run changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityGap {
+    pub durable_head: bitrouter_ai::core::checkpoint::DurableHead,
+    pub known_active_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionSnapshot {
     pub session_id: String,
@@ -259,6 +270,10 @@ pub struct SessionSnapshot {
     pub manifest: HarnessManifest,
     pub agents: BTreeMap<String, AgentState>,
     pub run: Option<RootRun>,
+    /// Run identity to missing-activity evidence. Entries survive later roots;
+    /// checkpoint admission bounds their total bytes before a new run starts.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub activity_gaps: BTreeMap<String, ActivityGap>,
     pub operations: BTreeMap<String, OperationReceipt>,
     pub waits: BTreeMap<String, RuntimeWait>,
     pub signals: SignalState,

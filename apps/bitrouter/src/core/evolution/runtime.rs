@@ -158,6 +158,7 @@ impl EvolutionRuntime {
         let store = EvolutionStore::new(self.db.clone(), &identity.owner)?;
         let key = identity.key()?;
         let mut rows: Vec<ExecutionRecord> = crate::storage::evolution::records::Entity::find()
+            .filter(crate::storage::legacy::scope("checkpoint_evolution"))
             .filter(crate::storage::evolution::records::Column::ScopeId.eq(&store.scope_id))
             .filter(crate::storage::evolution::records::Column::Kind.eq(EXECUTION_KIND))
             .filter(crate::storage::evolution::records::Column::SessionKey.eq(key))

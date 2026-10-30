@@ -5,7 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use {super::store::EvalStore, bitrouter_ai::eval::EvalSnapshot};
+use {
+    super::store::{EvalStore, SnapshotRecords},
+    bitrouter_ai::eval::EvalSnapshot,
+};
 use {
     bitrouter_ai::eval::DecisionCredit, bitrouter_ai::eval::EvalSubject,
     bitrouter_ai::eval::EvalVerdict, bitrouter_ai::eval::EvaluationResult,
@@ -29,34 +32,35 @@ pub struct EvalEvidenceSnapshot {
 
 impl EvalEvidenceSnapshot {
     pub async fn load(store: &EvalStore, evidence_root: &str) -> Result<Self> {
-        let snapshot = store
-            .snapshot_by_root(evidence_root)
+        let stored = store
+            .snapshot_records(evidence_root)
             .await?
             .ok_or_else(|| anyhow::anyhow!("eval snapshot '{evidence_root}' not found"))?;
-        Self::from_manifest(store, snapshot).await
+        Self::from_records(stored)
     }
 
     /// Materialize compiler evidence from an in-memory immutable manifest.
     pub async fn from_manifest(store: &EvalStore, snapshot: EvalSnapshot) -> Result<Self> {
-        let mut records = Vec::with_capacity(snapshot.entries.len());
-        for entry in snapshot.entries {
-            let stored = store.result(&entry.result_id).await?.ok_or_else(|| {
-                anyhow::anyhow!("snapshot result '{}' is missing", entry.result_id)
-            })?;
-            if stored.content_digest != entry.content_digest {
-                anyhow::bail!("snapshot result '{}' changed content", entry.result_id);
-            }
-            let subject = store.subject(&entry.eval_id).await?.ok_or_else(|| {
-                anyhow::anyhow!("snapshot subject '{}' is missing", entry.eval_id)
-            })?;
-            let subject_digest = crate::storage::evaluation::subject_digest(&subject)?;
-            if subject_digest != entry.subject_content_digest {
-                anyhow::bail!("snapshot subject '{}' changed content", entry.eval_id);
-            }
+        // The store validates tenant roots and the whole immutable closure in
+        // one stable transaction with a cumulative row/byte budget.
+        let stored_records = store.manifest_records(&snapshot).await?;
+        Self::from_records(SnapshotRecords {
+            snapshot,
+            records: stored_records,
+        })
+    }
+
+    pub(crate) fn from_records(stored: SnapshotRecords) -> Result<Self> {
+        let SnapshotRecords {
+            snapshot,
+            records: stored_records,
+        } = stored;
+        let mut records = Vec::with_capacity(stored_records.len());
+        for (stored, subject) in stored_records {
             crate::storage::evaluation::validate_result_for_subject(&stored.result, &subject)?;
             records.push(EvalEvidenceRecord {
-                result_id: entry.result_id,
-                content_digest: entry.content_digest,
+                result_id: stored.result_id,
+                content_digest: stored.content_digest,
                 subject,
                 result: stored.result,
             });

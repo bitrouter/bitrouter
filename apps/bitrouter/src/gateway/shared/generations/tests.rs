@@ -1,5 +1,6 @@
 //! Complete assembly and durable producer ownership against PostgreSQL.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::time::Duration;
 
 use axum::body::Body;
@@ -11,7 +12,6 @@ use tower::ServiceExt as _;
 
 use super::*;
 use crate::gateway::shared::{
-    crypto::DeploymentKey,
     publication::Configuration,
     schema,
     store::{self, Kind, Store},

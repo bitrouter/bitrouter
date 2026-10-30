@@ -32,6 +32,7 @@ mod metrics;
 pub(crate) mod owned;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 mod processor_runtime;
+pub(crate) mod receipt_latency;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub mod subscriber;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]

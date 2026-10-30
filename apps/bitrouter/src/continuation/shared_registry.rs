@@ -64,6 +64,7 @@ impl Pending {
             anyhow::bail!("shared publication has no observed forward lease");
         };
         Ok(PendingPublication {
+            tenant: None,
             continuation_identity: self.intent.identity.clone(),
             generation: self.intent.generation.clone(),
             instance_id: self.intent.producer.clone(),

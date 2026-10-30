@@ -1,11 +1,18 @@
-//! Full context preparation and historical decision reconciliation.
+//! Full ordinary context and sealed, tenancy-owned Choice preparation.
 
 use super::*;
+#[cfg(feature = "harness")]
+use crate::core::context_router::owned::CompileOptions;
 use crate::core::context_router::planner;
 use crate::gateway::model::decision::types::{DecisionError, DecisionFailure};
 use crate::storage::checkpoint::snapshot::context::evidence::EvidenceSource;
+#[cfg(feature = "harness")]
+use crate::storage::checkpoint::snapshot::context::view::CandidateSet;
 use crate::storage::checkpoint::snapshot::context::view::SourceRevision;
 use crate::storage::checkpoint::snapshot::context::{ExecutionPlan, FEATURE, WorkUnit};
+
+#[cfg(all(test, unix, feature = "harness"))]
+mod fallback_tests;
 
 pub(super) fn enabled(state: &SessionSnapshot) -> bool {
     state
@@ -165,6 +172,18 @@ impl CoreSession {
         )?;
 
         let policy = crate::gateway::model::decision::policy::DecisionPolicy::default();
+        #[cfg(feature = "harness")]
+        let owned_profile = control
+            .owned_step
+            .as_ref()
+            .map(|step| step.choice_profile())
+            .transpose()
+            .map_err(crate::tenancy::execution::session::core_error)?
+            .flatten();
+        #[cfg(feature = "harness")]
+        let policy = owned_profile
+            .as_ref()
+            .map_or(policy, |profile| profile.policy.clone());
         policy
             .validate()
             .map_err(|message| reject(ErrorCode::NoFeasibleRoute, &message))?;
@@ -245,14 +264,171 @@ impl CoreSession {
                 }
             }
         }
-        let (view, prompt) = planner::compile_full(
-            &store,
-            &task_id,
-            ordered,
-            &original,
-            source.clone(),
-            hard_limit_bytes,
-        )?;
+        let mut capabilities = std::collections::BTreeSet::new();
+        if portable_reasoning(&snapshot, turn) {
+            capabilities.insert(crate::gateway::routing::ContextCapability::OmitPrivateReasoning);
+        }
+        // Ordinary execution never consults a host decision model or historical
+        // decision outcome. Only the sealed owned profile admits the Choice path.
+        let full = || -> Result<_, CoreError> {
+            let (view, prompt) = planner::compile_full(
+                &store,
+                &task_id,
+                ordered.clone(),
+                &original,
+                source.clone(),
+                hard_limit_bytes,
+            )?;
+            Ok((vec![("full", (view, prompt))], None))
+        };
+        #[cfg(feature = "harness")]
+        let (offered, receipt) = if let Some(profile) = owned_profile {
+            let mut candidates = CandidateSet::prepare(
+                &store,
+                &task_id,
+                ordered.clone(),
+                &snapshot.manifest,
+                &policy,
+            )?;
+            let mut semantic_prompt = original.clone();
+            semantic_prompt.system = Some(agent.required_instructions.join("\n"));
+            let mut input = crate::gateway::routing::input::Input::from_prompt(
+                &semantic_prompt,
+                policy.max_request_bytes / 4,
+            );
+            input.task = Some(crate::gateway::routing::input::Task {
+                objective: turn.input.text.clone(),
+                acceptance_criteria: turn.input.acceptance_criteria.clone(),
+            });
+            let mut decision_id = None;
+            let mut response = None;
+            let mut reason = "conservative_context";
+            let needs_assessment = turn.input.routing.model
+                == bitrouter_ai::core::protocol::ModelMode::Policy
+                || (turn.input.routing.context == bitrouter_ai::core::protocol::ContextMode::Auto
+                    && !candidates.candidates.is_empty());
+            if needs_assessment
+                && let Some((request, native)) =
+                    choice::request(&mut candidates, &store, &profile, &input)?
+            {
+                let request_sha256 = digest(&request)?;
+                let prior = store.decisions.values().find(|receipt| {
+                    receipt.task_id == task_id
+                        && receipt.source == source
+                        && receipt.request_sha256 == request_sha256
+                        && receipt.policy == policy
+                        && !receipt.stale
+                });
+                if let Some(prior) = prior {
+                    self.validate_owned_choice_reuse(prior, &profile).await?;
+                    decision_id = Some(prior.decision_id.clone());
+                    response = prior
+                        .outcome
+                        .as_ref()
+                        .and_then(|outcome| outcome.as_ref().ok())
+                        .cloned();
+                    reason = if response.is_some() {
+                        "reused_committed_decision"
+                    } else {
+                        "conservative_interrupted_decision"
+                    };
+                } else {
+                    #[cfg(all(test, unix, feature = "harness"))]
+                    if std::env::var("BITROUTER_TEST_STOPPED_NATIVE_MODE").as_deref()
+                        == Ok("shared-parent")
+                    {
+                        // Both real callback invocations must observe absence before
+                        // either commits intent. This changes scheduling only in the
+                        // isolated child; the ordinary reuse and send gates still run.
+                        static READY: std::sync::LazyLock<tokio::sync::Barrier> =
+                            std::sync::LazyLock::new(|| tokio::sync::Barrier::new(2));
+                        READY.wait().await;
+                    }
+                    let completed = self
+                        .owned_choice(
+                            control,
+                            step_id,
+                            source.clone(),
+                            candidates.clone(),
+                            (request, native),
+                            profile,
+                        )
+                        .await?;
+                    decision_id = Some(completed.id);
+                    response = completed.response;
+                    reason = if response.is_some() {
+                        "typed_context_decision"
+                    } else {
+                        "conservative_decision_failure"
+                    };
+                }
+            }
+            // A summary or extract can expand when rendered. Its byte limit
+            // failure must not discard a feasible exact-history candidate.
+            let routed = match candidates.compile(
+                &store,
+                &original,
+                CompileOptions {
+                    source: source.clone(),
+                    policy: &policy,
+                    response: response.as_ref(),
+                    decision_id: decision_id.clone(),
+                    reason,
+                    hard_limit_bytes,
+                },
+            ) {
+                Ok(routed) => Some(routed),
+                Err(error) if error.code == ErrorCode::NoFeasibleRoute => None,
+                Err(error) => return Err(error),
+            };
+            let full = match candidates.compile(
+                &store,
+                &original,
+                CompileOptions {
+                    source: source.clone(),
+                    policy: &policy,
+                    response: None,
+                    decision_id: decision_id.clone(),
+                    reason: "full_context_candidate",
+                    hard_limit_bytes,
+                },
+            ) {
+                Ok(full) => Some(full),
+                Err(error) if error.code == ErrorCode::NoFeasibleRoute => None,
+                Err(error) => return Err(error),
+            };
+            let mut offered = Vec::new();
+            if let Some(routed) = routed {
+                offered.push(("routed", routed));
+            }
+            if let Some(full) = full {
+                offered.push(("full", full));
+            }
+            if offered.is_empty() {
+                return Err(reject(
+                    ErrorCode::NoFeasibleRoute,
+                    "no context candidate fits the prompt byte limit",
+                ));
+            }
+            let current = self.snapshot().await;
+            let receipt = decision_id
+                .as_ref()
+                .and_then(|id| current.context_store.decisions.get(id))
+                .map(crate::core::context_router::models::receipt);
+            if turn.input.routing.context == bitrouter_ai::core::protocol::ContextMode::Auto {
+                capabilities.extend([
+                    crate::gateway::routing::ContextCapability::OmitEvidence,
+                    crate::gateway::routing::ContextCapability::UseExtract,
+                    crate::gateway::routing::ContextCapability::UseSummary,
+                    crate::gateway::routing::ContextCapability::RecallEvidence,
+                ]);
+            }
+            (offered, receipt)
+        } else {
+            full()?
+        };
+        #[cfg(not(feature = "harness"))]
+        let (offered, receipt) = full()?;
         let previous = store
             .work
             .get(&task_id)
@@ -264,20 +440,20 @@ impl CoreSession {
                     .find(|execution| &execution.view_id == view)
             })
             .and_then(|execution| execution.model.clone());
-        let views = vec![crate::core::context_router::models::view(
-            "full", &view, &prompt,
-        )];
+        let views = offered
+            .iter()
+            .map(|(id, (view, prompt))| crate::core::context_router::models::view(id, view, prompt))
+            .collect();
         *control.routing_pending.lock().await = Some(Pending {
             source,
             task_id,
-            view,
+            views: offered
+                .into_iter()
+                .map(|(id, (view, _))| (id.into(), view))
+                .collect(),
         });
-        let mut capabilities = std::collections::BTreeSet::new();
-        if portable_reasoning(&snapshot, turn) {
-            capabilities.insert(crate::gateway::routing::ContextCapability::OmitPrivateReasoning);
-        }
         Ok(Some(crate::gateway::routing::preparation::Prepared {
-            receipt: None,
+            receipt,
             views,
             policy,
             previous,
@@ -296,14 +472,16 @@ impl CoreSession {
         let Pending {
             source,
             task_id,
-            mut view,
+            mut views,
         } = pending;
-        if plan.selection.selected_context != "full" {
-            return Err(reject(
-                ErrorCode::OperationConflict,
-                "selected context was not offered",
-            ));
-        }
+        let mut view = views
+            .remove(&plan.selection.selected_context)
+            .ok_or_else(|| {
+                reject(
+                    ErrorCode::OperationConflict,
+                    "selected context was not offered",
+                )
+            })?;
         let prompt = &plan.prompt;
         view.prompt_sha256 = digest(prompt)?;
         view.prompt_bytes = serde_json::to_vec(prompt).map_err(json_error)?.len();
@@ -318,6 +496,18 @@ impl CoreSession {
                     reject(ErrorCode::CheckpointConflict, "context task vanished")
                 })?;
             work.last_view_id = Some(view.view_id.clone());
+            if let Some(decision_id) = &view.decision_id {
+                let receipt = state
+                    .context_store
+                    .decisions
+                    .get_mut(decision_id)
+                    .ok_or_else(|| {
+                        reject(ErrorCode::CheckpointConflict, "context receipt vanished")
+                    })?;
+                if !receipt.view_ids.contains(&view.view_id) {
+                    receipt.view_ids.push(view.view_id.clone());
+                }
+            }
             state
                 .context_store
                 .views
@@ -329,13 +519,13 @@ impl CoreSession {
                     task_id: task_id.clone(),
                     agent_id: agent_id.into(),
                     view_id: view.view_id.clone(),
-                    decision_id: None,
+                    decision_id: view.decision_id.clone(),
                     model: None,
                     routing: routing.clone(),
                 },
             );
             Ok(
-                json!({"task_id":task_id,"view_id":view.view_id,"decision_id":null,
+                json!({"task_id":task_id,"view_id":view.view_id,"decision_id":view.decision_id,
                 "selected_groups":view.selected.len(),"omitted_groups":view.omitted.len(),
                 "prompt_bytes":view.prompt_bytes,"reason":view.reason}),
             )
@@ -355,7 +545,17 @@ fn portable_reasoning(state: &SessionSnapshot, turn: &AgentTurn) -> bool {
 pub(super) struct Pending {
     source: SourceRevision,
     task_id: String,
-    view: crate::storage::checkpoint::snapshot::context::view::ContextView,
+    views: BTreeMap<String, crate::storage::checkpoint::snapshot::context::view::ContextView>,
+}
+
+#[cfg(feature = "harness")]
+pub(super) fn validate_decision_source(
+    state: &SessionSnapshot,
+    agent_id: &str,
+    step_id: &str,
+    source: &SourceRevision,
+) -> Result<(), CoreError> {
+    validate_context_source(state, agent_id, step_id, source)
 }
 
 fn validate_context_source(

@@ -156,6 +156,8 @@ pub enum Instrument {
     Counter,
     /// Value distribution.
     Histogram,
+    /// Independently sampled numeric state; not monotonic or additive.
+    Gauge,
 }
 
 /// One metric instrument and the dimensions it is recorded with.
@@ -163,7 +165,7 @@ pub enum Instrument {
 pub struct MetricDef {
     /// Instrument name, verbatim.
     pub name: &'static str,
-    /// Counter or histogram — changing this changes what a backend can ask of
+    /// Counter, histogram or gauge — changing this changes what a backend can ask of
     /// the series, so it is part of the contract.
     pub instrument: Instrument,
     /// Recorded value type.
@@ -897,6 +899,95 @@ const BASE_METRIC_DIMENSIONS: &[AttrDef] = &[
 ];
 
 const METRICS: &[MetricDef] = &[
+    MetricDef {
+        name: "bitrouter.receipt.capacity.bytes",
+        instrument: Instrument::Gauge,
+        value_type: AttrType::Int,
+        unit: "By",
+        note: "Opt-in admission policy byte accounting, not heap or physical filesystem usage. Independent callbacks may straddle sealing; require a complete immutable initial/final batch.",
+        dimensions: &[
+            AttrDef {
+                key: "field",
+                ty: AttrType::String,
+                requirement: Requirement::Required,
+                note: "Fixed field: completion_reserved, accounted, ingress_reserved.",
+            },
+            AttrDef {
+                key: "checkpoint",
+                ty: AttrType::String,
+                requirement: Requirement::Required,
+                note: "Fixed checkpoint: initial, current, or final. No cross-callback or cross-batch current conservation.",
+            },
+        ],
+    },
+    MetricDef {
+        name: "bitrouter.receipt.capacity.state",
+        instrument: Instrument::Gauge,
+        value_type: AttrType::Int,
+        unit: "1",
+        note: "Opt-in process-wide admission and durable Unknown state. available=0 omits unreadable values; final values require real producer cleanup and remain immutable.",
+        dimensions: &[
+            AttrDef {
+                key: "field",
+                ty: AttrType::String,
+                requirement: Requirement::Required,
+                note: "Fixed field: potential_unknown, live_unknown, active, queued, ingress, closed, fenced, available.",
+            },
+            AttrDef {
+                key: "checkpoint",
+                ty: AttrType::String,
+                requirement: Requirement::Required,
+                note: "Fixed checkpoint: initial, current, or final. No cross-callback or cross-batch current conservation.",
+            },
+        ],
+    },
+    MetricDef {
+        name: "bitrouter.receipt.queue_ready_to_durable",
+        instrument: Instrument::Histogram,
+        value_type: AttrType::Int,
+        unit: "ns",
+        note: "Opt-in first terminal queue to actual durable publication, including retries. Explicit bounds; never a caller output acknowledgement.",
+        dimensions: &[AttrDef {
+            key: "receipt_class",
+            ty: AttrType::String,
+            requirement: Requirement::Required,
+            note: "Fixed class: complete_completed, terminal_other, or evidence_unknown.",
+        }],
+    },
+    MetricDef {
+        name: "bitrouter.receipt.phase.duration",
+        instrument: Instrument::Histogram,
+        value_type: AttrType::Int,
+        unit: "ns",
+        note: "Opt-in custody phase duration. SQL commit brackets only the original consuming await after phase entry.",
+        dimensions: &[
+            AttrDef {
+                key: "phase",
+                ty: AttrType::String,
+                requirement: Requirement::Required,
+                note: "Fixed phase: first_queue, prepare, transaction, or sql_commit.",
+            },
+            AttrDef {
+                key: "result",
+                ty: AttrType::String,
+                requirement: Requirement::Required,
+                note: "Fixed result: observed, acknowledged, failed, or unconfirmed.",
+            },
+        ],
+    },
+    MetricDef {
+        name: "bitrouter.receipt.observation",
+        instrument: Instrument::Counter,
+        value_type: AttrType::Int,
+        unit: "1",
+        note: "Bounded opt-in lifecycle and invalidity counters. A clean seal is not an exporter or receipt acknowledgement.",
+        dimensions: &[AttrDef {
+            key: "event",
+            ty: AttrType::String,
+            requirement: Requirement::Required,
+            note: "Fixed internal lifecycle event; never an identity, secret, error text, or user-defined label.",
+        }],
+    },
     MetricDef {
         name: "bitrouter.requests",
         instrument: Instrument::Counter,

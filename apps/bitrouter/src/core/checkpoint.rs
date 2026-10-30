@@ -66,6 +66,25 @@ impl CommitGate {
             && self.head.execution_epoch == self.grant.execution_epoch
     }
 
+    #[cfg(test)]
+    pub(super) fn dispatch_fence_for_test(&self) -> &'static str {
+        if !self.connected {
+            "Disconnected"
+        } else if self.provisionally_blocked {
+            "Provisional"
+        } else if self.released {
+            "Released"
+        } else if self.pending.is_some() {
+            "Pending"
+        } else if self.head.state_revision == 0 {
+            "NoRevision"
+        } else if self.head.execution_epoch != self.grant.execution_epoch {
+            "Epoch"
+        } else {
+            "Ready"
+        }
+    }
+
     pub fn disconnect(&mut self) {
         self.connected = false;
     }

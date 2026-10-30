@@ -351,6 +351,11 @@ pub struct Controller<A> {
     route_control: Option<Arc<dyn RouteControl>>,
     session_cost: Option<Arc<dyn SessionCost>>,
     capture: Option<Arc<dyn super::capture::CapturePort>>,
+    #[cfg(feature = "core")]
+    owned: Option<(
+        Arc<crate::tenancy::capture::Binding>,
+        Arc<crate::tenancy::capture::port::Port>,
+    )>,
 }
 
 impl<A> Controller<A>
@@ -365,6 +370,8 @@ where
             route_control: None,
             session_cost: None,
             capture: None,
+            #[cfg(feature = "core")]
+            owned: None,
         }
     }
 
@@ -390,6 +397,17 @@ where
         self
     }
 
+    #[cfg(feature = "core")]
+    pub(crate) fn owned_capture(
+        mut self,
+        binding: Arc<crate::tenancy::capture::Binding>,
+        port: Arc<crate::tenancy::capture::port::Port>,
+    ) -> Self {
+        self.capture = Some(port.clone());
+        self.owned = Some((binding, port));
+        self
+    }
+
     /// Serve the controller on a manager-facing ACP transport.
     pub async fn run(
         self,
@@ -406,9 +424,23 @@ where
             config: self.config,
             route_control,
             session_cost: self.session_cost,
+            #[cfg(feature = "core")]
+            owned: self.owned.as_ref().map(|(binding, _)| binding.clone()),
         };
         let capture = self.capture;
-        let mut components = ProxiesAndAgent::new(self.agent);
+        let components = ProxiesAndAgent::new(self.agent);
+        // Proxies are ordered client-to-agent. Owned capture must follow the
+        // controller gate so internally issued provider setup and every direct
+        // session forwarding branch traverse the checked capture boundary.
+        // https://github.com/agentclientprotocol/rust-sdk/tree/main/src/agent-client-protocol-conductor
+        #[cfg(feature = "core")]
+        let (mut components, proxy) = if self.owned.is_some() {
+            (components.proxy(proxy), None)
+        } else {
+            (components, Some(proxy))
+        };
+        #[cfg(not(feature = "core"))]
+        let (mut components, proxy) = (components, Some(proxy));
         if let Some(port) = &capture {
             super::capture::record(
                 port.as_ref(),
@@ -423,9 +455,14 @@ where
             .await?;
             components = components.proxy(super::capture::CaptureProxy {
                 port: Arc::clone(port),
+                #[cfg(feature = "core")]
+                owned: self.owned.as_ref().map(|(_, port)| port.clone()),
             });
         }
-        let result = ConductorImpl::new_agent("bitrouter-acp-controller", components.proxy(proxy))
+        if let Some(gate) = proxy {
+            components = components.proxy(gate);
+        }
+        let result = ConductorImpl::new_agent("bitrouter-acp-controller", components)
             .run(transport)
             .await;
         let captured_close = match capture {
@@ -459,6 +496,8 @@ where
 }
 
 struct ControllerProxy {
+    #[cfg(feature = "core")]
+    owned: Option<Arc<crate::tenancy::capture::Binding>>,
     config: ControllerConfig,
     route_control: Option<Arc<dyn RouteControl>>,
     session_cost: Option<Arc<dyn SessionCost>>,
@@ -475,6 +514,8 @@ impl ConnectTo<Conductor> for ControllerProxy {
         client: impl ConnectTo<Proxy>,
     ) -> Result<(), agent_client_protocol::Error> {
         let config = Arc::new(self.config);
+        #[cfg(feature = "core")]
+        let owned = self.owned;
         let route_control = self.route_control;
         let route_control_enabled = route_control.is_some();
         let session_cost = self.session_cost;
@@ -500,6 +541,8 @@ impl ConnectTo<Conductor> for ControllerProxy {
                       responder: Responder<InitializeResponse>,
                       connection: ConnectionTo<Conductor>| {
                     let config = std::sync::Arc::clone(&config);
+                    #[cfg(feature = "core")]
+                    let owned = owned.clone();
                     let initialize_state = std::sync::Arc::clone(&initialize_state);
                     async move {
                         if initialize_state
@@ -529,6 +572,16 @@ impl ConnectTo<Conductor> for ControllerProxy {
                                     return responder.respond_with_error(error);
                                 }
                             };
+                            #[cfg(feature = "core")]
+                            if let Some(owned) = &owned
+                                && (owned.check().is_err()
+                                    || response.agent_capabilities.providers.is_none())
+                            {
+                                initialize_state.store(INITIALIZE_FAILED, Ordering::SeqCst);
+                                return responder.respond_with_error(provider_configuration_error(
+                                    "owned provider configuration unavailable",
+                                ));
+                            }
                             if response.agent_capabilities.providers.is_some()
                                 && let Some(endpoint) = &config.endpoint
                                 && let Err(error) =

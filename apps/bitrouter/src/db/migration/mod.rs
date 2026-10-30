@@ -38,8 +38,26 @@ pub mod m20240101_000024_create_bro_runtime_ownership;
 pub mod m20240101_000025_create_bro_execution_index;
 mod m20240101_000026_bro_runtime_format;
 mod m20240101_000027_bro_managed_sessions;
+mod m20240101_000028_resource_tenancy;
+mod m20240101_000029_tenancy_configurations;
+mod m20240101_000030_eval_storage_scope;
+mod m20240101_000031_native_continuation_epoch;
+mod m20240101_000032_trajectory_storage_scope;
+mod m20240101_000033_capture_legacy_scope;
+mod m20240101_000034_continuation_storage_scope;
+mod m20240101_000035_execution_receipts;
+mod m20240101_000036_native_harness_scope;
+mod m20240101_000037_owned_oauth;
+mod m20240101_000038_eval_import_provenance;
 
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
+
+/// Read-only compatibility gate for the retired SQLite receipt reader.
+pub(crate) async fn validate_receipt_archive(
+    db: &impl sea_orm::ConnectionTrait,
+) -> Result<(), sea_orm::DbErr> {
+    m20240101_000035_execution_receipts::validate_archive(db).await
+}
 
 /// The bitrouter schema migrator — owns the ordered list of every
 /// migration the binary ships.
@@ -75,6 +93,17 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000025_create_bro_execution_index::Migration),
             Box::new(m20240101_000026_bro_runtime_format::Migration),
             Box::new(m20240101_000027_bro_managed_sessions::Migration),
+            Box::new(m20240101_000028_resource_tenancy::Migration),
+            Box::new(m20240101_000029_tenancy_configurations::Migration),
+            Box::new(m20240101_000030_eval_storage_scope::Migration),
+            Box::new(m20240101_000031_native_continuation_epoch::Migration),
+            Box::new(m20240101_000032_trajectory_storage_scope::Migration),
+            Box::new(m20240101_000033_capture_legacy_scope::Migration),
+            Box::new(m20240101_000034_continuation_storage_scope::Migration),
+            Box::new(m20240101_000035_execution_receipts::Migration),
+            Box::new(m20240101_000036_native_harness_scope::Migration),
+            Box::new(m20240101_000037_owned_oauth::Migration),
+            Box::new(m20240101_000038_eval_import_provenance::Migration),
         ]
     }
 }

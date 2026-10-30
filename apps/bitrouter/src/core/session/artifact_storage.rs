@@ -9,6 +9,14 @@ pub(super) fn check(
     prepared: &SessionSnapshot,
     host: &Limits,
 ) -> Result<(), CoreError> {
+    projected_bytes(state, prepared, host).map(|_| ())
+}
+
+pub(super) fn projected_bytes(
+    state: &SessionSnapshot,
+    prepared: &SessionSnapshot,
+    host: &Limits,
+) -> Result<u64, CoreError> {
     let calls = || {
         state
             .agents
@@ -94,7 +102,7 @@ pub(super) fn check(
     if bytes > state.manifest.artifact_quota_bytes {
         return Err(exhausted());
     }
-    Ok(())
+    Ok(bytes)
 }
 
 fn add(left: u64, right: u64) -> Result<u64, CoreError> {

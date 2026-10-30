@@ -14,10 +14,12 @@ dist = false
 [dependencies]
 registry-json.workspace = true
 semver = "1"
-bitrouter-ai.workspace = true
+bitrouter-ai = { workspace = true, features = ["schema"] }
 bitrouter-registry.workspace = true
 schemars.workspace = true
 serde_json.workspace = true
+# Proposed wire-fixture validation only; this helper is not a runtime dependency.
+jsonschema = { version = "0.47.0", default-features = false }
 anyhow.workspace = true
 chrono.workspace = true
 clap.workspace = true

@@ -2,6 +2,11 @@
 //! Core and harness share codecs without sharing live execution authority.
 
 pub(crate) mod acp_history;
+pub(crate) mod legacy;
+pub(crate) mod partition;
+
+#[cfg(feature = "core")]
+pub(crate) mod scope;
 
 pub mod checkpoint;
 
@@ -14,3 +19,5 @@ pub mod session_identity;
 pub mod capture;
 
 pub mod skills;
+
+pub(crate) mod operation_budget;

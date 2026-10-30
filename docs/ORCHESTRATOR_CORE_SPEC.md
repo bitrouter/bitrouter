@@ -498,6 +498,15 @@ Recovery rules:
   coverage blocks restoration. Per-attempt durations and disconnect duration
   cannot substitute for this measurement. Running tools then continue on the
   replacement's monotonic clock, including restore validation and ACK waits.
+  The private authenticated native stopped-owner participant has a separate
+  retirement path: it may cancel the old run with an immutable `activity_gaps` entry
+  keyed by run ID, naming the last durable head and known lower bound before
+  coverage was lost. `active_ms` is then
+  only a known lower bound. It supplies no clock attestation and cannot resume
+  old work; its repair and cancellation must commit before publishing a handle.
+  Ordinary restoration still rejects a nonterminal run with this gap, including
+  when a later caller supplies a clock value. A later explicit new run starts
+  independent accounting; the old gap remains in every subsequent snapshot.
 - Process-crash recovery is required. Cross-system exactly-once side effects,
   arbitrary power-loss durability and replayable private provider reasoning
   are not promised.

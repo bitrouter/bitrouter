@@ -55,6 +55,7 @@ impl CanonicalStore {
             let mut scoped = Vec::new();
             for captured in &segment.connections {
                 let row = connections::Entity::find_by_id(&captured.connection_id)
+                    .filter(crate::storage::legacy::scope("acp_capture_connections"))
                     .one(&self.db)
                     .await?
                     .context("capture connection missing")?;
@@ -148,6 +149,7 @@ impl CanonicalStore {
         );
         locked_manifest(&tx, identity, id, &locked_sessions).await?;
         if let Some(existing) = resources::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_resource_observations"))
             .filter(resources::Column::CheckpointId.eq(id))
             .order_by_desc(resources::Column::Revision)
             .lock_exclusive()
@@ -166,15 +168,16 @@ impl CanonicalStore {
             observation.previous_observation_id = Some(previous.observation_id);
         }
         observation.observation_id = digest(&(id, observation.revision, &content_digest))?;
-        resources::ActiveModel {
+        let inserted = resources::Entity::insert(resources::ActiveModel {
             observation_id: Set(observation.observation_id.clone()),
             checkpoint_id: Set(id.into()),
             revision: Set(observation.revision),
             observed_at: Set(observation.observed_at.clone()),
             observation_json: Set(serde_json::to_string(&observation)?),
-        }
-        .insert(&tx)
+        })
+        .exec_without_returning(&tx)
         .await?;
+        ensure!(inserted == 1, "resources row was not inserted");
         tx.commit().await?;
         Ok(observation)
     }
@@ -186,6 +189,7 @@ impl CanonicalStore {
     ) -> Result<Vec<ResourceObservation>> {
         manifest(&self.db, identity, id).await?;
         let rows = resources::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_resource_observations"))
             .filter(resources::Column::CheckpointId.eq(id))
             .order_by_asc(resources::Column::Revision)
             .all(&self.db)

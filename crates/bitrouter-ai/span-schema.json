@@ -898,6 +898,99 @@
   "meter_name": "bitrouter",
   "metrics": [
     {
+      "name": "bitrouter.receipt.capacity.bytes",
+      "instrument": "gauge",
+      "value_type": "int",
+      "unit": "By",
+      "note": "Opt-in admission policy byte accounting, not heap or physical filesystem usage. Independent callbacks may straddle sealing; require a complete immutable initial/final batch.",
+      "dimensions": [
+        {
+          "key": "field",
+          "type": "string",
+          "requirement": "required",
+          "note": "Fixed field: completion_reserved, accounted, ingress_reserved."
+        },
+        {
+          "key": "checkpoint",
+          "type": "string",
+          "requirement": "required",
+          "note": "Fixed checkpoint: initial, current, or final. No cross-callback or cross-batch current conservation."
+        }
+      ]
+    },
+    {
+      "name": "bitrouter.receipt.capacity.state",
+      "instrument": "gauge",
+      "value_type": "int",
+      "unit": "1",
+      "note": "Opt-in process-wide admission and durable Unknown state. available=0 omits unreadable values; final values require real producer cleanup and remain immutable.",
+      "dimensions": [
+        {
+          "key": "field",
+          "type": "string",
+          "requirement": "required",
+          "note": "Fixed field: potential_unknown, live_unknown, active, queued, ingress, closed, fenced, available."
+        },
+        {
+          "key": "checkpoint",
+          "type": "string",
+          "requirement": "required",
+          "note": "Fixed checkpoint: initial, current, or final. No cross-callback or cross-batch current conservation."
+        }
+      ]
+    },
+    {
+      "name": "bitrouter.receipt.queue_ready_to_durable",
+      "instrument": "histogram",
+      "value_type": "int",
+      "unit": "ns",
+      "note": "Opt-in first terminal queue to actual durable publication, including retries. Explicit bounds; never a caller output acknowledgement.",
+      "dimensions": [
+        {
+          "key": "receipt_class",
+          "type": "string",
+          "requirement": "required",
+          "note": "Fixed class: complete_completed, terminal_other, or evidence_unknown."
+        }
+      ]
+    },
+    {
+      "name": "bitrouter.receipt.phase.duration",
+      "instrument": "histogram",
+      "value_type": "int",
+      "unit": "ns",
+      "note": "Opt-in custody phase duration. SQL commit brackets only the original consuming await after phase entry.",
+      "dimensions": [
+        {
+          "key": "phase",
+          "type": "string",
+          "requirement": "required",
+          "note": "Fixed phase: first_queue, prepare, transaction, or sql_commit."
+        },
+        {
+          "key": "result",
+          "type": "string",
+          "requirement": "required",
+          "note": "Fixed result: observed, acknowledged, failed, or unconfirmed."
+        }
+      ]
+    },
+    {
+      "name": "bitrouter.receipt.observation",
+      "instrument": "counter",
+      "value_type": "int",
+      "unit": "1",
+      "note": "Bounded opt-in lifecycle and invalidity counters. A clean seal is not an exporter or receipt acknowledgement.",
+      "dimensions": [
+        {
+          "key": "event",
+          "type": "string",
+          "requirement": "required",
+          "note": "Fixed internal lifecycle event; never an identity, secret, error text, or user-defined label."
+        }
+      ]
+    },
+    {
       "name": "bitrouter.requests",
       "instrument": "counter",
       "value_type": "int",

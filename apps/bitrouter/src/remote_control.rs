@@ -125,7 +125,12 @@ fn current_capabilities(state: &ControlState, caller: &ControlCaller) -> Capabil
             })
             .collect(),
         server_instance_id: Some(state.instance.clone()),
-        scopes: caller.scopes().to_vec(),
+        scopes: caller
+            .scopes()
+            .iter()
+            .copied()
+            .filter(|scope| *scope != bitrouter_ai::control::ControlScope::Tenancy)
+            .collect(),
     }
 }
 
@@ -162,6 +167,7 @@ pub struct ControlServer {
     listen: SocketAddr,
     state: ControlState,
     auth: ControlAuth,
+    tenancy: Option<crate::tenancy::Service>,
 }
 
 /// A control listener whose address conflict has already been checked.
@@ -210,7 +216,13 @@ impl ControlServer {
                 instance: uuid::Uuid::new_v4().to_string(),
             },
             auth,
+            tenancy: None,
         }))
+    }
+
+    pub(crate) fn with_tenancy(mut self, tenancy: Option<crate::tenancy::Service>) -> Self {
+        self.tenancy = tenancy;
+        self
     }
 
     pub fn with_administration(mut self, administration: Administration) -> Self {
@@ -236,10 +248,14 @@ impl ControlServer {
         let listener = tokio::net::TcpListener::bind(self.listen)
             .await
             .with_context(|| format!("bind remote control listener {}", self.listen))?;
+        let mut router = control_router_with(self.state, self.auth.clone());
+        if let Some(tenancy) = self.tenancy {
+            router = router.merge(crate::tenancy::http::router(tenancy, self.auth));
+        }
         Ok(BoundControlServer {
             listen: self.listen,
             listener,
-            router: control_router_with(self.state, self.auth),
+            router,
         })
     }
 }
@@ -360,7 +376,7 @@ async fn require_control_token(
                         .find(|row| row.path == path)
                         .map(|row| row.scope)
                 });
-            if scope.is_some_and(|scope| !caller.permits(scope)) {
+            if !caller.permits(scope.unwrap_or(bitrouter_ai::control::ControlScope::Read)) {
                 ControlError::new(
                     StatusCode::FORBIDDEN,
                     "scope_denied",
@@ -423,7 +439,7 @@ async fn require_control_token(
     response
 }
 
-fn origin_matches_host(headers: &HeaderMap) -> bool {
+pub(crate) fn origin_matches_host(headers: &HeaderMap) -> bool {
     let Some(origin) = headers.get(header::ORIGIN) else {
         return true;
     };

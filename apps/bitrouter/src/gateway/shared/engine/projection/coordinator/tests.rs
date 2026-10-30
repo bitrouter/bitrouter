@@ -1,9 +1,8 @@
 //! Real PostgreSQL rollback and replay campaigns for the two projection phases.
 
 use super::*;
-use crate::gateway::shared::{
-    authority::Authority, crypto::DeploymentKey, schema, test_database::EmptyDatabase,
-};
+use crate::gateway::shared::{authority::Authority, schema, test_database::EmptyDatabase};
+use crate::runtime_crypto::DeploymentKey;
 use crate::storage::evaluation::shared::SharedEvaluation;
 use crate::trajectory::types::{
     BeginRequest, EpisodeStart, HistoryCompleteness, KeyedDigest, TRAJECTORY_SCHEMA_VERSION,

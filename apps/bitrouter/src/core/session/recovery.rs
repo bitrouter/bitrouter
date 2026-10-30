@@ -68,6 +68,46 @@ impl CoreSession {
         Register: FnOnce(CoreSession) -> Registered + Send,
         Registered: std::future::Future<Output = Result<(), CoreError>> + Send,
     {
+        app.require_legacy_core()?;
+        Self::restore_host(
+            request,
+            capabilities,
+            owned::Host {
+                app,
+                caller,
+                request_headers,
+                harness,
+                #[cfg(feature = "harness")]
+                owned: None,
+                #[cfg(feature = "harness")]
+                owned_journal: None,
+            },
+            register,
+        )
+        .await
+    }
+
+    pub(super) async fn restore_host<Register, Registered>(
+        request: Restore,
+        capabilities: &Capabilities,
+        host: owned::Host,
+        register: Register,
+    ) -> Result<Self, CoreError>
+    where
+        Register: FnOnce(CoreSession) -> Registered + Send,
+        Registered: std::future::Future<Output = Result<(), CoreError>> + Send,
+    {
+        host.check(&request.binding.grant)?;
+        let owned::Host {
+            app,
+            caller,
+            request_headers,
+            harness,
+            #[cfg(feature = "harness")]
+            owned,
+            #[cfg(feature = "harness")]
+            owned_journal,
+        } = host;
         let handoff = Instant::now();
         if !request.previous_owner_stopped {
             return Err(reject(
@@ -76,24 +116,63 @@ impl CoreSession {
             ));
         }
         let mut state = restore_snapshot(&request, capabilities, harness.as_ref()).await?;
+        #[cfg(feature = "harness")]
+        if let Some(binding) = &owned {
+            binding.check_restore()?;
+        }
         let workspace_changed =
             state.manifest.workspace_revision != request.binding.manifest.workspace_revision;
         state.manifest = request.binding.manifest.clone();
         let sent_tools = reconcile_tools(&mut state, &request, workspace_changed)?;
         responses::validate(&state, &request.binding)?;
-        recovery_time::reconcile(&mut state, &request)?;
         context_decisions::reconcile(&mut state);
         for work in state.context_store.work.values_mut() {
             if let Some(selection) = &mut work.skills {
                 selection.validated_step_count = None;
             }
         }
-        let outputs = resume_model_steps(&mut state);
+        #[cfg(feature = "harness")]
+        let recovery = owned
+            .as_ref()
+            .and_then(|binding| binding.recovery().cloned());
+        #[cfg(feature = "harness")]
+        let stopping = recovery.is_some();
+        #[cfg(not(feature = "harness"))]
+        let stopping = false;
+        #[cfg(feature = "harness")]
+        let activity_gap = if let Some(checked) = &recovery {
+            recovery_time::retire(&mut state, &request, checked)?
+        } else {
+            recovery_time::reconcile(&mut state, &request)?;
+            None
+        };
+        #[cfg(not(feature = "harness"))]
+        let activity_gap: Option<crate::storage::checkpoint::snapshot::ActivityGap> = {
+            recovery_time::reconcile(&mut state, &request)?;
+            None
+        };
+        let outputs = if stopping {
+            // Reconciliation records uncertainty. It never resumes a model step
+            // or applies a stored answer, which could dispatch tools/follow-ups.
+            for agent in state.agents.values_mut() {
+                if let Some(turn) = &mut agent.turn {
+                    for step in &mut turn.steps {
+                        if !step.settled {
+                            step.interrupted = true;
+                            step.settled = true;
+                        }
+                    }
+                }
+            }
+            Vec::new()
+        } else {
+            resume_model_steps(&mut state)
+        };
         let initialization = PendingInitialization {
             base_revision: request.binding.durable_head.state_revision,
             kind: "session.restored",
             payload: json!({"previous_owner_stopped":true,"tool_observations":request.tools,
-                "active_time":request.active_time,"workspace_changed":workspace_changed,
+                "active_time":request.active_time,"activity_gap":activity_gap,"workspace_changed":workspace_changed,
                 "interrupted_steps":state.agents.values().filter_map(|agent| agent.turn.as_ref())
                     .flat_map(|turn| &turn.steps).filter(|step| step.interrupted)
                     .map(|step| &step.step_id).collect::<Vec<_>>()}),
@@ -135,6 +214,10 @@ impl CoreSession {
                 app,
                 caller,
                 request_headers,
+                #[cfg(feature = "harness")]
+                owned,
+                #[cfg(feature = "harness")]
+                owned_journal,
                 harness,
                 limits: binding.limits,
                 capabilities: capabilities.clone(),
@@ -146,6 +229,13 @@ impl CoreSession {
         };
         register(session.clone()).await?;
         session.initialize().await?;
+        #[cfg(feature = "harness")]
+        if stopping {
+            session
+                .retire_stopped_native()
+                .await
+                .map_err(committed_restore_error)?;
+        }
         for (agent_id, step_id, request_id, output) in outputs {
             let state = session.snapshot().await;
             if state
@@ -175,6 +265,105 @@ impl CoreSession {
             .await
             .map_err(committed_restore_error)?;
         Ok(session)
+    }
+
+    #[cfg(feature = "harness")]
+    pub(crate) async fn retire_stopped_native(&self) -> Result<(), CoreError> {
+        let binding = self.shared.owned.as_ref().ok_or_else(|| {
+            reject(
+                ErrorCode::RecoveryRequired,
+                "native recovery binding missing",
+            )
+        })?;
+        let checked = binding.recovery().ok_or_else(|| {
+            reject(
+                ErrorCode::RecoveryRequired,
+                "native recovery participant missing",
+            )
+        })?;
+        if !checked.committed() {
+            return Err(reject(
+                ErrorCode::CheckpointUnavailable,
+                "native repair is not acknowledged",
+            ));
+        }
+        loop {
+            let state = self.snapshot().await;
+            let Some(entry) = state.root_queue.pending.front() else {
+                break;
+            };
+            self.cancel_run(
+                &id("recovery_cancel_queued"),
+                self.head().await.state_revision,
+                &entry.run_id,
+            )
+            .await?;
+        }
+        let state = self.snapshot().await;
+        if let Some(run) = &state.run
+            && !run.status.terminal()
+        {
+            self.cancel_run(
+                &id("recovery_cancel"),
+                self.head().await.state_revision,
+                &run.run_id,
+            )
+            .await?;
+            for agent in state.agents.values() {
+                if agent
+                    .turn
+                    .as_ref()
+                    .is_some_and(|turn| !turn.status.terminal())
+                    && !self.cleanup_interruption(&agent.agent_id).await?
+                {
+                    return Err(reject(
+                        ErrorCode::RecoveryRequired,
+                        "native retirement is not settled",
+                    ));
+                }
+            }
+            // Only terminal child notification is permitted here. There is
+            // no driver, queue advancement, model preparation or replay.
+            let settled = self.snapshot().await;
+            for agent in settled
+                .agents
+                .values()
+                .filter(|agent| agent.parent_id.is_some())
+            {
+                if agent
+                    .turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.status.terminal() && !turn.notified)
+                {
+                    // Ordinary advance_agent checks steering before terminal
+                    // notification. Retirement may use only its terminal arm.
+                    if steering::has_pending(&settled, &agent.agent_id)
+                        || !self.advance_agent(&agent.agent_id).await?
+                    {
+                        return Err(reject(
+                            ErrorCode::RecoveryRequired,
+                            "native child retirement is not acknowledged",
+                        ));
+                    }
+                }
+            }
+            if !self.finish_run_if_settled(&self.snapshot().await).await? {
+                return Err(reject(
+                    ErrorCode::RecoveryRequired,
+                    "native run retirement is not acknowledged",
+                ));
+            }
+        }
+        let state = self.snapshot().await;
+        if !state.root_queue.pending.is_empty()
+            || state.run.as_ref().is_some_and(|run| !run.status.terminal())
+        {
+            return Err(reject(
+                ErrorCode::RecoveryRequired,
+                "native predecessor remains runnable",
+            ));
+        }
+        Ok(())
     }
 
     /// Registration can be interrupted before a batch exists. Preserve its

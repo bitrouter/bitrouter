@@ -123,6 +123,8 @@ pub trait PromptTransform: Send + Sync {
 /// A fully assembled application: one pipeline per enabled protocol, plus the
 /// injected infrastructure and the collected migration set.
 pub struct App {
+    /// Installed only by successful product assembly; never an embedding setter.
+    tenancy: Option<crate::tenancy::Service>,
     language_model: Option<Arc<language_model::execution::Pipeline>>,
     decision_model: Option<crate::gateway::model::decision::DecisionRuntime>,
     mcp: Option<Arc<mcp::Pipeline>>,
@@ -137,8 +139,78 @@ pub struct App {
 }
 
 impl App {
+    #[cfg(feature = "core")]
+    pub(crate) fn require_legacy_core(
+        &self,
+    ) -> std::result::Result<(), bitrouter_ai::core::protocol::CoreError> {
+        if self.tenancy.is_some() {
+            return Err(bitrouter_ai::core::protocol::CoreError::rejected(
+                bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
+                "tenant Core requires the authenticated native harness",
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn native_session_service(
+        &self,
+    ) -> std::result::Result<crate::tenancy::Service, bitrouter_ai::core::protocol::CoreError> {
+        self.tenancy.clone().ok_or_else(|| {
+            bitrouter_ai::core::protocol::CoreError::rejected(
+                bitrouter_ai::core::protocol::ErrorCode::UnauthorizedScope,
+                "authenticated native harness requires tenancy",
+            )
+        })
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) async fn execute_native_owned(
+        &self,
+        step: &crate::tenancy::execution::session::StepBinding,
+        prompt: bitrouter_ai::types::Prompt,
+        headers: http::HeaderMap,
+        control: std::sync::Arc<dyn crate::gateway::pipeline::native::NativeExecutionControl>,
+    ) -> crate::gateway::error::Result<crate::gateway::pipeline::types::PipelineResponse> {
+        let service = self
+            .tenancy
+            .as_ref()
+            .ok_or_else(|| crate::gateway::error::BitrouterError::UpstreamUnavailable)?;
+        service
+            .execute_session_native(step, prompt, headers, control)
+            .await
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn capture_service(
+        &self,
+    ) -> std::result::Result<crate::tenancy::Service, anyhow::Error> {
+        self.tenancy
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("authenticated capture requires tenancy"))
+    }
+
+    pub(crate) fn owned_inference_router(&self, router: axum::Router) -> axum::Router {
+        match &self.tenancy {
+            Some(service) => router.layer(axum::middleware::from_fn_with_state(
+                service.clone(),
+                crate::tenancy::http::dispatch,
+            )),
+            None => router,
+        }
+    }
+
+    pub(crate) fn with_tenancy(mut self, service: crate::tenancy::Service) -> Self {
+        self.tenancy = Some(service);
+        self
+    }
+
     /// Typed decision backend injected by the host, independent of generation.
     pub fn decision_model(&self) -> Option<&crate::gateway::model::decision::DecisionRuntime> {
+        if self.tenancy.is_some() {
+            // A host-global decision backend has no owned child-execution proof.
+            return None;
+        }
         self.decision_model.as_ref()
     }
 
@@ -160,6 +232,11 @@ impl App {
         prompt: Prompt,
         caller: CallerContext,
     ) -> Result<PipelineResponse> {
+        if self.tenancy.is_some() {
+            return Err(crate::gateway::error::BitrouterError::Unauthorized(
+                "tenant native execution requires authenticated dispatch headers".into(),
+            ));
+        }
         if prompt.stream {
             return Err(crate::gateway::error::BitrouterError::bad_request(
                 "native model turns must be non-streaming",
@@ -205,6 +282,11 @@ impl App {
             return Err(crate::gateway::error::BitrouterError::bad_request(
                 "controlled model turns must be non-streaming",
             ));
+        }
+        if let Some(service) = &self.tenancy {
+            return service
+                .execute_native_controlled(prompt, headers, control)
+                .await;
         }
         let pipeline = self.language_model.as_ref().ok_or_else(|| {
             crate::gateway::error::BitrouterError::internal("no language_model pipeline configured")
@@ -281,6 +363,19 @@ impl App {
         caller: &CallerContext,
         request_ids: &[String],
     ) -> Result<Vec<crate::gateway::pipeline::native_accounting::NativeCostObservation>> {
+        if self.tenancy.is_some() {
+            // Public caller metadata cannot authorize a host-global cost lookup.
+            return Ok(request_ids
+                .iter()
+                .map(|request_id| {
+                    crate::gateway::pipeline::native_accounting::NativeCostObservation {
+                        request_id: request_id.clone(),
+                        claims: Vec::new(),
+                        unknown_reason: Some("owned_cost_source_unavailable".into()),
+                    }
+                })
+                .collect());
+        }
         if let Some(source) = self
             .language_model
             .as_ref()
@@ -312,6 +407,11 @@ impl App {
         String,
         Pin<Box<dyn Stream<Item = Result<StreamPart>> + Send>>,
     )> {
+        if self.tenancy.is_some() {
+            return Err(crate::gateway::error::BitrouterError::Unauthorized(
+                "tenant native execution requires authenticated dispatch headers".into(),
+            ));
+        }
         let pipeline = self.language_model.as_ref().ok_or_else(|| {
             crate::gateway::error::BitrouterError::internal("no language_model pipeline configured")
         })?;
@@ -692,6 +792,7 @@ impl AppBuilder {
         };
 
         Ok(App {
+            tenancy: None,
             language_model,
             decision_model: self.decision_model,
             mcp,

@@ -290,6 +290,9 @@ impl SharedNative {
                     .checked_add_signed(retention)
                     .context("shared native purge exceeds supported time")?;
                 let mut row = continuation_entity::Model {
+                    installation_id: None,
+                    tenant_id: None,
+                    creator_principal_id: None,
                     continuation_identity: identity.clone(),
                     owner_identity: owner_identity.clone(),
                     ciphertext: None,

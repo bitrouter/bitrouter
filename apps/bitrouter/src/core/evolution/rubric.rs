@@ -6,7 +6,7 @@ use crate::storage::evolution::digest;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::evidence::{EVIDENCE_VERSION, EvidencePacket};
+use super::evidence::{EvidencePacket, validate_projection};
 use crate::acp_trajectory::checkpoint::types::{
     AssessmentContent, CriterionScore, EvidenceCitation,
 };
@@ -142,10 +142,7 @@ impl QualityBounds {
 
 impl RubricEvaluation {
     pub fn aggregate(&self, packet: &EvidencePacket) -> Result<QualityBounds> {
-        ensure!(
-            packet.projection_version == EVIDENCE_VERSION,
-            "unsupported evidence projection; prepare the checkpoint with the current evaluator"
-        );
+        validate_projection(&packet.projection_version)?;
         ensure!(
             self.rubric_version == RUBRIC_VERSION,
             "unsupported rubric version"

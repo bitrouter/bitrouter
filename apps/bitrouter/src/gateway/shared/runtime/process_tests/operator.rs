@@ -46,13 +46,19 @@ async fn official_operator_receipts_cross_replicas_and_survive_readiness_loss() 
         let configuration = fixture.authority.configuration(&head).await?;
         let prepared = fixture.authority.prepare_publication(head.config_generation, &configuration)?;
         let store = fixture.authority.store();
-        let tx = store.begin().await?;
-        let mut failed = fixture.authority.fence_exclusive(&tx).await?;
-        fixture.authority.publish_in(&tx, &mut failed, &prepared).await?;
-        let mut publication = store.lock::<Value>(&tx, Kind::Authority, &format!("configuration/{}", failed.value.config_generation)).await?;
-        store.save(&tx, &mut publication, "retained", None, Store::now(&tx).await?).await?;
-        let failed = failed.value;
-        tx.commit().await?;
+        // Live replicas also transact while this storage fault is installed.
+        // Retry only proven aborts of this complete local transaction, using
+        // the same bounded helper as ordinary shared-authority publication.
+        let failed = store.retry(|| async {
+            let tx = store.begin().await?;
+            let mut failed = fixture.authority.fence_exclusive(&tx).await?;
+            fixture.authority.publish_in(&tx, &mut failed, &prepared).await?;
+            let mut publication = store.lock::<Value>(&tx, Kind::Authority, &format!("configuration/{}", failed.value.config_generation)).await?;
+            store.save(&tx, &mut publication, "retained", None, Store::now(&tx).await?).await?;
+            let failed = failed.value;
+            tx.commit().await?;
+            Ok(failed)
+        }).await?;
         for index in [a, b] {
             let address = fixture.child(index)?.address;
             tokio::time::timeout(Duration::from_secs(4), async {

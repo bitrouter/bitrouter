@@ -471,6 +471,9 @@ fn restart_required_fields(
     if current.control != candidate.control {
         fields.insert("control".to_string());
     }
+    if current.tenancy != candidate.tenancy {
+        fields.insert("tenancy".to_string());
+    }
     if current.chat != candidate.chat {
         fields.insert("chat".to_string());
     }
@@ -1073,6 +1076,7 @@ fn fixed_top_level_field(name: &str) -> &'static str {
     match name {
         "server" => "server",
         "control" => "control",
+        "tenancy" => "tenancy",
         "chat" => "chat",
         "upstream" => "upstream",
         "database" => "database",
@@ -1135,6 +1139,7 @@ fn fixed_restart_field(path: &str) -> String {
         | "server.require_known_pricing" => path.to_string(),
         "inherit_defaults"
         | "control"
+        | "tenancy"
         | "decision_model"
         | "chat"
         | "database.url"

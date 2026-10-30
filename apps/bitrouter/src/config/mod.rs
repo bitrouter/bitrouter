@@ -49,6 +49,7 @@ pub mod routing_table;
 pub mod server_tools;
 pub(crate) mod shared_process;
 pub mod skills;
+pub mod tenancy;
 pub(crate) mod yaml;
 
 #[cfg(test)]
@@ -105,6 +106,8 @@ pub struct Config {
     pub server: ServerConfig,
     /// Opt-in, read-only operator control API settings.
     pub control: ControlConfig,
+    /// Opt-in local resource-tenancy authority.
+    pub tenancy: tenancy::TenancyConfig,
     /// Opt-in privileged BRO coding task API, separate from inference and control.
     pub agent_api: AgentApiConfig,
     /// Typed decision backend for native context routing. Absent means the
@@ -177,6 +180,7 @@ impl Default for Config {
             registry_models: None,
             server: ServerConfig::default(),
             control: ControlConfig::default(),
+            tenancy: tenancy::TenancyConfig::default(),
             agent_api: AgentApiConfig::default(),
             decision_model: None,
             chat: ChatConfig::default(),
@@ -1374,7 +1378,7 @@ impl Default for ProviderConfig {
 }
 
 impl ProviderConfig {
-    fn outbound_headers(&self) -> Result<Vec<OutboundHeaderRule>> {
+    pub(crate) fn outbound_headers(&self) -> Result<Vec<OutboundHeaderRule>> {
         let mut names = HashSet::new();
         let mut rules = Vec::with_capacity(self.headers.len());
         for (name, config) in &self.headers {
@@ -1833,6 +1837,9 @@ pub(crate) fn parse_resolved(document: &str) -> Result<Config> {
     config
         .gateway_state
         .validate(&config.database.url, config.server.skip_auth)?;
+    config.tenancy.validate(&config).map_err(|error| {
+        BitrouterError::bad_request(format!("invalid tenancy configuration: {error}"))
+    })?;
     config.validate_router_config()?;
     validate_trajectory_config(&config.trajectory)?;
     validate_continuation_config(&config.continuation)?;

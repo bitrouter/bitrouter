@@ -13,6 +13,7 @@ use std::time::Duration;
 use crate::config::mcp::McpServerConfig;
 use crate::config::skills::SkillsConfig;
 use crate::gateway::caller::CallerContext;
+use crate::gateway::mcp::client::Discovery;
 #[cfg(feature = "core")]
 use bitrouter_ai::types::Tool;
 use bitrouter_ai::types::ToolResultOutput;
@@ -131,11 +132,31 @@ impl HarnessInventoryExt for HarnessInventory {
 /// are closed before settlement; cold history/open operations never create one.
 pub(crate) struct HarnessResources {
     pub(crate) inventory: HarnessInventory,
-    mcp: Mutex<mcp::McpConnections>,
+    mcp: Arc<Mutex<mcp::McpConnections>>,
     skill_policy: SkillsConfig,
     caller: CallerContext,
     workspace: PathBuf,
     library: Option<Arc<dyn crate::skills::library::SkillDirectory>>,
+}
+
+/// Retained connection custody and authority for one discovery pass.
+pub(super) struct DiscoveryOwner<'a> {
+    mcp: Arc<Mutex<mcp::McpConnections>>,
+    discovery: &'a Discovery,
+}
+
+// New skill discovery must obey the same per-poll authority fence as MCP
+// connection discovery. Constructing an async future alone does not perform I/O.
+async fn discover_with_authority<F: std::future::Future>(
+    discovery: &Discovery,
+    work: F,
+) -> Result<F::Output, String> {
+    tokio::pin!(work);
+    std::future::poll_fn(|cx| match discovery.with(|| work.as_mut().poll(cx)) {
+        Ok(poll) => poll.map(Ok),
+        Err(error) => std::task::Poll::Ready(Err(error)),
+    })
+    .await
 }
 
 impl HarnessResources {
@@ -147,15 +168,41 @@ impl HarnessResources {
         cancel: &CancellationToken,
         max_duration: Duration,
     ) -> Result<Self, ResourceError> {
+        Self::discover_in(
+            workspace,
+            config,
+            caller,
+            mode,
+            cancel,
+            max_duration,
+            DiscoveryOwner {
+                mcp: Arc::new(Mutex::new(mcp::McpConnections::default())),
+                discovery: &Discovery::default(),
+            },
+        )
+        .await
+    }
+
+    pub(super) async fn discover_in(
+        workspace: &Path,
+        config: &HarnessConfig,
+        caller: &CallerContext,
+        mode: ToolMode,
+        cancel: &CancellationToken,
+        max_duration: Duration,
+        owner: DiscoveryOwner<'_>,
+    ) -> Result<Self, ResourceError> {
+        let DiscoveryOwner { mcp, discovery } = owner;
         let started = std::time::Instant::now();
         let mut roots = vec![workspace.to_path_buf()];
         roots.extend(config.skill_roots.clone());
-        let catalog = tokio::task::spawn_blocking(move || skills::SkillCatalog::discover(&roots))
+        let catalog = discovery
+            .with(|| tokio::task::spawn_blocking(move || skills::SkillCatalog::discover(&roots)))?
             .await
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
         let local_skills = if let Some(library) = &config.library {
-            match library.catalog(workspace, caller).await {
+            match discover_with_authority(discovery, library.catalog(workspace, caller)).await? {
                 Ok(catalog) => catalog,
                 Err(error) => bitrouter_ai::harness::skills::LocalSkillCatalog {
                     skills: Vec::new(),
@@ -190,15 +237,20 @@ impl HarnessResources {
             })
             .cloned()
             .collect();
-        let mut connections = mcp::McpConnections::connect_scoped(
-            workspace,
-            &servers,
-            &tool_servers,
-            config.protocol.clone(),
-            cancel,
-            max_duration.saturating_sub(started.elapsed()),
-        )
-        .await?;
+        let mut connections = mcp.lock().await;
+        connections
+            .connect_in_place(
+                workspace,
+                crate::gateway::mcp::client::ConnectionCatalog {
+                    servers: &servers,
+                    tool_servers: &tool_servers,
+                },
+                config.protocol.clone(),
+                cancel,
+                max_duration.saturating_sub(started.elapsed()),
+                discovery,
+            )
+            .await?;
         let mut encoded = serde_json::to_value((
             workspace,
             servers,
@@ -216,11 +268,26 @@ impl HarnessResources {
         };
         let mut mcp_skills = bitrouter_ai::harness::skills::McpSkillCatalog::default();
         for server in allowed_sources {
-            let result = tokio::time::timeout(
-                max_duration.saturating_sub(started.elapsed()),
-                connections.list_skills(&server, &access, cancel),
+            let result = discover_with_authority(
+                discovery,
+                tokio::time::timeout(
+                    max_duration.saturating_sub(started.elapsed()),
+                    connections.list_skills(&server, &access, cancel),
+                ),
             )
             .await;
+            let result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    return match connections.shutdown().await {
+                        Ok(()) => Err(error.into()),
+                        Err(cleanup) => Err(ResourceError {
+                            message: format!("{error}; {cleanup}"),
+                            cleanup_unknown: true,
+                        }),
+                    };
+                }
+            };
             let result = match result {
                 Ok(result) => result,
                 Err(_) => Err("MCP skill discovery exceeded the remaining Turn time".into()),
@@ -261,9 +328,10 @@ impl HarnessResources {
                 }),
             };
         }
+        drop(connections);
         Ok(Self {
             inventory,
-            mcp: Mutex::new(connections),
+            mcp,
             skill_policy: config.skills.clone(),
             caller: caller.clone(),
             workspace: workspace.to_path_buf(),

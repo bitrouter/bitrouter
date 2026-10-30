@@ -1,5 +1,6 @@
 //! Real database evidence for mutation receipts, without an operator HTTP server.
 
+use crate::runtime_crypto::DeploymentKey;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -12,7 +13,6 @@ use crate::gateway::providers::auth::store::CredentialKey;
 use crate::gateway::shared::{
     authority::Authority,
     credentials::Credentials,
-    crypto::DeploymentKey,
     engine::{Admission, AdmissionResult, Engine, TrajectoryBinding},
     schema,
     store::{self, Kind, Store, Stored},

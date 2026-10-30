@@ -176,43 +176,7 @@ impl AuthApplier for ClaudeCodeAuthApplier {
         body: &mut serde_json::Value,
         _target: &ModelTarget,
     ) -> Result<()> {
-        unwrap_litellm_extra_body(body)?;
-        // A/B against the first-party CLI shows the subscription endpoint
-        // returns a generic 429 for an OAuth-shaped request that lacks a
-        // recognized agent identity. Headers alone are insufficient. Add the
-        // current SDK identity only on the explicit claude-code route, retain
-        // every client system block, and do nothing for genuine/legacy Claude
-        // Code bodies that already carry an identity.
-        if system_has_agent_identity(body) {
-            return Ok(());
-        }
-        let object = body.as_object_mut().ok_or_else(|| {
-            ModelError::configuration("claude-code request body must be a JSON object")
-        })?;
-        let identity = serde_json::json!({
-            "type": "text",
-            "text": headers::CLAUDE_AGENT_SYSTEM_PROMPT,
-        });
-        let system = match object.remove("system") {
-            None | Some(serde_json::Value::Null) => serde_json::Value::Array(vec![identity]),
-            Some(serde_json::Value::String(text)) => serde_json::Value::Array(vec![
-                identity,
-                serde_json::json!({ "type": "text", "text": text }),
-            ]),
-            Some(serde_json::Value::Array(mut blocks)) => {
-                blocks.insert(0, identity);
-                serde_json::Value::Array(blocks)
-            }
-            Some(other) => {
-                object.insert("system".to_string(), other);
-                return Err(ModelError::Provider {
-                    status: 400,
-                    message: "claude-code request has an invalid Anthropic system field".into(),
-                });
-            }
-        };
-        object.insert("system".to_string(), system);
-        Ok(())
+        normalize_owned_body(body)
     }
     async fn refresh_after_unauthorized(
         &self,
@@ -232,6 +196,47 @@ impl AuthApplier for ClaudeCodeAuthApplier {
             .await?;
         Ok(true)
     }
+}
+
+/// Deterministic Claude Code body adaptation shared by explicit owned and Legacy sessions.
+pub(crate) fn normalize_owned_body(body: &mut serde_json::Value) -> Result<()> {
+    unwrap_litellm_extra_body(body)?;
+    // A/B against the first-party CLI shows the subscription endpoint
+    // returns a generic 429 for an OAuth-shaped request that lacks a
+    // recognized agent identity. Headers alone are insufficient. Add the
+    // current SDK identity only on the explicit claude-code route, retain
+    // every client system block, and do nothing for genuine/legacy Claude
+    // Code bodies that already carry an identity.
+    if system_has_agent_identity(body) {
+        return Ok(());
+    }
+    let object = body.as_object_mut().ok_or_else(|| {
+        ModelError::configuration("claude-code request body must be a JSON object")
+    })?;
+    let identity = serde_json::json!({
+        "type": "text",
+        "text": headers::CLAUDE_AGENT_SYSTEM_PROMPT,
+    });
+    let system = match object.remove("system") {
+        None | Some(serde_json::Value::Null) => serde_json::Value::Array(vec![identity]),
+        Some(serde_json::Value::String(text)) => serde_json::Value::Array(vec![
+            identity,
+            serde_json::json!({ "type": "text", "text": text }),
+        ]),
+        Some(serde_json::Value::Array(mut blocks)) => {
+            blocks.insert(0, identity);
+            serde_json::Value::Array(blocks)
+        }
+        Some(other) => {
+            object.insert("system".to_string(), other);
+            return Err(ModelError::Provider {
+                status: 400,
+                message: "claude-code request has an invalid Anthropic system field".into(),
+            });
+        }
+    };
+    object.insert("system".to_string(), system);
+    Ok(())
 }
 
 /// Normalize LiteLLM's provider-extension container before calling Anthropic.

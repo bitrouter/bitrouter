@@ -590,6 +590,7 @@ impl PolicyTableRouter {
         respect_explicit_route: bool,
         apply_tool_floor: bool,
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
+        owned_assignment: Option<&bitrouter_ai::eval::EvalExperimentRef>,
     ) -> PolicyDecision {
         // Keep this exact immutable table alive through guards, recording, and
         // final target materialization, even if a concurrent reload swaps the
@@ -690,11 +691,12 @@ impl PolicyTableRouter {
                 && admitted(&exploration.target_request_key)
         });
         let (assigned_tier, experiment) = match matching_exploration {
-            Some(exploration) => match exploration
-                .assignment(&decision.workflow_identity)
-                .ok()
-                .flatten()
-            {
+            Some(exploration) => match owned_assignment.cloned().or_else(|| {
+                exploration
+                    .assignment(&decision.workflow_identity)
+                    .ok()
+                    .flatten()
+            }) {
                 Some(assignment) => {
                     let tier = match assignment.arm {
                         ExperimentArm::Control => exploration.champion_tier.as_str(),
@@ -750,7 +752,7 @@ impl PolicyTableRouter {
     ) -> bool {
         let input_model = prompt.model.clone();
         let input_effort = prompt.params.reasoning_effort;
-        let decision = self.decision_for_inner(prompt, headers, true, true, Some(assessment));
+        let decision = self.decision_for_inner(prompt, headers, true, true, Some(assessment), None);
         let selected =
             self.record_decision(input_model, input_effort, decision, headers, None, None);
         let Some(target) = selected else {
@@ -777,7 +779,7 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> PolicyDecision {
-        self.decision_for_inner(prompt, headers, false, true, Some(assessment))
+        self.decision_for_inner(prompt, headers, false, true, Some(assessment), None)
     }
 
     #[cfg(test)]
@@ -787,7 +789,7 @@ impl PolicyTableRouter {
         headers: &HeaderMap,
         assessment: &crate::gateway::routing::assessment::Assessment,
     ) -> PolicyDecision {
-        self.decision_for_inner(prompt, headers, false, false, Some(assessment))
+        self.decision_for_inner(prompt, headers, false, false, Some(assessment), None)
     }
 
     pub(crate) fn decision_for_routing(
@@ -797,7 +799,24 @@ impl PolicyTableRouter {
         assessment: Option<&crate::gateway::routing::assessment::Assessment>,
         guarded: bool,
     ) -> PolicyDecision {
-        self.decision_for_inner(prompt, headers, false, !guarded, assessment)
+        self.decision_for_inner(prompt, headers, false, !guarded, assessment, None)
+    }
+
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) fn decision_for_owned_experiment(
+        &self,
+        prompt: &Prompt,
+        headers: &HeaderMap,
+        assessment: Option<&crate::gateway::routing::assessment::Assessment>,
+        witness: &crate::tenancy::experiment::Witness,
+    ) -> crate::gateway::error::Result<PolicyDecision> {
+        let treatment = self.exploration.as_ref().ok_or_else(|| {
+            crate::gateway::error::BitrouterError::Forbidden(
+                "native experiment policy is absent".into(),
+            )
+        })?;
+        let assignment = witness.assignment_for(treatment)?;
+        Ok(self.decision_for_inner(prompt, headers, false, false, assessment, Some(assignment)))
     }
 
     pub(crate) fn apply_guarded_route(
@@ -1331,7 +1350,7 @@ mod tests {
             headers: &HeaderMap,
             assessment: &Assessment,
         ) -> PolicyDecision {
-            self.decision_for_inner(prompt, headers, true, true, Some(assessment))
+            self.decision_for_inner(prompt, headers, true, true, Some(assessment), None)
         }
     }
 

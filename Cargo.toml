@@ -165,8 +165,9 @@ rmcp = { version = "3.3", default-features = false, features = [
 ] }
 
 # database — sea-orm is the only database dependency in the workspace.
-# bitrouter depends on this high-level ORM abstraction, never on a concrete
-# driver. SQLite is the base backend; application `db-postgres` / `db-mysql`
+# Queries use this high-level ORM abstraction. SQLite pool construction uses
+# SeaORM's re-exported driver to retain file ownership for the pool lifetime.
+# SQLite is the base backend; application `db-postgres` / `db-mysql`
 # features activate the other drivers in both ORM and migration dependencies.
 # The schema is defined as `sea-orm-migration` Rust code, not SQL.
 sea-orm = { version = "1", default-features = false, features = [

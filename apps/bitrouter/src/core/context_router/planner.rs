@@ -8,6 +8,9 @@ use crate::storage::checkpoint::snapshot::context::view::{
 use crate::storage::checkpoint::snapshot::context::{ContextStore, digest, invalid};
 use bitrouter_ai::core::protocol::{CoreError, ErrorCode, HarnessManifest};
 
+#[cfg(test)]
+mod tests;
+
 impl SourceRevision {
     pub fn capture(
         context_revision: u64,

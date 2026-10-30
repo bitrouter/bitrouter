@@ -33,6 +33,7 @@ impl EvalService {
         result: EvaluationResult,
         principal: SubmissionPrincipal,
     ) -> anyhow::Result<AdmissionOutcome> {
+        self.store.legacy_only()?;
         admission::submit(&self.store, &self.config, result, principal).await
     }
 }

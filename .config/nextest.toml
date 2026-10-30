@@ -19,6 +19,22 @@ slow-timeout = { period = "60s", terminate-after = 5 }
 core-tree-pressure = { max-threads = 1 }
 shared-gateway-process = { max-threads = 1 }
 
+# These two real-provider campaigns fill the unchanged 8 MiB Choice receipt
+# budget over dozens of native turns. Full growing snapshots are deliberately
+# retained and checked on every turn; debug serialization needs a bounded
+# aggregate allowance beyond each unchanged operation deadline.
+[[profile.default.overrides]]
+filter = 'test(tenancy::tests::execution::native::session::choice::headroom::)'
+test-group = 'core-tree-pressure'
+slow-timeout = { period = "60s", terminate-after = 35 }
+
+# This fixed 128-run campaign grows shared retained experiment history.
+# Reserve all test slots so unrelated cases cannot consume its 180s aggregate
+# budget. Internal concurrency, operation deadlines and assertions are unchanged.
+[[profile.default.overrides]]
+filter = 'test(=tenancy::tests::execution::native::session::experiment::consumer::native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort)'
+threads-required = "num-test-threads"
+
 # Each shared process campaign owns a PostgreSQL workload and multiple servers.
 # Keep separate campaigns from competing for host resources, including the
 # delayed-database C16 cases. Concurrency inside each campaign is unchanged.
@@ -58,3 +74,10 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 [[profile.default.overrides]]
 filter = 'test(tui_coding_publication_and_rollback)'
 slow-timeout = { period = "60s", terminate-after = 41 }
+
+# This opt-in campaign creates every one of the frozen 100,000 operation rows
+# through the HTTP SDK. Only the aggregate test allowance is larger; individual
+# management, SQL, offline and cleanup deadlines keep their product bounds.
+[[profile.default.overrides]]
+filter = 'test(offline::recovery::tests::saturation::)'
+slow-timeout = { period = "60s", terminate-after = 35 }

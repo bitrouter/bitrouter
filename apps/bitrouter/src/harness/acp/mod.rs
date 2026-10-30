@@ -57,6 +57,7 @@
 
 pub mod capture;
 pub mod client;
+pub mod controlled;
 pub mod controller;
 pub mod journal;
 #[cfg(feature = "harness")]

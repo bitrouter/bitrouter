@@ -1,3 +1,6 @@
+#[cfg(any(feature = "core", feature = "multi-instance"))]
+pub(crate) mod headroom;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};

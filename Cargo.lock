@@ -1619,6 +1619,7 @@ dependencies = [
  "clap",
  "flate2",
  "hex",
+ "jsonschema",
  "regex",
  "reqwest",
  "schemars 1.2.1",

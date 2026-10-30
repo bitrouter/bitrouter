@@ -24,10 +24,13 @@ use bitrouter_ai::core::protocol::{
 };
 use bitrouter_ai::harness::agent::ToolMode;
 
+#[cfg(test)]
+mod timing;
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(in crate::harness::resources::managed) struct StoredArtifact {
-    reference: ArtifactRef,
-    content_base64: String,
+    pub(super) reference: ArtifactRef,
+    pub(super) content_base64: String,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -50,8 +53,10 @@ pub(in crate::harness::resources::managed) struct Journal {
     pub ack: Option<CheckpointAck>,
     pub released: bool,
     pub starts: BTreeMap<String, StartedTool>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) owned_choices: BTreeMap<String, super::choice::Record>,
     pub fences: BTreeSet<ToolStartFence>,
-    artifacts: BTreeMap<String, StoredArtifact>,
+    pub(super) artifacts: BTreeMap<String, StoredArtifact>,
 }
 
 impl Journal {
@@ -73,9 +78,26 @@ impl Journal {
             ack: None,
             released: false,
             starts: BTreeMap::new(),
+            owned_choices: BTreeMap::new(),
             fences: BTreeSet::new(),
             artifacts: BTreeMap::new(),
         }
+    }
+
+    pub(super) fn validate_model_artifacts(
+        &self,
+        references: &[ArtifactRef],
+    ) -> Result<(), CoreError> {
+        let mut visited = BTreeSet::new();
+        for reference in references {
+            self.require_artifact(reference, &mut visited)?;
+        }
+        // Completed artifact uploads may precede their next checkpoint. Validate
+        // them too, without treating an unreferenced object as model authority.
+        for artifact in self.artifacts.values() {
+            self.require_artifact(&artifact.reference, &mut visited)?;
+        }
+        Ok(())
     }
 
     pub fn available(&self) -> Vec<ArtifactRef> {
@@ -85,7 +107,7 @@ impl Journal {
             .collect()
     }
 
-    fn require_artifact(
+    pub(super) fn require_artifact(
         &self,
         reference: &ArtifactRef,
         visited: &mut BTreeSet<String>,
@@ -137,6 +159,9 @@ pub(in crate::harness::resources::managed) struct NativePort {
     pub commands: mpsc::Sender<ServerMessage>,
     pub active: std::sync::Mutex<BTreeMap<String, CancellationToken>>,
     pub failed: AtomicBool,
+    recovery: Option<Arc<crate::tenancy::session::recovery::CheckedRecovery>>,
+    owned: Option<Arc<crate::tenancy::execution::session::Binding>>,
+    restoring: AtomicBool,
     staging: Mutex<BTreeMap<String, (ArtifactRef, Vec<u8>)>>,
 }
 
@@ -155,14 +180,139 @@ impl NativePort {
             commands,
             active: Default::default(),
             failed: AtomicBool::new(false),
+            recovery: None,
+            owned: None,
+            restoring: AtomicBool::new(false),
             staging: Default::default(),
         }
     }
 
-    pub async fn persist(&self, state: &mut DurableState, next: Journal) -> Result<(), CoreError> {
-        self.authorize_dispatch().await?;
-        let bytes =
-            serde_json::to_vec(&next).map_err(|_| error("native journal encoding failed"))?;
+    pub fn new_owned(
+        revision: u64,
+        journal: Journal,
+        store: Arc<dyn NativeStore>,
+        commands: mpsc::Sender<ServerMessage>,
+        resources: Arc<super::super::NativeResources>,
+        binding: Arc<crate::tenancy::execution::session::Binding>,
+    ) -> Self {
+        let mut port = Self::new(revision, journal, store, commands, resources);
+        port.owned = Some(binding);
+        port.restoring.store(true, Ordering::Release);
+        port
+    }
+
+    pub(in crate::harness::resources::managed) async fn reconcile_owned(
+        &self,
+        store: &crate::managed_store::owned::Store,
+    ) -> Result<(), CoreError> {
+        // Serialize with every mutation of this same row, including artifact ACKs.
+        let mut state = self.state.lock().await;
+        let loaded = store.reconcile().await?;
+        let journal: Journal = serde_json::from_slice(&loaded.journal)
+            .map_err(|_| error("native readback journal is invalid"))?;
+        let binding = self
+            .owned
+            .as_ref()
+            .ok_or_else(|| error("native readback binding missing"))?;
+        binding.grant(&journal.grant)?;
+        super::choice::validate(&journal, Some(binding))?;
+        let attempted = store.matches_attempt(&loaded)?;
+        let same = crate::managed_store::owned::encode(&journal)
+            .map_err(|_| error("native readback bound"))?
+            == crate::managed_store::owned::encode(&state.journal)
+                .map_err(|_| error("native readback bound"))?;
+        if !((same && loaded.revision == state.revision) || attempted) {
+            return Err(error("native readback does not match the retained write"));
+        }
+        state.revision = loaded.revision;
+        state.journal = journal;
+        store.confirm_readback();
+        self.failed.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    pub(super) async fn preflight_choices(
+        &self,
+        payload: &bitrouter_ai::core::checkpoint::CheckpointPayload,
+        head: &DurableHead,
+    ) -> Result<(), CoreError> {
+        let state = self.state.lock().await;
+        self.healthy()?;
+        if &state.journal.head != head {
+            return Err(error("native Choice preflight head changed"));
+        }
+        super::choice::apply(&state.journal, payload, self.owned.as_deref()).map(|_| ())
+    }
+
+    pub(in crate::harness::resources::managed) fn recovering(
+        mut self,
+        checked: Option<Arc<crate::tenancy::session::recovery::CheckedRecovery>>,
+    ) -> Self {
+        self.recovery = checked;
+        self
+    }
+    pub fn restored(&self) {
+        self.restoring.store(false, Ordering::Release);
+    }
+
+    fn healthy(&self) -> Result<(), CoreError> {
+        if self.failed.load(Ordering::Acquire) {
+            Err(error("native durable authority requires reconciliation"))
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn with_dispatch<T>(&self, work: impl FnOnce() -> T) -> Result<T, CoreError> {
+        self.healthy()?;
+        match &self.owned {
+            Some(binding) => binding.with_dispatch(work),
+            None => Ok(work()),
+        }
+    }
+
+    // A resource future may wait for a connection or a local reader before it
+    // admits I/O. Revalidate on the poll that resumes it, keeping the authority
+    // guard only for that poll and retaining resource custody in this port.
+    async fn poll_dispatch<F: std::future::Future>(&self, work: F) -> Result<F::Output, CoreError> {
+        tokio::pin!(work);
+        std::future::poll_fn(|cx| match self.with_dispatch(|| work.as_mut().poll(cx)) {
+            Ok(poll) => poll.map(Ok),
+            Err(error) => std::task::Poll::Ready(Err(error)),
+        })
+        .await
+    }
+
+    pub async fn persist(
+        &self,
+        state: &mut DurableState,
+        mut next: Journal,
+    ) -> Result<(), CoreError> {
+        #[cfg(test)]
+        let mut timing = timing::Scope::new(timing::Operation::NativePersist);
+        #[cfg(test)]
+        timing.revisions(state.journal.head.state_revision, state.revision);
+        self.healthy()?;
+        if let Some(checked) = self.recovery.as_ref().filter(|checked| !checked.retired()) {
+            super::recovery::apply_links(&mut next, checked)
+                .map_err(|_| error("native recovery links invalid"))?;
+            checked
+                .budget
+                .charge(
+                    0,
+                    usize::try_from(crate::storage::checkpoint::serialized_bytes(&next)?)
+                        .map_err(|_| error("native recovery byte bound"))?,
+                )
+                .map_err(|_| error("native recovery byte bound"))?;
+        }
+        #[cfg(test)]
+        timing.mark_persist(timing::PersistStage::Recovery);
+        let bytes = if self.owned.is_some() {
+            crate::managed_store::owned::encode(&next)
+                .map_err(|_| error("native journal exceeds storage allowance"))?
+        } else {
+            serde_json::to_vec(&next).map_err(|_| error("native journal encoding failed"))?
+        };
         if bytes.len() > MAX_STORE_BYTES {
             return Err(error("native journal exceeds storage allowance"));
         }
@@ -170,12 +320,22 @@ impl NativePort {
             .revision
             .checked_add(1)
             .ok_or_else(|| error("native store revision exhausted"))?;
+        #[cfg(test)]
+        timing.mark_persist(timing::PersistStage::Encode);
         if let Err(error) = self.store.save(state.revision, bytes).await {
-            self.failed.store(true, Ordering::SeqCst);
+            if error.commit_status != bitrouter_ai::core::protocol::CommitStatus::NotCommitted {
+                self.failed.store(true, Ordering::SeqCst);
+            }
             return Err(error);
         }
+        #[cfg(test)]
+        timing.mark_persist(timing::PersistStage::StoreSave);
         state.revision = revision;
         state.journal = next;
+        #[cfg(test)]
+        timing.mark_persist(timing::PersistStage::Adopt);
+        #[cfg(test)]
+        timing.succeeded();
         Ok(())
     }
 
@@ -269,7 +429,26 @@ impl NativePort {
                 },
             );
             next.require_artifact(&reference, &mut BTreeSet::new())?;
-            self.persist(&mut state, next).await?;
+            if let Some(checked) = self
+                .recovery
+                .as_ref()
+                .filter(|checked| !checked.committed())
+            {
+                // A recovery proposal may stage new archive bytes in its
+                // registered Opening, but it cannot overwrite the predecessor
+                // before the complete session.restored checkpoint transaction.
+                checked
+                    .budget
+                    .charge(
+                        0,
+                        usize::try_from(crate::storage::checkpoint::serialized_bytes(&next)?)
+                            .map_err(|_| error("recovery artifact bound"))?,
+                    )
+                    .map_err(|_| error("recovery artifact bound"))?;
+                state.journal = next;
+            } else {
+                self.persist(&mut state, next).await?;
+            }
             staging.remove(&reference.artifact_id);
         }
         Ok(())
@@ -294,10 +473,8 @@ impl HarnessPort for NativePort {
         uri: &str,
         cancel: &CancellationToken,
     ) -> Result<bitrouter_ai::harness::skills::HeldMcpSkill, CoreError> {
-        self.authorize_dispatch().await?;
-        self.resources
-            .mcp_skill(server, uri, cancel)
-            .await
+        self.poll_dispatch(self.resources.mcp_skill(server, uri, cancel))
+            .await?
             .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
     }
 
@@ -308,28 +485,30 @@ impl HarnessPort for NativePort {
         cached_bytes: Option<&[u8]>,
         cancel: &CancellationToken,
     ) -> Result<Vec<u8>, CoreError> {
-        self.authorize_dispatch().await?;
-        match source {
-            crate::storage::skills::SkillSource::Local(binding) => self
-                .resources
-                .managed_skill_file(binding, "SKILL.md", max_bytes)
-                .await
-                .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),
-            crate::storage::skills::SkillSource::Mcp(held) => self
-                .resources
-                .mcp_skill_file(
-                    held,
-                    crate::skills::mcp::SkillRead {
-                        reference: &held.entry.uri,
-                        max_bytes,
-                        cached_bytes,
-                    },
-                    cancel,
-                )
-                .await
-                .map(|file| file.bytes)
-                .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message)),
-        }
+        self.poll_dispatch(async {
+            match source {
+                crate::storage::skills::SkillSource::Local(binding) => {
+                    self.resources
+                        .managed_skill_file(binding, "SKILL.md", max_bytes)
+                        .await
+                }
+                crate::storage::skills::SkillSource::Mcp(held) => self
+                    .resources
+                    .mcp_skill_file(
+                        held,
+                        crate::skills::mcp::SkillRead {
+                            reference: &held.entry.uri,
+                            max_bytes,
+                            cached_bytes,
+                        },
+                        cancel,
+                    )
+                    .await
+                    .map(|file| file.bytes),
+            }
+        })
+        .await?
+        .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
     }
 
     async fn skill_file(
@@ -340,24 +519,37 @@ impl HarnessPort for NativePort {
         cached_bytes: Option<&[u8]>,
         cancel: &CancellationToken,
     ) -> Result<Vec<u8>, CoreError> {
-        self.authorize_dispatch().await?;
-        self.resources
-            .skill_file(source, reference, max_bytes, cached_bytes, cancel)
-            .await
-            .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
+        self.poll_dispatch(self.resources.skill_file(
+            source,
+            reference,
+            max_bytes,
+            cached_bytes,
+            cancel,
+        ))
+        .await?
+        .map_err(|message| CoreError::rejected(ErrorCode::ArtifactUnavailable, message))
     }
 
     async fn authorize_dispatch(&self) -> Result<(), CoreError> {
-        if self.failed.load(Ordering::SeqCst) {
-            Err(error("native durable authority requires reconciliation"))
-        } else {
-            Ok(())
+        self.with_dispatch(|| ())
+    }
+
+    async fn model_cancelled(&self) {
+        match &self.owned {
+            Some(binding) => binding.authority().service().host_stop().cancelled().await,
+            None => std::future::pending::<()>().await,
         }
     }
 
     async fn commit(&self, batch: CheckpointBatch) -> Result<CheckpointAck, CoreError> {
+        #[cfg(test)]
+        let mut timing = timing::Scope::new(timing::Operation::NativeCommit);
         let mut state = self.state.lock().await;
-        self.authorize_dispatch().await?;
+        #[cfg(test)]
+        timing.revisions(state.journal.head.state_revision, state.revision);
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::StateLock);
+        self.healthy()?;
         let journal = &state.journal;
         let available = journal
             .available()
@@ -379,13 +571,21 @@ impl HarnessPort for NativePort {
         for reference in &payload.checkpoint.artifact_refs {
             journal.require_artifact(reference, &mut retained_artifacts)?;
         }
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::AppendValidation);
         if retained.is_some() {
             if journal.checkpoint.as_ref() != Some(&batch) {
                 return Err(error("checkpoint retry changed original bytes"));
             }
+            #[cfg(test)]
+            timing.replayed();
             return Ok(ack);
         }
+        let choices = super::choice::apply(journal, &payload, self.owned.as_deref())?;
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::ChoiceApply);
         let mut next = journal.clone();
+        next.owned_choices = choices;
         next.fences.extend(payload.tool_start_fences.clone());
         next.head = ack.head();
         next.ack = Some(ack.clone());
@@ -394,7 +594,46 @@ impl HarnessPort for NativePort {
         // closure survives; superseded archives can be reclaimed after commit.
         next.artifacts
             .retain(|id, _| retained_artifacts.contains(id));
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::Assemble);
         self.persist(&mut state, next).await?;
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::Persist);
+        #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+        if let Some(binding) = &self.owned {
+            use crate::tenancy::hosts::HostBoundary;
+            let boundary = payload
+                .events
+                .iter()
+                .find_map(|event| match event.kind.as_str() {
+                    "model.attempt.intent" => Some(HostBoundary::NativeAttemptIntentAck),
+                    "model.attempt.outcome" => Some(HostBoundary::NativeAttemptOutcomeAck),
+                    _ => None,
+                });
+            if let Some(boundary) = boundary
+                && let Some(gate) = binding.authority().service().take_host_gate(boundary)?
+            {
+                // Hold the actual post-COMMIT reply. No replacement ACK or
+                // synthetic SQL result is supplied when the barrier is released.
+                gate.reached().await;
+            }
+        }
+        #[cfg(test)]
+        if payload
+            .events
+            .iter()
+            .any(|event| event.kind == "context.decision.outcome")
+            && let Some(binding) = &self.owned
+            && let Some(gate) = binding
+                .authority()
+                .service()
+                .take_host_gate(crate::tenancy::hosts::HostBoundary::ChoiceOutcomeAck)?
+        {
+            // Fault only after the actual row COMMIT and local durable-state
+            // adoption. The caller must reconcile a missing ACK, never infer it.
+            gate.reached().await;
+            return Err(error("test fault: owned Choice outcome ACK unavailable"));
+        }
         let active = self
             .active
             .lock()
@@ -404,11 +643,15 @@ impl HarnessPort for NativePort {
                 cancel.cancel();
             }
         }
+        #[cfg(test)]
+        timing.mark_commit(timing::CommitStage::AckTail);
+        #[cfg(test)]
+        timing.succeeded();
         Ok(ack)
     }
 
     async fn send(&self, message: ServerMessage) -> Result<(), CoreError> {
-        self.authorize_dispatch().await?;
+        self.healthy()?;
         match message {
             ServerMessage::ArtifactPut {
                 reference,
@@ -435,11 +678,13 @@ impl HarnessPort for NativePort {
             }
             ServerMessage::ToolExecute(_)
             | ServerMessage::MaterialRequest { .. }
-            | ServerMessage::SkillConsentRequest(_) => self
-                .commands
-                .send(message)
-                .await
-                .map_err(|_| error("native harness driver stopped")),
+            | ServerMessage::SkillConsentRequest(_) => {
+                self.authorize_dispatch().await?;
+                self.commands
+                    .send(message)
+                    .await
+                    .map_err(|_| error("native harness driver stopped"))
+            }
             _ => Err(error("unsupported native harness message")),
         }
     }
@@ -450,7 +695,31 @@ impl HarnessPort for NativePort {
         offset: u64,
         max_bytes: u64,
     ) -> Result<Vec<u8>, CoreError> {
+        self.healthy()?;
         let state = self.state.lock().await;
+        // Fresh restore must revalidate before every artifact access. Once this
+        // private port is bound, only admitted Core work can read its retained
+        // closure, including cleanup after revocation; no external reader exists.
+        if self.restoring.load(Ordering::Acquire) {
+            if let Some(checked) = &self.recovery {
+                if !checked.committed() {
+                    self.owned
+                        .as_ref()
+                        .ok_or_else(|| error("recovery binding missing"))?
+                        .check_restore()?;
+                }
+                checked
+                    .budget
+                    .charge(
+                        0,
+                        usize::try_from(reference.bytes)
+                            .map_err(|_| error("recovery artifact bound"))?,
+                    )
+                    .map_err(|_| error("recovery artifact bound"))?;
+            } else {
+                self.authorize_dispatch().await?;
+            }
+        }
         if max_bytes > state.journal.manifest.max_artifact_chunk_bytes {
             return Err(error("artifact read exceeds native bound"));
         }

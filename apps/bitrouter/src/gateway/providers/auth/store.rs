@@ -194,7 +194,6 @@ pub struct OAuthSession {
     store: Arc<dyn CredentialStore>,
     refresher: Arc<dyn OAuthRefresher>,
     refresh_window: Duration,
-    #[cfg(feature = "multi-instance")]
     inline: bool,
 }
 
@@ -209,14 +208,12 @@ impl OAuthSession {
             store,
             refresher,
             refresh_window,
-            #[cfg(feature = "multi-instance")]
             inline: false,
         }
     }
 
-    /// Keep refresh, commit and release within the shared request's owned future.
+    /// Keep refresh, commit and release within the selected owned request future.
     /// Its store must durably fence a started or uncertain refresh when dropped.
-    #[cfg(feature = "multi-instance")]
     pub(crate) fn new_inline(
         store: Arc<dyn CredentialStore>,
         refresher: Arc<dyn OAuthRefresher>,
@@ -275,7 +272,6 @@ impl OAuthSession {
                 Err(error) => Err(error),
             }
         };
-        #[cfg(feature = "multi-instance")]
         if self.inline {
             // Dropping the request destroys the refresh future and transaction.
             // A shared store's started fence remains durable; Drop does no I/O.

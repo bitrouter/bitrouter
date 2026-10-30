@@ -31,7 +31,12 @@ type AgentTransport =
 /// It carries the established child policy: stripped inherited markers,
 /// config-authored env precedence, stderr draining, process-group teardown,
 /// and prompt failure when the child dies.
+#[cfg(feature = "core")]
+pub(crate) mod owned;
+
 pub struct AgentProcess {
+    #[cfg(feature = "core")]
+    owned: Option<std::sync::Arc<owned::Control>>,
     command: String,
     args: Vec<String>,
     env: HashMap<String, String>,
@@ -69,6 +74,8 @@ impl AgentProcess {
         env: HashMap<String, String>,
     ) -> Self {
         Self {
+            #[cfg(feature = "core")]
+            owned: None,
             command: command.into(),
             args,
             env,
@@ -107,6 +114,10 @@ impl ConnectTo<Client> for AgentProcess {
         self,
         client: impl ConnectTo<Agent>,
     ) -> Result<(), agent_client_protocol::Error> {
+        #[cfg(feature = "core")]
+        if let Some(control) = self.owned.clone() {
+            return self.connect_owned(client, control).await;
+        }
         let (transport, child) = spawn_agent_process(
             &self.command,
             &self.args,

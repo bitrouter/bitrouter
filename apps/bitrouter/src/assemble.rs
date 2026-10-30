@@ -122,6 +122,7 @@ pub struct Assembled {
     pub app: App,
     /// The shared database connection.
     pub db: DatabaseConnection,
+    pub(crate) tenancy: Option<crate::tenancy::Service>,
     /// In-memory API-principal-scoped ACP route leases.
     #[cfg(feature = "harness")]
     pub acp_runtime: Arc<AcpRuntime>,
@@ -413,6 +414,8 @@ pub fn validate_host_configuration(config: &Config) -> Result<()> {
 }
 
 fn validate_host_configuration_inner(config: &Config, resolve_telemetry: bool) -> Result<()> {
+    config.tenancy.validate(config)?;
+    crate::telemetry::receipt_latency::Config::read(config)?;
     config
         .gateway_state
         .validate(&config.database.url, config.server.skip_auth)?;
@@ -663,6 +666,7 @@ async fn assemble_app(
     let config = &effective_config;
     validate_host_configuration_inner(config, !is_shared)?;
     config.validate_router_config()?;
+    let receipt_observation_config = crate::telemetry::receipt_latency::Config::read(config)?;
     let decision_runtime = config
         .decision_model
         .as_ref()
@@ -719,18 +723,26 @@ async fn assemble_app(
     let shared_db = shared.map(|inputs| inputs.continuation.database().clone());
     #[cfg(not(feature = "multi-instance"))]
     let shared_db: Option<DatabaseConnection> = None;
+    let tenancy_database = if config.tenancy.enabled {
+        Some(crate::db::connect_owned_tenancy(&config.database.url).await?)
+    } else {
+        None
+    };
     let db = match shared_db {
         Some(database) => database,
         None => {
-            let database = crate::db::connect(&config.database.url)
-                .await
-                .context("connecting to database")?;
+            let database = match &tenancy_database {
+                Some(database) => Ok(database.database().clone()),
+                None => crate::db::connect(&config.database.url).await,
+            }
+            .context("connecting to database")?;
             crate::db::run_migrations(&database)
                 .await
                 .context("running database migrations")?;
             database
         }
     };
+    let tenancy_enabled = tenancy_database.is_some();
     #[cfg(feature = "harness")]
     let acp_runtime = Arc::new(AcpRuntime::new());
     // Resolve dynamic authentication once and share the same registry with
@@ -755,53 +767,62 @@ async fn assemble_app(
                 .context("local credential manager is unavailable")?,
         )?,
     };
-    #[cfg(feature = "multi-instance")]
-    let shared_continuation =
-        shared.map(|inputs| ContinuationKeySource::fixed(inputs.continuation.key()));
-    #[cfg(not(feature = "multi-instance"))]
-    let shared_continuation: Option<ContinuationKeySource> = None;
-    let continuation_keys = match shared_continuation {
-        Some(keys) => keys,
-        None => {
-            let runtime_home = match config_path.and_then(std::path::Path::parent) {
-                Some(home) => home.to_path_buf(),
-                None => std::env::current_dir().context("resolve continuation key home")?,
-            };
-            ContinuationKeySource::lazy(runtime_home)
-        }
-    };
-    let private_context =
-        crate::continuation::native_context::PrivateContextPolicy::new(continuation_keys.clone());
-    let continuation_registry = ContinuationRegistry::new(
-        db.clone(),
-        continuation_keys,
-        config.continuation.retention_days,
-        config.continuation.prune_batch_size,
-    )?;
-    #[cfg(feature = "multi-instance")]
-    let continuation_registry = if let Some(inputs) = shared {
-        ContinuationRegistry::new_shared(
-            inputs.continuation.clone(),
+    let (continuation_registry, private_context, continuation_runtime) = if tenancy_enabled {
+        (None, None, None)
+    } else {
+        #[cfg(feature = "multi-instance")]
+        let shared_continuation =
+            shared.map(|inputs| ContinuationKeySource::fixed(inputs.continuation.key()));
+        #[cfg(not(feature = "multi-instance"))]
+        let shared_continuation: Option<ContinuationKeySource> = None;
+        let continuation_keys = match shared_continuation {
+            Some(keys) => keys,
+            None => {
+                let runtime_home = match config_path.and_then(std::path::Path::parent) {
+                    Some(home) => home.to_path_buf(),
+                    None => std::env::current_dir().context("resolve continuation key home")?,
+                };
+                ContinuationKeySource::lazy(runtime_home)
+            }
+        };
+        let private_context = crate::continuation::native_context::PrivateContextPolicy::new(
+            continuation_keys.clone(),
+        );
+        let continuation_registry = ContinuationRegistry::new(
+            db.clone(),
+            continuation_keys,
             config.continuation.retention_days,
             config.continuation.prune_batch_size,
-        )?
-    } else {
-        continuation_registry
-    };
-    if !is_shared {
-        let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
-        if continuation_pruned > 0 {
-            tracing::info!(
-                deleted_rows = continuation_pruned,
-                "pruned expired provider continuations at startup"
-            );
+        )?;
+        #[cfg(feature = "multi-instance")]
+        let continuation_registry = if let Some(inputs) = shared {
+            ContinuationRegistry::new_shared(
+                inputs.continuation.clone(),
+                config.continuation.retention_days,
+                config.continuation.prune_batch_size,
+            )?
+        } else {
+            continuation_registry
+        };
+        if !is_shared {
+            let continuation_pruned = continuation_registry.prune(chrono::Utc::now()).await?;
+            if continuation_pruned > 0 {
+                tracing::info!(
+                    deleted_rows = continuation_pruned,
+                    "pruned expired provider continuations at startup"
+                );
+            }
         }
-        continuation_registry.start_reconciler();
-    }
-    let continuation_runtime = ContinuationRuntime::with_auth_appliers(
-        continuation_registry.clone(),
-        auth_appliers.clone(),
-    );
+        let continuation_runtime = ContinuationRuntime::with_auth_appliers(
+            continuation_registry.clone(),
+            auth_appliers.clone(),
+        );
+        (
+            Some(continuation_registry),
+            Some(private_context),
+            Some(continuation_runtime),
+        )
+    };
     // A SQLite database file holds SHA-256 hashes of every virtual key,
     // plus the metering audit trail. On Unix, tighten the file
     // permissions to 0600 so a co-tenant on the host can't read it. The
@@ -962,6 +983,23 @@ async fn assemble_app(
                 None => (None, None),
             },
         };
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    let receipt_observer = if receipt_observation_config.enabled {
+        otel_exporter
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("receipt latency exporter initialization failed"))?
+            .receipt_observer(&receipt_observation_config)?
+    } else {
+        crate::telemetry::receipt_latency::Sink::default()
+    };
+    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
+    let receipt_observer = {
+        anyhow::ensure!(
+            !receipt_observation_config.enabled,
+            "receipt latency requires an OTLP transport"
+        );
+        crate::telemetry::receipt_latency::Sink::default()
+    };
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     let default_observe: Arc<dyn ObserveStatusProvider> = match otel_exporter.clone() {
         Some(exporter) => Arc::new(OtelExporterStatus { exporter }),
@@ -1133,7 +1171,7 @@ async fn assemble_app(
     let eval_service = EvalService::new(eval_store.clone(), config.eval.clone());
     #[cfg(feature = "core")]
     let mut trajectory_outbox_publisher = None;
-    let trajectory_services = if config.trajectory.enabled {
+    let trajectory_services = if config.trajectory.enabled && !config.tenancy.enabled {
         let trajectory_store = TrajectoryStore::new(db.clone());
         let retention = chrono::TimeDelta::try_days(i64::from(config.trajectory.retention_days))
             .ok_or_else(|| anyhow::anyhow!("trajectory retention_days exceeds time range"))?;
@@ -1309,7 +1347,9 @@ async fn assemble_app(
                 lm.native_cost_estimator(pricing_for_native);
                 lm.native_cost_source(Arc::new(metering_for_native_costs));
             }
-            lm.native_private_context(Arc::new(private_context.clone()));
+            if let Some(policy) = &private_context {
+                lm.native_private_context(Arc::new(policy.clone()));
+            }
             lm.served_operations(OperationScope::Both);
             lm.require_hook::<AuthHook>(HookStage::PreResolution, OperationScope::Both);
             lm.require_hook::<SessionContextHook>(HookStage::PreResolution, OperationScope::Both);
@@ -1333,10 +1373,12 @@ async fn assemble_app(
             }
             lm.require_hook::<PolicyHook>(HookStage::PreRequest, OperationScope::Both);
             lm.require_hook::<CaptureTariffs>(HookStage::Route, OperationScope::Both);
-            lm.require_hook::<ContinuationRuntime>(
-                HookStage::Finalization,
-                OperationScope::Generation,
-            );
+            if !tenancy_enabled {
+                lm.require_hook::<ContinuationRuntime>(
+                    HookStage::Finalization,
+                    OperationScope::Generation,
+                );
+            }
             lm.request_checker_runner(request_checks_for_pipeline);
             lm.fallback_backoff(
                 config
@@ -1347,7 +1389,9 @@ async fn assemble_app(
                     .map(std::time::Duration::from_millis),
             );
             lm.model_selector(policy_runtime_for_selector);
-            lm.route_hook(continuation_for_route);
+            if let Some(runtime) = continuation_for_route {
+                lm.route_hook(runtime);
+            }
             lm.route_hook(crate::policy_lock::PredictiveSingleTargetRouteHook);
             if let Some(binding) = &canonical_binding {
                 lm.route_hook(binding.clone());
@@ -1368,7 +1412,9 @@ async fn assemble_app(
                 MeteringRecorder::new(metering_store_for_recorder, pricing_for_recorder)
                     .with_reconciliation_provider("bitrouter")
             });
-            lm.required_finalizer(continuation_for_finalization);
+            if let Some(runtime) = continuation_for_finalization {
+                lm.required_finalizer(runtime);
+            }
             // Server-tool declaration capture runs first and is pure
             // observation: it parses any advisor / sub-agent / fusion
             // declaration (or the one the fusion alias injected) off the prompt
@@ -1392,10 +1438,17 @@ async fn assemble_app(
             // API-principal-scoped route lease before Stage 2 model selection;
             // explicit routes and provider continuations retain precedence.
             // The pipeline runs bound external checks after these local hooks.
-            lm.pre_resolution_hook_for(AuthHook::new(db_for_hooks.clone()), OperationScope::Both);
+            lm.pre_resolution_hook_for(
+                AuthHook::new(db_for_hooks.clone()).with_tenancy(tenancy_enabled),
+                OperationScope::Both,
+            );
             lm.pre_resolution_hook_for(session_context, OperationScope::Both);
-            lm.pre_resolution_hook(private_context);
-            lm.pre_resolution_hook(continuation_for_pre_request);
+            if let Some(policy) = private_context {
+                lm.pre_resolution_hook(policy);
+            }
+            if let Some(runtime) = continuation_for_pre_request {
+                lm.pre_resolution_hook(runtime);
+            }
             // Candidate recipe selection may replace defaults and the policy,
             // but cannot replace the ingress router's frozen checker bindings.
             if !is_shared {
@@ -1497,7 +1550,7 @@ async fn assemble_app(
             let app = app.mcp(move |m| {
                 m.routing_table(table)
                     .executor(exec)
-                    .pre_request_hook(AuthHook::new(db_for_mcp_auth));
+                    .pre_request_hook(AuthHook::new(db_for_mcp_auth).with_tenancy(tenancy_enabled));
             });
             if let Some(route) = mcp_aggregate_route {
                 app.mcp_aggregate_route(route)
@@ -1509,9 +1562,43 @@ async fn assemble_app(
     };
     let app = app.build().context("building the App")?;
 
+    // Start the authority actor only after every other fallible assembly step.
+    // Failed startup must not leave a detached owner behind during a retry.
+    let tenancy = match tenancy_database {
+        Some(database) if receipt_observer.enabled() => Some(
+            crate::tenancy::Service::open_owned_profile_observed(
+                database,
+                &config.tenancy,
+                &config.continuation,
+                receipt_observer,
+            )
+            .await?,
+        ),
+        Some(database) => Some(
+            crate::tenancy::Service::open_owned_profile(
+                database,
+                &config.tenancy,
+                &config.continuation,
+            )
+            .await?,
+        ),
+        None => None,
+    };
+    let app = match &tenancy {
+        Some(service) => app.with_tenancy(service.clone()),
+        None => app,
+    };
+    let continuation_registry = match &tenancy {
+        Some(service) => service.continuation_registry().clone(),
+        None => continuation_registry.context("Legacy continuation registry unavailable")?,
+    };
+    if !is_shared && !tenancy_enabled {
+        continuation_registry.start_reconciler();
+    }
     Ok(Assembled {
         app,
         db,
+        tenancy,
         #[cfg(feature = "harness")]
         acp_runtime,
         policy_store: policy_store_for_reload,

@@ -1,4 +1,4 @@
-//! Shared-generation task ownership. Waiters borrow the task sets; cancellation
+//! Explicit pipeline task ownership. Waiters borrow the task sets; cancellation
 //! never transfers, drops or detaches their handles.
 
 use std::future::Future;
@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Context, Poll, Waker};
 
 use tokio::task::{JoinError, JoinSet};
+#[cfg(any(feature = "multi-instance", test))]
 use tokio::time::Instant;
 
 use crate::gateway::error::{BitrouterError, Result};
@@ -35,6 +36,7 @@ impl Summary {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(any(feature = "multi-instance", test))]
 pub(crate) struct Pending {
     pub sources: usize,
     pub executions: usize,
@@ -42,6 +44,7 @@ pub(crate) struct Pending {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+#[cfg(any(feature = "multi-instance", test))]
 pub(crate) enum Drain {
     Joined(Summary),
     Retained(Pending),
@@ -83,6 +86,7 @@ impl State {
         }
     }
 
+    #[cfg(any(feature = "multi-instance", test))]
     fn pending(&self) -> Pending {
         Pending {
             sources: self.sources,
@@ -172,6 +176,7 @@ impl OwnedTasks {
         }
     }
 
+    #[cfg(any(feature = "multi-instance", test))]
     pub fn pending(&self) -> Pending {
         self.lock().pending()
     }
@@ -286,6 +291,7 @@ impl OwnedTasks {
 
     /// An elapsed grace deadline retains every handle and producer ticket.
     /// Callers keep the generation and may retry with the same deadline.
+    #[cfg(any(feature = "multi-instance", test))]
     pub async fn drain_until(&self, deadline: Instant) -> Result<Drain> {
         let _waiter = self.waiter()?;
         match tokio::time::timeout_at(deadline, std::future::poll_fn(|cx| self.poll_joined(cx)))
@@ -296,8 +302,16 @@ impl OwnedTasks {
         }
     }
 
+    /// Join closed producers and all descendants without taking their handles.
+    /// Cancelling this wait leaves the same task sets available for another wait.
+    pub async fn drain(&self) -> Result<Summary> {
+        let _waiter = self.waiter()?;
+        Ok(std::future::poll_fn(|cx| self.poll_joined(cx)).await)
+    }
+
     /// Transport roots must already be destroyed and joined. Force is permanent:
     /// descendants registered by cancellation are owned but never polled.
+    #[cfg(any(feature = "multi-instance", test))]
     pub fn force(&self) -> Result<()> {
         let mut state = self.lock();
         if !state.closed || state.sources != 0 {
@@ -316,6 +330,7 @@ impl OwnedTasks {
 
     /// No fresh grace period is granted after force. Cancellation retains the
     /// joins; a noncooperative task must be reported, never claimed as drained.
+    #[cfg(any(feature = "multi-instance", test))]
     pub async fn join_forced(&self) -> Result<Summary> {
         let _waiter = self.waiter()?;
         if !self.lock().forcing {

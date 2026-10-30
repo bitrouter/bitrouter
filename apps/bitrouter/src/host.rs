@@ -291,6 +291,17 @@ async fn serve_with_options(
     let assembled =
         crate::assemble::build_app_with_extensions(&cfg, config_path_for_reload, register).await?;
     let observe_for_shutdown = assembled.observe.clone();
+    let tenancy_for_shutdown = assembled.tenancy.clone();
+    let receipt_observer = assembled
+        .tenancy
+        .as_ref()
+        .map(|service| service.receipt_observer())
+        .unwrap_or_default();
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    let receipt_exporter = receipt_observer
+        .enabled()
+        .then(|| assembled.otel_exporter.clone())
+        .flatten();
     #[cfg(feature = "core")]
     let trajectory_outbox_for_shutdown = assembled.trajectory_outbox_publisher.clone();
     // Every failure after assembly follows the same flush/drain path, including
@@ -431,6 +442,7 @@ async fn serve_with_options(
                 server
                     .with_administration(administration.clone())
                     .with_reloader(reloader.clone())
+                    .with_tenancy(assembled.tenancy.clone())
                     .bind()
                     .await?,
             ),
@@ -439,6 +451,7 @@ async fn serve_with_options(
 
         pid_guard = Some(PidFile::create(&pid_path).await?);
         let remote_listen = remote_control.as_ref().map(|server| server.listen());
+        let tenancy_http = assembled.tenancy.clone();
         let ready_listen = listen.clone();
 
         let http_app = app.clone();
@@ -480,6 +493,9 @@ async fn serve_with_options(
             // Open an OTel SERVER span per inbound request and publish it on the
             // OTel context, so the bitrouter `chat` INTERNAL span parents on it.
             let otel_wrapper = move |router: axum::Router| {
+                let router = if let Some(service) = &tenancy_http {
+                    router.layer(axum::middleware::from_fn_with_state(service.clone(), crate::tenancy::http::dispatch))
+                } else { router };
                 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
                 let router = match &otel_router_wrapper {
                     Some(wrapper) => wrapper(router),
@@ -806,13 +822,13 @@ async fn serve_with_options(
         #[cfg(feature = "core")]
         let evolution_stop = tokio_util::sync::CancellationToken::new();
         #[cfg(feature = "core")]
-        let evolution_worker = app.language_model().cloned().map(|pipeline| {
-            let worker =
-                crate::core::evolution::scheduler::EvolutionScheduler::new(assembled.evolution.clone())
-                    .with_handoff_gate(handoff_gate.clone());
-            let stop = evolution_stop.clone();
-            tokio::spawn(async move { worker.run(pipeline, stop).await })
-        });
+        let evolution_worker = crate::core::evolution::scheduler::EvolutionScheduler::start(
+            assembled.evolution.clone(),
+            app.language_model().cloned(),
+            assembled.tenancy.clone(),
+            handoff_gate.clone(),
+            evolution_stop.clone(),
+        );
         #[cfg(feature = "core")]
         let control = async {
             let result = control.await;
@@ -851,6 +867,11 @@ async fn serve_with_options(
     }
     .await;
 
+    let tenancy_shutdown = match tenancy_for_shutdown {
+        Some(service) => service.shutdown().await,
+        None => Ok(()),
+    };
+
     #[cfg(feature = "core")]
     if let Some(publisher) = trajectory_outbox_for_shutdown {
         match publisher.drain_after_active_worker().await {
@@ -873,10 +894,27 @@ async fn serve_with_options(
     // and `spawn_blocking` (inside the provider's `shutdown`) parks on
     // a dedicated thread so the runtime is free to keep ticking. The
     // impl is idempotent: a follow-up Drop is a no-op.
+    let receipt_observation_clean = receipt_observer.seal(tenancy_shutdown.is_ok());
     observe_for_shutdown.shutdown().await;
     drop(pid_guard);
 
-    result
+    let receipt_measurement = (|| -> Result<()> {
+        anyhow::ensure!(
+            receipt_observation_clean,
+            "receipt latency observation did not seal cleanly"
+        );
+        #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+        if receipt_observer.enabled() {
+            anyhow::ensure!(
+                receipt_exporter
+                    .as_ref()
+                    .is_some_and(|exporter| exporter.recorded_shutdown_is_clean()),
+                "receipt latency local export did not shut down cleanly"
+            );
+        }
+        Ok(())
+    })();
+    result.and(tenancy_shutdown).and(receipt_measurement)
 }
 
 struct PidFile {

@@ -40,8 +40,29 @@ pub enum Error {
     Service(Box<ServiceFailure>),
     #[error("control service returned HTTP status {}", .0.status)]
     Control(Box<ServiceFailure<bitrouter_ai::control::error::ErrorEnvelope>>),
+    #[error("tenancy service returned HTTP status {}", .0.status)]
+    Tenancy(Box<ServiceFailure<bitrouter_ai::tenancy::operation::Error>>),
+    /// A management response was lost or could not be trusted. Query this exact
+    /// operation using the original installation and current read authority.
+    #[error("tenancy outcome is unknown; query operation {operation_id} before retrying")]
+    TenancyUnknown {
+        /// Nonsecret original command identity; request payloads are not retained.
+        operation_id: bitrouter_ai::tenancy::identity::OperationId,
+        /// Transport or response validation failure, without request contents.
+        #[source]
+        source: Box<Error>,
+    },
     #[error("evaluation service returned HTTP status {}", .0.status)]
     Evaluation(Box<ServiceFailure<bitrouter_ai::eval::ErrorEnvelope>>),
+    /// An owned evaluation mutation may have committed, even when its response
+    /// reports an authorization failure with provider dispatch `not_started`.
+    /// No operation identity or exactly-once recovery guarantee is implied.
+    #[error("owned evaluation outcome is unknown; inspect the ledger before any explicit retry")]
+    OwnedEvalUnknown {
+        /// Transport or response failure; request contents are not retained.
+        #[source]
+        source: Box<Error>,
+    },
     #[error("core service returned HTTP status {}", .0.status)]
     Core(Box<ServiceFailure<bitrouter_ai::core::protocol::ErrorEnvelope>>),
     #[error("core reported a managed response stream failure; execution may still be running")]

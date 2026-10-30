@@ -32,6 +32,118 @@ only those entries authenticate; the legacy variable is not an extra credential.
 Read authority includes host-wide spend, request metadata, and policy rules.
 It is not a personal usage scope. Inference `server.skip_auth` has no effect.
 
+`control:tenancy` is a separate installation-management grant. It does not imply
+`control:read` or `control:reload`; use a dedicated credential when only tenant
+management is needed. The optional `tenancy.enabled: true` service requires
+authenticated ingress, this explicit operator grant, local gateway state and a
+literal SQLite file URL. This profile supports one owning process on Unix;
+shared databases, memory databases, encoded paths and the host coding-task API
+are rejected. Enabling or disabling tenancy requires restart. Once provisioned,
+the store cannot be reopened by ordinary local database commands with tenancy
+disabled; use protected HTTP administration. Read-only host reports remain
+available. Stop all old writers before first enabling tenancy, especially older
+binaries that predate ownership leases. Current writable pools retain a shared
+file lease, and the authority owner requires an exclusive lease until its
+transactions and connections have settled. `mode=rw` never creates a missing
+database.
+
+Tenancy operator credential IDs are limited to 119 bytes. Their stable principal
+ID is exactly `operator.<configured ID>`; use
+`PrincipalId::for_control_credential` to derive the management owner for binding
+updates. Token rotation preserves this identity; renaming the configured ID
+changes it. Ordinary principals cannot use the reserved `operator.` prefix.
+
+`tenancy.resource_import` optionally imports an operator JSON resource manifest
+at startup; relative paths use the server process working directory. Set
+`tenancy.wrapping_key_env` to an environment variable holding a stable base64
+32-byte key. Import requires that key, and retained resources require the same
+key on later restarts even after removing the import path. These settings are
+restart-only. Never treat a replacement key as automatic rotation. The importer
+accepts explicit route/policy definitions, static API-key credential slots, and
+explicit Claude Code OAuth seeds pinned to the known Anthropic registration
+under the [owned OAuth profile](../../../docs/RESOURCE_TENANCY_AUXILIARY_PROFILE.md).
+Ambient credential backends and native request checks remain unsupported. Definitions
+are retained as authenticated ciphertext, and a changed definition requires a
+new qualified resource revision. Importing resources does not grant tenant access
+or activate a configuration. Never put resource-import definitions or secret key
+values into a tenant draft; drafts contain resource references only.
+
+Use the HTTP `TenancyClient` for tenant management or the `bro tenancy`
+configuration adapter below. The tenant-operation namespace
+is `/control/v1/tenancy/operations/{operation_id}`, separate from host reload
+operations. Retain operation IDs after a lost response; credential secrets are
+returned only once. Tenancy is disabled by default. In the supported enabled
+profile, `dispatch_enabled`, `revision_bound_dispatch` and `strict_receipts`
+reflect the owning service's current eligibility. Shutdown, saturation or a
+storage/admission fence prevents new dispatch; unavailable authority can also
+prevent discovery. Require all three flags before strict inference. True flags
+neither reserve execution capacity nor grant access to a route or credential.
+
+Use `TenantCapabilities::bind` with an explicitly selected retained execution
+revision and correlation ID, and send its seven binding headers with the issued
+tenant credential. An installation operator token does not authorize inference.
+The service rechecks the exact installation, instance and capability revision,
+current grants, retained resources and request limits before starting work.
+After a restart, discover the new instance descriptor for a new submission;
+do not reuse the old binding. If a response is uncertain, retain any returned
+execution ID and the original correlation ID, then query receipts with current
+read authority. Correlation is not an idempotency key: do not automatically
+refresh the binding and resend the inference request.
+
+Controlled native turns use the same tenant credential and dispatch binding as
+HTTP turns. Caller labels, host inspection credentials and local harness metadata
+cannot bypass the dispatch capability fence. Historical evaluation rows remain
+legacy records after schema upgrades; enabling tenancy does not assign them to a
+tenant. Signed experiments also require qualified tenant exploration admission;
+an Observe configuration does not authorize an active experiment.
+
+## Tenant configuration commands
+
+Create a dedicated named context using the selected installation operator or
+tenant credential's environment variable. A tenancy-only operator token does not
+need `control:read` for these commands. Each remote command can instead take an
+explicit `--endpoint URL --token-env NAME` pair. Targets cannot be mixed, and
+there is no `--context local` or implicit local discovery.
+
+```console
+bro context add resource-admin --endpoint https://router.example/control/v1 --token-env RESOURCE_ADMIN_TOKEN
+bro --context resource-admin tenancy capabilities
+bro tenancy configuration validate --input draft.json
+bro --context resource-admin tenancy configuration apply --tenant tenant-a --input draft.json
+bro --context resource-admin tenancy configuration read --installation-id install-a --tenant tenant-a --revision config-r1
+bro --context resource-admin tenancy configuration active --installation-id install-a --tenant tenant-a
+bro --context resource-admin tenancy configuration activate --tenant tenant-a --input activation.json
+bro --context resource-admin tenancy operation --installation-id install-a --operation-id prepare-1
+```
+
+`draft.json` must be the complete `ConfigurationPut` request: a caller-chosen
+stable `operation_id`, actual `installation_id`, observed
+`expected_authority_revision`, and typed `document`. The same file is used for
+local validation and apply. `activation.json` is a complete `Activation` request
+with a separate stable operation ID, installation, observed authority revision,
+`expected_active_revision`, and retained target `revision_id`. The active CAS
+field is required even when its value is `null`. Resource definitions must
+already be provisioned; apply sends references and framework settings only.
+
+Validation is explicitly local shape/bounds checking. It reads no context or
+credential and cannot confirm authorization, resource existence, compilation,
+CAS, or dispatch readiness. Files are literal JSON, bounded to 2 MiB with a
+1 MiB configuration limit. They do not expand environment variables. Apply
+prepares a revision; activation is always explicit. Active-pointer reads require
+tenant-wide resource.read or installation-operator authority.
+
+The adapter performs one SDK request per remote action, without a host-read
+handshake, automatic retry, identity generation, or CAS substitution. After an
+uncertain mutation, query its original installation/operation using the same
+principal and current read authority. Lookup absence is not proof of rollback.
+When an applied configuration operation returns its retained revision, explicitly
+read that revision. Never create a replacement operation ID just to resolve a
+lost response. Non-applied operation reports exit nonzero but retain their single
+JSON result; `--human` provides the corresponding human view.
+
+Capability discovery succeeds even if dispatch is disabled. Require all three
+dispatch flags before strict inference; these client commands do not turn them on.
+
 ## Client context
 
 Set the selected token in the client's environment, then save its variable name:

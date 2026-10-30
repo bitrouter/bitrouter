@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "source_installation_id": "installation-a",
+  "mappings": [
+    {
+      "source_installation_id": "installation-a",
+      "source_kind": "local_user",
+      "old_owner": "old-a",
+      "resource_kind": "evaluation",
+      "tenant_id": "tenant-a",
+      "principal_id": "principal-a",
+      "disposition": "mapped",
+      "evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_count": 2,
+      "resource_examples": [
+        {
+          "legacy_resource_id": "legacy-old-a",
+          "name": "overlapping-name",
+          "content_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ],
+      "rationale": "Operator verified the legacy owner namespace; names and hashes are not ownership evidence.",
+      "evidence_ref": "offline-inventory-evidence-v1",
+      "source_content_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "source_installation_id": "installation-a",
+      "source_kind": "local_user",
+      "old_owner": "old-b",
+      "resource_kind": "evaluation",
+      "tenant_id": "tenant-b",
+      "principal_id": "principal-b",
+      "disposition": "mapped",
+      "evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_count": 2,
+      "resource_examples": [
+        {
+          "legacy_resource_id": "legacy-old-b",
+          "name": "overlapping-name",
+          "content_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ],
+      "rationale": "Operator verified the legacy owner namespace; names and hashes are not ownership evidence.",
+      "evidence_ref": "offline-inventory-evidence-v1",
+      "source_content_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "source_installation_id": "installation-a",
+      "source_kind": "unresolved",
+      "old_owner": null,
+      "resource_kind": "evaluation",
+      "tenant_id": null,
+      "principal_id": null,
+      "disposition": "quarantined",
+      "evidence_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "source_count": 2,
+      "resource_examples": [
+        {
+          "legacy_resource_id": "legacy-unknown",
+          "name": "overlapping-name",
+          "content_digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ],
+      "rationale": "No verified owner; keep read-only quarantine.",
+      "evidence_ref": "offline-inventory-evidence-v1",
+      "source_content_digest": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ],
+  "source_commit": "38ddfd231f053beae9b52a61443a3706688628e0",
+  "source_snapshot_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "tenant_merge_approvals": []
+}

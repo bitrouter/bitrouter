@@ -117,6 +117,99 @@ impl WorkspaceFence {
         })
     }
 
+    /// Reserve the exact predecessor marker using the private, fully checked
+    /// native recovery participant. The marker is unchanged until atomic native
+    /// repair and stop-only retirement are acknowledged; failure cannot release it.
+    #[cfg(feature = "core")]
+    pub(crate) fn reserve_stopped_native(
+        workspace: &Path,
+        checked: &crate::tenancy::session::recovery::CheckedRecovery,
+    ) -> Result<Self, ServiceError> {
+        let (lock, marker, _) = open_lock(workspace)?;
+        let claim = match read_marker(&marker)? {
+            Some(Marker::Active { claim } | Marker::Idle { claim, .. })
+                if !claim.inspection
+                    && checked.workspace_matches(
+                        workspace,
+                        &claim.server_instance_id,
+                        claim.generation,
+                        &claim.execution_id,
+                    ) =>
+            {
+                claim
+            }
+            _ => {
+                return Err(ServiceError::new(
+                    ErrorCode::RecoveryRequired,
+                    "workspace does not match the checked native predecessor",
+                ));
+            }
+        };
+        Ok(Self {
+            _lock: lock,
+            marker,
+            claim: std::sync::Mutex::new(claim),
+            can_finish: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    /// The native opener invokes this only after stop-only retirement ACKs.
+    /// A crash between marker activation and its final native Ready checkpoint
+    /// remains bound to either exact journal grant in the checked participant.
+    #[cfg(feature = "core")]
+    pub(crate) fn activate_stopped_native(
+        &self,
+        checked: &crate::tenancy::session::recovery::CheckedRecovery,
+        grant: &bitrouter_ai::core::protocol::OwnershipGrant,
+    ) -> Result<(), ServiceError> {
+        if !checked.committed() {
+            return Err(storage("native repair is not committed"));
+        }
+        grant.validate().map_err(storage)?;
+        let mut current = self
+            .claim
+            .lock()
+            .map_err(|_| storage("workspace claim poisoned"))?;
+        let saved = read_marker(&self.marker)?;
+        let same = matches!(&saved, Some(Marker::Active { claim } | Marker::Idle { claim, .. }) if claim == &*current);
+        let already = current.server_instance_id == grant.core_instance_id
+            && current.generation == grant.execution_epoch
+            && current.execution_id == grant.session_id;
+        if !same
+            || (!already
+                && !checked.workspace_matches(
+                    &current.workspace,
+                    &current.server_instance_id,
+                    current.generation,
+                    &current.execution_id,
+                ))
+        {
+            return Err(storage("native workspace changed before activation"));
+        }
+        if !already {
+            let claim = WorkspaceClaim {
+                format_version: 1,
+                inspection: false,
+                workspace: current.workspace.clone(),
+                lease_id: uuid::Uuid::new_v4().to_string(),
+                server_instance_id: grant.core_instance_id.clone(),
+                generation: grant.execution_epoch,
+                execution_id: grant.session_id.clone(),
+                acquired_at_ms: crate::harness::storage::owner_time_ms().map_err(storage)?,
+            };
+            write_marker(
+                &self.marker,
+                &Marker::Active {
+                    claim: claim.clone(),
+                },
+            )?;
+            *current = claim;
+        }
+        self.can_finish
+            .store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
+    }
+
     /// A cold reader may hold the kernel lock but never manufactures release
     /// proof or execution authority. An existing active marker stays unchanged.
     pub(super) fn inspect(

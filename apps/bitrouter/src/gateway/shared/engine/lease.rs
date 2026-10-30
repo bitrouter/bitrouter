@@ -62,9 +62,10 @@ impl Heartbeat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runtime_crypto::DeploymentKey;
     use std::time::Duration;
 
-    use crate::gateway::shared::{crypto::DeploymentKey, schema, store};
+    use crate::gateway::shared::{schema, store};
     use sea_orm::TransactionTrait;
     use sha2::Digest;
 

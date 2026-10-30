@@ -1,0 +1,119 @@
+[
+  {
+    "name": "auth-policy",
+    "paths": [
+      "apps/bitrouter/src/auth",
+      "apps/bitrouter/src/policy"
+    ],
+    "existing": "user_id / api-key row / policy ID",
+    "target": "tenant + stable principal + credential",
+    "obligations": "All joins, issuance/revoke, policy reads and auth caches",
+    "exclusions": "External identity directories and business policy remain outside core."
+  },
+  {
+    "name": "shared",
+    "paths": [
+      "apps/bitrouter/src/gateway/shared",
+      "crates/bitrouter-ai/src/gateway"
+    ],
+    "existing": "shared user tenant surrogate, key principal surrogate",
+    "target": "explicit compatibility mapping; no local shared transaction dependency",
+    "obligations": "Admission/refresh/finalization/maintenance and operator DTO adapters",
+    "exclusions": "Local authority does not depend on shared transactions."
+  },
+  {
+    "name": "eval",
+    "paths": [
+      "apps/bitrouter/src/core/eval"
+    ],
+    "existing": "owner_user_id, evidence root",
+    "target": "tenant predicates and creator principal provenance",
+    "obligations": "Subject/results/snapshot queries; no unscoped private aggregation",
+    "exclusions": "Legacy unscoped operator readers must not become tenant readers."
+  },
+  {
+    "name": "evolution",
+    "paths": [
+      "apps/bitrouter/src/core/evolution",
+      "apps/bitrouter/src/storage/evolution.rs"
+    ],
+    "existing": "owner-derived scope hash",
+    "target": "tenant-scoped store + principal provenance",
+    "obligations": "Worker restore, publication, checkpoints, cache invalidation",
+    "exclusions": "No second scheduler; existing owner worker is adapted."
+  },
+  {
+    "name": "sessions",
+    "paths": [
+      "apps/bitrouter/src/core/session",
+      "apps/bitrouter/src/core/workflow_state",
+      "apps/bitrouter/src/storage/session_identity.rs"
+    ],
+    "existing": "owner/source/native-session tuple",
+    "target": "tenant + principal + owned run references",
+    "obligations": "Parent/child wake, restore, admission; harness keeps full transcript authority",
+    "exclusions": "Harness transcripts remain harness-owned."
+  },
+  {
+    "name": "trajectory",
+    "paths": [
+      "apps/bitrouter/src/trajectory",
+      "apps/bitrouter/src/storage/capture.rs",
+      "apps/bitrouter/src/storage/evaluation.rs"
+    ],
+    "existing": "evidence roots / capture keys",
+    "target": "tenant-scoped readers, retention and aggregation",
+    "obligations": "Background capture/cleanup, hash lookup, reward and evaluation joins",
+    "exclusions": "No public raw-evidence export or cross-tenant aggregation."
+  },
+  {
+    "name": "continuation",
+    "paths": [
+      "apps/bitrouter/src/continuation.rs",
+      "apps/bitrouter/src/gateway/pipeline/native_continuation.rs"
+    ],
+    "existing": "installation + owner + response/credential binding",
+    "target": "preserve originating backend and principal; add explicit tenant",
+    "obligations": "Continuation resolution/cache/maintenance; reject missing provenance",
+    "exclusions": "No continuation transfer by hash substitution."
+  },
+  {
+    "name": "execution-metering",
+    "paths": [
+      "apps/bitrouter/src/storage/execution.rs",
+      "apps/bitrouter/src/metering",
+      "apps/bitrouter/src/gateway/pipeline/settlement.rs"
+    ],
+    "existing": "user/key/request/attempt IDs",
+    "target": "tenant + installation/execution identity",
+    "obligations": "Recorder/finalizer/disconnect paths; ordinary metering is not strict commit",
+    "exclusions": "Ordinary accounting is not strict receipt durability."
+  },
+  {
+    "name": "control-config",
+    "paths": [
+      "apps/bitrouter/src/remote_control.rs",
+      "apps/bitrouter/src/remote_control",
+      "apps/bitrouter/src/config",
+      "apps/bitrouter/src/reload.rs"
+    ],
+    "existing": "host-global control/config snapshots",
+    "target": "preserve operator boundary, add independent tenant resource commands",
+    "obligations": "Operation IDs, active snapshot caches, config validation and reload",
+    "exclusions": "Host-global reload and secret-bearing host configuration remain installation-operator-only."
+  },
+  {
+    "name": "credentials-routing",
+    "paths": [
+      "apps/bitrouter/src/provider_credentials.rs",
+      "apps/bitrouter/src/gateway/pipeline/native_auth.rs",
+      "apps/bitrouter/src/gateway/providers/auth/file/snapshot.rs",
+      "apps/bitrouter/src/gateway/providers/auth/file/backend.rs",
+      "apps/bitrouter/src/gateway/providers/auth/store.rs"
+    ],
+    "existing": "Selected canonical credential-file path + provider/account; snapshot map and process-local ACCOUNTS leases/pending refresh replacements; default file may be outside state directory",
+    "target": "Existing host-global slots stay explicit installation-operator pools unless an evidenced offline mapping creates a distinct tenant-owned slot",
+    "obligations": "Inventory actual selected credential-store paths, all writers and pending refreshes. Fence every writer of each selected path, not just state-directory owners; backend has no cross-process exclusion. Drain or quarantine pending replacements before cutover. Rebuild private caches/leases with tenant, slot and authority revision; never export secrets.",
+    "exclusions": "No tenant ownership inferred from a state directory or provider/account label."
+  }
+]

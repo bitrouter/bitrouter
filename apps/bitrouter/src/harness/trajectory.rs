@@ -3,15 +3,18 @@
 //! Historical projections and checkpoints remain in `acp_trajectory`; only
 //! this harness adapter creates recording connections and acknowledges appends.
 
+#[cfg(feature = "core")]
+pub(crate) mod owned;
+
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use sea_orm::sea_query::{Expr, OnConflict};
+use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
-    QuerySelect, Set, TransactionTrait,
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, QueryTrait,
+    Set, TransactionTrait,
 };
 use tokio::sync::Mutex;
 
@@ -58,7 +61,7 @@ impl Recorder {
             "recording scope is empty"
         );
         let connection_id = uuid::Uuid::new_v4().to_string();
-        connections::ActiveModel {
+        let inserted = connections::Entity::insert(connections::ActiveModel {
             connection_id: Set(connection_id.clone()),
             owner: Set(scope.owner.clone()),
             source: Set(scope.source.clone()),
@@ -68,9 +71,10 @@ impl Recorder {
             head: Set(0),
             started_at: Set(chrono::Utc::now().to_rfc3339()),
             metadata_json: Set("{}".into()),
-        }
-        .insert(&db)
+        })
+        .exec_without_returning(&db)
         .await?;
+        ensure!(inserted == 1, "connections row was not inserted");
         Ok(Arc::new(Recorder {
             db,
             connection_id,
@@ -106,6 +110,7 @@ impl Recorder {
                 }
                 .key()?;
                 call.parent_watermark = sessions::Entity::find_by_id(&parent)
+                    .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                     .one(&self.db)
                     .await?
                     .map(|row| row.head);
@@ -128,6 +133,7 @@ impl Recorder {
         // The connection row and session head serialize appenders on all supported
         // databases. The event and both cursors commit in the same transaction.
         let bumped = connections::Entity::update_many()
+            .filter(crate::storage::legacy::scope("acp_capture_connections"))
             .col_expr(
                 connections::Column::Head,
                 Expr::col(connections::Column::Head).add(1),
@@ -145,6 +151,7 @@ impl Recorder {
         // here would freeze an older snapshot while waiting for that session.
         // https://dev.mysql.com/doc/refman/8.4/en/innodb-consistent-read.html
         let connection = connections::Entity::find_by_id(&self.connection_id)
+            .filter(crate::storage::legacy::scope("acp_capture_connections"))
             .lock_exclusive()
             .one(&tx)
             .await?
@@ -164,11 +171,7 @@ impl Recorder {
             let forked = event.kind == CaptureKind::Response
                 && event.method == "session/fork"
                 && created_id.is_some();
-            // SessionKey is this table's only unique key. SeaQuery's MySQL
-            // polyfill assigns that key to itself; PostgreSQL/SQLite keep DO
-            // NOTHING, preserving the existing head, origin and fork metadata.
-            // https://docs.rs/sea-query/0.32.7/sea_query/query/struct.OnConflict.html#method.do_nothing_on
-            sessions::Entity::insert(sessions::ActiveModel {
+            let statement = sessions::Entity::insert(sessions::ActiveModel {
                 session_key: Set(key.clone()),
                 owner: Set(identity.owner),
                 source: Set(identity.source),
@@ -182,19 +185,13 @@ impl Recorder {
                     None
                 }),
                 parent_watermark: Set(if forked { call.parent_watermark } else { None }),
-            })
-            .on_conflict(
-                OnConflict::column(sessions::Column::SessionKey)
-                    .do_nothing_on([sessions::Column::SessionKey])
-                    .to_owned(),
-            )
-            .do_nothing()
-            .exec(&tx)
-            .await?;
+            });
+            crate::storage::legacy::insert(&tx, statement.into_query()).await?;
             // Serialize session mutations and inspect its current tombstone
             // before establishing a consistent view of the session's events.
             // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html
             let current = sessions::Entity::find_by_id(&key)
+                .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                 .lock_exclusive()
                 .one(&tx)
                 .await?
@@ -210,6 +207,7 @@ impl Recorder {
                 // would gap-lock unrelated sessions and deadlock their inserts.
                 // https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html#innodb-gap-locks
                 let prior = events::Entity::find()
+                    .filter(crate::storage::legacy::scope("acp_capture_events"))
                     .filter(events::Column::SessionKey.eq(&key))
                     .filter(
                         Condition::any()
@@ -226,6 +224,7 @@ impl Recorder {
                     "partial"
                 };
                 let mut update = sessions::Entity::update_many()
+                    .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                     .col_expr(sessions::Column::HistoryOrigin, Expr::value(origin))
                     .filter(sessions::Column::SessionKey.eq(&key));
                 if forked {
@@ -243,6 +242,7 @@ impl Recorder {
             }
             if !replay {
                 sessions::Entity::update_many()
+                    .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                     .col_expr(
                         sessions::Column::Head,
                         Expr::col(sessions::Column::Head).add(1),
@@ -252,6 +252,7 @@ impl Recorder {
                     .await?;
                 session_sequence = Some(
                     sessions::Entity::find_by_id(&key)
+                        .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
                         .one(&tx)
                         .await?
                         .context("capture session disappeared")?
@@ -260,7 +261,7 @@ impl Recorder {
             }
             session_key = Some(key);
         }
-        events::ActiveModel {
+        let inserted = events::Entity::insert(events::ActiveModel {
             connection_id: Set(self.connection_id.clone()),
             sequence: Set(connection.head),
             session_key: Set(session_key),
@@ -268,11 +269,13 @@ impl Recorder {
             replay: Set(replay),
             event_json: Set(serde_json::to_string(event)?),
             captured_at: Set(chrono::Utc::now().to_rfc3339()),
-        }
-        .insert(&tx)
+        })
+        .exec_without_returning(&tx)
         .await?;
+        ensure!(inserted == 1, "events row was not inserted");
         if event.kind == CaptureKind::Connected {
             connections::Entity::update_many()
+                .filter(crate::storage::legacy::scope("acp_capture_connections"))
                 .col_expr(
                     connections::Column::MetadataJson,
                     Expr::value(serde_json::to_string(&event.payload)?),
@@ -289,6 +292,7 @@ impl Recorder {
                 == Some(true)
                 && state.calls.is_empty();
             connections::Entity::update_many()
+                .filter(crate::storage::legacy::scope("acp_capture_connections"))
                 .col_expr(
                     connections::Column::State,
                     Expr::value(if clean { "complete" } else { "interrupted" }),
@@ -339,6 +343,7 @@ impl CapturePort for Recorder {
             // The row starts dirty; even a total database outage or process crash
             // cannot leave an acknowledged complete recording behind.
             let _marked = connections::Entity::update_many()
+                .filter(crate::storage::legacy::scope("acp_capture_connections"))
                 .col_expr(connections::Column::State, Expr::value("interrupted"))
                 .filter(connections::Column::ConnectionId.eq(&self.connection_id))
                 .exec(&self.db)

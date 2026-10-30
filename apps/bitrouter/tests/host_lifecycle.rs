@@ -3,6 +3,7 @@
 #![cfg(unix)]
 
 use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::net::{SocketAddr, TcpListener};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::path::PathBuf;
@@ -26,13 +27,22 @@ const CASE_TIMEOUT: Duration = Duration::from_secs(60);
 const STEP_TIMEOUT: Duration = Duration::from_secs(10);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(20);
+const START_ATTEMPTS: usize = 5;
+const ATTEMPT_LOG_BYTES: u64 = 256 * 1024;
 const CONTROL_TOKEN: &str = "host-lifecycle-private-control-token";
 const PROVIDER_KEY: &str = "host-lifecycle-private-provider-key";
 const REQUEST_ID: &str = "host-lifecycle-control-error";
 const REPLY: &str = "completed after control shutdown failed";
 
+#[path = "host_lifecycle/tenancy.rs"]
+mod tenancy;
+#[path = "host_lifecycle/tenancy_dispatch.rs"]
+mod tenancy_dispatch;
+
 struct Host {
     child: Option<Child>,
+    launch: Option<Launch>,
+    ready_once: bool,
     home: PathBuf,
     directory: Option<tempfile::TempDir>,
     log: PathBuf,
@@ -42,8 +52,28 @@ struct Host {
     client: reqwest::Client,
 }
 
+struct Launch {
+    command: Command,
+    config: PathBuf,
+    source: String,
+    log_offset: u64,
+    attempts: usize,
+}
+
 impl Host {
     fn start(upstream: &str) -> Result<Self> {
+        Self::start_profile(upstream, false)
+    }
+
+    fn start_profile(upstream: &str, tenancy: bool) -> Result<Self> {
+        let (mut host, inference, remote) = Self::prepare_profile(upstream, tenancy)?;
+        // Reserve distinct ephemeral ports until immediately before spawn.
+        drop((inference, remote));
+        host.spawn(&host.home.join("private.yaml"))?;
+        Ok(host)
+    }
+
+    fn prepare_profile(upstream: &str, tenancy: bool) -> Result<(Self, TcpListener, TcpListener)> {
         // Short, owner-only paths also fit macOS's Unix-socket path limit.
         let directory = tempfile::Builder::new()
             .prefix("bro-life-")
@@ -51,8 +81,10 @@ impl Host {
         let home = directory.path().to_path_buf();
         let inference = TcpListener::bind("127.0.0.1:0")?;
         let remote = TcpListener::bind("127.0.0.1:0")?;
-        let mut host = Self {
+        let host = Self {
             child: None,
+            launch: None,
+            ready_once: false,
             socket: home.join("control.sock"),
             log: home.join("host.log"),
             inference: inference.local_addr()?,
@@ -71,10 +103,20 @@ impl Host {
             fs::create_dir(host.home.join(name))?;
         }
         let config = host.home.join("private.yaml");
+        let tenancy_config = if tenancy {
+            "tenancy: {enabled: true}\n"
+        } else {
+            ""
+        };
+        let control_credentials = if tenancy {
+            "  credentials:\n    - id: test-operator\n      token_env: BITROUTER_CONTROL_TOKEN\n      scopes: [control:read, control:tenancy]\n"
+        } else {
+            ""
+        };
         fs::write(
             &config,
             format!(
-                r#"inherit_defaults: false
+                r#"{tenancy_config}inherit_defaults: false
 registry:
   enabled: false
 server:
@@ -84,7 +126,7 @@ server:
 control:
   enabled: true
   listen: {}
-database:
+{control_credentials}database:
   url: 'sqlite://host.db?mode=rwc'
 agent_api:
   enabled: false
@@ -103,33 +145,142 @@ models:
                 host.inference, host.remote,
             ),
         )?;
-        let output = File::create(&host.log)?;
-        // Reserve distinct ephemeral ports until immediately before spawn.
-        drop((inference, remote));
-        host.child = Some(
-            Command::new(env!("CARGO_BIN_EXE_bro"))
-                .args(["serve", "--managed-child", "--config"])
-                .arg(config)
-                .current_dir(&host.home)
-                // Do not inherit credentials, discovery paths, proxies, OTel,
-                // workflow tracing, or feature activation from the developer.
-                .env_clear()
-                .env("PATH", "/usr/bin:/bin")
-                .env("HOME", host.home.join("home"))
-                .env("USERPROFILE", host.home.join("home"))
-                .env("BITROUTER_HOME", host.home.join("runtime"))
-                .env("XDG_CONFIG_HOME", host.home.join("config"))
-                .env("XDG_CACHE_HOME", host.home.join("cache"))
-                .env("XDG_DATA_HOME", host.home.join("data"))
-                .env("TMPDIR", host.home.join("tmp"))
-                .env("BITROUTER_CONTROL_TOKEN", CONTROL_TOKEN)
-                .stdin(Stdio::null())
-                .stdout(output.try_clone()?)
-                .stderr(output)
+        Ok((host, inference, remote))
+    }
+
+    fn spawn(&mut self, config: &std::path::Path) -> Result<()> {
+        self.spawn_with_wrapping_key(config, None)
+    }
+
+    fn spawn_with_wrapping_key(
+        &mut self,
+        config: &std::path::Path,
+        key: Option<&str>,
+    ) -> Result<()> {
+        if let Some(child) = &mut self.child {
+            ensure!(
+                child.try_wait()?.is_some(),
+                "cannot replace a live owned host"
+            );
+        }
+        let source = fs::read_to_string(config)?;
+        let output = File::options().create(true).append(true).open(&self.log)?;
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bro"));
+        command
+            .args(["serve", "--managed-child", "--config"])
+            .arg(config)
+            .current_dir(&self.home)
+            // Do not inherit credentials, discovery paths, proxies, OTel,
+            // workflow tracing, or feature activation from the developer.
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", self.home.join("home"))
+            .env("USERPROFILE", self.home.join("home"))
+            .env("BITROUTER_HOME", self.home.join("runtime"))
+            .env("XDG_CONFIG_HOME", self.home.join("config"))
+            .env("XDG_CACHE_HOME", self.home.join("cache"))
+            .env("XDG_DATA_HOME", self.home.join("data"))
+            .env("TMPDIR", self.home.join("tmp"))
+            .env("BITROUTER_CONTROL_TOKEN", CONTROL_TOKEN)
+            .stdin(Stdio::null())
+            .stdout(output.try_clone()?)
+            .stderr(output);
+        if let Some(key) = key {
+            command.env("TEST_TENANCY_WRAPPING_KEY", key);
+        }
+        self.launch = Some(Launch {
+            command,
+            config: config.to_owned(),
+            source,
+            log_offset: 0,
+            attempts: 0,
+        });
+        self.spawn_attempt()
+    }
+
+    fn spawn_attempt(&mut self) -> Result<()> {
+        if let Some(child) = &mut self.child {
+            ensure!(
+                child.try_wait()?.is_some(),
+                "cannot replace a live owned host"
+            );
+        }
+        let launch = self
+            .launch
+            .as_mut()
+            .context("missing host launch command")?;
+        ensure!(
+            launch.attempts < START_ATTEMPTS,
+            "host startup retry limit reached"
+        );
+        launch.log_offset = fs::metadata(&self.log)?.len();
+        launch.attempts += 1;
+        self.child = Some(
+            launch
+                .command
                 .spawn()
                 .context("spawn the Cargo-built official host")?,
         );
-        Ok(host)
+        Ok(())
+    }
+
+    fn attempt_logs(&self) -> Result<String> {
+        let launch = self
+            .launch
+            .as_ref()
+            .context("missing host launch command")?;
+        log_since(&self.log, launch.log_offset)
+    }
+
+    fn retry_startup_collision(&mut self, status: ExitStatus) -> Result<bool> {
+        // Once addresses have been published, tests may retain SDK clients across
+        // explicit restarts. Keep those endpoints stable and their failures visible.
+        if self.ready_once || status.code() != Some(1) {
+            return Ok(false);
+        }
+        ensure!(
+            self.child()?.try_wait()? == Some(status),
+            "startup retry requires the exact exited and reaped child"
+        );
+        if !listener_bind_collision(&self.attempt_logs()?, self.inference, self.remote) {
+            return Ok(false);
+        }
+        let launch = self
+            .launch
+            .as_mut()
+            .context("missing host launch command")?;
+        ensure!(
+            launch.attempts < START_ATTEMPTS,
+            "host startup retry limit reached"
+        );
+        ensure!(
+            fs::read_to_string(&launch.config)? == launch.source,
+            "host configuration changed during startup"
+        );
+        let (inference, remote) = reserve_fresh_addresses([self.inference, self.remote])?;
+        let inference_address = inference.local_addr()?;
+        let remote_address = remote.local_addr()?;
+        let mut source = launch.source.clone();
+        for (old, new) in [
+            (self.inference, inference_address),
+            (self.remote, remote_address),
+        ] {
+            let old = format!("  listen: {old}\n");
+            ensure!(
+                source.matches(&old).count() == 1,
+                "ambiguous owned listener configuration"
+            );
+            source = source.replacen(&old, &format!("  listen: {new}\n"), 1);
+        }
+        fs::write(&launch.config, &source)?;
+        launch.source = source;
+        self.inference = inference_address;
+        self.remote = remote_address;
+        // Reuse the original Command: args, cleared environment, wrapping key,
+        // working directory and append-only output handles remain identical.
+        drop((inference, remote));
+        self.spawn_attempt()?;
+        Ok(true)
     }
 
     fn child(&mut self) -> Result<&mut Child> {
@@ -170,7 +321,12 @@ models:
     async fn ready(&mut self) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
-                self.alive()?;
+                if let Some(status) = self.child()?.try_wait()? {
+                    if self.retry_startup_collision(status)? {
+                        continue;
+                    }
+                    bail!("host exited early: {status}");
+                }
                 if let Ok(DaemonResponse::Status { pid, .. }) =
                     self.command(&DaemonCommand::Status).await
                 {
@@ -195,7 +351,7 @@ models:
                     .await;
                     if remote_ready.is_ok()
                         && self.health().await.is_ok()
-                        && self.logs().contains("— serving on")
+                        && self.attempt_logs()?.contains("— serving on")
                     {
                         return Ok::<_, anyhow::Error>(());
                     }
@@ -216,6 +372,7 @@ models:
             ),
             "must exercise managed-child admission, not external-host rejection: {hello:?}"
         );
+        self.ready_once = true;
         Ok(())
     }
 
@@ -308,6 +465,7 @@ models:
             }
             self.child = None;
         }
+        self.launch = None;
         if let Some(directory) = self.directory.take() {
             directory.close().context("remove private host directory")?;
         }
@@ -335,6 +493,224 @@ impl Drop for Host {
             eprintln!("host lifecycle cleanup failed: {error:#}\n{}", self.logs());
         }
     }
+}
+
+fn log_since(path: &std::path::Path, offset: u64) -> Result<String> {
+    let mut file = File::open(path)?;
+    ensure!(
+        file.metadata()?.len() >= offset,
+        "host attempt log was truncated"
+    );
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = Vec::new();
+    file.take(ATTEMPT_LOG_BYTES + 1).read_to_end(&mut bytes)?;
+    ensure!(
+        u64::try_from(bytes.len())? <= ATTEMPT_LOG_BYTES,
+        "host attempt log exceeds the diagnostic bound"
+    );
+    String::from_utf8(bytes).context("host attempt log is not UTF-8")
+}
+
+fn listener_bind_collision(logs: &str, inference: SocketAddr, remote: SocketAddr) -> bool {
+    // Only the CLI's final structured error can authorize another launch, never
+    // an incidental tracing line, earlier attempt, or error after serving began.
+    if logs.contains("— serving on") {
+        return false;
+    }
+    let start = logs
+        .split_inclusive('\n')
+        .scan(0, |offset, line| {
+            let start = *offset;
+            *offset += line.len();
+            Some((start, line))
+        })
+        .find_map(|(start, line)| (line.trim() == "{").then_some(start));
+    let Some(start) = start else {
+        return false;
+    };
+    let Ok(report) = serde_json::from_str::<Value>(&logs[start..]) else {
+        return false;
+    };
+    let message =
+        std::io::Error::from_raw_os_error(rustix::io::Errno::ADDRINUSE.raw_os_error()).to_string();
+    report["error"]["kind"] == "internal"
+        && report["error"]["message"] == message
+        && [
+            format!("bind inference listener {inference}"),
+            format!("bind remote control listener {remote}"),
+        ]
+        .iter()
+        .any(|context| report["error"]["context"] == json!([context]))
+}
+
+fn reserve_fresh_addresses(previous: [SocketAddr; 2]) -> Result<(TcpListener, TcpListener)> {
+    for _ in 0..16 {
+        let inference = TcpListener::bind("127.0.0.1:0")?;
+        let remote = TcpListener::bind("127.0.0.1:0")?;
+        if !previous.contains(&inference.local_addr()?) && !previous.contains(&remote.local_addr()?)
+        {
+            return Ok((inference, remote));
+        }
+    }
+    bail!("could not reserve fresh private listener addresses")
+}
+
+#[tokio::test]
+async fn initial_remote_bind_collision_relaunches_the_exact_owned_command() -> Result<()> {
+    use base64::Engine;
+
+    let (mut host, inference, remote) = Host::prepare_profile("http://127.0.0.1:1", false)?;
+    let blocked = host.remote;
+    let config = host.home.join("private.yaml");
+    // Port zero avoids an unrelated inference-port race in this deliberately
+    // failing attempt. The held remote listener is the deterministic failure.
+    let first_inference = SocketAddr::new(host.inference.ip(), 0);
+    let source = fs::read_to_string(&config)?.replacen(
+        &format!("  listen: {}\n", host.inference),
+        &format!("  listen: {first_inference}\n"),
+        1,
+    );
+    fs::write(&config, &source)?;
+    host.inference = first_inference;
+    drop(inference);
+    let result = tokio::time::timeout(CASE_TIMEOUT, async {
+        let wrapping_key = base64::engine::general_purpose::STANDARD.encode([19; 32]);
+        host.spawn_with_wrapping_key(&config, Some(&wrapping_key))?;
+        let first_pid = host.child()?.id();
+        let launch = host.launch.as_ref().context("missing first launch")?;
+        let args = launch
+            .command
+            .get_args()
+            .map(std::ffi::OsStr::to_owned)
+            .collect::<Vec<_>>();
+        let env = launch
+            .command
+            .get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(std::ffi::OsStr::to_owned)))
+            .collect::<Vec<_>>();
+
+        // Hold the actual remote reservation through exit/reap, proving that
+        // the first child fails at listener binding rather than relying on luck.
+        let failed = host.exited().await?;
+        ensure!(failed.code() == Some(1));
+        ensure!(listener_bind_collision(
+            &host.attempt_logs()?,
+            first_inference,
+            blocked
+        ));
+        ensure!(
+            host.attempt_logs()?
+                .contains(&format!("bind remote control listener {blocked}"))
+        );
+        ensure!(remote.local_addr()? == blocked);
+        host.ready().await?;
+        ensure!(host.child()?.id() != first_pid);
+        ensure!(host.remote != blocked && host.inference != first_inference);
+        let launch = host.launch.as_ref().context("missing replacement launch")?;
+        ensure!((2..=START_ATTEMPTS).contains(&launch.attempts));
+        ensure!(
+            launch
+                .command
+                .get_args()
+                .eq(args.iter().map(std::ffi::OsString::as_os_str))
+        );
+        ensure!(
+            launch.command.get_envs().eq(env
+                .iter()
+                .map(|(name, value)| (name.as_os_str(), value.as_deref())))
+        );
+        ensure!(launch.command.get_current_dir() == Some(host.home.as_path()));
+        let restored = fs::read_to_string(&config)?
+            .replace(
+                &format!("  listen: {}\n", host.inference),
+                &format!("  listen: {first_inference}\n"),
+            )
+            .replace(
+                &format!("  listen: {}\n", host.remote),
+                &format!("  listen: {blocked}\n"),
+            );
+        ensure!(
+            restored == source,
+            "retry changed more than the two owned addresses"
+        );
+        ensure!(matches!(
+            host.command(&DaemonCommand::Stop).await?,
+            DaemonResponse::Ok
+        ));
+        ensure!(host.exited().await?.success());
+        host.ensure_closed().await?;
+        Ok(())
+    })
+    .await
+    .context("bind-collision lifecycle case timed out")
+    .and_then(|result| result);
+    drop(remote);
+    host.finish(result)
+}
+
+#[test]
+fn startup_collision_requires_exact_current_attempt_error() -> Result<()> {
+    let inference: SocketAddr = "127.0.0.1:41001".parse()?;
+    let remote: SocketAddr = "127.0.0.1:41002".parse()?;
+    let expected = json!({"error": {
+        "kind":"internal",
+        "message":std::io::Error::from_raw_os_error(rustix::io::Errno::ADDRINUSE.raw_os_error()).to_string(),
+        "context":[format!("bind remote control listener {remote}")],
+    }});
+    let collision = serde_json::to_string_pretty(&expected)?;
+    ensure!(listener_bind_collision(&collision, inference, remote));
+    for (field, value) in [
+        ("kind", json!("bad_request")),
+        (
+            "message",
+            json!("Address already in use while opening a database"),
+        ),
+        (
+            "context",
+            json!(["bind remote control listener 127.0.0.1:41003"]),
+        ),
+        (
+            "context",
+            json!([
+                "database startup",
+                format!("bind remote control listener {remote}")
+            ]),
+        ),
+    ] {
+        let mut other = expected.clone();
+        other["error"][field] = value;
+        ensure!(!listener_bind_collision(
+            &serde_json::to_string_pretty(&other)?,
+            inference,
+            remote
+        ));
+    }
+    ensure!(!listener_bind_collision(
+        &format!("— serving on\n{collision}"),
+        inference,
+        remote
+    ));
+    ensure!(!listener_bind_collision(
+        &format!("{collision}\n{collision}"),
+        inference,
+        remote
+    ));
+    ensure!(!listener_bind_collision(
+        "Address already in use",
+        inference,
+        remote
+    ));
+    let directory = tempfile::tempdir()?;
+    let log = directory.path().join("attempts.log");
+    let previous = format!("{collision}\n");
+    let current = serde_json::to_string_pretty(&json!({"error": {
+        "kind":"internal", "message":"invalid wrapping key"
+    }}))?;
+    fs::write(&log, format!("{previous}{current}"))?;
+    let attempt = log_since(&log, u64::try_from(previous.len())?)?;
+    ensure!(attempt == current);
+    ensure!(!listener_bind_collision(&attempt, inference, remote));
+    Ok(())
 }
 
 async fn listener_closed(address: SocketAddr) -> Result<bool> {

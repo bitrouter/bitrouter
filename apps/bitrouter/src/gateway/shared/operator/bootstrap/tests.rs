@@ -1,3 +1,4 @@
+use crate::runtime_crypto::DeploymentKey;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
@@ -5,7 +6,7 @@ use bitrouter_ai::gateway::operator::*;
 use serde_json::json;
 
 use super::*;
-use crate::gateway::shared::{crypto::DeploymentKey, schema, store};
+use crate::gateway::shared::{schema, store};
 
 fn plan(principal_id: &str) -> BootstrapPlan {
     BootstrapPlan {

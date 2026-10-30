@@ -210,6 +210,25 @@ rm -rf ~/.bitrouter
 bro start
 ```
 
+## Optional receipt latency measurement
+
+A local tenancy profile can opt into `plugins.bitrouter-telemetry.receipt_latency`
+with `enabled: true` and an optional exact `correlation_id` (at most128 bytes).
+Use an explicit `otel` block with metrics enabled and a compiled `otel-http`
+or `otel-grpc` transport. This private measurement path uses the existing OTLP
+provider and final flush; it adds no authority or request header. Disabled is the
+default. Explicit enabled measurement fails startup if unavailable, and fails the
+local shutdown result if producer classification or cached SDK export shutdown
+is unclean. Ordinary telemetry remains best-effort.
+
+Collect the actual OTLP histograms after producer drain. `observe status` does
+not report p99 or prove receipt/export completeness. Receipt durations are first
+terminal queue to actual Durable publication, including retries; SQL COMMIT is
+also measured separately. A final downstream DONE remains a distinct acknowledgement.
+See `docs/RESOURCE_TENANCY_RECEIPT_LATENCY.md` in the source checkout for the
+finite histogram, cohort, export reconciliation and qualification requirements.
+Do not infer a20ms pass or any new production capability from enabling it.
+
 ## Observability snapshot
 
 ```bash

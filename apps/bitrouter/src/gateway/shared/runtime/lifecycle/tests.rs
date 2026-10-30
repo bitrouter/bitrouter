@@ -4,6 +4,7 @@
 mod oauth;
 
 use super::*;
+use crate::runtime_crypto::DeploymentKey;
 use anyhow::Context as _;
 use axum::body::Body;
 use axum::{Router, routing::get};
@@ -16,7 +17,6 @@ use tower::ServiceExt as _;
 use crate::config::shared_process::{Process, Server};
 use crate::gateway::shared::{
     authority::Authority,
-    crypto::DeploymentKey,
     publication::Configuration,
     schema,
     store::{self, Store},

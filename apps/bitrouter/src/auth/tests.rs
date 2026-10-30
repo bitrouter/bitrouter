@@ -107,6 +107,29 @@ async fn valid_key_authenticates_and_emits_event() {
 }
 
 #[tokio::test]
+async fn tenancy_fences_native_and_local_callers_before_authentication() -> anyhow::Result<()> {
+    let hook = AuthHook::new(DatabaseConnection::Disconnected).with_tenancy(true);
+    for caller in [
+        CallerContext::anonymous(),
+        CallerContext::local(),
+        CallerContext::new("native-key", "native-user"),
+    ] {
+        let mut context = ctx_with(caller, None);
+        assert!(matches!(
+            hook.check(&mut context).await?,
+            HookDecision::Deny(_)
+        ));
+        assert!(matches!(
+            hook.revalidate_context(&context).await?,
+            HookDecision::Deny(_)
+        ));
+        assert!(context.get_event::<Authenticated>().is_none());
+        assert!(context.get_event::<ApiPrincipalEstablished>().is_none());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn valid_key_authenticates_mcp_and_emits_identity_events() {
     let pool = pool().await;
     let (secret, key_id) = insert_active_key(&pool, "mcp-user").await;

@@ -1,6 +1,7 @@
 //! Native workspace resources behind the managed core's execution boundary.
 //! This adapter owns no model loop and never interprets collaboration tools.
 
+use crate::gateway::mcp::client::Discovery;
 use crate::skills::library::LocalSkillExt;
 use crate::storage::checkpoint::validation::HarnessManifestExt;
 use crate::storage::checkpoint::validation::ToolResultLimitsExt;
@@ -13,7 +14,7 @@ use bitrouter_ai::types::{Tool, ToolResultOutput};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-use super::{HarnessConfig, HarnessResources, ResourceError, instructions};
+use super::{DiscoveryOwner, HarnessConfig, HarnessResources, ResourceError, instructions};
 use crate::harness::tools::WorkspaceTools;
 use crate::storage::checkpoint::sha256;
 use bitrouter_ai::core::protocol::{
@@ -71,21 +72,54 @@ impl NativeResources {
         caller: &crate::gateway::caller::CallerContext,
         cancel: &CancellationToken,
     ) -> Result<Self, ResourceError> {
-        let tools = WorkspaceTools::new(workspace, mode).map_err(|error| error.to_string())?;
+        Self::discover_in(
+            workspace,
+            mode,
+            config,
+            caller,
+            cancel,
+            DiscoveryOwner {
+                mcp: std::sync::Arc::new(tokio::sync::Mutex::new(
+                    super::mcp::McpConnections::default(),
+                )),
+                discovery: &Discovery::default(),
+            },
+            false,
+        )
+        .await
+    }
+
+    async fn discover_in(
+        workspace: &Path,
+        mode: ToolMode,
+        config: &HarnessConfig,
+        caller: &crate::gateway::caller::CallerContext,
+        cancel: &CancellationToken,
+        owner: DiscoveryOwner<'_>,
+        context_views: bool,
+    ) -> Result<Self, ResourceError> {
+        let DiscoveryOwner { mcp, discovery } = owner;
+        let tools = discovery
+            .with(|| WorkspaceTools::new(workspace, mode))?
+            .map_err(|error| error.to_string())?;
         let root = tools.root().to_path_buf();
         let instruction_config = config.instructions.clone();
-        let startup = tokio::task::spawn_blocking(move || {
-            instructions::InstructionSnapshot::load(&root, &root, &instruction_config)
-        })
-        .await
-        .map_err(|error| error.to_string())??;
-        let resources = HarnessResources::discover(
+        let startup = discovery
+            .with(|| {
+                tokio::task::spawn_blocking(move || {
+                    instructions::InstructionSnapshot::load(&root, &root, &instruction_config)
+                })
+            })?
+            .await
+            .map_err(|error| error.to_string())??;
+        let resources = HarnessResources::discover_in(
             tools.root(),
             config,
             caller,
             mode,
             cancel,
             Duration::from_secs(30),
+            DiscoveryOwner { mcp, discovery },
         )
         .await?;
         let prepared = Self::prepare(
@@ -93,6 +127,7 @@ impl NativeResources {
             &resources,
             &startup,
             config.library.is_some() || !config.skills.mcp_sources.is_empty(),
+            context_views,
         );
         match prepared {
             Ok(signals) => Ok(Self {
@@ -118,6 +153,7 @@ impl NativeResources {
         resources: &HarnessResources,
         startup: &instructions::InstructionSnapshot,
         native_skills: bool,
+        context_views: bool,
     ) -> Result<SignalUpdate, String> {
         let mut declarations = Vec::new();
         for tool in tools.declarations() {
@@ -163,14 +199,18 @@ impl NativeResources {
             max_tool_output_bytes: 512 * 1024,
             artifact_quota_bytes: 32 * 1024 * 1024,
             max_artifact_chunk_bytes: 32 * 1024,
-            required_features: if native_skills {
-                vec![
-                    crate::storage::checkpoint::snapshot::context::FEATURE.into(),
-                    crate::storage::skills::FEATURE.into(),
-                    crate::storage::skills::FILES_FEATURE.into(),
-                ]
-            } else {
-                vec![]
+            required_features: {
+                let mut features = Vec::new();
+                if context_views || native_skills {
+                    features.push(crate::storage::checkpoint::snapshot::context::FEATURE.into());
+                }
+                if native_skills {
+                    features.extend([
+                        crate::storage::skills::FEATURE.into(),
+                        crate::storage::skills::FILES_FEATURE.into(),
+                    ]);
+                }
+                features
             },
         };
         let mut materials: Vec<_> = resources

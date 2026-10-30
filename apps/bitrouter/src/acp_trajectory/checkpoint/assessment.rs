@@ -4,6 +4,7 @@ use super::*;
 
 async fn head(db: &impl ConnectionTrait, key: &str) -> Result<Option<String>> {
     Ok(heads::Entity::find_by_id(key)
+        .filter(crate::storage::legacy::scope("acp_effective_assessments"))
         .one(db)
         .await?
         .and_then(|h| h.revision_id))
@@ -11,6 +12,7 @@ async fn head(db: &impl ConnectionTrait, key: &str) -> Result<Option<String>> {
 
 async fn revision(db: &impl ConnectionTrait, id: &str) -> Result<AssessmentRevision> {
     let row = revisions::Entity::find_by_id(id)
+        .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
         .one(db)
         .await?
         .context("assessment revision missing")?;
@@ -124,11 +126,13 @@ impl CanonicalStore {
         // actually matches; discovery never grants access across native scope.
         if let Some(expected) = &input.expected_revision
             && let Some(row) = revisions::Entity::find_by_id(expected)
+                .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
                 .one(&self.db)
                 .await?
             && row.session_key == key
             && let Ok(previous) = serde_json::from_str::<AssessmentRevision>(&row.revision_json)
             && let Some(row) = checkpoints::Entity::find_by_id(&previous.input.checkpoint_id)
+                .filter(crate::storage::legacy::scope("acp_checkpoints"))
                 .one(&self.db)
                 .await?
             && row.session_key == key
@@ -155,6 +159,7 @@ impl CanonicalStore {
         }
         locked_manifest(&tx, identity, &input.checkpoint_id, &locked_sessions).await?;
         if let Some(existing) = revisions::Entity::find_by_id(&revision_id)
+            .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
             .lock_exclusive()
             .one(&tx)
             .await?
@@ -169,11 +174,14 @@ impl CanonicalStore {
         }
         // The session fence does not refresh an older MySQL read view. The
         // selected head and its revision must both be read at that fence.
-        let current_id = heads::Entity::find_by_id(&key)
+        let current_head = heads::Entity::find_by_id(&key)
+            .filter(crate::storage::legacy::scope("acp_effective_assessments"))
             .lock_exclusive()
             .one(&tx)
-            .await?
-            .and_then(|head| head.revision_id);
+            .await?;
+        let current_id = current_head
+            .as_ref()
+            .and_then(|head| head.revision_id.clone());
         ensure!(
             current_id == input.expected_revision,
             "effective revision changed; refresh before submitting"
@@ -181,6 +189,7 @@ impl CanonicalStore {
         let current = match &current_id {
             Some(id) => {
                 let row = revisions::Entity::find_by_id(id)
+                    .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
                     .lock_exclusive()
                     .one(&tx)
                     .await?
@@ -233,27 +242,36 @@ impl CanonicalStore {
             selection_reason: selection_reason.into(),
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        revisions::ActiveModel {
+        let inserted = revisions::Entity::insert(revisions::ActiveModel {
             revision_id: Set(revision_id.clone()),
             session_key: Set(key.clone()),
             checkpoint_id: Set(cp.checkpoint_id),
             created_at: Set(value.created_at.clone()),
             revision_json: Set(serde_json::to_string(&value)?),
-        }
-        .insert(&tx)
+        })
+        .exec_without_returning(&tx)
         .await?;
+        ensure!(inserted == 1, "revisions row was not inserted");
         if selected {
-            heads::Entity::insert(heads::ActiveModel {
-                session_key: Set(key),
-                revision_id: Set(Some(revision_id)),
-            })
-            .on_conflict(
-                OnConflict::column(heads::Column::SessionKey)
-                    .update_column(heads::Column::RevisionId)
-                    .to_owned(),
-            )
-            .exec(&tx)
-            .await?;
+            if current_head.is_some() {
+                let updated = heads::Entity::update_many()
+                    .filter(crate::storage::legacy::scope("acp_effective_assessments"))
+                    .filter(heads::Column::SessionKey.eq(&key))
+                    .col_expr(heads::Column::RevisionId, Expr::value(Some(revision_id)))
+                    .exec(&tx)
+                    .await?;
+                ensure!(updated.rows_affected == 1, "assessment head changed");
+            } else {
+                // The locked session serializes Legacy creators. A foreign occupied
+                // key is an error, never an upsert into that namespace.
+                let inserted = heads::Entity::insert(heads::ActiveModel {
+                    session_key: Set(key),
+                    revision_id: Set(Some(revision_id)),
+                })
+                .exec_without_returning(&tx)
+                .await?;
+                ensure!(inserted == 1, "heads row was not inserted");
+            }
         }
         tx.commit().await?;
         Ok(value)
@@ -265,6 +283,7 @@ impl CanonicalStore {
     ) -> Result<Vec<AssessmentRevision>> {
         session(&self.db, &identity.key()?).await?;
         let rows = revisions::Entity::find()
+            .filter(crate::storage::legacy::scope("acp_assessment_revisions"))
             .filter(revisions::Column::SessionKey.eq(identity.key()?))
             .order_by_asc(revisions::Column::CreatedAt)
             .order_by_asc(revisions::Column::RevisionId)
@@ -318,6 +337,7 @@ impl CanonicalStore {
             if let Some(own) = cp.segments.last() {
                 for captured in &own.connections {
                     let connection = connections::Entity::find_by_id(&captured.connection_id)
+                        .filter(crate::storage::legacy::scope("acp_capture_connections"))
                         .one(&self.db)
                         .await?
                         .context("capture connection missing")?;
@@ -355,6 +375,7 @@ impl CanonicalStore {
         for (id, state) in &source_states {
             ensure!(
                 connections::Entity::find_by_id(id)
+                    .filter(crate::storage::legacy::scope("acp_capture_connections"))
                     .one(&self.db)
                     .await?
                     .is_some_and(|row| row.state == *state),
@@ -429,6 +450,7 @@ impl CanonicalStore {
             for (id, state) in &view.source_capture_states {
                 ensure!(
                     connections::Entity::find_by_id(id)
+                        .filter(crate::storage::legacy::scope("acp_capture_connections"))
                         .one(&self.db)
                         .await?
                         .is_some_and(|row| row.state == *state),

@@ -82,8 +82,9 @@ Every command prints a single **formatted JSON object** to **stdout** — succes
 
 - `-j`, `--json` — force JSON (the default).
 - `--human` — render a human-readable view to stdout instead of JSON.
-- `--context <name>` — run a supported read action against a named remote
-  BitRouter target; `local` explicitly selects normal local behavior.
+- `--context <name>` — run a supported administration action against a named remote
+  BitRouter target; `local` explicitly selects normal local behavior for commands
+  that support it. `tenancy` HTTP commands require a named remote target.
 - `-H` before the subcommand (for example, `bro -H cloud whoami`) — compatibility spelling for `--human`. Under `bro cloud api`, `-H` means `--header`, matching `gh api`.
 - `-h`, `--help` — unchanged (`-h` is **not** human output).
 
@@ -571,7 +572,7 @@ Contexts live in `contexts.toml` under `$BITROUTER_HOME`, or under
 `~/.bitrouter` when that variable is unset. They contain the endpoint and token
 environment-variable **name**, never the bearer value. Endpoints must use HTTPS;
 plain HTTP is accepted only for `localhost`/loopback, including an SSH-forwarded
-port. The client performs the `/control/v1/capabilities` handshake before its
+port. Host administration performs the `/control/v1/capabilities` handshake before its
 first action (and retains it for that command), follows no redirects, and
 never falls back to this computer's config, socket, or database after a remote
 error. A named context is the complete target: supported remote commands reject
@@ -579,23 +580,122 @@ local `--config` and `--socket` flags before opening local configuration,
 environment, or metering state.
 
 Remote read actions are `status`, `requests`, `models`, `route`, `providers
-list`, `observe status`, `policy status`, `policy show`, and `agents list`, as
-well as the operations-only `code` surface. A remote policy command defaults to
-`--view active`; local policy reads default to `--view disk`. Code requests the
-active policy explicitly and opens named policy detail through a temporary
-picker and inspector.
+list`, `observe status`, `policy status`, `policy show`, and `agents list`.
+A remote policy command defaults to `--view active`; local policy reads default
+to `--view disk`.
 
 `agents list` is a catalog read only. `agents list --remote`, agent checks and
-launches, ACP sessions, native harness UIs, and `code <agent>` stay local. The
-only remote mutation is the explicit `reload` action; it reloads server-owned
-files and never uploads config or forwards the client's environment. Provider,
-key, configuration, policy-publication, and service lifecycle administration
-remain local.
+launches, ACP sessions, and native execution commands stay local. The
+remote host mutation is the explicit `reload` action; it reloads server-owned
+files and never uploads config or forwards the client's environment. The separate
+`tenancy` command group prepares and activates typed tenant configuration through
+the tenancy HTTP SDK. Host provider, key, configuration, policy-publication, and
+service lifecycle administration remain local.
 
 Local CLI compatibility adapters retain the established `providers list`
 `api_base` field and `observe status` socket, endpoint, and service fields.
 Those host details are omitted from remote administration and dashboard
 reports, which use the redacted typed read contracts.
+
+## Tenant configuration over HTTP
+
+The HTTP subcommands of `bro tenancy` are available in the base gateway build.
+They are client adapters;
+the server must implement the selected tenancy operation. Choose either a named
+context or an explicit `--endpoint URL --token-env NAME` pair on each remote
+command. Mixing them is an error. There is no default target, local daemon
+discovery, database access, or `--context local` fallback. The token comes only
+from the selected environment variable; no token-value flag is provided. HTTPS
+or loopback HTTP is required. The client follows no redirects and preserves the
+existing CLI system-proxy behavior.
+
+```console
+bro context add resource-admin \
+  --endpoint https://router.example/control/v1 --token-env RESOURCE_ADMIN_TOKEN
+bro --context resource-admin tenancy capabilities
+bro tenancy capabilities --endpoint http://127.0.0.1:4358 --token-env RESOURCE_ADMIN_TOKEN
+bro tenancy configuration validate --input draft.json
+bro --context resource-admin tenancy configuration apply --tenant tenant-a --input draft.json
+bro --context resource-admin tenancy configuration read \
+  --installation-id install-a --tenant tenant-a --revision config-r1
+bro --context resource-admin tenancy configuration active \
+  --installation-id install-a --tenant tenant-a
+bro --context resource-admin tenancy configuration activate --tenant tenant-a --input activation.json
+bro --context resource-admin tenancy operation --installation-id install-a --operation-id prepare-1
+```
+
+| Command | Input and effect |
+| --- | --- |
+| `tenancy capabilities` | One fresh `TenantCapabilities` read. No host-capabilities handshake or implicit submission follows. |
+| `tenancy configuration validate --input FILE` | Local `ConfigurationPut` JSON shape, duplicate/unknown-field, reference-count and numeric-bound checks only. Rejects target/context flags. No authorization, resource lookup, compilation, CAS or dispatch check. |
+| `tenancy configuration apply --tenant ID --input FILE` | One `put_configuration` call. Prepares an immutable draft; does not activate it. |
+| `tenancy configuration read --installation-id ID --tenant ID --revision ID` | Reads exactly the requested retained revision under current grants. |
+| `tenancy configuration activate --tenant ID --input FILE` | One `activate` call with the complete `Activation` document; rollback uses the same command with the chosen retained revision. |
+| `tenancy configuration active --installation-id ID --tenant ID` | Reads the current pointer and authority revision; does not copy them into any submission. Requires tenant-wide read authority or an installation operator. |
+| `tenancy operation --installation-id ID --operation-id ID` | Reads the original principal's nonsecret management result under current read authority. Separate from host `operations show`. |
+
+Files are literal UTF-8 JSON, bounded to 2 MiB; the configuration document also
+has the contract's 1 MiB bound. No YAML, environment expansion, host-file upload,
+or implicit resource import occurs. Validate and apply take the **same complete
+ConfigurationPut file**, for example:
+
+```json
+{
+  "operation_id": "prepare-1",
+  "installation_id": "install-a",
+  "expected_authority_revision": 17,
+  "document": {
+    "routes": [
+      {
+        "owner_kind": "tenant",
+        "owner_id": "tenant-a",
+        "resource_kind": "route",
+        "resource_id": "coding",
+        "revision_id": "route-r1"
+      }
+    ],
+    "policy": null,
+    "generation_defaults": { "max_output_tokens": 2048, "temperature": 0.2 },
+    "learning": { "mode": "off", "max_evaluations": 0 },
+    "limits": { "active_executions": 16, "queued_work": 32, "learning_jobs": 0 }
+  }
+}
+```
+
+These IDs and revisions are illustrative. Use the actual installation, observed
+authority revision, and already provisioned owner-qualified resource revisions.
+The local validator can accept references that the server cannot resolve or
+authorize. Its output explicitly reports `validation: "local_shape_only"` and
+`server_checked: false`.
+
+`activation.json` supplies both CAS observations and the exact retained target:
+
+```json
+{
+  "operation_id": "activate-1",
+  "installation_id": "install-a",
+  "expected_authority_revision": 18,
+  "expected_active_revision": null,
+  "revision_id": "config-r1"
+}
+```
+
+`expected_active_revision` must be present. Use `null` only after observing no
+active revision; otherwise supply the observed ID. The CLI never generates an
+operation ID, fetches a replacement CAS value, substitutes an installation, or
+retries a mutation. After an unknown response, retain the exact request and query
+its original operation with the original installation and same principal's
+current read authority. A missing result does not prove non-application. An
+applied configuration operation identifies the revision for an explicit read.
+Do not submit a new operation ID to resolve uncertainty.
+
+Output uses the usual JSON default and `--human` view. Remote success output keeps
+the typed service response shape; operation statuses other than `applied` exit
+nonzero while emitting one operation object. Capability discovery remains a
+successful read when dispatch is disabled. The presence of these commands, local
+validation, or a prepared/activated revision does not establish inference support:
+`revision_bound_dispatch`, `strict_receipts`, and `dispatch_enabled` must all be
+true for strict tenant dispatch. Authority-only servers keep these flags false.
 
 ---
 
@@ -632,6 +732,58 @@ are accepted; the legacy token is not an additional credential. Each token must
 be at least 32 bytes. `control:read` grants the host-wide operational reports;
 `control:reload` permits the guarded reload operation and requires the read
 scope alongside it.
+
+`control:tenancy` grants installation resource management independently of host
+read/reload authority. The opt-in `tenancy.enabled` service uses this credential
+on the same protected listener. It currently requires a Unix host, local gateway
+state, authenticated ingress and a literal SQLite file URL. Tenancy configuration
+is restart-only. Use `bitrouter-sdk`'s `TenancyClient` for these operations;
+host reload operation IDs belong to a separate namespace. This stage exposes
+authority and retained-configuration management with tenant dispatch disabled
+pending runtime execution binding and strict receipts.
+
+The optional restart-only `tenancy.resource_import` names an operator JSON
+manifest, relative to the server process working directory when not absolute.
+Set `tenancy.wrapping_key_env` to the name of an environment variable containing
+a stable base64-encoded 32-byte wrapping key before importing resources. These
+settings require `tenancy.enabled`; import additionally requires the key setting.
+The key is also required on subsequent restarts while retained resources exist,
+even if the manifest path has been removed. A missing/wrong key fails startup.
+No key is generated implicitly, and changing it is not a key-rotation operation.
+
+The manifest's `format: 1`, `installation_id`, and `resources` identify an
+explicit installation catalog. Each resource contains its qualified `reference`
+and a route, policy, or credential `definition`. Routes retain their complete
+routing source, selector and explicit provider/account credential references;
+policies retain a policy-lock document and named entry. The initial importer
+accepts static API-key credentials with generation zero; OAuth/ambient stores
+and native request-check definitions remain unsupported. The manifest is
+privileged secret-bearing input: tenant configuration requests only name
+references and cannot supply provider endpoints, keys, files or executables.
+
+Imports commit atomically before listeners start. Identical qualified revisions
+are idempotent; changed content under the same revision is rejected. Removing or
+editing a source file does not alter retained revisions. Catalog definitions and
+compiled configurations are authenticated ciphertext; public configuration
+responses expose references and the public document only. Active compiled
+configurations are verified again on restart and before activation. Import files
+are limited to 4 MiB/256 resources, with at most 4,096 retained resources; these
+are internal provisioning bounds. Tenant draft documents retain their public
+1 MiB/256-reference limits.
+
+An operator's principal ID is `operator.<configured credential ID>`, preserving
+case. Tenancy credential IDs are limited to 119 bytes. Use the public
+`PrincipalId::for_control_credential` helper as `expected_management_owner` when
+updating a binding created by that operator. Changing the token or `token_env`
+preserves identity; renaming the ID changes it. Reusing an old ID intentionally
+reuses its management and operation identity.
+
+Stop existing writers before enabling tenancy on a legacy SQLite file, including
+processes from releases that predate file ownership leases. Current writable
+pools hold a shared lease; an authority owner requires exclusive access and
+retains it through shutdown and outstanding transactions. `mode=rw` requires an
+existing file. Host-authorized read-only reports remain available; direct local
+commands cannot reopen a provisioned authority store for writing.
 
 This listener is disabled by default, accepts loopback addresses only, and is
 never affected by inference `server.skip_auth`. Its typed HTTP actions live
@@ -2488,3 +2640,125 @@ Skills discovery supplies metadata and versions without prompt injection.
 See [BRO harness resources](BRO_HARNESS_RESOURCES.md).
 
 `bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).
+
+
+## Offline DB evidence (Unix SQLite only)
+
+`bro tenancy offline` operates on explicitly supplied local paths. It does not
+load host configuration, discover a daemon, contact HTTP, migrate a source, or
+bootstrap an installation. Stop all source writers before capture. The existing
+canonical exclusive DB ownership lock refuses participating live writers,
+including symlink aliases; hard-linked DB files are rejected. Old/external
+writers that do not participate in this lock still require an external fence.
+
+```sh
+bro tenancy offline snapshot --database /absolute/state/bitrouter.db --bundle /absolute/new-db-evidence
+bro tenancy offline inventory --bundle /absolute/new-db-evidence
+bro tenancy offline verify --bundle /absolute/new-db-evidence --evidence-digest <digest-from-snapshot>
+```
+
+The bundle path must not exist. Preserve the returned `evidence_digest` outside
+the bundle and pass its exact64 lowercase hexadecimal characters to `verify`.
+Inventory recomputes the actual contents but does not authenticate the origin of
+a self-contained bundle. Verification compares the supplied evidence anchor,
+private profile, file digest and actual typed SQL inventory. Neither operation
+grants execution, migration, owner assignment or recovery authority.
+
+The snapshot, inventory and verify results have `scope: sqlite_database_only`, `complete: false` and
+`cutover_ready: false`. This is **not a full backup** or an M0 MigrationManifest.
+External OAuth files, workspace/harness state and external-effect outcomes are
+unassessed, excluded and unfenced. Source build/commit are honestly null; the
+report separately identifies the inspecting binary. Missing installation or
+ledger is recorded as null, never created or represented as an empty ledger.
+No configuration input is accepted; `--config`, remote endpoint/token flags and
+`--context` are rejected. If a deployment selects external state, this profile
+cannot qualify that deployment for cutover; preserve it separately under a
+qualified operator procedure. Never use a newly introduced sidecar as evidence
+that an old OAuth writer has stopped.
+
+The new directory is0700; `snapshot.sqlite`, `inventory.key`, `evidence.json`
+and `READY` are0600. The SQLite copy and inventory key are sensitive; reports
+contain metadata, counts and keyed digests, not raw records/SQL definitions or
+secrets. Keep the whole secured bundle together. A failed or interrupted command before publication
+leaves `INCOMPLETE`; inventory/verify refuse it. Do not remove that marker or
+resume the output. Inspect/quarantine it and select a new directory for retry.
+
+The private v1 profile bounds logical/file DB size to512MiB,256 tables,2048 schema
+objects,128 columns/table,1MiB/schema SQL,16MiB/cell,32MiB/row,256MiB inspected
+values/schema bytes,1,000,000 rows and2MiB evidence JSON. Exceeding a bound fails
+without truncating counts. Virtual/shadow tables and generated/hidden columns
+are unsupported. Ordinary views/triggers are hashed as schema, never executed.
+Inventory frames SQLite null/integer/real/text/blob distinctly, preserves
+duplicates, and hashes the sorted multiset of keyed row digests. Text/blob bytes
+are not parsed as JSON. This is typed SQL-value preservation, not physical-page
+or hidden-rowid preservation; SQLite VACUUM may change physical layout.
+
+Transfer, new credentials, OAuth transfer, operation-capacity recovery and
+034/035/036-specific recovery are outside snapshot, inventory and verify. A
+successful exit only means the requested **partial DB evidence** operation completed.
+
+The offline inspector qualifies source definitions before integrity checking or
+copying. Views/triggers, expression/partial indexes and executable schema
+expressions outside its bounded literal/comparison profile are refused. Existing
+BitRouter continuation CHECK constraints remain supported. Per-connection VM
+work is bounded; a cancelled operation retains its source owner through actual
+driver cleanup. Unconfirmed connection initialization or close retains the
+canonical source fence until process exit; it is not a successful snapshot.
+
+### Read-only retired receipt audit
+
+`bro tenancy offline audit --archive DIRECTORY --projection NEW_DIRECTORY --evidence-digest SHA256 --control-config FILE --listen 127.0.0.1:PORT` serves only the existing authenticated receipt GET/page routes for the archive's original installation. The explicit control file is bounded JSON with a `credentials` array of existing `id`, `token_env` and `scopes` entries; each requires `control:tenancy`. Bearer values are read only from those named environment variables, never command arguments. Example:
+
+```json
+{"credentials":[{"id":"archive-auditor","token_env":"ARCHIVE_CONTROL_TOKEN","scopes":["control:tenancy"]}]}
+```
+
+Use a private mode0600 control file and a mode0700 verified M4a bundle. The projection must be a new directory outside that bundle; its verified DB copy and canonical ownership sidecar do not alter the archive. Only Unix local SQLite with the exact supported current migration ledger and bounded schema/inventory is accepted. No source migration, missing-identity initialization, configuration loading, maintenance, credential refresh, provider call or command route runs. `--context`, endpoint/token flags and ambient host configuration are not audit inputs. The listener must be loopback; HTTP/2 follows the existing optional `http2` feature.
+
+Every receipt request supplies `Authorization: Bearer ...` and the mandatory old `Bitrouter-Installation-Id`. Responses use `Cache-Control: no-store`. The first profile authenticates only the explicitly configured installation-operator control credentials; archived tenant ingress tokens are not audit credentials. Unknown receipt IDs are 404; wrong installation is a typed mismatch. Other management, inference, capability discovery and mutation routes are absent.
+
+The running command emits one nonsecret readiness report containing the bound address, old installation and evidence digest. SIGINT/SIGTERM stops admission and retains each accepted read until its actual rollback and worker close are acknowledged. A dropped HTTP/CLI waiter cannot release the SQL owner. Unconfirmed bootstrap/close retains the canonical lease until process exit; elapsed time is not a cleanup witness. Limits: 32 sockets with a 60-second maximum connection lifetime, eight reads including queued/reply-held work, five-second read budget, up to 100 IDs/page and 8 MiB encoded response bytes. Reply buffers retain their read slot through transport clones and slices. Preparation observation is bounded to 120 seconds; cleanup observation is bounded to 30 seconds without aborting the owner.
+
+The bundle remains `sqlite_database_only`, `complete=false`, `cutover_ready=false`. This command is receipt audit, not recovery verification, new-installation provisioning or a full backup. External credentials/workspace state and unknown upstream effects remain unassessed. Operators must maintain retirement of the source writers; a new sidecar does not fence arbitrary old binaries. Requalify corrected M4a and the final archive consumer before shipping this profile.
+
+#### Offline mapping review
+
+`bro tenancy offline map --bundle DIRECTORY --evidence-digest SHA256 --manifest FILE --report NEW_DIRECTORY` validates the frozen M0 MigrationManifest and binds its source snapshot to a verified DB-only bundle. Inputs must be private regular files; no named context, host config or network lookup is used. This local profile accepts at most 8 MiB, 4096 mappings, 4096 merge approvals and 16 examples per mapping. Each declared disposition total must fit an exact JSON integer.
+
+The new secured report directory records the original manifest and nonsecret validation summary. Duplicate mapping keys, missing or extraneous merge approvals, unresolved owners with grants, foreign observed installations and wrong snapshot digests fail. Same text in different owner namespaces remains distinct. The RECORDED marker only seals this review packet; it is never bundle READY or an execution capability.
+
+Counts and evidence inside the manifest remain operator claims. The command does **not** authenticate external ownership/producer evidence, count per-owner source records, backfill rows, provision a target or retire writers. Missing installation identity remains explicitly unobserved. All completion/cutover flags stay false. Historical family codecs, explicit quarantine/backfill and operational cutover/rollback verification are still required.
+
+### Bounded Legacy Eval import (Core, Unix SQLite)
+
+`bro tenancy offline eval-inventory --bundle DIRECTORY --evidence-digest SHA256 --source-kind local_user --report NEW_DIRECTORY` validates the four-table Legacy Eval graph and records exact keyed owner partitions. `shared_user` and `native_owner` are explicit alternative source namespaces, never inferred from owner names. Wildcard snapshots are unresolved quarantine.
+
+`bro tenancy offline eval-backfill --plan FILE --plan-digest SHA256 --report NEW_DIRECTORY` consumes an independently anchored private `bitrouter.offline.eval-backfill.v1` plan. It requires a stopped, freshly Service-provisioned destination with migration038 already applied, actual current tenant-wide admin bindings, and exact fresh provisioning history. It performs no provisioning, schema migration or counter reset. Inputs use explicit absolute paths; there is no context lookup or network call. See [the private-format profile](RESOURCE_TENANCY_EVAL_IMPORT.md) for plan fields and the required operator trust boundary.
+
+The complete source/target inventory is limited to 4096 rows, 32 MiB typed values and 1 MiB per cell; the transformed target must also fit those bounds. An 8 MiB M0 mapping manifest must match every Eval partition. Only selected Eval rows are inserted into an empty destination graph. All other source tables and unresolved/quarantined Eval partitions remain in external immutable evidence. Snapshot IDs, original root and manifest bytes are preserved through exact private versioned provenance; ordinary owned readers require that record to validate an imported Legacy root. No tenant authority is derived from source metadata.
+
+Success publishes a secured `RECORDED` packet only after explicit COMMIT, exact full-content verification and actual SQLite worker close. It remains `complete=false` and `cutover_ready=false`. A failed/abandoned reply may follow a committed import; retain any `INCOMPLETE` packet and keep the destination stopped for explicit reconciliation. Do not retry under another plan or merge history. Unknown SQL outcome/cleanup retains the canonical file fence until process exit. External writer retirement, target restart/readback, ingress release and compatible rollback are separate M4 gates. Production dispatch and strict-receipt flags are unchanged.
+
+### Fresh installation recovery verification (Unix SQLite)
+
+`bro tenancy offline recover --plan FILE --report NEW_DIRECTORY` verifies an
+anchored retired archive against an already stopped, freshly provisioned target.
+The private plan names the actual new installation, complete provisioning results,
+approved static definitions, selected external files, and anchored operator
+retirement evidence. All paths are explicit; no ambient configuration or daemon
+discovery supplies inputs. The report directory must be new.
+
+Use normal Service/API/SDK operations to provision the target and fresh ingress
+credentials first. This command reads the existing records and authenticates the
+static resource/configuration closure with the explicitly named wrapping-key
+environment variable. It does not provision, migrate, transfer keys/history,
+retry uncertain effects, or release ingress. The original source namespace and
+operation counters remain in the archive. See [the recovery profile](RESOURCE_TENANCY_RECOVERY.md)
+for private plan fields, file and work limits, and the supported static closure.
+
+The secured report retains `complete=false`, `cutover_ready=false`,
+`external_writers_independently_excluded=false`, `history_transferred=false`,
+and `upstream_effects_resolved=false`. Matching retirement evidence is an operator
+attestation, not proof of process exit. Keep source retirement and target ingress
+fences in place. `VERIFIED` authenticates report bytes only and requires an absent
+`INCOMPLETE` marker; it does not authorize runtime work.

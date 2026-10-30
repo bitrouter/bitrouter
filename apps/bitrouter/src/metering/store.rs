@@ -671,7 +671,8 @@ impl MeteringStore {
             })
             .collect();
         let sql = format!(
-            "SELECT request_id, episode_id FROM trajectory_requests WHERE request_id IN ({})",
+            "SELECT request_id, episode_id FROM trajectory_requests WHERE installation_id IS NULL AND tenant_id IS NULL \
+             AND creator_principal_id IS NULL AND logical_identity_json IS NULL AND request_id IN ({})",
             placeholders.join(", ")
         );
         let values: Vec<sea_orm::Value> = rows

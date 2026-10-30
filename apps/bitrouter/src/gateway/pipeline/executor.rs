@@ -35,10 +35,12 @@ use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
 use tokio_util::sync::CancellationToken;
 
-mod input_count;
+pub(crate) mod input_count;
+mod receipt;
 mod response_body;
 mod shared;
 mod stream_bridge;
+pub(crate) mod tenancy;
 
 use stream_bridge::BridgeCapture;
 
@@ -465,6 +467,25 @@ impl UpstreamErrorScrubber {
             .capture_request_credentials(request, target.effective_api_key());
     }
 
+    fn capture_target(&mut self, target: &RoutingTarget, ctx: &PipelineContext) {
+        self.capture_effective_target_key(target);
+        if tenancy::has_execution(ctx) {
+            // Fixed retained headers belong to the private resource closure.
+            // Execution permission does not make their values public, even
+            // when a provider echoes a header with an ordinary-looking name.
+            for rule in &target.headers {
+                if !rule.passthrough()
+                    && let Some(value) = rule
+                        .default()
+                        .and_then(|value| std::str::from_utf8(value.as_bytes()).ok())
+                {
+                    self.redactor
+                        .add_replacement(value.to_owned(), "[redacted credential]".to_owned());
+                }
+            }
+        }
+    }
+
     fn capture_effective_target_key(&mut self, target: &RoutingTarget) {
         self.redactor.add_replacement(
             target.effective_api_key().to_owned(),
@@ -561,6 +582,17 @@ fn apply_provider_continuation(
     target: &RoutingTarget,
     ctx: &PipelineContext,
 ) -> Result<Option<ProviderContinuationSubstitution>> {
+    if let Some(runtime) = ctx.extension::<crate::continuation::tenant::runtime::Runtime>() {
+        return runtime.substitute(body, target, ctx).map(|value| {
+            value.map(
+                |(native, public_or_redacted)| ProviderContinuationSubstitution {
+                    native,
+                    public_or_redacted,
+                },
+            )
+        });
+    }
+
     if let Some(plan) = native_continuation_plan(target, ctx.require_generation_prompt()?, ctx)? {
         if ctx.extension::<ProviderContinuation>().is_some()
             || ctx.extension::<SuppressProviderContinuation>().is_some()
@@ -671,6 +703,10 @@ fn validate_continuation_authority(
     ctx: &PipelineContext,
     actual: Option<&ContinuationAuthority>,
 ) -> Result<()> {
+    if let Some(runtime) = ctx.extension::<crate::continuation::tenant::runtime::Runtime>() {
+        return runtime.authenticated(target, ctx, actual);
+    }
+
     if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>() {
         runtime
             .validate_continuation_authority(ctx, target, actual)
@@ -1010,15 +1046,53 @@ impl HttpExecutor {
         }
     }
 
-    /// Run the per-provider [`AuthApplier::prepare_body`] hook on the freshly
-    /// rendered request body when an applier is registered for the target's
-    /// provider. No-op otherwise. Shared by `execute` and `execute_stream` so
-    /// subscription-OAuth body shaping happens identically on both paths.
+    fn needs_body_shaping(&self, target: &RoutingTarget, ctx: &PipelineContext) -> Result<bool> {
+        match tenancy::execution(ctx) {
+            Some(execution) => execution
+                .uses_oauth(target)
+                .map_err(|code| execution.reject(code)),
+            None => Ok(self.auth_applier(target).is_some()),
+        }
+    }
+
+    /// Apply only the retained owned credential's deterministic normalization.
+    /// Returning true also covers static credentials, which must not consult a
+    /// host registry. The actual body and managed baseline use this same rule.
+    fn shape_owned_request_body(
+        body: &mut serde_json::Value,
+        target: &RoutingTarget,
+        ctx: &PipelineContext,
+    ) -> Result<bool> {
+        if let Some(execution) = tenancy::execution(ctx) {
+            execution
+                .revalidate()
+                .map_err(|code| execution.reject(code))?;
+            execution
+                .route()
+                .match_candidate(target)
+                .map_err(|code| execution.reject(code))?;
+            if execution
+                .uses_oauth(target)
+                .map_err(|code| execution.reject(code))?
+            {
+                crate::gateway::providers::claude_code::normalize_owned_body(body)?;
+            }
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Normalize an owned body or run the Legacy provider's registered hook.
+    /// Shared by JSON and streaming sends, independently of registry presence.
     async fn shape_request_body(
         &self,
         body: &mut serde_json::Value,
         target: &RoutingTarget,
+        ctx: &PipelineContext,
     ) -> Result<()> {
+        if Self::shape_owned_request_body(body, target, ctx)? {
+            return Ok(());
+        }
         if let Some(applier) = self.auth_applier(target) {
             applier
                 .prepare_body(body, &target.model_target())
@@ -1132,7 +1206,10 @@ impl HttpExecutor {
         ctx: &PipelineContext,
     ) -> std::result::Result<serde_json::Value, &'static str> {
         let mut expected = rendered.clone();
-        if let Some(applier) = self.auth_applier(target) {
+        if !Self::shape_owned_request_body(&mut expected, target, ctx)
+            .map_err(|_| "provider_body_normalization_failed")?
+            && let Some(applier) = self.auth_applier(target)
+        {
             applier
                 .normalize_managed_body(&mut expected, &target.model_target())
                 .map_err(|_| "provider_body_normalization_failed")?;
@@ -1167,7 +1244,7 @@ impl HttpExecutor {
     async fn build_authenticated_request(
         &self,
         input: &RequestBuildInput<'_>,
-    ) -> Result<crate::gateway::providers::auth::AppliedAuth> {
+    ) -> Result<tenancy::AuthenticatedRequest> {
         native_work::observe(
             input.ctx,
             NativeProviderWorkKind::Authentication,
@@ -1180,16 +1257,33 @@ impl HttpExecutor {
     async fn build_authenticated_request_inner(
         &self,
         input: &RequestBuildInput<'_>,
-    ) -> Result<AppliedAuth> {
+    ) -> Result<tenancy::AuthenticatedRequest> {
         input.ctx.record_credential_authority(None);
+        let reservation = tenancy::reserve(input.target, input.ctx)?;
         let mut request = input.client.build_request(input.url, input.body)?;
         forward_inbound_anthropic_beta(&mut request, input.target, input.ctx);
         apply_provider_headers(&mut request, input.target, input.ctx, true);
         let scope = request_scope_headers(input.target, Some(input.ctx.headers()))
             .ok_or_else(|| BitrouterError::internal("request account scope unavailable"))?;
-        let mut applied = self
-            .apply_auth(request, input.target, input.transport)
-            .await?;
+        let (mut applied, oauth_stamp) = match tenancy::execution(input.ctx) {
+            Some(execution) => {
+                tenancy::authenticate(
+                    request,
+                    input.target,
+                    input.transport,
+                    &execution,
+                    reservation.as_ref().ok_or_else(|| {
+                        execution.reject(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden)
+                    })?,
+                )
+                .await?
+            }
+            None => (
+                self.apply_auth(request, input.target, input.transport)
+                    .await?,
+                None,
+            ),
+        };
         apply_provider_headers(&mut applied, input.target, input.ctx, false);
         merge_outbound_trace_headers(&mut applied, input.trace_headers);
         inject_outbound_request_id(&mut applied, input.ctx)?;
@@ -1209,6 +1303,14 @@ impl HttpExecutor {
         }
         let credential_authority =
             credential_authority.map(|authority| authority.with_request_scope(&scope));
+        let credential_authority =
+            tenancy::native::bind_headers(credential_authority, &request, input.target, input.ctx);
+        let credential_authority = tenancy::http_continuation::bind_headers(
+            credential_authority,
+            &request,
+            input.target,
+            input.ctx,
+        );
         validate_continuation_authority(input.target, input.ctx, credential_authority.as_ref())?;
         crate::gateway::providers::google_chat::validate_authenticated_request(
             &request,
@@ -1323,7 +1425,14 @@ impl HttpExecutor {
             Some(stamp) => applied.bind_shared_credential(stamp),
             None => applied,
         };
-        Ok(applied)
+        tenancy::AuthenticatedRequest::new_reserved(
+            applied,
+            input.target,
+            input.ctx,
+            input.url,
+            reservation,
+            oauth_stamp,
+        )
     }
 
     async fn refresh_auth_after_unauthorized(
@@ -1332,6 +1441,18 @@ impl HttpExecutor {
         rejected_authorization: Option<&reqwest::header::HeaderValue>,
         ctx: &PipelineContext,
     ) -> Result<bool> {
+        if let Some(execution) = tenancy::execution(ctx) {
+            execution
+                .revalidate()
+                .map_err(|code| execution.reject(code))?;
+            execution
+                .route()
+                .match_candidate(target)
+                .map_err(|code| execution.reject(code))?;
+            // Static credentials cannot be refreshed. Owned OAuth supplies its
+            // own qualified refresh path; host OAuth is never a fallback.
+            return Ok(false);
+        }
         let Some(applier) = self.auth_applier(target) else {
             return Ok(false);
         };
@@ -1384,18 +1505,37 @@ impl HttpExecutor {
         request: &DecisionRequest,
         transport: &Arc<dyn crate::gateway::model::protocol::Transport>,
         ctx: &PipelineContext,
-    ) -> Result<(String, UpstreamErrorScrubber, u64, shared::Attempt)> {
-        let (client, _) = self.client_for(target, shared::has_admission(ctx));
+    ) -> Result<(
+        String,
+        UpstreamErrorScrubber,
+        u64,
+        shared::Attempt,
+        Option<crate::tenancy::receipts::journal::AttemptPermit>,
+    )> {
+        let (client, _) = self.client_for(
+            target,
+            shared::has_admission(ctx) || tenancy::has_execution(ctx),
+        );
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let choice_gate = tenancy::execution(ctx)
+            .map(|execution| execution.choice_gate())
+            .transpose()?
+            .flatten();
+        #[cfg(all(feature = "core", feature = "harness"))]
+        let cancellation = choice_gate
+            .as_ref()
+            .map_or_else(CancellationToken::new, |gate| gate.cancellation());
+        #[cfg(not(all(feature = "core", feature = "harness")))]
         let cancellation = CancellationToken::new();
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
         let mut scrubber = UpstreamErrorScrubber::new(None);
-        scrubber.capture_effective_target_key(target);
+        scrubber.capture_target(target, ctx);
         let started = Instant::now();
         let mut refreshed = false;
         loop {
             let mut body = client.render_decision_request(&target.model_target(), request)?;
-            self.shape_request_body(&mut body, target)
+            self.shape_request_body(&mut body, target, ctx)
                 .await
                 .map_err(|error| scrubber.scrub_error(error))?;
             DecisionsCodec::parse_request(body.clone())?;
@@ -1415,12 +1555,29 @@ impl HttpExecutor {
                 .map_err(|error| scrubber.scrub_error(error))?;
             let mut attempt =
                 shared::Attempt::begin(self.shared_authority, &request, target, ctx).await?;
-            let (request, _) = request.into_parts();
+            let tenant_binding = request.tenant_binding();
+            let (mut request, _, mut tenant_attempt) = request.into_parts();
             scrubber.capture_request_credentials(&request, target);
             let rejected_authorization = request
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
+            let mut arm = || {
+                tenancy::admit_send(
+                    tenant_binding.as_ref(),
+                    &mut tenant_attempt,
+                    &mut request,
+                    target,
+                    ctx,
+                )
+            };
+            #[cfg(all(feature = "core", feature = "harness"))]
+            let _tenant_attempt = match &choice_gate {
+                Some(gate) => gate.arm(&body, &target.service_id, arm).await?,
+                None => arm()?,
+            };
+            #[cfg(not(all(feature = "core", feature = "harness")))]
+            let _tenant_attempt = arm()?;
             if let Some(attempts) =
                 ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>()
             {
@@ -1431,6 +1588,7 @@ impl HttpExecutor {
                 .await
                 .map_err(|error| scrubber.scrub_error(error.into()))?;
             let status = response.status();
+            receipt::status(&mut tenant_attempt, status.as_u16())?;
             if !status.is_success() {
                 attempt.rejected(status.as_u16()).await?;
             }
@@ -1445,6 +1603,7 @@ impl HttpExecutor {
                     scrubber,
                     started.elapsed().as_millis() as u64,
                     attempt,
+                    tenant_attempt,
                 ));
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
@@ -1457,6 +1616,7 @@ impl HttpExecutor {
                 refreshed = true;
                 continue;
             }
+            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             return Err(classify_upstream_error(
                 status.as_u16(),
                 &scrubber.scrub_body(&text),
@@ -1765,7 +1925,7 @@ impl Executor for HttpExecutor {
         Self::check_response_format(prompt, adapter, target)?;
 
         let mut error_scrubber = UpstreamErrorScrubber::new(None);
-        error_scrubber.capture_effective_target_key(target);
+        error_scrubber.capture_target(target, ctx);
         error_scrubber.redactor.capture_prompt_continuity(prompt);
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
@@ -1774,7 +1934,8 @@ impl Executor for HttpExecutor {
             target,
             ctx.extension::<super::native::NativeManagedRequest>()
                 .is_some()
-                || shared::has_admission(ctx),
+                || shared::has_admission(ctx)
+                || tenancy::has_execution(ctx),
         );
 
         let initial_gate = native_work::gate_duration(ctx);
@@ -1786,7 +1947,16 @@ impl Executor for HttpExecutor {
                     ContinuationFailure::BindingChanged,
                 )
             })?;
-        let (text, successful_authority, storage_allowed, effort_bound, mut shared_attempt) = loop {
+        let (
+            text,
+            successful_authority,
+            storage_allowed,
+            effort_bound,
+            mut shared_attempt,
+            successful_binding,
+            successful_attempt,
+            mut tenant_attempt,
+        ) = loop {
             let mut body = self.render_execution_request(
                 adapter.as_ref(),
                 target,
@@ -1795,11 +1965,11 @@ impl Executor for HttpExecutor {
                 target.provider_name == "openai-codex",
             )?;
             let managed_expected = self.managed_expected_body(&body, target, ctx)?;
-            if self.auth_applier(target).is_some() {
+            if self.needs_body_shaping(target, ctx)? {
                 native_work::observe(
                     ctx,
                     NativeProviderWorkKind::AuthenticationPreparation,
-                    self.shape_request_body(&mut body, target),
+                    self.shape_request_body(&mut body, target, ctx),
                     |_| None,
                 )
                 .await
@@ -1829,7 +1999,8 @@ impl Executor for HttpExecutor {
                 .map_err(|error| error_scrubber.scrub_error(error))?;
             let mut shared_attempt =
                 shared::Attempt::begin(self.shared_authority, &applied, target, ctx).await?;
-            let (request, authority) = applied.into_parts();
+            let tenant_binding = applied.tenant_binding();
+            let (mut request, authority, mut tenant_attempt) = applied.into_parts();
             let wire: Option<serde_json::Value> = request
                 .body()
                 .and_then(reqwest::Body::as_bytes)
@@ -1848,11 +2019,19 @@ impl Executor for HttpExecutor {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
+            let mut native_attempt = None;
             let response = native_work::observe(
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
                 async {
                     record_native_dispatch(prompt, target, ctx)?;
+                    native_attempt = tenancy::admit_send(
+                        tenant_binding.as_ref(),
+                        &mut tenant_attempt,
+                        &mut request,
+                        target,
+                        ctx,
+                    )?;
                     client
                         .send(request, &CancellationToken::new())
                         .await
@@ -1863,6 +2042,7 @@ impl Executor for HttpExecutor {
             .await?;
 
             let status = response.status();
+            receipt::status(&mut tenant_attempt, status.as_u16())?;
             if !status.is_success() {
                 shared_attempt.rejected(status.as_u16()).await?;
             }
@@ -1879,6 +2059,9 @@ impl Executor for HttpExecutor {
                     storage_allowed,
                     effort_bound,
                     shared_attempt,
+                    tenant_binding,
+                    native_attempt,
+                    tenant_attempt,
                 );
             }
             if status == reqwest::StatusCode::UNAUTHORIZED
@@ -1891,6 +2074,7 @@ impl Executor for HttpExecutor {
                 attempted_auth_refresh = true;
                 continue;
             }
+            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             let scrubbed = error_scrubber.scrub_body(&text);
             return Err(classify_upstream_error(
                 status.as_u16(),
@@ -1905,11 +2089,13 @@ impl Executor for HttpExecutor {
                 message: format!("upstream returned non-JSON body: {error}"),
             })
         })?;
+        receipt::json(&mut tenant_attempt, &target.api_protocol, &json)?;
         if target.api_protocol == ApiProtocol::Responses {
-            if shared_attempt.is_shared()
+            if (shared_attempt.is_shared() || tenant_attempt.is_some())
                 && let Some((failure, usage)) =
                     crate::gateway::model::protocol::responses::failed_terminal(&json)
             {
+                receipt::complete(&mut tenant_attempt, false)?;
                 shared_attempt.complete(false, usage.as_ref()).await?;
                 return Err(error_scrubber.scrub_error(failure.into()));
             }
@@ -1925,12 +2111,21 @@ impl Executor for HttpExecutor {
         let mut result =
             crate::gateway::providers::google_chat::bind_result(result, &target.model_target())
                 .map_err(|error| error_scrubber.scrub_error(error.into()))?;
-        if shared_attempt.is_shared() && result.finish_reason.is_none() {
+        if (shared_attempt.is_shared() || tenant_attempt.is_some())
+            && result.finish_reason.is_none()
+        {
             return Err(BitrouterError::UpstreamInvalidResponse {
                 message: "shared response has no provider terminal".into(),
                 usage: result.usage.clone().map(Box::new),
             });
         }
+        receipt::complete(
+            &mut tenant_attempt,
+            !matches!(
+                result.finish_reason,
+                Some(bitrouter_ai::types::FinishReason::Error(_))
+            ),
+        )?;
         shared_attempt
             .complete(
                 !matches!(
@@ -1940,16 +2135,55 @@ impl Executor for HttpExecutor {
                 result.usage.as_ref(),
             )
             .await?;
+        if let (Some(binding), Some(attempt), Some(authority)) = (
+            successful_binding.as_ref(),
+            successful_attempt.as_ref(),
+            successful_authority.as_ref(),
+        ) && let Some(input) = tenancy::http_continuation::Input::new(prompt, ctx)
+        {
+            use crate::gateway::model::protocol::responses;
+            binding.record_http_source(
+                input,
+                attempt.clone(),
+                authority,
+                result.response_id.as_deref(),
+                tenancy::http_continuation::Output {
+                    delivered: responses::assistant_turn_commitment(&result.content),
+                    reconstructible: replayable
+                        .then(|| responses::terminal_assistant_turn_commitment(&json))
+                        .flatten(),
+                    stored: stored_response && effort_bound,
+                },
+            );
+        }
         let elapsed = started.elapsed().as_millis() as u64;
         if let Some(runtime) = ctx.extension::<super::native_context::NativePrivateContextRuntime>()
         {
             if target.api_protocol == ApiProtocol::Responses && !replayable {
                 super::native_continuation::mark_required_state(&mut result.content);
             }
+            if let (Some(binding), Some(attempt), Some(authority)) = (
+                successful_binding.as_ref(),
+                successful_attempt,
+                successful_authority.as_ref(),
+            ) {
+                binding.record_native_source(
+                    attempt,
+                    authority,
+                    prompt,
+                    &result,
+                    tenancy::native::Storage {
+                        stored: stored_response,
+                        replayable,
+                        effort_bound,
+                    },
+                );
+            }
             runtime.succeeded(prompt, target, successful_authority, &result);
             runtime.stored_response(stored_response, replayable, effort_bound);
         }
 
+        drop(tenant_attempt);
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),
             model_id: target.service_id.clone(),
@@ -1981,19 +2215,23 @@ impl Executor for HttpExecutor {
         self.preflight_decisions(target, request)?;
         let transport: Arc<dyn crate::gateway::model::protocol::Transport> =
             Arc::new(DecisionsTransport);
-        let (text, scrubber, elapsed, mut attempt) =
+        let (text, scrubber, elapsed, mut attempt, mut tenant_attempt) =
             self.execute_json(target, request, &transport, ctx).await?;
+        receipt::json_text(&mut tenant_attempt, &ApiProtocol::Decisions, &text)?;
         let result = match ModelClient::parse_decision_response(&text, request) {
             Ok(result) => result,
             Err(error) => {
                 let error = scrubber.redactor.scrub_error(error);
                 if error.is_completed_decision_failure() {
                     ctx.record_decision_failure_usage(error.decision_usage().cloned());
+                    receipt::complete(&mut tenant_attempt, false)?;
                     attempt.complete(false, error.decision_usage()).await?;
                 }
                 return Err(BitrouterError::from(error));
             }
         };
+        receipt::complete(&mut tenant_attempt, true)?;
+        drop(tenant_attempt);
         attempt.complete(true, Some(&result.usage)).await?;
         Ok(ExecutionResult {
             provider_id: target.provider_name.clone(),

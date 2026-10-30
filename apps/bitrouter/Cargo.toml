@@ -308,3 +308,17 @@ required-features = ["harness"]
 [[test]]
 name = "background_cli"
 required-features = ["harness"]
+
+[[example]]
+name = "owned_capture_fixture"
+required-features = ["core", "harness"]
+
+[[example]]
+name = "owned_capture_handler"
+crate-type = ["lib"]
+required-features = ["core", "harness"]
+
+[[example]]
+name = "owned_native_experiment"
+crate-type = ["lib"]
+required-features = ["core", "harness"]

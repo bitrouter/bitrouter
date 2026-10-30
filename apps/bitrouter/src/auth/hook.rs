@@ -57,6 +57,7 @@ pub fn plugin_id() -> PluginId {
 /// establishes identity.
 pub struct AuthHook {
     db: DatabaseConnection,
+    tenancy: bool,
 }
 
 enum Authentication {
@@ -73,7 +74,12 @@ impl AuthHook {
     /// Build an `AuthHook` over a database connection. The database must
     /// already carry this module's tables (`crate::db::run_migrations`).
     pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+        Self { db, tenancy: false }
+    }
+
+    pub(crate) fn with_tenancy(mut self, enabled: bool) -> Self {
+        self.tenancy = enabled;
+        self
     }
 
     /// Turn a validated key record into a `CallerContext`.
@@ -89,6 +95,11 @@ impl AuthHook {
         headers: &HeaderMap,
         caller: &CallerContext,
     ) -> Result<Authentication> {
+        if self.tenancy {
+            return Ok(Authentication::Denied(
+                "tenant dispatch is not yet available".into(),
+            ));
+        }
         if caller.is_local() {
             return Ok(Authentication::Local);
         }
@@ -160,6 +171,11 @@ fn embedding_caller(ctx: &PipelineContext) -> bool {
 #[async_trait]
 impl PreRequestHook for AuthHook {
     async fn revalidate_context(&self, ctx: &PipelineContext) -> Result<HookDecision> {
+        if self.tenancy {
+            return Ok(HookDecision::Deny(DenyReason::Forbidden(
+                "tenant dispatch is not yet available".into(),
+            )));
+        }
         #[cfg(feature = "multi-instance")]
         if let Some(admission) =
             ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()
@@ -204,6 +220,11 @@ impl PreRequestHook for AuthHook {
     }
 
     async fn check(&self, ctx: &mut PipelineContext) -> Result<HookDecision> {
+        if self.tenancy {
+            return Ok(HookDecision::Deny(DenyReason::Forbidden(
+                "tenant dispatch is not yet available".into(),
+            )));
+        }
         #[cfg(feature = "multi-instance")]
         if let Some(admission) =
             ctx.extension::<crate::gateway::shared::admitted::SharedAdmission>()

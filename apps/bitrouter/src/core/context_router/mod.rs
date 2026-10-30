@@ -3,6 +3,8 @@
 
 pub mod evidence;
 pub mod models;
+#[cfg(feature = "harness")]
+pub(crate) mod owned;
 pub mod planner;
 pub(crate) mod tasks;
 pub mod tools;

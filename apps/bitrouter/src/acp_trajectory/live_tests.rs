@@ -243,7 +243,7 @@ async fn append_failure_latches_incomplete_and_does_not_advance_watermark() -> a
     let old = store.transcript(&identity("s")).await?.session.head;
     // A schema/storage failure after successful capture, without a model call.
     use sea_orm_migration::prelude::{Alias, Table};
-    use sea_orm_migration::{MigrationTrait, SchemaManager};
+    use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
     SchemaManager::new(&store.db)
         .drop_table(
             Table::drop()
@@ -263,6 +263,13 @@ async fn append_failure_latches_incomplete_and_does_not_advance_watermark() -> a
     crate::db::migration::m20240101_000018_create_acp_capture::Migration
         .up(&SchemaManager::new(&store.db))
         .await?;
+    // Restore the real current table shape after the deliberate storage fault.
+    // The latched recorder must still refuse even after schema repair.
+    let scope_migration = crate::db::migration::Migrator::migrations()
+        .into_iter()
+        .find(|migration| migration.name() == "m20240101_000033_capture_legacy_scope")
+        .context("capture namespace migration missing")?;
+    scope_migration.up(&SchemaManager::new(&store.db)).await?;
     assert!(
         recorder
             .record(event(

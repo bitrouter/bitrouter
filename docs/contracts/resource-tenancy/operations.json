@@ -1,0 +1,114 @@
+[
+  {
+    "name": "tenant.put",
+    "method": "PUT",
+    "path": "/control/v1/tenants/{tenant_id}",
+    "request": "TenantPut",
+    "response": "OperationResult"
+  },
+  {
+    "name": "principal.put",
+    "method": "PUT",
+    "path": "/control/v1/principals/{principal_id}",
+    "request": "PrincipalPut",
+    "response": "OperationResult"
+  },
+  {
+    "name": "binding.put",
+    "method": "PUT",
+    "path": "/control/v1/tenants/{tenant_id}/bindings/{binding_id}",
+    "request": "BindingPut",
+    "response": "OperationResult"
+  },
+  {
+    "name": "credential.create",
+    "method": "POST",
+    "path": "/control/v1/tenants/{tenant_id}/credentials",
+    "request": "CredentialCreate",
+    "response": "CredentialIssued"
+  },
+  {
+    "name": "credential.revoke",
+    "method": "DELETE",
+    "path": "/control/v1/tenants/{tenant_id}/credentials/{credential_id}",
+    "request": "CredentialRevoke",
+    "response": "OperationResult"
+  },
+  {
+    "name": "configuration.put",
+    "method": "POST",
+    "path": "/control/v1/tenants/{tenant_id}/configurations",
+    "request": "ConfigurationPut",
+    "response": "ConfigurationRevision"
+  },
+  {
+    "name": "configuration.activate",
+    "method": "POST",
+    "path": "/control/v1/tenants/{tenant_id}/activation",
+    "request": "Activation",
+    "response": "OperationResult"
+  },
+  {
+    "name": "activation.read",
+    "method": "GET",
+    "path": "/control/v1/tenants/{tenant_id}/activation",
+    "request": null,
+    "response": "ActiveRevision"
+  },
+  {
+    "name": "configuration.read",
+    "method": "GET",
+    "path": "/control/v1/tenants/{tenant_id}/configurations/{revision_id}",
+    "request": null,
+    "response": "ConfigurationRevision"
+  },
+  {
+    "name": "operation.read",
+    "method": "GET",
+    "path": "/control/v1/tenancy/operations/{operation_id}",
+    "request": null,
+    "response": "OperationResult"
+  },
+  {
+    "name": "receipt.read",
+    "method": "GET",
+    "path": "/control/v1/tenants/{tenant_id}/executions/{execution_id}",
+    "request": null,
+    "response": "ExecutionReceipt"
+  },
+  {
+    "name": "receipt.query",
+    "method": "GET",
+    "path": "/control/v1/tenants/{tenant_id}/executions",
+    "request": null,
+    "response": "ExecutionPage"
+  },
+  {
+    "name": "audit-reader.create",
+    "method": "POST",
+    "path": "/control/v1/tenants/{tenant_id}/audit-readers",
+    "request": "AuditReaderCreate",
+    "response": "CredentialIssued"
+  },
+  {
+    "name": "binding.detach",
+    "method": "DELETE",
+    "path": "/control/v1/tenants/{tenant_id}/bindings/{binding_id}/management",
+    "request": "Mutation",
+    "response": "OperationResult"
+  },
+  {
+    "name": "credential.read",
+    "method": "GET",
+    "path": "/control/v1/tenants/{tenant_id}/credentials/{credential_id}",
+    "request": null,
+    "response": "CredentialStatus"
+  },
+  {
+    "name": "tenancy.capabilities",
+    "method": "GET",
+    "path": "/control/v1/tenancy/capabilities",
+    "request": null,
+    "response": "TenantCapabilities"
+  }
+]

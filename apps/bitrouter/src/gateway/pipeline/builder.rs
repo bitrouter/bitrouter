@@ -58,7 +58,6 @@ pub struct PipelineBuilder {
     native_private_context: Option<Arc<dyn super::native_context::NativePrivateContextPolicy>>,
     served_operations: OperationScope,
     requirements: Vec<HookRequirement>,
-    #[cfg(feature = "multi-instance")]
     owned_drain: bool,
 }
 
@@ -97,13 +96,11 @@ impl PipelineBuilder {
             native_private_context: None,
             served_operations: OperationScope::Generation,
             requirements: Vec::new(),
-            #[cfg(feature = "multi-instance")]
             owned_drain: false,
         }
     }
 
-    /// Retain shared-generation task handles across cancelled drain waits.
-    #[cfg(feature = "multi-instance")]
+    /// Retain task handles for an explicit serving or execution lifecycle.
     pub(crate) fn owned_drain(&mut self) -> &mut Self {
         self.owned_drain = true;
         self
@@ -508,15 +505,10 @@ impl PipelineBuilder {
             keepalive_interval: self.keepalive_interval,
             fallback_backoff: self.fallback_backoff,
             pending_settlements: {
-                let tasks = super::tasks::Settlements::default();
-                #[cfg(feature = "multi-instance")]
-                let tasks = {
-                    let mut tasks = tasks;
-                    if self.owned_drain {
-                        tasks.owned = Some(Arc::new(super::owned_tasks::OwnedTasks::default()));
-                    }
-                    tasks
-                };
+                let mut tasks = super::tasks::Settlements::default();
+                if self.owned_drain {
+                    tasks.owned = Some(Arc::new(super::owned_tasks::OwnedTasks::default()));
+                }
                 tasks
             },
             detached_executions: tokio_util::task::TaskTracker::new(),

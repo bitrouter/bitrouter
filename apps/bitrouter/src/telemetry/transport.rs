@@ -13,9 +13,9 @@
 //! are, **HTTP takes precedence** so the default OTLP endpoint
 //! (`http://localhost:4318`) keeps working out of the box. To run gRPC,
 //! compile only `otel-grpc` (`--no-default-features --features otel-grpc`).
-//! `with_endpoint`/header forwarding behave identically across the two, so a
-//! deterministic winner keeps behaviour predictable. The `otel` module only
-//! compiles when `__otel-core` is on, and `lib.rs` guarantees at least one
+//! HTTP adds the standard signal path to a plain root endpoint; explicit paths
+//! and query URLs are forwarded unchanged. gRPC forwards the endpoint unchanged.
+//! The `otel` module only compiles when `__otel-core` is on, and `lib.rs` guarantees at least one
 //! transport accompanies it, so exactly one `imp` below is ever active.
 //!
 //! Both builders forward [`OtelConfig::endpoint`] and [`OtelConfig::headers`].
@@ -88,13 +88,31 @@ mod imp {
 
     use crate::telemetry::auth_client::AuthRefreshClient;
 
+    fn signal_endpoint(endpoint: &str, path: &str) -> String {
+        // The SDK treats a programmatic endpoint as a complete signal URL. Our
+        // default and receipt-latency configuration also accept a collector
+        // origin, so expand only that form. Keep explicit routes (including
+        // query URLs), empty endpoints and SDK validation behavior unchanged.
+        match endpoint.parse::<http::Uri>() {
+            Ok(uri)
+                if uri.scheme().is_some()
+                    && uri.authority().is_some()
+                    && uri.path() == "/"
+                    && uri.query().is_none() =>
+            {
+                format!("{}{path}", endpoint.trim_end_matches('/'))
+            }
+            _ => endpoint.to_owned(),
+        }
+    }
+
     pub(crate) fn span_exporter(
         config: &OtelConfig,
         bearer: Option<Arc<dyn TelemetryBearer>>,
     ) -> Result<SpanExporter, Box<dyn std::error::Error>> {
         let builder = SpanExporter::builder()
             .with_http()
-            .with_endpoint(&config.endpoint)
+            .with_endpoint(signal_endpoint(&config.endpoint, "/v1/traces"))
             // Static non-auth headers (vendor keys, an explicit `bearer_token`)
             // always ride as headers. When a live bearer source is present, the
             // custom client fills the `Authorization` slot per export *if it is
@@ -119,7 +137,7 @@ mod imp {
     ) -> Result<MetricExporter, Box<dyn std::error::Error>> {
         Ok(MetricExporter::builder()
             .with_http()
-            .with_endpoint(&config.endpoint)
+            .with_endpoint(signal_endpoint(&config.endpoint, "/v1/metrics"))
             .with_headers(config.effective_headers())
             .build()?)
     }
