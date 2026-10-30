@@ -19,6 +19,8 @@ mod shutdown;
 pub(super) fn limits() -> Limits {
     Limits {
         connections: 1,
+        #[cfg(feature = "http2")]
+        requests: 128,
         request_bytes: 1024,
         header_timeout: Duration::from_secs(2),
         request_timeout: Duration::from_secs(2),

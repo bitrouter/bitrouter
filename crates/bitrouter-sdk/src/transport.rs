@@ -2,6 +2,7 @@ use futures_util::StreamExt;
 use reqwest::{Response, header};
 
 use crate::error::{Error, Result, ServiceFailure};
+use crate::gateway::HttpVersion;
 
 pub(crate) async fn body(response: Response, limit: usize) -> Result<Vec<u8>> {
     if response
@@ -119,11 +120,23 @@ fn http_builder(
     if let Some(timeout) = options.request_timeout {
         builder = builder.timeout(timeout);
     }
-    if http1_only {
+    let http_version = if http1_only {
         // HTTP/1.1 upgrade needs a dedicated pool and ALPN selection even when
-        // another consumer enables reqwest's HTTP/2 feature.
+        // ordinary requests explicitly require HTTP/2.
         // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.http1_only
-        builder = builder.http1_only();
+        HttpVersion::Http1Only
+    } else {
+        options.http_version
+    };
+    // reqwest owns ALPN and prior-knowledge framing; no probe or replay is needed.
+    // https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.http2_prior_knowledge
+    match http_version {
+        #[cfg(feature = "http2")]
+        HttpVersion::Auto => builder,
+        #[cfg(not(feature = "http2"))]
+        HttpVersion::Auto => builder.http1_only(),
+        HttpVersion::Http1Only => builder.http1_only(),
+        #[cfg(feature = "http2")]
+        HttpVersion::Http2PriorKnowledge => builder.http2_prior_knowledge(),
     }
-    builder
 }

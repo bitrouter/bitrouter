@@ -1,5 +1,31 @@
 # CLI reference
 
+HTTP/2 is a default-on application Cargo feature (`http2`), forwarded to axum,
+reqwest, the SDK and the shared transport's `h2` dependency. The explicitly
+no-default-features `gateway` and `gateway-shared` distributions remain
+HTTP/1-only with their existing release identities. Build a lean HTTP/2
+executable with either of these commands:
+
+```sh
+cargo build --locked -p bitrouter --bin bro --no-default-features --features http2
+cargo build --locked -p bitrouter --bin bro --no-default-features --features multi-instance,http2
+```
+
+Both report `profile: "custom"`; `bro --json build-info` lists `http2` among
+their effective features. This is a build-time capability, with no new CLI
+flag or HTTP port. Local axum serving accepts HTTP/1 and HTTP/2. Shared inference
+and operator listeners detect cleartext HTTP/2 prior knowledge on their
+respective existing ports; HTTP/1 still closes after each request there. No TLS
+listener, h2c Upgrade handshake or gRPC server is added. See
+[shared gateway configuration](shared-gateway.md) for stream caps, timeouts and
+connection-owned shutdown.
+
+The SDK also enables `http2` by default. For cleartext HTTP/2, explicitly select
+`bitrouter_sdk::gateway::HttpVersion::Http2PriorKnowledge` via
+`TransportOptions::http_version` or `OperatorOptions::http_version`. Its default
+`Auto` uses HTTP/1.1 for cleartext URLs. Consumers using `default-features = false`
+must explicitly enable SDK `http2` to use prior knowledge.
+
 ## Single-operation native and ACP controls
 
 Use the running local daemon; queries do not start it. `--config PATH` selects

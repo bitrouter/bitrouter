@@ -20,7 +20,9 @@ name = "bro"
 path = "src/main.rs"
 
 [features]
-default = ["core", "harness", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql"]
+default = ["core", "harness", "mcp", "server-tools", "otel-http", "db-postgres", "db-mysql", "http2"]
+# The same JSON/SSE API over HTTP/2, including cleartext private-network ingress.
+http2 = ["axum/http2", "reqwest/http2", "bitrouter-sdk/http2", "dep:h2"]
 core = ["dep:rand_distr"]
 harness = ["mcp", "dep:jsonschema", "dep:agent-client-protocol", "dep:agent-client-protocol-schema", "dep:agent-client-protocol-conductor", "dep:globset", "dep:ignore", "dep:tokio-stream"]
 mcp = ["dep:rmcp", "dep:process-wrap"]
@@ -130,6 +132,7 @@ http.workspace = true
 axum = { workspace = true, features = ["ws"] }
 http-body.workspace = true
 hyper = { workspace = true, optional = true, features = ["http1", "server"] }
+h2 = { version = "0.4.15", optional = true }
 hyper-util = { workspace = true, optional = true, features = ["tokio"] }
 futures.workspace = true
 agent-client-protocol = { workspace = true, optional = true }
