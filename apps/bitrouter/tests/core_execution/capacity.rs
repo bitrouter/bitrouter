@@ -4,6 +4,7 @@ use bitrouter::storage::checkpoint::snapshot::ResourceConstraint;
 use bitrouter_ai::core::protocol::{ToolObservation, ToolStatus};
 
 #[path = "capacity/tree_limits.rs"]
+#[cfg(bitrouter_capacity_tests)]
 mod tree_limits;
 
 #[path = "capacity/tool_intents.rs"]

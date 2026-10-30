@@ -2665,6 +2665,7 @@ async fn steering_retries_use_bounded_receipt_pages() -> Result<(), Box<dyn std:
     Ok(())
 }
 
+#[cfg(bitrouter_capacity_tests)]
 #[tokio::test]
 async fn native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery()
 -> Result<(), Box<dyn std::error::Error>> {

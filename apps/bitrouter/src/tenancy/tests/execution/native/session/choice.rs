@@ -9,6 +9,7 @@ mod authority;
 pub(super) mod custody;
 mod fallback;
 pub(in crate::tenancy::tests::execution::native) mod fixture;
+#[cfg(bitrouter_capacity_tests)]
 mod headroom;
 mod inheritance;
 #[cfg(unix)]

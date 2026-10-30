@@ -1,0 +1,39 @@
+name: Restore Linux test artifacts
+description: Restore the exact build for this revision without running Cargo.
+runs:
+  using: composite
+  steps:
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - uses: actions/download-artifact@v4
+      with:
+        name: linux-tests-${{ github.sha }}
+        path: .ci-archive
+    - name: Verify and extract the test build
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(cat .ci-archive/tests.sha)" = "$GITHUB_SHA"
+        # Some existing tests embed Cargo paths. Keep the same checkout path and
+        # runner ABI until those tests support arbitrary workspace relocation.
+        test "$(cat .ci-archive/tests.workspace)" = "$GITHUB_WORKSPACE"
+        (cd .ci-archive && sha256sum -c tests.tar.zst.sha256)
+        # nextest archives contain target/ and preserve executable permissions.
+        # https://nexte.st/docs/ci-features/archiving/
+        mkdir -p ci-evidence
+        /usr/bin/time -v -o ci-evidence/extract.txt tar --zstd -xf .ci-archive/tests.tar.zst
+        test -x target/debug/bro
+        test -x target/debug/examples/owned_capture_fixture
+        printf '%s\n' \
+          "BITROUTER_TEST_PREBUILT_ONLY=1" \
+          "BITROUTER_TEST_EXAMPLES_DIR=$GITHUB_WORKSPACE/target/debug/examples" \
+          "BITROUTER_TEST_BRO=$GITHUB_WORKSPACE/target/debug/bro" \
+          "BITROUTER_TEST_GATEWAY_BINARY=$GITHUB_WORKSPACE/target/debug/bro" \
+          "BITROUTER_OWNED_CAPTURE_FIXTURE=$GITHUB_WORKSPACE/target/debug/examples/owned_capture_fixture" >> "$GITHUB_ENV"
+        # A consumer must never silently turn a missing artifact into a rebuild.
+        mkdir -p "$RUNNER_TEMP/ci-no-build"
+        printf '#!/bin/sh\necho "CI test consumers must use prebuilt artifacts" >&2\nexit 97\n' > "$RUNNER_TEMP/ci-no-build/cargo"
+        chmod +x "$RUNNER_TEMP/ci-no-build/cargo"
+        cp "$RUNNER_TEMP/ci-no-build/cargo" "$RUNNER_TEMP/ci-no-build/rustc"
+        printf '%s\n' "$RUNNER_TEMP/ci-no-build" >> "$GITHUB_PATH"

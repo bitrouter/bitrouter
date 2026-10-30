@@ -6,6 +6,11 @@ pub fn from_env(example: &str) -> Result<Option<PathBuf>, String> {
     let Some(directory) =
         std::env::var_os("BITROUTER_TEST_EXAMPLES_DIR").filter(|directory| !directory.is_empty())
     else {
+        if std::env::var_os("BITROUTER_TEST_PREBUILT_ONLY").is_some() {
+            return Err(
+                "archive tests require BITROUTER_TEST_EXAMPLES_DIR; rebuilding is forbidden".into(),
+            );
+        }
         return Ok(None);
     };
     let path = PathBuf::from(directory).join(format!("{example}{}", std::env::consts::EXE_SUFFIX));

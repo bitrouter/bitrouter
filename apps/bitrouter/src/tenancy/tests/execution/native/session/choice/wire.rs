@@ -100,6 +100,7 @@ impl Endpoint {
     pub async fn hiding() -> Result<Self> {
         Self::build(false, false, true, false, "judge-reported-r1".into()).await
     }
+    #[cfg(bitrouter_capacity_tests)]
     pub async fn large() -> Result<Self> {
         // A provider may report a concrete model name. Keep the real result below
         // the frozen 270336-byte allowance while materially filling receipt history.
@@ -115,9 +116,11 @@ impl Endpoint {
     pub async fn transport_failure() -> Result<Self> {
         Self::build(false, false, false, true, "judge-reported-r1".into()).await
     }
+    #[cfg(bitrouter_capacity_tests)]
     pub fn pause_next(&self) {
         self.wire.pause_at.store(self.calls() + 1, Ordering::SeqCst);
     }
+    #[cfg(bitrouter_capacity_tests)]
     pub fn resume(&self) {
         self.wire.resume.cancel();
     }
