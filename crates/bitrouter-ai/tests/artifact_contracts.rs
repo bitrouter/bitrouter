@@ -81,37 +81,49 @@ fn artifact_schema_exposes_nullable_revision_and_closed_profiles()
 }
 
 #[test]
-fn contract_crate_keeps_its_dependency_boundary() {
+fn contract_crate_keeps_its_dependency_boundary() -> Result<(), Box<dyn std::error::Error>> {
     // All dependency declarations (including future target/build sections) must
-    // stay within the contract crate's existing serialization/error vocabulary.
+    // stay within the contract vocabulary or optional framework bindings. Test
+    // harness dependencies do not grant production runtime ownership.
     // The isolated Cargo dependency-tree gate also checks transitive dependencies.
-    let mut dependencies = false;
-    for line in include_str!("../Cargo.toml").lines().map(str::trim) {
-        if line.starts_with('[') {
-            if let Some((_, name)) = line.split_once("dependencies.") {
-                // cargo package rewrites inline declarations as subtables.
-                assert!(
-                    matches!(
-                        name.trim_end_matches(']'),
-                        "serde" | "serde_json" | "thiserror" | "schemars"
-                    ),
-                    "unexpected contract dependency: {line}"
-                );
-                dependencies = false;
-            } else {
-                dependencies = line.contains("dependencies");
-            }
-            continue;
-        }
-        if dependencies && !line.is_empty() && !line.starts_with('#') {
-            let name = line.split(['.', ' ', '=']).next();
+    fn check(name: &str, declaration: &toml::Value, development: bool) {
+        let contract = matches!(name, "serde" | "serde_json" | "thiserror" | "schemars");
+        let binding = matches!(name, "axum" | "futures-core" | "futures-util");
+        let fixture = development && matches!(name, "tokio" | "http-body-util" | "tower" | "toml");
+        assert!(
+            contract || binding || fixture,
+            "unexpected dependency: {name}"
+        );
+        if binding && !development {
             assert!(
-                matches!(
-                    name,
-                    Some("serde" | "serde_json" | "thiserror" | "schemars")
-                ),
-                "unexpected contract dependency: {line}"
+                declaration.get("optional").and_then(toml::Value::as_bool) == Some(true),
+                "framework binding must remain optional: {name}"
             );
+            if matches!(name, "axum" | "futures-util") {
+                assert!(
+                    declaration
+                        .get("default-features")
+                        .and_then(toml::Value::as_bool)
+                        == Some(false),
+                    "framework binding must disable default features: {name}"
+                );
+            }
+        }
+    }
+
+    // Parse actual TOML values so comments cannot grant production exceptions.
+    // Inline tables and cargo-package's normalized subtables share this shape.
+    let manifest: toml::Value = toml::from_str(include_str!("../Cargo.toml"))?;
+    let targets = manifest.get("target").and_then(toml::Value::as_table);
+    for owner in
+        std::iter::once(&manifest).chain(targets.into_iter().flat_map(|targets| targets.values()))
+    {
+        for kind in ["dependencies", "build-dependencies", "dev-dependencies"] {
+            if let Some(dependencies) = owner.get(kind).and_then(toml::Value::as_table) {
+                for (name, declaration) in dependencies {
+                    check(name, declaration, kind == "dev-dependencies");
+                }
+            }
         }
     }
     let source = include_str!("../src/artifact.rs");
@@ -129,4 +141,5 @@ fn contract_crate_keeps_its_dependency_boundary() {
             "artifact contract acquired runtime behavior: {runtime}"
         );
     }
+    Ok(())
 }

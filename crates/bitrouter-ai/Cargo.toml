@@ -38,3 +38,4 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 http-body-util = "0.1"
 tower = { workspace = true, features = ["util"] }
+toml.workspace = true
