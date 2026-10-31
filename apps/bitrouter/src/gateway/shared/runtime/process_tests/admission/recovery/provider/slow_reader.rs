@@ -1,6 +1,7 @@
 //! One stock-process A07 candidate. Observe real socket backpressure, resume
 //! the reader to demonstrate progress, then leave it open for the write stall.
 
+use std::future::Future;
 use std::io::{self, IoSlice};
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
@@ -131,7 +132,7 @@ async fn exercise(
     let held = probe.snapshot();
     ensure!(
         held.pending && held.written == first.written && !held.body_dropped,
-        "provider did not stay backpressured across survivor completion"
+        "provider did not stay backpressured across survivor completion: first={first:?}, held={held:?}"
     );
     ensure!(provider.calls() == 2);
 
@@ -430,7 +431,7 @@ async fn flood_request(
     Response::from_parts(parts, Body::from_stream(stream))
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 struct Observed {
     written: usize,
     blocks: usize,
@@ -464,7 +465,7 @@ impl Probe {
                 let state = *receiver.borrow_and_update();
                 ensure!(
                     !state.cap_hit && !state.closed && !state.body_dropped,
-                    "provider ended/exhausted bytes before sustained socket pressure"
+                    "provider ended/exhausted bytes before sustained socket pressure: {state:?}"
                 );
                 if state.pending && state.written >= written && state.blocks >= blocks {
                     let deadline = state
@@ -580,7 +581,11 @@ impl AsyncWrite for ProbeIo {
         cx: &mut TaskContext<'_>,
         bytes: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let result = Pin::new(&mut self.inner).poll_write(cx, bytes);
+        // Tokio can yield for its cooperative budget before checking socket
+        // readiness. Exclude that yield from the pressure measurement, only
+        // for this delegated poll; the provider task remains cooperative.
+        let write = std::future::poll_fn(|cx| Pin::new(&mut self.inner).poll_write(cx, bytes));
+        let result = std::pin::pin!(tokio::task::unconstrained(write)).poll(cx);
         if let Some(probe) = &self.probe {
             probe.write(&result);
         }
@@ -591,7 +596,9 @@ impl AsyncWrite for ProbeIo {
         cx: &mut TaskContext<'_>,
         bytes: &[IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        let result = Pin::new(&mut self.inner).poll_write_vectored(cx, bytes);
+        let write =
+            std::future::poll_fn(|cx| Pin::new(&mut self.inner).poll_write_vectored(cx, bytes));
+        let result = std::pin::pin!(tokio::task::unconstrained(write)).poll(cx);
         if let Some(probe) = &self.probe {
             probe.write(&result);
         }
@@ -606,6 +613,48 @@ impl AsyncWrite for ProbeIo {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
+}
+
+#[tokio::test]
+async fn probe_measures_socket_pressure_with_exhausted_task_budget() -> Result<()> {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let socket = TcpStream::connect(listener.local_addr()?).await?;
+        let (_peer, _) = listener.accept().await?;
+        socket.writable().await?;
+        let probe = Arc::new(Probe::new());
+        let mut io = ProbeIo {
+            inner: socket,
+            probe: Some(probe.clone()),
+        };
+        for vectored in [false, true] {
+            while tokio::task::coop::has_budget_remaining() {
+                tokio::task::consume_budget().await;
+            }
+            // Observe one poll directly: retrying Pending would restore the
+            // task budget and hide a scheduler yield recorded as pressure.
+            let result = std::future::poll_fn(|cx| {
+                Poll::Ready(if vectored {
+                    Pin::new(&mut io).poll_write_vectored(cx, &[IoSlice::new(b"x")])
+                } else {
+                    Pin::new(&mut io).poll_write(cx, b"x")
+                })
+            })
+            .await;
+            ensure!(
+                matches!(result, Poll::Ready(Ok(1))),
+                "writable socket yielded for task budget: vectored={vectored}, result={result:?}"
+            );
+        }
+        let state = probe.snapshot();
+        ensure!(
+            state.written == 2 && state.blocks == 0 && !state.pending,
+            "scheduler yielding was recorded as socket pressure: {state:?}"
+        );
+        Ok(())
+    })
+    .await
+    .context("cooperative-budget probe regression timed out")?
 }
 
 async fn read_head(socket: &mut TcpStream) -> Result<Wire> {
