@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 pub(super) enum Restore {
     #[default]
     Exact,
+    CodexConfig {
+        model: String,
+    },
     ClaudeProfile,
     ClaudeMeta {
         profile: String,
@@ -82,12 +85,20 @@ impl Change {
         if current == Some(&self.after) {
             return Ok(self.before.clone());
         }
+        if let Restore::CodexConfig { model } = &self.restore {
+            return super::codex::restore_config(
+                self.before.as_deref(),
+                &self.after,
+                current,
+                model,
+            );
+        }
         ensure!(!matches!(self.restore, Restore::Exact), "file was edited");
         let mut value = object(current)?;
         let after = object(Some(&self.after))?;
         let before = object(self.before.as_deref())?;
         match &self.restore {
-            Restore::Exact => anyhow::bail!("file was edited"),
+            Restore::Exact | Restore::CodexConfig { .. } => anyhow::bail!("file was edited"),
             Restore::ClaudeProfile => {
                 // Desktop seals this owned secret on first launch. No other
                 // profile edits are implicitly discarded, including new keys.
@@ -152,6 +163,9 @@ impl Change {
         if self.restored(current, false).is_err() {
             return Ok(false);
         }
+        if matches!(self.restore, Restore::CodexConfig { .. }) {
+            return super::codex::config_installed(&self.after, current);
+        }
         let value = object(current)?;
         let after = object(Some(&self.after))?;
         Ok(match &self.restore {
@@ -164,7 +178,7 @@ impl Change {
             }
             Restore::ClaudeMode => value.get("deploymentMode") == after.get("deploymentMode"),
             Restore::ClaudeProfile => true,
-            Restore::Exact => false,
+            Restore::Exact | Restore::CodexConfig { .. } => false,
         })
     }
 }
@@ -205,7 +219,7 @@ pub(super) struct Receipt {
 impl Receipt {
     pub fn new(endpoint: String, model: String, files: Vec<Change>) -> Self {
         Self {
-            version: 3,
+            version: 4,
             endpoint,
             model,
             display_name: None,
@@ -228,7 +242,7 @@ impl Receipt {
                 let mut receipt: Self =
                     serde_json::from_str(&text).context("invalid connection receipt")?;
                 ensure!(
-                    matches!(receipt.version, 1..=3),
+                    matches!(receipt.version, 1..=4),
                     "unsupported connection receipt version"
                 );
                 if receipt.version == 1 && receipt.model.is_empty() {
@@ -426,12 +440,14 @@ fn private_dir(path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             private_dir(parent)?;
         }
-        let mut builder = fs::DirBuilder::new();
+        let builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = builder;
             builder.mode(0o700);
-        }
+            builder
+        };
         builder.create(path)?;
     }
     Ok(())

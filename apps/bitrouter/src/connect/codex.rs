@@ -164,8 +164,87 @@ pub(super) fn prepare(
     providers.insert(PROVIDER, Item::Table(provider));
     Ok(vec![
         Change::json(catalog_path, None, &catalog)?,
-        Change::snapshot(config_path, before, config.to_string()),
+        Change::snapshot(config_path, before, config.to_string()).with_restore(
+            files::Restore::CodexConfig {
+                model: model.into(),
+            },
+        ),
     ])
+}
+
+fn config_value(text: Option<&str>) -> Result<toml::Value> {
+    toml::from_str(text.unwrap_or_default())
+        .map_err(|_| anyhow::anyhow!("invalid Codex config.toml (contents redacted)"))
+}
+
+fn owned_provider(value: &toml::Value) -> Option<&toml::Value> {
+    value.get("model_providers").and_then(|v| v.get(PROVIDER))
+}
+
+pub(super) fn config_installed(after: &str, current: Option<&str>) -> Result<bool> {
+    let after = config_value(Some(after))?;
+    let current = config_value(current)?;
+    Ok(["model_provider", "model_catalog_json"]
+        .iter()
+        .all(|key| current.get(key) == after.get(key))
+        && owned_provider(&current) == owned_provider(&after))
+}
+
+pub(super) fn restore_config(
+    before_text: Option<&str>,
+    after_text: &str,
+    current_text: Option<&str>,
+    model: &str,
+) -> Result<Option<String>> {
+    let before = config_value(before_text)?;
+    let after = config_value(Some(after_text))?;
+    let current = config_value(current_text)?;
+    // Each owned field may already have been restored before an interruption.
+    ensure!(
+        ["model_provider", "model_catalog_json"]
+            .iter()
+            .all(|key| current.get(key) == after.get(key) || current.get(key) == before.get(key))
+            && (owned_provider(&current) == owned_provider(&after)
+                || owned_provider(&current) == owned_provider(&before)),
+        "BitRouter provider or catalog settings were edited"
+    );
+    let parse = |text: &str| {
+        text.parse::<DocumentMut>()
+            .map_err(|_| anyhow::anyhow!("invalid Codex config.toml (contents redacted)"))
+    };
+    let original = parse(before_text.unwrap_or_default())?;
+    let mut document = parse(current_text.context("Codex config was removed")?)?;
+    for key in ["model_provider", "model_catalog_json"] {
+        restore_item(&mut document, &original, key);
+    }
+    if let Some(providers) = document.get_mut("model_providers") {
+        let providers = providers
+            .as_table_like_mut()
+            .context("invalid Codex providers")?;
+        providers.remove(PROVIDER);
+        if providers.is_empty() && before.get("model_providers").is_none() {
+            document.remove("model_providers");
+        }
+    }
+    // The picker writes model and effort after setup. Avoid leaving a default
+    // that points at the catalog being removed; preserve later model choices.
+    if current.get("model").and_then(toml::Value::as_str) == Some(model) {
+        restore_item(&mut document, &original, "model");
+        restore_item(&mut document, &original, "model_reasoning_effort");
+    }
+    if config_value(Some(&document.to_string()))? == before {
+        Ok(before_text.map(str::to_owned))
+    } else {
+        Ok(Some(document.to_string()))
+    }
+}
+
+fn restore_item(document: &mut DocumentMut, original: &DocumentMut, key: &str) {
+    if let Some(value) = original.get(key) {
+        document[key] = value.clone();
+    } else {
+        document.remove(key);
+    }
 }
 
 fn model_entry(model: &str) -> Value {
@@ -205,6 +284,105 @@ fn model_entry(model: &str) -> Value {
 mod tests {
     use super::*;
     const MODEL: &str = "team/coding-v2";
+
+    #[test]
+    fn picker_and_desktop_preferences_survive_reconnect_and_restore() -> Result<()> {
+        for selected in [MODEL, "another-native"] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path().canonicalize()?;
+            let config = root.join("config.toml");
+            std::fs::write(
+                &config,
+                "# original\nmodel = 'native'\nmodel_reasoning_effort = 'high'\n",
+            )?;
+            let changes = prepare(
+                &root,
+                "http://localhost",
+                "fixture",
+                MODEL,
+                None,
+                None,
+                Some(json!({"models": [model_entry("native")]})),
+            )?;
+            let receipt = files::Receipt::new("http://localhost".into(), MODEL.into(), changes);
+            let journal = root.join("receipt.json");
+            receipt.apply(&journal)?;
+            let applied = std::fs::read_to_string(&config)?;
+            let mut edited: DocumentMut = applied.parse()?;
+            edited["model"] = value(selected);
+            edited["model_reasoning_effort"] = value("none");
+            edited["desktop"] = Item::Table(Table::new());
+            edited["desktop"]["conversationDetailMode"] = value("STEPS_COMMANDS");
+            std::fs::write(&config, edited.to_string())?;
+            assert!(receipt.installed()?);
+            if selected == MODEL {
+                // Crash after restoring config, before deleting catalog/receipt.
+                let restored = restore_config(
+                    Some("# original\nmodel = 'native'\nmodel_reasoning_effort = 'high'\n"),
+                    &applied,
+                    Some(&edited.to_string()),
+                    MODEL,
+                )?
+                .context("missing restored config")?;
+                std::fs::write(&config, restored)?;
+                assert!(!receipt.installed()?);
+            }
+            receipt.restore(&journal)?;
+            let restored = std::fs::read_to_string(&config)?;
+            let cfg = config_value(Some(&restored))?;
+            assert!(restored.contains("# original"));
+            assert_eq!(
+                cfg["desktop"]["conversationDetailMode"].as_str(),
+                Some("STEPS_COMMANDS")
+            );
+            assert_eq!(
+                cfg["model"].as_str(),
+                Some(if selected == MODEL {
+                    "native"
+                } else {
+                    selected
+                })
+            );
+            assert_eq!(
+                cfg["model_reasoning_effort"].as_str(),
+                Some(if selected == MODEL { "high" } else { "none" })
+            );
+            assert!(cfg.get("model_provider").is_none());
+            assert!(cfg.get("model_catalog_json").is_none());
+            assert!(cfg.get("model_providers").is_none());
+            assert!(!root.join("bitrouter-models.json").exists());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn owned_provider_edits_abort_all_restore_writes() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let config = root.join("config.toml");
+        let changes = prepare(
+            &root,
+            "http://localhost",
+            "fixture",
+            MODEL,
+            None,
+            None,
+            Some(json!({"models": [model_entry("native")]})),
+        )?;
+        let receipt = files::Receipt::new("http://localhost".into(), MODEL.into(), changes);
+        let journal = root.join("receipt.json");
+        receipt.apply(&journal)?;
+        let mut edited: DocumentMut = std::fs::read_to_string(&config)?.parse()?;
+        edited["model_providers"][PROVIDER]["base_url"] = value("https://changed.example/v1");
+        let text = edited.to_string();
+        std::fs::write(&config, &text)?;
+        assert!(!receipt.installed()?);
+        assert!(receipt.restore(&journal).is_err());
+        assert_eq!(std::fs::read_to_string(&config)?, text);
+        assert!(root.join("bitrouter-models.json").exists());
+        assert!(journal.exists());
+        Ok(())
+    }
 
     #[test]
     fn preserves_settings_native_metadata_and_restores_exactly() -> Result<()> {

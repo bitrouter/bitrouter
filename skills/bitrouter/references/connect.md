@@ -63,6 +63,11 @@ web/image/audio tools, code-mode, service tiers or multi-agent backend. Use
 `--codex-catalog` with a complete catalog containing the selected model to supply
 its actual context limits and capabilities. A `/v1/models` ID alone does not
 prove those capabilities or tool-call compatibility.
+Desktop can still attach native namespace and web-search tool declarations.
+Linux Desktop 26.1027.30824 was verified against a native Responses upstream;
+its tool-bearing requests were refused by the gateway's lossless conversion
+checks against a Chat Completions upstream. A picker entry alone does not
+establish compatibility with arbitrary Chat Completions models.
 An active profile overriding provider/catalog is rejected. Project and managed
 settings can still take precedence. The fallback runs `codex debug models
 --bundled` without authentication/network access. Older clients without this
@@ -111,7 +116,13 @@ They include original file bytes and gateway credentials; do not publish them.
 Files are replaced atomically, receipts precede writes, and symlinks/multiply
 linked files are refused. Unix writes use mode 0600.
 
-`--remove` restores unchanged Codex/CLI files exactly. Desktop restoration is
+`--remove` restores unchanged files exactly. Codex config recovery restores the
+owned provider and catalog pointers while preserving other settings written by
+the app. If the picker still selects the connected model, it restores the prior
+default model and reasoning effort; a later selection of another model is kept.
+Edits to the owned provider or catalog pointer remain conflicts. The catalog
+file and Claude CLI settings retain exact-file conflict checks.
+Claude Desktop restoration is
 scoped: it removes only the owned profile/list entry, restores the previous
 selection only while the BitRouter profile is selected, and preserves unrelated
 preferences and later profile selections. Desktop's `__sealed__:` credential
@@ -122,9 +133,11 @@ transactions remain recoverable. Repeat connect accepts the supported Desktop
 normalizations but rejects a changed profile selection. Fully quit the client
 before connect/remove to avoid concurrent writers.
 
-Version-3 receipts record the endpoint, request model and optional display name,
-plus Desktop ownership rules. Version-1/2 receipts remain readable with their
-original exact-file recovery behavior. To rotate a key, change endpoints, refresh
+Version-4 receipts add Codex config ownership rules. Version-3 receipts record
+the endpoint, request model, optional display name and Claude Desktop ownership
+rules. Earlier receipts remain readable with their original recovery behavior;
+existing Codex exact-file receipts do not silently acquire relaxed checks.
+To rotate a key, change endpoints, refresh
 a catalog or include a newly installed client, remove and reconnect.
 
 With inherit_defaults: true, a canonical auto router also supplies the default
