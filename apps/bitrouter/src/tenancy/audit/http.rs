@@ -145,7 +145,7 @@ async fn page(
 ) -> Result<Response, Failure> {
     let Path(tenant) = path.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
     let Query(query) = query.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-    let limit = query.limit.map_or(100, |value| value);
+    let limit = query.limit.unwrap_or(100);
     if !(1..=100).contains(&limit) {
         return Err(ErrorCode::InvalidRequest.into());
     }
