@@ -20,6 +20,7 @@ conformance requirements. The index below distinguishes beta drafts from their w
 | Managed Core | Beta, `1.0.0-beta.1`; core wire `1` | [Managed Core](managed-core-v1/README.md) | [Cases](managed-core-v1/conformance.md) |
 | Native ACP | Beta, `1.0.0-beta.1`; ACP v1 / draft v2 | [Native ACP](native-acp-v1/README.md) | [Cases](native-acp-v1/conformance.md) |
 | Agent catalog | Beta, `1.0.0-beta.1`; no envelope version | [Agent catalog](agent-catalog-v1/README.md) | [Cases](agent-catalog-v1/conformance.md) |
+| Observation schema | Beta, `1.0.0-beta.1`; schema `2` | [Telemetry](telemetry-v2/README.md) | [Cases](telemetry-v2/conformance.md) |
 | Policy lock | Beta, `1.0.0-beta.1`; file version `4` | [Policy lock v4](policy-lock-v4/README.md) | [Cases](policy-lock-v4/conformance.md) |
 
 Beta describes the maturity of the contract. It does not assert that a particular
