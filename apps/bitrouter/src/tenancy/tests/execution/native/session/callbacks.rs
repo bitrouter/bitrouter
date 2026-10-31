@@ -96,12 +96,12 @@ async fn held_ack(completed_provider: bool) -> Result<()> {
             "barrier did not follow a real committed checkpoint"
         );
         let (receipt, tasks) = fixture.service.pipelines.callback_owner_for_test(&id)?;
-        let cleanup_deadline = receipt.cleanup_deadline();
         ensure!(provider.calls() == usize::from(completed_provider));
         if completed_provider {
             ensure!(provider.receive().await?.body["model"] == "model-a");
         }
         receipt.cancel();
+        let cleanup_deadline = receipt.cleanup_deadline();
         // Wait for the actual cancelled preparation task and its sole Source to
         // finish. A sleep or receipt-cancel notification alone cannot establish
         // that the enclosing future has been dropped.

@@ -115,6 +115,26 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
     let router = Router::new()
         .route("/control/v1/tenancy/capabilities", get(capabilities))
         .route(
+            "/control/v1/tenancy/usage-evidence/capabilities",
+            get(super::receipts::usage_evidence::http::capabilities),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/executions/{execution_id}/usage-evidence",
+            get(super::receipts::usage_evidence::http::read),
+        )
+        .route(
+            "/control/v1/tenancy/resource-capabilities",
+            get(resource_capabilities),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/resources",
+            get(resource_status).post(put_resource),
+        )
+        .route(
+            "/control/v1/tenants/{tenant_id}/resources/revoke",
+            post(revoke_resource),
+        )
+        .route(
             "/control/v1/tenancy/operations/{operation_id}",
             get(operation),
         )
@@ -304,6 +324,58 @@ async fn capabilities(
     Extension(caller): Extension<Caller>,
 ) -> Result<Response, Failure> {
     Ok(Json(service.capabilities(&caller)?).into_response())
+}
+
+async fn resource_capabilities(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Response, Failure> {
+    Ok(Json(service.resource_capabilities(&caller)?).into_response())
+}
+
+async fn put_resource(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    tenant: Result<Path<TenantId>, PathRejection>,
+    input: Result<Json<bitrouter_ai::tenancy::resources::ResourcePut>, JsonRejection>,
+) -> Result<Response, Failure> {
+    Ok(response(
+        service
+            .execute(caller, Command::Resource(path(tenant)?, body(input)?))
+            .await?,
+    ))
+}
+
+async fn revoke_resource(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    tenant: Result<Path<TenantId>, PathRejection>,
+    input: Result<Json<bitrouter_ai::tenancy::resources::ResourceRevoke>, JsonRejection>,
+) -> Result<Response, Failure> {
+    Ok(response(
+        service
+            .execute(caller, Command::RevokeResource(path(tenant)?, body(input)?))
+            .await?,
+    ))
+}
+
+async fn resource_status(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+    tenant: Result<Path<TenantId>, PathRejection>,
+    query: Result<
+        axum::extract::Query<bitrouter_ai::tenancy::configuration::ResourceRef>,
+        axum::extract::rejection::QueryRejection,
+    >,
+) -> Result<Response, Failure> {
+    let axum::extract::Query(reference) =
+        query.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+    Ok(Json(
+        service
+            .resource_status(&caller, &path(tenant)?, &reference)
+            .await?,
+    )
+    .into_response())
 }
 
 async fn operation(

@@ -591,3 +591,104 @@ fn bounded_projection_satisfies_frozen_receipt_validation_even_when_sum_overflow
     ensure!(serde_json::to_vec(&receipt)?.len() <= 1024 * 1024);
     Ok(())
 }
+
+#[test]
+fn original_frames_survive_failed_attempt_disconnect_and_estimator_finalization() -> Result<()> {
+    use bitrouter_ai::tenancy::usage_evidence::{
+        Estimate, EstimateCoverage, EstimateTrigger, Estimation, EstimatorAlgorithm, Semantics,
+        Source,
+    };
+    let identity = owner("execution")?;
+    let journal = Journal::owned(identity.clone());
+    let bound = stamp(&identity, "model")?;
+    let mut rejected = journal.reserve(bound.clone())?;
+    let rejected_id = rejected.arm(&bound)?;
+    rejected.http_status(401)?;
+    rejected.observe_usage_frame(
+        Protocol::Responses,
+        Source::HttpError,
+        &json!({"input_tokens":2}),
+    )?;
+    drop(rejected);
+    let mut disconnected = journal.reserve(bound.clone())?;
+    let disconnected_id = disconnected.arm(&bound)?;
+    disconnected.http_status(200)?;
+    disconnected.observe_usage_frame(
+        Protocol::Messages,
+        Source::MessageStart,
+        &json!({"input_tokens":0}),
+    )?;
+    disconnected.observe_usage_frame(
+        Protocol::Messages,
+        Source::MessageDelta,
+        &json!({"output_tokens":3}),
+    )?;
+    drop(disconnected);
+    journal.observe_estimator(Some(Estimate {
+        algorithm: EstimatorAlgorithm::StreamCharacterCeiling,
+        version: 1,
+        characters_per_token: 4,
+        coverage: EstimateCoverage::PromptTextAndObservedTextReasoning,
+        trigger: EstimateTrigger::Disconnected,
+        prompt_characters: 5,
+        output_characters: 9,
+        input_tokens: 2,
+        output_tokens: 3,
+    }))?;
+    let frozen = journal.freeze()?;
+    let snapshot = frozen.usage_evidence.clone();
+    let document = snapshot.document(&receipt(frozen, Outcome::Unknown)?);
+    document.validate()?;
+    ensure!(
+        document.frames.len() == 3
+            && document.frames[0].attempt_id == rejected_id
+            && document.frames[1].attempt_id == disconnected_id
+    );
+    ensure!(
+        document
+            .frames
+            .iter()
+            .enumerate()
+            .all(|(n, f)| f.sequence == n as u64 && f.semantics == Semantics::Snapshot)
+    );
+    ensure!(
+        document.attempts[0].outcome == Outcome::Failed
+            && document.attempts[1].outcome == Outcome::Unknown
+    );
+    ensure!(document.attempts.iter().all(|a| !a.terminal_observed));
+    ensure!(
+        document.estimation == Estimation::Captured
+            && document.estimate.context("estimate")?.output_tokens == 3
+    );
+    ensure!(matches!(
+        journal.observe_estimator(None),
+        Err(Error::Closed)
+    ));
+    Ok(())
+}
+
+#[test]
+fn owned_linkage_is_bidirectional_bounded_and_refuses_reparenting_or_started_child() -> Result<()> {
+    let parent = Journal::owned(owner("parent")?);
+    let child = Journal::owned(owner("child")?);
+    parent.link_child(&child)?;
+    ensure!(parent.freeze()?.usage_evidence.children == vec!["child".try_into()?]);
+    ensure!(child.freeze()?.usage_evidence.parent == Some("parent".try_into()?));
+    ensure!(parent.link_child(&child).is_err());
+    let parent = Journal::owned(owner("second-parent")?);
+    let identity = owner("started")?;
+    let child = Journal::owned(identity.clone());
+    let bound = stamp(&identity, "model")?;
+    let mut permit = child.reserve(bound.clone())?;
+    permit.arm(&bound)?;
+    ensure!(parent.link_child(&child).is_err());
+    drop(permit);
+    for index in 0..64 {
+        parent.link_child(&Journal::owned(owner(&format!("child-{index}"))?))?;
+    }
+    ensure!(matches!(
+        parent.link_child(&Journal::owned(owner("overflow")?)),
+        Err(Error::Capacity)
+    ));
+    Ok(())
+}

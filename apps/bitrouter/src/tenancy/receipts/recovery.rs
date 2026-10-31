@@ -11,6 +11,9 @@ use bitrouter_ai::tenancy::{
 };
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+mod tests;
+
 /// Immutable facts copied only from an actual receipt Owner. Deserialization is
 /// evidence validation, never admission or an authority constructor.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +26,10 @@ pub(crate) struct Seed {
     correlation: CorrelationId,
     revision: RevisionId,
     pub(in crate::tenancy) origin: Stamp,
+    // Missing only in historical seeds. Preserve their serialized bytes and
+    // digests; new admissions durably distinguish loss from never-installed capture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage_evidence_version: Option<u8>,
 }
 impl Seed {
     pub(crate) fn execution_id(&self) -> &ExecutionId {
@@ -38,6 +45,7 @@ impl Seed {
             correlation: identity.correlation.clone(),
             revision: identity.revision.clone(),
             origin,
+            usage_evidence_version: Some(1),
         }
     }
     pub(crate) fn matches(&self, descriptor: &Descriptor, execution: &ExecutionId) -> bool {
@@ -48,6 +56,7 @@ impl Seed {
             && &self.execution == execution
     }
     pub(in crate::tenancy) fn check(&self, descriptor: &Descriptor, origin: &Stamp) -> Result<()> {
+        self.validate_usage_version()?;
         self.origin.validate()?;
         ensure!(
             self.matches(descriptor, &self.execution) && &self.origin == origin,
@@ -56,6 +65,7 @@ impl Seed {
         Ok(())
     }
     pub(in crate::tenancy) fn validate_receipt(&self, value: &ExecutionReceipt) -> Result<()> {
+        self.validate_usage_version()?;
         ensure!(
             value.installation_id == self.installation
                 && value.tenant_id == self.tenant
@@ -68,7 +78,8 @@ impl Seed {
         Ok(())
     }
     pub(in crate::tenancy) fn unknown(&self, at: &Timestamp) -> Result<Candidate> {
-        Candidate::new(
+        self.validate_usage_version()?;
+        let candidate = Candidate::new(
             ExecutionReceipt {
                 installation_id: self.installation.clone(),
                 tenant_id: self.tenant.clone(),
@@ -95,6 +106,18 @@ impl Seed {
                 statuses: Vec::new(),
                 auxiliary_digest: None,
             },
-        )
+        )?;
+        if self.usage_evidence_version.is_some() {
+            candidate.with_unavailable_usage_evidence()
+        } else {
+            Ok(candidate)
+        }
+    }
+    fn validate_usage_version(&self) -> Result<()> {
+        ensure!(
+            matches!(self.usage_evidence_version, None | Some(1)),
+            "unsupported receipt seed usage evidence version"
+        );
+        Ok(())
     }
 }

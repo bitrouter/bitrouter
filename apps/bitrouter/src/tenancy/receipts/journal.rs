@@ -207,6 +207,7 @@ struct Entry {
     phase: Phase,
     status: Option<u16>,
     evidence: Evidence,
+    terminal_observed: bool,
     live: bool,
 }
 
@@ -214,6 +215,7 @@ struct State {
     slots: [Option<Entry>; SLOTS],
     armed: u8,
     closed: bool,
+    usage_evidence: super::usage_evidence::Snapshot,
 }
 
 /// Contains no Service/transport handle and cannot cause provider work.
@@ -232,6 +234,7 @@ pub(crate) struct Frozen {
     pub(crate) dispatch: DispatchState,
     /// Same order as attempts; status is classification evidence, not diagnostic text.
     pub(crate) http_statuses: Vec<Option<u16>>,
+    pub(crate) usage_evidence: super::usage_evidence::Snapshot,
 }
 
 /// Evidence for the existing fallback classifier, never permission to retry.
@@ -265,6 +268,7 @@ impl Journal {
                 slots: std::array::from_fn(|_| None),
                 armed: 0,
                 closed: false,
+                usage_evidence: super::usage_evidence::Snapshot::default(),
             }),
         })
     }
@@ -313,6 +317,7 @@ impl Journal {
             phase: Phase::Reserved,
             status: None,
             evidence: Evidence::default(),
+            terminal_observed: false,
             live: true,
         });
         Ok(AttemptPermit {
@@ -405,12 +410,21 @@ impl Journal {
             statuses.push(entry.status);
         }
         let usage = evidence::aggregate(&attempts);
+        let mut usage_evidence = state.usage_evidence.clone();
+        usage_evidence.terminals = state
+            .slots
+            .iter()
+            .flatten()
+            .filter(|entry| entry.terminal_observed)
+            .map(|entry| entry.id.clone())
+            .collect();
         Ok(Frozen {
             owner: self.owner.clone(),
             attempts,
             usage,
             dispatch,
             http_statuses: statuses,
+            usage_evidence,
         })
     }
 }
@@ -490,10 +504,40 @@ impl AttemptPermit {
         protocol: Protocol,
         original: &serde_json::Value,
     ) -> Result<(), Error> {
+        self.observe_usage_frame(
+            protocol,
+            bitrouter_ai::tenancy::usage_evidence::Source::Json,
+            original,
+        )
+    }
+
+    pub(crate) fn observe_usage_frame(
+        &mut self,
+        protocol: Protocol,
+        source: bitrouter_ai::tenancy::usage_evidence::Source,
+        original: &serde_json::Value,
+    ) -> Result<(), Error> {
         self.edit(|entry| {
             entry.evidence.observe(protocol, original);
             Ok(())
-        })
+        })?;
+        let mut state = self.journal.lock()?;
+        let id = state.slots[self.index]
+            .as_ref()
+            .ok_or(Error::Phase)?
+            .id
+            .clone();
+        use bitrouter_ai::tenancy::usage_evidence::Protocol as Wire;
+        let protocol = match protocol {
+            Protocol::ChatCompletions => Wire::ChatCompletions,
+            Protocol::Responses => Wire::Responses,
+            Protocol::Messages => Wire::Messages,
+            Protocol::Decisions => Wire::Decisions,
+        };
+        state
+            .usage_evidence
+            .observe(&id, protocol, source, original);
+        Ok(())
     }
 
     /// The adapter must call this if its available raw payload was filtered or
@@ -515,6 +559,7 @@ impl AttemptPermit {
                 Phase::Failed
             };
             if entry.phase == desired {
+                entry.terminal_observed = true;
                 return Ok(());
             }
             if entry.phase != Phase::Armed || !entry.status.is_some_and(|status| status < 300) {
@@ -523,6 +568,7 @@ impl AttemptPermit {
                 return Err(Error::Conflict);
             }
             entry.phase = desired;
+            entry.terminal_observed = true;
             Ok(())
         })
     }
@@ -562,4 +608,83 @@ impl Drop for AttemptPermit {
         drop(state);
         self.journal.changed.notify_waiters();
     }
+}
+
+impl Journal {
+    /// Called by the installed stream finalizer before receipt preparation.
+    pub(crate) fn observe_estimator(
+        &self,
+        estimate: Option<bitrouter_ai::tenancy::usage_evidence::Estimate>,
+    ) -> Result<(), Error> {
+        if let Some(value) = &estimate {
+            value.validate().map_err(|_| Error::Conflict)?;
+        }
+        let mut state = self.lock()?;
+        if state.closed {
+            return Err(Error::Closed);
+        }
+        if state.usage_evidence.estimator_seen && state.usage_evidence.estimate != estimate {
+            return Err(Error::Conflict);
+        }
+        state.usage_evidence.estimator_seen = true;
+        state.usage_evidence.estimate = estimate;
+        Ok(())
+    }
+
+    #[cfg(any(test, all(feature = "core", feature = "harness")))]
+    fn link_child(&self, child: &Self) -> Result<(), Error> {
+        if self.owner.installation != child.owner.installation
+            || self.owner.execution == child.owner.execution
+        {
+            return Err(Error::Binding);
+        }
+        // Stable lock order prevents inverse-parent calls from deadlocking.
+        let (mut parent_state, mut child_state) = if self.owner.execution < child.owner.execution {
+            (self.lock()?, child.lock()?)
+        } else {
+            let child_state = child.lock()?;
+            (self.lock()?, child_state)
+        };
+        if parent_state.closed
+            || child_state.closed
+            || child_state.armed != 0
+            || child_state.slots.iter().any(Option::is_some)
+            || child_state.usage_evidence.parent.is_some()
+            || !child_state.usage_evidence.children.is_empty()
+        {
+            return Err(Error::Phase);
+        }
+        if parent_state.usage_evidence.children.len() >= 64 {
+            return Err(Error::Capacity);
+        }
+        if parent_state.usage_evidence.parent.as_ref() == Some(&child.owner.execution)
+            || parent_state
+                .usage_evidence
+                .children
+                .contains(&child.owner.execution)
+        {
+            return Err(Error::Conflict);
+        }
+        parent_state
+            .usage_evidence
+            .children
+            .push(child.owner.execution.clone());
+        child_state.usage_evidence.parent = Some(self.owner.execution.clone());
+        Ok(())
+    }
+}
+
+/// Link only the actual admitted parent and child, before the child starts work.
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(crate) fn link_owned_child(
+    parent: &TenantExecution,
+    child: &TenantExecution,
+) -> Result<(), bitrouter_ai::tenancy::operation::ErrorCode> {
+    if parent.storage_identity() != child.storage_identity() {
+        return Err(bitrouter_ai::tenancy::operation::ErrorCode::Forbidden);
+    }
+    parent
+        .journal()?
+        .link_child(child.journal()?)
+        .map_err(super::journal_error)
 }

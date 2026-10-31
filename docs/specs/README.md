@@ -10,6 +10,8 @@ conformance requirements. Registry v1 is the first protocol maintained here.
 | Protocol | Status | Specification | Conformance |
 | --- | --- | --- | --- |
 | Registry v1 | Beta, `1.0.0-beta.6`; wire version `1` | [Registry v1](registry-v1/README.md) | [Required behavior](registry-v1/conformance.md) |
+| Resource provisioning v1 | Draft, wire format `1` | [Resource provisioning](resource-provisioning-v1/README.md) | [Required behavior](resource-provisioning-v1/conformance.md) |
+| Execution usage evidence v1 | Draft, wire schema `1` | [Usage evidence](usage-evidence-v1/README.md) | [Required behavior](usage-evidence-v1/conformance.md) |
 
 Beta describes the maturity of the contract. It does not assert that a particular
 release implements it. Stable protocols must keep their compatibility promises;

@@ -136,7 +136,8 @@ impl Authority {
             principal: self.identity.principal.clone(),
             credential: self.identity.credential.clone(),
             binding: self.identity.binding.clone(),
-            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+            deadline: self.service.submission_deadline(),
+            cancelled: tokio_util::sync::CancellationToken::new(),
             session_closed: None,
             block: None,
         }

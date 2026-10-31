@@ -1553,8 +1553,15 @@ pub(crate) async fn handle_tenant(
         let streamed = input
             .generation_prompt()
             .is_some_and(|prompt| prompt.stream);
-        let prepared =
-            prepare_http_response(pipeline.clone(), req, inbound, input, request_id).await;
+        let prepared = tokio::select! {
+            biased;
+            () = receipt.cancelled.cancelled() => return,
+            () = sender.closed() => {
+                receipt.cancel();
+                return;
+            }
+            prepared = prepare_http_response(pipeline.clone(), req, inbound, input, request_id) => prepared,
+        };
         let PreparedHttpResponse {
             response,
             mut delivery,

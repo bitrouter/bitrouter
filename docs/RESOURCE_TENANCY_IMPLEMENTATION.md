@@ -217,8 +217,10 @@ grants are checked after queue/storage waits and immediately before every actual
 provider send. Each send binds the exact retained candidate and authenticated
 method, URL, headers and body, with a new attempt identity and an eight-attempt
 ceiling. Static credentials resolve through qualified immutable slots. Repeated
-correlation IDs never deduplicate inference. The submission deadline covers body
-ingress and narrows each provider request's remaining time budget.
+correlation IDs never deduplicate inference. The bounded submission deadline
+covers body ingress and admission. An optional execution total starts after
+admission and narrows provider requests; it is disabled by default. Finite read
+and output-idle limits protect reservations independently of that total.
 
 Atomic tenant/instance admission bounds active and queued executions. Its lease
 survives non-streaming disconnects, stream preparation, prepared-result handoff,
@@ -315,8 +317,8 @@ selector/operation's retained approvals. Persisted compiler-v1 bytes and HTTP
 selection are unchanged. Native derivation has separate cumulative work and
 candidate limits; an unsupported native view does not invalidate its HTTP view.
 
-Embedding callbacks run inside tracked execution with the request deadline and
-bounded outcome cleanup. Returned context alternatives share a 16 MiB serialized
+Embedding callbacks run inside tracked execution with execution cancellation,
+the optional total deadline and bounded outcome cleanup. Returned context alternatives share a 16 MiB serialized
 input budget and a 32-view limit before the shared planner copies them. Request
 queueing cannot extend the submission deadline. Synchronous embedding callbacks
 remain trusted process code and must not block. Owned input counting, provider
@@ -696,7 +698,9 @@ inference.
 
 Protected receipt reads recheck current authority after waits and validate the
 stored owner and integrity. Ingress is bounded by 128 concurrent uploads, 64 MiB
-reserved bytes, 16 MiB per request and a fixed 60-second deadline. Completion
+reserved bytes, 16 MiB per request and a configurable submission deadline
+(60 seconds by default). Admitted executions have no total deadline by default;
+finite stream-idle and cleanup bounds remain independent. Completion
 reservations, disk-space thresholds and unknown-outcome limits are detailed in
 [the receipt implementation profile](RESOURCE_TENANCY_RECEIPTS.md).
 

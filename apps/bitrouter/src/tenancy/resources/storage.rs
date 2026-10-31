@@ -79,6 +79,22 @@ pub(super) async fn retain(
     db: &impl ConnectionTrait,
     artifact: &Artifact,
 ) -> Result<()> {
+    let record = seal(resources, artifact)?;
+    if let Some(existing) = configuration_store::resource(db, &artifact.reference).await? {
+        let retained = authenticate(resources, existing.clone())?;
+        ensure!(
+            existing.content_digest == record.content_digest
+                && bounded_bytes(&retained, MAX_ARTIFACT_BYTES)?
+                    == bounded_bytes(artifact, MAX_ARTIFACT_BYTES)?,
+            "immutable resource revision conflicts"
+        );
+        return Ok(());
+    }
+    configuration_store::insert_resource(db, &record).await
+}
+
+/// Prepare ciphertext before opening the authority transaction. No store writes.
+pub(super) fn seal(resources: &Resources, artifact: &Artifact) -> Result<StoredResource> {
     let key = resources.key.as_ref().context("resource key unavailable")?;
     let bytes = bounded_bytes(artifact, MAX_ARTIFACT_BYTES)?;
     let dependencies = artifact.definition.dependencies();
@@ -108,31 +124,17 @@ pub(super) async fn retain(
         "immutable-definition",
         &fingerprint_input,
     )?;
-    if let Some(existing) = configuration_store::resource(db, &artifact.reference).await? {
-        let retained = authenticate(resources, existing.clone())?;
-        ensure!(
-            existing.content_digest.as_str() == fingerprint
-                && bounded_bytes(&retained, MAX_ARTIFACT_BYTES)? == bytes,
-            "immutable resource revision conflicts"
-        );
-        // Retain the original random nonce, ciphertext and creation time.
-        return Ok(());
-    }
     let sealed = key.seal_bound(purpose, &binding, &bytes)?;
-    configuration_store::insert_resource(
-        db,
-        &StoredResource {
-            reference: artifact.reference.clone(),
-            compiler_version: version.into(),
-            payload: serde_json::to_value(sealed)?,
-            dependencies: serde_json::to_value(dependencies)?,
-            content_digest: fingerprint.try_into()?,
-            created_at: Timestamp::try_from(
-                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            )?,
-        },
-    )
-    .await
+    Ok(StoredResource {
+        reference: artifact.reference.clone(),
+        compiler_version: version.into(),
+        payload: serde_json::to_value(sealed)?,
+        dependencies: serde_json::to_value(dependencies)?,
+        content_digest: fingerprint.try_into()?,
+        created_at: Timestamp::try_from(
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        )?,
+    })
 }
 
 pub(super) fn authenticate(resources: &Resources, record: StoredResource) -> Result<Artifact> {

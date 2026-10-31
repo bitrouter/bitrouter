@@ -273,6 +273,10 @@ fn route_data(
     content_bytes: &mut usize,
     native_budget: &mut native_v1::Budget<'_>,
 ) -> Result<RouteData> {
+    // Derive runtime-only limits/ordering from authenticated source. Keeping
+    // these out of the exact target codec preserves compiler-v1 ciphertext.
+    let runtime_config = native_budget.block_config(&source.routing)?;
+    let root_preferences = runtime_config.resolve_router(&route.selector)?.prefs;
     let policy = match (&route.policy, &route.policy_name) {
         (Some(reference), Some(name)) => {
             let policy = policies
@@ -326,6 +330,10 @@ fn route_data(
             } else {
                 let index = candidates.len();
                 candidates.push(Candidate {
+                    routing: crate::tenancy::routing::Metadata::from_config(
+                        &runtime_config,
+                        &target,
+                    ),
                     target,
                     projection,
                     credential: approved.credential,
@@ -347,7 +355,10 @@ fn route_data(
             );
             indices.push(index);
         }
+        let mut preferences = runtime_config.resolve_router(&chain.selector)?.prefs;
+        crate::config::routing_table::merge_prefs(&mut preferences, &root_preferences);
         chains.push(Chain {
+            sort: preferences.sort,
             selector: chain.selector,
             inbound: chain.inbound,
             candidates: indices,

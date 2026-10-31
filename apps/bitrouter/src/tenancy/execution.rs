@@ -42,6 +42,7 @@ pub(super) mod cached;
 pub(crate) mod choice;
 mod continuation;
 mod count;
+pub(crate) mod deadline;
 #[cfg(all(feature = "core", feature = "harness"))]
 mod experiment;
 #[cfg(all(feature = "core", feature = "harness"))]
@@ -66,7 +67,8 @@ pub(crate) struct Submission {
     principal: PrincipalId,
     credential: CredentialId,
     binding: DispatchBinding,
-    deadline: tokio::time::Instant,
+    deadline: deadline::Deadline,
+    cancelled: tokio_util::sync::CancellationToken,
     #[cfg(all(feature = "core", feature = "harness"))]
     session_closed: Option<Arc<AtomicBool>>,
     #[cfg(all(feature = "core", feature = "harness"))]
@@ -79,11 +81,15 @@ impl Submission {
         mut self,
         deadline: tokio::time::Instant,
     ) -> Self {
-        self.deadline = self.deadline.min(deadline);
+        self.deadline = deadline::Deadline::Execution(Some(self.deadline.min(deadline)));
         self
     }
     pub(super) fn deadline(&self) -> tokio::time::Instant {
+        // Ingress only accepts a bounded submission. Accidentally recycling an
+        // unlimited admitted execution into ingress must fail closed.
         self.deadline
+            .instant()
+            .unwrap_or_else(tokio::time::Instant::now)
     }
 }
 
@@ -120,6 +126,12 @@ pub(crate) struct OwnedCredential {
 }
 
 impl Service {
+    fn submission_deadline(&self) -> deadline::Deadline {
+        deadline::Deadline::Submission(deadline::after(std::time::Duration::from_secs(
+            self.execution_settings.submission_timeout_secs,
+        )))
+    }
+
     pub(super) fn dispatch_ready(&self, state: &Snapshot) -> bool {
         // Production construction consumes the exclusive owned database and
         // completes bootstrap before publication. Unix eligibility still requires
@@ -169,7 +181,7 @@ impl Service {
             return Err(ErrorCode::AuthorityUnavailable);
         }
         let state = guard.as_ref();
-        if submission.deadline <= tokio::time::Instant::now() {
+        if submission.deadline.expired() || submission.cancelled.is_cancelled() {
             return Err(ErrorCode::CapacityExceeded);
         }
         if !self.dispatch_ready(state)
@@ -227,7 +239,8 @@ impl Service {
             principal: credential.principal.clone(),
             credential: credential.id.clone(),
             binding,
-            deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(60),
+            deadline: self.submission_deadline(),
+            cancelled: tokio_util::sync::CancellationToken::new(),
             #[cfg(all(feature = "core", feature = "harness"))]
             session_closed: None,
             #[cfg(all(feature = "core", feature = "harness"))]
@@ -309,7 +322,7 @@ impl Service {
         self.admission.receipt_probe(free);
         let lease = self
             .admission
-            .acquire_until(&submission.tenant, &limits, submission.deadline)
+            .acquire_until(&submission.tenant, &limits, submission.deadline())
             .await
             .map_err(Failure::from)?;
         self.finish_admission(
@@ -325,7 +338,7 @@ impl Service {
 
     fn finish_admission(
         &self,
-        submission: Submission,
+        mut submission: Submission,
         route: Arc<RetainedRoute>,
         lease: super::admission::Lease,
         #[cfg(feature = "core")] learning: bitrouter_ai::tenancy::configuration::Learning,
@@ -337,6 +350,9 @@ impl Service {
             authorize_route(state, &submission, route.dependencies())
         })
         .map_err(Failure::from)?;
+        submission.deadline = submission
+            .deadline
+            .admit(self.execution_settings.execution_timeout_secs);
         let id = uuid::Uuid::new_v4()
             .to_string()
             .try_into()
@@ -393,6 +409,8 @@ impl Service {
             self.cleanup.clone(),
             (
                 execution.submission.deadline,
+                execution.submission.cancelled.clone(),
+                &self.execution_settings,
                 self.receipt_observer
                     .timing(&execution.submission.binding.correlation_id),
             ),
@@ -426,10 +444,23 @@ impl TenantExecution {
         &self,
         outcome: bitrouter_ai::tenancy::execution::Outcome,
     ) -> crate::gateway::error::Result<()> {
-        self.receipt_owner()?.finish(outcome).await.map_err(|code| {
-            self.reject(code);
-            crate::gateway::error::BitrouterError::UpstreamUnavailable
-        })
+        self.receipt_owner()?
+            .finish(outcome)
+            .await
+            .map_err(|code| {
+                self.reject(code);
+                crate::gateway::error::BitrouterError::UpstreamUnavailable
+            })?;
+        // Persisted provider work belongs to the admitted execution. Revoking
+        // or rotating its caller blocks another send, not this completion.
+        // The receipt await may still cross the execution's original lifetime
+        // ceiling; continuation publication has its own tenant-state fence.
+        if outcome == bitrouter_ai::tenancy::execution::Outcome::Completed
+            && (self.submission.deadline.expired() || self.submission.cancelled.is_cancelled())
+        {
+            return Err(self.reject(ErrorCode::CapacityExceeded));
+        }
+        Ok(())
     }
     pub(crate) fn record_native_source(
         &self,
@@ -544,10 +575,11 @@ impl TenantExecution {
         &self.id
     }
 
-    pub(crate) fn remaining(&self) -> std::time::Duration {
+    pub(crate) fn remaining(&self) -> Option<std::time::Duration> {
         self.submission
             .deadline
-            .saturating_duration_since(tokio::time::Instant::now())
+            .instant()
+            .map(|deadline| deadline.saturating_duration_since(tokio::time::Instant::now()))
     }
 
     pub(crate) fn caller(&self) -> CallerContext {
@@ -559,6 +591,24 @@ impl TenantExecution {
 
     pub(crate) fn route(&self) -> &Arc<RetainedRoute> {
         &self.route
+    }
+
+    /// Paid completion keeps its admitted caller authority. Output still obeys
+    /// the execution lifetime and explicit revocation of its resource graph.
+    pub(crate) fn check_delivery(&self) -> Result<(), ErrorCode> {
+        if self.submission.deadline.expired() || self.submission.cancelled.is_cancelled() {
+            return Err(ErrorCode::CapacityExceeded);
+        }
+        let state = self.service.current().map_err(|failure| failure.0.code)?;
+        if self
+            .route
+            .dependencies()
+            .iter()
+            .any(|reference| state.resource_lifecycle.revoked(reference))
+        {
+            return Err(ErrorCode::Forbidden);
+        }
+        Ok(())
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), ErrorCode> {
@@ -722,6 +772,9 @@ fn authorize_route(
         return Err(ErrorCode::Forbidden);
     }
     for reference in dependencies {
+        if state.resource_lifecycle.revoked(reference) {
+            return Err(ErrorCode::Forbidden);
+        }
         if reference.owner_kind == OwnerKind::Tenant
             && reference.owner_id.as_str() != submission.tenant.as_str()
         {

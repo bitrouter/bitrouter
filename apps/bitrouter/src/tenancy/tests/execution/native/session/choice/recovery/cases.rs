@@ -163,7 +163,15 @@ pub(super) async fn campaign(root: &Path, mode: &str) -> Result<()> {
             && parent_receipt.attempts.is_empty() && parent_receipt.correlation_id.as_str()=="same-correlation"
             && parent_receipt.execution_revision==bound.revision);
         let child_receipt=receipt(&bound,child).await?;
+        let parent_evidence = usage_evidence(&bound, parent).await?;
+        ensure!(parent_evidence.capture == bitrouter_ai::tenancy::usage_evidence::Capture::Unavailable
+            && parent_evidence.frames.is_empty() && parent_evidence.attempts.is_empty()
+            && parent_evidence.parent_execution_id.is_none() && parent_evidence.child_execution_ids.is_empty(),
+            "stopped owner's lost observations must not be advertised as historical or reconstructed");
+        let child_evidence = usage_evidence(&bound, child).await?;
         if mode=="completed-child" {
+            ensure!(child_evidence.capture == bitrouter_ai::tenancy::usage_evidence::Capture::Captured
+                && !child_evidence.frames.is_empty() && child_evidence.parent_execution_id.as_ref().is_some_and(|id|id.as_str()==parent));
             let expected:(String,String)=serde_json::from_slice(&std::fs::read(root.join("receipt-before.json"))?)?;
             let actual=bound.fixture.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
                 "SELECT receipt_json,disposition_json FROM tenancy_execution_receipts WHERE installation_id=? AND tenant_id=? AND execution_id=?",
@@ -171,6 +179,8 @@ pub(super) async fn campaign(root: &Path, mode: &str) -> Result<()> {
             ensure!((actual.try_get::<String>("","receipt_json")?,actual.try_get::<String>("","disposition_json")?)==expected);
             ensure!(child_receipt.attempts.len()==1 && child_receipt.outcome==Outcome::Completed);
         } else {
+            ensure!(child_evidence.capture == bitrouter_ai::tenancy::usage_evidence::Capture::Unavailable
+                && child_evidence.frames.is_empty() && child_evidence.attempts.is_empty());
             ensure!(child_receipt.state==bitrouter_ai::tenancy::execution::ReceiptState::Unknown
                 && child_receipt.attempts.is_empty() && child_receipt.usage.provenance==Provenance::Unknown
                 && !child_receipt.usage.complete && child_receipt.usage.input_tokens.is_none()

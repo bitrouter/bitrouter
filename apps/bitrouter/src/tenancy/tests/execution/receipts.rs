@@ -38,6 +38,7 @@ mod ingress_socket;
 #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
 pub(in crate::tenancy::tests::execution) mod latency;
 mod lifecycle;
+mod lifetime;
 mod reads;
 mod wire;
 

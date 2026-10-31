@@ -75,7 +75,7 @@ async fn unpolled_sse_body_does_not_own_deadline_or_capacity_and_retains_at_most
 }
 
 #[tokio::test]
-async fn aborted_http_waiter_before_provider_headers_is_finalized_by_autonomous_request_deadline()
+async fn aborted_http_waiter_before_provider_headers_cancels_and_retains_unknown_evidence()
 -> Result<()> {
     let gate = Arc::new(Semaphore::new(0));
     let mut harness = Harness::with_reply(
@@ -96,16 +96,8 @@ async fn aborted_http_waiter_before_provider_headers_is_finalized_by_autonomous_
         .context("provider accepted complete POST")?;
     caller.abort();
     ensure!(caller.await.is_err_and(|error| error.is_cancelled()));
-    ensure!(
-        tokio::time::timeout(
-            Duration::from_millis(20),
-            harness.fixture.service.admission.wait_drained()
-        )
-        .await
-        .is_err()
-    );
     // The provider remains blocked. No client timeout or provider release can
-    // explain the observed drain; only the owned whole-request watchdog can.
+    // explain the observed drain; the closed handoff cancels the owned request.
     tokio::time::timeout(
         Duration::from_secs(4),
         harness.fixture.service.admission.wait_drained(),

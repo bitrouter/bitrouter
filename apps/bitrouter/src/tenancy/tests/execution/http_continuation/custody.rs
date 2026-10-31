@@ -387,7 +387,12 @@ async fn caller_revoke_while_provider_is_awaited_finishes_only_admitted_work() -
 async fn lookup_deadline_during_acknowledged_rollback_does_not_fence_service() -> Result<()> {
     use crate::tenancy::transaction::Phase;
     let server = Server::start().await?;
-    let ready = ready(&server).await?;
+    let mut ready = ready(&server).await?;
+    ready
+        .fixture
+        .service
+        .execution_settings
+        .execution_timeout_secs = Some(60);
     ready
         .fixture
         .service
@@ -402,6 +407,7 @@ async fn lookup_deadline_during_acknowledged_rollback_does_not_fence_service() -
     tokio::time::advance(
         execution
             .remaining()
+            .context("configured execution total")?
             .saturating_sub(crate::tenancy::transaction::CLEANUP_TIMEOUT / 2),
     )
     .await;
@@ -422,7 +428,13 @@ async fn lookup_deadline_during_acknowledged_rollback_does_not_fence_service() -
     }).await;
     if entered.as_ref().is_ok_and(|result| result.is_ok()) {
         tokio::time::pause();
-        tokio::time::advance(execution.remaining() + Duration::from_millis(1)).await;
+        tokio::time::advance(
+            execution
+                .remaining()
+                .context("configured execution total")?
+                + Duration::from_millis(1),
+        )
+        .await;
         ready.fixture.service.cleanup.release_gate();
         tokio::time::resume();
     } else {

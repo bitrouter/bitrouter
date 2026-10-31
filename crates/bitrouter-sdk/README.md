@@ -56,7 +56,7 @@ BITROUTER_URL=http://127.0.0.1:4356 cargo run -p bitrouter-sdk --example axum_ga
 ```
 
 It listens on loopback port 4357; deployment identity, middleware and business
-logic remain application-owned. Public reply methods do not add tenant dispatch
+logic remain application-owned. Unscoped public reply methods do not add tenant dispatch
 authority or substitute for a strict execution/receipt API.
 
 Use `with_options` and `TransportOptions` to configure connect/read/total timeouts
@@ -212,6 +212,37 @@ strict dispatch metadata only when all required guarantees are advertised;
 binding still requires a live server-side check. An older gateway's missing
 endpoint is not evidence of support. These client contracts do not themselves
 enable or advertise tenancy endpoints in a service.
+
+`resource_capabilities`, `put_resource`, `resource_status` and `revoke_resource`
+provide the separately versioned resource contract. Provisioning requires an
+explicit key namespace, operation ID and managed-head CAS. Credentials are
+write-only; status exposes revision and revocation metadata. Rotating a slot
+creates a new revision and leaves existing configurations pinned to their old
+dependency. Activate a configuration containing the new revision explicitly;
+revoke the old revision when its later use must be fenced. A lost write response
+uses the same `TenancyUnknown` and operation lookup rules above.
+
+For inference, `GatewayClient::tenant(bearer, &binding)` uses a per-call tenant
+credential and all seven validated dispatch-binding headers on the client's
+existing connection pool. It does not mutate the client's default credential.
+The scoped helper supplies `chat_reply`, `messages_reply`, `responses_reply`
+and `decisions`; JSON and SSE use the same AI protocol types as public calls.
+Its reply metadata retains the admitted execution ID separately from caller
+correlation. A response error with trustworthy `not_started` evidence is distinct
+from an unknown dispatch outcome. Dropping a stream or losing a response never
+authorizes automatic replay. Query the stored execution with current authority
+and retain the execution ID in the consumer's own reconciliation records.
+
+`usage_evidence_capabilities` discovers the independent evidence contract, and
+`usage_evidence(installation, tenant, execution)` reads its immutable document
+under receipt-read authority. Native numeric frames retain order; repeated
+snapshots are not additive. Inspect truncation, invalid/unsupported counters,
+terminal evidence and estimator coverage before interpreting quantities.
+Historical `not_captured` is distinct from installed capture with no reported
+counters and from `unavailable` observations lost during recovery. The client
+enforces the 256 KiB evidence limit on original response bytes, validates scope,
+and never reconstructs missing
+usage, combines child quantities or makes settlement decisions.
 
 ```rust,no_run
 use bitrouter_ai::control::action::Action;

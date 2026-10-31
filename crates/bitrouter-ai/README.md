@@ -60,6 +60,19 @@ sampling and OTLP export also belong to the application. This crate starts no
 runtime, opens no listeners or network clients, and depends on neither the
 service nor the SDK. The optional Axum binding consumes host-supplied bodies.
 
+`tenancy::resources` defines write-only resource provisioning, explicit revision
+CAS, revocation and nonsecret status. Embedded routing and policy documents are
+data; the service compiles and authorizes them. Credentials have redacted Debug
+output. Validation does not grant network access, resolve secrets or start a
+resource lifecycle. These contracts leave the existing strict tenancy discovery
+and execution receipt schemas unchanged.
+
+`tenancy::usage_evidence` contains the separate versioned technical evidence
+document. Ordered numeric observations preserve native units, missing versus zero,
+invalid fields, truncation and estimator provenance. Owned children have separate
+execution identities and quantities. The data does not define prices or payable
+amounts; receipt authority and durable consistency remain service responsibilities.
+
 ## Features
 
 - Default: serde, serde_json and thiserror only.

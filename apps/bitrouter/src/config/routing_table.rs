@@ -522,7 +522,10 @@ fn resolve_virtual_model(
     // that share a provider id.
     if virtual_model.strategy == VirtualModelStrategy::Cascade {
         match prefs.sort {
-            SortOrder::Alphabetical | SortOrder::Latency | SortOrder::Cost => {
+            SortOrder::Alphabetical
+            | SortOrder::Latency
+            | SortOrder::Cost
+            | SortOrder::Throughput => {
                 endpoints.sort_by(|a, b| a.0.cmp(&b.0));
             }
         }
@@ -666,7 +669,7 @@ pub(crate) fn resolve_clean_route_chain(
         matches!(inbound, Some(p) if targets.first().is_some_and(|t| &t.api_protocol == p))
     };
     match prefs.sort {
-        SortOrder::Alphabetical | SortOrder::Latency | SortOrder::Cost => {
+        SortOrder::Alphabetical | SortOrder::Latency | SortOrder::Cost | SortOrder::Throughput => {
             chain.sort_by(|a, b| {
                 a.0.cmp(&b.0) // priority rank ascending (lower = preferred)
                     .then_with(|| a.1.cmp(&b.1)) // provider id alphabetical

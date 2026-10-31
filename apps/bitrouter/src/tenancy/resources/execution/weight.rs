@@ -472,6 +472,7 @@ impl Weight {
             selector,
             inbound,
             candidates,
+            sort: _,
         } in chains
         {
             self.string(selector)?;
@@ -498,11 +499,13 @@ impl Weight {
             target,
             projection,
             credential,
+            routing,
         } in candidates
         {
             self.target(target)?;
             self.vector(projection)?;
             self.reference(credential)?;
+            self.optional_string(&routing.provider_bucket)?;
         }
         Ok(())
     }

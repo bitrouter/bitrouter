@@ -184,6 +184,12 @@ impl Worker {
         let digest = command
             .digest(&principal)
             .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+        // A write-only credential must not leave a public offline guessing hash
+        // in operation storage. Bind resource command digests to the wrapping key.
+        let digest = self
+            .resources
+            .management_digest(command, &digest)
+            .map_err(Failure::from)?;
         let previous = store::operation(
             &self.db,
             &old.installation,

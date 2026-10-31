@@ -53,9 +53,43 @@ and reads while preserving completion of previously admitted obligations.
 ## Limits and storage
 
 Ingress allows at most 128 uploads and 64 MiB of reserved body bytes, with a
-16 MiB ceiling per request and an absolute 60-second submission deadline. Bodies
+16 MiB ceiling per request and an absolute submission deadline (60 seconds by
+default, configured with `tenancy.submission_timeout_secs`). Bodies
 without Content-Length reserve the entire per-request ceiling. These reservation
 limits are not a claim about total process RSS.
+
+Submission bounds upload, queueing and initial admission. After admission,
+`tenancy.execution_timeout_secs` optionally bounds the whole execution; omission
+or `null` means no total deadline. A configured total starts when capacity is
+admitted, and Choice children inherit their parent's remaining ceiling. A new
+native host/session operation gets a fresh submission budget, never renewed
+authority for an existing execution. Unattached admissions still expire within
+the submission budget. Preparation callbacks can own paid provider work and
+therefore follow execution cancellation and its optional total. Per-stream-part
+callbacks use the idle budget; storage operations retain their shorter bounds.
+
+`tenancy.stream_idle_timeout_secs` defaults to 120 seconds. It independently
+bounds provider reads and a blocked output handoff; each new read or handoff gets
+that idle window. Thus active streams can continue beyond 60 seconds, while a
+silent upstream or an unread output slot cannot indefinitely hold capacity.
+Dropping the preparation waiter cancels its owned provider call, including before
+response headers. Already admitted settlement work remains retained until its
+actual producers and durable receipt settle. No timer retries provider work.
+These are startup-only host settings, not tenant-controlled public contracts.
+All configured durations must be positive integer seconds, at most 31,536,000
+(one year); zero, overflow and values outside that bound are rejected.
+
+Terminal receipt settlement has a fixed 30-second budget. Cancellation and
+shutdown stop new sends, revoke output slots and start a separate, single
+30-second producer-join budget, capped by the configured total plus its cleanup
+grace. An unread response can outlive settled receipt work without spending its
+later cancellation budget in advance. Neither budget renews a transaction or an
+already running callback. Unknown provider effects remain unknown, and
+successful delivery still requires an acknowledged durable receipt. If actual
+producers or storage cannot be joined, authority is fenced and owners are
+retained. A later drain may confirm those joins and release capacity against the
+same expired deadline; it cannot clear the failure fence, replay work, or infer
+cleanup from elapsed time.
 
 Each admitted execution reserves 4 MiB for its bounded receipt and initial
 storage allowance. Strict admission stops below 768 MiB of free space or at the

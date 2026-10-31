@@ -69,8 +69,8 @@ impl CoreSession {
                 "owned model binding missing",
             )
         })?;
-        let cleanup_deadline = step
-            .cleanup_deadline()
+        let cleanup_owner = step
+            .cleanup_owner()
             .map_err(crate::tenancy::execution::session::core_error)?;
         let tasks = step
             .tasks()
@@ -100,7 +100,7 @@ impl CoreSession {
         // it needs no new external Source and remains in this same drain.
         tasks.spawn_settlement(async move {
             let mut reply = Some(reply);
-            if tokio::time::Instant::now() >= cleanup_deadline {
+            if cleanup_owner.cancelled.is_cancelled() || cleanup_owner.deadline.expired() {
                 #[cfg(test)]
                 eprintln!("headroom Choice boundary: stage=BeforeFirstPoll, reason=CleanupDeadline");
                 respond(
@@ -118,7 +118,7 @@ impl CoreSession {
                 tokio::pin!(work);
                 tokio::select! {
                     biased;
-                    () = tokio::time::sleep_until(cleanup_deadline) => {
+                    () = cleanup_owner.cleanup_elapsed() => {
                         #[cfg(test)]
                         eprintln!("headroom Choice boundary: stage=Running, reason=CleanupDeadline");
                         quarantine(&owner, authority.as_deref());

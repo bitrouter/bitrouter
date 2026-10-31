@@ -144,7 +144,9 @@ impl Service {
         // capacity classification in either ordering. Earlier authority failures
         // remain sticky; receipt storage failure still has priority in failure().
         if outcome.is_err()
-            && execution.remaining().is_zero()
+            && execution
+                .remaining()
+                .is_some_and(|remaining| remaining.is_zero())
             && execution.receipt_owner()?.cancelled.is_cancelled()
         {
             execution.reject(ErrorCode::CapacityExceeded);

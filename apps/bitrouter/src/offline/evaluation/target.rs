@@ -1,6 +1,7 @@
 //! Inspect already provisioned target facts; never initialize or grant authority.
 use super::*;
 use crate::core::eval::store::migration::Assignment;
+use anyhow::Context;
 use bitrouter_ai::tenancy::{
     authority::{GrantScope, TenantRole, TenantState},
     identity::{PrincipalId, TenantId},
@@ -70,13 +71,22 @@ pub(super) async fn validate(
                 .is_none(),
         "target has runtime ownership history"
     );
+    use sea_orm_migration::MigratorTrait;
+    let expected = crate::db::migration::Migrator::migrations()
+        .into_iter()
+        .map(|migration| migration.name().to_owned())
+        .collect::<BTreeSet<_>>();
+    let ledger = inventory
+        .ledger
+        .as_ref()
+        .context("target migration ledger missing")?;
+    let actual = ledger
+        .iter()
+        .map(|entry| entry.version.clone())
+        .collect::<BTreeSet<_>>();
     ensure!(
-        inventory
-            .ledger
-            .as_ref()
-            .and_then(|m| m.last())
-            .is_some_and(|m| m.version == "m20240101_000038_eval_import_provenance"),
-        "target migration038 required"
+        actual.len() == ledger.len() && actual == expected,
+        "current target migration ledger required"
     );
     let row=sea_orm::sqlx::query("SELECT singleton,schema_version,operation_ids,safety_operation_ids,saturated,authority_revision FROM tenancy_installation LIMIT 2").fetch_all(&mut *db).await?;
     ensure!(row.len() == 1, "target identity cardinality");

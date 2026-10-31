@@ -480,8 +480,11 @@ Development measurements cannot establish production release performance.
 Configured v1 limits: 32 tenants, 4 principals and 2 live credentials per principal
 (256 live credentials, including audit readers; rotation replaces one slot);
 16 active executions/tenant, 128/instance, 32 queued/tenant,
-256/instance; 2 learning jobs/tenant, 8/instance. Queue wait 5 s; request 60 s;
-stream/cleanup drain 30 s; management/validation 5 s. Maximum 8 provider attempts,
+256/instance; 2 learning jobs/tenant, 8/instance. Queue wait 5 s; submission 60 s
+by default; execution total optional and disabled by default; stream idle 120 s
+by default; cleanup drain 30 s; management/validation 5 s. Host lifetime settings
+and reservation policy are described in [owned receipts](RESOURCE_TENANCY_RECEIPTS.md).
+Maximum 8 provider attempts,
 256 total route-plus-policy references (255 routes when policy is present) and
 1 MiB configuration; 1 MiB terminal receipt including all attempts, at most 8 KiB numeric native-usage evidence/attempt. Exceeding an
 observation bound yields incomplete bounded evidence, never truncates silently.

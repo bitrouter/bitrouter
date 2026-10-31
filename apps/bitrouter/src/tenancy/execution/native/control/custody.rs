@@ -1,7 +1,7 @@
 //! A callback's bounded reply is independent of its retained checkpoint work.
 use super::*;
 use futures::FutureExt;
-use std::{panic::AssertUnwindSafe, time::Duration};
+use std::panic::AssertUnwindSafe;
 use tokio::{sync::oneshot, time::Instant};
 
 fn admission(execution: &TenantExecution) -> Result<()> {
@@ -25,7 +25,7 @@ impl Bounded {
     {
         admission(&self.execution)?;
         let value = self
-            .retained(self.execution.submission.deadline, true, start)
+            .retained(self.execution.submission.deadline.instant(), true, start)
             .await?;
         admission(&self.execution)?;
         Ok(value)
@@ -42,14 +42,13 @@ impl Bounded {
         // Bound only the waiter. An already owed outcome must still finish if
         // this deadline has passed, authority is revoked, or the caller leaves.
         // This is the original callback deadline, not a renewed cleanup period.
-        let deadline = (Instant::now() + Duration::from_secs(30))
-            .min(self.execution.submission.deadline + Duration::from_secs(30));
-        self.retained(deadline, false, start).await
+        let deadline = self.execution.receipt_owner()?.cleanup_deadline();
+        self.retained(Some(deadline), false, start).await
     }
 
     async fn retained<T, F>(
         &self,
-        deadline: Instant,
+        deadline: Option<Instant>,
         admitting: bool,
         start: impl FnOnce(Arc<dyn NativeExecutionControl>) -> F + Send + 'static,
     ) -> Result<T>
@@ -109,11 +108,25 @@ impl Bounded {
         // callback remains in the pipeline's settlement set until it resolves.
         // A forcing/sealed owner discards it before polling and cannot report a
         // clean drain; a closed reply must never be interpreted as success.
-        self.until(deadline, async {
+        let receive = async {
             receiver
                 .await
                 .map_err(|_| self.execution.reject(ErrorCode::StorageUnavailable))?
-        })
-        .await
+        };
+        let waiting = async {
+            match deadline {
+                Some(deadline) => self.until(deadline, receive).await,
+                None => receive.await,
+            }
+        };
+        if admitting {
+            tokio::select! {
+                biased;
+                () = self.execution.submission.cancelled.cancelled() => Err(self.execution.reject(ErrorCode::CapacityExceeded)),
+                result = waiting => result,
+            }
+        } else {
+            waiting.await
+        }
     }
 }
