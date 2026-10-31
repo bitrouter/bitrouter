@@ -50,11 +50,24 @@ examples compile once with all features; their reduced-feature compatibility
 and the observation benchmark are checked by Distribution acceptance.
 Public-library checks retain their independent feature closures.
 
+One focused PR job also runs the gRPC-only telemetry delivery contract. The
+all-feature archive chooses HTTP at compile time and excludes this test, so
+this target requires a separate `--no-default-features --features otel-grpc`
+build. It verifies spans, metrics, authentication metadata and shutdown flushing
+against a local collector, with one test thread and no retries. The same action
+runs in Distribution acceptance's existing `otel-grpc` profile. Both paths
+require exactly one selected test and preserve JUnit and resource evidence.
+
 macOS runs Unix socket permissions, signal draining and terminal behavior.
 Windows runs named-pipe behavior and the platform-only file replacement,
-PowerShell cleanup, unsupported tenancy and installer contracts. Windows still
+PowerShell cleanup, unsupported tenancy and installer contracts. It also checks
+native update commands and executable names, copied CLI aliases, config identity,
+SQLite path normalization and atomic policy publication/rollback. Windows still
 needs the library harness to reach its private unit tests, but only the selected
-platform tests execute. Pure Keychain output parsing also runs on Linux.
+platform tests execute. The platform jobs require the complete selected inventory
+(16 macOS cases and 20 Windows cases) before running the same built executables,
+and upload the inventory and JUnit evidence. Pure Keychain output parsing also
+runs on Linux.
 
 An all-feature binary cannot exercise `cfg(not(feature = ...))` branches or
 prove that an absent feature produces no side effects. Those runtime contracts,
