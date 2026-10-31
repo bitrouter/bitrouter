@@ -801,15 +801,32 @@ No feed kind guesses its source URL.
 `api_base: https://openrouter.ai/api/v1`. It requires the exact full-list URL
 `https://openrouter.ai/api/v1/models?output_modalities=all`, explicit request
 authentication, `pagination: {kind: none}`, `writes: [models, metadata]`, and
-complete public inventory. It forbids response mapping and request query
+the complete public source listing. It forbids response mapping and request query
 overrides. The [official model-list contract](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)
 defines native `id` as the exact canonical vocabulary. Each observed ID must
 also occur in the independent fresh identity audit before its same-model binding
 is recorded. This privilege never extends to another provider or generic feed.
 
+Batch execution is outside the current publication scope. OpenRouter catalog IDs
+with an exact colon-delimited `batch` variant MUST NOT enter curated models or
+provider inventory, whether imported or manually maintained; neither may another
+provider reference such a canonical ID. Do not strip the suffix or substitute the
+base model. The complete identity response MUST still include these IDs for its
+full-list validation and audit evidence. The adapter excludes them before feed
+reconciliation and ledger binding creation; publishers reject any remaining
+batch catalog references. A different provider's unbound native ID is not
+classified by OpenRouter's naming convention. See the
+[upstream catalog-variant contract](https://openrouter.ai/docs/guides/routing/model-variants/overview).
+
 This adapter imports typed names/descriptions and, only for text output with
-text input, a `chat_completions` / `generation` interface with documented
-modalities, supported parameters, and context length. Other model types remain
+text input and an explicit `/api/v1/chat/completions` entry in the row's
+`endpoints`, a `chat_completions` / `generation` interface with documented
+modalities, supported parameters, and context length. Modality alone MUST NOT
+establish endpoint support. Absent/null endpoint evidence is unobserved and
+cannot alone erase prior owned interfaces. Explicit unsupported endpoint or
+modality evidence independently retracts only feed-owned interfaces, even when
+the other evidence is absent. Malformed known
+endpoint metadata fails the feed. Other model types remain
 native inventory with no executable interface until their codecs are registered.
 It does not infer executable decision/multimedia interfaces or tariff semantics
 from a model name, modality alone, or aggregate OpenRouter prices. Existing
