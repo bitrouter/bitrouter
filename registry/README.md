@@ -23,6 +23,9 @@ Trusted CI binds `OPENAI_REGISTRY_API_KEY`, `ANTHROPIC_REGISTRY_API_KEY`, and
 `BITROUTER_REGISTRY_API_KEY` to GitHub repository secrets with those exact names.
 They are independent listing credentials; local inference keys are not inherited.
 OpenRouter's public full-list endpoint uses explicit `auth: {kind: none}`.
+Its importer excludes `:batch` catalog variants in this release and creates chat
+interfaces only when the upstream model explicitly advertises the chat endpoint.
+The independent identity audit still reads the complete unfiltered listing.
 Missing required secrets fail the run, while an independently validated public
 feed can still produce a reviewable proposal after the global audit passes.
 The workflow uploads the exact public identity response and JSON report.

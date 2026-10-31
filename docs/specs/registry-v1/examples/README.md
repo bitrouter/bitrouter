@@ -18,7 +18,10 @@ its response fixture is synthetic and establishes no live OpenRouter validity.
   `identity_source` configuration. It explicitly requests
   `output_modalities=all`; omitting that query would default to text-only output.
 - [`openrouter-models.json`](openrouter-models.json) is the minimal full identity
-  response fixture, including text, decision, and image output. Every public
+  response fixture, including text, decision, image output, and an excluded batch
+  variant. The full audit retains that variant, but no registry offer or new
+  ledger binding imports it. Explicit endpoint evidence enables the chat rows.
+  Every public
   canonical ID appears in `data[].id`. One `canonical_slug` differs intentionally;
   substituting it, narrowing by output modality, or relying on ledger history
   fails the audit. `total_count` agrees with the complete list.

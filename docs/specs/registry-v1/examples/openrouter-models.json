@@ -4,19 +4,31 @@
       "canonical_slug": "example/chat-1-revision-a",
       "id": "example/chat-1",
       "architecture": {
+        "input_modalities": ["text"],
         "output_modalities": [
           "text"
         ]
-      }
+      },
+      "endpoints": ["/api/v1/chat/completions"]
     },
     {
       "canonical_slug": "example/chat-2",
       "id": "example/chat-2",
       "architecture": {
+        "input_modalities": ["text"],
         "output_modalities": [
           "text"
         ]
-      }
+      },
+      "endpoints": ["/api/v1/chat/completions"]
+    },
+    {
+      "id": "example/chat-2:batch",
+      "architecture": {
+        "input_modalities": ["text"],
+        "output_modalities": ["text"]
+      },
+      "endpoints": []
     },
     {
       "canonical_slug": "example/judge-1",
@@ -40,7 +52,7 @@
   "future_metadata": {
     "note": "Unknown optional response metadata is preserved; not an identity authority"
   },
-  "total_count": 4,
+  "total_count": 5,
   "links": {
     "next": null
   }

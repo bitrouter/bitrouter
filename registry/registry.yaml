@@ -1,14 +1,14 @@
 {
-  "version": 1,
-  "spec_revision": "1.0.0-beta.6",
-  "as_of": "2026-10-28T19:35:49Z",
+  "as_of": "2026-10-31T19:05:54.452734Z",
   "identity_source": {
     "kind": "openrouter",
     "request": {
-      "url": "https://openrouter.ai/api/v1/models?output_modalities=all",
       "auth": {
         "kind": "none"
-      }
+      },
+      "url": "https://openrouter.ai/api/v1/models?output_modalities=all"
     }
-  }
+  },
+  "spec_revision": "1.0.0-beta.6",
+  "version": 1
 }
