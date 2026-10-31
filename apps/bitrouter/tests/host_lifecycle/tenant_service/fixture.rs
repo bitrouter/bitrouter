@@ -117,10 +117,10 @@ impl Protocol {
             }
         }
     }
-    pub fn first_chat_chunk() -> String {
+    pub fn first_chat_chunk(usage: Value) -> String {
         format!(
             "data: {}\n\n",
-            json!({"id":"chatcmpl-provider","object":"chat.completion.chunk","created":0,"model":"model","choices":[{"index":0,"delta":{"role":"assistant","content":REPLY},"finish_reason":null}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}}})
+            json!({"id":"chatcmpl-provider","object":"chat.completion.chunk","created":0,"model":"model","choices":[{"index":0,"delta":{"role":"assistant","content":REPLY},"finish_reason":null}],"usage":usage})
         )
     }
     pub fn stream(self) -> Result<String> {
@@ -129,9 +129,14 @@ impl Protocol {
         // https://platform.openai.com/docs/api-reference/responses-streaming
         // https://platform.claude.com/docs/en/api/streaming
         if self == Self::Chat {
+            // Chat counters are snapshots, not cumulative Messages updates.
+            // Keep the first frame distinct by omitting optional details, then
+            // repeat the same complete snapshot without contradicting its counts.
             return Ok(format!(
                 "{}data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-                Self::first_chat_chunk(),
+                Self::first_chat_chunk(
+                    json!({"prompt_tokens":11,"completion_tokens":7,"total_tokens":18})
+                ),
                 json!({"id":"chatcmpl-provider","object":"chat.completion.chunk","created":0,"model":"model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":self.usage()}),
                 json!({"id":"chatcmpl-provider","object":"chat.completion.chunk","created":0,"model":"model","choices":[],"usage":self.usage()})
             ));
@@ -879,7 +884,7 @@ impl HeldStream {
                             return axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response();
                         }
                         let stream = futures::stream::once(async {
-                            Ok::<_, std::io::Error>(Protocol::first_chat_chunk())
+                            Ok::<_, std::io::Error>(Protocol::first_chat_chunk(json!({"prompt_tokens":5,"completion_tokens":1,"total_tokens":6,"prompt_tokens_details":{"cached_tokens":1,"cache_write_tokens":0},"completion_tokens_details":{"reasoning_tokens":0}})))
                         })
                         .chain(futures::stream::pending());
                         (

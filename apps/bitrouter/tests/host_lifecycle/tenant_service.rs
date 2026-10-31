@@ -107,7 +107,10 @@ async fn receipt(
     let messages = protocol == Protocol::Messages;
     ensure!(
         receipt.usage.input_tokens == Some(if messages { 16 } else { 11 })
-            && receipt.usage.output_tokens == Some(7)
+            && receipt.usage.output_tokens == Some(7),
+        "{protocol:?} streaming={streaming}: unexpected receipt input={:?}, output={:?}",
+        receipt.usage.input_tokens,
+        receipt.usage.output_tokens
     );
     ensure!(
         receipt.usage.cache_read_tokens == Some(3) && receipt.usage.cache_write_tokens == Some(2)
@@ -191,7 +194,10 @@ async fn evidence(
     let expected = match (protocol, streaming, terminal) {
         (Protocol::Chat, true, false) => vec![(Source::ChatChunk, partial)],
         (Protocol::Chat, true, true) => vec![
-            (Source::ChatChunk, partial),
+            (
+                Source::ChatChunk,
+                vec![(InputTokens, 11), (OutputTokens, 7), (TotalTokens, 18)],
+            ),
             (Source::ChatChunk, full.clone()),
             (Source::ChatChunk, full),
         ],
@@ -229,6 +235,9 @@ async fn evidence(
         "native frame count changed"
     );
     for (index, (frame, (source, quantities))) in evidence.frames.iter().zip(expected).enumerate() {
+        // The successful first Chat frame has no optional detail fields. Later
+        // source frames contain cache_write_tokens, which is flagged unsupported.
+        let initial_chat = protocol == Protocol::Chat && streaming && terminal && index == 0;
         ensure!(
             frame.sequence == index as u64
                 && frame.protocol == expected_protocol
@@ -241,7 +250,7 @@ async fn evidence(
                         Semantics::Snapshot
                     }
                 && !frame.invalid
-                && frame.unsupported == (protocol != Protocol::Messages)
+                && frame.unsupported == (protocol != Protocol::Messages && !initial_chat)
         );
         let actual: Vec<_> = frame
             .quantities
