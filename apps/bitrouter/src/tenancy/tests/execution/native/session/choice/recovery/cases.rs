@@ -124,7 +124,10 @@ pub(super) async fn campaign(root: &Path, mode: &str) -> Result<()> {
             .flat_map(|turn| &turn.steps).find(|step| step.step_id == step_id)
             .context("actual preparation step")?;
         use crate::gateway::pipeline::native_preparation::NativePreparationWorkKind;
+        // Entry, request-local routing custody and HTTP continuation each have
+        // an acknowledged preparation step before the retained router lookup.
         let kinds = [NativePreparationWorkKind::PreResolutionHook,
+            NativePreparationWorkKind::PreResolutionHook,
             NativePreparationWorkKind::PreResolutionHook, NativePreparationWorkKind::RouterLookup];
         ensure!(step.preparation_work.len() == kinds.len()
             && step.preparation_work.iter().zip(kinds).enumerate().all(|(index, (record, kind))|
