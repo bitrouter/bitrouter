@@ -12,6 +12,7 @@ use wiremock::{
     matchers::{method, path},
 };
 mod authority;
+mod capacity;
 mod consumer;
 mod fixture;
 mod human;

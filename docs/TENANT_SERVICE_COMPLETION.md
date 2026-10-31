@@ -79,17 +79,19 @@ cuts remain supported.
   acceptance.
 - A new PR above #1008. That base has now merged as
   `80550c9b2079a6e23ceeeb6babf922a77e99b5bb`; delivery targets `main`, including
-  its separate CI fixes. Record source commits and actual verification results. No production
-  rollout, migration of consumer databases, or performance qualification is
-  implied by opening the PR.
+  its separate CI fixes. Record source commits and actual verification results.
+  No production rollout, migration of consumer databases, or performance
+  qualification is implied by opening the PR.
 
 ## Evidence ledger
 
 All five implementation slices are present. Separate source reviewers approved
 the SDK, resource authority/storage, execution lifetime, routing, usage evidence,
 SQLite migration atomicity and actual-process test stages after corrections.
-Final integrated execution and a fresh whole-change review are in progress;
-source approval alone does not establish runtime acceptance.
+A fresh whole-change reviewer also approved the integrated source and subsequent
+recovery, custody, capacity and fixture corrections, including the test fixture's
+MSRV-compatible atomic reservation. Source approval and execution evidence are
+recorded separately below.
 
 The reviews resulted in the following substantive corrections:
 
@@ -109,10 +111,48 @@ The reviews resulted in the following substantive corrections:
 - Exercise concurrent tenant calls over a shared SDK pool on HTTP/1.1 and h2c,
   exact native frame order, restart retention, active credential revocation and
   transport timeouts through actual service processes.
+- Retain stopped-owner recovery for both the historical preparation prefix and
+  the new routing-custody prefix. Both require exact identities, ordering and
+  complete successful ACKs; unfinished or foreign work remains ineligible.
+- Keep cancellation tests attached to actual producer/commit custody and derive
+  storage-capacity witnesses independently from receipt and sidecar bytes.
+  Bound the native experiment fixture at 160 KiB while proving that its former
+  128 KiB checkpoint budget refuses before any provider dispatch.
 
 Public API dependency manifests remain unchanged. The default AI public API
 contains no optional HTTP/runtime types; SDK public dependencies remain
 `bitrouter_ai`, `futures_core`, `http` and `reqwest`. Formatting, added-source
-boundary checks and local specification links have passed. Final test commands,
-results and any remaining limitations will replace this provisional validation
-record before submission.
+boundary checks and local specification links have passed.
+
+Completed local validation on macOS arm64 with Rust 1.99:
+
+- AI and SDK all-feature unit/integration tests and doctests passed, including
+  scoped dispatch and original-byte evidence bounds. Their all-feature Clippy
+  checks passed with warnings denied.
+- The complete workspace Clippy check passed after the final reviewed
+  corrections, using `--workspace --all-features --tests -- -D warnings`.
+- The complete all-feature workspace suite passed: 5,878 tests, zero failures,
+  338 skipped. Three expected long-running cases were reported as slow; no
+  timeout, retry or output-pipe leak was reported in this run.
+- All 85 focused recovery, cancellation, native experiment and capacity
+  regressions passed. The separately selected ignored stopped-owner campaign
+  passed all eight actual subprocess scenarios, preserving repair and
+  no-resend assertions.
+- Minimal gateway (`--no-default-features`) tenancy, configuration and SQLite
+  migration tests passed: 506 selected tests, zero failures. One pure
+  configuration case reported an output-pipe leak warning; its all-feature
+  rerun passed without that warning or any runner-limit change.
+- All five actual SDK-to-service process tests passed in the final full suite:
+  HTTP/1.1 and h2c across seven protocol modes, concurrent tenant isolation,
+  credential rotation/revocation and restart, dropped SSE and client read
+  timeout. The successful Chat fixture uses consistent usage snapshots; the
+  original contradictory snapshots correctly failed strict receipt assertions.
+- The complete configuration schema was regenerated from the default product.
+  Public API foreign-type baselines and default AI isolation passed.
+- Complete workspace all-feature doctests passed: 13 passed and one explicitly
+  ignored. Final formatting and diff whitespace checks passed.
+
+These local runs cover candidate `4b71915` plus the final reviewed recovery and
+fixture corrections. The delivery rebase also incorporates upstream CI coverage
+and registry updates (#1012 and #1014); PR CI validates the resulting integrated
+head. Hosted throughput and distributed authority remain unqualified.
