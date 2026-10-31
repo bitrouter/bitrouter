@@ -444,11 +444,15 @@ jobs:
     - name: inspect isolated production dependency closures
       shell: bash
       run: |
+        cargo check --locked -p bitrouter-ai --no-default-features --features axum --lib
         # Successful checks above prove package membership. Inspect forward
         # trees: an unknown inverted dependency must not count as evidence.
         for flags in '' '--no-default-features' '--all-features'; do
           cargo tree --locked -p bitrouter-ai $flags -e normal,build --prefix none > ai-tree.txt
-          if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|axum|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
+          if [[ "$flags" != '--all-features' ]] && grep -Eq '^(axum|axum-core|hyper|hyper-util) v' ai-tree.txt; then
+            echo '::error::default AI contracts pulled HTTP framework dependencies'; exit 1
+          fi
+          if grep -Eq '^(bitrouter(-sdk)?|reqwest|tokio(-[^ ]*)?|sea-orm(-[^ ]*)?|sqlx(-[^ ]*)?|ratatui(-[^ ]*)?|crossterm|opentelemetry[^ ]*|tracing-opentelemetry|agent-client-protocol[^ ]*|rmcp) v' ai-tree.txt; then
             echo '::error::AI public contracts pulled runtime dependencies'; exit 1
           fi
           cargo tree --locked -p bitrouter-sdk $flags -e normal,build --prefix none > sdk-tree.txt
