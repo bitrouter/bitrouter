@@ -3,22 +3,23 @@
 use std::pin::Pin;
 
 use bitrouter_ai::gateway::GatewayErrorEnvelope;
+use bitrouter_ai::stream::{ProtocolEnd, StreamItem};
 use futures_core::Stream;
 use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 
 use crate::error::{Error, Result, ServiceFailure};
 
-/// A service event with its SSE name and last event ID. IDs do not authorize replay.
-#[derive(Debug)]
-pub struct ServerEvent<T> {
-    pub event: String,
-    pub id: String,
-    pub data: T,
-}
+/// Compatibility name for the shared public event contract.
+/// New consumers may import its owning type from `bitrouter_ai::stream`.
+pub type ServerEvent<T> = bitrouter_ai::stream::ServerEvent<T>;
 
 /// Dropping the stream closes local consumption; it does not prove upstream cancellation.
 pub type EventStream<T> = Pin<Box<dyn Stream<Item = Result<ServerEvent<T>>> + Send>>;
+
+/// A relay stream retains explicit termination instead of treating EOF as success.
+/// Dropping it does not establish upstream cancellation or permit redispatch.
+pub type RelayStream<T> = Pin<Box<dyn Stream<Item = Result<StreamItem<T>>> + Send>>;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Protocol {
@@ -33,6 +34,22 @@ pub(crate) fn decode<T: DeserializeOwned + Send + 'static>(
     limit: usize,
     protocol: Protocol,
 ) -> EventStream<T> {
+    let mut stream = decode_relay(response, limit, protocol);
+    Box::pin(async_stream::try_stream! {
+        while let Some(item) = stream.next().await {
+            match item? {
+                StreamItem::Event(event) => yield event,
+                StreamItem::End(_) => break,
+            }
+        }
+    })
+}
+
+pub(crate) fn decode_relay<T: DeserializeOwned + Send + 'static>(
+    response: reqwest::Response,
+    limit: usize,
+    protocol: Protocol,
+) -> RelayStream<T> {
     let status = response.status().as_u16();
     let headers = response.headers().clone();
     let mut chunks = response.bytes_stream();
@@ -45,6 +62,7 @@ pub(crate) fn decode<T: DeserializeOwned + Send + 'static>(
                 let Some(event) = decoder.accept(byte)? else { continue; };
                 if matches!(protocol, Protocol::Chat) && event.event != "error" && event.data == "[DONE]" {
                     terminal = true;
+                    yield StreamItem::End(ProtocolEnd::ChatDone);
                     break 'body;
                 }
                 let data: serde_json::Value = serde_json::from_str(&event.data)
@@ -75,9 +93,19 @@ pub(crate) fn decode<T: DeserializeOwned + Send + 'static>(
                         Err(Error::Response("terminal event is missing its matching response status"))?;
                     }
                 }
+                let end = if terminal {
+                    match kind {
+                        Some("message_stop") => Some(ProtocolEnd::MessagesStop),
+                        Some("response.completed") => Some(ProtocolEnd::ResponsesCompleted),
+                        Some("response.incomplete") => Some(ProtocolEnd::ResponsesIncomplete),
+                        Some("response.failed") => Some(ProtocolEnd::ResponsesFailed),
+                        _ => None,
+                    }
+                } else { None };
                 let data = serde_json::from_value(data)
                     .map_err(|_| Error::Response("SSE data does not match the public contract"))?;
-                yield ServerEvent { event: event.event, id: event.id, data };
+                yield StreamItem::Event(ServerEvent { event: event.event, id: event.id, data });
+                if let Some(end) = end { yield StreamItem::End(end); }
                 if terminal { break 'body; }
             }
         }

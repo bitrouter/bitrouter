@@ -91,7 +91,7 @@ agent-client-protocol-schema = { workspace = true, optional = true }
 agent-client-protocol-conductor = { workspace = true, optional = true }
 tokio-stream = { workspace = true, optional = true, features = ["sync"] }
 bitrouter-guardrails = { workspace = true, optional = true }
-bitrouter-ai = { workspace = true, features = ["schema"] }
+bitrouter-ai = { workspace = true, features = ["schema", "axum"] }
 # Product-only OS keyring discovery for explicitly adopted external CLI sessions.
 keyring.workspace = true
 chrono.workspace = true

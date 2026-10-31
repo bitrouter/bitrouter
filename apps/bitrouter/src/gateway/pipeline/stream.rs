@@ -152,16 +152,17 @@ pub enum StreamOutcome {
 }
 
 pin_project! {
-    /// Wraps any `Stream<Item = SseFrame>` and injects a keepalive comment frame
+    /// Wraps a frame stream and injects a host-selected keepalive frame
     /// whenever the inner stream is idle longer than `interval`. Fixes v0 #422
     /// (slow generations dropping the connection after 5 minutes of silence).
-    pub struct SseKeepaliveStream<S> {
+    pub struct SseKeepaliveStream<S, T = SseFrame> {
         #[pin]
         inner: S,
         interval: Duration,
         #[pin]
         timer: Sleep,
         done: bool,
+        keepalive: fn() -> T,
     }
 }
 
@@ -174,15 +175,29 @@ impl<S> SseKeepaliveStream<S> {
             interval,
             timer: tokio::time::sleep(interval),
             done: false,
+            keepalive: || SseFrame::Comment("keepalive".to_string()),
         }
     }
 }
 
-impl<S> Stream for SseKeepaliveStream<S>
+impl<S, T> SseKeepaliveStream<S, T> {
+    /// Wrap already-encoded frames without encoding after a delivery gate.
+    pub fn with_frame(inner: S, interval: Duration, keepalive: fn() -> T) -> Self {
+        Self {
+            inner,
+            interval,
+            timer: tokio::time::sleep(interval),
+            done: false,
+            keepalive,
+        }
+    }
+}
+
+impl<S, T> Stream for SseKeepaliveStream<S, T>
 where
-    S: Stream<Item = SseFrame>,
+    S: Stream<Item = T>,
 {
-    type Item = SseFrame;
+    type Item = T;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let mut this = self.project();
@@ -201,7 +216,7 @@ where
             Poll::Pending => match this.timer.as_mut().poll(cx) {
                 Poll::Ready(()) => {
                     this.timer.as_mut().reset(Instant::now() + *this.interval);
-                    Poll::Ready(Some(SseFrame::Comment("keepalive".to_string())))
+                    Poll::Ready(Some((this.keepalive)()))
                 }
                 Poll::Pending => Poll::Pending,
             },
