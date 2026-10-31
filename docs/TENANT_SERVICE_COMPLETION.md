@@ -118,6 +118,11 @@ The reviews resulted in the following substantive corrections:
   storage-capacity witnesses independently from receipt and sidecar bytes.
   Bound the native experiment fixture at 160 KiB while proving that its former
   128 KiB checkpoint budget refuses before any provider dispatch.
+- Charge bounded usage-evidence reads from SQL-measured UTF-8 lengths before
+  transferring payloads. Retain one shared 32 MiB operation budget, absolute
+  SQL cell bounds and measured-length guards against intervening growth. The
+  earlier per-record maximum reservation incorrectly exhausted this budget
+  during a 128-record cohort read.
 
 Public API dependency manifests remain unchanged. The default AI public API
 contains no optional HTTP/runtime types; SDK public dependencies remain
@@ -156,3 +161,31 @@ These local runs cover candidate `4b71915` plus the final reviewed recovery and
 fixture corrections. The delivery rebase also incorporates upstream CI coverage
 and registry updates (#1012 and #1014); PR CI validates the resulting integrated
 head. Hosted throughput and distributed authority remain unqualified.
+
+CI follow-up on `6b8f4df` found two additional issues in explicitly selected
+process/capacity campaigns: recovery witnesses omitted usage-sidecar storage,
+and repeated fixed-maximum evidence reservations rejected the final cohort
+read after all 128 executions had reconciled. Independent review approved the
+corrected storage witnesses, actual-length reader and five adversarial reader
+regressions. Rebuilt runtime verification passed:
+
+- All five reader regressions, including 128 small sidecars on a shared budget
+  with 24 MiB already consumed, refusal before payload transfer, and growth or
+  corruption between metadata and payload reads.
+- All 127 related receipt and recovery tests, including the original 60-second
+  HTTP/1.1 and HTTP/2 ingress deadlines.
+- All 14 paid-recovery parent campaigns, the six-mode repair-observation parent
+  and the eight-mode stopped-owner parent.
+- The unchanged 128-execution mixed-arm campaign, including final cohort
+  reconciliation, completed in 70.17 seconds with the original limits.
+
+The follow-up workspace Clippy passed with warnings denied, and final formatting
+and diff checks passed. The committed candidate must also pass the complete PR
+CI gate.
+
+The unchanged PostgreSQL slow-reader fixture also reported a transient socket
+pressure failure; an unchanged rerun passed the entire PostgreSQL job, including
+that test. The fixture and shared-gateway production path were not modified for
+this failure. All other first-candidate CI checks passed, including Windows,
+macOS, Linux ordinary tests, MySQL, feature closures, MSRV, public API boundaries,
+Clippy, docs and distribution checks.

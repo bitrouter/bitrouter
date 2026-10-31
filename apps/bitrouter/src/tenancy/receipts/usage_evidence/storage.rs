@@ -69,12 +69,83 @@ fn octets(backend: DatabaseBackend, name: &str) -> String {
         format!("octet_length({name})")
     }
 }
+fn integer_cell(backend: DatabaseBackend, name: &str) -> String {
+    if backend == DatabaseBackend::Sqlite {
+        format!("CASE WHEN typeof({name})='integer' THEN {name} ELSE NULL END")
+    } else {
+        name.to_owned()
+    }
+}
+
+type Charge<'a> = dyn Fn(usize, usize) -> Result<()> + Sync + 'a;
+
+/// Only scalar lengths cross this boundary. The stored byte_count is checked,
+/// never used as the transfer allowance. Two rows include a duplicate sentinel.
+async fn preflight(
+    db: &impl ConnectionTrait,
+    receipt: &ExecutionReceipt,
+    expected: Option<&str>,
+    charge: &Charge<'_>,
+) -> Result<Option<usize>> {
+    charge(2, 1024)?;
+    let backend = db.get_database_backend();
+    let json_bytes = octets(backend, "evidence_json");
+    let cast = if backend == DatabaseBackend::MySql {
+        "SIGNED"
+    } else {
+        "BIGINT"
+    };
+    let mut query = scope(receipt);
+    query.expr_as(Expr::cust(format!(
+        "CASE WHEN {json_bytes} BETWEEN 1 AND {MAX_BYTES} AND {}=64 AND {}=64 THEN CAST({json_bytes} AS {cast}) ELSE NULL END",
+        octets(backend, "evidence_digest"), octets(backend, "receipt_digest")
+    )), Alias::new("evidence_bytes"));
+    for name in ["byte_count", "schema_version"] {
+        query.expr_as(Expr::cust(integer_cell(backend, name)), Alias::new(name));
+    }
+    query.limit(2);
+    let rows = db.query_all(backend.build(&query)).await?;
+    charge(0, 0)?;
+    ensure!(rows.len() <= 1, "usage evidence multiplicity");
+    match (expected, rows.first()) {
+        (None, None) => Ok(None),
+        (Some(_), Some(row)) => {
+            let bytes = usize::try_from(row.try_get::<i64>("", "evidence_bytes")?)?;
+            ensure!(
+                row.try_get::<i64>("", "byte_count")? == i64::try_from(bytes)?
+                    && row.try_get::<i32>("", "schema_version")? == 1,
+                "usage evidence length or version"
+            );
+            // Three copies cover transfer, decoding and canonical encoding.
+            // Both digest strings are exactly 64 bytes; fixed overhead covers
+            // scalar cells and allocation metadata. A duplicate is rejected
+            // before decoding, so its two transferred bodies fit this allowance.
+            let allocation = bytes
+                .checked_add(128)
+                .and_then(|bytes| bytes.checked_mul(3))
+                .and_then(|bytes| bytes.checked_add(4096))
+                .context("usage evidence allocation bound")?;
+            charge(2, allocation)?;
+            Ok(Some(bytes))
+        }
+        _ => anyhow::bail!("usage evidence presence mismatch"),
+    }
+}
 async fn load(
     db: &impl ConnectionTrait,
     receipt: &ExecutionReceipt,
     receipt_digest: &str,
     expected: Option<&str>,
+    charge: Option<&Charge<'_>>,
 ) -> Result<Option<Evidence>> {
+    let measured = if let Some(charge) = charge {
+        let Some(bytes) = preflight(db, receipt, expected, charge).await? else {
+            return Ok(None);
+        };
+        Some(bytes)
+    } else {
+        None
+    };
     let backend = db.get_database_backend();
     let mut query = scope(receipt);
     for (name, bound) in [
@@ -82,24 +153,39 @@ async fn load(
         ("evidence_digest", 64),
         ("receipt_digest", 64),
     ] {
+        let length = octets(backend, name);
+        // Keep the absolute CASE guard, and also cap transfer to the measured
+        // length. Growth between queries must become NULL before allocation.
+        let unchanged = measured.map_or_else(String::new, |bytes| {
+            format!(
+                " AND {length}={}",
+                if name == "evidence_json" { bytes } else { 64 }
+            )
+        });
         query.expr_as(
             Expr::cust(format!(
-                "CASE WHEN {} <= {bound} THEN {name} ELSE NULL END",
-                octets(backend, name)
+                "CASE WHEN {length} <= {bound}{unchanged} THEN {name} ELSE NULL END"
             )),
             Alias::new(name),
         );
     }
-    query
-        .column(Alias::new("byte_count"))
-        .column(Alias::new("schema_version"))
-        .limit(2);
+    for name in ["byte_count", "schema_version"] {
+        query.expr_as(Expr::cust(integer_cell(backend, name)), Alias::new(name));
+    }
+    query.limit(2);
     let rows = db.query_all(backend.build(&query)).await?;
+    if let Some(charge) = charge {
+        charge(0, 0)?;
+    }
     ensure!(rows.len() <= 1, "usage evidence multiplicity");
     match (expected, rows.first()) {
         (None, None) => Ok(None),
         (Some(expected), Some(row)) => {
             let json: String = row.try_get("", "evidence_json")?;
+            ensure!(
+                measured.is_none_or(|bytes| json.len() == bytes),
+                "usage evidence length changed"
+            );
             let evidence = Evidence::new(serde_json::from_str(&json)?, receipt)?;
             ensure!(
                 evidence.json == json
@@ -120,7 +206,25 @@ pub(in crate::tenancy::receipts) async fn validate(
     candidate: &mut Candidate,
     expected: Option<&str>,
 ) -> Result<()> {
-    candidate.usage_evidence = load(db, &candidate.receipt, &candidate.digest, expected).await?;
+    candidate.usage_evidence =
+        load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
+    Ok(())
+}
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy::receipts) async fn validate_bounded(
+    db: &impl ConnectionTrait,
+    candidate: &mut Candidate,
+    expected: Option<&str>,
+    charge: &Charge<'_>,
+) -> Result<()> {
+    candidate.usage_evidence = load(
+        db,
+        &candidate.receipt,
+        &candidate.digest,
+        expected,
+        Some(charge),
+    )
+    .await?;
     Ok(())
 }
 pub(in crate::tenancy::receipts) async fn insert(
@@ -156,7 +260,7 @@ pub(in crate::tenancy::receipts) async fn insert(
             "usage evidence insert count"
         );
     }
-    load(db, &candidate.receipt, &candidate.digest, expected).await?;
+    load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
     Ok(())
 }
 

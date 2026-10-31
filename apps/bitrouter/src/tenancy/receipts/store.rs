@@ -783,14 +783,11 @@ pub(in crate::tenancy) async fn recovery_lookup(
         disposition.auxiliary_digest.is_none(),
         "auxiliary receipt link has no recovery proof"
     );
-    budget.charge(
-        1,
-        3 * bitrouter_ai::tenancy::usage_evidence::MAX_BYTES + 4096,
-    )?;
-    super::usage_evidence::storage::validate(
+    super::usage_evidence::storage::validate_bounded(
         db,
         &mut candidate,
         disposition.usage_evidence_digest.as_deref(),
+        &|rows, bytes| budget.charge(rows, bytes),
     )
     .await?;
     Ok(Some(candidate))
@@ -883,14 +880,11 @@ async fn native_namespace_candidate_in(
     let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
     super::auxiliary_store::validate(tx, &mut candidate, disposition.auxiliary_digest.as_deref())
         .await?;
-    budget.charge(
-        1,
-        3 * bitrouter_ai::tenancy::usage_evidence::MAX_BYTES + 4096,
-    )?;
-    super::usage_evidence::storage::validate(
+    super::usage_evidence::storage::validate_bounded(
         tx,
         &mut candidate,
         disposition.usage_evidence_digest.as_deref(),
+        &|rows, bytes| Ok(budget.charge(rows, bytes)?),
     )
     .await?;
     budget.check()?;

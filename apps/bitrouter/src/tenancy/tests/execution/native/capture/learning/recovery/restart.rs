@@ -187,8 +187,8 @@ async fn consumer() -> Result<()> {
                 missing::repaired(&before, &after)?;
             } else {
                 ensure!(
-                    after["receipts"] == before["receipts"],
-                    "recovery replaced known receipt bytes"
+                    after["receipts"] == before["receipts"] && after["usage"] == before["usage"],
+                    "recovery replaced known receipt or usage evidence bytes"
                 );
             }
             let jobs = values(&db, "owned_judge_job").await?;
