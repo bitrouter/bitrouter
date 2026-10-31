@@ -87,9 +87,18 @@ Native headless tool turns passed with Chat Completions, Responses, and
 Anthropic Messages. The Messages run exposed an endpoint distinction: its SDK
 adds `/v1/messages`, so its configured `baseURL` must be the gateway root;
 OpenAI protocols use the root plus `/v1`. A focused regression covers the root
-and reverse-proxy prefix. The corrected Messages configuration passed native
-streaming and real file execution; final rebuilt CLI generation is recorded
-in the final lifecycle artifacts.
+and reverse-proxy prefix. The final rebuilt `bro --update` generated that corrected Messages
+configuration. Both headless and the real Web UI then passed streamed two-step
+turns with native file writes through BitRouter.
+
+Final actual CLI lifecycle evidence includes `configured`, `catalog_verified`
+with no launching credential environment variable, reordered/duplicate profile
+repeat setup, `updated`, `restored`, and `not_configured`. A later home-level
+BitRouter default correctly refused removal with its receipt retained. After
+removing that fixture override, removal restored both original `[]` patches,
+removed the owned key, and kept the session directory. Connection/check reports
+continued to state `inference_verified: false`; native inference acceptance is
+the separate controlled fixture evidence above.
 
 ## Automated lifecycle coverage
 
@@ -103,9 +112,9 @@ interrupted restore, and unrelated JavaScript YAML rows.
 The lightweight actual-module harness passed four module tests, including raw
 Unicode/JavaScript row preservation, conditional default restoration, the
 Messages endpoint convention, and refusal to remove a provider while a later
-home-level default still selects it. The first cloud CLI run passed all five
-DeepSeek integration tests. Root verification owns the final shared full-suite
-and clippy results.
+home-level default still selects it. The compiled cloud CLI passed all five DeepSeek integration tests, within the
+shared 19-test CLI run. Root verification owns the separate full-suite and
+all-features clippy results.
 
 Limits: fixture responses establish transport, native stream handling, and
 tool execution. They do not establish a real model's behavior, image support,
