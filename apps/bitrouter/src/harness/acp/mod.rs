@@ -36,21 +36,8 @@
 //! as an execution backend. The app's stdio bridge owns bytes only; its EOF does
 //! not cancel daemon-owned native Turns or pending approval.
 //!
-//! # What used to be here
-//!
-//! A second stack: `engine::Session`, a single conversation behind a
-//! manager-facing id alias, driven by an ACP `Pipeline` of
-//! `PreRequestHook` → `RouteHook` → `ExecutionHook` over a routing table
-//! pinned to one target its executor ignored. No consumer ever
-//! registered a hook on it, and two stacks meant a harness could be offered
-//! different client capabilities depending on which command launched it —
-//! capabilities are declared by the client, so there has to be one.
-//!
-//! It is gone, along with `turn::TurnController`,
-//! `permissions::PermissionRegistry`, `session::SessionState`,
-//! `config_routing::ConfigAcpRoutingTable`, and the down-facing endpoint.
-//! `https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_AMENDMENT_1.md` §2 records where each part went, and
-//! the remaining guarantees are enforced at the controller and client boundary.
+//! Ownership and identity rules are maintained in
+//! `docs/development/agent-runtime.md`.
 
 #![forbid(unsafe_code)]
 

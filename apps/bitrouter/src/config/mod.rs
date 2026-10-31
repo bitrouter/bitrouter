@@ -897,7 +897,7 @@ pub enum McpUpstreamProtocol {
     /// responses, and modern rejection codes fail the connection. Opting in
     /// also lets upstreams answer `tools/call` with MRTR `input_required` or a
     /// Tasks `task` handle; neither is a shape this gateway can carry, so both
-    /// surface as explicit errors (see `docs/specs/mcp-gateway-v1/README.md`).
+    /// surface as explicit errors (see `docs/development/gateway.md`).
     #[serde(rename = "2026-07-28")]
     V2026_07_28,
 }

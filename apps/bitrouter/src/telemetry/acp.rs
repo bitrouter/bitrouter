@@ -3,8 +3,8 @@
 //! The ACP protocol runtime itself lives in `apps/bitrouter/src/harness/acp/`.
 //! This module only *observes* that path: it lives here, rather than beside
 //! the pipeline, because `AcpSpanRecorder` stores a tracer obtained from
-//! `OtelExporter::tracer_clone()`, which stays `pub(crate)` (see
-//! `https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/OTEL_SDK_MIGRATION_SPEC.md`).
+//! `OtelExporter::tracer_clone()`, which stays `pub(crate)`.
+//! Exporter ownership is described in `docs/development/observability.md`.
 //!
 //! Maps substrate-shaped events onto the OTel GenAI *agent* semantic
 //! conventions (<https://opentelemetry.io/docs/specs/semconv/gen-ai/> —

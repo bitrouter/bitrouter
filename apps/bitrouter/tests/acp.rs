@@ -173,8 +173,7 @@ async fn prompt_ndjson() {
         "first NDJSON line must be the session line; got: {}",
         lines[0]
     );
-    // Contract break, `https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_AMENDMENT_1.md` §2: the minted
-    // `record_id` alias is gone from the wire. Session identity is
+    // The minted `record_id` alias is gone from the wire. Session identity is
     // harness-native, so the correlation line carries the id the harness
     // itself minted plus the controller instance the daemon meters by — the
     // two columns a spend query actually joins on.

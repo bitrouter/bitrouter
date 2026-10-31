@@ -26,8 +26,8 @@
 //! from `bitrouter.yaml`. Anyone adding per-caller credentials must re-key this
 //! pool by `(server, credential)` first: deriving headers per request without
 //! that would be silently ineffective, since the second caller would reuse the
-//! first caller's already-authenticated connection. Recorded as D7 in
-//! `https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/SKILLS_MCP_SPEC.md`.
+//! first caller's already-authenticated connection. See the connection ownership discussion in
+//! `docs/development/gateway.md`.
 
 use crate::skills::protocol::SkillEntryExt;
 use std::collections::HashMap;
@@ -736,7 +736,7 @@ fn stream_tools_call(
 ///   we say so directly instead.
 /// - **Tasks `resultType: "task"` (SEP-2663)** hands back a task id to poll.
 ///   Polling is a lifecycle this executor does not implement yet — see
-///   `docs/specs/mcp-gateway-v1/README.md` — so we surface the task id rather
+///   `docs/development/gateway.md` — so we surface the task id rather
 ///   than stranding the caller on an opaque failure.
 ///
 /// Both follow the module's existing stance on server→client relaying: an

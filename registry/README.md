@@ -84,7 +84,7 @@ of values**: `models.shape` (`map_of_empty` / `array_of_id` /
 `provider_prefixed`), and `mcp.entry` (`opencode_typed` /
 `command_args_or_url`). Nothing is evaluated — a registry entry selects among
 behaviours reviewed in this repo, which is why a fetched catalog cannot
-introduce new ones. See the [agent catalog profile](../docs/specs/agent-catalog-v1/README.md).
+introduce new ones. See the [agent catalog profile](../docs/development/catalogs.md).
 
 Placeholders are context-specific, because they resolve at different moments:
 `{base_url_v1}` and `{auth}` in the skeleton's string leaves; `{dir}`,

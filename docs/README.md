@@ -1,14 +1,17 @@
 # BitRouter documentation
 
-- [Protocol specifications](specs/README.md) describe versioned external
-  contracts and conformance cases; beta drafts are open to change.
-- [CLI reference](CLI.md), [distribution](DISTRIBUTION.md), and the other
-  operator and UX documents describe usage and supported configurations.
-- [Development guide](DEVELOPMENT.md) covers architecture and the rules for
-  maintaining documentation. [CI](CI.md) describes contributor checks.
-- Product documentation is maintained in [bitrouter-docs](https://github.com/bitrouter/bitrouter-docs).
+- [Specifications](specs/README.md): compatibility-sensitive Registry,
+  configuration and service API formats, each with one canonical specification.
+- [Engineering guides](development/README.md): current implementation,
+  architecture and boundaries, updated as the application evolves.
+- [CLI](CLI.md), [distribution](DISTRIBUTION.md), [shared distribution](SHARED_GATEWAY_DISTRIBUTION.md)
+  and other operator guides: current procedures and deployment instructions.
+- [UX references](ux/README.md): retained interaction designs, including clearly
+  identified historical TUI material.
+- [Development policy](DEVELOPMENT.md): specification admission, design/review,
+  documentation placement and semantic cross-reference checks.
 
-Historical UX designs are retained for context and can describe removed
-interfaces; their status notes do not establish current product behavior.
-Implementation plans, progress ledgers and dated evidence belong in pull
-requests or external artifacts rather than the tracked documentation tree.
+Product-site documentation is maintained in
+[bitrouter-docs](https://github.com/bitrouter/bitrouter-docs). Plans, progress
+ledgers and raw acceptance/experiment evidence belong with their issue, PR or
+CI artifact rather than in the maintained documentation tree.

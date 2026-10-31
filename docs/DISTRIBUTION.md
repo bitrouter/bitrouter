@@ -4,8 +4,8 @@ The installable package remains `bitrouter`, and the executable remains `bro`.
 Default Cargo, shell, PowerShell, npm and Homebrew installations contain the full
 product. Gateway archives are separate release assets; choosing one does not
 require building a custom application. Both profiles always include the gateway
-and its management CLI. See [the feature plan](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/BITROUTER_SERVICE_REFACTOR_PLAN.md#feature-dependency-plan)
-for optional capabilities and the full default selection.
+and its management CLI. See the [architecture guide](development/architecture.md) for optional
+capabilities and the default feature selection.
 
 ## Gateway archives
 

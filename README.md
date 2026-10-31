@@ -143,7 +143,7 @@ controls, flags, and config resolution.
 
 ## Workflow recipes
 
-Ready-made **policy specs** for common agentic workflows start in [`templates/auto-router/`](templates/auto-router/): a predictive `bitrouter/auto` / `bitrouter/auto:cost` ladder using GPT-5.6 as the strong tier, Kimi K3 as balanced, and DeepSeek V4 Pro as economy. Treat it as a starting point and evaluate it against your own loop before publishing a live policy.
+Ready-made **policy specs** for common agentic workflows start in [`templates/auto-router/`](templates/auto-router): a predictive `bitrouter/auto` / `bitrouter/auto:cost` ladder using GPT-5.6 as the strong tier, Kimi K3 as balanced, and DeepSeek V4 Pro as economy. Treat it as a starting point and evaluate it against your own loop before publishing a live policy.
 
 ## Models & providers
 
@@ -167,9 +167,9 @@ no keys at all. Frontier models from OpenAI, Anthropic, Google, and xAI also rou
 over a subscription sign-in (Claude Pro/Max, GitHub Copilot, ChatGPT Codex)
 instead of a key.
 
-The chart is generated from [`dist/registry/`](dist/registry/) on every catalog
+The chart is generated from [`dist/registry/`](dist/registry) on every catalog
 change — it is never hand-maintained, so it cannot drift from what the router
-actually resolves. Full catalog in [`registry/`](registry/).
+actually resolves. Full catalog in [`registry/`](registry).
 
 ## Talk to founders
 
@@ -179,10 +179,10 @@ Want a first-party provider integration, or building an open-source agent/harnes
 
 ## Development
 
-- [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — workspace architecture and SDK internals
+- [Development guide](docs/DEVELOPMENT.md) — documentation policy and engineering guide index
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — contribution workflow, issue reporting, and provider updates
 - [`CLAUDE.md`](CLAUDE.md) — guidance for AI coding agents working in this repository
-- [`skills/`](skills/) — the `/bitrouter` Agent Skill (source of truth)
+- [`skills/`](skills) — the `/bitrouter` Agent Skill (source of truth)
 
 ## Star History
 

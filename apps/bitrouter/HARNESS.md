@@ -6,7 +6,7 @@ The host assembles transport and storage. Model routing uses the application's
 gateway pipeline; the SDK contains service clients.
 
 Paths below are relative to `src/harness/` unless stated otherwise. Feature
-requirements are described in the [development guide](../../docs/DEVELOPMENT.md).
+requirements are described in the [architecture guide](../../docs/development/architecture.md).
 
 ## External agents over ACP
 
@@ -36,7 +36,7 @@ EOF affects observation only. The harness owns single-Thread closure and records
 cancelled queued Turns before joining active cleanup; completion retries do not
 cancel newer work. Runtime format 7 retains supported 2/3/4/5/6 reads.
 
-See the [native ACP interoperability profile](../../docs/specs/native-acp-v1/README.md).
+See the [native ACP interoperability profile](../../docs/specs/service-api/README.md#native-acp-extensions).
 External
 client/controller paths remain v1; native v2 is pinned to the SDK's draft schema.
 
