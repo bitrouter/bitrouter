@@ -1,5 +1,10 @@
 [
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "family": "claude-fable",
     "id": "anthropic/claude-fable-5",
     "input_modalities": [
@@ -14,14 +19,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-06-09",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-06-09"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "family": "claude-haiku",
     "id": "anthropic/claude-haiku-4.5",
     "input_modalities": [
@@ -36,14 +41,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2025-10-15",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2025-10-15"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "description": "Anthropic's Claude Opus 5.",
     "family": "claude-opus",
     "id": "anthropic/claude-opus-5",
@@ -59,14 +64,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-07-24",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-07-24"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "description": "Anthropic's Claude Sonnet 5.",
     "family": "claude-sonnet",
     "id": "anthropic/claude-sonnet-5",
@@ -82,15 +87,15 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-06-30",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-06-30"
   },
   {
-    "release_date": "2026-02-17",
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
+      "expires_at": "2026-11-30T01:29:19.650770156Z"
+    },
     "description": "Anthropic's Claude Sonnet 4.6.",
     "family": "claude-sonnet",
     "id": "anthropic/claude-sonnet-4.6",
@@ -106,13 +111,14 @@
     "output_modalities": [
       "text"
     ],
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-02-17"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "anthropic/claude-fable-5.1",
     "input_modalities": [
       "file",
@@ -125,14 +131,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-01",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-01"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "anthropic/claude-opus-5.5",
     "input_modalities": [
       "file",
@@ -145,14 +151,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-22",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-22"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "anthropic/claude-sonnet-5.5",
     "input_modalities": [
       "file",
@@ -165,14 +171,14 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-09-28",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-09-28"
   },
   {
+    "curation": {
+      "checked_at": "2026-10-22T17:30:00Z",
+      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
+      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all"
+    },
     "id": "anthropic/claude-haiku-5.5",
     "input_modalities": [
       "file",
@@ -185,11 +191,6 @@
     "output_modalities": [
       "text"
     ],
-    "release_date": "2026-10-07",
-    "curation": {
-      "reason": "Migrated reviewed recommendation; current identity and active offer verified",
-      "source_url": "https://openrouter.ai/api/v1/models?output_modalities=all",
-      "checked_at": "2026-10-22T17:30:00Z"
-    }
+    "release_date": "2026-10-07"
   }
 ]
