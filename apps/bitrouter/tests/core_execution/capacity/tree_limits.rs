@@ -561,26 +561,31 @@ async fn maximum_tree(case: Case, committed: bool) -> TestResult {
 }
 
 #[tokio::test]
+#[ignore = "bounded capacity campaign; run from the shared CI archive or capacity workflow"]
 async fn maximum_tree_completes_with_default_counts_and_terminal_ack_loss() -> TestResult {
     maximum_tree(Case::MaximumTree, false).await
 }
 
 #[tokio::test]
+#[ignore = "bounded capacity campaign; run from the shared CI archive or capacity workflow"]
 async fn maximum_tool_batch_keeps_full_replies_after_terminal_ack_loss() -> TestResult {
     maximum_tree(Case::MaximumTools, true).await
 }
 
 #[tokio::test]
+#[ignore = "bounded capacity campaign; run from the shared CI archive or capacity workflow"]
 async fn maximum_tree_byte_failure_survives_terminal_ack_loss_before_persistence() -> TestResult {
     maximum_tree(Case::CheckpointCapacity, false).await
 }
 
 #[tokio::test]
+#[ignore = "bounded capacity campaign; run from the shared CI archive or capacity workflow"]
 async fn maximum_tree_byte_failure_survives_terminal_ack_loss_after_persistence() -> TestResult {
     maximum_tree(Case::CheckpointCapacity, true).await
 }
 
 #[tokio::test]
+#[ignore = "bounded capacity campaign; run from the shared CI archive or capacity workflow"]
 async fn insufficient_artifact_quota_never_dispatches_the_tool_batch() -> TestResult {
     maximum_tree(Case::ArtifactCapacity, true).await
 }

@@ -4,10 +4,10 @@
 # to read — which is exactly the shape `test (ubuntu-latest)` has been failing
 # in on this repo while macOS and Windows pass the identical tree.
 #
-# Report anything over a minute as SLOW, and kill it after five. The whole
-# suite finishes in ~2 minutes when it is healthy and the slowest deliberate
-# wait in it is a 5 second polling budget, so five minutes is far outside any
-# legitimate test while still ending the job cleanly enough to get logs.
+# Report anything over a minute as SLOW, and kill it after five unless an
+# explicit campaign override below provides a larger bounded allowance.
+# Capacity parents are compiled into the shared archive but explicitly ignored
+# by ordinary runs; CI selects their exact names in serial capacity lanes.
 [profile.default]
 slow-timeout = { period = "60s", terminate-after = 5 }
 

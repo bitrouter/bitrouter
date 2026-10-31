@@ -200,6 +200,55 @@ jobs:
         - suite: integration
           threads: 2
           filter: kind(test)
+  test-capacity:
+    name: test (Linux, capacity ${{ matrix.suite }})
+    needs:
+    - build-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+        - suite: core-tree
+          expected-tests: 5
+          filter: binary(=core_execution) & (test(=capacity::tree_limits::maximum_tree_completes_with_default_counts_and_terminal_ack_loss) | test(=capacity::tree_limits::maximum_tool_batch_keeps_full_replies_after_terminal_ack_loss) | test(=capacity::tree_limits::maximum_tree_byte_failure_survives_terminal_ack_loss_before_persistence) | test(=capacity::tree_limits::maximum_tree_byte_failure_survives_terminal_ack_loss_after_persistence) | test(=capacity::tree_limits::insufficient_artifact_quota_never_dispatches_the_tool_batch))
+        - suite: checkpoints
+          expected-tests: 3
+          filter: kind(lib) & (test(=harness::agent::tests::native::native_checkpoint_capacity_failure_reports_the_resource_cause) | test(=harness::agent::tests::native::native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(=harness::service::tests::recovery::native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery))
+        - suite: recovery-experiment
+          expected-tests: 2
+          filter: kind(lib) & (test(=offline::recovery::tests::saturation::actual_full_operation_ledger_is_archived_and_fresh_target_keeps_independent_history) | test(=tenancy::tests::execution::native::session::experiment::consumer::native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort))
+    steps:
+    - uses: actions/checkout@v6
+    - uses: ./.github/actions/test-archive
+    - name: Run bounded capacity parents without rebuilding
+      env:
+        FILTER: ${{ matrix.filter }}
+        EXPECTED_TESTS: ${{ matrix.expected-tests }}
+      run: |
+        # A partially renamed allowlist must fail, even if another parent matches.
+        # https://nexte.st/docs/machine-readable/list/
+        cargo-nextest nextest list \
+          --cargo-metadata "$PWD/target/nextest/cargo-metadata.json" \
+          --binaries-metadata "$PWD/target/nextest/binaries-metadata.json" \
+          --workspace-remap "$PWD" --target-dir-remap "$PWD/target" \
+          --profile ci --run-ignored only -E "$FILTER" --message-format json \
+          > ci-evidence/capacity-selection.json
+        jq -e --argjson expected "$EXPECTED_TESTS" '
+          [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
+          | length == $expected and all(.ignored == true)
+        ' ci-evidence/capacity-selection.json
+        export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
+        bash .github/scripts/ci-test.sh capacity --test-threads 1 --run-ignored only -E "$FILTER"
+    - name: Upload test evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
+        path: ci-evidence/
+        retention-days: 7
   test-process:
     name: test (Linux, process contracts)
     needs:
@@ -876,6 +925,7 @@ jobs:
     - build-linux
     - test-linux
     - test-process
+    - test-capacity
     - database-backends
     - application-features
     - feature-isolation

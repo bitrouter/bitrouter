@@ -9,8 +9,8 @@ process and database integration tests remain in PR CI.
 
 `build-linux` compiles the workspace tests and examples with two build jobs and
 without debug information. It publishes a nextest archive for the exact GitHub
-revision. The module, integration, process-contract and database jobs download
-that artifact and run its executables without invoking Cargo. The
+revision. The module, integration, process-contract, bounded-capacity and database
+jobs download that artifact and run its executables without invoking Cargo. The
 archive includes process fixtures; a missing fixture is an error, not permission
 to rebuild during a test deadline.
 
@@ -31,8 +31,8 @@ existing build. See [artifact replacement](https://github.com/actions/upload-art
 `/usr/bin/time` reports process resource accounting,
 not the peak memory of the entire VM or database service containers. Module
 tests use four slots on the standard four-CPU Linux runner; integration tests use
-two, and database and ignored process parents run serially. Builds stay at two
-jobs because their memory demand is much higher than test execution.
+two, and database, ignored process parents and each capacity lane run serially.
+Builds stay at two jobs because their memory demand is much higher than test execution.
 Only the listed ignored parents run: internal fault-injection children must not
 be selected with a blanket `--run-ignored all`.
 
@@ -65,14 +65,24 @@ builds and verifies the packaged target matrix against its actual dist artifacts
 
 ## Capacity campaigns
 
-**Capacity campaigns** runs manually or weekly on one Linux runner. It contains
-the full Choice receipt-history campaigns, fixed 128-session experiment, maximum
-Core tree cases, long checkpoint histories and the 100,000-row offline recovery
-campaign. Ordinary smaller boundary cases remain in PR CI. Product limits and
-per-operation deadlines are unchanged.
+PR CI also runs ten bounded capacity parents from the same all-feature archive:
 
-The large test modules require an explicit test-build cfg so normal PR builds do
-not compile them. To select a capacity case locally:
+- Five maximum-tree, tool-batch and artifact-quota contracts.
+- Three native checkpoint capacity, long-loop and cold-recovery contracts.
+- The fixed 128-session experiment and the 100,000-row offline recovery contract.
+
+Three Linux lanes run one parent at a time, with a 25-minute job limit, no retries
+and resource/JUnit evidence. Internal concurrency, product limits, operation
+counts and per-operation deadlines are unchanged. These cases use `#[ignore]`
+to avoid duplicate execution in the ordinary lanes, and exact selectors prevent
+internal fault-injection children from running independently. A missing match
+fails the job. They remain available in the manual/weekly **Capacity campaigns**
+workflow as well; its explicit filter includes ignored parents.
+
+The two full Choice receipt-history campaigns still require an explicit test-build
+cfg and the lightly optimized `ci-capacity` profile. Their earlier optimized
+runtime is not evidence that running their growing snapshots in the ordinary
+unoptimized archive would fit the PR budget. To select a Choice case locally:
 
 ```sh
 RUSTFLAGS='--cfg bitrouter_capacity_tests' cargo nextest run \
@@ -84,3 +94,20 @@ RUSTFLAGS='--cfg bitrouter_capacity_tests' cargo nextest run \
 The `ci-capacity` profile uses light optimization without release LTO, retaining
 debug assertions and overflow checks. External load generators and prolonged
 stress testing belong outside the PR workflow.
+
+## Measured PR baseline
+
+[PR #1009's final run](https://github.com/bitrouter/bitrouter/actions/runs/41133691229)
+passed all 21 jobs on October 31, 2026. It used 172.4 runner-minutes; the Linux
+critical path was 40.4 minutes (23.8 minutes building/publishing, then at most
+14.7 minutes restoring/running tests, plus initial scheduling). The full run
+lasted 171.7 minutes because macOS started 162 minutes after creation; that
+platform job itself took only 9.6 minutes. Queue delay must be reported separately
+from execution, and runner-minutes are not CPU-minutes.
+
+Before restoration, successful unoptimized runs put the ten capacity parents at
+13–323 seconds each. Those measurements justify testing archive reuse; the
+restored lanes' evidence measures their actual elapsed time and maximum resident
+memory on the current runner. Choice's old release-profile timing is excluded
+from this comparison. Shared archive download/extraction and extra compilation
+are still real costs, so compare the whole workflow, not only test execution.
