@@ -114,6 +114,9 @@ jobs:
                echo '::error::profile without MySQL pulled its driver'; exit 1
              fi ;;
         esac
+    - name: verify gRPC-only telemetry delivery
+      if: matrix.features == 'otel-grpc'
+      uses: ./.github/actions/test-grpc
     - name: prebuild selected-profile protocol fixtures
       if: contains(matrix.features, 'harness') || matrix.features == 'mcp'
       env:

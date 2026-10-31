@@ -894,15 +894,23 @@ jobs:
       matrix:
         include:
         - os: macos-latest
+          expected-tests: 16
           targets: --test daemon --test host_lifecycle --test mcp_config_pty --test onboarding_pty
           filter: (binary(=daemon) & (test(=status_route_and_stop_roundtrip_over_the_control_socket) | test(=concurrent_clients_are_all_served) | test(=socket_file_has_owner_only_permissions)))
             | (binary(=host_lifecycle) & test(=sigterm_control_error_drains_inflight_inference_before_nonzero_exit)) | binary(=mcp_config_pty) | binary(=onboarding_pty)
         - os: windows-latest
-          targets: --lib --test daemon
+          expected-tests: 20
+          targets: --lib --test daemon --test invocation
           filter: test(=tenancy::ownership::unsupported_claim_tests::native_recovery_connector_refuses_before_creating_non_unix_authority) | test(=tenancy::tests::execution::native::local_tenancy_remains_unavailable_without_creating_files)
             | test(=providers::cli_install::tests::install_command_is_the_official_native_installer) | test(=paths::tests::replacing_private_file_overwrites_existing_destination_on_windows)
             | test(harness::tools::tests::powershell_) | test(=harness::tools::tests::dropped_powershell_future_stops_descendants) | test(=status_route_and_stop_roundtrip_over_the_control_socket)
             | test(=concurrent_clients_are_all_served) | test(=probe_status_reports_none_when_nothing_listens) | test(=client_fails_clearly_when_no_daemon_is_listening)
+            | test(=update::tests::official_basename_is_required_even_in_the_same_install_prefix)
+            | test(=update::tests::reduced_profiles_delegate_for_every_install_method_and_channel)
+            | test(=daemon_locator::tests::config_identity_survives_file_deletion_and_recreation)
+            | test(=policy_lock::tests::publish_preserves_exact_parent_bytes_for_rollback)
+            | test(=db::tests::relative_sqlite_urls_anchor_to_config_home_and_preserve_queries)
+            | (binary(=invocation) & (test(=canonical_help_is_bro_and_has_no_alias_warning) | test(=alias_preserves_help_and_structured_stdout)))
     steps:
     - uses: actions/checkout@v6
     - uses: actions-rust-lang/setup-rust-toolchain@v1
@@ -921,13 +929,49 @@ jobs:
       env:
         TARGETS: ${{ matrix.targets }}
         FILTER: ${{ matrix.filter }}
+        EXPECTED_TESTS: ${{ matrix.expected-tests }}
         BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
       run: |
         read -r -a targets <<< "$TARGETS"
-        cargo nextest run --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 --test-threads 2 --retries 0 --no-fail-fast --no-tests fail -E "$FILTER"
+        mkdir -p ci-evidence
+        cargo nextest list --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 \
+          --profile ci -E "$FILTER" --message-format json > ci-evidence/platform-selection.json
+        # Require the entire platform allowlist, not merely one surviving match.
+        # https://nexte.st/docs/machine-readable/list/
+        jq -e --argjson expected "$EXPECTED_TESTS" '
+          [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
+          | length == $expected and all(.ignored == false)
+        ' ci-evidence/platform-selection.json
+        cargo nextest run --locked -p bitrouter --all-features "${targets[@]}" --build-jobs 2 \
+          --profile ci --test-threads 2 --retries 0 --no-fail-fast --no-tests fail -E "$FILTER"
+    - name: Upload platform evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ github.job }}-${{ strategy.job-index }}-attempt-${{ github.run_attempt }}-evidence
+        path: |
+          ci-evidence/
+          target/nextest/ci/junit.xml
+        retention-days: 7
     needs:
     - changes
     if: needs.changes.outputs.code == 'true'
+  test-telemetry-grpc:
+    name: test (Linux, gRPC-only telemetry)
+    needs:
+    - changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+      with:
+        toolchain: 1.99.1
+        cache-on-failure: false
+    # The all-feature archive selects HTTP at compile time. This one small
+    # integration target needs its own gRPC-only build to exercise the wire path.
+    - uses: ./.github/actions/test-grpc
   test-ubuntu:
     name: test (ubuntu-latest)
     if: always()
@@ -950,6 +994,7 @@ jobs:
     - doc
     - doctest
     - test-platform
+    - test-telemetry-grpc
     runs-on: ubuntu-24.04
     steps:
     - name: Require selected checks and reject failed or cancelled dependencies
