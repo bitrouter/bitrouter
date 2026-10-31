@@ -1,11 +1,18 @@
 # CLI reference
 
-`bro connect [codex|claude] --model ID [--display-name LABEL]` adds a gateway model to native model
+`bro connect [codex|claude|opencode|pi|deepseek-harness] --model ID [--display-name LABEL]` adds a gateway model to native model
 pickers (default: `bitrouter/automatos`). Omit the target for an interactive menu; use `--dry-run` to preview,
 `--yes` for scripted setup, and `--remove` to restore owned settings (Codex and Claude Desktop preserve unrelated settings).
 Works without `harness` or `core`. `--base-url URL` selects an explicit gateway
 without local config/startup. Read the [connection contract](connect.md) for gateway auth,
 client differences, restart requirements, catalog snapshots and recovery.
+
+OpenCode, Pi and DeepSeek Harness add an independent BitRouter provider. Use
+`--instance PATH` for the actual client configuration, `--protocol chat-completions|responses|messages`
+(default: chat-completions), and repeatable `--profile NAME` for initialized Harness profiles.
+`--status` is offline; `--check` checks saved configuration and the gateway catalog using
+the saved credential, without inference; `--update` replaces an existing connection.
+See the connection contract for per-client reload and recovery behavior.
 
 HTTP/2 is a default-on application Cargo feature (`http2`), forwarded to axum,
 reqwest, the SDK and the shared transport's `h2` dependency. The explicitly

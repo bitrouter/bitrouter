@@ -14,6 +14,17 @@ pub(super) enum Restore {
     CodexConfig {
         model: String,
     },
+    OpenCodeProvider,
+    PiModels,
+    PiAuth,
+    PiSettings {
+        model: String,
+    },
+    DeepseekProfile,
+    DeepseekCredentials {
+        instance: PathBuf,
+        profiles: Vec<PathBuf>,
+    },
     ClaudeProfile,
     ClaudeMeta {
         profile: String,
@@ -79,6 +90,17 @@ impl Change {
         if current == self.before.as_deref() {
             return Ok(self.before.clone());
         }
+        // A later profile can refer to an unchanged shared credential file.
+        // Reference ownership must be checked even when its bytes match setup.
+        if let Restore::DeepseekCredentials { instance, profiles } = &self.restore {
+            return super::deepseek::restore_credentials(
+                self.before.as_deref(),
+                &self.after,
+                current,
+                instance,
+                profiles,
+            );
+        }
         if matches!(self.restore, Restore::ClaudeMode) && preserve_mode {
             return Ok(current.map(str::to_owned));
         }
@@ -93,12 +115,43 @@ impl Change {
                 model,
             );
         }
+        let before = self.before.as_deref();
+        match &self.restore {
+            Restore::OpenCodeProvider => {
+                return super::opencode::restore_config(before, &self.after, current);
+            }
+            Restore::PiModels => return super::pi::restore_models(before, &self.after, current),
+            Restore::PiAuth => return super::pi::restore_auth(before, &self.after, current),
+            Restore::PiSettings { model } => {
+                return super::pi::restore_settings(before, &self.after, current, model);
+            }
+            Restore::DeepseekProfile => {
+                return super::deepseek::restore_profile(before, &self.after, current);
+            }
+            Restore::DeepseekCredentials { instance, profiles } => {
+                return super::deepseek::restore_credentials(
+                    before,
+                    &self.after,
+                    current,
+                    instance,
+                    profiles,
+                );
+            }
+            _ => {}
+        }
         ensure!(!matches!(self.restore, Restore::Exact), "file was edited");
         let mut value = object(current)?;
         let after = object(Some(&self.after))?;
         let before = object(self.before.as_deref())?;
         match &self.restore {
-            Restore::Exact | Restore::CodexConfig { .. } => anyhow::bail!("file was edited"),
+            Restore::Exact
+            | Restore::CodexConfig { .. }
+            | Restore::OpenCodeProvider
+            | Restore::PiModels
+            | Restore::PiAuth
+            | Restore::PiSettings { .. }
+            | Restore::DeepseekProfile
+            | Restore::DeepseekCredentials { .. } => anyhow::bail!("file was edited"),
             Restore::ClaudeProfile => {
                 // Desktop seals this owned secret on first launch. No other
                 // profile edits are implicitly discarded, including new keys.
@@ -166,6 +219,23 @@ impl Change {
         if matches!(self.restore, Restore::CodexConfig { .. }) {
             return super::codex::config_installed(&self.after, current);
         }
+        match &self.restore {
+            Restore::OpenCodeProvider => {
+                return super::opencode::config_installed(&self.after, current);
+            }
+            Restore::PiModels => return super::pi::models_installed(&self.after, current),
+            Restore::PiAuth => return super::pi::auth_installed(&self.after, current),
+            Restore::PiSettings { .. } => {
+                return super::pi::settings_installed(&self.after, current);
+            }
+            Restore::DeepseekProfile => {
+                return super::deepseek::profile_installed(&self.after, current);
+            }
+            Restore::DeepseekCredentials { .. } => {
+                return super::deepseek::credentials_installed(&self.after, current);
+            }
+            _ => {}
+        }
         let value = object(current)?;
         let after = object(Some(&self.after))?;
         Ok(match &self.restore {
@@ -178,7 +248,14 @@ impl Change {
             }
             Restore::ClaudeMode => value.get("deploymentMode") == after.get("deploymentMode"),
             Restore::ClaudeProfile => true,
-            Restore::Exact | Restore::CodexConfig { .. } => false,
+            Restore::Exact
+            | Restore::CodexConfig { .. }
+            | Restore::OpenCodeProvider
+            | Restore::PiModels
+            | Restore::PiAuth
+            | Restore::PiSettings { .. }
+            | Restore::DeepseekProfile
+            | Restore::DeepseekCredentials { .. } => false,
         })
     }
 }
@@ -213,16 +290,36 @@ pub(super) struct Receipt {
     pub model: String,
     #[serde(default)]
     display_name: Option<String>,
+    #[serde(default)]
+    pub native: Option<Native>,
     pub files: Vec<Change>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(super) struct Native {
+    pub instance: String,
+    pub protocol: super::Protocol,
+    pub profiles: Vec<String>,
+    pub surfaces: Vec<String>,
+    pub notes: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Replacement {
+    previous: Receipt,
+    rollback: Receipt,
+    #[serde(default)]
+    active_restored: bool,
 }
 
 impl Receipt {
     pub fn new(endpoint: String, model: String, files: Vec<Change>) -> Self {
         Self {
-            version: 4,
+            version: 5,
             endpoint,
             model,
             display_name: None,
+            native: None,
             files,
         }
     }
@@ -242,7 +339,7 @@ impl Receipt {
                 let mut receipt: Self =
                     serde_json::from_str(&text).context("invalid connection receipt")?;
                 ensure!(
-                    matches!(receipt.version, 1..=4),
+                    matches!(receipt.version, 1..=5),
                     "unsupported connection receipt version"
                 );
                 if receipt.version == 1 && receipt.model.is_empty() {
@@ -262,6 +359,20 @@ impl Receipt {
             }
         }
         Ok(true)
+    }
+
+    pub fn stored_token(&self) -> Result<String> {
+        for file in &self.files {
+            match &file.restore {
+                Restore::OpenCodeProvider => return super::opencode::stored_token(&file.after),
+                Restore::PiAuth => return super::pi::stored_token(&file.after),
+                Restore::DeepseekCredentials { .. } => {
+                    return super::deepseek::stored_token(&file.after);
+                }
+                _ => {}
+            }
+        }
+        anyhow::bail!("saved native credential was not found")
     }
 
     pub fn apply(&self, receipt_path: &Path) -> Result<()> {
@@ -299,6 +410,12 @@ impl Receipt {
     }
 
     pub fn restore(&self, receipt_path: &Path) -> Result<()> {
+        self.restore_files()?;
+        fs::remove_file(receipt_path)?;
+        Ok(())
+    }
+
+    fn restore_files(&self) -> Result<()> {
         let current: Vec<_> = self
             .files
             .iter()
@@ -339,7 +456,96 @@ impl Receipt {
                 None => fs::remove_file(&file.path)?,
             }
         }
-        fs::remove_file(receipt_path)?;
+        Ok(())
+    }
+
+    /// Persist recovery information before temporarily removing owned settings.
+    /// The builder sees the restored baseline and may fail without losing setup.
+    pub fn replace(self, path: &Path, build: impl FnOnce() -> Result<Self>) -> Result<Self> {
+        let journal = path.with_extension("update.json");
+        ensure!(
+            !journal.exists(),
+            "pending connection update must be recovered first"
+        );
+        let mut rollback = Vec::new();
+        for file in &self.files {
+            let current = read(&file.path)?;
+            let restored = file.restored(current.as_deref(), false)?;
+            // Recovery accepts an absent restored file too.
+            rollback.push(Change {
+                path: file.path.clone(),
+                before: current,
+                after: restored.unwrap_or_default(),
+                restore: Restore::Exact,
+            });
+        }
+        let recovery = Replacement {
+            rollback: Self::new(self.endpoint.clone(), self.model.clone(), rollback),
+            previous: self,
+            active_restored: false,
+        };
+        write(&journal, &serde_json::to_string_pretty(&recovery)?)?;
+        let result: Result<Self> = (|| {
+            recovery.previous.restore(path)?;
+            let next = build()?;
+            next.apply(path)?;
+            fs::remove_file(&journal)?;
+            Ok(next)
+        })();
+        match result {
+            Ok(next) => Ok(next),
+            Err(error) => match Self::recover_update(path) {
+                Ok(()) => Err(error.context("update rolled back; previous connection retained")),
+                Err(recovery) => {
+                    Err(error.context(format!("update interrupted; recovery retained: {recovery}")))
+                }
+            },
+        }
+    }
+
+    pub fn recover_update(path: &Path) -> Result<()> {
+        let journal = path.with_extension("update.json");
+        let Some(text) = read(&journal)? else {
+            return Ok(());
+        };
+        let mut recovery: Replacement =
+            serde_json::from_str(&text).context("invalid update recovery record")?;
+        if !recovery.active_restored {
+            if let Some(active) = Self::load(path)? {
+                active.restore_files()?;
+            }
+            // Once original installed bytes start returning, the newer receipt
+            // must never interpret them as edits to its own provider.
+            recovery.active_restored = true;
+            write(&journal, &serde_json::to_string_pretty(&recovery)?)?;
+        }
+        // Validate the entire baseline before recovering original exact bytes.
+        let mut validated = Vec::new();
+        for file in &recovery.rollback.files {
+            let current = read(&file.path)?;
+            ensure!(
+                current == file.before
+                    || current.as_deref() == Some(&file.after)
+                    || (current.is_none() && file.after.is_empty()),
+                "configuration changed during update recovery: {}",
+                file.path.display()
+            );
+            validated.push(current);
+        }
+        for (file, current) in recovery.rollback.files.iter().zip(validated) {
+            ensure!(
+                read(&file.path)? == current,
+                "configuration changed during update recovery: {}",
+                file.path.display()
+            );
+            match &file.before {
+                Some(text) => write(&file.path, text)?,
+                None if file.path.exists() => fs::remove_file(&file.path)?,
+                None => {}
+            }
+        }
+        write(path, &serde_json::to_string_pretty(&recovery.previous)?)?;
+        fs::remove_file(journal)?;
         Ok(())
     }
 }
@@ -375,7 +581,7 @@ pub(super) fn json_snapshot(path: &Path) -> Result<(serde_json::Value, Option<St
     Ok((value, before))
 }
 
-fn check_path(path: &Path) -> Result<()> {
+pub(super) fn check_path(path: &Path) -> Result<()> {
     ensure!(path.is_absolute(), "connection path must be absolute");
     for ancestor in path.ancestors() {
         match fs::symlink_metadata(ancestor) {

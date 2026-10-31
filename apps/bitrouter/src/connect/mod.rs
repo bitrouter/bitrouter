@@ -1,7 +1,11 @@
 //! Persistent native model-picker integration, separate from one-shot launch.
 mod claude;
 mod codex;
+mod deepseek;
 mod files;
+mod native;
+mod opencode;
+mod pi;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -16,6 +20,22 @@ use crate::output::{CliReport, Output};
 use crate::providers::cli_install::resolve_binary;
 
 const DEFAULT_MODEL: &str = "bitrouter/automatos";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum, Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Protocol {
+    #[default]
+    ChatCompletions,
+    Responses,
+    Messages,
+}
+
+struct Prepared {
+    pub files: Vec<files::Change>,
+    pub instance: String,
+    pub surfaces: Vec<String>,
+    pub notes: Vec<String>,
+}
 
 fn default_model() -> String {
     DEFAULT_MODEL.into()
@@ -47,6 +67,12 @@ fn validate_model(model: &str) -> Result<()> {
 pub enum Target {
     Codex,
     Claude,
+    #[value(name = "opencode")]
+    OpenCode,
+    Pi,
+    #[value(name = "deepseek-harness", alias = "dsh")]
+    #[serde(rename = "deepseek-harness")]
+    Deepseek,
 }
 
 impl Target {
@@ -54,29 +80,50 @@ impl Target {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::OpenCode => "opencode",
+            Self::Pi => "pi",
+            Self::Deepseek => "deepseek-harness",
         }
     }
 }
 
 #[derive(Debug, Args)]
 pub struct Options {
-    /// Omit for the interactive Codex / Claude menu.
+    /// Omit for the interactive native-client menu.
     pub target: Option<Target>,
     /// BitRouter configuration used to find/start the local gateway.
     #[arg(short, long)]
     pub config: Option<PathBuf>,
-    /// Existing gateway root URL. Requires BITROUTER_API_KEY.
+    /// Existing gateway root URL; use BITROUTER_API_KEY for scripted setup.
     #[arg(long, conflicts_with_all = ["remove", "config"])]
     pub base_url: Option<String>,
     /// Exact gateway model ID; new connections default to bitrouter/automatos.
     #[arg(long, conflicts_with = "remove")]
     pub model: Option<String>,
-    /// Picker label; defaults to the exact gateway model ID.
+    /// Native display/detail name; defaults to the exact gateway model ID.
     #[arg(long, conflicts_with = "remove")]
     pub display_name: Option<String>,
     /// Complete Codex ModelsResponse catalog; defaults to its current catalog/cache.
     #[arg(long, conflicts_with = "remove")]
     pub codex_catalog: Option<PathBuf>,
+    /// Actual OpenCode config file/directory, Pi agent directory, or DSH home.
+    #[arg(long)]
+    pub instance: Option<PathBuf>,
+    /// Initialized DeepSeek Harness profile to configure (repeatable).
+    #[arg(long = "profile")]
+    pub profiles: Vec<String>,
+    /// Gateway protocol for OpenCode, Pi and DeepSeek Harness.
+    #[arg(long, value_enum, conflicts_with = "remove")]
+    pub protocol: Option<Protocol>,
+    /// Inspect the selected connection without network access or file changes.
+    #[arg(long, conflicts_with_all = ["remove", "dry_run", "check", "update"])]
+    pub status: bool,
+    /// Check the saved connection and gateway catalog without inference.
+    #[arg(long, conflicts_with_all = ["remove", "dry_run", "update"])]
+    pub check: bool,
+    /// Replace a saved native-provider connection, preserving its prior settings.
+    #[arg(long, conflicts_with_all = ["remove", "dry_run"])]
+    pub update: bool,
     /// Show destination files and effects without starting or changing anything.
     #[arg(long, conflicts_with = "remove")]
     pub dry_run: bool,
@@ -226,23 +273,47 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
     let target = match options.target {
         Some(target) => target,
         None => {
-            ensure!(!options.yes, "--yes requires a target: codex or claude");
+            ensure!(!options.yes, "--yes requires an explicit client target");
             match crate::prompt::select(
                 "Connect BitRouter",
                 "Add the selected gateway model to your native model picker.",
                 vec![
                     crate::prompt::Item::new("Codex", "CLI + Desktop share one configuration"),
                     crate::prompt::Item::new("Claude", "Claude Code CLI + detected Claude Desktop"),
+                    crate::prompt::Item::new(
+                        "OpenCode",
+                        "CLI/TUI + local Desktop/Web server configuration",
+                    ),
+                    crate::prompt::Item::new("Pi", "CLI/TUI agent directory"),
+                    crate::prompt::Item::new(
+                        "DeepSeek Harness",
+                        "Initialized Web, Desktop and headless profiles",
+                    ),
                 ],
                 0,
             )
             .await?
             {
                 0 => Target::Codex,
-                _ => Target::Claude,
+                1 => Target::Claude,
+                2 => Target::OpenCode,
+                3 => Target::Pi,
+                _ => Target::Deepseek,
             }
         }
     };
+    if matches!(target, Target::OpenCode | Target::Pi | Target::Deepseek) {
+        return native::run(target, options, output).await;
+    }
+    ensure!(
+        options.instance.is_none()
+            && options.profiles.is_empty()
+            && options.protocol.is_none()
+            && !options.status
+            && !options.check
+            && !options.update,
+        "instance, profile, protocol, status, check and update flags apply to OpenCode, Pi and DeepSeek Harness"
+    );
     ensure!(
         matches!(target, Target::Codex) || options.codex_catalog.is_none(),
         "--codex-catalog requires the codex target"
@@ -401,6 +472,9 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
                 "neither Claude Code CLI nor Claude Desktop was detected"
             );
             changes
+        }
+        Target::OpenCode | Target::Pi | Target::Deepseek => {
+            anyhow::bail!("native provider dispatch failed")
         }
     };
     let receipt = files::Receipt::new(endpoint.clone(), model.into(), changes)

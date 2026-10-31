@@ -1,11 +1,18 @@
 # BitRouter CLI Reference
 
-`bro connect [codex|claude] --model ID [--display-name LABEL]` adds a gateway model to native model
+`bro connect [codex|claude|opencode|pi|deepseek-harness] --model ID [--display-name LABEL]` adds a gateway model to native model
 pickers (default: `bitrouter/automatos`). Omit the target for an interactive menu; use `--dry-run` to preview,
 `--yes` for scripted setup, and `--remove` to restore owned settings (Codex and Claude Desktop preserve unrelated settings).
 Works without `harness` or `core`. `--base-url URL` selects an explicit gateway
 without local config/startup. Read the [connection contract](../skills/bitrouter/references/connect.md)
 for gateway auth, client differences, restart requirements and recovery.
+
+OpenCode, Pi and DeepSeek Harness add an independent BitRouter provider. Use
+`--instance PATH` for the actual client configuration, `--protocol chat-completions|responses|messages`
+(default: chat-completions), and repeatable `--profile NAME` for initialized Harness profiles.
+`--status` is offline; `--check` checks saved configuration and the gateway catalog using
+the saved credential, without inference; `--update` replaces an existing connection.
+See the connection contract for per-client reload and recovery behavior.
 
 MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
 Without `harness`, the daemon opens no local task or native ACP listener, and

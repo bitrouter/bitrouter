@@ -232,7 +232,7 @@ enum SharedAction {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Connect Codex or Claude CLI and desktop to a gateway model.
+    /// Add a gateway model to supported native CLI, TUI and desktop clients.
     Connect(bitrouter::connect::Options),
     /// Report this executable's compiled features, profile and source identity.
     BuildInfo,

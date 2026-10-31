@@ -1,11 +1,12 @@
 # Persistent native model options
 
-`bro connect` presents a Codex / Claude menu, previews files and effects, and
+`bro connect` presents a Codex / Claude / OpenCode / Pi / DeepSeek Harness menu, previews files and effects, and
 asks once before connecting the detected clients. It works in gateway-only
 builds (`--no-default-features`); neither `harness` nor `core` is required.
 `--model ID` selects an exact gateway model ID. New connections default to
-`bitrouter/automatos`. `--display-name LABEL` separates the picker label from
-the request model ID. It never creates a gateway alias. Setup configures clients; it does not implement routing.
+`bitrouter/automatos`. `--display-name LABEL` supplies a native display/detail name;
+Pi picker rows still use the model ID. It never creates a gateway alias.
+Setup configures clients; it does not implement routing.
 
 ```sh
 bro connect
@@ -22,10 +23,11 @@ bro connect codex --remove
 - `--base-url URL` targets an existing gateway instead, without reading local
   BitRouter configuration or starting a daemon. It conflicts with `--config`.
   Gateway roots and `/v1` URLs, including reverse-proxy path prefixes, are
-  accepted. Explicit gateways require `BITROUTER_API_KEY`; remote URLs require
+  accepted. Scripted explicit gateways require `BITROUTER_API_KEY`; the three new
+  provider clients can prompt for a key interactively. Remote URLs require
   HTTPS. HTTP is permitted only on loopback.
 - `--model ID` is checked against the target gateway's `/v1/models` catalog.
-  One connection per client family is managed at a time. Omit the flag on repeat
+  Codex and Claude manage one connection per client family at a time. Omit the flag on repeat
   setup to retain the recorded model; a different model, explicit display name or endpoint requires
   removal and reconnection. `--remove` uses the receipt, not a model argument.
 - Local credential-less setup requires loopback and `skip_auth: true` in the
@@ -37,13 +39,56 @@ bro connect codex --remove
 - Noninteractive writes/restores require an explicit target and `--yes`.
 - Named remote contexts are rejected: these are local client-file operations.
 
-Both connect and restore require a full client restart. The command never quits
+Codex and Claude connect/restore require a full client restart. New provider adapters
+report their own reload instructions; Pi refreshes its picker on `/model`. The command never quits
 an application, changes tool permissions, or submits an inference request.
 It checks that the gateway advertises the exact model before writing clients.
 `gateway_catalog_verified` is not inference validation; `inference_verified`
 remains false. A preview has state `preview`, a write has
 `configured_restart_required`, and repeat setup has
 `already_configured_restart_required`.
+
+## Independent provider clients
+
+OpenCode, Pi and DeepSeek Harness add a provider named BitRouter without changing
+existing providers or the selected default. They support these additional flags:
+
+- `--instance PATH`: OpenCode config file/directory, Pi agent directory, or Harness home.
+  Receipt identity includes the resolved configuration path. Separate instances are independent.
+- `--protocol chat-completions|responses|messages`: choose the gateway wire API;
+  default is Chat Completions. This is a configuration choice, not a protocol certification.
+- `--profile NAME`: Harness only; repeat for initialized profiles. Without it,
+  all detected initialized profiles are configured. The connector does not create profiles.
+- `--status`: inspect saved settings offline without file writes.
+- `--check`: verify installed settings and the exact gateway model in the catalog
+  using the stored client credential. No inference or tool request is sent.
+- `--update`: change endpoint, model, label, protocol, profile scope or key
+  (set `BITROUTER_API_KEY`). Omitted settings retain the saved connection;
+  an omitted key is reused only when the gateway URL is unchanged.
+  A recoverable journal protects the old connection if replacement fails.
+  Successful updates restore the earlier native default; select BitRouter again if desired.
+  An interrupted update is recovered by the next mutating connect invocation.
+
+Fresh setup reports `configured`, repeat setup `already_configured`, updates
+`updated`, and offline status `configuration_changed` when owned settings drift.
+`configuration_verified` proves supported settings are installed;
+`gateway_catalog_verified` proves catalog access. Neither means a running client
+has reloaded its configuration or that inference and tools work.
+
+`--remove` restores owned provider fields and prior selection only when the
+BitRouter entry is still selected, preserving later unrelated preferences.
+Edited owned provider fields are conflicts. Close config-writing clients during
+connect/update/remove; separate-file updates cannot exclude external writers atomically.
+
+Client details and acceptance boundaries:
+
+- [OpenCode CLI/TUI, Desktop and Web](connect-opencode.md)
+- [Pi CLI/TUI](connect-pi.md)
+- [DeepSeek Harness profiles](connect-deepseek.md)
+
+`bro connect` configures the local server's instance. A Desktop/Web UI attached
+to another machine needs the connector run against that server's configuration.
+It does not silently modify remote machines.
 
 ## Codex
 
@@ -133,12 +178,12 @@ transactions remain recoverable. Repeat connect accepts the supported Desktop
 normalizations but rejects a changed profile selection. Fully quit the client
 before connect/remove to avoid concurrent writers.
 
-Version-4 receipts add Codex config ownership rules. Version-3 receipts record
+Version-5 receipts add native provider ownership and instance metadata. Version-4 receipts add Codex config ownership rules. Version-3 receipts record
 the endpoint, request model, optional display name and Claude Desktop ownership
 rules. Earlier receipts remain readable with their original recovery behavior;
 existing Codex exact-file receipts do not silently acquire relaxed checks.
-To rotate a key, change endpoints, refresh
-a catalog or include a newly installed client, remove and reconnect.
+For Codex/Claude, rotate keys, refresh catalogs or include newly installed clients
+by removing and reconnecting. The three independent-provider clients also support `--update`.
 
 With inherit_defaults: true, a canonical auto router also supplies the default
 automatos router using the same policy/defaults/checks. An explicit
