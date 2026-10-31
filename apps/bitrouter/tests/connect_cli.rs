@@ -113,7 +113,7 @@ fn client_paths(root: &Path) -> [PathBuf; 3] {
 #[tokio::test]
 async fn custom_gateway_model_connects_both_clients_without_local_configuration() -> Result<()> {
     let fixture = Fixture::new()?;
-    let model = "company/team/coder-v2";
+    let model = "bitrouter/claude-automatos";
     let server = gateway(model, "/proxy/team").await;
     let endpoint = format!("{}/proxy/team", server.uri());
     let input_url = format!("{endpoint}/v1/");
@@ -126,11 +126,14 @@ async fn custom_gateway_model_connects_both_clients_without_local_configuration(
             &input_url,
             "--model",
             model,
+            "--display-name",
+            "bitrouter/automatos",
             "--yes",
         ];
         let report = fixture.run(&args, true).await?;
         assert_eq!(report["state"], "configured_restart_required");
         assert_eq!(report["model"], model);
+        assert_eq!(report["display_name"], "bitrouter/automatos");
         assert_eq!(report["endpoint"], endpoint);
         assert_eq!(report["gateway_catalog_verified"], true);
         assert_eq!(report["inference_verified"], false);
@@ -138,6 +141,19 @@ async fn custom_gateway_model_connects_both_clients_without_local_configuration(
         let again = fixture.run(&["connect", target, "--yes"], true).await?;
         assert_eq!(again["state"], "already_configured_restart_required");
         assert_eq!(again["model"], model);
+        assert_eq!(again["display_name"], "bitrouter/automatos");
+        fixture
+            .run(
+                &[
+                    "connect",
+                    target,
+                    "--display-name",
+                    "Different label",
+                    "--yes",
+                ],
+                false,
+            )
+            .await?;
         fixture
             .run(
                 &["connect", target, "--model", "different/model", "--yes"],
@@ -159,12 +175,21 @@ async fn custom_gateway_model_connects_both_clients_without_local_configuration(
     }
     let models = fixture.json("codex/bitrouter-models.json")?;
     assert_eq!(models["models"][1]["slug"], model);
+    assert_eq!(models["models"][1]["display_name"], "bitrouter/automatos");
     let settings = fixture.json("claude/settings.json")?;
     assert_eq!(settings["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION"], model);
+    assert_eq!(
+        settings["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+        "bitrouter/automatos"
+    );
     assert_eq!(settings["env"]["ANTHROPIC_BASE_URL"], endpoint);
     let profile =
         fixture.json("desktop/configLibrary/6c00b780-eab9-4f8f-a51e-4fc1c363b8cd.json")?;
     assert_eq!(profile["inferenceModels"][0]["name"], model);
+    assert_eq!(
+        profile["inferenceModels"][0]["labelOverride"],
+        "bitrouter/automatos"
+    );
     assert_eq!(profile["inferenceGatewayBaseUrl"], endpoint);
     for target in ["codex", "claude"] {
         let report = fixture

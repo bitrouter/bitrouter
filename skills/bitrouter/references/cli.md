@@ -1,8 +1,8 @@
 # CLI reference
 
-`bro connect [codex|claude] --model ID` adds a gateway model to native model
+`bro connect [codex|claude] --model ID [--display-name LABEL]` adds a gateway model to native model
 pickers (default: `bitrouter/automatos`). Omit the target for an interactive menu; use `--dry-run` to preview,
-`--yes` for scripted setup, and `--remove` to restore unchanged files.
+`--yes` for scripted setup, and `--remove` to restore owned settings (Desktop preserves unrelated changes).
 Works without `harness` or `core`. `--base-url URL` selects an explicit gateway
 without local config/startup. Read the [connection contract](connect.md) for gateway auth,
 client differences, restart requirements, catalog snapshots and recovery.

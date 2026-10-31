@@ -4,14 +4,16 @@
 asks once before connecting the detected clients. It works in gateway-only
 builds (`--no-default-features`); neither `harness` nor `core` is required.
 `--model ID` selects an exact gateway model ID. New connections default to
-`bitrouter/automatos`. Setup configures clients; it does not implement routing.
+`bitrouter/automatos`. `--display-name LABEL` separates the picker label from
+the request model ID. It never creates a gateway alias. Setup configures clients; it does not implement routing.
 
 ```sh
 bro connect
 bro connect codex --dry-run
 bro connect claude --yes
 bro connect codex --base-url https://gateway.example/proxy/v1 --model team/coder
-bro connect claude --base-url https://gateway.example --model vendor/coding-v2
+bro connect claude --base-url https://gateway.example \
+  --model bitrouter/claude-automatos --display-name bitrouter/automatos
 bro connect codex --remove
 ```
 
@@ -24,7 +26,7 @@ bro connect codex --remove
   HTTPS. HTTP is permitted only on loopback.
 - `--model ID` is checked against the target gateway's `/v1/models` catalog.
   One connection per client family is managed at a time. Omit the flag on repeat
-  setup to retain the recorded model; a different model or endpoint requires
+  setup to retain the recorded model; a different model, explicit display name or endpoint requires
   removal and reconnection. `--remove` uses the receipt, not a model argument.
 - Local credential-less setup requires loopback and `skip_auth: true` in the
   selected config. No upstream provider credential is borrowed.
@@ -81,7 +83,7 @@ provider-selection variables, custom headers and shell overrides are rejected.
 Desktop does not inherit CLI inference settings. A detected desktop gets a
 separate local Claude-3p/configLibrary BitRouter profile, selected through
 _meta.json, and deploymentMode: "3p". The schema was checked against Desktop
-4.29.0; the implementation does not install or upgrade it. Existing profile model
+4.4212.0; the implementation does not install or upgrade it. Existing profile model
 entries are retained and the alias is appended. With no explicit model list,
 this profile contains only the selected model. Previous profiles remain intact.
 Gateway mode does not support Anthropic cloud environments or Remote Control.
@@ -89,6 +91,13 @@ Managed and bootstrap configurations are rejected. Standard application
 locations or an existing config library (also under CLAUDE_USER_DATA_DIR) are
 used for detection; an absent
 desktop is reported as skipped.
+
+Desktop filters model IDs that are not recognizably Claude, including the default
+`bitrouter/automatos`. For Desktop, select a gateway-advertised Claude route such
+as `bitrouter/claude-automatos` and set `--display-name bitrouter/automatos`.
+`labelOverride` changes the label, not the request model or capability checks.
+The gateway must implement that route; setup does not silently rename it or
+certify non-Claude backends. CLI does not inherit this Desktop name restriction.
 
 The documented Claude gateway contract is Anthropic Messages, including SSE
 and tool use. Validate the actual routed models against that contract before
@@ -102,15 +111,21 @@ They include original file bytes and gateway credentials; do not publish them.
 Files are replaced atomically, receipts precede writes, and symlinks/multiply
 linked files are refused. Unix writes use mode 0600.
 
-`--remove` restores original files exactly, including absent files and the old
-profile selection. It accepts interrupted transactions where a file still has
-its original bytes. If any file has since changed, restore fails without
-overwriting it. Retain the receipt, reconcile those edits, and retry. Repeated
-connect is a no-op only while recorded files remain unchanged. To rotate a key,
-change endpoints, refresh a catalog or include a newly installed client,
-remove and reconnect.
-Receipts include the selected endpoint and model. Original version-1 Automatos
-receipts remain readable and restorable after this upgrade.
+`--remove` restores unchanged Codex/CLI files exactly. Desktop restoration is
+scoped: it removes only the owned profile/list entry, restores the previous
+selection only while the BitRouter profile is selected, and preserves unrelated
+preferences and later profile selections. Desktop's `__sealed__:` credential
+migration is accepted; other edits to the owned profile or its list entry are
+conflicts. Resolve those before retrying; validation precedes all restore writes.
+If another profile was selected, its deployment mode stays unchanged. Interrupted
+transactions remain recoverable. Repeat connect accepts the supported Desktop
+normalizations but rejects a changed profile selection. Fully quit the client
+before connect/remove to avoid concurrent writers.
+
+Version-3 receipts record the endpoint, request model and optional display name,
+plus Desktop ownership rules. Version-1/2 receipts remain readable with their
+original exact-file recovery behavior. To rotate a key, change endpoints, refresh
+a catalog or include a newly installed client, remove and reconnect.
 
 With inherit_defaults: true, a canonical auto router also supplies the default
 automatos router using the same policy/defaults/checks. An explicit

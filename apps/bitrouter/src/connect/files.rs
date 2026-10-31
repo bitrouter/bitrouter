@@ -6,11 +6,25 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+#[derive(Default, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(super) enum Restore {
+    #[default]
+    Exact,
+    ClaudeProfile,
+    ClaudeMeta {
+        profile: String,
+    },
+    ClaudeMode,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(super) struct Change {
     pub path: PathBuf,
     before: Option<String>,
     after: String,
+    #[serde(default)]
+    restore: Restore,
 }
 
 impl Change {
@@ -21,6 +35,7 @@ impl Change {
             path,
             before,
             after,
+            restore: Restore::Exact,
         })
     }
 
@@ -29,6 +44,7 @@ impl Change {
             path,
             before,
             after,
+            restore: Restore::Exact,
         }
     }
 
@@ -39,6 +55,140 @@ impl Change {
             format!("{}\n", serde_json::to_string_pretty(value)?),
         ))
     }
+
+    pub fn with_restore(mut self, restore: Restore) -> Self {
+        self.restore = restore;
+        self
+    }
+
+    fn switched_profile(&self, current: Option<&str>) -> Result<bool> {
+        if let Restore::ClaudeMeta { profile } = &self.restore {
+            let current = object(current)?;
+            let before = object(self.before.as_deref())?;
+            return Ok(current.get("appliedId").and_then(serde_json::Value::as_str)
+                != Some(profile)
+                && current.get("appliedId") != before.get("appliedId"));
+        }
+        Ok(false)
+    }
+
+    fn restored(&self, current: Option<&str>, preserve_mode: bool) -> Result<Option<String>> {
+        if current == self.before.as_deref() {
+            return Ok(self.before.clone());
+        }
+        if matches!(self.restore, Restore::ClaudeMode) && preserve_mode {
+            return Ok(current.map(str::to_owned));
+        }
+        if current == Some(&self.after) {
+            return Ok(self.before.clone());
+        }
+        ensure!(!matches!(self.restore, Restore::Exact), "file was edited");
+        let mut value = object(current)?;
+        let after = object(Some(&self.after))?;
+        let before = object(self.before.as_deref())?;
+        match &self.restore {
+            Restore::Exact => anyhow::bail!("file was edited"),
+            Restore::ClaudeProfile => {
+                // Desktop seals this owned secret on first launch. No other
+                // profile edits are implicitly discarded, including new keys.
+                if value
+                    .get("inferenceGatewayApiKey")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|key| key.starts_with("__sealed__:"))
+                    && let Some(key) = after.get("inferenceGatewayApiKey")
+                {
+                    value.insert("inferenceGatewayApiKey".into(), key.clone());
+                }
+                ensure!(value == after, "BitRouter profile was edited");
+                return Ok(self.before.clone());
+            }
+            Restore::ClaudeMode => {
+                // A later explicit mode choice belongs to the user.
+                if value.get("deploymentMode") == after.get("deploymentMode") {
+                    restore_key(&mut value, &before, "deploymentMode");
+                }
+            }
+            Restore::ClaudeMeta { profile } => {
+                let entries = value
+                    .get_mut("entries")
+                    .and_then(serde_json::Value::as_array_mut)
+                    .context("invalid Desktop profile entries")?;
+                let expected = after
+                    .get("entries")
+                    .and_then(serde_json::Value::as_array)
+                    .and_then(|entries| entries.iter().find(|entry| entry["id"] == *profile))
+                    .context("missing owned profile entry")?;
+                let owned: Vec<_> = entries
+                    .iter()
+                    .filter(|entry| entry["id"] == *profile)
+                    .collect();
+                ensure!(
+                    owned.len() <= 1 && owned.iter().all(|entry| *entry == expected),
+                    "BitRouter profile entry was edited"
+                );
+                entries.retain(|entry| entry["id"] != *profile);
+                if entries.is_empty() && !before.contains_key("entries") {
+                    value.remove("entries");
+                }
+                if value.get("appliedId").and_then(serde_json::Value::as_str) == Some(profile) {
+                    restore_key(&mut value, &before, "appliedId");
+                }
+            }
+        }
+        if value == before {
+            Ok(self.before.clone())
+        } else {
+            Ok(Some(format!("{}\n", serde_json::to_string_pretty(&value)?)))
+        }
+    }
+
+    fn installed(&self, current: Option<&str>) -> Result<bool> {
+        if current == Some(&self.after) {
+            return Ok(true);
+        }
+        if current.is_none() || matches!(self.restore, Restore::Exact) {
+            return Ok(false);
+        }
+        if self.restored(current, false).is_err() {
+            return Ok(false);
+        }
+        let value = object(current)?;
+        let after = object(Some(&self.after))?;
+        Ok(match &self.restore {
+            Restore::ClaudeMeta { profile } => {
+                value.get("appliedId") == after.get("appliedId")
+                    && value
+                        .get("entries")
+                        .and_then(serde_json::Value::as_array)
+                        .is_some_and(|entries| entries.iter().any(|entry| entry["id"] == *profile))
+            }
+            Restore::ClaudeMode => value.get("deploymentMode") == after.get("deploymentMode"),
+            Restore::ClaudeProfile => true,
+            Restore::Exact => false,
+        })
+    }
+}
+
+fn object(text: Option<&str>) -> Result<serde_json::Map<String, serde_json::Value>> {
+    match text {
+        Some(text) => serde_json::from_str(text).context("expected a JSON object"),
+        None => Ok(serde_json::Map::new()),
+    }
+}
+
+fn restore_key(
+    value: &mut serde_json::Map<String, serde_json::Value>,
+    before: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) {
+    match before.get(key) {
+        Some(original) => {
+            value.insert(key.into(), original.clone());
+        }
+        None => {
+            value.remove(key);
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -47,17 +197,29 @@ pub(super) struct Receipt {
     pub endpoint: String,
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    display_name: Option<String>,
     pub files: Vec<Change>,
 }
 
 impl Receipt {
     pub fn new(endpoint: String, model: String, files: Vec<Change>) -> Self {
         Self {
-            version: 2,
+            version: 3,
             endpoint,
             model,
+            display_name: None,
             files,
         }
+    }
+
+    pub fn with_display_name(mut self, name: Option<String>) -> Self {
+        self.display_name = name;
+        self
+    }
+
+    pub fn display_name(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.model)
     }
 
     pub fn load(path: &Path) -> Result<Option<Self>> {
@@ -66,13 +228,14 @@ impl Receipt {
                 let mut receipt: Self =
                     serde_json::from_str(&text).context("invalid connection receipt")?;
                 ensure!(
-                    matches!(receipt.version, 1 | 2),
+                    matches!(receipt.version, 1..=3),
                     "unsupported connection receipt version"
                 );
                 if receipt.version == 1 && receipt.model.is_empty() {
                     receipt.model = super::default_model();
                 }
                 super::validate_model(&receipt.model)?;
+                super::validate_display_name(receipt.display_name())?;
                 Ok(receipt)
             })
             .transpose()
@@ -80,7 +243,7 @@ impl Receipt {
 
     pub fn installed(&self) -> Result<bool> {
         for file in &self.files {
-            if read(&file.path)?.as_deref() != Some(&file.after) {
+            if !file.installed(read(&file.path)?.as_deref())? {
                 return Ok(false);
             }
         }
@@ -122,26 +285,42 @@ impl Receipt {
     }
 
     pub fn restore(&self, receipt_path: &Path) -> Result<()> {
-        for file in &self.files {
-            let current = read(&file.path)?;
-            ensure!(
-                current == file.before || current.as_deref() == Some(&file.after),
-                "refusing to overwrite a changed file: {}; keep the receipt and reconcile this file before retrying --remove",
-                file.path.display()
-            );
+        let current: Vec<_> = self
+            .files
+            .iter()
+            .map(|file| read(&file.path))
+            .collect::<Result<_>>()?;
+        let mut preserve_mode = false;
+        for (file, current) in self.files.iter().zip(&current) {
+            preserve_mode |= file.switched_profile(current.as_deref())?;
         }
+        // Validate every owned field before writing anything. Keep the exact
+        // current bytes for the second race check, not the original snapshot.
+        let restored: Vec<_> = self
+            .files
+            .iter()
+            .zip(&current)
+            .map(|(file, current)| {
+                file.restored(current.as_deref(), preserve_mode)
+                    .with_context(|| {
+                        format!(
+                            "refusing to overwrite changed settings: {}; receipt retained",
+                            file.path.display()
+                        )
+                    })
+            })
+            .collect::<Result<_>>()?;
         // Undo activation pointers first, then provider/catalog files.
-        for file in self.files.iter().rev() {
-            let current = read(&file.path)?;
-            if current == file.before {
+        for ((file, current), restored) in self.files.iter().zip(&current).zip(&restored).rev() {
+            if current == restored {
                 continue;
             }
             ensure!(
-                current.as_deref() == Some(&file.after),
+                read(&file.path)? == *current,
                 "configuration changed during restore: {}",
                 file.path.display()
             );
-            match &file.before {
+            match restored {
                 Some(original) => write(&file.path, original)?,
                 None => fs::remove_file(&file.path)?,
             }

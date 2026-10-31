@@ -21,6 +21,17 @@ fn default_model() -> String {
     DEFAULT_MODEL.into()
 }
 
+fn validate_display_name(name: &str) -> Result<()> {
+    ensure!(
+        !name.is_empty()
+            && name.trim() == name
+            && name.len() <= 512
+            && !name.chars().any(char::is_control),
+        "display name must be nonempty, at most 512 bytes, without control characters or surrounding whitespace"
+    );
+    Ok(())
+}
+
 fn validate_model(model: &str) -> Result<()> {
     ensure!(
         !model.is_empty()
@@ -60,13 +71,16 @@ pub struct Options {
     /// Exact gateway model ID; new connections default to bitrouter/automatos.
     #[arg(long, conflicts_with = "remove")]
     pub model: Option<String>,
+    /// Picker label; defaults to the exact gateway model ID.
+    #[arg(long, conflicts_with = "remove")]
+    pub display_name: Option<String>,
     /// Complete Codex ModelsResponse catalog; defaults to its current catalog/cache.
     #[arg(long, conflicts_with = "remove")]
     pub codex_catalog: Option<PathBuf>,
     /// Show destination files and effects without starting or changing anything.
     #[arg(long, conflicts_with = "remove")]
     pub dry_run: bool,
-    /// Restore the original files if none have changed since connection.
+    /// Restore owned settings, preserving unrelated Desktop changes.
     #[arg(long, conflicts_with = "config")]
     pub remove: bool,
     /// Accept the displayed connection/restore plan without a prompt.
@@ -180,6 +194,7 @@ fn desktop_unmanaged() -> Result<()> {
 struct Report {
     target: Target,
     model: String,
+    display_name: String,
     endpoint: String,
     state: &'static str,
     files: Vec<PathBuf>,
@@ -191,8 +206,9 @@ struct Report {
 impl CliReport for Report {
     fn render(&self, h: &mut Human<'_>) -> std::io::Result<()> {
         h.line(&format!(
-            "{}: {} — {}",
+            "{}: {} (request: {}) — {}",
             self.target.name(),
+            self.display_name,
             self.model,
             self.state
         ))?;
@@ -268,6 +284,13 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
             );
             ensure!(
                 options
+                    .display_name
+                    .as_ref()
+                    .is_none_or(|name| name == receipt.display_name()),
+                "already connected with another display name; use --remove before changing it"
+            );
+            ensure!(
+                options
                     .base_url
                     .as_ref()
                     .is_none_or(|url| endpoint(url).ok().as_ref() == Some(&receipt.endpoint)),
@@ -287,6 +310,8 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
     );
     let model = options.model.as_deref().unwrap_or(DEFAULT_MODEL);
     validate_model(model)?;
+    let display_name = options.display_name.as_deref().unwrap_or(model);
+    validate_display_name(display_name)?;
     // Explicit gateways require neither local configuration nor a local daemon.
     let local = if options.base_url.is_none() {
         let source = crate::paths::resolve_config(options.config.as_deref())?;
@@ -316,7 +341,7 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
     let mut notes = vec![
         "Requests for all selected client models will use the BitRouter gateway.".into(),
         format!(
-            "Fully restart the client, then select {model}. Project, profile or managed overrides may take precedence."
+            "Fully restart the client, then select {display_name} (request model: {model}). Project, profile or managed overrides may take precedence."
         ),
         "Gateway credentials and restore receipts are stored in private local files.".into(),
     ];
@@ -338,6 +363,7 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
                 &endpoint,
                 &token,
                 model,
+                options.display_name.as_deref(),
                 catalog.as_deref(),
                 bundled,
             )?
@@ -346,13 +372,26 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
             claude::check_environment()?;
             let mut changes = vec![];
             if resolve_binary("claude").is_some() || paths.claude.join("settings.json").exists() {
-                changes.push(claude::cli(&paths.claude, &endpoint, &token, model)?);
+                changes.push(claude::cli(
+                    &paths.claude,
+                    &endpoint,
+                    &token,
+                    model,
+                    display_name,
+                )?);
             } else {
                 notes.push("Claude Code CLI was not detected; skipped.".into());
             }
             if let Some(home) = &paths.desktop {
                 desktop_unmanaged()?;
-                changes.extend(claude::desktop(home, &endpoint, &token, model)?);
+                notes.push("Claude Desktop accepts recognizable Claude route IDs. A display name does not bypass model validation or certify backend compatibility.".into());
+                changes.extend(claude::desktop(
+                    home,
+                    &endpoint,
+                    &token,
+                    model,
+                    display_name,
+                )?);
                 notes.push("Claude Desktop switches to a separate BitRouter gateway profile; previous profiles are retained. Cloud environments and Remote Control are unavailable in this mode.".into());
             } else {
                 notes.push("Claude Desktop was not detected; skipped. Run connect --remove and reconnect after installing/opening it.".into());
@@ -364,7 +403,8 @@ pub async fn run(options: Options, output: &Output) -> Result<()> {
             changes
         }
     };
-    let receipt = files::Receipt::new(endpoint.clone(), model.into(), changes);
+    let receipt = files::Receipt::new(endpoint.clone(), model.into(), changes)
+        .with_display_name(options.display_name.clone());
     let mut report = report(
         target,
         &receipt,
@@ -398,6 +438,7 @@ fn report(target: Target, receipt: &files::Receipt, state: &'static str) -> Repo
     Report {
         target,
         model: receipt.model.clone(),
+        display_name: receipt.display_name().into(),
         endpoint: receipt.endpoint.clone(),
         state,
         files: receipt

@@ -32,7 +32,13 @@ pub(super) fn check_environment() -> Result<()> {
     Ok(())
 }
 
-pub(super) fn cli(home: &Path, endpoint: &str, token: &str, model: &str) -> Result<Change> {
+pub(super) fn cli(
+    home: &Path,
+    endpoint: &str,
+    token: &str,
+    model: &str,
+    display_name: &str,
+) -> Result<Change> {
     let path = home.join("settings.json");
     let (mut settings, before) = files::json_snapshot(&path)?;
     ensure!(
@@ -64,7 +70,10 @@ pub(super) fn cli(home: &Path, endpoint: &str, token: &str, model: &str) -> Resu
     env.insert("ANTHROPIC_BASE_URL".into(), json!(endpoint));
     env.insert("ANTHROPIC_AUTH_TOKEN".into(), json!(token));
     env.insert("ANTHROPIC_CUSTOM_MODEL_OPTION".into(), json!(model));
-    env.insert("ANTHROPIC_CUSTOM_MODEL_OPTION_NAME".into(), json!(model));
+    env.insert(
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME".into(),
+        json!(display_name),
+    );
     env.insert(
         "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION".into(),
         json!("Gateway model connected through BitRouter"),
@@ -81,8 +90,9 @@ pub(super) fn desktop(
     endpoint: &str,
     token: &str,
     model: &str,
+    display_name: &str,
 ) -> Result<Vec<Change>> {
-    // configLibrary schema verified against Claude Desktop 4.29.0. Profiles
+    // configLibrary schema and key sealing checked against Desktop 4.4212.0. Profiles
     // contain flat documented gateway keys; _meta selects the applied UUID.
     let library = home.join("configLibrary");
     let meta_path = library.join("_meta.json");
@@ -123,11 +133,17 @@ pub(super) fn desktop(
                 .collect(),
         );
     }
-    if !models
-        .iter()
-        .any(|m| m.as_str() == Some(model) || m.get("name").and_then(Value::as_str) == Some(model))
+    if let Some(existing) = models
+        .iter_mut()
+        .find(|m| m.as_str() == Some(model) || m.get("name").and_then(Value::as_str) == Some(model))
     {
-        models.push(json!({"name": model, "labelOverride": model}));
+        if existing.is_string() {
+            *existing = json!({"name": model, "labelOverride": display_name});
+        } else {
+            existing["labelOverride"] = json!(display_name);
+        }
+    } else {
+        models.push(json!({"name": model, "labelOverride": display_name}));
     }
     let profile_path = library.join(format!("{PROFILE}.json"));
     ensure!(
@@ -170,9 +186,11 @@ pub(super) fn desktop(
     let (mut mode, mode_before) = files::json_snapshot(&mode_path)?;
     mode["deploymentMode"] = json!("3p");
     Ok(vec![
-        Change::json(profile_path, None, &profile)?,
-        Change::json(meta_path, meta_before, &meta)?,
-        Change::json(mode_path, mode_before, &mode)?,
+        Change::json(profile_path, None, &profile)?.with_restore(files::Restore::ClaudeProfile),
+        Change::json(meta_path, meta_before, &meta)?.with_restore(files::Restore::ClaudeMeta {
+            profile: PROFILE.into(),
+        }),
+        Change::json(mode_path, mode_before, &mode)?.with_restore(files::Restore::ClaudeMode),
     ])
 }
 
@@ -189,7 +207,13 @@ mod tests {
         let original = json!({"model":"sonnet","permissions":{"deny":["Bash(rm *)"]},
             "env":{"ANTHROPIC_API_KEY":"upstream-secret","USER_FLAG":"keep"}});
         std::fs::write(&path, original.to_string())?;
-        let change = cli(&root, "http://127.0.0.1:4356", "gateway-secret", MODEL)?;
+        let change = cli(
+            &root,
+            "http://127.0.0.1:4356",
+            "gateway-secret",
+            MODEL,
+            "BitRouter test",
+        )?;
         let journal = root.join("receipt.json");
         let receipt = super::super::files::Receipt::new(
             "http://127.0.0.1:4356".into(),
@@ -201,6 +225,10 @@ mod tests {
         assert_eq!(settings["model"], "sonnet");
         assert_eq!(settings["permissions"], original["permissions"]);
         assert_eq!(settings["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION"], MODEL);
+        assert_eq!(
+            settings["env"]["ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"],
+            "BitRouter test"
+        );
         assert_eq!(settings["env"]["ANTHROPIC_API_KEY"], "");
         assert_eq!(settings["env"]["USER_FLAG"], "keep");
         receipt.restore(&journal)?;
@@ -225,7 +253,13 @@ mod tests {
         let receipt = super::super::files::Receipt::new(
             "http://localhost".into(),
             MODEL.into(),
-            desktop(&root, "http://localhost", "new-key", MODEL)?,
+            desktop(
+                &root,
+                "http://localhost",
+                "new-key",
+                MODEL,
+                "BitRouter test",
+            )?,
         );
         let journal = root.join("receipt.json");
         receipt.apply(&journal)?;
@@ -233,6 +267,10 @@ mod tests {
         let profile = files::json(&library.join(format!("{PROFILE}.json")))?;
         assert_eq!(profile["inferenceModels"][0], "claude-sonnet-test");
         assert_eq!(profile["inferenceModels"][1]["name"], MODEL);
+        assert_eq!(
+            profile["inferenceModels"][1]["labelOverride"],
+            "BitRouter test"
+        );
         assert_eq!(profile["autoModeEnabled"], false);
         assert!(profile.get("inferenceCredentialHelper").is_none());
         assert_eq!(
@@ -252,8 +290,109 @@ mod tests {
         let path = root.join("settings.json");
         let original = json!({"apiKeyHelper":"secret-helper"});
         std::fs::write(&path, original.to_string())?;
-        assert!(cli(&root, "http://localhost", "token", MODEL).is_err());
+        assert!(cli(&root, "http://localhost", "token", MODEL, "BitRouter test").is_err());
         assert_eq!(files::json(&path)?, original);
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_sealing_and_preferences_survive_restart_and_remove() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let receipt = files::Receipt::new(
+            "http://localhost".into(),
+            MODEL.into(),
+            desktop(&root, "http://localhost", "key", MODEL, "BitRouter")?,
+        );
+        let journal = root.join("receipt.json");
+        receipt.apply(&journal)?;
+        let profile_path = root.join(format!("configLibrary/{PROFILE}.json"));
+        let mut profile = files::json(&profile_path)?;
+        profile["inferenceGatewayApiKey"] = json!("__sealed__:fixture");
+        std::fs::write(&profile_path, profile.to_string())?;
+        let mode_path = root.join("claude_desktop_config.json");
+        let mut mode = files::json(&mode_path)?;
+        mode["preferences"] = json!({"theme":"dark"});
+        mode["_cfprefsMigrated"] = json!(true);
+        std::fs::write(&mode_path, mode.to_string())?;
+        let meta_path = root.join("configLibrary/_meta.json");
+        let mut meta = files::json(&meta_path)?;
+        meta["entries"]
+            .as_array_mut()
+            .context("entries")?
+            .push(json!({"id":"another-profile","name":"Later"}));
+        std::fs::write(&meta_path, meta.to_string())?;
+        assert!(receipt.installed()?);
+        receipt.restore(&journal)?;
+        assert!(!profile_path.exists());
+        let restored = files::json(&mode_path)?;
+        assert_eq!(restored["preferences"], mode["preferences"]);
+        assert_eq!(restored["_cfprefsMigrated"], true);
+        assert!(restored.get("deploymentMode").is_none());
+        let meta = files::json(&meta_path)?;
+        assert!(meta.get("appliedId").is_none());
+        assert_eq!(
+            meta["entries"],
+            json!([{"id":"another-profile","name":"Later"}])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_user_profile_choice_is_not_reverted() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let receipt = files::Receipt::new(
+            "http://localhost".into(),
+            MODEL.into(),
+            desktop(&root, "http://localhost", "key", MODEL, "BitRouter")?,
+        );
+        let journal = root.join("receipt.json");
+        receipt.apply(&journal)?;
+        let meta_path = root.join("configLibrary/_meta.json");
+        let mut meta = files::json(&meta_path)?;
+        meta["entries"]
+            .as_array_mut()
+            .context("entries")?
+            .push(json!({"id":"another-profile","name":"Later"}));
+        meta["appliedId"] = json!("another-profile");
+        std::fs::write(&meta_path, meta.to_string())?;
+        assert!(!receipt.installed()?);
+        receipt.restore(&journal)?;
+        assert_eq!(files::json(&meta_path)?["appliedId"], "another-profile");
+        assert_eq!(
+            files::json(&root.join("claude_desktop_config.json"))?["deploymentMode"],
+            "3p"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn desktop_owned_edits_conflict_before_any_restore_write() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let receipt = files::Receipt::new(
+            "http://localhost".into(),
+            MODEL.into(),
+            desktop(&root, "http://localhost", "key", MODEL, "BitRouter")?,
+        );
+        let journal = root.join("receipt.json");
+        receipt.apply(&journal)?;
+        let profile_path = root.join(format!("configLibrary/{PROFILE}.json"));
+        let mut profile = files::json(&profile_path)?;
+        profile["inferenceGatewayBaseUrl"] = json!("https://user.example");
+        std::fs::write(&profile_path, profile.to_string())?;
+        assert!(!receipt.installed()?);
+        assert!(receipt.restore(&journal).is_err());
+        assert!(journal.exists());
+        assert_eq!(
+            files::json(&root.join("configLibrary/_meta.json"))?["appliedId"],
+            PROFILE
+        );
+        assert_eq!(
+            files::json(&root.join("claude_desktop_config.json"))?["deploymentMode"],
+            "3p"
+        );
         Ok(())
     }
 }

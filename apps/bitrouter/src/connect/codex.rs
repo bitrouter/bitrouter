@@ -47,6 +47,7 @@ pub(super) fn prepare(
     endpoint: &str,
     token: &str,
     model: &str,
+    display_name: Option<&str>,
     catalog_override: Option<&Path>,
     bundled: Option<Value>,
 ) -> Result<Vec<Change>> {
@@ -119,6 +120,11 @@ pub(super) fn prepare(
         existing["visibility"] = json!("list");
     } else {
         models.push(model_entry(model));
+    }
+    if let Some(label) = display_name
+        && let Some(entry) = models.iter_mut().find(|entry| entry["slug"] == model)
+    {
+        entry["display_name"] = json!(label);
     }
     // API-authenticated custom providers filter models on this flag. Existing
     // slugs keep their metadata and route through the harness's gateway mapping.
@@ -224,6 +230,7 @@ mod tests {
             MODEL,
             None,
             None,
+            None,
         )?;
         let journal = root.join("receipt.json");
         let receipt = super::super::files::Receipt::new(
@@ -252,7 +259,7 @@ mod tests {
     fn missing_catalog_and_active_profile_fail_without_writes() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let root = temp.path().canonicalize()?;
-        assert!(prepare(&root, "http://localhost", "local", MODEL, None, None).is_err());
+        assert!(prepare(&root, "http://localhost", "local", MODEL, None, None, None).is_err());
         assert!(!root.join("config.toml").exists());
         let mut native = model_entry("native");
         native["slug"] = json!("bundled-native");
@@ -262,6 +269,7 @@ mod tests {
             "local",
             MODEL,
             None,
+            None,
             Some(json!({"models": [native]})),
         )?;
         assert_eq!(seeded.len(), 2);
@@ -270,7 +278,7 @@ mod tests {
             root.join("config.toml"),
             "profile = 'work'\n[profiles.work]\nmodel_provider = 'company'\n",
         )?;
-        assert!(prepare(&root, "http://localhost", "local", MODEL, None, None).is_err());
+        assert!(prepare(&root, "http://localhost", "local", MODEL, None, None, None).is_err());
         Ok(())
     }
 
@@ -288,6 +296,7 @@ mod tests {
             "http://localhost/proxy",
             "local",
             MODEL,
+            None,
             None,
             Some(json!({"models": [existing.clone()]})),
         )?;
