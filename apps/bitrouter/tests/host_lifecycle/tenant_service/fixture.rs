@@ -849,6 +849,8 @@ pub(super) async fn default_owner(
     .await
 }
 
+type HeldStreamState = (mpsc::Sender<(bool, Value)>, Arc<AtomicUsize>);
+
 pub(super) struct HeldStream {
     pub endpoint: String,
     pub calls: Arc<AtomicUsize>,
@@ -869,10 +871,7 @@ impl HeldStream {
             .route(
                 "/chat/completions",
                 axum::routing::post(
-                    |axum::extract::State((sender, calls)): axum::extract::State<(
-                        mpsc::Sender<(bool, Value)>,
-                        Arc<AtomicUsize>,
-                    )>,
+                    |axum::extract::State((sender, calls)): axum::extract::State<HeldStreamState>,
                      headers: axum::http::HeaderMap,
                      axum::Json(body): axum::Json<Value>| async move {
                         calls.fetch_add(1, Ordering::SeqCst);
