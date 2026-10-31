@@ -6,20 +6,20 @@
 > remain supported through CLI/API/native launchers. Earlier implementation
 > notes and source locations below are historical, including G01 notes that UI
 > remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
-> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> and [stage evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 > **CLI-only G01 update (2026-10-18, local worktree):** shared ACP permission
 > policy/replies, command resolution, journal projection and plain transcripts now
 > live in `bitrouter_orchestrator::acp`; process diagnostics and client/UI adapters
 > are separated app-side. The existing UI remains for this phase. See the
-> [implementation evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> [implementation evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 > Earlier source locations below remain historical evidence; UI deletion is G05.
 
 > Code presentation update (2026-09-08):
 > [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md) supersedes permanent dashboard
 > navigation and independent interactive drivers. It preserves public CLI names,
 > native-session ownership, typed action boundaries, and read-only remote scope.
-> [Implementation verification](CODE_TUI_UX_PROGRESS.md) is tracked separately.
+> [Implementation verification](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CODE_TUI_UX_PROGRESS.md) is tracked separately.
 
 Status: **historical design record; final boundary differs in Phase 4** ·
 Author: Claude (with Spikel) · Date: 2026-08-14 · Rev 3
@@ -31,12 +31,12 @@ Author: Claude (with Spikel) · Date: 2026-08-14 · Rev 3
 > into the app or reusing watcher helpers are retained only as design history
 > unless a later note corrects them.
 
-Companion plan: [`TUI_RENDERER_PLAN.md`](TUI_RENDERER_PLAN.md) — numbered tasks
+Companion plan: [`TUI_RENDERER_PLAN.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/TUI_RENDERER_PLAN.md) — numbered tasks
 and gates, per the house pattern set by
-[`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md).
+[`ACP_TUI_PLAN.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_TUI_PLAN.md).
 
 Builds on [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) and
-[`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md), both **complete**. It keeps their
+[`ACP_TUI_PLAN.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_TUI_PLAN.md), both **complete**. It keeps their
 decisions and changes exactly one mechanism: PLAN §C decision 7's
 `ratatui::Viewport::Inline`, whose inline / no-alternate-screen property §4
 preserves by other means.
@@ -846,7 +846,7 @@ This spec **does** change user-facing surface.
 - [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §8 gains a note that its reading of pi's
   main-screen/alt-screen split was half the story (§1.4) and that its status
   line is superseded by §4.5's footer.
-  [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) §C decision 7 and task 4.5 gain a pointer
+  [`ACP_TUI_PLAN.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_TUI_PLAN.md) §C decision 7 and task 4.5 gain a pointer
   here, since `Viewport::Inline` is the one mechanism this spec replaces.
 - No flag, port, env var, or default config changes, so the plugin manifests at
   `.claude-plugin/`, `.codex-plugin/`, and `.agents/plugins/marketplace.json`

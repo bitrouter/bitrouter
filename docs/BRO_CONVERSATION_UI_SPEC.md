@@ -6,11 +6,11 @@
 > remain supported through CLI/API/native launchers. Earlier implementation
 > notes and source locations below are historical, including G01 notes that UI
 > remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
-> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> and [stage evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 Updated: 2026-10-04. This is the native presentation and navigation contract for
 PR #945. Runtime identity, admission, context, ownership and recovery are defined
-once in [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md). Explicit
+once in [the standalone runtime contract](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/BRO_AGENT_RUNTIME_SPEC.md). Explicit
 ACP entry points retain their supervisor inventory and use
 [shared ACP navigation](CODE_TUI_CODEX_NAVIGATION_SPEC.md).
 

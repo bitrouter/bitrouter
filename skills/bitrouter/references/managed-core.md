@@ -138,7 +138,7 @@ turn. Stopping a provider connection does not prove zero usage: incomplete
 attempts and any unresolved integration phase retain unknown cost exposure.
 
 HTTP examples and the full wire contract are in the repository's
-`docs/ORCHESTRATOR_CORE_SPEC.md`. Client functions come from the bound manifest;
+the source-level `bitrouter_ai::core` contracts. Client functions come from the bound manifest;
 request-level `tools` overrides are rejected. Unsupported input fields fail
 explicitly, including stateless transcript replay and provider encrypted state.
 Collaboration observation uses `bitrouter.*` events. The core model pipeline

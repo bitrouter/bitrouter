@@ -5,12 +5,12 @@
 > First-party code/tui/chat/agents attach interfaces are removed; earlier UI
 > examples and source paths are historical. Use native Thread controls, headless
 > ACP commands or native harness launchers from the [current CLI reference](CLI.md).
-> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> See [migration evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 Version: **v0.2**. Updated: **2026-10-04**.
 
 Status: **implemented in #951 and adapted to #945's Thread/Turn runtime.**
-The [acceptance record](BRO_BASE_TOOLS_ACCEPTANCE.md) separates original
+The [acceptance record](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/BRO_BASE_TOOLS_ACCEPTANCE.md) separates original
 macOS/Windows/real-model evidence from integration validation. Runtime authority,
 commit ordering and recovery are defined by the standalone runtime contract.
 
@@ -22,7 +22,7 @@ one `shell` backed by a server-selected interpreter. Preserve the native
 read-only profile without a general command executor.
 
 This document defines tool arguments, outputs, path bounds and interpreter rules.
-[The standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) owns identities,
+[The standalone runtime contract](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/BRO_AGENT_RUNTIME_SPEC.md) owns identities,
 permissions, commit barriers, concurrency and recovery; tool validation does not
 establish full runtime or product acceptance.
 
@@ -39,10 +39,10 @@ Windows servers. [The original design rationale](https://github.com/bitrouter/bi
 is historical. A clearer interface is the motivation; better accuracy, latency
 or token cost is not established by the controlled acceptance tasks.
 
-Source: [tools.rs](../crates/bitrouter-orchestrator/src/tools.rs),
-[agent.rs](../crates/bitrouter-orchestrator/src/agent.rs),
-[service.rs](../crates/bitrouter-orchestrator/src/service.rs) and
-[store.rs](../crates/bitrouter-orchestrator/src/store.rs).
+Source: tools.rs,
+agent.rs,
+service.rs and
+store.rs.
 
 ## Tool interfaces and permissions
 

@@ -1,7 +1,7 @@
 # Router & Extension Spec
 
 状态：**v0.7，Beta 编译式扩展与共享前台宿主；#923 已合并，并随 v1.0.0-alpha.33 预发布。**
-实现与本地验证结果见[验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
+实现与本地验证结果见[验收记录](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
 
 本版替代 v0.5 的 Native/HTTP 双交付设计。Beta 的可执行 extension 统一编译进自定义宿主，
 启动时注册能力，router 显式绑定。删除 HTTP checker 服务、wire crate 和连通 probe；
@@ -218,12 +218,12 @@ callback 原始错误。配置有效、代码成功注册和真实调用仍是�
 | CE07 | 旧 SDK Plugin/stream/output 兼容测试保持；输入检查不宣称替代全部保护 |
 | CE08 | 本地全量测试、lint、fmt、文档、schema、feature 和真实 Native 进程验证 |
 
-验证事实与尚未完成的门槛见 [验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
+验证事实与尚未完成的门槛见 [验收记录](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
 历史 Native/HTTP 验收不能证明本次编译式收敛已经通过。
 
 ## 9. 相关实现
 
-- [SDK extension](../crates/bitrouter-sdk/src/extension/mod.rs)
+- SDK extension
 - [宿主装配](../apps/bitrouter/src/assemble.rs)
 - [共享前台宿主](../apps/bitrouter/src/host.rs)
 - [检查 runtime](../apps/bitrouter/src/request_checks.rs)

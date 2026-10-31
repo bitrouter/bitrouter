@@ -84,7 +84,7 @@ of values**: `models.shape` (`map_of_empty` / `array_of_id` /
 `provider_prefixed`), and `mcp.entry` (`opencode_typed` /
 `command_args_or_url`). Nothing is evaluated — a registry entry selects among
 behaviours reviewed in this repo, which is why a fetched catalog cannot
-introduce new ones. See `docs/AGENT_REGISTRY_SPEC.md` §7 and D4.
+introduce new ones. See the [agent catalog profile](../docs/specs/agent-catalog-v1/README.md).
 
 Placeholders are context-specific, because they resolve at different moments:
 `{base_url_v1}` and `{auth}` in the skeleton's string leaves; `{dir}`,
@@ -142,4 +142,4 @@ An entry with no record is an advisory, not an error; that is how a newly
 contributed agent reads until someone runs the suite.
 
 The **lifecycle** tier (`session/new` → prompt → cancel) is specified in
-`docs/AGENT_REGISTRY_SPEC.md` §9 but not implemented, so no record carries it.
+the catalog profile but is not implemented, so no record carries it.

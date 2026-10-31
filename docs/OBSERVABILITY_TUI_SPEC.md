@@ -6,7 +6,7 @@
 > remain supported through CLI/API/native launchers. Earlier implementation
 > notes and source locations below are historical, including G01 notes that UI
 > remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
-> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> and [stage evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 > **SUPERSEDED 2026-08-16 — the live view is gone.** The `launch --tui` half was
 > already superseded by [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md). The

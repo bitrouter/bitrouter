@@ -2,15 +2,40 @@
 
 This document is the workspace-level guide for BitRouter internals. Start with [`README.md`](../README.md) for the product introduction, then use this guide when you need to understand how the workspace is assembled or how to extend or operate the service.
 
+## Documentation policy
+
+`docs/` contains maintainable protocol contracts, operator instructions,
+contributor documentation and UX documentation. Product documentation is
+maintained in [bitrouter-docs](https://github.com/bitrouter/bitrouter-docs).
+Historical UX material must be identified as such and must not be presented as
+current behavior. Keep user-facing instructions accurate when commands change.
+
+Use [`docs/specs/`](specs/README.md) for interoperable wire and artifact
+contracts. Every new protocol draft needs a beta/stability label distinct from
+its wire version, scope, normative behavior, error and compatibility rules,
+examples or schemas where useful, and observable conformance cases. State
+feature and deployment limits; do not describe unimplemented proposals as
+current behavior. Review schema, examples, tests and documentation together.
+A feature design or implementation detail is not automatically a protocol.
+
+Do not commit task plans, implementation trackers, agent handoffs, dated test
+logs, experiment outputs, acceptance ledgers or intermediate artifacts under
+`docs/`. Put change discussion and evidence in the corresponding issue, pull
+request or CI artifact; keep local work notes outside the tracked docs tree.
+Keep test fixtures required by the build in an appropriate test or contract
+location, and update their consumers before moving them. Before removing a
+document, preserve relevant UX and operator guidance, verify repository links
+and references, and keep previously published stable protocol versions available.
+Development and audit agents must apply these rules when adding, changing or
+reviewing documentation.
+
 ## Workspace Architecture
 
 The application owns gateway execution, Core scheduling, Harness execution and
 storage, CLI orchestration, and optional telemetry. The former standalone
 implementation crates have been consolidated into the application; the
 first-party terminal UI has been retired. The SDK provides gateway, control,
-evaluation, Harness and managed Core transport clients. Revision-specific
-validation is recorded in the [progress ledger](BITROUTER_SERVICE_REFACTOR_PROGRESS.md);
-implementation ownership is described in the [refactor plan](BITROUTER_SERVICE_REFACTOR_PLAN.md).
+evaluation, Harness and managed Core transport clients. Implementation ownership follows the module layout below.
 
 BitRouter is a Cargo workspace organized into `crates/` for shared libraries and contracts, `apps/` for product hosts, and `extensions/` for independently delivered capabilities. Each extension groups its related Cargo packages in one directory; `helpers/` contains contributor tooling.
 
@@ -154,17 +179,13 @@ Trusted application hosts that previously called
 `bitrouter::gateway::pipeline::native_accounting::capture_cache`.
 Those algorithms are application APIs, not AI helpers or SDK transport code.
 
-Use [the standalone runtime contract](BRO_AGENT_RUNTIME_SPEC.md) for current
-requirements, including root format 2 and local v19/HTTP v2. The
-[runtime acceptance index](BRO_AGENT_RUNTIME_IMPLEMENTATION.md) separates local
-fixtures, historical provider/platform checks and remaining product gates.
-[Conversation UI](BRO_CONVERSATION_UI_SPEC.md) and
-[six tools](BRO_BASE_TOOLS_SPEC.md) specialize that contract. Older phase ledgers
-are historical references, not competing descriptions of current behavior.
-Future [core/harness separation](BRO_AGENT_RUNTIME_HANDOFF.md) assigns live
-scheduling/checkpoint semantics to Core and durable storage/ACK authority to
-Harness; the standalone implementation does not prove that integration.
-Router metering and external ACP session ownership retain their own boundaries.
+The [native Thread HTTP profile](specs/agent-http-v2/README.md),
+[native ACP profile](specs/native-acp-v1/README.md), and
+[managed Core profile](specs/managed-core-v1/README.md) document the external
+boundaries. [Conversation UI](BRO_CONVERSATION_UI_SPEC.md) and
+[six tools](BRO_BASE_TOOLS_SPEC.md) describe the corresponding user experience
+and tool behavior. Router metering and external ACP session ownership retain
+their own boundaries.
 
 The CLI is the **host** interface: it owns `main()` and mounts the other
 interfaces as subcommands. The gateway owns model/MCP interop; the harness
@@ -212,8 +233,7 @@ must also install `recorder.tariff_capture(require_known)` at the route stage.
 without guaranteed price coverage before I/O, including native Decisions while
 cache billing remains unverified. Prices and endpoint profile anchors also
 require restart. Native nonzero cache usage retains counters and raw evidence
-with an unavailable cost. See [Decisions specification](DECISIONS_API_SPEC.md)
-and the shipped [setup reference](../skills/bitrouter/references/decisions.md).
+with an unavailable cost. See the shipped [Decisions setup reference](../skills/bitrouter/references/decisions.md) and the [gateway profile](specs/gateway-v1/README.md).
 
 Codex subscription `generate` calls use upstream SSE and the gateway's canonical stream
 collector; the HTTP executor shares that collector and retains its gateway request policy
@@ -310,15 +330,13 @@ Metered Google uses the official Chat endpoint; the retired native Gemini and
 Antigravity transports are not restored. Tool signatures retain canonical
 metadata and a selected-credential replay proof. Clients echo the entire
 `extra_content`; the gateway removes its proof before upstream dispatch.
-See [retirement progress](GEMINI_PROTOCOL_RETIREMENT_PROGRESS.md) for the existing
-SDK limitation and live-provider validation scope.
+
 
 The matcher depends only on AI capability contracts. The repurposed SDK is a
 service-client package and never owns gateway assembly, configuration discovery
 or provider authentication. Its gateway/control/evaluation methods use explicit endpoints and
 credentials, bounded reads and no automatic replay. See the
-[SDK guide](../crates/bitrouter-sdk/README.md) for the available methods and
-[service progress](BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for P0 acceptance evidence.
+[SDK guide](../crates/bitrouter-sdk/README.md) for the available methods.
 
 The span names, attribute vocabulary and lifecycle invariants belong to the AI
 observation contract. The committed schema and conformance tests preserve those
@@ -328,11 +346,9 @@ Application `telemetry` owns OTLP transport, bearer resolution, batching,
 endpoint configuration, cardinality limiting, span construction and the tracing
 bridge. It consumes AI's observation schema and implements the pipeline's
 `ObserveHook`. Other observers continue to record essential request facts and
-usage even when OTLP is absent. The contract carries no OTel types. See the
-[service plan](BITROUTER_SERVICE_REFACTOR_PLAN.md) for the target boundary and the
-[telemetry spec](TELEMETRY_CRATE_SPEC.md) for frozen wire behavior.
+usage even when OTLP is absent. The contract carries no OTel types. See the committed observation schema for wire behavior.
 
-Because the schema is the contract, it is written down rather than inferred from a renderer's call sites. `crates/bitrouter-ai/src/observe/schema.rs` declares every span, attribute, event, metric and silent-failure invariant, names no `opentelemetry` type, depends on nothing but `serde`, and renders to the committed artifact `crates/bitrouter-ai/span-schema.json` — regenerate with `UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-ai committed_artifact` (default features: the module is ungated, and a staleness guard that only fired under `--all-features` would let the artifact rot everywhere else), and the ordinary test run fails when it is stale. It ships with the AI contract crate because it is the interop surface. The declaration is `pub` for the same reason: a second renderer needs it at compile time, not just as JSON. The three helpers only a conformance suite calls — `span_def_for`, `value_type_matches` and `render_json` — sit behind the default-off `testing` feature instead, since public API with no production caller is what CLAUDE.md rule 4 forbids; the feature carries no dependency, so a renderer enables it under `[dev-dependencies]` and pays nothing. Conformance tests in application `telemetry/exporter.rs`, `telemetry/acp.rs` and `telemetry/http_layer.rs` drive real lifecycles and assert that nothing reaches the wire the declaration does not describe, so the artifact is checked rather than aspirational. See [`TELEMETRY_CRATE_SPEC.md`](TELEMETRY_CRATE_SPEC.md).
+Because the schema is the contract, it is written down rather than inferred from a renderer's call sites. `crates/bitrouter-ai/src/observe/schema.rs` declares every span, attribute, event, metric and silent-failure invariant, names no `opentelemetry` type, depends on nothing but `serde`, and renders to the committed artifact `crates/bitrouter-ai/span-schema.json` — regenerate with `UPDATE_SPAN_SCHEMA=1 cargo test -p bitrouter-ai committed_artifact` (default features: the module is ungated, and a staleness guard that only fired under `--all-features` would let the artifact rot everywhere else), and the ordinary test run fails when it is stale. It ships with the AI contract crate because it is the interop surface. The declaration is `pub` for the same reason: a second renderer needs it at compile time, not just as JSON. The three helpers only a conformance suite calls — `span_def_for`, `value_type_matches` and `render_json` — sit behind the default-off `testing` feature instead, since public API with no production caller is what CLAUDE.md rule 4 forbids; the feature carries no dependency, so a renderer enables it under `[dev-dependencies]` and pays nothing. Conformance tests in application `telemetry/exporter.rs`, `telemetry/acp.rs` and `telemetry/http_layer.rs` drive real lifecycles and assert that nothing reaches the wire the declaration does not describe, so the artifact is checked rather than aspirational.
 
 The application gateway owns `assembly`, `http`, `pipeline`, `mcp`, `routing`,
 `observability` and `extensions`. Configuration lives in application `config`.
@@ -484,8 +500,7 @@ remains `full` and includes `http2`. Enabling `multi-instance` still requires
 explicit shared-mode configuration before it changes the runtime mode.
 
 AI observation declarations are ungated. Its pure conformance helpers use the
-default-off `testing` feature. The [P0 plan](BITROUTER_SERVICE_REFACTOR_PLAN.md)
-defines the final feature graph and isolated validation matrix.
+default-off `testing` feature. The workspace manifests define the feature graph.
 
 Application-local task transport and envelopes live in
 `client::agent_local`; its decoded rejection type is `ReplyError` rather than
@@ -687,7 +702,7 @@ Contributor commands in `dist-helper` use this workspace by default. Pass
 Sources, sync locks, recovery journals and generated artifacts all belong to
 that selected tree. This lets experiments run the production producer without
 modifying the contributor's checkout. The live producer-to-host experiment and
-its evidence are described in [Registry v1 acceptance](REGISTRY_V1_ACCEPTANCE.md).
+its evidence are described in [Registry v1 acceptance](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/REGISTRY_V1_ACCEPTANCE.md).
 
 ### Add a new wire protocol
 

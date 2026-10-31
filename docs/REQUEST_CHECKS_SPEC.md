@@ -5,7 +5,7 @@ checker transport, request-check receipts, checker inventory, dedicated control
 routes and `bro checks` command are not part of this contract. See
 [ROUTER_EXTENSION_SPEC.md](ROUTER_EXTENSION_SPEC.md) for scope and migration;
 historical implementation results remain in
-[the acceptance ledger](GUARDRAILS_EXTENSION_ACCEPTANCE.md).
+[the acceptance ledger](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/GUARDRAILS_EXTENSION_ACCEPTANCE.md).
 
 A user selects a named router; its configured input checks run before model
 selection. Checks return allow/deny, not model choices or rewritten requests.

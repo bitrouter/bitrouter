@@ -6,7 +6,7 @@ Author: Claude (with Spikel) · Date: 2026-09-01, revised 2026-09-02
 > **Revised (2026-09-02), and the revision is the reason to read this note.**
 > §2.3 and §4.2 were written against `engine::Session` — a `PendingPermission`
 > in `acp::up`, and a `Session::prompt(&self)` that borrowed the session.
-> [`ACP_CONTROLLER_AMENDMENT_1.md`](ACP_CONTROLLER_AMENDMENT_1.md) retired that
+> [`ACP_CONTROLLER_AMENDMENT_1.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_AMENDMENT_1.md) retired that
 > stack for `bitrouter_orchestrator::acp::client::AcpClient`, so both sections were
 > re-derived from what is actually there before this plan was executed. **Both
 > conclusions survived, for different reasons than the ones originally given**

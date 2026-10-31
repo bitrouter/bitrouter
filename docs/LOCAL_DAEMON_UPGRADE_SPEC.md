@@ -54,7 +54,7 @@ Current source anchors: [update.rs](../apps/bitrouter/src/update.rs),
 [main.rs](../apps/bitrouter/src/main.rs) (`Command::Update`, `restart`),
 [daemon.rs](../apps/bitrouter/src/daemon.rs) (`DaemonResponse::Status`),
 [assemble.rs](../apps/bitrouter/src/assemble.rs) (migration on startup), and
-[supervisor.rs](../apps/bitrouter/src/supervisor.rs) (shutdown and restart
+supervisor.rs (shutdown and restart
 ledger).
 
 ## 2. Scope and terms

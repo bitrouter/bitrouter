@@ -1,7 +1,7 @@
 # Spec: unified agent interfaces — native shortcuts, Code TUI, headless run, and one ACP bridge
 
 > **Superseded in part (2026-09-14):**
-> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes `mcp serve`,
+> [`OSS_MCP_BOUNDARY_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/OSS_MCP_BOUNDARY_SPEC.md) removes `mcp serve`,
 > `mcp install`, and `/mcp-control` from OSS. The native Skill + CLI, Code,
 > launch, run, ACP, and upstream MCP gateway decisions remain.
 
@@ -9,7 +9,7 @@
 > [CODE_TUI_UX_SPEC.md](CODE_TUI_UX_SPEC.md) supersedes permanent dashboard
 > navigation and independent interactive drivers. It preserves public CLI names,
 > native-session ownership, typed action boundaries, and read-only remote scope.
-> [Implementation verification](CODE_TUI_UX_PROGRESS.md) is tracked separately.
+> [Implementation verification](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CODE_TUI_UX_PROGRESS.md) is tracked separately.
 
 Status: **proposed for review** · Date: 2026-09-07  
 Baseline: `45ac00bd` (`codex/remote-control-tui`)
@@ -97,7 +97,7 @@ share presentation semantics merely to make the command tree look symmetric.
 ## 2. Relationship to existing specs
 
 This document changes public naming and product scope while preserving the
-controller invariants in [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md).
+controller invariants in [`ACP_CONTROLLER_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_SPEC.md).
 
 It supersedes:
 
@@ -1333,11 +1333,11 @@ of these items. A changed decision amends this section first.
 
 ## 22. Authoritative references
 
-- [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) — controller topology,
+- [`ACP_CONTROLLER_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_SPEC.md) — controller topology,
   identity, route leases, and harness-owned sessions.
-- [`ACP_SAFETY_INVARIANTS.md`](ACP_SAFETY_INVARIANTS.md) — teardown,
+- [`ACP_SAFETY_INVARIANTS.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_SAFETY_INVARIANTS.md) — teardown,
   permissions, and process safety.
-- [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) — current shared action/report work.
+- [`ACTIONS_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACTIONS_SPEC.md) — current shared action/report work.
 - [`REMOTE_CONTROL_MVP_SPEC.md`](REMOTE_CONTROL_MVP_SPEC.md) — implemented
   remote HTTP read actions.
 - [`REMOTE_CLI_TUI_SUPPORT_SPEC.md`](REMOTE_CLI_TUI_SUPPORT_SPEC.md) — deferred

@@ -8,7 +8,7 @@ controls remain an explicit legacy action; this document retains their
 historical implementation evidence and the unchanged supervisor contracts.
 
 Implementation was authorized after review. Progress and verification evidence
-are tracked in [BACKGROUND_AGENT_IMPLEMENTATION.md](BACKGROUND_AGENT_IMPLEMENTATION.md).
+are tracked in [BACKGROUND_AGENT_IMPLEMENTATION.md](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/BACKGROUND_AGENT_IMPLEMENTATION.md).
 The acceptance criteria below remain requirements, not claims of completed work.
 
 This document proposes a hybrid terminal UX for running and supervising
@@ -98,7 +98,7 @@ cannot make a turn survive terminal closure. Background execution requires
 process ownership to move into a resident supervisor before the UI promises
 detach or later attachment.
 Current implementation and test evidence are tracked separately in the
-[implementation ledger](BACKGROUND_AGENT_IMPLEMENTATION.md).
+[implementation ledger](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/BACKGROUND_AGENT_IMPLEMENTATION.md).
 
 ---
 
@@ -1393,7 +1393,7 @@ Approval should explicitly confirm:
 15. global usage is omitted unless its scope and attribution are exact.
 
 The approved direction is tracked in the ordered
-[implementation plan](BACKGROUND_AGENT_IMPLEMENTATION.md). Work begins with
+[implementation plan](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/BACKGROUND_AGENT_IMPLEMENTATION.md). Work begins with
 supervisor ownership and the local attach/event contract, not with the visible
 agent strip.
 

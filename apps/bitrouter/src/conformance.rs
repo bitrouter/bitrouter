@@ -15,7 +15,7 @@
 //!   by default" from a statement about a config block into a statement about
 //!   observed behaviour.
 //!
-//! T1 (session lifecycle) is specified in `docs/AGENT_REGISTRY_SPEC.md` §9 but
+//! T1 (session lifecycle) is specified in `https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/AGENT_REGISTRY_SPEC.md` §9 but
 //! not implemented here; its result stays **absent** from a report rather than
 //! being reported as a pass. See `Tier` for what that costs.
 //!
@@ -138,7 +138,7 @@ pub struct Report {
 impl Report {
     /// Whether every tier that ran passed. A skipped tier does not block, but
     /// the validator decides separately whether an *absent* tier may go
-    /// `active` — see `docs/AGENT_REGISTRY_SPEC.md` §10.
+    /// `active` — see `https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/AGENT_REGISTRY_SPEC.md` §10.
     pub fn passed(&self) -> bool {
         self.tiers
             .iter()

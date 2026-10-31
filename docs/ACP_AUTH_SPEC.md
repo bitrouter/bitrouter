@@ -5,7 +5,7 @@
 > First-party code/tui/chat/agents attach interfaces are removed; earlier UI
 > examples and source paths are historical. Use native Thread controls, headless
 > ACP commands or native harness launchers from the [current CLI reference](CLI.md).
-> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> See [migration evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 Status: **Proposed — for review** · Date: 2026-09-03
 
@@ -21,7 +21,7 @@ in `bitrouter-sdk`, the auth surfaces of `bitrouter-tui`, and the
 `providers login` path in `apps/bitrouter` insofar as that path duplicates
 knowledge the protocol carries.
 
-It does **not** supersede [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md).
+It does **not** supersede [`ACP_CONTROLLER_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_SPEC.md).
 The controller's forwarding contract, capability gating, and session ownership
 are unchanged; this adds one client-side capability and one client-side flow.
 It does not change how the daemon acquires provider credentials, and it does
@@ -73,9 +73,9 @@ and may be removed or changed at any point," and Zed's client does not
 implement it. BitRouter nonetheless uses it, correctly and in advance: the
 controller sends `providers/set` downstream to the harness, verifies the result
 with `providers/list`, and fails initialize on a mismatch
-([`controller.rs:713`](../crates/bitrouter-orchestrator/src/acp/controller.rs)); it
+(`controller.rs:713`); it
 rejects the same methods upstream from a manager as "not manager-facing"
-([`controller.rs:845`](../crates/bitrouter-orchestrator/src/acp/controller.rs)) and
+(`controller.rs:845`) and
 strips `agentCapabilities.providers` from the response it passes up.
 
 That boundary is correct and this spec does not touch it. Configuring an
@@ -188,7 +188,7 @@ terminal* is the precedent for §7.3.
 `AcpClient` retains only what it acts on. The doc comment is explicit that the
 `initialize` response "is **not** retained: everything this client acts on is
 read out of it here, at handshake, and keeping the rest would be state with no
-reader" ([`client.rs:528`](../crates/bitrouter-orchestrator/src/acp/client.rs)). Only
+reader" (`client.rs:528`). Only
 `route_control` survives. `authMethods` arrives and is dropped, so no surface
 above can name what a harness offers.
 
@@ -197,7 +197,7 @@ reader (§9.1), not to retain the response.
 
 ### 5.2 The capability is declined for a reason that does not apply
 
-[`client.rs:1017`](../crates/bitrouter-orchestrator/src/acp/client.rs):
+`client.rs:1017`:
 
 > Client capabilities are deliberately left at their defaults (no fs / no
 > terminal): ACP v2 removes that client surface, and a manager provides such

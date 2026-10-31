@@ -6,17 +6,17 @@
 > remain supported through CLI/API/native launchers. Earlier implementation
 > notes and source locations below are historical, including G01 notes that UI
 > remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
-> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> and [stage evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 > **CLI-only G01 update (2026-10-18, local worktree):** shared ACP permission
 > policy/replies, command resolution, journal projection and plain transcripts now
 > live in `bitrouter_orchestrator::acp`; process diagnostics and client/UI adapters
 > are separated app-side. The existing UI remains for this phase. See the
-> [implementation evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> [implementation evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 > Earlier source locations below remain historical evidence; UI deletion is G05.
 
 > **Superseded in part (2026-09-14):**
-> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes the OSS origin
+> [`OSS_MCP_BOUNDARY_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/OSS_MCP_BOUNDARY_SPEC.md) removes the OSS origin
 > MCP transport and its action mapping. The retained CLI/TUI parity reasoning
 > now uses the app-owned action table.
 
@@ -30,13 +30,13 @@ Status: **historical rationale; track 1 implemented in #880**
 ([§6.11](#611-acpx-and-what-remote-over-http-can-actually-mean),
 [D13](#d13--the-remote-transport-requirement)); D10's reasoning superseded, its
 conclusion held
-· Implementation: [`CLI_TUI_PARITY_IMPL_SPEC.md`](CLI_TUI_PARITY_IMPL_SPEC.md)
+· Implementation: [`CLI_TUI_PARITY_IMPL_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_TUI_PARITY_IMPL_SPEC.md)
 — the buildable form of §9–§14, measured later against the actions-table stack
 tip; where the two disagree on a `file:line`, that document is current
-· Refs: [`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) (phases 0–4 implemented),
+· Refs: [`ACTIONS_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACTIONS_SPEC.md) (phases 0–4 implemented),
 [`ACP_TUI_SPEC.md`](ACP_TUI_SPEC.md) §2/§8.3/§9,
 [`OBSERVABILITY_TUI_SPEC.md`](OBSERVABILITY_TUI_SPEC.md) §14,
-[`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) §16.3
+[`ACP_CONTROLLER_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_SPEC.md) §16.3
 
 > **The stated goal is "every headless CLI command has the same interactive TUI
 > command." This spec argues it is the wrong target — not because parity is
@@ -234,7 +234,7 @@ There are 29 top-level commands and 103 leaves. Only 8 of the 29 are *invocable*
   the chat line editor.
 
 Two parsers for one grammar is not a hypothetical risk. It is
-[`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §2 root cause (a) — *two implementations* —
+[`ACTIONS_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACTIONS_SPEC.md) §2 root cause (a) — *two implementations* —
 re-created in a surface that has no `--json` and therefore no way to test that
 the two agree.
 
@@ -370,7 +370,7 @@ same gate, and it admits set C honestly instead of by exception. See
 TUI command" says nothing about whether the two *agree*. `bro route` and
 the `/route` picker are both present today and disagree: the picker offers model
 ids the daemon's `route_chain` will refuse
-([`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §1, phase 5). Under P1 that is a violated
+([`ACTIONS_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACTIONS_SPEC.md) §1, phase 5). Under P1 that is a violated
 invariant with a failing test. Command-count parity would have scored today's
 `/route` as a success.
 
@@ -429,7 +429,7 @@ the **TUI's** reach, and track 2 is entirely TUI work.
 
 ## 4. Root cause — why 103 versus 2
 
-[`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §2 named three causes of CLI↔MCP drift. Two
+[`ACTIONS_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACTIONS_SPEC.md) §2 named three causes of CLI↔MCP drift. Two
 of them apply here unchanged and a third is specific to this pair.
 
 **(a) No inventory of interactive commands.** `ACTIONS` inventories MCP tools and
@@ -1995,7 +1995,7 @@ than a preference.
 `SessionActions::status` to call `actions::status` — a future implementer under
 time pressure can satisfy the trait by reading the config directly, and the
 result compiles, passes clippy, and drifts. That is precisely
-[`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §2 root cause (a) — *two implementations* —
+[`ACTIONS_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACTIONS_SPEC.md) §2 root cause (a) — *two implementations* —
 re-created one layer down, and it is the failure this whole line of work exists
 to prevent. B does not have that hole: the report crosses a declared JSON-RPC
 boundary with a negotiated capability, so a second implementation would have to
@@ -2917,7 +2917,7 @@ for free, on the standard surface, instead of the private
   per method, and carries a report shape (`RouteSetResponse`) that a
   `select` cannot express — a route lease is not a value chosen from an
   enumeration, it is a request the daemon may refuse
-  ([`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §1, phase 5).
+  ([`ACTIONS_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACTIONS_SPEC.md) §1, phase 5).
 - **(b) Move to `configOptions`.** Standard surface, no extension to version,
   and any ACP client — not just BitRouter's own TUI — gets a route picker.
 - **(c) Both**: advertise the config option for the picker, keep the extension
@@ -3083,7 +3083,7 @@ the remote profile is a strict subset asserted by a guard
 
 **"Two impls behind a trait" is the wrong shape and would reintroduce the exact
 defect this line of work exists to remove.** Two impls is
-[`ACTIONS_SPEC.md`](ACTIONS_SPEC.md) §2 root cause (a) — *two implementations* —
+[`ACTIONS_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACTIONS_SPEC.md) §2 root cause (a) — *two implementations* —
 with a `#[cfg]`-free blessing. A profile is not an implementation: it is a
 **declaration of which rows this transport may carry**, over one implementation.
 The correct extension of [§10](#10-source-of-truth) is therefore a column, not a

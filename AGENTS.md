@@ -41,17 +41,14 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
 
 ## Documentation
 
-Product docs live in the **`bitrouter-docs`** repo (`content/docs/`), where they
-are authored, reviewed, translated, and published. The authoring contract,
-English/Chinese lockstep, and `sourceHash` tracking live there now — not here.
-`docs/` in this repo now holds internal **development** docs — the CLI reference
-(`docs/CLI.md`), the workspace architecture guide (`docs/DEVELOPMENT.md`), and
-design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
-
-`docs/specs/` is reserved for tracked **protocol specifications**, starting with
-Registry v1. Follow `docs/specs/README.md`; keep wire contracts, compatibility
-rules, schemas, examples, and conformance requirements there. Implementation
-plans, progress, and acceptance evidence belong outside this directory.
+All development and audit agents **MUST** follow the
+[documentation policy](docs/DEVELOPMENT.md#documentation-policy) and the
+[protocol authorship rules](docs/specs/README.md). Keep protocol contracts and
+conformance cases current with the implementation; retain UX and operator
+guidance, and do not add plans, progress ledgers, dated evidence or experiment
+outputs to tracked `docs/`. Product documentation is authored in
+**`bitrouter-docs`**. Confirm links and build/test fixture dependencies before
+removing or moving documentation.
 
 1. **The docs site generates its supported-models table** from its committed
    catalog snapshot. Refreshing that snapshot reads the public `/v1/models`

@@ -3,9 +3,9 @@
 These consumers extend the existing execution owner and authority transaction
 actor. They add no public endpoint, public authority type, service or Cargo
 feature. Dispatch and strict receipts follow the supported opt-in, single-instance
-Unix SQLite [Service eligibility](RESOURCE_TENANCY_IMPLEMENTATION.md#current-local-dispatch-eligibility).
+Unix SQLite [Service eligibility](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/RESOURCE_TENANCY_IMPLEMENTATION.md#current-local-dispatch-eligibility).
 Source-pinned local evidence does not establish final aggregate, platform or
-performance acceptance; see [remaining qualification](RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
+performance acceptance; see [remaining qualification](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/RESOURCE_TENANCY_IMPLEMENTATION.md#remaining-acceptance).
 
 ## OAuth credential lineage
 

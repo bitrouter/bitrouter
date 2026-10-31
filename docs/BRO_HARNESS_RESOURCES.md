@@ -5,7 +5,7 @@
 > First-party code/tui/chat/agents attach interfaces are removed; earlier UI
 > examples and source paths are historical. Use native Thread controls, headless
 > ACP commands or native harness launchers from the [current CLI reference](CLI.md).
-> See [migration evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> See [migration evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 This is the resource extension of PR #945's production `ThreadService`. The app
 wires static daemon configuration in `host.rs`; `Agent` discovers resources while
@@ -334,4 +334,4 @@ not committed artifact downloads. Hosted CI, Windows/Linux process behavior,
 credentialed MCP/provider usage and abrupt-owner recovery are separate gates.
 Skills activation/material delivery, Core context/value selection and native
 multi-agent scheduling remain subsequent work. Native ACP uses this Harness
-unchanged; see [the native ACP contract](BRO_NATIVE_ACP_SERVER_SPEC.md).
+unchanged; see [the native ACP contract](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/BRO_NATIVE_ACP_SERVER_SPEC.md).

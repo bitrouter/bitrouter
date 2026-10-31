@@ -532,7 +532,7 @@ impl OtelExporter {
         //    `TraceLayer` because a public multi-tenant edge must not honour
         //    caller-supplied trace context, and it would silently export
         //    orphaned `chat` roots if this arm were removed. See
-        //    `docs/OTEL_TIERING_SPEC.md` D3/D4.
+        //    `https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/OTEL_TIERING_SPEC.md` D3/D4.
         // 3. The inbound `traceparent`, for a deployment with no ingress span
         //    of its own.
         let parent_context = {

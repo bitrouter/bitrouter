@@ -5,7 +5,7 @@ use super::SubmissionOptions;
 use crate::error::{Error, Result};
 
 // The gateway-request-v1 semantic header contract, independent of configuration.
-// Keep this in sync with docs/GATEWAY_MULTI_INSTANCE_SPEC.md; additions require
+// Keep this in sync with docs/specs/gateway-v1/shared-execution.md; additions require
 // an explicit compatibility decision, not a client-local expansion.
 const SEMANTIC_HEADERS: &[&str] = &[
     "anthropic-beta",

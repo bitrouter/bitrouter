@@ -3,7 +3,7 @@
 > Historical proposal (2026-07-15). Current implementation and acceptance are
 > defined by [CLI-only spec](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md),
 > [CLI reference](CLI.md#bro-init-onboarding-wizard) and the
-> [implementation record](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> [implementation record](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 > Onboarding now saves Router configuration, optionally calls the shared MCP
 > publisher and versioned skill installer, and retains saved progress after
 > optional failures. The no-config-write premise below is historical.

@@ -6,7 +6,7 @@
 > remain supported through CLI/API/native launchers. Earlier implementation
 > notes and source locations below are historical, including G01 notes that UI
 > remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
-> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> and [stage evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 Status: **implemented; locally verified (first delivery)** · Date: 2026-10-01
 
@@ -15,7 +15,7 @@ and an explicitly opened Agents view. The first delivery implements navigation
 and the menu skeleton using native terminal scrollback. BitRouter task
 operations are added separately when their capabilities are defined. This is
 a normative implementation contract. Evidence is recorded separately in
-[CODE_TUI_CODEX_IMPLEMENTATION.md](CODE_TUI_CODEX_IMPLEMENTATION.md).
+[CODE_TUI_CODEX_IMPLEMENTATION.md](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CODE_TUI_CODEX_IMPLEMENTATION.md).
 
 ## 1. Product decisions
 

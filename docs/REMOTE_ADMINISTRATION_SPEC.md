@@ -1,7 +1,7 @@
 # Spec: remote router administration
 
 > **Superseded in part (2026-09-14):**
-> [`OSS_MCP_BOUNDARY_SPEC.md`](OSS_MCP_BOUNDARY_SPEC.md) removes the
+> [`OSS_MCP_BOUNDARY_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/OSS_MCP_BOUNDARY_SPEC.md) removes the
 > `/mcp-control` companion endpoint. The scoped typed HTTP control API,
 > loopback/TLS boundary, and named-context behavior remain current.
 
@@ -9,7 +9,7 @@ Status: **implemented; expanded live verification found a remote MCP issue.**
 The original acceptance run completed on 2026-09-08 in the maintainer-approved
 Docker environment. A subsequent live MCP test found that the transport rejects
 the external Host header through a TLS proxy that preserves it. See the
-[acceptance evidence and current findings](REMOTE_ADMINISTRATION_PROGRESS.md).
+[acceptance evidence and current findings](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/REMOTE_ADMINISTRATION_PROGRESS.md).
 Date: 2026-09-08.
 Verified source baseline: `b657cb62` (`v1.0.0-alpha.30`).
 
@@ -44,7 +44,7 @@ execution. Provider credentials and configuration files stay on the host.
 The maintainer authorized implementation of this spec, including D1–D6, on
 2026-09-08. Flags, paths, scopes, and configuration below remain implementation
 requirements, not proof of delivered behavior. Track evidence in the
-[implementation ledger](REMOTE_ADMINISTRATION_PROGRESS.md).
+[implementation ledger](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/REMOTE_ADMINISTRATION_PROGRESS.md).
 
 ## 2. Verified starting point
 

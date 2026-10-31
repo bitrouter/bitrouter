@@ -6,7 +6,7 @@
 > remain supported through CLI/API/native launchers. Earlier implementation
 > notes and source locations below are historical, including G01 notes that UI
 > remained at that stage. See the [current CLI-only contract](CLI_ONLY_AND_WORKFLOW_SKILLS_SPEC.md)
-> and [stage evidence](CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
+> and [stage evidence](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_AND_WORKFLOW_SKILLS_IMPLEMENTATION.md).
 
 Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 
@@ -15,7 +15,7 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 > authoritative describe the codebase state when this spec was written.
 >
 > **Controller boundary update (2026-09-01):**
-> [`ACP_CONTROLLER_SPEC.md`](ACP_CONTROLLER_SPEC.md) supersedes this spec's
+> [`ACP_CONTROLLER_SPEC.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_SPEC.md) supersedes this spec's
 > single-session product boundary, manager-facing use of `providers/*` for
 > BitRouter route selection, and one-`Session` relay architecture. The shipped
 > renderer, inline terminal behavior, permission UI, cost presentation, and
@@ -184,7 +184,7 @@ are all in the protocol. What lacks them is BitRouter's
 `method_not_found` to everything outside `initialize` / `session/new` /
 `session/prompt` / `session/cancel`
 ([`down.rs:319`](https://github.com/bitrouter/bitrouter/blob/d97924e78c7dab7c6fdf93c779014583e079b97e/crates/bitrouter-sdk/src/acp/down.rs#L319)), and
-[`translate.rs`](../crates/bitrouter-orchestrator/src/acp/translate.rs), whose `_ =>
+`translate.rs`, whose `_ =>
 None` arm drops `Plan` and every variant above.
 
 ## 5. Decision 2 — the work is in `down.rs`, not the TUI
@@ -461,7 +461,7 @@ the same change.
 
 ### 8.3 Scope: session-only, over the shared snapshot layer
 
-> **AMENDED 2026-08-13 by [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) §C.1.** The scope
+> **AMENDED 2026-08-13 by [`ACP_TUI_PLAN.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_TUI_PLAN.md) §C.1.** The scope
 > *rule* below is unchanged and remains authoritative. Its *mechanism* is not:
 > the TUI takes its data from the ACP wire, *not* from `snapshot.rs`. That layer
 > is the `status --watch` shape — daemon-wide rows, rate metrics, control-socket
@@ -503,7 +503,7 @@ credential (Claude Code on Max), requests never reach the daemon, so session
 cost is **structurally unknowable**. The TUI must render `Scope::DaemonWide`
 visibly rather than silently. Inherit that behaviour; do not reinvent it.
 
-> **Superseded 2026-09-02 by [`ACP_CONTROLLER_AMENDMENT_1.md`](ACP_CONTROLLER_AMENDMENT_1.md)
+> **Superseded 2026-09-02 by [`ACP_CONTROLLER_AMENDMENT_1.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_CONTROLLER_AMENDMENT_1.md)
 > C2/C3/C5.** `Scope::Wider` left the ACP surface: `UsageUpdate.cost` is
 > session-attributed or absent, `_meta["bitrouter.dev/cost"]` marks
 > *provenance* rather than scope, and every unattributable case above is
@@ -512,7 +512,7 @@ visibly rather than silently. Inherit that behaviour; do not reinvent it.
 
 ## 9. Decision 6 — no crate yet, with a stated trigger
 
-> **SUPERSEDED 2026-08-13 by [`ACP_TUI_PLAN.md`](ACP_TUI_PLAN.md) §C.1.** Build
+> **SUPERSEDED 2026-08-13 by [`ACP_TUI_PLAN.md`](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/ACP_TUI_PLAN.md) §C.1.** Build
 > the TUI as `crates/bitrouter-tui`, depending on neither the `bitrouter` app
 > crate nor its config.
 >

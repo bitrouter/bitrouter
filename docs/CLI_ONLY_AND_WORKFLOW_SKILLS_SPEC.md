@@ -65,7 +65,7 @@ Native host 仍先检查独立来源许可，再对确切 skill entry 请求内�
 完整 manifest、server+URI 身份、当前 capability、caller/workspace 权限、缓存
 校验与嵌套批准边界不因删除本地版本库而放宽。MCP manifest/digest 是协议完整性
 事实，不等于本地安装版本库。固定规范与 M01–M10 原始契约见
-[MCP 附件](CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md)，其中自动选择描述以本文件为准。
+[MCP 附件](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/CLI_ONLY_MCP_SKILLS_ACCEPTANCE.md)，其中自动选择描述以本文件为准。
 
 ## 5. ACP 交付
 

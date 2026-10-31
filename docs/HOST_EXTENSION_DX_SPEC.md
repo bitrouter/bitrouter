@@ -9,7 +9,7 @@
 本文基于当前工作区的 compile-only extension 实现与已完成的内部收敛，
 补充 [Router & Extension Spec](ROUTER_EXTENSION_SPEC.md) 和
 [Request Checks Spec](REQUEST_CHECKS_SPEC.md)。本版记录已批准的启动接口、类型迁移和
-注册规则；运行验证事实见 [验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
+注册规则；运行验证事实见 [验收记录](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/GUARDRAILS_EXTENSION_ACCEPTANCE.md)。
 
 ## 1. 设计依据与取舍
 
@@ -48,9 +48,9 @@ BitRouter 同样应让使用已编译能力的人通过 router 配置操作，�
 
 当前源码锚点：
 
-- [ExtensionApi](../crates/bitrouter-sdk/src/extension/mod.rs)
-- [业务输入和判定](../crates/bitrouter-sdk/src/extension/request_check.rs)
-- [投影和 host runner](../crates/bitrouter-sdk/src/language_model/request_checks.rs)
+- ExtensionApi
+- 业务输入和判定
+- 投影和 host runner
 - [共享装配](../apps/bitrouter/src/assemble.rs)
 - [共享服务编排](../apps/bitrouter/src/host.rs)
 - [CLI 入口](../apps/bitrouter/src/main.rs)
@@ -266,7 +266,7 @@ store、progress reporter、checker inventory、local/remote control 路由和 `
 每个切片单独可审阅、可验证，不等到四项全部完成才检查默认宿主回归。
 实现提交需完成仓库要求的 all-feature tests、clippy、fmt；公共 API 迁移同时检查
 doctests、严格 rustdoc 与上述 feature 组合。验收结果写入
-[验收记录](GUARDRAILS_EXTENSION_ACCEPTANCE.md)，本文件不预先标记通过。
+[验收记录](https://github.com/bitrouter/bitrouter/blob/80550c9b2079a6e23ceeeb6babf922a77e99b5bb/docs/GUARDRAILS_EXTENSION_ACCEPTANCE.md)，本文件不预先标记通过。
 
 ## 9. 后续方向与本轮边界
 
