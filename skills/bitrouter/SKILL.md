@@ -84,6 +84,8 @@ covers hosted accounts, credits, and `brk_*` keys. Hosted BitRouter or BYOK supp
 
 ### 5. Start the desired agent interface
 
+For persistent gateway model options, use `bro connect --model ID [--display-name LABEL]` (default `bitrouter/automatos`, no harness required);
+see `references/connect.md` for previews, desktop differences and scoped settings recovery.
 Use single-operation CLI controls or the harness's own native interface.
 Observing state never submits, approves, resumes or stops work:
 

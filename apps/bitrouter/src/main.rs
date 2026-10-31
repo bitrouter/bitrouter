@@ -232,6 +232,8 @@ enum SharedAction {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Connect Codex or Claude CLI and desktop to a gateway model.
+    Connect(bitrouter::connect::Options),
     /// Report this executable's compiled features, profile and source identity.
     BuildInfo,
     /// Explicit shared-gateway initialization and administration.
@@ -2104,6 +2106,7 @@ async fn run(cli: Cli, output: &bitrouter::output::Output) -> Result<()> {
 
     match command {
         Command::Shared { action } => run_shared(action, output).await,
+        Command::Connect(options) => bitrouter::connect::run(options, output).await,
         Command::Tenancy { action } => tenancy::run(&action, cli.context.as_deref(), output).await,
         Command::BuildInfo => {
             output.emit(&bitrouter::artifact::current())?;

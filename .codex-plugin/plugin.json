@@ -2,7 +2,7 @@
   "name": "bitrouter",
   "displayName": "BitRouter",
   "version": "0.1.0",
-  "description": "Configure BitRouter through its CLI: provider setup, background daemon readiness, agent inspection, MCP configuration, local skill directories and native/ACP orchestration. Read the bundled skill for commands, permissions and delivery limits.",
+  "description": "Configure BitRouter through its CLI: provider setup, persistent gateway/model connections with display labels and scoped settings recovery, background daemon readiness, agent inspection, MCP configuration, local skill directories and native/ACP orchestration. Read the bundled skill for commands, permissions and delivery limits.",
   "homepage": "https://bitrouter.ai",
   "repository": "https://github.com/bitrouter/bitrouter",
   "license": "Apache-2.0",

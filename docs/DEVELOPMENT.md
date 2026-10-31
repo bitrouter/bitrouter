@@ -170,6 +170,12 @@ The CLI is the **host** interface: it owns `main()` and mounts the other
 interfaces as subcommands. The gateway owns model/MCP interop; the harness
 owns ACP execution. The application also owns local actions and presentation.
 
+Persistent external-client setup (`bro connect`) belongs to the application
+CLI and is available without `harness` or `core`. Its Codex/Claude adapters own
+local configuration and recovery receipts, not agent execution or routing.
+An explicit gateway URL bypasses local configuration and daemon startup; the
+target gateway owns the selected model's catalog and routing behavior.
+
 ### Dependency Logic
 
 **`bitrouter-ai`** owns public model/protocol data, lifecycle and capability

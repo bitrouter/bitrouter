@@ -1,5 +1,12 @@
 # BitRouter CLI Reference
 
+`bro connect [codex|claude] --model ID [--display-name LABEL]` adds a gateway model to native model
+pickers (default: `bitrouter/automatos`). Omit the target for an interactive menu; use `--dry-run` to preview,
+`--yes` for scripted setup, and `--remove` to restore owned settings (Codex and Claude Desktop preserve unrelated settings).
+Works without `harness` or `core`. `--base-url URL` selects an explicit gateway
+without local config/startup. Read the [connection contract](../skills/bitrouter/references/connect.md)
+for gateway auth, client differences, restart requirements and recovery.
+
 MCP proxy configuration and `mcp check`/legacy `tools` diagnostics require `mcp`.
 Without `harness`, the daemon opens no local task or native ACP listener, and
 `agent_api.enabled` and `acp serve` report the missing capability before startup.

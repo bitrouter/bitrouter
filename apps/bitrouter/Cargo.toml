@@ -120,6 +120,7 @@ serde.workspace = true
 # Keep it explicit: optional ACP dependencies must not select storage semantics.
 serde_json = { workspace = true, features = ["float_roundtrip", "preserve_order"] }
 toml.workspace = true
+toml_edit = "0.25"
 erased-serde = "0.4"
 async-trait.workspace = true
 reqwest.workspace = true

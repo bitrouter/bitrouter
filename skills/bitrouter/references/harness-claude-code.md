@@ -1,6 +1,10 @@
 # Harness: Claude
 
-Claude has two deliberate BitRouter facets:
+Claude has three deliberate BitRouter facets:
+
+- `bro connect claude --model ID` adds a persistent gateway model option
+  (default `bitrouter/automatos`), including in builds without `harness`;
+  see [persistent connections](connect.md) for desktop behavior and restore.
 
 - `bro run claude` drives the maintained ACP adapter for one headless turn;
   `--background` gives controller ownership to the daemon.
@@ -45,7 +49,7 @@ adapter's own provider authentication; ordinary sessions route through
 BitRouter and can auto-start the local daemon.
 
 `init --model ID` saves the default model. `run claude PROMPT --model ID` overrides
-it for one session. No vendor CLI config file is rewritten.
+it for one session. These launch/ACP commands do not rewrite vendor CLI config files.
 
 ## Native interface
 

@@ -1,5 +1,12 @@
 # CLI reference
 
+`bro connect [codex|claude] --model ID [--display-name LABEL]` adds a gateway model to native model
+pickers (default: `bitrouter/automatos`). Omit the target for an interactive menu; use `--dry-run` to preview,
+`--yes` for scripted setup, and `--remove` to restore owned settings (Codex and Claude Desktop preserve unrelated settings).
+Works without `harness` or `core`. `--base-url URL` selects an explicit gateway
+without local config/startup. Read the [connection contract](connect.md) for gateway auth,
+client differences, restart requirements, catalog snapshots and recovery.
+
 HTTP/2 is a default-on application Cargo feature (`http2`), forwarded to axum,
 reqwest, the SDK and the shared transport's `h2` dependency. The explicitly
 no-default-features `gateway` and `gateway-shared` distributions remain
