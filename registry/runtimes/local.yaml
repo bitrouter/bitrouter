@@ -1,9 +1,8 @@
 # The local runtime — agents execute as child processes on this machine, over
 # ACP's canonical stdio transport.
 #
-# This is the only runtime BitRouter ships today. Container and remote-sandbox
-# runtimes (E2B, Daytona) are specified in `docs/AGENT_REGISTRY_SPEC.md` §12 but
-# are not implemented, so nothing here anticipates them.
+# This catalog currently ships the local runtime. Container and remote
+# sandbox runtimes are not implemented.
 #
 # Exact pins are the security contract for this file: the catalog is fetched
 # over the network and names commands that BitRouter spawns with the user's

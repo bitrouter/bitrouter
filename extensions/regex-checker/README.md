@@ -172,8 +172,7 @@ the explicit `.plugin(...)` call in the custom executable.
 The host registration API is
 `bitrouter::gateway::extensions::registry::ExtensionApi`. Callback inputs and decisions have moved to
 `bitrouter_ai::extension::request_check`; use those contracts directly. HTTP
-checker declarations remain unsupported. See the
-[service migration plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md).
+checker declarations remain unsupported.
 
 ## Verification
 

@@ -1544,8 +1544,7 @@ active work while preserving a paused accepted queue. Load/resume reattaches;
 foreground prompt can clear a safely settled empty pause. `session/close` cancels
 all accepted inputs, waits for cleanup and retains history, then requires reopen.
 Use `_meta.bitrouter.idempotencyKey` for retryable durable operations. See
-[the native ACP contract](BRO_NATIVE_ACP_SERVER_SPEC.md) and its
-[acceptance record](BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md).
+[the native ACP interoperability profile](specs/service-api/README.md#native-acp-extensions).
 
 MCP requests must exactly match host-configured bindings; native resources,
 skills and AGENTS.md use the existing Harness. Client file/terminal callbacks,
@@ -2376,7 +2375,7 @@ harness-native. `show` returns canonical events, separate replay audit, gaps,
 and observed metering/route links. Output follows the global JSON/`--human`
 convention. Content persists until explicit deletion; deletion fences further
 recording for that native identity and does not touch native harness history
-or metering. See [the recording contract](ACP_CANONICAL_CAPTURE_SPEC.md) for
+or metering. See [recording guide](development/evidence-learning.md#observed-recording) for
 visibility, write-failure, and cost-accounting semantics.
 
 ## ACP checkpoints and assessment history
@@ -2455,7 +2454,7 @@ cannot overwrite a newer selection. Appending a session marks its previous
 assessment stale, while preserving the old checkpoint. Deletion invalidates
 dependent checkpoints and removes associated assessment text. Only `judge` and
 `judge-job --resume` invoke a model; checkpoint and manual scoring commands do
-not publish routes. See [the checkpoint contract](ACP_CHECKPOINT_SPEC.md).
+not publish routes. See [checkpoint guide](development/evidence-learning.md#immutable-checkpoints-and-assessment-revisions).
 
 `judge` creates a durable job for the checkpoint/model contract. It uses the
 fixed rubric library, sends no tools or ACP routing identity, and imposes no
@@ -2613,7 +2612,7 @@ reduced exposure is not automatically raised. A persisted incompatible learner
 plan holds new trial admission until local reconciliation; this does not require
 another judge call or reassign existing sessions.
 
-See [the evolution contract](ACP_EVOLUTION_SPEC.md) for the block, reward and
+See [learning guide](development/evidence-learning.md#evaluation-and-policy-publication) for the block, reward and
 publication semantics. Use the CLI controls above for mode, rubric and existing
 block management. These controls do not establish that automatic promotion is
 safe on real coding tasks.
@@ -2626,7 +2625,7 @@ verifies compiled registrations and revisions. Checker declarations and router
 bindings require restart after changes. Startup logs and bounded invocation
 tracing provide content-free diagnostics; absence of telemetry is not proof that
 a check did not run. Existing `bro requests` remains the settled cost/usage
-interface. See [REQUEST_CHECKS_SPEC.md](REQUEST_CHECKS_SPEC.md) for the execution
+interface. See [Router request checks](development/extensions.md#request-entry-and-checking) for the execution
 and coverage contract.
 
 ### Native BRO resource configuration
@@ -2637,7 +2636,7 @@ implementation and honors `mcp.upstream_protocol`. MCP calls follow the existing
 identified approval policy; `--read-only` does not connect to MCP. Configuration
 is fixed at daemon startup: restart to replace native MCP transport/credentials.
 Skills discovery supplies metadata and versions without prompt injection.
-See [BRO harness resources](BRO_HARNESS_RESOURCES.md).
+See [BRO harness resources](development/harness-resources.md).
 
 `bro workflow-state reliability-report --database-url <URL> --config <PATH> --policy <NAME> --output <PATH>` reads reliability thresholds from the named policy in the version 4 lock (`--policy` defaults to `auto`).
 
