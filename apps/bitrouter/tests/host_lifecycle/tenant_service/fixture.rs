@@ -693,11 +693,22 @@ async fn gated_response(
     let body = axum::body::to_bytes(body, BODY_LIMIT)
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-    if state
-        .waiting
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
-        .is_ok()
-    {
+    // Retain the saturating reservation on the MSRV and Rust 1.99, which
+    // deprecated fetch_update in favor of the newer try_update spelling.
+    let mut waiting = state.waiting.load(Ordering::SeqCst);
+    let reserved = loop {
+        let Some(next) = waiting.checked_sub(1) else {
+            break false;
+        };
+        match state
+            .waiting
+            .compare_exchange_weak(waiting, next, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => break true,
+            Err(current) => waiting = current,
+        }
+    };
+    if reserved {
         let authorization = parts
             .headers
             .get("authorization")
