@@ -12,7 +12,7 @@ struct Slot<T> {
     state: Mutex<State<T>>,
     changed: Notify,
 }
-pub(crate) struct Sender<T>(Arc<Slot<T>>);
+pub(crate) struct Sender<T>(Arc<Slot<T>>, std::sync::Weak<Owner>, std::time::Duration);
 pub(crate) struct Receiver<T>(Arc<Slot<T>>);
 pub(crate) fn channel<T: Send + 'static>(owner: &Arc<Owner>) -> Result<(Sender<T>, Receiver<T>)> {
     let slot = Arc::new(Slot {
@@ -29,7 +29,10 @@ pub(crate) fn channel<T: Send + 'static>(owner: &Arc<Owner>) -> Result<(Sender<T
             slot.close();
         }
     }))?;
-    Ok((Sender(slot.clone()), Receiver(slot)))
+    Ok((
+        Sender(slot.clone(), Arc::downgrade(owner), owner.output_idle),
+        Receiver(slot),
+    ))
 }
 impl<T> Slot<T> {
     fn close(&self) {
@@ -73,6 +76,19 @@ impl<T> Sender<T> {
     /// Return only once the receiver took the value or disappeared. Cancellation
     /// destroys an unread value outside the mutex, before capacity can drain.
     pub(crate) async fn send(&self, item: T) -> Result<()> {
+        match tokio::time::timeout(self.2, self.send_until_consumed(item)).await {
+            Ok(result) => result,
+            Err(_) => {
+                if let Some(owner) = self.1.upgrade() {
+                    owner.cancel();
+                }
+                self.0.close();
+                Err(BitrouterError::UpstreamUnavailable)
+            }
+        }
+    }
+
+    async fn send_until_consumed(&self, item: T) -> Result<()> {
         {
             let mut state = self
                 .0

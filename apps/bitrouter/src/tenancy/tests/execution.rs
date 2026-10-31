@@ -24,6 +24,8 @@ pub(in crate::tenancy) mod native;
 mod oauth_cases;
 mod receipts;
 mod rejections;
+#[path = "../routing/pipeline_tests.rs"]
+mod routing_regressions;
 mod secrets;
 
 async fn provision(url: &str) -> Result<(Fixture, ResourceRef, ResourceRef)> {

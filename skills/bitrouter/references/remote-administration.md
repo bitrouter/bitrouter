@@ -53,6 +53,39 @@ ID is exactly `operator.<configured ID>`; use
 updates. Token rotation preserves this identity; renaming the configured ID
 changes it. Ordinary principals cannot use the reserved `operator.` prefix.
 
+Execution lifetime is configured by the host at startup:
+
+```yaml
+tenancy:
+  enabled: true
+  submission_timeout_secs: 60
+  execution_timeout_secs: null
+  stream_idle_timeout_secs: 120
+  resource_origins: []
+```
+
+Submission bounds upload and admission, not the lifetime of an admitted stream.
+The optional execution total starts at admission; `null` or omission permits
+ongoing active work. The idle setting bounds each provider read and blocked
+output handoff, preventing silent upstreams or unread response bodies from
+indefinitely retaining reservations. All durations are positive integer seconds
+up to 31,536,000. Preparation callbacks follow the execution's optional total;
+per-part callbacks use the idle budget and storage keeps its shorter limits.
+A disconnected preparation waiter cancels its owned call. Receipt settlement
+has a fixed 30-second budget; cancellation/shutdown has a separate 30-second
+producer-join budget so unread output does not spend cleanup time in advance.
+Repeated cancellation does not renew either budget. Late confirmed joins can
+release capacity, but genuine cleanup failure keeps admission fenced. Unknown
+effects remain unknown and inference is never replayed. Successful delivery
+still waits for durable receipt acknowledgement.
+
+`resource_origins` defaults to empty, which keeps tenant-managed route
+provisioning disabled. Installation operators remain trusted. An enabled host
+may list up to 256 distinct HTTP(S) origins (for example,
+`https://api.example.com`); a trailing slash is accepted. Userinfo, paths,
+queries, fragments and duplicate normalized origins are rejected. This is a
+host-controlled allowlist, not a field in a tenant draft.
+
 `tenancy.resource_import` optionally imports an operator JSON resource manifest
 at startup; relative paths use the server process working directory. Set
 `tenancy.wrapping_key_env` to an environment variable holding a stable base64

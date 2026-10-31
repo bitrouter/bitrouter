@@ -117,7 +117,7 @@ impl Worker {
                     let candidate = seed.unknown(&at)?;
                     budget.charge(
                         0,
-                        usize::try_from(candidate.bytes())?
+                        usize::try_from(candidate.bytes() + candidate.auxiliary_bytes())?
                             .checked_mul(3)
                             .context("recovery receipt bound")?,
                     )?;
@@ -233,7 +233,7 @@ impl Worker {
             match (saved, missing) {
                 (None, true) => {
                     reserve_bytes = reserve_bytes
-                        .checked_add(candidate.bytes())
+                        .checked_add(candidate.bytes() + candidate.auxiliary_bytes())
                         .context("native repair capacity overflow")?;
                     entries.push((
                         seed.execution.clone(),

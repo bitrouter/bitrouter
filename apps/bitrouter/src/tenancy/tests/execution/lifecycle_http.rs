@@ -87,12 +87,23 @@ struct Settlement {
     streamed: bool,
 }
 
-struct Recorder(Arc<Mutex<Vec<Settlement>>>);
+#[derive(Default)]
+struct SettlementGate {
+    entered: Notify,
+    release: CancellationToken,
+}
+
+struct Recorder {
+    recorded: Arc<Mutex<Vec<Settlement>>>,
+    gate: Arc<SettlementGate>,
+}
 
 #[async_trait]
 impl SettlementRecorder for Recorder {
     async fn record(&self, ctx: &mut SettlementContext) -> GatewayResult<()> {
-        self.0
+        self.gate.entered.notify_one();
+        self.gate.release.cancelled().await;
+        self.recorded
             .lock()
             .map_err(|_| BitrouterError::internal("test settlement lock"))?
             .push(Settlement {
@@ -146,6 +157,7 @@ struct Invocation {
     execution: Weak<TenantExecution>,
     request_id: String,
     recorded: Arc<Mutex<Vec<Settlement>>>,
+    settlement: Arc<SettlementGate>,
     prepared: Arc<AtomicBool>,
 }
 
@@ -179,11 +191,15 @@ async fn invocation(fixture: &Fixture, route: &ResourceRef) -> Result<Invocation
     request.inbound_protocol = Some(ApiProtocol::ChatCompletions);
     let mut pipeline = execution.pipeline()?;
     let recorded = Arc::new(Mutex::new(Vec::new()));
+    let settlement = Arc::new(SettlementGate::default());
     Arc::get_mut(&mut pipeline)
         .context("new pipeline already shared")?
         .settlement_recorders
         .push(HookRegistration::new(
-            Arc::new(Recorder(recorded.clone())),
+            Arc::new(Recorder {
+                recorded: recorded.clone(),
+                gate: settlement.clone(),
+            }),
             OperationScope::Generation,
             TypeId::of::<Recorder>(),
         ));
@@ -206,6 +222,7 @@ async fn invocation(fixture: &Fixture, route: &ResourceRef) -> Result<Invocation
         execution: weak_execution,
         request_id,
         recorded,
+        settlement,
         prepared,
     })
 }
@@ -277,6 +294,7 @@ async fn exercise(disconnect: Disconnect) -> Result<()> {
         ..HttpTimeouts::default()
     })?);
     let mut invocation = invocation(&fixture, &route).await?;
+    let cleanup = invocation.settlement.release.clone().drop_guard();
     let request = Request::builder()
         .method("POST")
         .uri("/v1/chat/completions")
@@ -308,7 +326,10 @@ async fn exercise(disconnect: Disconnect) -> Result<()> {
                 let task = handler.take().context("HTTP handler")?;
                 task.abort();
                 ensure!(matches!(task.await, Err(error) if error.is_cancelled()));
-                retained(&invocation, true)?;
+                // Transport cancellation must reach the original settlement
+                // callback without releasing its external producer custody.
+                tokio::time::timeout(TIMEOUT, invocation.settlement.entered.notified()).await?;
+                retained(&invocation, false)?;
             }
             Disconnect::UnclaimedResponse => {
                 release.notify_one();
@@ -365,9 +386,16 @@ async fn exercise(disconnect: Disconnect) -> Result<()> {
             );
         }
         match disconnect {
-            Disconnect::BeforeHeaders => release.notify_one(),
-            Disconnect::UnclaimedResponse => drop(handler.take()),
+            Disconnect::BeforeHeaders => {}
+            Disconnect::UnclaimedResponse => {
+                drop(handler.take());
+                tokio::time::timeout(TIMEOUT, invocation.settlement.entered.notified()).await?;
+                retained(&invocation, false)?;
+            }
         }
+        // The provider's withheld headers stay blocked in BeforeHeaders. Only
+        // the real settlement ACK may now release the pipeline and its lease.
+        invocation.settlement.release.cancel();
         tokio::time::timeout(TIMEOUT, shutdown).await??;
         ensure!(
             invocation.pipeline.upgrade().is_none(),
@@ -377,14 +405,34 @@ async fn exercise(disconnect: Disconnect) -> Result<()> {
             invocation.execution.upgrade().is_none(),
             "tenant execution survived clean drain"
         );
-        let recorded = invocation
-            .recorded
-            .lock()
-            .map_err(|_| anyhow::anyhow!("test settlement lock"))?;
-        ensure!(recorded.len() == 1, "disconnect must settle exactly once");
-        let recorded = recorded.first().context("missing settlement")?;
-        ensure!(recorded.request_id == invocation.request_id);
-        ensure!(recorded.principal == fixture.principal.as_str() && recorded.streamed);
+        {
+            let recorded = invocation
+                .recorded
+                .lock()
+                .map_err(|_| anyhow::anyhow!("test settlement lock"))?;
+            ensure!(recorded.len() == 1, "disconnect must settle exactly once");
+            let recorded = recorded.first().context("missing settlement")?;
+            ensure!(recorded.request_id == invocation.request_id);
+            ensure!(recorded.principal == fixture.principal.as_str());
+            ensure!(recorded.streamed == matches!(disconnect, Disconnect::UnclaimedResponse));
+        }
+        let receipt = crate::tenancy::receipts::store::lookup(
+            &fixture.db,
+            &fixture.installation,
+            &fixture.tenant,
+            &invocation.request_id.as_str().try_into()?,
+        )
+        .await?
+        .context("durable disconnected receipt")?;
+        ensure!(receipt.outcome != bitrouter_ai::tenancy::execution::Outcome::Completed);
+        ensure!(receipt.attempts.len() == 1);
+        if matches!(disconnect, Disconnect::BeforeHeaders) {
+            ensure!(
+                receipt.state == bitrouter_ai::tenancy::execution::ReceiptState::Unknown
+                    && receipt.attempts[0].outcome
+                        == bitrouter_ai::tenancy::execution::Outcome::Unknown
+            );
+        }
         ensure!(
             calls.load(Ordering::SeqCst) == 1,
             "disconnect retried provider work"
@@ -392,6 +440,7 @@ async fn exercise(disconnect: Disconnect) -> Result<()> {
         Ok::<(), anyhow::Error>(())
     }
     .await;
+    drop(cleanup);
     drop(handler);
     release.notify_one();
     stop.cancel();

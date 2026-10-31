@@ -69,9 +69,9 @@ async fn provider(State(state): State<Provider>, Json(body): Json<serde_json::Va
     if body["model"] != "model-a" || body["stream"] != true {
         return StatusCode::BAD_REQUEST.into_response();
     }
+    let dropped = Dropped(state.dropped.clone());
     state.received.notify_one();
     state.headers.cancelled().await;
-    let dropped = Dropped(state.dropped.clone());
     // https://platform.openai.com/docs/api-reference/chat/streaming
     let first = json!({"id":"socket-stream","object":"chat.completion.chunk","created":0,"model":"model-a",
         "choices":[{"index":0,"delta":{"content":"socket-prefix"},"finish_reason":null}]});

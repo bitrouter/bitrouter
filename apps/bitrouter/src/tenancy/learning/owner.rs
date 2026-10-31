@@ -32,7 +32,7 @@ pub(in crate::tenancy) struct Owner {
     pub binding: Binding,
     pub prepared: Arc<Prepared>,
     pub execution: ExecutionId,
-    pub deadline: tokio::time::Instant,
+    pub deadline: crate::tenancy::execution::deadline::Deadline,
     pub(in crate::tenancy) recovery: Option<super::recovery::Seed>,
     receipt: Weak<ReceiptOwner>,
     observation: OnceLock<Observation>,
@@ -67,7 +67,7 @@ impl Owner {
         prepared: Arc<Prepared>,
         receipt: &Arc<ReceiptOwner>,
         lease: LearningLease,
-        deadline: tokio::time::Instant,
+        deadline: crate::tenancy::execution::deadline::Deadline,
     ) -> anyhow::Result<Arc<Self>> {
         let recovery = receipt.learning_seed(&binding, &prepared)?;
         Ok(Arc::new(Self {
@@ -249,6 +249,7 @@ impl Owner {
         Ok(state.output.clone())
     }
     pub(super) async fn wait_terminal(&self) -> Result<(), ErrorCode> {
+        let deadline = self.cleanup_deadline()?;
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -263,7 +264,7 @@ impl Owner {
                 Phase::Unknown => return Err(ErrorCode::AuthorityUnavailable),
                 _ => {}
             }
-            tokio::time::timeout_at(self.deadline + std::time::Duration::from_secs(30), changed)
+            tokio::time::timeout_at(deadline, changed)
                 .await
                 .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         }
@@ -271,6 +272,7 @@ impl Owner {
     /// Only Registry uses this after its actual local pipeline joins. This is
     /// a readiness predicate, never an admission or a completed-receipt claim.
     pub(in crate::tenancy) async fn stopped(&self) -> Result<bool, ErrorCode> {
+        let deadline = self.cleanup_deadline()?;
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -292,12 +294,13 @@ impl Owner {
                     _ => {}
                 }
             }
-            tokio::time::timeout_at(self.deadline + std::time::Duration::from_secs(30), changed)
+            tokio::time::timeout_at(deadline, changed)
                 .await
                 .map_err(|_| ErrorCode::AuthorityUnavailable)?;
         }
     }
     pub(in crate::tenancy) async fn drain(self: &Arc<Self>) -> Result<(), ErrorCode> {
+        let deadline = self.cleanup_deadline()?;
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);
@@ -340,12 +343,9 @@ impl Owner {
                 }
                 (Phase::Unknown, _) => return Err(ErrorCode::AuthorityUnavailable),
                 _ => {
-                    tokio::time::timeout_at(
-                        self.deadline + std::time::Duration::from_secs(30),
-                        changed,
-                    )
-                    .await
-                    .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+                    tokio::time::timeout_at(deadline, changed)
+                        .await
+                        .map_err(|_| ErrorCode::AuthorityUnavailable)?;
                 }
             }
         }
@@ -358,5 +358,12 @@ impl Owner {
         };
         drop((lease, source));
         Ok(())
+    }
+
+    pub(super) fn cleanup_deadline(&self) -> Result<tokio::time::Instant, ErrorCode> {
+        self.receipt
+            .upgrade()
+            .map(|receipt| receipt.cleanup_deadline())
+            .ok_or(ErrorCode::AuthorityUnavailable)
     }
 }

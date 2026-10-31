@@ -127,6 +127,14 @@ pub(super) fn repaired(before: &Value, after: &Value) -> Result<()> {
         .context("repaired exact execution")?;
     let receipt: Value = serde_json::from_str(row[1].as_str().context("receipt JSON")?)?;
     let disposition: Value = serde_json::from_str(row[2].as_str().context("disposition JSON")?)?;
+    // Paid learning seeds have no capture version. Repair cannot manufacture
+    // observations or a capture contract absent from the accepted seed.
+    ensure!(
+        seed["usage_evidence_version"].is_null()
+            && disposition["usage_evidence_digest"].is_null()
+            && after["usage"] == before["usage"],
+        "paid repair changed retained capture or invented missing evidence"
+    );
     for (receipt_field, seed_field) in [
         ("installation_id", "installation"),
         ("tenant_id", "tenant"),
@@ -173,21 +181,85 @@ pub(super) async fn accounting(service: &Service, db: &sea_orm::DatabaseConnecti
             == 0,
         "bootstrap retained a completed repair reservation"
     );
-    // This is the same production M5 read-only observation, not a fixture copy
-    // of its arithmetic. Both first startup and idempotent restart call it.
+    let retained = exact(db).await?;
+    let receipts = retained["receipts"]
+        .as_array()
+        .context("accounted receipt rows")?;
+    let usage = retained["usage"]
+        .as_array()
+        .context("accounted usage rows")?;
+    let mut captured = 0usize;
+    for row in receipts {
+        let receipt: Value = serde_json::from_str(row[1].as_str().context("receipt JSON")?)?;
+        let disposition: Value =
+            serde_json::from_str(row[2].as_str().context("disposition JSON")?)?;
+        let evidence = usage.iter().find(|evidence| evidence[0] == row[0]);
+        if disposition["usage_evidence_digest"].is_string() {
+            let evidence = evidence.context("new receipt lost captured usage")?;
+            let document: Value =
+                serde_json::from_str(evidence[1].as_str().context("usage JSON")?)?;
+            ensure!(
+                document["capture"] == "captured",
+                "live receipt capture status changed"
+            );
+            captured += 1;
+        } else {
+            ensure!(
+                evidence.is_none()
+                    && receipt["state"] == "unknown"
+                    && receipt["outcome"] == "unknown"
+                    && receipt["attempts"] == json!([]),
+                "only a missing paid terminal may lack captured usage"
+            );
+        }
+    }
+    ensure!(
+        captured > 0 && captured == usage.len(),
+        "unbound usage evidence rows"
+    );
+    // Compare the production M5 observation to actual encoded storage bytes,
+    // independently of Admission, Candidate and restart inventory arithmetic.
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     {
-        let rows = exact(db).await?;
-        let rows = rows["receipts"]
-            .as_array()
-            .context("accounted receipt rows")?;
-        let expected = rows.iter().try_fold(0u64, |sum, row| {
-            let receipt = row[1].as_str().context("receipt bytes")?.len();
-            let disposition = row[2].as_str().context("disposition bytes")?.len();
-            sum.checked_add(u64::try_from(receipt + disposition)? + 16 * 1024)
-                .context("receipt accounting overflow")
-        })?;
-        let unknown = rows.iter().map(|row| {
+        let row = db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+            r#"WITH retained AS (
+                SELECT 'receipt' AS kind, byte_count,
+                    length(CAST(receipt_json AS BLOB)) + length(CAST(disposition_json AS BLOB)) AS encoded_bytes
+                FROM tenancy_execution_receipts
+                UNION ALL
+                SELECT 'usage', byte_count, length(CAST(evidence_json AS BLOB)) FROM tenancy_usage_evidence
+                UNION ALL
+                SELECT 'auxiliary', length(CAST(evidence_json AS BLOB)), length(CAST(evidence_json AS BLOB)) FROM tenancy_receipt_auxiliary
+            ) SELECT COUNT(*) AS rows, COALESCE(SUM(encoded_bytes),0) AS bytes,
+                COALESCE(SUM(byte_count != encoded_bytes),0) AS mismatched_bytes,
+                COALESCE(SUM(kind = 'receipt'),0) AS receipt_rows,
+                COALESCE(SUM(kind = 'usage'),0) AS usage_rows,
+                COALESCE(SUM(kind = 'auxiliary'),0) AS auxiliary_rows,
+                (SELECT COUNT(*) FROM tenancy_oauth_slots) AS oauth_slots
+            FROM retained"#.to_owned()))
+            .await?.context("independent retained byte witness")?;
+        let rows = u64::try_from(row.try_get::<i64>("", "rows")?)?;
+        let bytes = u64::try_from(row.try_get::<i64>("", "bytes")?)?;
+        let receipt_rows = u64::try_from(row.try_get::<i64>("", "receipt_rows")?)?;
+        let usage_rows = u64::try_from(row.try_get::<i64>("", "usage_rows")?)?;
+        let auxiliary_rows = u64::try_from(row.try_get::<i64>("", "auxiliary_rows")?)?;
+        ensure!(
+            receipt_rows == u64::try_from(receipts.len())?
+                && usage_rows == u64::try_from(captured)?
+        );
+        ensure!(
+            row.try_get::<i64>("", "mismatched_bytes")? == 0,
+            "stored byte count differs from encoded bytes"
+        );
+        ensure!(
+            row.try_get::<i64>("", "oauth_slots")? == 0,
+            "unexpected OAuth accounting in static fixture"
+        );
+        let expected = rows
+            .checked_mul(16 * 1024)
+            .and_then(|overhead| bytes.checked_add(overhead))
+            .context("receipt and sidecar accounting overflow")?;
+        let unknown = receipts.iter().map(|row| {
             Ok(serde_json::from_str::<Value>(row[1].as_str().context("receipt JSON")?)?["state"] == "unknown")
         }).collect::<Result<Vec<_>>>()?.into_iter().filter(|unknown| *unknown).count();
         let snapshot = tokio::time::timeout(TIMEOUT, async {
@@ -209,10 +281,9 @@ pub(super) async fn accounting(service: &Service, db: &sea_orm::DatabaseConnecti
                 && snapshot.potential_unknown == 0
                 && snapshot.active == 0
                 && snapshot.queued == 0
-                && !snapshot.fenced
+                && !snapshot.fenced,
+            "recovery accounting mismatch: actual={snapshot:?}, expected_accounted={expected}, expected_unknown={unknown}, rows={rows}, receipt_rows={receipt_rows}, usage_rows={usage_rows}, auxiliary_rows={auxiliary_rows}, encoded_bytes={bytes}"
         );
     }
-    #[cfg(not(any(feature = "otel-http", feature = "otel-grpc")))]
-    let _ = db;
     Ok(())
 }

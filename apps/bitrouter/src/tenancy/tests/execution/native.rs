@@ -60,6 +60,7 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 mod capture;
 mod continuation;
 pub(in crate::tenancy) mod counting;
+mod lifetime;
 mod limits;
 mod receipts_authority;
 #[cfg(all(unix, feature = "core", feature = "harness"))]
@@ -911,62 +912,165 @@ async fn native_plan_and_dispatch_waits_recheck_revocation_suspension_and_slot_s
 }
 
 #[tokio::test]
-async fn cancelled_native_call_keeps_drain_and_lease_until_provider_and_outcome_cleanup()
--> Result<()> {
-    for hold in [Hold::Dispatch, Hold::Outcome] {
-        // Dispatch here means holding the real provider before response headers.
-        let mut provider = Provider::start(hold == Hold::Dispatch).await?;
-        let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
-        let gate = Arc::new(Gate::default());
-        let release_on_drop = gate.release.clone().drop_guard();
-        let checked = async {
-            let (ingress, _) = ready(&fixture, &route).await?;
-            let app = host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?.with_tenancy(fixture.service.clone());
-            let control = Arc::new(Control {
-                hold: (hold == Hold::Outcome).then(|| (Hold::Outcome, gate.clone())),
-                ..Default::default()
-            });
-            let observed = control.clone();
-            let call = AbortOnDropHandle::new(tokio::spawn(async move {
-                app.execute_native_controlled_with_headers(prompt(), CallerContext::local(), ingress, control).await
-            }));
-            let request = provider.receive().await?;
-            ensure!(request.body["model"] == "model-a");
-            if hold == Hold::Outcome {
-                tokio::time::timeout(TIMEOUT, gate.entered.notified()).await?;
-                ensure!(observed.attempts.lock().await.len() == 1);
-            } else {
-                ensure!(observed.attempts.lock().await.is_empty());
-            }
-            call.abort();
-            ensure!(matches!(tokio::time::timeout(TIMEOUT, call).await?, Err(error) if error.is_cancelled()));
-            let limits = Limits { active_executions: 1, queued_work: 0, learning_jobs: 0 };
-            ensure!(matches!(fixture.service.admission.acquire(&fixture.tenant, &limits).now_or_never(), Some(Err(ErrorCode::CapacityExceeded))), "cancel released the active tenant lease");
-            {
-                let mut drain = Box::pin(fixture.service.pipelines.close_and_drain());
-                ensure!(futures::poll!(&mut drain).is_pending(), "registry lost native cleanup");
-            }
-            let mut shutdown = Box::pin(fixture.service.shutdown());
-            ensure!(futures::poll!(&mut shutdown).is_pending(), "shutdown skipped native cleanup");
-            {
-                let mut leases = Box::pin(fixture.service.admission.wait_drained());
-                ensure!(futures::poll!(&mut leases).is_pending(), "shutdown released native custody");
-            }
-            provider.state.release.cancel();
-            gate.release.cancel();
-            tokio::time::timeout(TIMEOUT, shutdown).await??;
-            tokio::time::timeout(TIMEOUT, fixture.service.admission.wait_drained()).await?;
-            let attempts = observed.attempts.lock().await;
-            ensure!(attempts.len() == 1 && attempts[0].result.is_some() && attempts[0].error.is_none());
-            let plans = observed.plans.lock().await;
-            ensure!(attempts[0].request_id == plans.first().context("missing native plan")?.request_id);
-            ensure!(provider.calls() == 1, "cancelled native work retried");
-            Ok(())
-        }.await;
-        drop(release_on_drop);
-        finish(&fixture, provider, checked).await?;
+async fn cancelled_native_dispatch_before_headers_keeps_unknown_receipt_without_retry() -> Result<()>
+{
+    let mut provider = Provider::start(true).await?;
+    let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
+    let checked = async {
+        let (ingress, _) = ready(&fixture, &route).await?;
+        let app = host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
+            .with_tenancy(fixture.service.clone());
+        let observed = Arc::new(Control::default());
+        let control = observed.clone();
+        let call = AbortOnDropHandle::new(tokio::spawn(async move {
+            app.execute_native_controlled_with_headers(
+                prompt(),
+                CallerContext::local(),
+                ingress,
+                control,
+            )
+            .await
+        }));
+        ensure!(provider.receive().await?.body["model"] == "model-a");
+        ensure!(observed.attempts.lock().await.is_empty());
+        call.abort();
+        ensure!(call.await.is_err_and(|error| error.is_cancelled()));
+        // Explicit registry cancellation must stop the transport without
+        // waiting for this provider to release its withheld headers.
+        tokio::time::timeout(TIMEOUT, fixture.service.pipelines.close_and_drain()).await??;
+        tokio::time::timeout(TIMEOUT, fixture.service.admission.wait_drained()).await?;
+        ensure!(!provider.state.release.is_cancelled() && provider.calls() == 1);
+        let plans = observed.plans.lock().await;
+        let id = plans
+            .first()
+            .context("native plan")?
+            .request_id
+            .as_str()
+            .try_into()?;
+        let receipt = crate::tenancy::receipts::store::lookup(
+            &fixture.db,
+            &fixture.installation,
+            &fixture.tenant,
+            &id,
+        )
+        .await?
+        .context("durable stopped-dispatch receipt")?;
+        ensure!(receipt.state == bitrouter_ai::tenancy::execution::ReceiptState::Unknown);
+        ensure!(receipt.outcome != bitrouter_ai::tenancy::execution::Outcome::Completed);
+        ensure!(
+            receipt.attempts.len() == 1
+                && receipt.attempts[0].outcome
+                    == bitrouter_ai::tenancy::execution::Outcome::Unknown
+        );
+        ensure!(
+            observed
+                .attempts
+                .lock()
+                .await
+                .iter()
+                .all(|attempt| attempt.result.is_none())
+        );
+        ensure!(fixture.service.admission.receipts_ready());
+        Ok(())
     }
-    Ok(())
+    .await;
+    finish(&fixture, provider, checked).await
+}
+
+#[tokio::test]
+async fn cancelled_native_outcome_keeps_lease_until_the_running_callback_ack() -> Result<()> {
+    let mut provider = Provider::start(false).await?;
+    let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
+    let gate = Arc::new(Gate::default());
+    let release_on_drop = gate.release.clone().drop_guard();
+    let checked = async {
+        let (ingress, _) = ready(&fixture, &route).await?;
+        let app = host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
+            .with_tenancy(fixture.service.clone());
+        let control = Arc::new(Control {
+            hold: Some((Hold::Outcome, gate.clone())),
+            ..Default::default()
+        });
+        let observed = control.clone();
+        let call = AbortOnDropHandle::new(tokio::spawn(async move {
+            app.execute_native_controlled_with_headers(
+                prompt(),
+                CallerContext::local(),
+                ingress,
+                control,
+            )
+            .await
+        }));
+        let request = provider.receive().await?;
+        ensure!(request.body["model"] == "model-a");
+        tokio::time::timeout(TIMEOUT, gate.entered.notified()).await?;
+        ensure!(observed.attempts.lock().await.len() == 1);
+        call.abort();
+        ensure!(
+            matches!(tokio::time::timeout(TIMEOUT, call).await?, Err(error) if error.is_cancelled())
+        );
+        let limits = Limits {
+            active_executions: 1,
+            queued_work: 0,
+            learning_jobs: 0,
+        };
+        ensure!(
+            matches!(
+                fixture
+                    .service
+                    .admission
+                    .acquire(&fixture.tenant, &limits)
+                    .now_or_never(),
+                Some(Err(ErrorCode::CapacityExceeded))
+            ),
+            "cancel released the active tenant lease"
+        );
+        {
+            let mut drain = Box::pin(fixture.service.pipelines.close_and_drain());
+            ensure!(
+                futures::poll!(&mut drain).is_pending(),
+                "registry lost native cleanup"
+            );
+        }
+        let mut shutdown = Box::pin(fixture.service.shutdown());
+        ensure!(
+            futures::poll!(&mut shutdown).is_pending(),
+            "shutdown skipped native cleanup"
+        );
+        {
+            let mut leases = Box::pin(fixture.service.admission.wait_drained());
+            ensure!(
+                futures::poll!(&mut leases).is_pending(),
+                "shutdown released native custody"
+            );
+        }
+        gate.release.cancel();
+        tokio::time::timeout(TIMEOUT, shutdown).await??;
+        tokio::time::timeout(TIMEOUT, fixture.service.admission.wait_drained()).await?;
+        let attempts = observed.attempts.lock().await;
+        ensure!(attempts.len() == 1 && attempts[0].result.is_some() && attempts[0].error.is_none());
+        let plans = observed.plans.lock().await;
+        ensure!(attempts[0].request_id == plans.first().context("missing native plan")?.request_id);
+        let id = attempts[0].request_id.as_str().try_into()?;
+        let receipt = crate::tenancy::receipts::store::lookup(
+            &fixture.db,
+            &fixture.installation,
+            &fixture.tenant,
+            &id,
+        )
+        .await?
+        .context("durable provider evidence after outcome ACK")?;
+        ensure!(
+            receipt.attempts.len() == 1
+                && receipt.attempts[0].outcome
+                    == bitrouter_ai::tenancy::execution::Outcome::Completed
+        );
+        ensure!(provider.calls() == 1, "cancelled native work retried");
+        Ok(())
+    }
+    .await;
+    drop(release_on_drop);
+    finish(&fixture, provider, checked).await
 }
 
 async fn revised_route(

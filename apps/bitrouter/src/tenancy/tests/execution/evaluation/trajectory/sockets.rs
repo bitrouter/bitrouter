@@ -87,35 +87,60 @@ async fn disconnect(protocol: Protocol, when: Disconnect, revoked: bool) -> Resu
         provider.headers.cancel();
         client.prefix().await?;
     }
+    // Cancellation closes provider I/O. Hold the actual terminal transaction,
+    // rather than relying on withheld provider headers to retain cleanup.
+    let gate = fixture
+        .service
+        .cleanup
+        .hold(crate::tenancy::transaction::Phase::Committing);
+    let _release = ReleaseGate(fixture.service.clone());
     client.disconnect().await?;
     let mut shutdown = Box::pin(fixture.service.shutdown());
-    if matches!(when, Disconnect::BeforeHeaders) {
-        // No terminal can exist while the admitted provider handshake is gated.
-        // Polling shutdown exercises both registry custody and the held lease.
-        ensure!(
-            tokio::time::timeout(Duration::from_millis(100), &mut shutdown)
-                .await
-                .is_err()
-        );
-        ensure!(
-            fixture
-                .service
-                .admission
-                .wait_drained()
-                .now_or_never()
-                .is_none()
-        );
-        ensure!(count(&fixture.db, "trajectory_requests", "status = 'started'").await? == 1);
-        provider.headers.cancel();
-        provider.tail.cancel();
-    }
+    ensure!(futures::poll!(&mut shutdown).is_pending());
+    tokio::time::timeout(TIMEOUT, gate.entered.notified())
+        .await
+        .context("cancelled provider did not reach terminal COMMIT")?;
+    ensure!(
+        fixture.service.cleanup.disposition() == crate::tenancy::transaction::Disposition::Pending
+    );
+    ensure!(
+        tokio::time::timeout(Duration::from_millis(100), &mut shutdown)
+            .await
+            .is_err()
+    );
+    ensure!(
+        fixture
+            .service
+            .admission
+            .wait_drained()
+            .now_or_never()
+            .is_none()
+    );
+    fixture.service.cleanup.release_gate();
     tokio::time::timeout(TIMEOUT, &mut shutdown).await??;
     tokio::time::timeout(TIMEOUT, fixture.service.admission.wait_drained()).await?;
     fixture.service.pipelines.close_and_drain().await?;
     closure(&fixture, 1).await?;
+    let receipt = only_receipt(&fixture).await?;
+    ensure!(receipt.outcome != bitrouter_ai::tenancy::execution::Outcome::Completed);
+    ensure!(receipt.attempts.len() == 1);
+    if matches!(when, Disconnect::BeforeHeaders) {
+        ensure!(
+            receipt.state == bitrouter_ai::tenancy::execution::ReceiptState::Unknown
+                && receipt.attempts[0].outcome
+                    == bitrouter_ai::tenancy::execution::Outcome::Unknown
+        );
+    }
     ensure!(provider.calls.load(Ordering::SeqCst) == 1);
-    // During-stream cancellation must drop the upstream body without requiring
-    // its next chunk. Before-header cleanup may finish an already empty body.
+    // Neither withheld headers nor the next stream chunk is needed to settle.
+    ensure!(!provider.tail.is_cancelled());
+    if matches!(when, Disconnect::BeforeHeaders) {
+        ensure!(!provider.headers.is_cancelled());
+        // The remote handler may outlive the closed socket. Release its fixture
+        // gates only after proving local receipt completion and capacity drain.
+        provider.headers.cancel();
+        provider.tail.cancel();
+    }
     tokio::time::timeout(TIMEOUT, provider.dropped.cancelled()).await?;
     ingress.close().await?;
     upstream.close().await?;

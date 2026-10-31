@@ -16,6 +16,10 @@ the CLI-only contract and implementation record define the current product.
 - [AI Axum adapter](AI_AXUM_ADAPTER.md) — optional public protocol bindings,
   explicit SDK stream termination, dependency boundaries and delivery gates.
 
+- [Tenant service completion](TENANT_SERVICE_COMPLETION.md) — fixed library and
+  service boundaries, resource management, scoped dispatch, execution evidence
+  and single-instance acceptance requirements.
+
 - [Protocol specifications](specs/README.md) — tracked interoperability contracts.
   [Registry v1](specs/registry-v1/README.md) is the first protocol, currently
   `1.0.0-beta.6`, with [conformance requirements](specs/registry-v1/conformance.md).

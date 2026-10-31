@@ -53,8 +53,11 @@ pub(crate) struct Owner {
     admission: Arc<crate::tenancy::admission::Admission>,
     lease: Mutex<Option<Arc<Lease>>>,
     pub(in crate::tenancy) origin: Arc<Proof>,
-    pub(crate) deadline: tokio::time::Instant,
-    cleanup: Mutex<tokio::time::Instant>,
+    pub(crate) deadline: crate::tenancy::execution::deadline::Deadline,
+    pub(in crate::tenancy) attachment_deadline: tokio::time::Instant,
+    pub(in crate::tenancy) output_idle: std::time::Duration,
+    cleanup: Mutex<Option<tokio::time::Instant>>,
+    cancellation_cleanup: Mutex<Option<tokio::time::Instant>>,
     pub(crate) cancelled: tokio_util::sync::CancellationToken,
 }
 
@@ -161,11 +164,13 @@ impl Owner {
         admission: Arc<crate::tenancy::admission::Admission>,
         origin: Arc<Proof>,
         observed_deadline: (
-            tokio::time::Instant,
+            crate::tenancy::execution::deadline::Deadline,
+            tokio_util::sync::CancellationToken,
+            &crate::config::tenancy::TenancyConfig,
             crate::telemetry::receipt_latency::Timing,
         ),
     ) -> Arc<Self> {
-        let (deadline, observation) = observed_deadline;
+        let (deadline, cancelled, settings, observation) = observed_deadline;
         Arc::new(Self {
             #[cfg(all(feature = "core", feature = "harness"))]
             learning: std::sync::OnceLock::new(),
@@ -184,8 +189,14 @@ impl Owner {
             admission,
             origin,
             deadline,
-            cleanup: Mutex::new(deadline + std::time::Duration::from_secs(30)),
-            cancelled: tokio_util::sync::CancellationToken::new(),
+            attachment_deadline: deadline.min(
+                tokio::time::Instant::now()
+                    + std::time::Duration::from_secs(settings.submission_timeout_secs),
+            ),
+            output_idle: std::time::Duration::from_secs(settings.stream_idle_timeout_secs),
+            cleanup: Mutex::new(None),
+            cancellation_cleanup: Mutex::new(None),
+            cancelled,
         })
     }
     pub(in crate::tenancy) fn retain_oauth_replacement(
@@ -233,11 +244,67 @@ impl Owner {
         Ok(())
     }
     pub(in crate::tenancy) fn cleanup_deadline(&self) -> tokio::time::Instant {
-        self.cleanup
-            .lock()
-            .map_or_else(|_| tokio::time::Instant::now(), |value| *value)
+        self.cleanup.lock().map_or_else(
+            |_| tokio::time::Instant::now(),
+            |value| value.unwrap_or_else(|| self.cleanup_bound()),
+        )
+    }
+    fn cleanup_bound(&self) -> tokio::time::Instant {
+        let grace = std::time::Duration::from_secs(30);
+        let bound = tokio::time::Instant::now() + grace;
+        self.deadline
+            .instant()
+            .and_then(|deadline| deadline.checked_add(grace))
+            .map_or(bound, |deadline| deadline.min(bound))
+    }
+    fn start_cleanup(&self) {
+        if let Ok(mut deadline) = self.cleanup.lock() {
+            deadline.get_or_insert_with(|| self.cleanup_bound());
+        }
+        self.changed.notify_waiters();
+    }
+    /// Output may remain unread after durable settlement. Its cancellation gets
+    /// one independent join budget; it never renews the receipt transaction or
+    /// any callback's already captured settlement deadline.
+    pub(in crate::tenancy) fn cancellation_deadline(&self) -> tokio::time::Instant {
+        self.cancellation_cleanup.lock().map_or_else(
+            |_| tokio::time::Instant::now(),
+            |deadline| deadline.unwrap_or_else(|| self.cleanup_bound()),
+        )
+    }
+    /// Active work has no cleanup clock until terminalization or cancellation.
+    /// A configured total still bounds cleanup even if no producer is polled.
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(crate) async fn cleanup_elapsed(&self) {
+        loop {
+            let changed = self.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            let deadline = match self.cleanup.lock() {
+                Ok(value) => *value,
+                Err(_) => return,
+            }
+            .or_else(|| {
+                self.deadline
+                    .instant()
+                    .and_then(|deadline| deadline.checked_add(std::time::Duration::from_secs(30)))
+            });
+            tokio::select! {
+                () = changed => {},
+                () = async {
+                    match deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => return,
+            }
+        }
     }
     pub(crate) fn cancel(&self) {
+        if let Ok(mut deadline) = self.cancellation_cleanup.lock() {
+            deadline.get_or_insert_with(|| self.cleanup_bound());
+        }
+        self.start_cleanup();
         let actions = {
             let mut actions = self
                 .cancel_actions
@@ -322,7 +389,7 @@ impl Owner {
                         .cleanup
                         .lock()
                         .map_err(|_| ErrorCode::StorageUnavailable)? =
-                        tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+                        Some(tokio::time::Instant::now() + std::time::Duration::from_secs(30));
                     true
                 }
                 _ => false,
@@ -379,6 +446,11 @@ impl Owner {
     /// The first terminal proposal owns classification. Later disconnects join it
     /// and cannot rewrite provider facts after commit has begun.
     fn begin(self: &Arc<Self>, outcome: Outcome, join: bool) -> Result<(), ErrorCode> {
+        let outcome = if outcome == Outcome::Completed && self.cancelled.is_cancelled() {
+            Outcome::Cancelled
+        } else {
+            outcome
+        };
         let queue = {
             let mut state = self
                 .phase
@@ -415,6 +487,10 @@ impl Owner {
         Ok(())
     }
     pub(crate) async fn finish(self: &Arc<Self>, outcome: Outcome) -> Result<(), ErrorCode> {
+        if self.deadline.expired() {
+            self.cancel();
+        }
+        self.start_cleanup();
         self.close_auxiliary().await?;
         self.begin(outcome, false)?;
         self.wait_bounded(true).await
@@ -426,6 +502,13 @@ impl Owner {
         self: &Arc<Self>,
         fallback: Outcome,
     ) -> Result<(), ErrorCode> {
+        // A committed receipt has already joined its auxiliary producers. A
+        // later output disconnect joins that immutable fact without reopening
+        // settlement or applying its now-expired transaction budget.
+        if self.durable() {
+            return self.wait(false).await;
+        }
+        self.start_cleanup();
         self.close_auxiliary().await?;
         self.begin(fallback, true)?;
         self.wait_bounded(false).await
@@ -488,6 +571,9 @@ impl Owner {
                     .map_err(|_| ErrorCode::StorageUnavailable)?;
                 match &*state {
                     Phase::Durable(candidate) => {
+                        if delivery && (self.cancelled.is_cancelled() || self.deadline.expired()) {
+                            return Err(ErrorCode::CapacityExceeded);
+                        }
                         if delivery
                             && candidate.auxiliary_unclean()
                             && self.proposal.get() == Some(&Outcome::Completed)
@@ -587,6 +673,7 @@ impl Owner {
                     auxiliary_digest: None,
                 },
             )?
+            .with_usage_evidence(frozen.usage_evidence)?
             .with_auxiliary(auxiliary)?,
         );
         let mut phase = self

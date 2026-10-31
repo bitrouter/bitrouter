@@ -390,18 +390,14 @@ fn optional_rate(rate: Option<f64>) -> Option<Option<f64>> {
 /// the highest-cost cumulative snapshot wins; without usable pricing, the last
 /// snapshot wins. Provider usage frames are cumulative totals, never deltas.
 ///
-/// Also tracks the total *character* count of text and reasoning deltas
-/// observed so that — when the consumer hangs up before the upstream `Usage`
-/// frame arrives — we can synthesise an estimated output-token count and bill
-/// for the work the upstream already did. Without this, a hostile client
-/// could drain a long generation, disconnect just before the terminal Usage
-/// chunk, and pay nothing. See
+/// Also tracks the character count of observed text and reasoning deltas.
+/// When a stream ends before an upstream usage frame arrives, these counts
+/// support a local token estimate with explicit coverage and provenance. See
 /// [`UsageAccumulator::estimated_output_tokens`] and the
 /// disconnect branch inside [`StreamProcessor::finish`].
 ///
-/// Heuristic for the estimate: ~4 chars per token (the OpenAI "rule of thumb"
-/// for English) — wrong for code / non-Latin scripts but bounded, monotonic
-/// in delta length, and far closer to the true cost than `0`.
+/// The local heuristic uses four Unicode scalar values per token. Accuracy
+/// varies with language and content; it never establishes provider usage.
 #[derive(Debug, Clone, Default)]
 pub struct UsageAccumulator {
     usage: Usage,
@@ -413,13 +409,12 @@ pub struct UsageAccumulator {
     delta_chars: u64,
     /// `char` count of the request prompt's text, seeded at stream start. Lets a
     /// client disconnect *before* the upstream usage frame still estimate the
-    /// prompt tokens the provider bills regardless of disconnect.
+    /// token count for textual prompt payloads independently of output delivery.
     prompt_chars: u64,
 }
 
 impl UsageAccumulator {
-    /// Chars-per-token estimate for the disconnect-time billing heuristic.
-    /// Conservative-ish: too small bills extra, too large bills less.
+    /// Character-count inputs for the local stream usage estimator.
     /// A fresh accumulator seeded with the request prompt's `char` count, so a
     /// disconnect before the upstream usage frame can still estimate prompt
     /// tokens. Pass `0` when no prompt-token estimate is wanted.
@@ -489,7 +484,7 @@ impl UsageAccumulator {
     }
 
     /// Estimated output-token count from accumulated delta text, for the
-    /// disconnect-billing fallback. Returns `0` when no text deltas were
+    /// disconnect estimation fallback. Returns `0` when no text deltas were
     /// observed.
     pub fn estimated_output_tokens(&self) -> u64 {
         self.delta_chars
@@ -497,7 +492,7 @@ impl UsageAccumulator {
     }
 
     /// Estimated prompt-token count from the seeded prompt char count, for the
-    /// disconnect-billing fallback. Returns `0` when the accumulator was not
+    /// disconnect estimation fallback. Returns `0` when the accumulator was not
     /// seeded with a prompt char count.
     pub fn estimated_prompt_tokens(&self) -> u64 {
         self.prompt_chars
@@ -622,7 +617,7 @@ impl StreamProcessor {
     /// Idempotent — repeated calls are no-ops. Hook errors are swallowed (the
     /// stream is already over) but logged.
     ///
-    /// Settlement billing rules at the end of a stream:
+    /// Technical usage selection at the end of a stream:
     /// - If an authoritative `Usage` part was observed at any point, that
     ///   wins — covers both clean termination and disconnect *after* the
     ///   usage chunk.
@@ -631,13 +626,12 @@ impl StreamProcessor {
     ///   synthesise a usage estimate: `prompt_tokens` from the request prompt's
     ///   char count (seeded into the accumulator at stream start) and
     ///   `completion_tokens` from observed delta text. Some upstreams omit
-    ///   usage on successful streams; benchmark/cost accounting should be
-    ///   estimated rather than silently recorded as `0/0`. The provider bills
-    ///   input tokens the moment it accepts the request, so prompt tokens are
-    ///   charged even when no output streamed before a hang-up; output is added
-    ///   when deltas were seen.
+    ///   usage on successful streams. An explicit estimate preserves observed
+    ///   work instead of representing missing quantities as provider zeroes.
+    ///   Input coverage is textual prompt payloads; output coverage includes
+    ///   only text and reasoning deltas observed before termination.
     /// - Otherwise (error with no usage, or no seeded prompt/deltas), leave
-    ///   `final_usage` empty; settlement records the request as un-billable.
+    ///   `final_usage` empty; no usage quantity is asserted.
     pub async fn finish(&mut self, outcome: StreamOutcome) -> &StreamContext {
         if self.ended {
             return &self.ctx;
@@ -662,6 +656,7 @@ impl StreamProcessor {
                 None
             }
         };
+        let mut estimator_used = false;
         if let Some(usage) = self.ctx.accumulated_usage.finalized() {
             if usage == Usage::default()
                 && matches!(
@@ -674,8 +669,9 @@ impl StreamProcessor {
                     request_id = %self.ctx.request_id,
                     estimated_prompt_tokens = estimated.prompt_tokens,
                     estimated_output_tokens = estimated.completion_tokens,
-                    "stream reported zero usage despite prompt/output evidence; billing estimated usage"
+                    "stream reported zero usage despite prompt/output evidence; recording local usage estimate"
                 );
+                estimator_used = true;
                 self.ctx.final_usage = Some(estimated);
             } else {
                 self.ctx.final_usage = Some(usage);
@@ -691,7 +687,7 @@ impl StreamProcessor {
                         request_id = %self.ctx.request_id,
                         estimated_prompt_tokens = estimated.prompt_tokens,
                         estimated_output_tokens = estimated.completion_tokens,
-                        "client disconnected mid-stream before upstream usage frame; billing estimated usage"
+                        "client disconnected before upstream usage frame; recording local usage estimate"
                     );
                 }
                 StreamOutcome::Completed => {
@@ -699,12 +695,48 @@ impl StreamProcessor {
                         request_id = %self.ctx.request_id,
                         estimated_prompt_tokens = estimated.prompt_tokens,
                         estimated_output_tokens = estimated.completion_tokens,
-                        "stream completed without upstream usage frame; billing estimated usage"
+                        "stream completed without upstream usage frame; recording local usage estimate"
                     );
                 }
                 StreamOutcome::UpstreamError(_) | StreamOutcome::Aborted(_) => {}
             }
+            estimator_used = true;
             self.ctx.final_usage = Some(estimated);
+        }
+        if let Some(execution) = self
+            .ctx
+            .extension::<crate::tenancy::execution::TenantExecution>()
+        {
+            use bitrouter_ai::tenancy::usage_evidence::{
+                Estimate, EstimateCoverage, EstimateTrigger, EstimatorAlgorithm,
+            };
+            let estimate = if estimator_used {
+                self.ctx.final_usage.as_ref().map(|usage| Estimate {
+                    algorithm: EstimatorAlgorithm::StreamCharacterCeiling,
+                    // STREAM_USAGE_ESTIMATOR_VERSION: stream-char-div-ceil-4-v1.
+                    version: 1,
+                    characters_per_token: 4,
+                    coverage: EstimateCoverage::PromptTextAndObservedTextReasoning,
+                    trigger: if matches!(outcome, StreamOutcome::ClientDisconnected) {
+                        EstimateTrigger::Disconnected
+                    } else {
+                        EstimateTrigger::Completed
+                    },
+                    prompt_characters: self.ctx.accumulated_usage.prompt_chars,
+                    output_characters: self.ctx.accumulated_usage.delta_chars,
+                    input_tokens: usage.prompt_tokens,
+                    output_tokens: usage.completion_tokens,
+                })
+            } else {
+                None
+            };
+            if let Err(code) = execution.journal().and_then(|journal| {
+                journal
+                    .observe_estimator(estimate)
+                    .map_err(crate::tenancy::receipts::journal_error)
+            }) {
+                let _ = execution.reject(code);
+            }
         }
         &self.ctx
     }
@@ -973,10 +1005,10 @@ mod tests {
     }
 
     #[test]
-    fn block_markers_do_not_affect_disconnect_billing_estimate() {
-        // Disconnect-billing estimates output tokens from observed `TextDelta` /
+    fn block_markers_do_not_affect_disconnect_usage_estimate() {
+        // Disconnect estimation derives output tokens from observed `TextDelta` /
         // `ReasoningDelta` chars. The new block-lifecycle markers carry no text,
-        // so they must contribute zero — billing is unaffected by the boundary
+        // so they must contribute zero; the estimate is unaffected by the boundary
         // frames a block-framed stream now emits.
         let mut acc = UsageAccumulator::default();
         for marker in [

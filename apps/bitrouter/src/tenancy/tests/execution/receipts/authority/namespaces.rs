@@ -317,3 +317,69 @@ async fn tenant_binding_does_not_widen_full_partial_or_disjoint_resource_credent
     }
     Ok(())
 }
+
+#[cfg(all(feature = "core", feature = "harness"))]
+#[tokio::test]
+async fn owned_usage_linkage_rejects_another_tenant_in_the_same_installation_before_work()
+-> Result<()> {
+    let harness = harness().await?;
+    let checked = async {
+        let second = second_tenant(&harness.fixture).await?;
+        let mut route = harness.route.clone();
+        route.owner_id = second.tenant.as_str().try_into()?;
+        let revision = draft(&second, &route, "usage-link-second-config", 25).await?;
+        let credential = second.issue("usage-link-second-client").await?;
+        let first_headers = headers(
+            &harness.fixture,
+            harness
+                .credential
+                .secret
+                .as_deref()
+                .context("first token")?,
+            &harness.revision.revision_id,
+        )?;
+        let second_headers = headers(
+            &second,
+            credential.secret.as_deref().context("second token")?,
+            &revision.revision_id,
+        )?;
+        let parent =
+            crate::tenancy::tests::execution::admitted(&harness.fixture, &first_headers).await?;
+        let child = crate::tenancy::tests::execution::admitted(&second, &second_headers).await?;
+        let parent_id = parent.id().clone();
+        let child_id = child.id().clone();
+        ensure!(
+            parent.storage_identity().0 == child.storage_identity().0
+                && parent.storage_identity().1 != child.storage_identity().1
+        );
+        let linked = crate::tenancy::receipts::journal::link_owned_child(&parent, &child);
+        drop(parent);
+        drop(child);
+        ensure!(matches!(linked, Err(ErrorCode::Forbidden)));
+        drain(&harness.fixture).await?;
+        for (fixture, id) in [(&harness.fixture, parent_id), (&second, child_id)] {
+            let bytes = fixture
+                .service
+                .read_receipt(
+                    fixture.operator.clone(),
+                    fixture.tenant.clone(),
+                    read::Request::UsageEvidence(id),
+                )
+                .await
+                .map_err(failure)?;
+            let document: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1 =
+                serde_json::from_slice(&bytes)?;
+            ensure!(
+                document.parent_execution_id.is_none()
+                    && document.child_execution_ids.is_empty()
+                    && document.attempts.is_empty()
+                    && document.frames.is_empty(),
+                "a rejected linkage must not mutate either receipt or manufacture provider work"
+            );
+        }
+        ensure!(harness.calls.load(Ordering::SeqCst) == 0);
+        Ok(())
+    }
+    .await;
+    finish(&harness, checked).await
+}

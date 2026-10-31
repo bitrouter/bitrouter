@@ -88,6 +88,7 @@ fn route(name: &str, header: &str) -> TestResult<RouteData> {
         policy: None,
         choice: None,
         chains: vec![Chain {
+            sort: bitrouter_ai::routing::SortOrder::default(),
             selector: "fixture:model".into(),
             inbound: ApiProtocol::ChatCompletions,
             candidates: vec![0],
@@ -98,6 +99,7 @@ fn route(name: &str, header: &str) -> TestResult<RouteData> {
             candidates: vec![0],
         }]),
         candidates: vec![Candidate {
+            routing: Default::default(),
             target,
             projection,
             credential: self::reference(ResourceKind::Credential, "slot")?,
@@ -478,6 +480,7 @@ fn constructor_compacts_actual_root_and_every_retained_reference_allocation() ->
     for Candidate {
         target: _,
         projection: _,
+        routing: _,
         credential,
     } in candidates
     {

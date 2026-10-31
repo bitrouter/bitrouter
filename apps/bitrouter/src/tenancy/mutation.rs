@@ -28,6 +28,7 @@ pub(super) struct Prepared {
     pub context: ReadContext,
     pub credential: Option<Credential>,
     pub configuration: Option<StoredConfiguration>,
+    pub resource: Option<super::configuration_store::StoredResource>,
 }
 
 fn operator(caller: &Caller) -> Result<()> {
@@ -81,7 +82,15 @@ pub(super) async fn prepare(
 ) -> Result<Prepared> {
     let mut credential = None;
     let mut retained = None;
+    let mut resource = None;
     let context = match command {
+        Command::Resource(..) | Command::RevokeResource(..) => {
+            let prepared =
+                super::resources::management::prepare(db, resources, state, caller, command, now)
+                    .await?;
+            resource = prepared.1;
+            prepared.0
+        }
         Command::Tenant(..)
         | Command::Principal(..)
         | Command::AuditReader(..)
@@ -218,6 +227,7 @@ pub(super) async fn prepare(
         context,
         credential,
         configuration: retained,
+        resource,
     })
 }
 
@@ -322,6 +332,9 @@ pub(super) fn apply(
     let next_revision = revision()?;
     let mut issued = None;
     let (resource, changes) = match command {
+        Command::Resource(..) | Command::RevokeResource(..) => {
+            return super::resources::management::apply(state, caller, command, prepared, now);
+        }
         Command::Configuration(..) | Command::Activate(..) => {
             return configuration::apply(state, caller, command, prepared, now);
         }

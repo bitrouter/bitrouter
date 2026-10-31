@@ -462,6 +462,11 @@ impl HttpExecutor {
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
                 async {
+                    let routing_guard = if super::tenancy::has_execution(ctx) {
+                        Some(crate::tenancy::routing::admit(ctx, target)?)
+                    } else {
+                        None
+                    };
                     record_native_dispatch(prompt, target, ctx)?;
                     native_attempt = super::tenancy::admit_send(
                         tenant_binding.as_ref(),
@@ -470,8 +475,11 @@ impl HttpExecutor {
                         target,
                         ctx,
                     )?;
+                    if let Some(guard) = routing_guard {
+                        guard.sent()?;
+                    }
                     client
-                        .send(request, &CancellationToken::new())
+                        .send(request, &super::tenancy::cancellation(ctx)?)
                         .await
                         .map_err(|error| error_scrubber.scrub_error(error.into()))
                 },
@@ -481,6 +489,17 @@ impl HttpExecutor {
 
             let status = response.status();
             receipt::status(&mut tenant_attempt, status.as_u16())?;
+            if !status.is_success() {
+                crate::tenancy::routing::response_failed(
+                    ctx,
+                    target,
+                    &classify_upstream_error(
+                        status.as_u16(),
+                        "",
+                        parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER)),
+                    ),
+                );
+            }
             let retry_after =
                 parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER));
             if status.is_success() {
@@ -500,6 +519,7 @@ impl HttpExecutor {
             let text = response_body::read(response, ctx)
                 .await
                 .map_err(|error| error_scrubber.scrub_error(error))?;
+            receipt::error_json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
                 && self
@@ -510,7 +530,6 @@ impl HttpExecutor {
                 attempted_auth_refresh = true;
                 continue;
             }
-            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             let scrubbed = error_scrubber.scrub_body(&text);
             return Err(classify_upstream_error(
                 status.as_u16(),
@@ -524,6 +543,7 @@ impl HttpExecutor {
         let mut decoder = adapter.stream_decoder();
         let protocol = adapter.protocol();
         let limit = response_body::limit(ctx);
+        let cancellation = super::tenancy::cancellation(ctx)?;
         response_body::check_length(&response, limit)?;
         let byte_stream = response_body::bounded(response.bytes_stream(), limit);
 
@@ -536,7 +556,17 @@ impl HttpExecutor {
             let mut held_terminal = None;
             let events = byte_stream.eventsource();
             futures::pin_mut!(events);
-            while let Some(event) = events.next().await {
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    () = cancellation.cancelled() => {
+                        drop(tenant_attempt.take());
+                        yield Err(BitrouterError::UpstreamUnavailable);
+                        return;
+                    }
+                    event = events.next() => event,
+                };
+                let Some(event) = event else { break };
                 match event {
                     Ok(ev) => {
                         let sse = SseEvent {

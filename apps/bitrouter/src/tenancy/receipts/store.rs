@@ -30,12 +30,36 @@ pub(in crate::tenancy) struct Disposition {
     pub auxiliary_digest: Option<String>,
 }
 
+// The internal envelope may evolve without changing the frozen public receipt
+// or forcing unrelated receipt producers to fabricate observation evidence.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredDisposition {
+    dispatch: DispatchState,
+    statuses: Vec<Option<u16>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    auxiliary_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    usage_evidence_digest: Option<String>,
+}
+impl From<Disposition> for StoredDisposition {
+    fn from(value: Disposition) -> Self {
+        Self {
+            dispatch: value.dispatch,
+            statuses: value.statuses,
+            auxiliary_digest: value.auxiliary_digest,
+            usage_evidence_digest: None,
+        }
+    }
+}
+
 pub(in crate::tenancy) struct Candidate {
     pub receipt: ExecutionReceipt,
     json: String,
     private_json: String,
     pub(in crate::tenancy) digest: String,
     pub(super) auxiliary: Option<super::auxiliary_store::Evidence>,
+    pub(super) usage_evidence: Option<super::usage_evidence::storage::Evidence>,
 }
 
 impl Candidate {
@@ -46,10 +70,13 @@ impl Candidate {
 
     #[cfg(all(feature = "core", feature = "harness"))]
     pub(in crate::tenancy) fn experiment_disposition(&self) -> Result<(&str, DispatchState)> {
-        let disposition: Disposition = serde_json::from_str(&self.private_json)?;
+        let disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;
         Ok((&self.digest, disposition.dispatch))
     }
     pub fn new(receipt: ExecutionReceipt, disposition: Disposition) -> Result<Self> {
+        Self::from_parts(receipt, disposition.into())
+    }
+    fn from_parts(receipt: ExecutionReceipt, disposition: StoredDisposition) -> Result<Self> {
         receipt.validate()?;
         ensure!(
             disposition.statuses.len() == receipt.attempts.len(),
@@ -76,6 +103,7 @@ impl Candidate {
             private_json,
             digest,
             auxiliary: None,
+            usage_evidence: None,
         })
     }
     #[cfg(all(test, unix))]
@@ -99,7 +127,7 @@ impl Candidate {
             return Ok(self);
         }
         let evidence = super::auxiliary_store::Evidence::new(&self.receipt, facts)?;
-        let mut disposition: Disposition = serde_json::from_str(&self.private_json)?;
+        let mut disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;
         disposition.auxiliary_digest = Some(evidence.digest.clone());
         self.private_json = serde_json::to_string(&disposition)?;
         ensure!(
@@ -108,6 +136,45 @@ impl Candidate {
         );
         self.digest = digest(&self.json, &self.private_json);
         self.auxiliary = Some(evidence);
+        Ok(self)
+    }
+    pub fn with_usage_evidence(self, snapshot: super::usage_evidence::Snapshot) -> Result<Self> {
+        let document = snapshot.document(&self.receipt);
+        self.with_usage_document(document)
+    }
+    /// Fault fixtures may change another receipt projection while retaining the
+    /// exact original usage document and rebinding its immutable receipt digest.
+    #[cfg(test)]
+    pub(in crate::tenancy) fn with_preserved_usage_evidence_for_test(
+        self,
+        original: &Self,
+    ) -> Result<Self> {
+        let evidence = original
+            .usage_evidence
+            .as_ref()
+            .context("original usage evidence")?;
+        self.with_usage_document(evidence.document.clone())
+    }
+    #[cfg(all(feature = "core", feature = "harness"))]
+    pub(super) fn with_unavailable_usage_evidence(self) -> Result<Self> {
+        let mut document = super::usage_evidence::historical(&self.receipt);
+        document.capture = bitrouter_ai::tenancy::usage_evidence::Capture::Unavailable;
+        self.with_usage_document(document)
+    }
+    fn with_usage_document(
+        mut self,
+        document: bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1,
+    ) -> Result<Self> {
+        let evidence = super::usage_evidence::storage::Evidence::new(document, &self.receipt)?;
+        let mut disposition: StoredDisposition = serde_json::from_str(&self.private_json)?;
+        disposition.usage_evidence_digest = Some(evidence.digest.clone());
+        self.private_json = serde_json::to_string(&disposition)?;
+        ensure!(
+            self.private_json.len() <= MAX_DISPOSITION,
+            "receipt disposition byte bound"
+        );
+        self.digest = digest(&self.json, &self.private_json);
+        self.usage_evidence = Some(evidence);
         Ok(self)
     }
     #[cfg(all(feature = "core", feature = "harness"))]
@@ -121,9 +188,15 @@ impl Candidate {
         self.auxiliary.as_ref().is_some_and(|aux| aux.unknown())
     }
     pub fn auxiliary_bytes(&self) -> u64 {
-        self.auxiliary
+        let usage = self
+            .usage_evidence
             .as_ref()
-            .map_or(0, |aux| aux.json.len() as u64 + 16 * 1024)
+            .map_or(0, |e| e.json.len() as u64 + 16 * 1024);
+        usage
+            + self
+                .auxiliary
+                .as_ref()
+                .map_or(0, |aux| aux.json.len() as u64 + 16 * 1024)
     }
     pub fn bytes(&self) -> u64 {
         (self.json.len() + self.private_json.len()) as u64
@@ -255,7 +328,7 @@ fn decode(
         json.len() <= MAX_RECEIPT && private.len() <= MAX_DISPOSITION,
         "receipt byte bound"
     );
-    let candidate = Candidate::new(
+    let candidate = Candidate::from_parts(
         serde_json::from_str(&json)?,
         serde_json::from_str(&private)?,
     )?;
@@ -313,9 +386,15 @@ pub(in crate::tenancy) async fn lookup_candidate(
         return Ok(None);
     };
     let mut candidate = decode(row, installation, tenant, id)?;
-    let disposition: Disposition = serde_json::from_str(&candidate.private_json)?;
+    let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
     super::auxiliary_store::validate(db, &mut candidate, disposition.auxiliary_digest.as_deref())
         .await?;
+    super::usage_evidence::storage::validate(
+        db,
+        &mut candidate,
+        disposition.usage_evidence_digest.as_deref(),
+    )
+    .await?;
     Ok(Some(candidate))
 }
 
@@ -348,6 +427,7 @@ pub(in crate::tenancy) async fn insert(
                 && saved.private_json == candidate.private_json,
             "immutable receipt conflict"
         );
+        super::usage_evidence::storage::insert(tx, candidate, false).await?;
         return Ok(false);
     }
     let fields: Vec<(&str, sea_orm::Value)> = vec![
@@ -406,6 +486,7 @@ pub(in crate::tenancy) async fn insert(
             && saved.private_json == candidate.private_json,
         "immutable receipt conflict"
     );
+    super::usage_evidence::storage::insert(tx, candidate, changed).await?;
     Ok(changed)
 }
 
@@ -608,10 +689,12 @@ pub(in crate::tenancy) async fn inventory(
         unknown.push((tenant, id, recorded));
     }
     let oauth_bytes = crate::tenancy::oauth::storage::inventory(db, installation).await?;
+    let evidence_bytes = super::usage_evidence::storage::inventory(db, installation).await?;
     Ok(Inventory {
         bytes: u64::try_from(bytes)?
             .checked_add(aux_bytes)
             .and_then(|bytes| bytes.checked_add(oauth_bytes))
+            .and_then(|bytes| bytes.checked_add(evidence_bytes))
             .context("auxiliary receipt inventory overflow")?,
         rows: count,
         unknown,
@@ -694,12 +777,19 @@ pub(in crate::tenancy) async fn recovery_lookup(
     let Some(row) = row(db, point(installation, tenant, id)).await? else {
         return Ok(None);
     };
-    let candidate = decode(row, installation, tenant, id)?;
-    let disposition: Disposition = serde_json::from_str(&candidate.private_json)?;
+    let mut candidate = decode(row, installation, tenant, id)?;
+    let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
     ensure!(
         disposition.auxiliary_digest.is_none(),
         "auxiliary receipt link has no recovery proof"
     );
+    super::usage_evidence::storage::validate_bounded(
+        db,
+        &mut candidate,
+        disposition.usage_evidence_digest.as_deref(),
+        &|rows, bytes| budget.charge(rows, bytes),
+    )
+    .await?;
     Ok(Some(candidate))
 }
 
@@ -714,7 +804,8 @@ pub(in crate::tenancy) fn reserve_experiment_write(
     // receipt and experiment participant cannot each claim a fresh allowance.
     let receipt = MAX_RECEIPT + MAX_DISPOSITION + 4096;
     let auxiliary = super::auxiliary::MAX_BYTES + 4096;
-    budget.charge(16, 3 * receipt + 4 * auxiliary)?;
+    let evidence = bitrouter_ai::tenancy::usage_evidence::MAX_BYTES + 4096;
+    budget.charge(24, 3 * receipt + 4 * auxiliary + 4 * evidence)?;
     Ok(())
 }
 
@@ -786,9 +877,16 @@ async fn native_namespace_candidate_in(
     // allowance on this same budget before issuing it; static experiment routes
     // are expected to have no auxiliary body, but corruption is still checked.
     budget.charge(1, super::auxiliary::MAX_BYTES + 4096)?;
-    let disposition: Disposition = serde_json::from_str(&candidate.private_json)?;
+    let disposition: StoredDisposition = serde_json::from_str(&candidate.private_json)?;
     super::auxiliary_store::validate(tx, &mut candidate, disposition.auxiliary_digest.as_deref())
         .await?;
+    super::usage_evidence::storage::validate_bounded(
+        tx,
+        &mut candidate,
+        disposition.usage_evidence_digest.as_deref(),
+        &|rows, bytes| Ok(budget.charge(rows, bytes)?),
+    )
+    .await?;
     budget.check()?;
     Ok(Some(candidate))
 }

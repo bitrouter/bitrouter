@@ -56,7 +56,24 @@ impl Bounded {
         }
         tokio::time::timeout_at(deadline, future)
             .await
-            .map_err(|_| self.execution.reject(ErrorCode::CapacityExceeded))?
+            .map_err(|_| {
+                if let Ok(owner) = self.execution.receipt_owner() {
+                    owner.cancel();
+                }
+                self.execution.reject(ErrorCode::CapacityExceeded)
+            })?
+    }
+
+    fn callback_deadline(&self) -> tokio::time::Instant {
+        self.execution.submission.deadline.min(
+            tokio::time::Instant::now()
+                + std::time::Duration::from_secs(
+                    self.execution
+                        .service
+                        .execution_settings
+                        .stream_idle_timeout_secs,
+                ),
+        )
     }
 
     fn prompt(&self, prompt: &Prompt) -> Result<()> {
@@ -115,7 +132,7 @@ impl NativeExecutionControl for Bounded {
 
     async fn on_stream_part(&self, request_id: &str, part: &StreamPart) {
         let _ = self
-            .until(self.execution.submission.deadline, async {
+            .until(self.callback_deadline(), async {
                 self.inner.on_stream_part(request_id, part).await;
                 Ok(())
             })
@@ -139,7 +156,8 @@ impl NativeExecutionControl for Bounded {
     async fn provider_cancelled(&self) {
         tokio::select! {
             _ = self.inner.provider_cancelled() => {},
-            _ = tokio::time::sleep_until(self.execution.submission.deadline) => {
+            _ = self.execution.submission.cancelled.cancelled() => {},
+            _ = self.execution.submission.deadline.elapsed() => {
                 self.execution.reject(ErrorCode::CapacityExceeded);
             }
         }

@@ -4,12 +4,50 @@ use bitrouter_ai::tenancy::execution::ReceiptState;
 use sea_orm::Statement;
 
 pub(super) async fn stored_policy_bytes(h: &Harness) -> Result<u64> {
-    let row=h.fixture.db.query_one(Statement::from_string(h.fixture.db.get_database_backend(),
-        "SELECT COUNT(*) AS rows, COALESCE(SUM(byte_count),0) AS bytes FROM tenancy_execution_receipts".to_owned())).await?.context("stored accounting")?;
+    // Derive this witness from actual stored UTF-8 bytes, independently of
+    // Admission, Candidate and restart inventory. Every receipt and retained
+    // sidecar carries its own 16 KiB policy overhead, including empty capture.
+    let row = h.fixture.db.query_one(Statement::from_string(
+        h.fixture.db.get_database_backend(),
+        r#"WITH retained AS (
+            SELECT 'receipt' AS kind, byte_count,
+                length(CAST(receipt_json AS BLOB)) + length(CAST(disposition_json AS BLOB)) AS encoded_bytes
+            FROM tenancy_execution_receipts
+            UNION ALL
+            SELECT 'usage', byte_count, length(CAST(evidence_json AS BLOB))
+            FROM tenancy_usage_evidence
+            UNION ALL
+            SELECT 'auxiliary', length(CAST(evidence_json AS BLOB)), length(CAST(evidence_json AS BLOB))
+            FROM tenancy_receipt_auxiliary
+        )
+        SELECT COUNT(*) AS rows, COALESCE(SUM(encoded_bytes),0) AS bytes,
+            COALESCE(SUM(byte_count != encoded_bytes),0) AS mismatched_bytes,
+            COALESCE(SUM(kind = 'receipt'),0) AS receipt_rows,
+            COALESCE(SUM(kind = 'usage'),0) AS usage_rows,
+            (SELECT COUNT(*) FROM tenancy_oauth_slots) AS oauth_slots
+        FROM retained"#.to_owned(),
+    )).await?.context("stored accounting")?;
     let rows = u64::try_from(row.try_get::<i64>("", "rows")?)?;
     let bytes = u64::try_from(row.try_get::<i64>("", "bytes")?)?;
-    ensure!(rows > 0);
-    Ok(bytes + rows * 16 * 1024)
+    let receipts = u64::try_from(row.try_get::<i64>("", "receipt_rows")?)?;
+    let usage = u64::try_from(row.try_get::<i64>("", "usage_rows")?)?;
+    ensure!(
+        receipts > 0 && usage == receipts,
+        "new receipts require captured usage sidecars"
+    );
+    ensure!(
+        row.try_get::<i64>("", "mismatched_bytes")? == 0,
+        "stored byte counts differ from encoded JSON bytes"
+    );
+    // These fixtures use static provider credentials. OAuth slot envelopes and
+    // pending-refresh obligations require their separate accounting campaign.
+    ensure!(
+        row.try_get::<i64>("", "oauth_slots")? == 0,
+        "unexpected OAuth accounting in static fixture"
+    );
+    rows.checked_mul(16 * 1024)
+        .and_then(|overhead| bytes.checked_add(overhead))
+        .context("stored receipt and sidecar accounting overflow")
 }
 pub(super) fn assert_frozen(
     view: &collector::View,

@@ -137,7 +137,7 @@ impl Service {
     }
 
     fn read_timeout(&self, submission: &Submission) -> Failure {
-        if tokio::time::Instant::now() >= submission.deadline {
+        if submission.deadline.expired() {
             ErrorCode::CapacityExceeded.into()
         } else {
             self.unavailable()

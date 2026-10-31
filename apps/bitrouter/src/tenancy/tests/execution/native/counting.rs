@@ -664,8 +664,13 @@ async fn caller_loss_during_real_count_handshake_holds_admission_until_producer_
     for h2 in protocols() {
         let mut provider = Provider::start(true).await?;
         let (fixture, ingress, _, _) = setup(&provider, h2).await?;
+        let gate = Arc::new(Gate::default());
+        let release_callback = gate.release.clone().drop_guard();
         let checked = async {
-            let control = Arc::new(CountControl::default());
+            let control = Arc::new(CountControl {
+                after_gate: Some(gate.clone()),
+                ..Default::default()
+            });
             let observed = control.clone();
             let app = host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
                 .with_tenancy(fixture.service.clone());
@@ -692,19 +697,62 @@ async fn caller_loss_during_real_count_handshake_holds_admission_until_producer_
                 .try_into()?;
             caller.abort();
             ensure!(caller.await.is_err_and(|error| error.is_cancelled()));
+            // Cancellation stops the count socket, but its unavailable report
+            // is still owed to the same external callback before custody ends.
+            tokio::time::timeout(TIMEOUT, gate.entered.notified()).await?;
+            {
+                let reports = observed.reports.lock().await;
+                ensure!(
+                    reports.len() == 1
+                        && matches!(reports[0].outcome, NativeInputCount::Unavailable { .. })
+                );
+            }
+            ensure!(!provider.state.release.is_cancelled());
+            let receipt_gate = fixture
+                .service
+                .cleanup
+                .hold(crate::tenancy::transaction::Phase::Committing);
             let mut shutdown = Box::pin(fixture.service.shutdown());
             ensure!(futures::poll!(&mut shutdown).is_pending());
             let mut drained = Box::pin(fixture.service.admission.wait_drained());
             ensure!(futures::poll!(&mut drained).is_pending());
-            provider.state.release.cancel();
+            gate.release.cancel();
+            tokio::time::timeout(TIMEOUT, receipt_gate.entered.notified()).await?;
+            ensure!(
+                futures::poll!(&mut drained).is_pending(),
+                "callback ACK released the lease before receipt COMMIT"
+            );
+            fixture.service.cleanup.release_gate();
             tokio::time::timeout(TIMEOUT, shutdown).await??;
             tokio::time::timeout(TIMEOUT, drained).await?;
             let (receipt, counts) = facts_for_id(&fixture, &id).await?;
-            ensure!(counts.counts.len() == 1 && counts.counts[0].input_tokens == Some(4));
+            ensure!(counts.counts.len() == 1);
+            let count = &counts.counts[0];
+            ensure!(
+                count.outcome == crate::tenancy::receipts::auxiliary::count::Outcome::Unknown
+                    && count.input_tokens.is_none()
+                    && count.http_status.is_none()
+                    && count.generation_request.is_some()
+                    && count.count_request.is_some()
+            );
             ensure!(receipt.attempts.is_empty() && provider.calls() == 1);
+            ensure!(receipt.outcome != bitrouter_ai::tenancy::execution::Outcome::Completed);
+            ensure!(
+                receipts::inventory(&fixture.db, &fixture.installation)
+                    .await?
+                    .unknown
+                    .len()
+                    == 1
+            );
+            ensure!(
+                !provider.state.release.is_cancelled(),
+                "test released withheld count headers"
+            );
             Ok(())
         }
         .await;
+        drop(release_callback);
+        fixture.service.cleanup.release_gate();
         provider.state.release.cancel();
         finish(&fixture, provider, checked).await?;
     }

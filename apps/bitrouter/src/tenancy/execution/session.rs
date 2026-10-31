@@ -524,12 +524,14 @@ impl StepBinding {
         parent.service.choice_final_gate_for_test(child).await
     }
 
-    pub(crate) fn cleanup_deadline(&self) -> Result<tokio::time::Instant, Failure> {
+    pub(crate) fn cleanup_owner(
+        &self,
+    ) -> Result<Arc<crate::tenancy::receipts::owner::Owner>, Failure> {
         Ok(self
             .parent()?
             .receipt_owner()
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?
-            .cleanup_deadline())
+            .clone())
     }
     pub(crate) fn choice_profile(
         &self,

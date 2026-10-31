@@ -208,6 +208,7 @@ async fn consume(directory: &Path) -> Result<()> {
             wrapping_key_env: Some(KEY.into()),
             resource_import: None,
             learning_registrations: None,
+            ..Default::default()
         },
         &crate::config::ContinuationConfig::default(),
     )

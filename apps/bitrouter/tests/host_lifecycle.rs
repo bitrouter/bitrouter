@@ -38,6 +38,8 @@ const REPLY: &str = "completed after control shutdown failed";
 mod tenancy;
 #[path = "host_lifecycle/tenancy_dispatch.rs"]
 mod tenancy_dispatch;
+#[path = "host_lifecycle/tenant_service.rs"]
+mod tenant_service;
 
 struct Host {
     child: Option<Child>,

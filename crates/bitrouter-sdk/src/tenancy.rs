@@ -6,7 +6,9 @@
 //! Use HTTPS or a tunnel to a loopback control listener for remote administration.
 
 mod eval;
+mod resources;
 mod transport;
+mod usage_evidence;
 
 use std::time::Duration;
 

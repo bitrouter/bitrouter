@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "installation_id",
+    "max_bytes",
+    "max_frames",
+    "max_attempt_frames",
+    "max_quantities",
+    "estimator_capture",
+    "child_linkage",
+    "server_tool_capture"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "installation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "max_bytes": {
+      "const": 262144
+    },
+    "max_frames": {
+      "const": 512
+    },
+    "max_attempt_frames": {
+      "const": 128
+    },
+    "max_quantities": {
+      "const": 32
+    },
+    "estimator_capture": {
+      "const": true
+    },
+    "child_linkage": {
+      "type": "boolean"
+    },
+    "server_tool_capture": {
+      "const": false
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UsageEvidenceCapabilitiesV1"
+}

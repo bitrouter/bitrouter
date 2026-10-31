@@ -4,6 +4,7 @@ mod core;
 mod eval;
 pub mod execution;
 pub mod reply;
+pub mod tenancy;
 
 use std::time::Duration;
 

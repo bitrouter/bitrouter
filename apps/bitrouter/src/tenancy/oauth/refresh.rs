@@ -25,7 +25,12 @@ impl Refresher {
 impl OAuthRefresher for Refresher {
     async fn refresh(&self, current: &OAuthToken) -> Result<OAuthToken> {
         let exchange = &self.exchange;
-        let budget = exchange.execution.remaining().min(Duration::from_secs(30));
+        let budget = exchange
+            .execution
+            .remaining()
+            .map_or(Duration::from_secs(30), |remaining| {
+                remaining.min(Duration::from_secs(30))
+            });
         if budget.is_zero() {
             return Err(model_error(exchange, ErrorCode::CapacityExceeded));
         }
