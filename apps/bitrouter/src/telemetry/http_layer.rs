@@ -70,8 +70,8 @@ impl<'a> Extractor for HeaderExtractor<'a> {
 /// deliberately does not install a global `TracerProvider` — doing so would
 /// clobber any other OpenTelemetry consumer in the process — so
 /// `global::tracer()` here would return a `NoopTracer` and drop every ingress
-/// span silently. See `docs/OTEL_TIERING_SPEC.md` D4 for the same constraint
-/// on the `tracing` bridge.
+/// span silently. The same provider-ownership constraint applies to the
+/// `tracing` bridge; see `docs/development/observability.md`.
 pub fn router_wrapper(
     exporter: &OtelExporter,
 ) -> impl Fn(Router) -> Router + Clone + Send + Sync + 'static {

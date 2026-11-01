@@ -214,7 +214,8 @@ endpoint is not evidence of support. These client contracts do not themselves
 enable or advertise tenancy endpoints in a service.
 
 `resource_capabilities`, `put_resource`, `resource_status` and `revoke_resource`
-provide the separately versioned resource contract. Provisioning requires an
+provide the resource provisioning messages in the canonical
+[service API](../../docs/specs/service-api/README.md#resource-provisioning). Provisioning requires an
 explicit key namespace, operation ID and managed-head CAS. Credentials are
 write-only; status exposes revision and revocation metadata. Rotating a slot
 creates a new revision and leaves existing configurations pinned to their old
@@ -233,7 +234,8 @@ from an unknown dispatch outcome. Dropping a stream or losing a response never
 authorizes automatic replay. Query the stored execution with current authority
 and retain the execution ID in the consumer's own reconciliation records.
 
-`usage_evidence_capabilities` discovers the independent evidence contract, and
+`usage_evidence_capabilities` discovers the separate evidence wire format in that
+same service API, and
 `usage_evidence(installation, tenant, execution)` reads its immutable document
 under receipt-read authority. Native numeric frames retain order; repeated
 snapshots are not additive. Inspect truncation, invalid/unsupported counters,
