@@ -25,8 +25,9 @@ key, excludes deprecated rows, and imports new offers as staging with empty
 interfaces. It cannot establish provider lifecycle, execution, canonical
 bindings or tariff authority. It preserves existing manual data. A missing or
 rejected key for a usable native list is a credential problem, not grounds for
-silently switching sources. Private native feeds awaiting listing credentials
-remain unconfigured until those credentials are validated.
+silently switching sources. Private native candidates can remain manual; a
+declared feed must not receive a CI listing credential until its complete
+observation and publication admission pass validation.
 
 Feed authentication is independent of the provider's inference authentication.
 Configure each listing according to its own endpoint contract. Examples:
