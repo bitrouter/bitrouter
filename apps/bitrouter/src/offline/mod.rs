@@ -687,5 +687,5 @@ pub async fn recover_with_options(
     options: large::Options,
 ) -> Result<impl CliReport> {
     recovery::run_with_options(plan, report, validation, options).await
-        .map_err(|_| failure("offline recovery verification failed: preserve incomplete evidence and the stopped target; do not release ingress"))
+        .map_err(|_| failure("offline recovery verification failed or cleanup is unconfirmed: retain incomplete evidence and the stopped target; do not release ingress"))
 }

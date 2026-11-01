@@ -83,7 +83,11 @@ fn completed_copy_and_spool_probe_failure_refuse_success_after_sync() -> Result<
 async fn sql_phase_keeps_allowance_until_real_worker_clear_ack() -> Result<()> {
     let home = tempfile::tempdir()?;
     let path = home.path().join("phase.sqlite");
-    database(&path).await?.close().await?;
+    let mut seed = database(&path).await?;
+    sea_orm::sqlx::query("CREATE TABLE samples(value INTEGER CHECK(value=1))")
+        .execute(&mut seed)
+        .await?;
+    seed.close().await?;
     let workspace = Workspace::create(
         &options(home.path(), 16 * 1024 * 1024)?,
         CancellationToken::new(),
@@ -106,7 +110,7 @@ async fn sql_phase_keeps_allowance_until_real_worker_clear_ack() -> Result<()> {
     });
     let before = workspace.available();
     let phase = super::phase::Phase::new(&workspace, 1024 * 1024)?;
-    let mut query = Box::pin(sea_orm::sqlx::query("SELECT 1").fetch_optional(&mut *db));
+    let mut query = Box::pin(inventory::validate_checks_in(db, "samples"));
     let query_pending = futures::poll!(&mut query).is_pending();
     tokio::time::timeout(std::time::Duration::from_secs(10), entered.cancelled()).await?;
     drop(query);
@@ -198,7 +202,10 @@ async fn oversized_cell_refuses_from_scalar_preflight_and_releases_acknowledged_
     let home = tempfile::tempdir()?;
     let path = home.path().join("oversized.sqlite");
     let mut db = database(&path).await?;
-    sea_orm::sqlx::query("CREATE TABLE samples(value BLOB)")
+    sea_orm::sqlx::query("CREATE TABLE samples(value BLOB CHECK(value = 'allowed'))")
+        .execute(&mut db)
+        .await?;
+    sea_orm::sqlx::query("PRAGMA ignore_check_constraints=ON")
         .execute(&mut db)
         .await?;
     sea_orm::sqlx::query("INSERT INTO samples VALUES(zeroblob(?))")
@@ -237,51 +244,228 @@ async fn oversized_cell_refuses_from_scalar_preflight_and_releases_acknowledged_
 #[tokio::test]
 async fn bounded_integrity_scalar_accepts_valid_and_rejects_retained_check_corruption() -> Result<()>
 {
+    check_inventory_case(
+        "CREATE TABLE samples(value INTEGER CHECK(value IN (0,1)))",
+        "INSERT INTO samples VALUES(1)",
+        "INSERT INTO samples VALUES(-1)",
+        1,
+    )
+    .await
+}
+
+async fn check_inventory_case(
+    definition: &str,
+    valid: &str,
+    invalid: &str,
+    valid_rows: u64,
+) -> Result<()> {
     for corrupt in [false, true] {
         let home = tempfile::tempdir()?;
         let path = home.path().join("integrity.sqlite");
         let mut db = database(&path).await?;
-        sea_orm::sqlx::query("CREATE TABLE samples(value INTEGER CHECK(value IN (0,1)))")
-            .execute(&mut db)
-            .await?;
+        sea_orm::sqlx::query(definition).execute(&mut db).await?;
+        sea_orm::sqlx::query(valid).execute(&mut db).await?;
         if corrupt {
+            // SQLite's own writable CHECK enforcement establishes the oracle.
+            let error = sea_orm::sqlx::query(invalid)
+                .execute(&mut db)
+                .await
+                .err()
+                .context("invalid fixture passed writable CHECK")?;
+            ensure!(error.to_string().contains("CHECK constraint failed"));
             sea_orm::sqlx::query("PRAGMA ignore_check_constraints=ON")
                 .execute(&mut db)
                 .await?;
+            sea_orm::sqlx::query(invalid).execute(&mut db).await?;
         }
-        sea_orm::sqlx::query("INSERT INTO samples VALUES(?)")
-            .bind(if corrupt { -1_i64 } else { 1_i64 })
-            .execute(&mut db)
-            .await?;
         db.close().await?;
+        let witness = Source::inspect(&path)?;
+        let bytes = std::fs::read(&path)?;
         let workspace = Workspace::create(
             &options(home.path(), 32 * 1024 * 1024)?,
             CancellationToken::new(),
         )?;
+        let baseline = workspace.available();
         let mut connections = Connections::new(CancellationToken::new(), None);
         connections.open_budgeted(&path, true, &workspace).await?;
+        let held = workspace.available();
         let mut tx = connections
             .copy
             .as_mut()
             .context("copy missing")?
             .begin()
             .await?;
+        ensure!(sea_orm::sqlx::query(valid).execute(&mut *tx).await.is_err());
+        let legacy = inventory::inspect_in(&mut tx, &[9; 32]).await;
         let actual = inspect_in(&mut tx, &[9; 32], &workspace).await;
         if corrupt {
+            let error = actual.err().context("corrupt database accepted")?;
+            ensure!(error.to_string() == "SQLite integrity failed");
             ensure!(
-                actual
+                legacy
                     .err()
-                    .context("corrupt database accepted")?
+                    .context("v1 accepted corrupt CHECK")?
                     .to_string()
-                    .contains("SQLite integrity failed")
+                    == "SQLite integrity failed"
             );
         } else {
-            ensure!(actual?.value().rows == 1);
+            let actual = actual?;
+            ensure!(actual.value().rows == valid_rows && actual.value() == &legacy?);
         }
+        // Both outcomes cross ClearCache ACK; only the connection remains held.
+        ensure!(workspace.available() == held);
         tx.rollback().await?;
         connections.close().await?;
+        ensure!(workspace.available() == baseline);
+        witness.check()?;
+        ensure!(std::fs::read(&path)? == bytes);
         workspace.finish()?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn readonly_checks_preserve_sqlite_null_affinity_collation_and_names() -> Result<()> {
+    for (definition, valid, invalid, rows) in [
+        (
+            "CREATE TABLE samples(value INTEGER CHECK(value != 0) CHECK(value BETWEEN -2 AND +2))",
+            "INSERT INTO samples VALUES(1)",
+            "INSERT INTO samples VALUES(3)",
+            1,
+        ),
+        (
+            "CREATE TABLE \"sam\"\"ples\"(\"va\"\"lue\" TEXT COLLATE NOCASE CHECK(\"va\"\"lue\" = 'o''hare') CHECK(\"va\"\"lue\" <> 'forbidden'))",
+            "INSERT INTO \"sam\"\"ples\" VALUES('O''HARE')",
+            "INSERT INTO \"sam\"\"ples\" VALUES('other')",
+            1,
+        ),
+        (
+            "CREATE TABLE samples(value NUMERIC CHECK(value = '01'))",
+            "INSERT INTO samples VALUES(1)",
+            "INSERT INTO samples VALUES(2)",
+            1,
+        ),
+        (
+            "CREATE TABLE samples(value INTEGER CHECK(value = 9007199254740993))",
+            "INSERT INTO samples VALUES(9007199254740993)",
+            "INSERT INTO samples VALUES(9007199254740992)",
+            1,
+        ),
+        (
+            "CREATE TABLE samples(value INTEGER CHECK(value IN(TRUE,FALSE)))",
+            "INSERT INTO samples VALUES(NULL),(0),(1)",
+            "INSERT INTO samples VALUES(2)",
+            3,
+        ),
+        (
+            "CREATE TABLE samples(value INTEGER,\"true\" INTEGER,\"false\" INTEGER,CHECK(value IN(TRUE,FALSE)))",
+            "INSERT INTO samples VALUES(7,7,9),(NULL,7,9)",
+            "INSERT INTO samples VALUES(1,7,9)",
+            2,
+        ),
+        (
+            "CREATE TABLE samples(value TEXT CHECK(\"missing\" = 'missing'), CHECK(rowid != 0))",
+            "INSERT INTO samples(rowid,value) VALUES(5,'retained')",
+            "INSERT INTO samples(rowid,value) VALUES(0,'invalid')",
+            1,
+        ),
+    ] {
+        check_inventory_case(definition, valid, invalid, rows).await?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn readonly_check_operand_budget_refuses_before_corruption_and_releases_phases() -> Result<()>
+{
+    let home = tempfile::tempdir()?;
+    let path = home.path().join("check-budget.sqlite");
+    let mut db = database(&path).await?;
+    sea_orm::sqlx::query("CREATE TABLE samples(value BLOB CHECK(value = 'allowed'))")
+        .execute(&mut db)
+        .await?;
+    sea_orm::sqlx::query("PRAGMA ignore_check_constraints=ON")
+        .execute(&mut db)
+        .await?;
+    sea_orm::sqlx::query("INSERT INTO samples VALUES(zeroblob(2097152))")
+        .execute(&mut db)
+        .await?;
+    db.close().await?;
+    for mib in [16, 64] {
+        let workspace = Workspace::create(
+            &options(home.path(), mib * 1024 * 1024)?,
+            CancellationToken::new(),
+        )?;
+        let baseline = workspace.available();
+        let mut connections = Connections::new(CancellationToken::new(), None);
+        connections.open_budgeted(&path, true, &workspace).await?;
+        let held = workspace.available();
+        let mut tx = connections
+            .copy
+            .as_mut()
+            .context("copy missing")?
+            .begin()
+            .await?;
+        let error = inspect_in(&mut tx, &[1; 32], &workspace)
+            .await
+            .err()
+            .context("invalid CHECK accepted")?;
+        if mib == 16 {
+            ensure!(error.is::<CapacityExceeded>());
+        } else {
+            ensure!(error.to_string() == "SQLite integrity failed");
+        }
+        ensure!(workspace.available() == held);
+        tx.rollback().await?;
+        connections.close().await?;
+        ensure!(workspace.available() == baseline);
+        workspace.finish()?;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsafe_check_schema_refuses_before_an_earlier_violating_predicate() -> Result<()> {
+    let home = tempfile::tempdir()?;
+    let path = home.path().join("unsafe-check.sqlite");
+    let mut db = database(&path).await?;
+    sea_orm::sqlx::query("CREATE TABLE samples(value INTEGER CHECK(value=1), CHECK(value=abs(1)))")
+        .execute(&mut db)
+        .await?;
+    sea_orm::sqlx::query("PRAGMA ignore_check_constraints=ON")
+        .execute(&mut db)
+        .await?;
+    sea_orm::sqlx::query("INSERT INTO samples VALUES(2)")
+        .execute(&mut db)
+        .await?;
+    db.close().await?;
+    let workspace = Workspace::create(
+        &options(home.path(), 32 * 1024 * 1024)?,
+        CancellationToken::new(),
+    )?;
+    let mut connections = Connections::new(CancellationToken::new(), None);
+    connections.open_budgeted(&path, true, &workspace).await?;
+    let held = workspace.available();
+    let mut tx = connections
+        .copy
+        .as_mut()
+        .context("copy missing")?
+        .begin()
+        .await?;
+    let legacy = inventory::inspect_in(&mut tx, &[1; 32])
+        .await
+        .err()
+        .context("v1 accepted executable CHECK")?;
+    let large = inspect_in(&mut tx, &[1; 32], &workspace)
+        .await
+        .err()
+        .context("v2 accepted executable CHECK")?;
+    ensure!(legacy.to_string() == "unsupported schema literal");
+    ensure!(large.to_string() == legacy.to_string());
+    ensure!(workspace.available() == held);
+    tx.rollback().await?;
+    connections.close().await?;
+    workspace.finish()?;
     Ok(())
 }
 

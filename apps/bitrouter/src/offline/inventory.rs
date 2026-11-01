@@ -7,7 +7,7 @@ use super::{
         Column, Inventory, LedgerEntry, MAX_BYTES, MAX_CELL, MAX_FILE, MAX_ROW, MAX_ROWS, Table,
     },
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use futures::TryStreamExt;
 use sea_orm::sqlx::{Connection, Row, SqliteConnection};
 
@@ -249,6 +249,36 @@ pub(super) fn row_query(name: &str, columns: &[Column]) -> String {
     }
     format!("SELECT {} FROM {}", projections.join(","), quoted(name))
 }
+
+/// The caller has qualified every schema object and bounded this table's cells
+/// in the same snapshot. Keep operand and statement allowances until clear ACK.
+pub(super) async fn validate_checks_in(db: &mut SqliteConnection, name: &str) -> Result<()> {
+    let sql: Option<String> = sea_orm::sqlx::query_scalar(
+        "SELECT CASE WHEN length(CAST(sql AS BLOB))<=1048576 THEN sql ELSE NULL END FROM main.sqlite_schema WHERE type='table' AND name=?",
+    )
+    .bind(name)
+    .fetch_one(&mut *db)
+    .await?;
+    let sql = sql.context("table definition missing or exceeds profile")?;
+    let mut checks = super::schema::CheckCursor::new(&sql)?;
+    while let Some(predicate) = checks.next_predicate()? {
+        // Readonly SQLite can omit CHECKs from integrity_check. Evaluate only
+        // accepted original spans, with no aliases or normalization: affinity,
+        // collation, TRUE/FALSE name resolution and CHECK-NULL remain SQLite's.
+        // https://sqlite.org/lang_createtable.html#check_constraints
+        // https://sqlite.org/lang_expr.html#booleanexpr
+        let query = format!(
+            "SELECT EXISTS(SELECT 1 FROM main.{} NOT INDEXED WHERE NOT{predicate})",
+            quoted(name)
+        );
+        let violated: i64 = sea_orm::sqlx::query_scalar(&query)
+            .fetch_one(&mut *db)
+            .await?;
+        ensure!(violated == 0, "SQLite integrity failed");
+    }
+    Ok(())
+}
+
 async fn table(
     db: &mut SqliteConnection,
     name: &str,
@@ -272,6 +302,9 @@ async fn table(
             .ok_or_else(|| anyhow::anyhow!("byte count overflow"))?;
         hashes.push(row_digest(&row, name, &columns, key)?);
     }
+    drop(stream);
+    // Every row/cell has passed the bounded projection before CHECK evaluation.
+    validate_checks_in(db, name).await?;
     // Preserve duplicates; sorting fixed-size keyed hashes is independent of SQL
     // collation, insertion order, and VACUUM's physical btree layout.
     hashes.sort_unstable();

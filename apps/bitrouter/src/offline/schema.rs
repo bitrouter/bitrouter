@@ -1,6 +1,7 @@
 //! Finite source-expression profile checked before integrity/VACUUM. Ordinary
 //! BitRouter CHECKs are comparisons/membership, never arbitrary SQL programs.
 use anyhow::{Result, bail, ensure};
+use std::ops::Range;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Token {
@@ -11,7 +12,7 @@ enum Token {
     Symbol(u8),
 }
 
-fn tokens(sql: &str) -> Result<Vec<Token>> {
+fn tokens(sql: &str, mut spans: Option<&mut Vec<Range<usize>>>) -> Result<Vec<Token>> {
     let bytes = sql.as_bytes();
     let mut out = Vec::new();
     let mut at = 0;
@@ -75,6 +76,9 @@ fn tokens(sql: &str) -> Result<Vec<Token>> {
         } else {
             ensure!(byte.is_ascii(), "quote non-ASCII schema identifiers");
             out.push(Token::Symbol(byte));
+        }
+        if let Some(spans) = spans.as_mut() {
+            spans.push(start..at);
         }
     }
     Ok(out)
@@ -170,16 +174,19 @@ pub(super) fn validate(kind: &[u8], sql: Option<&[u8]>) -> Result<()> {
         ensure!(kind == b"index", "table definition missing");
         return Ok(());
     };
-    let tokens = tokens(std::str::from_utf8(sql)?)?;
+    validate_tokens(kind, &tokens(std::str::from_utf8(sql)?, None)?)
+}
+
+fn validate_tokens(kind: &[u8], tokens: &[Token]) -> Result<()> {
     let mut at = 0;
     while at < tokens.len() {
         if word(tokens.get(at), "check") {
             ensure!(kind == b"table", "unsupported index constraint");
             at += 1;
-            check(&tokens, &mut at)?;
+            check(tokens, &mut at)?;
         } else if word(tokens.get(at), "default") {
             at += 1;
-            literal(&tokens, &mut at)?;
+            literal(tokens, &mut at)?;
             ensure!(
                 !matches!(
                     tokens.get(at),
@@ -211,9 +218,60 @@ pub(super) fn validate(kind: &[u8], sql: Option<&[u8]>) -> Result<()> {
     Ok(())
 }
 
+/// Original, fully qualified CHECK spans; SQLite retains name and literal semantics.
+pub(super) struct CheckCursor<'a> {
+    sql: &'a str,
+    tokens: Vec<Token>,
+    spans: Vec<Range<usize>>,
+    at: usize,
+}
+impl<'a> CheckCursor<'a> {
+    pub(super) fn new(sql: &'a str) -> Result<Self> {
+        let mut spans = Vec::new();
+        let tokens = tokens(sql, Some(&mut spans))?;
+        validate_tokens(b"table", &tokens)?;
+        Ok(Self {
+            sql,
+            tokens,
+            spans,
+            at: 0,
+        })
+    }
+
+    pub(super) fn next_predicate(&mut self) -> Result<Option<&'a str>> {
+        while self.at < self.tokens.len() {
+            let is_check = word(self.tokens.get(self.at), "check");
+            self.at += 1;
+            if is_check {
+                let start = self.at;
+                check(&self.tokens, &mut self.at)?;
+                return Ok(Some(
+                    &self.sql[self.spans[start].start..self.spans[self.at - 1].end],
+                ));
+            }
+        }
+        Ok(None)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn check_spans_preserve_original_sql_and_qualify_the_whole_definition() -> Result<()> {
+        let predicate = "(\"not a column\" /* CHECK(abs(9)) */ = 'not a column')";
+        let sql = format!(
+            "CREATE TABLE t(value NUMERIC DEFAULT 'check', CHECK {predicate}, CHECK(value IN(TRUE, FALSE, NULL, +01, -2.0)))"
+        );
+        let mut checks = CheckCursor::new(&sql)?;
+        ensure!(checks.next_predicate()? == Some(predicate));
+        ensure!(checks.next_predicate()? == Some("(value IN(TRUE, FALSE, NULL, +01, -2.0))"));
+        ensure!(checks.next_predicate()?.is_none());
+        // Even an earlier harmless CHECK must not escape an unqualified schema.
+        ensure!(CheckCursor::new("CREATE TABLE t(v CHECK(v=1), CHECK(v=abs(1)))").is_err());
+        Ok(())
+    }
 
     #[test]
     fn obligation_ranges_allow_literals_but_never_executable_bounds() -> Result<()> {

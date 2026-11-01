@@ -204,6 +204,16 @@ async fn table(
         .ok_or(CapacityExceeded)?;
     // Consumer, queued and worker rows, SQLite result values, and copied cell.
     phase.grow(row_memory)?;
+    {
+        // Retain the actual operand/VM envelope above. As in schema(), 12 MiB
+        // covers bounded DDL/driver copies, token strings/spans and one original
+        // predicate/SQL statement, including UTF-16 to UTF-8 expansion. Clear
+        // both success and error before allocating the hash-sort working set.
+        let checks = Phase::new(workspace, 12 * 1024 * 1024)?;
+        let checked = shared::validate_checks_in(db, &name).await;
+        checks.clear(db).await?;
+        checked?;
+    }
     let mut hashes = sort::Records::<32>::new(workspace, workspace.available() / 2)?;
     let mut value_bytes = 0_u64;
     {
