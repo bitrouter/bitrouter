@@ -12,23 +12,37 @@ the complete OpenRouter identity list and gates the complete candidate before
 writing any source. `--report` writes JSON, including required-feed failures.
 
 Own-provider model feeds currently cover OpenAI, Anthropic, OpenRouter, and
-BitRouter. OpenAI, Anthropic, and BitRouter listings are account-scoped merge
-feeds: a missing account-visible model cannot prove global withdrawal. New
-heterogeneous offers have empty interfaces until endpoint support is verified;
+BitRouter. OpenAI and Anthropic listings are account-scoped merge feeds: a
+missing account-visible model cannot prove global withdrawal. BitRouter's
+listing is public and uses merge mode until complete inventory coverage is
+established. New heterogeneous offers have empty interfaces until endpoint support is verified;
 unknown prices stay absent. The remaining providers retain manually maintained
 inventories until a documented own-provider feed is configured. Third-party
 models.dev data is not used as provider membership authority.
 
-Trusted CI binds `OPENAI_REGISTRY_API_KEY`, `ANTHROPIC_REGISTRY_API_KEY`, and
-`BITROUTER_REGISTRY_API_KEY` to GitHub repository secrets with those exact names.
-They are independent listing credentials; local inference keys are not inherited.
-OpenRouter's public full-list endpoint uses explicit `auth: {kind: none}`.
+Feed authentication is independent of the provider's inference authentication.
+Configure each listing according to its own endpoint contract:
+
+| Feed | Listing authentication | CI secret |
+| --- | --- | --- |
+| [OpenAI](https://developers.openai.com/api/reference/resources/models/methods/list) | Bearer credential | `OPENAI_REGISTRY_API_KEY` |
+| [Anthropic](https://platform.claude.com/docs/en/api/models/list) | `x-api-key`, with `anthropic-version: 2023-06-01` | `ANTHROPIC_REGISTRY_API_KEY` |
+| [BitRouter](https://api.bitrouter.ai/v1/models) | Explicit `auth: {kind: none}` | None |
+| [OpenRouter](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | Explicit `auth: {kind: none}` | None |
+
+Trusted CI binds the two required listing credentials to GitHub repository
+secrets with those exact names; local inference keys are not inherited.
+The independent OpenRouter identity request also uses `auth: {kind: none}`.
 Its importer excludes `:batch` catalog variants in this release and creates chat
 interfaces only when the upstream model explicitly advertises the chat endpoint.
 The independent identity audit still reads the complete unfiltered listing.
 Missing required secrets fail the run, while an independently validated public
 feed can still produce a reviewable proposal after the global audit passes.
 The workflow uploads the exact public identity response and JSON report.
+Manual runs check out the selected commit, so a contributor can validate a
+configuration fix on its branch before merging. Only runs selected from `main`
+update `automation/registry-sync` and propose catalog changes; branch runs
+perform the same synchronization and checks without publishing a proposal.
 
 The v1 migration retained every native provider offer. Five delisted canonical
 bindings (`qwen/qwen3.8-max`, `deepseek/deepseek-v3.1`, and Xiaomi's
