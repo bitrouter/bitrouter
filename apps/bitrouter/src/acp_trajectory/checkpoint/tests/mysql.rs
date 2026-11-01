@@ -183,7 +183,7 @@ async fn freeze_after_snapshot(
     let old_session = initial.clone();
     let (ready_tx, ready_rx) = oneshot::channel();
     let (committed_tx, committed_rx) = oneshot::channel();
-    let frozen = store.freeze_checkpoint_checked(&identity, initial.head, move |tx| {
+    let frozen = store.freeze_checkpoint_checked(&identity, initial.head, move |tx, _write| {
         Box::pin(async move {
             ensure!(session(tx, &old_session.session_key).await? == old_session);
             wait_for_commit(tx, ready_tx, committed_rx).await?;
@@ -348,7 +348,7 @@ pub(super) async fn mysql_stale_assessment_cannot_overwrite_human_after_snapshot
         let expected_human_input = serde_json::to_value(&human_input)?;
         let (ready_tx, ready_rx) = oneshot::channel();
         let (committed_tx, committed_rx) = oneshot::channel();
-        let stale = store.submit_assessment_checked(&identity, stale_input, move |tx| {
+        let stale = store.submit_assessment_checked(&identity, stale_input, move |tx, _write| {
             Box::pin(async move {
                 ensure!(
                     heads::Entity::find_by_id(&old_head.session_key)

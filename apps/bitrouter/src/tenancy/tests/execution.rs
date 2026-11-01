@@ -95,15 +95,15 @@ async fn provision_protocol_observed(
     fixture.service = Service::start_resources_with_continuations(
         fixture.db.clone(),
         owner,
-        super::super::actor::OperationLimits::default(),
         snapshot,
         Arc::new(resources),
-        (
-            None,
-            &crate::config::ContinuationConfig::default(),
-            None,
-            observer,
-        ),
+        crate::tenancy::Provisioning {
+            import: None,
+            continuations: &crate::config::ContinuationConfig::default(),
+            claim: None,
+            receipt_observer: observer,
+            config: &crate::config::tenancy::TenancyConfig::default(),
+        },
         None,
     )
     .await?;
@@ -137,11 +137,11 @@ async fn draft(
 }
 
 fn headers(fixture: &Fixture, token: &str, revision: &RevisionId) -> Result<::http::HeaderMap> {
-    let caller = fixture.service.authenticate(token).map_err(failure)?;
+    let state = fixture.service.current().map_err(failure)?;
     let binding = fixture
         .service
-        .capabilities(&caller)
-        .map_err(failure)?
+        .capability_document(&state)
+        .map_err(|code| anyhow::anyhow!("{code:?}"))?
         .bind(revision.clone(), "same-correlation".try_into()?)?;
     let mut headers = ::http::HeaderMap::new();
     let object = serde_json::to_value(binding)?;
@@ -159,7 +159,7 @@ async fn admitted(
     fixture: &Fixture,
     headers: &::http::HeaderMap,
 ) -> Result<Arc<super::super::execution::TenantExecution>> {
-    let submission = fixture.service.submission(headers).map_err(failure)?;
+    let submission = fixture.service.submission(headers).await.map_err(failure)?;
     fixture
         .service
         .admit_execution(submission, MODEL, &ApiProtocol::ChatCompletions)
@@ -200,7 +200,7 @@ async fn queued_execution_rechecks_revoke_suspend_and_reduced_credential_scope()
         let first = admitted(&fixture, &headers).await?;
         let service = fixture.service.clone();
         let queued = tokio::spawn(async move {
-            let submission = service.submission(&headers)?;
+            let submission = service.submission(&headers).await?;
             service
                 .admit_execution(submission, MODEL, &ApiProtocol::ChatCompletions)
                 .await
@@ -226,15 +226,14 @@ async fn queued_execution_rechecks_revoke_suspend_and_reduced_credential_scope()
                 TenantPut {
                     operation_id: "stop-queued".try_into()?,
                     expected_revision: Some(
-                        fixture
-                            .service
-                            .current()
-                            .map_err(failure)?
-                            .tenants
-                            .get(&fixture.tenant)
-                            .context("tenant")?
-                            .revision
-                            .clone(),
+                        crate::tenancy::store::directory::tenant_in(
+                            &fixture.db,
+                            &fixture.tenant,
+                            fixture.service.authority.load_budget(),
+                        )
+                        .await?
+                        .context("tenant")?
+                        .revision,
                     ),
                     state: TenantState::Suspended,
                     installation_id: fixture.installation.clone(),
@@ -283,7 +282,7 @@ async fn queued_execution_rechecks_revoke_suspend_and_reduced_credential_scope()
 async fn execution_uses_submit_and_credential_grants_without_management_read() -> Result<()> {
     let (fixture, route, _) = provision("https://example.invalid/v1").await?;
     let revision = draft(&fixture, &route, "draft", 25).await?;
-    let mut issue = fixture.issuance("execution-only")?;
+    let mut issue = fixture.issuance("execution-only").await?;
     issue.permissions = vec![Permission::ExecutionSubmit, Permission::CredentialUse];
     let credential = issued(
         fixture
@@ -302,7 +301,7 @@ async fn execution_uses_submit_and_credential_grants_without_management_read() -
         .store(true, Ordering::Release);
     let headers = headers(&fixture, token, &revision.revision_id)?;
     let execution = admitted(&fixture, &headers).await?;
-    let caller = fixture.service.authenticate(token).map_err(failure)?;
+    let caller = fixture.service.authenticate(token).await.map_err(failure)?;
     ensure!(
         fixture
             .service
@@ -533,7 +532,7 @@ async fn every_send_rechecks_revocation_and_same_correlation_never_deduplicates(
         first.admit_send(&target),
         Err(ErrorCode::Unauthorized)
     ));
-    ensure!(fixture.service.submission(&headers).is_err());
+    ensure!(fixture.service.submission(&headers).await.is_err());
     drop((first, second));
     fixture.service.shutdown().await?;
     Ok(())

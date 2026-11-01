@@ -357,11 +357,16 @@ Verification asks for its own identified approval; denial reports `denied`.
 Cancellation joins started work before clean release. Storage failures and
 unknown effects retain workspace exclusion as `recovery_required`.
 
-Startup claims one database owner and completes bounded cold discovery before
-admission: 1024 roots, 1,000,000 scanned records and 4 MiB cold metadata.
+Startup claims one database owner and completes cold discovery before admission.
+The default working set retains at most 1024 unresolved roots and 4 MiB of
+unresolved metadata. Scanning yields cooperatively every 1,000,000 records and
+then continues through the complete history; this is not a total-record limit.
+See [native startup discovery](specs/service-api/README.md#native-startup-discovery)
+for the working-set and recovery contract.
 Recovery reads allow 2 readers, 64 records / 4 MiB per page and 1,000,000
 records per Thread. Capabilities expose aggregate progress, not root identities
-or prompts. New roots use runtime format 2. Migration adds metadata with
+or prompts. New/updated roots use runtime format 7; formats 2–6 remain readable
+without history rewriting. Migration adds metadata with
 **default 0** for old roots; unsupported formats fail before payload decoding
 or execution, with `recovery_required` / `unsupported_runtime_format`.
 They are not converted or marked safe.

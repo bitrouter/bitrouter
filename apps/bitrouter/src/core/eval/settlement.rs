@@ -212,12 +212,15 @@ impl SettlementRecorder for EvalSettlementRecorder {
         match (&self.owner, guard) {
             (RecorderOwner::Legacy { store }, None) => {
                 store
-                    .insert_subject_owned(&subject, owner)
+                    .insert_settlement_subject_owned(&subject, owner)
                     .await
                     .map_err(|error| {
-                        crate::gateway::error::BitrouterError::internal(format!(
-                            "persisting request eval subject: {error}"
-                        ))
+                        match error.downcast::<crate::gateway::error::BitrouterError>() {
+                            Ok(error) => error,
+                            Err(error) => crate::gateway::error::BitrouterError::internal(format!(
+                                "persisting request eval subject: {error}"
+                            )),
+                        }
                     })?;
             }
             (

@@ -3,14 +3,16 @@ use super::{
     auxiliary::{MAX_BYTES, Outcome, Snapshot},
     store::Candidate,
 };
-use anyhow::{Context, Result, ensure};
+#[cfg(test)]
+use anyhow::Context;
+use anyhow::{Result, ensure};
 use bitrouter_ai::tenancy::{
     execution::ExecutionReceipt,
     identity::{ExecutionId, InstallationId, TenantId},
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, SqlErr,
-    sea_query::{Alias, Expr, Func, OnConflict, Order, Query},
+    sea_query::{Alias, Expr, Func, OnConflict, Query},
 };
 use sha2::{Digest, Sha256};
 
@@ -232,145 +234,10 @@ pub(in crate::tenancy) async fn insert(
     Ok(())
 }
 
-pub(in crate::tenancy) async fn inventory(
-    db: &impl ConnectionTrait,
-    installation: &InstallationId,
-) -> Result<(
-    u64,
-    Vec<(TenantId, ExecutionId, chrono::DateTime<chrono::Utc>)>,
-)> {
-    let backend = db.get_database_backend();
-    let octets = if backend == DatabaseBackend::Sqlite {
-        "length(CAST(a.evidence_json AS BLOB))"
-    } else {
-        "octet_length(a.evidence_json)"
-    };
-    // Validate nullable private disposition linkage before loading any body.
-    // Old035 rows have no digest and no auxiliary row; new rows require both.
-    let auxiliary_digest = match backend {
-        DatabaseBackend::Sqlite => "json_extract(r.disposition_json, '$.auxiliary_digest')",
-        DatabaseBackend::Postgres => "r.disposition_json::jsonb->>'auxiliary_digest'",
-        DatabaseBackend::MySql => {
-            "JSON_UNQUOTE(JSON_EXTRACT(r.disposition_json, '$.auxiliary_digest'))"
-        }
-    };
-    let exact = format!(
-        "SELECT 1 FROM tenancy_execution_receipts r LEFT JOIN tenancy_receipt_auxiliary a ON a.installation_id=r.installation_id AND a.tenant_id=r.tenant_id AND a.execution_id=r.execution_id WHERE ({auxiliary_digest} IS NULL AND a.execution_id IS NOT NULL) OR ({auxiliary_digest} IS NOT NULL AND (a.execution_id IS NULL OR a.evidence_digest<>{auxiliary_digest})) LIMIT 1"
-    );
-    ensure!(
-        db.query_one(sea_orm::Statement::from_string(backend, exact))
-            .await?
-            .is_none(),
-        "OAuth evidence inventory presence mismatch"
-    );
-    let exact = format!(
-        "SELECT 1 FROM tenancy_receipt_auxiliary a LEFT JOIN tenancy_execution_receipts r ON a.installation_id=r.installation_id AND a.tenant_id=r.tenant_id AND a.execution_id=r.execution_id WHERE r.execution_id IS NULL OR a.receipt_digest<>r.content_digest OR {octets}>{MAX_BYTES} LIMIT 1"
-    );
-    ensure!(
-        db.query_one(sea_orm::Statement::from_string(backend, exact))
-            .await?
-            .is_none(),
-        "OAuth evidence inventory mismatch"
-    );
-    let foreign = Query::select()
-        .from(Alias::new(TABLE))
-        .expr(Expr::val(1))
-        .and_where(Expr::col(Alias::new("installation_id")).ne(installation.as_str()))
-        .limit(1)
-        .to_owned();
-    ensure!(
-        db.query_one(backend.build(&foreign)).await?.is_none(),
-        "foreign OAuth receipt installation"
-    );
-    // One key page plus one bounded point receipt/evidence pair at a time.
-    // Bound total validation work by the existing receipt high-water envelope;
-    // never materialize all retained JSON or trust a mutable unknown projection.
-    let mut after: Option<(TenantId, ExecutionId)> = None;
-    let mut bytes = 0_u64;
-    let mut validated_bytes = 0_u64;
-    let mut unknown = Vec::new();
-    loop {
-        let mut query = Query::select();
-        query
-            .from(Alias::new(TABLE))
-            .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-            .order_by(Alias::new("tenant_id"), Order::Asc)
-            .order_by(Alias::new("execution_id"), Order::Asc)
-            .limit(64);
-        for name in ["tenant_id", "execution_id"] {
-            let length = if backend == DatabaseBackend::Sqlite {
-                Func::cust(Alias::new("length"))
-                    .arg(Expr::col(Alias::new(name)).cast_as(Alias::new("BLOB")))
-            } else {
-                Func::cust(Alias::new("octet_length")).arg(Expr::col(Alias::new(name)))
-            };
-            query.expr_as(
-                Expr::case(Expr::expr(length).lte(128), Expr::col(Alias::new(name)))
-                    .finally(Expr::val(Option::<String>::None)),
-                Alias::new(name),
-            );
-        }
-        if let Some((tenant, execution)) = &after {
-            query.and_where(
-                Expr::col(Alias::new("tenant_id"))
-                    .gt(tenant.as_str())
-                    .or(Expr::col(Alias::new("tenant_id"))
-                        .eq(tenant.as_str())
-                        .and(Expr::col(Alias::new("execution_id")).gt(execution.as_str()))),
-            );
-        }
-        let page = db.query_all(backend.build(&query)).await?;
-        if page.is_empty() {
-            break;
-        }
-        for row in page {
-            let tenant: TenantId = row.try_get::<String>("", "tenant_id")?.try_into()?;
-            let execution: ExecutionId = row.try_get::<String>("", "execution_id")?.try_into()?;
-            if let Some(previous) = &after {
-                ensure!(
-                    (&tenant, &execution) > (&previous.0, &previous.1),
-                    "OAuth inventory key order"
-                );
-            }
-            let candidate = super::store::lookup_candidate(db, installation, &tenant, &execution)
-                .await?
-                .context("OAuth inventory receipt missing")?;
-            let evidence = candidate
-                .auxiliary
-                .as_ref()
-                .context("OAuth inventory evidence missing")?;
-            let charged = (evidence.json.len() as u64)
-                .checked_add(16 * 1024)
-                .context("OAuth inventory overflow")?;
-            bytes = bytes
-                .checked_add(charged)
-                .context("OAuth inventory overflow")?;
-            validated_bytes = validated_bytes
-                .checked_add(candidate.bytes())
-                .and_then(|value| value.checked_add(charged + 16 * 1024))
-                .context("OAuth validation work overflow")?;
-            ensure!(
-                validated_bytes <= super::capacity::HIGH_WATER,
-                "OAuth inventory validation work bound"
-            );
-            if evidence.unknown() {
-                ensure!(unknown.len() < 1000, "OAuth unknown evidence capacity");
-                unknown.push((
-                    tenant.clone(),
-                    execution.clone(),
-                    chrono::DateTime::parse_from_rfc3339(candidate.receipt.recorded_at.as_str())?
-                        .with_timezone(&chrono::Utc),
-                ));
-            }
-            after = Some((tenant, execution));
-        }
-    }
-    Ok((bytes, unknown))
-}
-
 /// A row can discharge this exact pending refresh only after both immutable
 /// records and their owner/work/generation linkage have been checked. Equal
 /// names or token bytes in another slot never participate in this lookup.
+#[cfg(test)]
 pub(in crate::tenancy) async fn pending_receipted(
     db: &impl ConnectionTrait,
     metadata: &crate::tenancy::oauth::storage::Metadata,

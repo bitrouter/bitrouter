@@ -16,11 +16,14 @@ struct Transfer {
 }
 
 fn dispatch_headers(service: &Service, transfer: &Transfer) -> Result<::http::HeaderMap> {
-    let caller = service.authenticate(&transfer.token).map_err(failure)?;
-    let binding = service.capabilities(&caller).map_err(failure)?.bind(
-        transfer.revision.revision_id.clone(),
-        "cross-feature".try_into()?,
-    )?;
+    let state = service.current().map_err(failure)?;
+    let binding = service
+        .capability_document(&state)
+        .map_err(|code| anyhow::anyhow!("{code:?}"))?
+        .bind(
+            transfer.revision.revision_id.clone(),
+            "cross-feature".try_into()?,
+        )?;
     let value = serde_json::to_value(binding)?;
     let mut headers = ::http::HeaderMap::new();
     for (name, value) in value.as_object().context("binding")? {
@@ -52,7 +55,7 @@ fn activate(service: &Service, transfer: &Transfer, operation: &str) -> Result<C
 #[cfg(feature = "core")]
 mod producer {
     use super::*;
-    use crate::tenancy::{actor::OperationLimits, resources::Resources, store};
+    use crate::tenancy::{resources::Resources, store};
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
     use serde_json::json;
 
@@ -85,8 +88,7 @@ mod producer {
         let db =
             crate::db::connect_tenancy(&format!("sqlite://{}?mode=rwc", path.display()), &owner)
                 .await?;
-        let mut fixture =
-            Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
+        let mut fixture = Fixture::with_database(db, &mut |_| {}).await?;
         fixture.service.shutdown().await?;
         let resources = Resources::with_key(fixture.installation.clone(), KEY)?;
         let reference = |kind, id: &str| -> Result<ResourceRef> {
@@ -141,7 +143,6 @@ mod producer {
         fixture.service = Service::start_prepared(
             fixture.db.clone(),
             None,
-            OperationLimits::default(),
             store::load(&fixture.db, Utc::now()).await?,
             Arc::new(resources),
         )
@@ -173,6 +174,7 @@ mod producer {
         let submission = fixture
             .service
             .submission(&dispatch_headers(&fixture.service, &transfer)?)
+            .await
             .map_err(failure)?;
         // Exercise the supported admission path too; no provider is contacted.
         drop(
@@ -192,7 +194,6 @@ mod producer {
         fixture.service = Service::start_prepared(
             fixture.db.clone(),
             None,
-            OperationLimits::default(),
             store::load(&fixture.db, Utc::now()).await?,
             Arc::new(Resources::with_key(fixture.installation.clone(), KEY)?),
         )
@@ -244,13 +245,25 @@ mod producer {
 #[cfg(not(feature = "core"))]
 mod consumer {
     use super::*;
-    use crate::tenancy::{actor::OperationLimits, ownership, resources::Resources, store};
+    use crate::tenancy::{ownership, resources::Resources, store};
     use axum::{
         body::Body,
         http::{Request, StatusCode},
     };
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
     use tower::ServiceExt;
+
+    async fn active(db: &sea_orm::DatabaseConnection, tenant: &TenantId) -> Result<String> {
+        let row = db
+            .query_one(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "SELECT revision_id FROM tenancy_active_configurations WHERE tenant_id=?",
+                [tenant.as_str().into()],
+            ))
+            .await?
+            .context("persisted active pointer")?;
+        Ok(row.try_get("", "revision_id")?)
+    }
 
     async fn open(
         path: &Path,
@@ -263,7 +276,6 @@ mod consumer {
         let started = Service::start_prepared(
             db.clone(),
             Some(owner),
-            OperationLimits::default(),
             store::load(&db, Utc::now()).await?,
             Arc::new(Resources::with_key(transfer.installation.clone(), KEY)?),
         )
@@ -324,6 +336,7 @@ mod consumer {
         ensure!(
             service
                 .active_revision(&operator, &transfer.tenant)
+                .await
                 .map_err(failure)?
                 .revision_id
                 .is_none()
@@ -350,7 +363,7 @@ mod consumer {
         let headers = dispatch_headers(&service, &transfer)?;
         // Both cold and cached reads must reject before acquiring execution capacity.
         for _ in 0..2 {
-            let submission = service.submission(&headers).map_err(failure)?;
+            let submission = service.submission(&headers).await.map_err(failure)?;
             ensure!(
                 matches!(service.admit_execution(submission, MODEL, &bitrouter_ai::types::ApiProtocol::ChatCompletions).await,
                 Err(error) if error.0.code == ErrorCode::CapabilityMismatch)
@@ -418,10 +431,7 @@ mod consumer {
             crate::db::connect_tenancy(&format!("sqlite://{}?mode=rw", path.display()), &owner)
                 .await?;
         let initial = store::load(&db, Utc::now()).await?;
-        ensure!(
-            initial.active_configurations.get(&transfer.tenant)
-                == Some(&transfer.revision.revision_id)
-        );
+        ensure!(active(&db, &transfer.tenant).await? == transfer.revision.revision_id.as_str());
         let resources = Resources::with_key(transfer.installation.clone(), KEY)?;
         let row = crate::tenancy::configuration_store::configuration(
             &db,
@@ -435,14 +445,8 @@ mod consumer {
             "active fixture lost integrity"
         );
         ensure!(resources.validate_executable(&row) == Err(ErrorCode::CapabilityMismatch));
-        let started = Service::start_prepared(
-            db.clone(),
-            Some(owner),
-            OperationLimits::default(),
-            initial,
-            Arc::new(resources),
-        )
-        .await;
+        let started =
+            Service::start_prepared(db.clone(), Some(owner), initial, Arc::new(resources)).await;
         match started {
             Ok(service) => {
                 service.shutdown().await?;
@@ -454,13 +458,7 @@ mod consumer {
                     .contains("native continuation key initialization failed")
             ),
         }
-        ensure!(
-            store::load(&db, Utc::now())
-                .await?
-                .active_configurations
-                .get(&transfer.tenant)
-                == Some(&transfer.revision.revision_id)
-        );
+        ensure!(active(&db, &transfer.tenant).await? == transfer.revision.revision_id.as_str());
         db.close().await?;
         std::fs::write(
             directory.join("no-core-passed"),

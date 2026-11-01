@@ -15,11 +15,11 @@ metadata:
 ---
 
 # BitRouter
-BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4. Native CLI tasks use bounded read workers and database execution records; see `references/cli.md` for permissions and restart limitations. Metered `google` uses Chat Completions with `GEMINI_API_KEY`; native Gemini routes, `google-ai` and Vertex Express are retired.
+BitRouter is a self-hosted Rust daemon at `http://127.0.0.1:4356` that routes OpenAI- or Anthropic-shaped requests to providers selected in §4. Native CLI tasks use bounded read workers and database execution records; see `references/cli.md` for permissions and restart limitations. Enabled tenancy uses startup-only `tenancy.capacity` budgets independent of stored tenant/key counts; see `references/remote-administration.md`. Metered `google` uses Chat Completions with `GEMINI_API_KEY`; native Gemini routes, `google-ai` and Vertex Express are retired.
 
 `bro task managed` submits to the local daemon, which owns native tools/Core and the existing durable journal. Use `--request-id` for exact retries, `managed-status` for passive inspection, `managed-cancel` with the original boot/input key for cancellation, and `managed-answer` for explicit MCP skill consent; continuation requires confirmed release. Custom durable harness clients use the negotiated managed-core HTTP/WebSocket profile; see `references/managed-core.md` for binding, ACKs, results and current limits.
 
-For a stopped local SQLite DB, `bro tenancy offline snapshot/inventory/verify` produces partial DB evidence only; external OAuth/workspace state is excluded and cutover remains forbidden. `bro tenancy offline audit` serves only protected old-installation receipt GET/page from verified evidence using an outside projection and explicit control credentials. See `references/cli.md` for literal path flags, audit limits and interrupted-bundle handling.
+For a stopped local SQLite DB, `bro tenancy offline snapshot/inventory/verify` produces DB-only evidence. Snapshot `--format v2` and an explicit private `--scratch-directory` process complete history with finite working memory; v1 remains the default. `offline restore` copies verified evidence into a new database path and preserves identity; normal startup and external recovery remain required. `offline audit` serves protected receipt reads. `offline upgrade-capacity` records only a verified legacy count-latch upgrade. See `references/cli.md` for identity, replay, resource-budget and writer-fence requirements.
 
 ## Activate in one pass
 ### 1. Probe

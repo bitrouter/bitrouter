@@ -76,6 +76,7 @@ async fn rootless_image_output_hook_change_denies_publication_but_keeps_provider
                         .fixture
                         .service
                         .submission(&ready.headers)
+                        .await
                         .map_err(failure)?,
                     MODEL,
                     &ApiProtocol::Responses,

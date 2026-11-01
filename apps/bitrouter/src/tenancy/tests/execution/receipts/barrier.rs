@@ -164,6 +164,26 @@ async fn reconcile_receipt_rollback(first_shutdown_refused: bool) -> Result<()> 
     let id = execution_id(&response)?;
     let _ = response.bytes().await?;
     ensure!(harness.fixture.service.cleanup.disposition() == Disposition::RolledBack);
+    // A real constraint/trigger refusal remains reconcilable; it must not be
+    // classified as storage damage merely because its receipt write failed.
+    #[cfg(unix)]
+    ensure!(
+        !harness
+            .fixture
+            .service
+            .admission
+            .receipt_capacity_for_test()
+            .map_err(|code| anyhow::anyhow!("receipt accounting: {code:?}"))?
+            .2
+    );
+    harness
+        .fixture
+        .service
+        .storage_budget()
+        .reserve(0, true)
+        .map_err(|code| anyhow::anyhow!("reconciliation storage: {code:?}"))?
+        .complete()
+        .map_err(|code| anyhow::anyhow!("storage release: {code:?}"))?;
     ensure!(
         store::lookup(
             &harness.fixture.db,
@@ -226,6 +246,10 @@ async fn reconcile_receipt_rollback(first_shutdown_refused: bool) -> Result<()> 
     .await?
     .context("receipt after repeated drain")?;
     ensure!(serde_json::to_vec(&after)? == before && harness.calls.load(Ordering::SeqCst) == 1);
+    ensure!(
+        !harness.fixture.service.admission.receipts_ready(),
+        "reconciliation reopened admission after a receipt failure"
+    );
     Ok(())
 }
 

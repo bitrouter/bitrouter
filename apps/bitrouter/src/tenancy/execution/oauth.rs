@@ -20,21 +20,21 @@ impl TenantExecution {
         target: &RoutingTarget,
     ) -> Result<Option<Metadata>, ErrorCode> {
         let reference = self.route.match_candidate(target)?;
-        self.service
-            .with_dispatch_authority(&self.submission, |state| {
-                authorize_route(state, &self.submission, self.route.dependencies())?;
-                let profile = self.service.oauth.get(self.installation_id(), &reference)?;
-                if let Some(metadata) = &profile {
-                    self.route.require_oauth_messages(target)?;
-                    if metadata.profile.provider != target.provider_name
-                        || metadata.profile.account
-                            != target.account_label.as_deref().unwrap_or("default")
-                    {
-                        return Err(ErrorCode::Forbidden);
-                    }
+        self.service.with_dispatch_view(&self.submission, |view| {
+            let state = view.facts();
+            authorize_route(state, &self.submission, self.route.dependencies())?;
+            let profile = view.oauth(&reference)?.cloned();
+            if let Some(metadata) = &profile {
+                self.route.require_oauth_messages(target)?;
+                if metadata.profile.provider != target.provider_name
+                    || metadata.profile.account
+                        != target.account_label.as_deref().unwrap_or("default")
+                {
+                    return Err(ErrorCode::Forbidden);
                 }
-                Ok(profile)
-            })
+            }
+            Ok(profile)
+        })
     }
     pub(crate) async fn oauth(
         self: &Arc<Self>,
@@ -113,39 +113,33 @@ impl TenantExecution {
         exchange: &Exchange,
         request: &reqwest::Request,
     ) -> Result<(), ErrorCode> {
-        self.service
-            .with_dispatch_authority(&self.submission, |state| {
-                authorize_route(state, &self.submission, self.route.dependencies())?;
-                self.route.require_oauth_messages(&exchange.target)?;
-                let metadata = self
-                    .service
-                    .oauth
-                    .get(
-                        self.installation_id(),
-                        &exchange.original.metadata.reference,
-                    )?
-                    .ok_or(ErrorCode::AuthorityUnavailable)?;
-                if exchange.execution.id() != self.id()
-                    || exchange.start.get().map(|row| &row.metadata) != Some(&metadata)
-                    || !matches!(metadata.state, State::RefreshStarted(_))
-                    || request.method() != reqwest::Method::POST
-                    || request.url().as_str() != metadata.profile.token_endpoint
-                {
-                    return Err(ErrorCode::Forbidden);
-                }
-                exchange.arm(oauth::refresh::request_digest(request)?)
-            })
+        self.with_send_authority(|view| {
+            self.route.require_oauth_messages(&exchange.target)?;
+            let metadata = view
+                .oauth(&exchange.original.metadata.reference)?
+                .ok_or(ErrorCode::AuthorityUnavailable)?;
+            if exchange.execution.id() != self.id()
+                || exchange.start.get().map(|row| &row.metadata) != Some(metadata)
+                || !matches!(metadata.state, State::RefreshStarted(_))
+                || request.method() != reqwest::Method::POST
+                || request.url().as_str() != metadata.profile.token_endpoint
+            {
+                return Err(ErrorCode::Forbidden);
+            }
+            exchange.arm(oauth::refresh::request_digest(request)?)
+        })
     }
     pub(in crate::tenancy) fn validate_oauth_model(
         &self,
+        view: &crate::tenancy::authority::live::View,
         target: &RoutingTarget,
         stamp: Option<&ModelStamp>,
     ) -> Result<(), ErrorCode> {
         let reference = self.route.match_candidate(target)?;
-        let metadata = self.service.oauth.get(self.installation_id(), &reference)?;
+        let metadata = view.oauth(&reference)?;
         match (metadata, stamp) {
             (None, None) => Ok(()),
-            (Some(metadata), Some(stamp)) if stamp.matches(self, &metadata) => {
+            (Some(metadata), Some(stamp)) if stamp.matches(self, metadata) => {
                 self.route.require_oauth_messages(target)
             }
             _ => Err(ErrorCode::Forbidden),

@@ -69,7 +69,7 @@ async fn configured_provider_idle_child() -> Result<()> {
     let response = tokio::time::timeout(TIMEOUT, call_with(
         fixture.service.clone(), headers,
         json!({"model": MODEL, "messages": [{"role":"user", "content":"hello"}], "stream": true}),
-    )?).await?;
+    ).await?).await?;
     ensure!(response.status() == StatusCode::OK);
     let mut body = response.into_body().into_data_stream();
     tokio::time::timeout(TIMEOUT, async {

@@ -12,10 +12,10 @@ use std::os::unix::fs::PermissionsExt;
 use tokio_util::task::AbortOnDropHandle;
 
 pub(super) const OPERATOR: &str = "recovery-cli-operator-0123456789abcdef";
-pub(super) const KEY_ENV: &str = "BITROUTER_TEST_RECOVERY_KEY";
+pub(crate) const KEY_ENV: &str = "BITROUTER_TEST_RECOVERY_KEY";
 pub(super) const OPERATOR_ID: &str = "recovery-operator";
 
-pub(super) struct Live {
+pub(crate) struct Live {
     service: crate::tenancy::Service,
     db: sea_orm::DatabaseConnection,
     pub base: String,
@@ -98,13 +98,13 @@ impl Live {
         Ok(())
     }
 }
-pub(super) struct Provision {
+pub(crate) struct Provision {
     pub installation: InstallationId,
     pub secret: String,
     pub operations: Vec<Value>,
     pub authority: bitrouter_ai::tenancy::identity::AuthorityRevision,
 }
-pub(super) async fn provision(live: &Live) -> Result<Provision> {
+pub(crate) async fn provision(live: &Live) -> Result<Provision> {
     let client = live.operator()?;
     let caps = client.capabilities().await?;
     ensure!(
@@ -199,14 +199,14 @@ pub(super) async fn provision(live: &Live) -> Result<Provision> {
         authority: issued.authority_revision,
     })
 }
-pub(super) fn manifest(installation: &InstallationId) -> Value {
+pub(crate) fn manifest(installation: &InstallationId) -> Value {
     let reference = |kind: &str, id: &str| json!({"owner_kind":"tenant","owner_id":"tenant","resource_kind":kind,"resource_id":id,"revision_id":"v1"});
     json!({"format":1,"installation_id":installation,"resources":[
         {"reference":reference("credential","slot"),"definition":{"kind":"credential","credential":{"type":"api_key","data":{"value":"PRIVATE_RECOVERY_PROVIDER_KEY"}}}},
         {"reference":reference("route","visible"),"definition":{"kind":"route","selector":"fixture:model-a","policy":null,"routing":{"providers":{"fixture":{"api_base":"http://127.0.0.1:1/v1","models":[{"id":"model-a"}]}}},"credentials":[{"provider":"fixture","account":"default","credential":reference("credential","slot")}]}}
     ]})
 }
-pub(super) async fn configure(
+pub(crate) async fn configure(
     live: &Live,
     provision: &mut Provision,
     source: &Provision,
@@ -277,7 +277,7 @@ pub(super) async fn configure(
         json!({"format":"bitrouter.offline.fresh-provisioning.v1","installation_id":provision.installation,"operations":provision.operations,"configurations":[prepared],"active":[{"tenant":tenant,"revision":active.revision_id,"authority_revision":activation.authority_revision}],"resources":manifest["resources"].as_array().context("manifest rows")?.iter().map(|r|r["reference"].clone()).collect::<Vec<_>>() }),
     )
 }
-pub(super) fn private_json(path: &Path, value: &Value) -> Result<Value> {
+pub(crate) fn private_json(path: &Path, value: &Value) -> Result<Value> {
     let bytes = serde_json::to_vec_pretty(value)?;
     files::write_new(path, &bytes)?;
     Ok(json!({"path":path,"sha256":files::sha(&bytes)}))

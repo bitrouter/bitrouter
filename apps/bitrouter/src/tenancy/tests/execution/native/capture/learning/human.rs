@@ -36,7 +36,7 @@ impl Host {
         let owner = crate::tenancy::ownership::acquire_path(&path, true)?;
         let db =
             crate::db::connect_tenancy(&format!("sqlite://{}", path.display()), &owner).await?;
-        let fixture = Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
+        let fixture = Fixture::with_database(db, &mut |_| {}).await?;
         let provider = Provider::start(false).await?;
         let judge = Judge::hold_from(hold_from).await?;
         let ready = Ready::from_fixture(

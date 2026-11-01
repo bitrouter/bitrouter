@@ -1,15 +1,14 @@
 //! Atomic immutable sidecars; bounded loads verify both directions of the binding.
-use super::super::store::Candidate;
+use super::super::store::{self, Candidate};
 use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{
     execution::{ExecutionReceipt, Outcome, ReceiptState},
-    identity::{ExecutionId, InstallationId, TenantId},
     usage_evidence::{Capture, ExecutionUsageEvidenceV1, MAX_BYTES},
     validation::Validate,
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend,
-    sea_query::{Alias, Expr, Order, Query, SelectStatement},
+    sea_query::{Alias, Expr, Query, SelectStatement},
 };
 use sha2::{Digest, Sha256};
 
@@ -131,7 +130,7 @@ async fn preflight(
         _ => anyhow::bail!("usage evidence presence mismatch"),
     }
 }
-async fn load(
+async fn load_inline(
     db: &impl ConnectionTrait,
     receipt: &ExecutionReceipt,
     receipt_digest: &str,
@@ -201,6 +200,81 @@ async fn load(
         _ => anyhow::bail!("usage evidence presence mismatch"),
     }
 }
+/// The canonical reader calls only this inline path, avoiding recursion when a
+/// direct sidecar reader follows an archive location back through that reader.
+pub(in crate::tenancy::receipts) async fn validate_inline(
+    db: &impl ConnectionTrait,
+    candidate: &mut Candidate,
+    expected: Option<&str>,
+    charge: Option<&Charge<'_>>,
+) -> Result<()> {
+    candidate.usage_evidence =
+        load_inline(db, &candidate.receipt, &candidate.digest, expected, charge).await?;
+    Ok(())
+}
+
+async fn load(
+    db: &impl ConnectionTrait,
+    receipt: &ExecutionReceipt,
+    receipt_digest: &str,
+    expected: Option<&str>,
+    charge: Option<&Charge<'_>>,
+) -> Result<Option<Evidence>> {
+    if db.get_database_backend() == DatabaseBackend::Sqlite {
+        if let Some(charge) = charge {
+            charge(1, 256)?;
+        }
+        let query = Query::select()
+            .from(Alias::new("tenancy_execution_receipts"))
+            .expr_as(
+                Expr::cust(integer_cell(DatabaseBackend::Sqlite, "storage_kind")),
+                Alias::new("storage_kind"),
+            )
+            .and_where(
+                Expr::col(Alias::new("installation_id")).eq(receipt.installation_id.as_str()),
+            )
+            .and_where(Expr::col(Alias::new("tenant_id")).eq(receipt.tenant_id.as_str()))
+            .and_where(Expr::col(Alias::new("execution_id")).eq(receipt.execution_id.as_str()))
+            .limit(1)
+            .to_owned();
+        if let Some(row) = db.query_one(DatabaseBackend::Sqlite.build(&query)).await? {
+            match row.try_get::<i64>("", "storage_kind")? {
+                0 => {}
+                1 => {
+                    let saved = if let Some(charge) = charge {
+                        store::lookup_candidate_bounded(
+                            db,
+                            &receipt.installation_id,
+                            &receipt.tenant_id,
+                            &receipt.execution_id,
+                            charge,
+                        )
+                        .await?
+                    } else {
+                        store::lookup_candidate(
+                            db,
+                            &receipt.installation_id,
+                            &receipt.tenant_id,
+                            &receipt.execution_id,
+                        )
+                        .await?
+                    }
+                    .context("archived usage receipt missing")?;
+                    ensure!(
+                        saved.digest == receipt_digest
+                            && saved.usage_evidence.as_ref().map(|e| e.digest.as_str()) == expected,
+                        "archived usage receipt binding"
+                    );
+                    return Ok(saved.usage_evidence);
+                }
+                _ => anyhow::bail!("usage receipt storage kind"),
+            }
+        }
+    }
+    load_inline(db, receipt, receipt_digest, expected, charge).await
+}
+
+#[cfg(test)]
 pub(in crate::tenancy::receipts) async fn validate(
     db: &impl ConnectionTrait,
     candidate: &mut Candidate,
@@ -210,7 +284,7 @@ pub(in crate::tenancy::receipts) async fn validate(
         load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
     Ok(())
 }
-#[cfg(all(feature = "core", feature = "harness"))]
+#[cfg(all(test, feature = "core", feature = "harness"))]
 pub(in crate::tenancy::receipts) async fn validate_bounded(
     db: &impl ConnectionTrait,
     candidate: &mut Candidate,
@@ -260,111 +334,33 @@ pub(in crate::tenancy::receipts) async fn insert(
             "usage evidence insert count"
         );
     }
-    load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
+    let saved = load(db, &candidate.receipt, &candidate.digest, expected, None).await?;
+    ensure!(
+        saved.as_ref().map(|e| (&e.json, &e.digest))
+            == candidate
+                .usage_evidence
+                .as_ref()
+                .map(|e| (&e.json, &e.digest)),
+        "immutable usage evidence conflict"
+    );
     Ok(())
 }
 
-/// Bounded SQL preflight before keyset traversal. Never trusts projected counts
-/// or silently treats a deleted sidecar as historical absence.
+/// Test entrypoint for the same complete canonical scan used by startup.
+#[cfg(test)]
 pub(in crate::tenancy::receipts) async fn inventory(
     db: &impl ConnectionTrait,
-    installation: &InstallationId,
+    installation: &bitrouter_ai::tenancy::identity::InstallationId,
 ) -> Result<u64> {
-    crate::db::migration::m20240101_000040_usage_evidence::validate(db).await?;
-    let backend = db.get_database_backend();
-    let bytes = octets(backend, "evidence_json");
-    let mut invalid = Query::select();
-    invalid.from(Alias::new(TABLE)).expr(Expr::val(1)).and_where(Expr::cust(format!("byte_count != {bytes} OR byte_count < 1 OR {bytes} > {MAX_BYTES} OR schema_version != 1 OR {} > 128 OR {} > 128 OR {} > 128 OR {} != 64 OR {} != 64", octets(backend,"installation_id"),octets(backend,"tenant_id"),octets(backend,"execution_id"),octets(backend,"evidence_digest"),octets(backend,"receipt_digest")))).limit(1);
-    ensure!(
-        db.query_one(backend.build(&invalid)).await?.is_none(),
-        "usage evidence inventory bounds"
-    );
-    if backend == DatabaseBackend::Sqlite {
-        let mut types = Query::select();
-        types.from(Alias::new(TABLE)).expr(Expr::val(1)).and_where(Expr::cust("typeof(byte_count)!='integer' OR typeof(schema_version)!='integer' OR typeof(evidence_json)!='text'")).limit(1);
-        ensure!(
-            db.query_one(backend.build(&types)).await?.is_none(),
-            "usage evidence SQL types"
-        );
-    }
-    let mut foreign = Query::select();
-    foreign
-        .from(Alias::new(TABLE))
-        .expr(Expr::val(1))
-        .and_where(Expr::col(Alias::new("installation_id")).ne(installation.as_str()))
-        .limit(1);
-    ensure!(
-        db.query_one(backend.build(&foreign)).await?.is_none(),
-        "foreign usage evidence"
-    );
-    let marker = match backend {
-        DatabaseBackend::Sqlite => "json_extract(r.disposition_json,'$.usage_evidence_digest')",
-        DatabaseBackend::Postgres => "r.disposition_json::jsonb->>'usage_evidence_digest'",
-        DatabaseBackend::MySql => {
-            "JSON_UNQUOTE(JSON_EXTRACT(r.disposition_json,'$.usage_evidence_digest'))"
-        }
-    };
-    let join = "e.installation_id=r.installation_id AND e.tenant_id=r.tenant_id AND e.execution_id=r.execution_id";
-    for sql in [
-        format!(
-            "SELECT 1 FROM tenancy_execution_receipts r LEFT JOIN {TABLE} e ON {join} WHERE {marker} IS NOT NULL AND e.execution_id IS NULL LIMIT 1"
-        ),
-        format!(
-            "SELECT 1 FROM {TABLE} e LEFT JOIN tenancy_execution_receipts r ON {join} WHERE r.execution_id IS NULL OR {marker} IS NULL LIMIT 1"
-        ),
-    ] {
-        ensure!(
-            db.query_one(sea_orm::Statement::from_string(backend, sql))
-                .await?
-                .is_none(),
-            "usage evidence orphan or missing sidecar"
-        );
-    }
-    let mut after: Option<(TenantId, ExecutionId)> = None;
-    let mut total = 0_u64;
-    let mut count = 0_usize;
-    loop {
-        let mut query = Query::select();
-        query
-            .from(Alias::new(TABLE))
-            .columns(["tenant_id", "execution_id"].map(Alias::new))
-            .and_where(Expr::col(Alias::new("installation_id")).eq(installation.as_str()))
-            .order_by(Alias::new("tenant_id"), Order::Asc)
-            .order_by(Alias::new("execution_id"), Order::Asc)
-            .limit(64);
-        if let Some((tenant, id)) = &after {
-            query.and_where(
-                Expr::col(Alias::new("tenant_id"))
-                    .gt(tenant.as_str())
-                    .or(Expr::col(Alias::new("tenant_id"))
-                        .eq(tenant.as_str())
-                        .and(Expr::col(Alias::new("execution_id")).gt(id.as_str()))),
-            );
-        }
-        let rows = db.query_all(backend.build(&query)).await?;
-        if rows.is_empty() {
-            break;
-        }
-        count = count
-            .checked_add(rows.len())
-            .context("usage evidence inventory count")?;
-        ensure!(count <= 524288, "usage evidence inventory row bound");
-        for row in rows {
-            let tenant: TenantId = row.try_get::<String>("", "tenant_id")?.try_into()?;
-            let id: ExecutionId = row.try_get::<String>("", "execution_id")?.try_into()?;
-            let candidate = super::super::store::lookup_candidate(db, installation, &tenant, &id)
-                .await?
-                .context("usage evidence receipt missing")?;
-            let evidence = candidate.usage_evidence.context("usage evidence missing")?;
-            total = total
+    let mut bytes = 0_u64;
+    super::super::store::inventory::scan(db, installation, |candidate| {
+        if let Some(evidence) = &candidate.usage_evidence {
+            bytes = bytes
                 .checked_add(evidence.json.len() as u64 + 16 * 1024)
                 .context("usage evidence inventory overflow")?;
-            ensure!(
-                total <= super::super::capacity::HIGH_WATER,
-                "usage evidence inventory capacity"
-            );
-            after = Some((tenant, id));
         }
-    }
-    Ok(total)
+        Ok(())
+    })
+    .await?;
+    Ok(bytes)
 }

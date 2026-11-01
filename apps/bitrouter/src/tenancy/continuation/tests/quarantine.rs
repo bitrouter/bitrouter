@@ -28,13 +28,7 @@ async fn epoch_commit_error_child() -> Result<()> {
     ensure!(
         tokio::time::timeout(
             Duration::from_secs(5),
-            Service::start_prepared(
-                db.clone(),
-                Some(owner),
-                OperationLimits::default(),
-                initial,
-                resources,
-            )
+            Service::start_prepared(db.clone(), Some(owner), initial, resources,)
         )
         .await?
         .is_err()

@@ -29,9 +29,13 @@ pub(super) struct Hooks {
 }
 impl Hooks {
     pub(super) fn receipt_sql(&self, sql: &str) -> String {
-        let Some(rest) = sql.strip_prefix("SELECT * FROM \"tenancy_execution_receipts\" ") else {
+        const DIGEST: &str = "THEN content_digest ELSE NULL END AS \"content_digest\"";
+        if !sql.contains(" FROM \"tenancy_execution_receipts\" ")
+            || !sql.contains(DIGEST)
+            || !sql.contains(" AS \"storage_kind\"")
+        {
             return sql.to_owned();
-        };
+        }
         if !self.wrong_digest.swap(false, Ordering::SeqCst) {
             return sql.to_owned();
         }
@@ -39,11 +43,15 @@ impl Hooks {
         // fully validated startup. All other columns and the bounded point
         // predicate remain original. Never mutate SQLite's immutable file or
         // synthesize the decoder's error/fatal classification.
-        format!(
-            "SELECT installation_id,tenant_id,execution_id,principal_id,correlation_id,receipt_json,CASE WHEN content_digest='{}' THEN '{}' ELSE '{}' END AS content_digest,content_digest AS fixture_original_digest,disposition_json,byte_count,unknown_outcome,recorded_at FROM \"tenancy_execution_receipts\" {rest}",
-            "0".repeat(64),
-            "1".repeat(64),
-            "0".repeat(64)
+        sql.replacen(
+            DIGEST,
+            &format!(
+                "THEN CASE WHEN content_digest='{}' THEN '{}' ELSE '{}' END ELSE NULL END AS \"content_digest\", CASE WHEN typeof(content_digest)='text' AND length(CAST(content_digest AS BLOB))=64 THEN content_digest ELSE NULL END AS fixture_original_digest",
+                "0".repeat(64),
+                "1".repeat(64),
+                "0".repeat(64)
+            ),
+            1,
         )
     }
     pub(super) fn observe_receipt_row(&self, row: &sea_orm::QueryResult) {

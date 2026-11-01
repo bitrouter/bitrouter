@@ -1,7 +1,8 @@
 //! Current tenant-wide read authority; no legacy caller inference or cached grant.
 use crate::tenancy::{
     Service,
-    actor::Job,
+    actor::{self, Job},
+    authority::live::{Authenticated, Lease},
     error::Failure,
     model::{Caller, Snapshot},
 };
@@ -23,6 +24,7 @@ pub(in crate::tenancy) enum Request {
 }
 pub(in crate::tenancy) struct Read {
     pub caller: Caller,
+    pub lease: Lease,
     pub installation: InstallationId,
     pub tenant: TenantId,
     pub request: Request,
@@ -71,10 +73,18 @@ impl Service {
         tenant: TenantId,
         request: Request,
     ) -> Result<Vec<u8>, Failure> {
-        let state = self.current()?;
-        authorize(&state, &caller, &tenant).map_err(Failure::from)?;
-        let installation = state.installation.clone();
-        drop(state);
+        let Authenticated { caller, lease, .. } = self
+            .authority_read(actor::AuthoritySubject::Caller(caller.clone()))
+            .await?;
+        let installation = self
+            .authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&lease, |view| {
+                authorize(view.facts(), &caller, &tenant)?;
+                Ok(view.facts().installation.clone())
+            })
+            .map_err(Failure::from)?;
         let permit = Arc::clone(&self.reads)
             .try_acquire_owned()
             .map_err(|_| Failure::from(ErrorCode::CapacityExceeded))?;
@@ -83,6 +93,7 @@ impl Service {
         self.commands
             .try_send(Job::ReceiptRead(Read {
                 caller: caller.clone(),
+                lease: lease.clone(),
                 installation,
                 tenant: tenant.clone(),
                 request,
@@ -95,8 +106,11 @@ impl Service {
             .await
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))?
             .map_err(|_| Failure::from(ErrorCode::AuthorityUnavailable))??;
-        let state = self.current()?;
-        authorize(&state, &caller, &tenant).map_err(Failure::from)?;
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&lease, |view| authorize(view.facts(), &caller, &tenant))
+            .map_err(Failure::from)?;
         Ok(body)
     }
 }

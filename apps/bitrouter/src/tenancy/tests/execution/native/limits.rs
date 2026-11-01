@@ -65,7 +65,11 @@ async fn terminal_callback_rejection_keeps_success_and_error_usage_in_settlement
         let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
         let checked: Result<()> = async {
             let (headers, _) = ready(&fixture, &route).await?;
-            let submission = fixture.service.submission(&headers).map_err(failure)?;
+            let submission = fixture
+                .service
+                .submission(&headers)
+                .await
+                .map_err(failure)?;
             let execution = fixture
                 .service
                 .admit_execution(submission, MODEL, &ApiProtocol::ChatCompletions)
@@ -140,7 +144,11 @@ async fn remembered_callback_failure_closes_authority_and_actual_send_gates() ->
     let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
     let checked: Result<()> = async {
         let (headers, _) = ready(&fixture, &route).await?;
-        let submission = fixture.service.submission(&headers).map_err(failure)?;
+        let submission = fixture
+            .service
+            .submission(&headers)
+            .await
+            .map_err(failure)?;
         let execution = fixture
             .service
             .admit_execution(submission, MODEL, &ApiProtocol::ChatCompletions)

@@ -107,6 +107,22 @@ fn arc_allowance<V>() -> Option<usize> {
 }
 
 impl<K: Eq, V> Cache<K, V> {
+    /// Observation never promotes entries, evicts values or inspects pins.
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub(crate) fn observed(
+        &self,
+    ) -> Result<
+        crate::telemetry::receipt_latency::capacity::runtime::CacheUsage,
+        crate::telemetry::receipt_latency::capacity::ReadError,
+    > {
+        use crate::telemetry::receipt_latency::capacity::{ReadError, runtime::CacheUsage};
+        let state = self.state.try_lock().map_err(|_| ReadError::Unavailable)?;
+        Ok(CacheUsage {
+            entries: u64::try_from(state.entries.len()).map_err(|_| ReadError::Invalid)?,
+            bytes: u64::try_from(state.bytes).map_err(|_| ReadError::Invalid)?,
+        })
+    }
+
     /// Preallocate metadata for a positive, fixed entry capacity.
     ///
     /// # Errors

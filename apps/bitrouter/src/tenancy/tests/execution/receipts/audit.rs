@@ -13,7 +13,7 @@ async fn file_harness(source: &Path) -> Result<Harness> {
     let owner = crate::tenancy::ownership::acquire_path(source, true)?;
     let db =
         crate::db::connect_tenancy(&format!("sqlite://{}", owner.path.display()), &owner).await?;
-    let fixture = Fixture::with_database(db, Default::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db, &mut |_| {}).await?;
     let harness = Harness::with_initial(
         "chat_completions",
         StatusCode::OK,

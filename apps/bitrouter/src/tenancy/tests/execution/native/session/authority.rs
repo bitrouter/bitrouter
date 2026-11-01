@@ -9,11 +9,14 @@ async fn binding(
     scope: GrantScope,
     operation: &str,
 ) -> Result<()> {
-    let state = fixture.service.current().map_err(failure)?;
-    let prior = state
-        .bindings
-        .get(&(fixture.tenant.clone(), fixture.binding.clone()))
-        .context("binding")?;
+    let prior = crate::tenancy::store::directory::binding_in(
+        &fixture.db,
+        &fixture.tenant,
+        &fixture.binding,
+        fixture.service.authority.load_budget(),
+    )
+    .await?
+    .context("binding")?;
     result(
         fixture
             .service
@@ -216,7 +219,7 @@ async fn native_host_uses_credential_and_current_binding_permission_intersection
                 .dispatch_test_ready
                 .store(true, Ordering::Release);
             // Issue under the actual admin binding, then narrow that binding.
-            let mut request = fixture.issuance("role-key")?;
+            let mut request = fixture.issuance("role-key").await?;
             request.permissions = permissions;
             let key = issue(&fixture, request).await?;
             binding(
@@ -303,7 +306,7 @@ async fn native_resource_grants_require_the_exact_retained_route_and_credential_
         let complete = GrantScope::Resources {
             resources: vec![route.key(), credential.clone()],
         };
-        let mut request = fixture.issuance("closure-key")?;
+        let mut request = fixture.issuance("closure-key").await?;
         request.scope = complete.clone();
         let key = issue(&fixture, request).await?;
         binding(
@@ -417,25 +420,27 @@ async fn native_opener_rechecks_authority_after_discovery_waits_and_before_journ
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                         .try_into()?,
                 )?;
-                let mut published = fixture
+                let mut changed = false;
+                fixture
                     .service
-                    .snapshot
-                    .write()
-                    .map_err(|_| anyhow::anyhow!("snapshot lock"))?;
-                let state = Arc::make_mut(&mut published);
-                if change == "credential-expiry" {
-                    state
-                        .credentials
-                        .get_mut(&key.credential_id)
-                        .context("credential")?
-                        .expires = expired;
-                } else {
-                    state
-                        .bindings
-                        .get_mut(&(fixture.tenant.clone(), fixture.binding.clone()))
-                        .context("binding")?
-                        .expires = expired;
-                }
+                    .authority
+                    .mutate_views_for_test(|state| {
+                        if change == "credential-expiry" {
+                            if let Some(credential) = state.credentials.get_mut(&key.credential_id)
+                            {
+                                credential.expires = expired.clone();
+                                changed = true;
+                            }
+                        } else if let Some(binding) = state
+                            .bindings
+                            .get_mut(&(fixture.tenant.clone(), fixture.binding.clone()))
+                        {
+                            binding.expires = expired.clone();
+                            changed = true;
+                        }
+                    })
+                    .map_err(|code| anyhow::anyhow!("expiry fixture: {code:?}"))?;
+                ensure!(changed, "held opener had no live grant to expire");
             } else {
                 change_authority(&fixture, &key, &route, change).await?;
             }
@@ -544,18 +549,18 @@ async fn postcommit_expiry_suppresses_open_but_exact_readback_releases_the_persi
                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                 .try_into()?,
         )?;
-        {
-            let mut published = fixture
-                .service
-                .snapshot
-                .write()
-                .map_err(|_| anyhow::anyhow!("snapshot lock"))?;
-            Arc::make_mut(&mut published)
-                .credentials
-                .get_mut(&key.credential_id)
-                .context("credential")?
-                .expires = expired;
-        }
+        let mut changed = false;
+        fixture
+            .service
+            .authority
+            .mutate_views_for_test(|state| {
+                if let Some(credential) = state.credentials.get_mut(&key.credential_id) {
+                    credential.expires = expired.clone();
+                    changed = true;
+                }
+            })
+            .map_err(|code| anyhow::anyhow!("expiry fixture: {code:?}"))?;
+        ensure!(changed, "committed opener had no live credential to expire");
         fixture.service.cleanup.release_gate();
         let rejection = opener
             .await?

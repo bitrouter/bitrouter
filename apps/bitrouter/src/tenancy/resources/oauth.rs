@@ -6,7 +6,6 @@ use super::{
 use crate::gateway::providers::auth::credentials::Credential;
 use crate::tenancy::oauth::{
     crypto::Crypto,
-    profile,
     storage::{self, Metadata, Row, State},
 };
 use anyhow::{Context, Result, ensure};
@@ -50,32 +49,22 @@ impl Resources {
         db: &impl ConnectionTrait,
         imports: &[Import],
     ) -> Result<()> {
-        let rows = storage::all(db, &self.installation).await?;
-        let mut slots: std::collections::HashSet<_> =
-            rows.iter().map(|row| row.metadata.slot.clone()).collect();
         for import in imports {
             if let Definition::Credential { oauth: Some(_), .. } = &import.definition {
-                let slot = storage::slot(&self.installation, &import.reference)?;
-                if let Some(existing) = rows.iter().find(|row| row.metadata.slot == slot) {
+                let existing = storage::lookup(db, &self.installation, &import.reference).await?;
+                if let Some(existing) = existing {
                     ensure!(
                         existing.metadata.reference == import.reference,
                         "owned OAuth authority replacement is not supported"
                     );
-                }
-                if !slots.contains(&slot)
-                    && crate::tenancy::configuration_store::resource(db, &import.reference)
-                        .await?
-                        .is_some()
+                } else if crate::tenancy::configuration_store::resource(db, &import.reference)
+                    .await?
+                    .is_some()
                 {
                     anyhow::bail!("retained OAuth slot missing; seed cannot restore live state");
                 }
-                slots.insert(slot);
             }
         }
-        ensure!(
-            slots.len() <= profile::MAX_SLOTS,
-            "owned OAuth slot capacity"
-        );
         Ok(())
     }
     pub(super) async fn retain_oauth(
@@ -114,38 +103,37 @@ impl Resources {
         storage::insert(db, &Row::new(&crypto, metadata, seed)?).await
     }
     /// Authenticate all slots and their exact retained resource; no seed restore.
-    pub(in crate::tenancy) async fn oauth_metadata(
-        &self,
-        db: &impl ConnectionTrait,
-    ) -> Result<Vec<Metadata>> {
-        let rows = storage::all(db, &self.installation).await?;
-        if rows.is_empty() {
-            return Ok(Vec::new());
+    pub(in crate::tenancy) async fn validate_oauth(&self, db: &impl ConnectionTrait) -> Result<()> {
+        let mut after = None;
+        loop {
+            let page = storage::page(db, &self.installation, after.as_deref()).await?;
+            if page.is_empty() {
+                break;
+            }
+            let crypto = self.oauth_crypto()?;
+            for row in page {
+                row.token(&crypto)?;
+                let artifact = self
+                    .load(db, &row.metadata.reference)
+                    .await
+                    .map_err(|_| anyhow::anyhow!("OAuth retained resource missing"))?;
+                let Definition::Credential {
+                    credential: Credential::Oauth(seed),
+                    oauth: Some(profile),
+                    oauth_generation: 0,
+                } = artifact.definition
+                else {
+                    anyhow::bail!("OAuth slot resource kind mismatch");
+                };
+                ensure!(
+                    row.metadata.profile == profile
+                        && row.metadata.seed
+                            == crypto.seed(&row.metadata.reference, &profile, &seed)?,
+                    "OAuth slot lineage mismatch"
+                );
+                after = Some(row.metadata.slot);
+            }
         }
-        let crypto = self.oauth_crypto()?;
-        let mut metadata = Vec::with_capacity(rows.len());
-        for row in rows {
-            row.token(&crypto)?;
-            let artifact = self
-                .load(db, &row.metadata.reference)
-                .await
-                .map_err(|_| anyhow::anyhow!("OAuth retained resource missing"))?;
-            let Definition::Credential {
-                credential: Credential::Oauth(seed),
-                oauth: Some(profile),
-                oauth_generation: 0,
-            } = artifact.definition
-            else {
-                anyhow::bail!("OAuth slot resource kind mismatch");
-            };
-            ensure!(
-                row.metadata.profile == profile
-                    && row.metadata.seed
-                        == crypto.seed(&row.metadata.reference, &profile, &seed)?,
-                "OAuth slot lineage mismatch"
-            );
-            metadata.push(row.metadata);
-        }
-        Ok(metadata)
+        Ok(())
     }
 }

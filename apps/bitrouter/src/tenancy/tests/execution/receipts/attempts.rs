@@ -1,5 +1,5 @@
 use super::*;
-use crate::tenancy::{Service, actor::OperationLimits, resources::Resources};
+use crate::tenancy::{Service, resources::Resources};
 use bitrouter_ai::{
     tenancy::{
         authority::{OwnerKind, ResourceKind},
@@ -61,14 +61,8 @@ async fn eight_actual_fallback_sends_are_recorded_and_ninth_never_reaches_provid
         {"reference":route,"definition":{"kind":"route","selector":"attempt-chain","policy":null,"routing":{"providers":providers,"models":{"attempt-chain":{"strategy":"priority","endpoints":endpoints}}},"credentials":credentials}}
     ]}))?).await?;
     let snapshot = crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     let revision = draft(&fixture, &route, "eight-attempt-config", 25).await?;
     let issued = fixture.issue("eight-attempt-client").await?;
     fixture
@@ -80,7 +74,11 @@ async fn eight_actual_fallback_sends_are_recorded_and_ninth_never_reaches_provid
     let execution = fixture
         .service
         .admit_execution(
-            fixture.service.submission(&headers).map_err(failure)?,
+            fixture
+                .service
+                .submission(&headers)
+                .await
+                .map_err(failure)?,
             MODEL,
             &ApiProtocol::ChatCompletions,
         )
@@ -112,7 +110,7 @@ async fn eight_actual_fallback_sends_are_recorded_and_ninth_never_reaches_provid
             && rejection.0.dispatch_state == DispatchState::Started
     );
     drop(execution);
-    let caller = fixture.service.authenticate(token).map_err(failure)?;
+    let caller = fixture.service.authenticate(token).await.map_err(failure)?;
     let bytes = fixture
         .service
         .read_receipt(

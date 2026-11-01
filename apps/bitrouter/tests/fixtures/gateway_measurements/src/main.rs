@@ -3,6 +3,8 @@
 #[cfg(unix)]
 mod host;
 #[cfg(unix)]
+mod metrics;
+#[cfg(unix)]
 mod workload;
 
 #[cfg(unix)]
@@ -24,8 +26,6 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(unix)]
 async fn run() -> anyhow::Result<()> {
     use anyhow::{Context, ensure};
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write;
     use std::path::PathBuf;
 
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
@@ -40,13 +40,9 @@ async fn run() -> anyhow::Result<()> {
     {
         let path = std::fs::canonicalize(path)?;
         let path = path.to_str().context("artifact path is not UTF-8")?;
-        let bytes = std::fs::read(path)?;
-        let mut sha256 = String::new();
-        for byte in Sha256::digest(&bytes) {
-            write!(sha256, "{byte:02x}")?;
-        }
+        let (bytes, sha256) = fingerprint(std::path::Path::new(path))?;
         artifacts.push(serde_json::json!({
-            "label":label,"path":path,"bytes":bytes.len(),
+            "label":label,"path":path,"bytes":bytes,
             "sha256":sha256
         }));
     }
@@ -58,15 +54,17 @@ async fn run() -> anyhow::Result<()> {
             let artifact = &artifacts[index];
             let label = artifact["label"].as_str().context("label missing")?;
             let path = PathBuf::from(artifact["path"].as_str().context("path missing")?);
+            verify_artifact(&path, artifact)?;
             let sample = workload::measure(&path, label, round).await?;
+            verify_artifact(&path, artifact)?;
             eprintln!("{}", serde_json::to_string(&sample)?);
             samples.push(sample);
         }
     }
     let report = serde_json::json!({
-        "schema":"bitrouter.gateway-local-measurements.v1",
+        "schema":"bitrouter.gateway-local-measurements.v2",
         "platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,
-        "workload":{"warmup_requests":workload::WARMUP,"requests_per_mode":workload::REQUESTS,"concurrency":workload::CONCURRENCY,"rss_unit":"KiB","provider":"local wiremock; fixed small response"},
+        "workload":{"warmup_requests":workload::WARMUP,"requests_per_mode":workload::REQUESTS,"concurrency":workload::CONCURRENCY,"rss_unit":"KiB","provider":"local wiremock; fixed small response", "observation_interval_ms":workload::OBSERVATION_INTERVAL.as_millis(), "failure_policy":"any refused or failed request invalidates the run; no completed report", "ttft_definition":"request start to first complete SSE frame with nonempty content delta; immediate fixed response, not provider generation speed"},
         "artifacts":artifacts,"samples":samples
     });
     let output = PathBuf::from(&arguments[3]);
@@ -78,6 +76,63 @@ async fn run() -> anyhow::Result<()> {
         .open(output)?;
     serde_json::to_writer_pretty(file, &report)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn fingerprint(path: &std::path::Path) -> anyhow::Result<(u64, String)> {
+    use anyhow::Context;
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let mut bytes = 0_u64;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(count as u64)
+            .context("artifact size overflow")?;
+        digest.update(&buffer[..count]);
+    }
+    let mut sha256 = String::new();
+    for byte in digest.finalize() {
+        write!(sha256, "{byte:02x}")?;
+    }
+    Ok((bytes, sha256))
+}
+
+#[cfg(unix)]
+fn verify_artifact(path: &std::path::Path, evidence: &serde_json::Value) -> anyhow::Result<()> {
+    let (bytes, sha256) = fingerprint(path)?;
+    anyhow::ensure!(
+        evidence["bytes"] == bytes && evidence["sha256"] == sha256,
+        "artifact changed during qualification: {}",
+        path.display()
+    );
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn changed_artifact_invalidates_evidence() -> anyhow::Result<()> {
+        let file = tempfile::NamedTempFile::new()?;
+        std::fs::write(file.path(), b"abc")?;
+        let (bytes, sha256) = super::fingerprint(file.path())?;
+        assert_eq!(
+            sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let evidence = serde_json::json!({"bytes":bytes,"sha256":sha256});
+        super::verify_artifact(file.path(), &evidence)?;
+        std::fs::write(file.path(), b"abd")?;
+        assert!(super::verify_artifact(file.path(), &evidence).is_err());
+        Ok(())
+    }
 }
 
 #[cfg(not(unix))]

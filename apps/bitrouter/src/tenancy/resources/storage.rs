@@ -11,7 +11,7 @@ use anyhow::{Context, Result, ensure};
 use bitrouter_ai::tenancy::{configuration::ResourceRef, identity::Timestamp};
 use sea_orm::{
     ConnectionTrait, DatabaseBackend,
-    sea_query::{Alias, Expr, Func, Query},
+    sea_query::{Alias, Cond, Expr, Func, Order, Query},
 };
 
 pub(super) async fn has_resources(db: &impl ConnectionTrait) -> Result<bool> {
@@ -26,11 +26,45 @@ pub(super) async fn has_resources(db: &impl ConnectionTrait) -> Result<bool> {
         .is_some())
 }
 
-pub(super) async fn references(db: &impl ConnectionTrait) -> Result<Vec<ResourceRef>> {
+/// One stable keyset page; the page size is not a catalog cardinality ceiling.
+pub(super) async fn reference_page(
+    db: &impl ConnectionTrait,
+    after: Option<&ResourceRef>,
+) -> Result<Vec<ResourceRef>> {
+    const KEYS: [&str; 5] = [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id",
+    ];
     let mut query = Query::select();
     query
         .from(Alias::new("tenancy_resource_revisions"))
-        .limit((MAX_CLOSURE + 1) as u64);
+        .limit(32);
+    for name in KEYS {
+        query.order_by(Alias::new(name), Order::Asc);
+    }
+    if let Some(after) = after {
+        let owner = serde_json::to_value(after.owner_kind)?;
+        let kind = serde_json::to_value(after.resource_kind)?;
+        let values = [
+            owner.as_str().context("resource owner enum")?,
+            after.owner_id.as_str(),
+            kind.as_str().context("resource kind enum")?,
+            after.resource_id.as_str(),
+            after.revision_id.as_str(),
+        ];
+        let mut cursor = Cond::any();
+        for index in 0..KEYS.len() {
+            let mut greater = Cond::all();
+            for prefix in 0..index {
+                greater = greater.add(Expr::col(Alias::new(KEYS[prefix])).eq(values[prefix]));
+            }
+            cursor = cursor.add(greater.add(Expr::col(Alias::new(KEYS[index])).gt(values[index])));
+        }
+        query.cond_where(cursor);
+    }
     // As in configuration_store, cap cells in SQL before the driver allocates
     // strings. Do not filter corrupt rows out: NULL projections fail catalog open.
     for (name, limit) in [
@@ -55,10 +89,6 @@ pub(super) async fn references(db: &impl ConnectionTrait) -> Result<Vec<Resource
     let rows = db
         .query_all(db.get_database_backend().build(&query))
         .await?;
-    ensure!(
-        rows.len() <= MAX_CLOSURE,
-        "retained resource capacity exceeded"
-    );
     rows.into_iter()
         .map(|row| {
             let owner: String = row.try_get("", "owner_kind")?;
@@ -72,6 +102,20 @@ pub(super) async fn references(db: &impl ConnectionTrait) -> Result<Vec<Resource
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+pub(super) async fn references(db: &impl ConnectionTrait) -> Result<Vec<ResourceRef>> {
+    let mut output = Vec::new();
+    let mut after = None;
+    loop {
+        let page = reference_page(db, after.as_ref()).await?;
+        if page.is_empty() {
+            return Ok(output);
+        }
+        after = page.last().cloned();
+        output.extend(page);
+    }
 }
 
 pub(super) async fn retain(

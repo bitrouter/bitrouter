@@ -31,6 +31,36 @@ binding; the [SDK example](../../crates/bitrouter-sdk/examples/axum_gateway.rs)
 shows that composition. A framework adapter's protocol end does not itself prove
 that the service committed an execution receipt.
 
+## Runtime budgets and indexed authority
+
+`tenancy.capacity` supplies finite startup budgets for active execution, waiting
+work, ingress, management, caches, authority views, routing and transport. The
+[configuration specification](../specs/configuration/README.md#process-capacity)
+defines their fields, units and defaults. Operators can raise them subject to
+machine representation, checked allocation and budget relationships. They do
+not impose a directory-size ceiling or preallocate one entry per stored tenant.
+The exclusive SQLite connection and single authority writer remain unchanged;
+ordinary, safety and completion queues rotate service so each can make progress.
+
+Startup validates the entire directory and retained authority through bounded
+keyset pages, including all retained operation IDs. Page size and working bytes
+bound temporary memory; no successful prefix substitutes for the complete scan.
+Format-2 validation does not apply the former directory or lifetime operation
+count ceilings. Historical format-1 counter rules remain format checks until
+the store is explicitly upgraded. Runtime reads load only the caller and exact
+dependency closure under read custody. The authority registry retains a small
+publication header and bounded leased views. Committed deltas update those views
+under a common publication gate; unrelated mutations do not invalidate a native caller solely
+because the public revision advanced. Every final lease check observes the same
+service liveness fence. Shutdown closes dispatch before draining HTTP while
+retaining the writer for admitted completion and cleanup.
+
+Authority-view bytes reserve one third for live facts and two thirds for staged
+replacements and construction overlap. Expansion is checked before cloning;
+revocation can publish when the live budget is full. Allocation is lazy.
+Immutable cache entries and pinned values have separate entry/byte budgets.
+These are payload-accounting bounds, not a measurement of total allocator RSS.
+
 ## Resource publication
 
 The [resource authority](../../apps/bitrouter/src/tenancy/resources/management.rs)
@@ -113,7 +143,8 @@ and reads while preserving completion of previously admitted obligations.
 
 ## Limits and storage
 
-Ingress allows at most 128 uploads and 64 MiB of reserved body bytes, with a
+Ingress defaults to 128 uploads and 64 MiB of reserved body bytes, selected by
+`tenancy.capacity.ingress`, with a
 16 MiB ceiling per request and an absolute submission deadline (60 seconds by
 default, configured with `tenancy.submission_timeout_secs`). Bodies
 without Content-Length reserve the entire per-request ceiling. These reservation
@@ -153,15 +184,119 @@ same expired deadline; it cannot clear the failure fence, replay work, or infer
 cleanup from elapsed time.
 
 Each admitted execution reserves 4 MiB for its bounded receipt and initial
-storage allowance. Strict admission stops below 768 MiB of free space or at the
-8 GiB receipt high-water mark; 256 MiB is reserved for maintenance. Accounting
-includes a conservative 16 KiB row allowance. Physical write amplification and
-filesystem exhaustion require separate measurement and fault qualification.
+storage allowance. `tenancy.capacity.receipts` defaults to a 768 MiB admission
+free-space floor, an 8 GiB live-receipt high-water budget and a 256 MiB maintenance
+reserve. Accounting includes a conservative 16 KiB row allowance. Each grant
+batch refreshes free space under the accounting mutex and includes outstanding
+physical charges for management, receipt and repair writes. Physical write
+amplification and filesystem exhaustion still require measurement and fault
+qualification. Terminal archived history is accounted separately from live
+receipt bytes; neither operation IDs nor retained history has a lifetime quota.
 
-Unknown receipts are bounded to 100 per tenant and 1,000 per instance. They are
-escalated for operator investigation after 15 minutes and are not automatically
-pruned or reclassified. The 30-second cleanup window is not permission to forget
-an uncertain transaction or an unjoined producer.
+Unknown obligations default to admission budgets of 100 per tenant and 1,000
+per instance, configurable in the same group. The transactionally maintained
+indexed projection covers both receipts and pending OAuth work, deduplicated by
+execution. Startup validates its complete count and digest without retaining a
+vector of all unresolved identities. A cold tenant uses an indexed count under
+the existing read permit and actor transaction; a pin retains that count through
+admission. Live committed deltas update pinned counts, and idle tenants need no
+resident count entry. Global pressure is checked before a cold count and again
+at grant time. Lowering a budget does not invalidate retained evidence.
+Indexed, resumable maintenance escalates unresolved work after 15 minutes
+without pruning or reclassifying it. The 30-second cleanup window is not
+permission to forget an uncertain transaction or an unjoined producer.
+
+The internal authority store uses format 2 so older strict readers refuse it.
+Healthy format-1 stores upgrade during complete validated startup. A legacy
+count-saturated store instead requires the explicit local
+`bro tenancy offline upgrade-capacity` workflow under exclusive stopped custody.
+The command checks the expected installation/revision, the actual legacy count
+latch, all retained authority/evidence and an explicit acknowledgment before
+atomically recording the transition and its replay result. It preserves
+identities and evidence and does not clear other storage or cleanup fences.
+See the [operator procedure](../../skills/bitrouter/references/cli.md#local-db-only-offline-evidence).
+Public strict-v1 request, attempt and evidence limits remain independent of host
+capacity, as do the bounded offline bundle and declared provisioning profiles.
+
+## Receipt archive and physical storage
+
+The existing writer moves eligible terminal receipt and usage-evidence payloads
+into an archive table in the same SQLite database. It uses bounded compression
+and preserves the original bytes and integrity digests, retaining the indexed
+receipt identity and correlation metadata. Readers transparently decode one
+bounded payload through the same authorized receipt/page APIs. There is no
+external archive service, history-row ceiling, age-based deletion or operation
+ID reuse.
+
+Maintenance begins before the live high-water budget is exhausted. Each turn
+examines a bounded key page and relocates at most one eligible payload, retaining
+a cursor across turns. The writer rechecks live execution custody, unresolved
+obligations and pending native/paid ownership before the archive transaction.
+Unknown effects remain inline. Compression runs outside the authority publication
+gate; only a confirmed COMMIT moves the accounting charge from live bytes to
+history. An uncertain transaction retains its real owner and reservation.
+
+Live receipt, history and OAuth byte values are conservative logical estimates.
+They are not the database file size, SQLite freelist capacity, WAL size, measured
+RSS or physical bytes returned to the filesystem. Compression may leave the file
+unchanged or temporarily increase writes. Admission uses a fresh volume free-space
+probe plus outstanding physical write estimates; maintenance retains its own
+write custody and cannot manufacture free-space credit from a predicted ratio.
+
+With tenancy enabled, the native execution journal shares the database's physical
+write budget. Journal appends use ordinary capacity; a refused append retains
+recovery responsibility and cannot establish a clean stopped owner. Recording a
+valid stopped-owner proof uses maintenance capacity. Native terminal appends have
+no separate completion reservation guarantee. Gateway receipt completion retains
+its existing protected maintenance path. Without tenancy, native storage keeps
+its existing behavior.
+
+The database lease excludes cooperating writers to that database, not other
+users of the filesystem. Concurrent external consumption, filesystem metadata,
+SQLite page/index layout and journal or WAL amplification can still cause ENOSPC
+after a successful probe. Budgets therefore provide admission control rather
+than an absolute allocation guarantee. Operators must monitor actual volume
+space and qualify write amplification, archive progress, crash recovery and
+mixed live/history reads for their deployment. Capacity defaults and synthetic
+directory fixtures do not establish throughput, latency or a deployment maximum.
+
+## Capacity diagnostics
+
+Startup traces the effective capacity configuration. The existing telemetry
+`receipt_latency.enabled` opt-in, which requires enabled OTel metrics and tenancy,
+also adds fixed fields to `bitrouter.receipt.capacity.bytes` and
+`bitrouter.receipt.capacity.state`. It uses the existing provider and reader;
+disabled telemetry creates no capacity observer. Callbacks only try-lock existing
+owners and copy numeric accounting. They do not scan entries, query SQL, probe
+the filesystem, reclaim caches or retain the Service.
+
+The current-only `execution_cache_*` and `credential_cache_*` fields report
+resident entries and charged bytes, including pinned entries and reserved cache
+metadata. `routing_*` reports target/provider entries, charged bytes and active
+guards. These values describe the existing budgets, not measured RSS. Each
+component has its own `*_available` field; zero omits that component's unreadable
+values rather than reporting zero usage. These current working-set fields are
+independent of the receipt ledger's immutable initial/final checkpoints.
+
+`observed_free` is the last successful owner-side volume probe. It may already
+be stale and does not promise a later write will fit. `volume_available=0` omits
+it for an unbound volume. Logical receipt/history bytes and estimated physical
+write reservations remain separate fields. Admission `closed` stops new work;
+`fenced` describes the hard receipt-accounting fence. A soft receipt failure can
+close admission while retained owners still reconcile against trusted accounting.
+Neither flag establishes a transaction outcome.
+
+Authority debug traces report checked bytes **as of** registration/replacement,
+after releasing the publication gate. They are neither a live registry count nor
+a lifetime accounting ledger. Startup phase traces and rate-limited directory
+page progress identify completed validation work without row identifiers. The
+final startup trace publishes four directory totals and ordinary/safety operation
+totals from the validated authority snapshot only after all startup phases and
+transaction cleanup succeed. Its revision identifies that as-of snapshot; it
+does not claim live counts after later mutations. Partial phase progress is not a
+percentage or a readiness claim. Existing admission decisions and scheduled
+archive/obligation turns emit finite refusal/progress/lateness debug fields,
+without per-tenant labels, backlog queries or another worker.
 
 ## Reading evidence
 

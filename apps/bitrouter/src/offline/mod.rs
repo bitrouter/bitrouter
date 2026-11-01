@@ -7,10 +7,51 @@ pub(crate) mod engine;
 #[cfg(feature = "core")]
 pub(crate) mod evaluation;
 mod files;
-mod format;
+pub(crate) mod format;
 mod inventory;
+pub mod large;
 mod mapping;
 pub(crate) mod recovery;
+mod streamed;
+
+/// Temporary memory for complete offline authority validation, not history size.
+#[derive(Clone, Copy)]
+pub struct ValidationBudget {
+    /// Number of small authority facts or keys in one page.
+    pub rows: usize,
+    /// Aggregate validation working bytes, including sequential object decoding.
+    pub bytes: usize,
+}
+impl Default for ValidationBudget {
+    fn default() -> Self {
+        Self {
+            rows: 32,
+            bytes: 64 * 1024 * 1024,
+        }
+    }
+}
+
+/// Upgrade one stopped legacy count-saturated authority with durable replay.
+///
+/// # Errors
+/// Refuses identity/revision conflicts, missing acknowledgment, invalid storage,
+/// insufficient working capacity, or unconfirmed transaction/worker cleanup.
+pub async fn upgrade_capacity(
+    database: &std::path::Path,
+    expected_installation: &str,
+    expected_authority_revision: u64,
+    operation_id: &str,
+    acknowledge_legacy_count_saturation: bool,
+    budget: ValidationBudget,
+) -> anyhow::Result<impl crate::output::CliReport> {
+    let request = crate::tenancy::audit::upgrade::Request {
+        installation: expected_installation.try_into()?,
+        revision: expected_authority_revision.try_into()?,
+        operation: operation_id.try_into()?,
+        acknowledge_legacy_count_saturation,
+    };
+    recovery::upgrade::run(database, request, budget).await
+}
 mod schema;
 
 use crate::{output::CliReport, tenancy::ownership};
@@ -34,6 +75,90 @@ pub async fn snapshot(database: &Path, bundle: &Path) -> Result<impl CliReport> 
     snapshot_inner(database,bundle).await.map_err(|_| failure(
         "offline snapshot failed: require a stopped, exclusively owned regular SQLite source and a new private bundle path; unsupported/corrupt/oversized data is refused; any INCOMPLETE bundle is unusable",
     ))
+}
+
+/// Create v2 DB-only evidence using finite working memory and disk scratch.
+/// The source must be cleanly stopped and all external writers fenced.
+///
+/// # Errors
+/// Refuses live/changed sources, insufficient working resources, unsupported
+/// schema, reused output or unconfirmed worker cleanup. Retain INCOMPLETE output.
+pub async fn snapshot_with_options(
+    database: &Path,
+    bundle: &Path,
+    options: large::Options,
+) -> Result<impl CliReport> {
+    streamed::run(streamed::Action::Snapshot { database: database.into(), bundle: bundle.into() }, options)
+        .await.map_err(|_| failure("offline v2 snapshot failed: require a cleanly stopped, externally fenced private SQLite source, private scratch and a new bundle; retain INCOMPLETE output"))
+}
+
+/// Recompute complete v1/v2 evidence with a finite working allowance.
+///
+/// # Errors
+/// Refuses incomplete, altered, unsupported evidence or insufficient resources.
+pub async fn inventory_with_options(
+    bundle: &Path,
+    options: large::Options,
+) -> Result<impl CliReport> {
+    read_bundle_with_options(bundle, None, "inventory", &options).await
+        .map_err(|_| failure("offline inventory failed: evidence is incomplete, changed, unsupported or exceeds available working resources"))
+}
+
+/// Verify complete v1/v2 evidence against an independently retained digest.
+///
+/// # Errors
+/// Refuses mismatched anchors, invalid evidence or unconfirmed cleanup.
+pub async fn verify_with_options(
+    bundle: &Path,
+    evidence_digest: &str,
+    options: large::Options,
+) -> Result<impl CliReport> {
+    read_bundle_with_options(bundle, Some(evidence_digest), "verify", &options).await
+        .map_err(|_| failure("offline verification failed: evidence anchor or database validation failed, or working resources were insufficient"))
+}
+
+async fn read_bundle_with_options(
+    bundle: &Path,
+    expected: Option<&str>,
+    action: &'static str,
+    options: &large::Options,
+) -> Result<Report> {
+    if let Some(expected) = expected {
+        files::validate_digest(expected)?;
+    }
+    streamed::run(
+        streamed::Action::Read {
+            bundle: bundle.into(),
+            expected: expected.map(str::to_owned),
+            action,
+        },
+        options.clone(),
+    )
+    .await
+}
+
+/// Restore an anchored database into a new path, preserving its original identity.
+/// This does not migrate, initialize, start authority, or authorize serving. Fence
+/// the original installation; normal startup and external-state recovery remain
+/// mandatory before releasing ingress.
+///
+/// # Errors
+/// Refuses existing destinations, mismatched identity/key, invalid evidence or
+/// unconfirmed cleanup. Preserve incomplete staging for reconciliation.
+pub async fn restore_with_options(
+    bundle: &Path,
+    evidence_digest: &str,
+    database: &Path,
+    expected_installation_id: &str,
+    wrapping_key_env: &str,
+    validation_rows: usize,
+    options: large::Options,
+) -> Result<impl CliReport> {
+    let installation = expected_installation_id.try_into()?;
+    streamed::run(streamed::Action::Restore {
+        bundle: bundle.into(), expected: evidence_digest.into(), database: database.into(),
+        installation, wrapping_key_env: wrapping_key_env.into(), validation_rows,
+    }, options).await.map_err(|_| failure("offline database restore failed or is incomplete: preserve staging and the stopped destination; do not release ingress or run the original installation concurrently"))
 }
 /// Recompute and display the exact DB inventory without asserting evidence origin.
 ///
@@ -371,6 +496,31 @@ pub async fn audit(
     listen: std::net::SocketAddr,
     output: &crate::output::Output,
 ) -> Result<()> {
+    audit_with_budget(
+        archive,
+        projection,
+        evidence_digest,
+        control_config,
+        listen,
+        output,
+        ValidationBudget::default(),
+    )
+    .await
+}
+
+/// Serve a verified archive with an explicit temporary validation allowance.
+///
+/// # Errors
+/// Returns the same custody and validation failures as [`audit`].
+pub async fn audit_with_budget(
+    archive: &Path,
+    projection: &Path,
+    evidence_digest: &str,
+    control_config: &Path,
+    listen: std::net::SocketAddr,
+    output: &crate::output::Output,
+    validation: ValidationBudget,
+) -> Result<()> {
     audit::run(
         archive,
         projection,
@@ -378,6 +528,41 @@ pub async fn audit(
         control_config,
         listen,
         output,
+        validation,
+    )
+    .await
+}
+
+/// An archived bundle and its independently retained evidence digest.
+pub struct AuditSource<'a> {
+    /// Private archive directory to verify before serving receipt reads.
+    pub archive: &'a Path,
+    /// Expected SHA256 of the archive's evidence document.
+    pub evidence_digest: &'a str,
+}
+
+/// Serve complete v1/v2 evidence using explicit temporary working resources.
+///
+/// # Errors
+/// Refuses invalid evidence, insufficient capacity and unconfirmed cleanup,
+/// preserving the same read-only loopback contract as [`audit`].
+pub async fn audit_with_options(
+    source: AuditSource<'_>,
+    projection: &Path,
+    control_config: &Path,
+    listen: std::net::SocketAddr,
+    output: &crate::output::Output,
+    validation: ValidationBudget,
+    options: large::Options,
+) -> Result<()> {
+    audit::run_with_options(
+        source,
+        projection,
+        control_config,
+        listen,
+        output,
+        validation,
+        options,
     )
     .await
 }
@@ -417,6 +602,22 @@ pub async fn eval_inventory(
         "offline Eval inventory failed: require exact Legacy ownership, a complete bounded graph and matching private evidence"))
 }
 
+/// Inspect the bounded selected Eval graph in complete v1/v2 database evidence.
+///
+/// # Errors
+/// Refuses invalid evidence, ownership/graph mismatch or insufficient capacity.
+#[cfg(feature = "core")]
+pub async fn eval_inventory_with_options(
+    bundle: &Path,
+    evidence_digest: &str,
+    source_kind: &str,
+    report: &Path,
+    options: large::Options,
+) -> Result<impl CliReport> {
+    evaluation::inventory_with_options(bundle, evidence_digest, source_kind, report, options).await
+        .map_err(|_| failure("offline Eval inventory failed: evidence or selected graph is invalid or working capacity is insufficient"))
+}
+
 /// Import a bounded four-table Legacy Eval graph into a stopped fresh authority.
 ///
 /// # Errors
@@ -433,6 +634,22 @@ pub async fn eval_backfill(
         "offline Eval backfill failed or outcome is unconfirmed: retain the incomplete packet and stopped destination for reconciliation; do not retry or activate"))
 }
 
+/// Import a bounded Eval graph into a fresh authority proven by streamed v2 evidence.
+///
+/// # Errors
+/// Refuses changed inputs, invalid target proof or unconfirmed SQL outcome.
+/// Preserve incomplete evidence and the stopped target on every failure.
+#[cfg(feature = "core")]
+pub async fn eval_backfill_with_options(
+    plan: &Path,
+    plan_digest: &str,
+    report: &Path,
+    options: large::Options,
+) -> Result<impl CliReport> {
+    evaluation::backfill_with_options(plan, plan_digest, report, options).await
+        .map_err(|_| failure("offline Eval backfill failed or outcome is unconfirmed: preserve incomplete evidence and the stopped target; do not retry or activate"))
+}
+
 /// Verify an explicitly retired archive and freshly provisioned stopped target.
 ///
 /// # Errors
@@ -443,4 +660,32 @@ pub async fn recover(
     report: &std::path::Path,
 ) -> anyhow::Result<impl crate::output::CliReport> {
     recovery::run(plan, report).await.map_err(|_| failure("offline recovery verification failed or cleanup is unconfirmed: retain incomplete evidence and the stopped target; do not release ingress"))
+}
+
+/// Verify retired/fresh authority with an explicit temporary validation budget.
+///
+/// # Errors
+/// Refuses incomplete evidence, unsupported profiles, insufficient capacity or
+/// unconfirmed cleanup. The declared fresh provisioning profile is unchanged.
+pub async fn recover_with_budget(
+    plan: &Path,
+    report: &Path,
+    validation: ValidationBudget,
+) -> Result<impl CliReport> {
+    recovery::run_with_budget(plan, report, validation).await
+}
+
+/// Verify a fresh target using complete streamed provisioning and retirement evidence.
+///
+/// # Errors
+/// Refuses incomplete proof, insufficient working resources or unconfirmed
+/// cleanup. Success neither starts authority nor authorizes ingress.
+pub async fn recover_with_options(
+    plan: &Path,
+    report: &Path,
+    validation: ValidationBudget,
+    options: large::Options,
+) -> Result<impl CliReport> {
+    recovery::run_with_options(plan, report, validation, options).await
+        .map_err(|_| failure("offline recovery verification failed: preserve incomplete evidence and the stopped target; do not release ingress"))
 }

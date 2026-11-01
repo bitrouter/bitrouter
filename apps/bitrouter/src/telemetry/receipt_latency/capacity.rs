@@ -1,6 +1,9 @@
 //! Fixed numeric observation; no admission mutation or retained Service owner.
 use std::sync::OnceLock;
 
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+pub(crate) mod runtime;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadError {
     Unavailable,
@@ -10,7 +13,17 @@ pub(crate) enum ReadError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Snapshot {
     pub completion_reserved: u64,
+    pub physical_write_reserved: u64,
+    /// Last successful owner-side volume probe, not a new callback probe.
+    /// None means no pinned physical volume; never expose a test sentinel.
+    pub observed_free: Option<u64>,
+    /// Current inline receipt/evidence accounting, excluding archived history.
     pub accounted: u64,
+    pub history_bytes: u64,
+    pub history_rows: u64,
+    /// Startup per-slot maximum durable envelope, unchanged by rotation. Not
+    /// actual encoded bytes, allocated filesystem bytes or a new quota.
+    pub oauth_reserved: u64,
     pub ingress_reserved: u64,
     pub potential_unknown: u64,
     pub live_unknown: u64,
@@ -45,25 +58,31 @@ impl Snapshot {
             && self.ingress == 0
             && self.ingress_reserved == 0
             && self.completion_reserved == 0
+            && self.physical_write_reserved == 0
             && self.potential_unknown == 0
     }
-    pub(crate) fn bytes(self) -> [(&'static str, u64); 3] {
+    pub(crate) fn bytes(self) -> [(&'static str, u64); 6] {
         [
             ("completion_reserved", self.completion_reserved),
+            ("physical_write_reserved", self.physical_write_reserved),
             ("accounted", self.accounted),
+            ("history_bytes", self.history_bytes),
+            ("oauth_reserved", self.oauth_reserved),
             ("ingress_reserved", self.ingress_reserved),
         ]
     }
-    pub(crate) fn state(self) -> [(&'static str, u64); 8] {
+    pub(crate) fn state(self) -> [(&'static str, u64); 10] {
         [
             ("potential_unknown", self.potential_unknown),
             ("live_unknown", self.live_unknown),
+            ("history_rows", self.history_rows),
             ("active", self.active),
             ("queued", self.queued),
             ("ingress", self.ingress),
             ("closed", u64::from(self.closed)),
             ("fenced", u64::from(self.fenced)),
             ("available", 1),
+            ("volume_available", u64::from(self.observed_free.is_some())),
         ]
     }
 }
@@ -84,9 +103,22 @@ pub(crate) struct Observation {
     #[cfg(all(test, feature = "otel-http"))]
     collect_hook: OnceLock<CollectHook>,
     binding: OnceLock<Binding>,
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    runtime: OnceLock<Box<dyn Fn() -> runtime::Snapshot + Send + Sync>>,
     final_value: OnceLock<Result<Snapshot, ReadError>>,
 }
 impl Observation {
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub(crate) fn bind_runtime(
+        &self,
+        read: impl Fn() -> runtime::Snapshot + Send + Sync + 'static,
+    ) -> bool {
+        self.runtime.set(Box::new(read)).is_ok()
+    }
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub(crate) fn runtime(&self) -> Option<runtime::Snapshot> {
+        self.runtime.get().map(|read| read())
+    }
     /// The caller supplies a Weak admission closure after real inventory load.
     pub(crate) fn bind(
         &self,

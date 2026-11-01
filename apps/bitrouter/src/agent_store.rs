@@ -13,29 +13,57 @@ use crate::harness::storage::owner_time_ms;
 use crate::harness::storage::push_history_event;
 use crate::harness::storage::validate_owner_id;
 use crate::harness::storage::validate_runtime_format;
+use anyhow::{Context, ensure};
 use bitrouter_ai::harness::runtime::ExecutionOwner;
 use bitrouter_ai::harness::runtime::OwnerClaim;
+#[cfg(test)]
+use sea_orm::ActiveModelTrait;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder, QuerySelect, Set, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    QuerySelect, QueryTrait, Set, TransactionTrait,
 };
 
 mod codec;
+mod physical;
 
 pub struct DatabaseExecutionStore {
     db: DatabaseConnection,
+    storage_budget: Option<crate::tenancy::storage::Budget>,
+    #[cfg(test)]
+    physical_gate: Option<std::sync::Arc<physical::Gate>>,
 }
 
 impl DatabaseExecutionStore {
     pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+        Self {
+            db,
+            storage_budget: None,
+            #[cfg(test)]
+            physical_gate: None,
+        }
+    }
+}
+
+impl DatabaseExecutionStore {
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<crate::tenancy::storage::Budget>,
+    ) -> Self {
+        self.storage_budget = budget;
+        self
+    }
+
+    fn sql_error(&self, error: sea_orm::DbErr) -> String {
+        let error = anyhow::Error::new(error);
+        physical::fence(self.storage_budget.as_ref(), &error);
+        error.to_string()
     }
 }
 
 mod execution {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "bro_executions")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -52,7 +80,7 @@ mod execution {
 
 mod discovery {
     use sea_orm::entity::prelude::*;
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "bro_execution_index")]
     pub struct Model {
         #[sea_orm(primary_key)]
@@ -67,7 +95,7 @@ mod discovery {
 mod record {
     use sea_orm::entity::prelude::*;
 
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "bro_execution_records")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -85,7 +113,7 @@ mod record {
 
 mod acceptance_key {
     use sea_orm::entity::prelude::*;
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "bro_acceptance_keys")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -103,7 +131,7 @@ mod acceptance_key {
 
 mod runtime_ownership {
     use sea_orm::entity::prelude::*;
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "bro_runtime_ownership")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -119,7 +147,7 @@ mod runtime_ownership {
 
 mod runtime_owner {
     use sea_orm::entity::prelude::*;
-    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel, serde::Serialize)]
     #[sea_orm(table_name = "bro_runtime_owners")]
     pub struct Model {
         #[sea_orm(primary_key, auto_increment = false)]
@@ -144,12 +172,12 @@ impl ExecutionStore for DatabaseExecutionStore {
         if !(1..=128).contains(&limit) || !(1..=4 * 1024 * 1024).contains(&max_bytes) {
             return Err("invalid execution index bounds".into());
         }
-        let tx = self.db.begin().await.map_err(|e| e.to_string())?;
+        let tx = self.db.begin().await.map_err(|e| self.sql_error(e))?;
         let head = discovery::Entity::find()
             .order_by_desc(discovery::Column::Position)
             .one(&tx)
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(|e| self.sql_error(e))?
             .map_or(Ok(0), |row| {
                 u64::try_from(row.position).map_err(|e| e.to_string())
             })?;
@@ -168,7 +196,7 @@ impl ExecutionStore for DatabaseExecutionStore {
             .limit((limit + 1) as u64)
             .all(&tx)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| self.sql_error(e))?;
         let mut entries = Vec::new();
         let mut bytes = 0_usize;
         let mut more = false;
@@ -176,7 +204,7 @@ impl ExecutionStore for DatabaseExecutionStore {
             let root = execution::Entity::find_by_id(&row.execution_id)
                 .one(&tx)
                 .await
-                .map_err(|e| e.to_string())?
+                .map_err(|e| self.sql_error(e))?
                 .ok_or("execution index points to missing root")?;
             let value = ExecutionHead {
                 format_version: u32::try_from(root.format_version).unwrap_or(0),
@@ -200,7 +228,7 @@ impl ExecutionStore for DatabaseExecutionStore {
         } else {
             None
         };
-        tx.commit().await.map_err(|e| e.to_string())?;
+        tx.commit().await.map_err(|e| self.sql_error(e))?;
         Ok(ExecutionIndexPage {
             cutoff,
             entries,
@@ -210,71 +238,66 @@ impl ExecutionStore for DatabaseExecutionStore {
 
     async fn claim_owner(&self, server_instance_id: &str) -> Result<OwnerClaim, String> {
         validate_owner_id(server_instance_id)?;
-        let transaction = self.db.begin().await.map_err(|error| error.to_string())?;
-        let current = lock_ownership(&transaction).await?;
-        if let Some(instance) = &current.server_instance_id {
-            let owner = convert_owner(instance.clone(), current.generation, current.stopped_at_ms)?;
-            if instance == server_instance_id && owner.stopped_at_ms.is_none() {
-                reconcile_execution_index(&transaction).await?;
-                transaction
-                    .commit()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                return Ok(OwnerClaim::Acquired { owner });
-            }
-            if instance == server_instance_id || owner.stopped_at_ms.is_none() {
-                transaction
-                    .commit()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                return Ok(OwnerClaim::Blocked { owner });
-            }
-        } else {
-            if current.generation != 0 || current.stopped_at_ms.is_some() {
-                return Err("invalid uninitialized execution owner fence".into());
-            }
-            if execution::Entity::find()
-                .one(&transaction)
-                .await
-                .map_err(|error| error.to_string())?
-                .is_some()
-            {
-                transaction
-                    .commit()
-                    .await
-                    .map_err(|error| error.to_string())?;
-                return Ok(OwnerClaim::Unfenced);
-            }
-        }
-        let generation = current
-            .generation
-            .checked_add(1)
-            .ok_or("execution owner generation exhausted")?;
-        runtime_owner::ActiveModel {
-            generation: Set(generation),
-            server_instance_id: Set(server_instance_id.into()),
-            stopped_at_ms: Set(None),
-        }
-        .insert(&transaction)
+        let (mut write, transaction) = physical::Write::begin(self, false, || {
+            crate::storage::write::statement_bytes(
+                &ownership_lock().build(self.db.get_database_backend()),
+            )
+        })
         .await
         .map_err(|error| error.to_string())?;
-        runtime_ownership::ActiveModel {
-            id: Set(1),
-            generation: Set(generation),
-            server_instance_id: Set(Some(server_instance_id.into())),
-            stopped_at_ms: Set(None),
+        let result: anyhow::Result<_> = async {
+            let current = lock_ownership(&transaction, &mut write).await?;
+            if let Some(instance) = &current.server_instance_id {
+                let owner =
+                    convert_owner(instance.clone(), current.generation, current.stopped_at_ms)
+                        .map_err(anyhow::Error::msg)?;
+                if instance == server_instance_id && owner.stopped_at_ms.is_none() {
+                    reconcile_execution_index(&transaction, &mut write).await?;
+                    return Ok(OwnerClaim::Acquired { owner });
+                }
+                if instance == server_instance_id || owner.stopped_at_ms.is_none() {
+                    return Ok(OwnerClaim::Blocked { owner });
+                }
+            } else {
+                ensure!(
+                    current.generation == 0 && current.stopped_at_ms.is_none(),
+                    "invalid uninitialized execution owner fence"
+                );
+                if execution::Entity::find().one(&transaction).await?.is_some() {
+                    return Ok(OwnerClaim::Unfenced);
+                }
+            }
+            let generation = current
+                .generation
+                .checked_add(1)
+                .context("execution owner generation exhausted")?;
+            let insert = runtime_owner::Entity::insert(runtime_owner::ActiveModel {
+                generation: Set(generation),
+                server_instance_id: Set(server_instance_id.into()),
+                stopped_at_ms: Set(None),
+            });
+            write.statement(|| insert.build(transaction.get_database_backend()))?;
+            insert.exec_with_returning(&transaction).await?;
+            let update = runtime_ownership::Entity::update(runtime_ownership::ActiveModel {
+                id: Set(1),
+                generation: Set(generation),
+                server_instance_id: Set(Some(server_instance_id.into())),
+                stopped_at_ms: Set(None),
+            });
+            write.row(&current)?;
+            write.statement(|| update.build(transaction.get_database_backend()))?;
+            update.exec(&transaction).await?;
+            let owner = convert_owner(server_instance_id.into(), generation, None)
+                .map_err(anyhow::Error::msg)?;
+            reconcile_execution_index(&transaction, &mut write).await?;
+            compact_legacy_records(&transaction, &mut write).await?;
+            Ok(OwnerClaim::Acquired { owner })
         }
-        .update(&transaction)
-        .await
-        .map_err(|error| error.to_string())?;
-        let owner = convert_owner(server_instance_id.into(), generation, None)?;
-        reconcile_execution_index(&transaction).await?;
-        compact_legacy_records(&transaction).await?;
-        transaction
-            .commit()
+        .await;
+        write
+            .finish(transaction, result)
             .await
-            .map_err(|error| error.to_string())?;
-        Ok(OwnerClaim::Acquired { owner })
+            .map_err(|error| error.to_string())
     }
 
     async fn read_owner(&self, server_instance_id: &str) -> Result<Option<ExecutionOwner>, String> {
@@ -283,55 +306,70 @@ impl ExecutionStore for DatabaseExecutionStore {
             .filter(runtime_owner::Column::ServerInstanceId.eq(server_instance_id))
             .one(&self.db)
             .await
-            .map_err(|error| error.to_string())?
+            .map_err(|error| self.sql_error(error))?
             .map(|row| convert_owner(row.server_instance_id, row.generation, row.stopped_at_ms))
             .transpose()
     }
 
     async fn stop_owner(&self, owner: &ExecutionOwner) -> Result<ExecutionOwner, String> {
-        let transaction = self.db.begin().await.map_err(|error| error.to_string())?;
-        let current = lock_ownership(&transaction).await?;
-        if current.server_instance_id.as_deref() != Some(&owner.server_instance_id)
-            || u64::try_from(current.generation).map_err(|error| error.to_string())?
-                != owner.generation
-        {
-            return Err("execution owner fence changed".into());
-        }
-        let stopped = match current.stopped_at_ms {
-            Some(stopped) => stopped,
-            None => i64::try_from(owner_time_ms()?).map_err(|error| error.to_string())?,
-        };
-        runtime_ownership::Entity::update_many()
-            .col_expr(
-                runtime_ownership::Column::StoppedAtMs,
-                sea_orm::sea_query::Expr::value(stopped),
+        let (mut write, transaction) = physical::Write::begin(self, true, || {
+            crate::storage::write::statement_bytes(
+                &ownership_lock().build(self.db.get_database_backend()),
             )
-            .filter(runtime_ownership::Column::Id.eq(1))
-            .exec(&transaction)
-            .await
-            .map_err(|error| error.to_string())?;
-        let updated = runtime_owner::Entity::update_many()
-            .col_expr(
-                runtime_owner::Column::StoppedAtMs,
-                sea_orm::sea_query::Expr::value(stopped),
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        let result: anyhow::Result<_> = async {
+            let current = lock_ownership(&transaction, &mut write).await?;
+            ensure!(
+                current.server_instance_id.as_deref() == Some(&owner.server_instance_id)
+                    && u64::try_from(current.generation)? == owner.generation,
+                "execution owner fence changed"
+            );
+            let stopped = match current.stopped_at_ms {
+                Some(stopped) => stopped,
+                None => i64::try_from(owner_time_ms().map_err(anyhow::Error::msg)?)?,
+            };
+            let update = runtime_ownership::Entity::update_many()
+                .col_expr(
+                    runtime_ownership::Column::StoppedAtMs,
+                    sea_orm::sea_query::Expr::value(stopped),
+                )
+                .filter(runtime_ownership::Column::Id.eq(1));
+            write.row(&current)?;
+            write.statement(|| update.build(transaction.get_database_backend()))?;
+            update.exec(&transaction).await?;
+            if write.enabled() {
+                let previous = runtime_owner::Entity::find_by_id(current.generation)
+                    .one(&transaction)
+                    .await?
+                    .context("execution owner proof is missing")?;
+                write.row(&previous)?;
+            }
+            let update = runtime_owner::Entity::update_many()
+                .col_expr(
+                    runtime_owner::Column::StoppedAtMs,
+                    sea_orm::sea_query::Expr::value(stopped),
+                )
+                .filter(runtime_owner::Column::Generation.eq(current.generation))
+                .filter(runtime_owner::Column::ServerInstanceId.eq(&owner.server_instance_id));
+            write.statement(|| update.build(transaction.get_database_backend()))?;
+            ensure!(
+                update.exec(&transaction).await?.rows_affected == 1,
+                "execution owner proof is missing"
+            );
+            convert_owner(
+                owner.server_instance_id.clone(),
+                current.generation,
+                Some(stopped),
             )
-            .filter(runtime_owner::Column::Generation.eq(current.generation))
-            .filter(runtime_owner::Column::ServerInstanceId.eq(&owner.server_instance_id))
-            .exec(&transaction)
-            .await
-            .map_err(|error| error.to_string())?;
-        if updated.rows_affected != 1 {
-            return Err("execution owner proof is missing".into());
+            .map_err(anyhow::Error::msg)
         }
-        transaction
-            .commit()
+        .await;
+        write
+            .finish(transaction, result)
             .await
-            .map_err(|error| error.to_string())?;
-        convert_owner(
-            owner.server_instance_id.clone(),
-            current.generation,
-            Some(stopped),
-        )
+            .map_err(|error| error.to_string())
     }
 
     async fn commit_owned(
@@ -356,11 +394,15 @@ impl ExecutionStore for DatabaseExecutionStore {
         if limit == 0 || limit > 128 || max_bytes == 0 || max_bytes > 4 * 1024 * 1024 {
             return Err("invalid execution page bounds".into());
         }
-        let transaction = self.db.begin().await.map_err(|error| error.to_string())?;
+        let transaction = self
+            .db
+            .begin()
+            .await
+            .map_err(|error| self.sql_error(error))?;
         let Some(execution) = execution::Entity::find_by_id(execution_id)
             .one(&transaction)
             .await
-            .map_err(|error| error.to_string())?
+            .map_err(|error| self.sql_error(error))?
         else {
             return Ok(None);
         };
@@ -386,7 +428,7 @@ impl ExecutionStore for DatabaseExecutionStore {
                 .limit(1)
                 .one(&transaction)
                 .await
-                .map_err(|error| error.to_string())?
+                .map_err(|error| self.sql_error(error))?
                 .ok_or("execution record history is incomplete")?;
             let sequence = u64::try_from(row.sequence).map_err(|error| error.to_string())?;
             if sequence != cursor + 1 {
@@ -406,7 +448,7 @@ impl ExecutionStore for DatabaseExecutionStore {
         transaction
             .commit()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| self.sql_error(error))?;
         Ok(Some(ExecutionPage {
             cutoff,
             records,
@@ -427,11 +469,15 @@ impl ExecutionStore for DatabaseExecutionStore {
         }
         let cutoff = i64::try_from(cutoff).map_err(|error| error.to_string())?;
         let mut after = i64::try_from(after).map_err(|error| error.to_string())?;
-        let transaction = self.db.begin().await.map_err(|error| error.to_string())?;
+        let transaction = self
+            .db
+            .begin()
+            .await
+            .map_err(|error| self.sql_error(error))?;
         let execution = execution::Entity::find_by_id(execution_id)
             .one(&transaction)
             .await
-            .map_err(|error| error.to_string())?
+            .map_err(|error| self.sql_error(error))?
             .ok_or("unknown execution")?;
         validate_runtime_format(u32::try_from(execution.format_version).unwrap_or(0))?;
         if cutoff > execution.version {
@@ -453,7 +499,7 @@ impl ExecutionStore for DatabaseExecutionStore {
                 .limit(1)
                 .one(&transaction)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| self.sql_error(error))?;
             let Some(row) = row else {
                 break;
             };
@@ -491,7 +537,7 @@ impl ExecutionStore for DatabaseExecutionStore {
         transaction
             .commit()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| self.sql_error(error))?;
         Ok(ThreadHistoryChunk { events, more })
     }
 
@@ -510,11 +556,15 @@ impl ExecutionStore for DatabaseExecutionStore {
     }
 
     async fn load(&self, execution_id: &str) -> Result<Option<StoredExecution>, String> {
-        let transaction = self.db.begin().await.map_err(|error| error.to_string())?;
+        let transaction = self
+            .db
+            .begin()
+            .await
+            .map_err(|error| self.sql_error(error))?;
         let Some(execution) = execution::Entity::find_by_id(execution_id)
             .one(&transaction)
             .await
-            .map_err(|error| error.to_string())?
+            .map_err(|error| self.sql_error(error))?
         else {
             return Ok(None);
         };
@@ -524,7 +574,7 @@ impl ExecutionStore for DatabaseExecutionStore {
             .order_by_asc(record::Column::Sequence)
             .all(&transaction)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| self.sql_error(error))?;
         let version = u64::try_from(execution.version).map_err(|error| error.to_string())?;
         if u64::try_from(rows.len()).map_err(|error| error.to_string())? != version {
             return Err("execution record history is incomplete".into());
@@ -543,7 +593,7 @@ impl ExecutionStore for DatabaseExecutionStore {
         transaction
             .commit()
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| self.sql_error(error))?;
         Ok(Some(StoredExecution {
             format_version: u32::try_from(execution.format_version).unwrap_or(0),
             execution_id: execution_id.into(),
@@ -572,23 +622,35 @@ fn convert_owner(
     })
 }
 
-async fn lock_ownership(
-    transaction: &sea_orm::DatabaseTransaction,
-) -> Result<runtime_ownership::Model, String> {
+fn ownership_lock() -> sea_orm::UpdateMany<runtime_ownership::Entity> {
     runtime_ownership::Entity::update_many()
         .col_expr(
             runtime_ownership::Column::Generation,
             sea_orm::sea_query::Expr::col(runtime_ownership::Column::Generation).into(),
         )
         .filter(runtime_ownership::Column::Id.eq(1))
-        .exec(transaction)
-        .await
-        .map_err(|error| error.to_string())?;
+}
+
+async fn lock_ownership(
+    transaction: &sea_orm::DatabaseTransaction,
+    write: &mut physical::Write<'_>,
+) -> anyhow::Result<runtime_ownership::Model> {
+    if write.enabled() {
+        let previous = runtime_ownership::Entity::find_by_id(1)
+            .one(transaction)
+            .await?
+            .context("runtime ownership control row is missing")?;
+        // The no-op UPDATE can rewrite the stored row. Account it before the
+        // first mutation, including a Blocked/Unfenced claim's lock-only write.
+        write.row(&(&previous, &previous))?;
+    }
+    let update = ownership_lock();
+    write.statement(|| update.build(transaction.get_database_backend()))?;
+    update.exec(transaction).await?;
     runtime_ownership::Entity::find_by_id(1)
         .one(transaction)
-        .await
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "runtime ownership control row is missing".into())
+        .await?
+        .context("runtime ownership control row is missing")
 }
 
 impl DatabaseExecutionStore {
@@ -613,108 +675,153 @@ impl DatabaseExecutionStore {
                 codec::encode(serde_json::to_string(record).map_err(|error| error.to_string())?)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let transaction = self.db.begin().await.map_err(|error| error.to_string())?;
-        let current = lock_ownership(&transaction).await?;
-        match owner {
-            Some(owner)
-                if current.server_instance_id.as_deref() == Some(&owner.server_instance_id)
-                    && current.generation
-                        == i64::try_from(owner.generation)
-                            .map_err(|error| error.to_string())?
-                    && current.stopped_at_ms.is_none()
-                    && owner.stopped_at_ms.is_none() => {}
-            None if current.server_instance_id.is_none()
-                && current.generation == 0
-                && current.stopped_at_ms.is_none() => {}
-            _ => return Err("execution owner fence changed, stopped or missing".into()),
+        let (mut write, transaction) = physical::Write::begin(self, false, || {
+            // Prepay known encoded values before BEGIN; exact SQL and old-row
+            // accounting consume this allowance and grow before each mutation.
+            let mut bytes = crate::storage::write::statement_bytes(
+                &ownership_lock().build(self.db.get_database_backend()),
+            )?;
+            let mut add = |value: usize| -> anyhow::Result<()> {
+                bytes = bytes
+                    .checked_add(value)
+                    .context("native write estimate overflow")?;
+                Ok(())
+            };
+            for (offset, payload) in payloads.iter().enumerate() {
+                add(crate::tenancy::storage::encoded_size(&(
+                    execution_id,
+                    expected + i64::try_from(offset)? + 1,
+                    payload,
+                ))?)?;
+            }
+            for entry in records.iter().filter_map(|record| match record {
+                ExecutionRecord::AcceptedKey { entry } => Some(entry),
+                _ => None,
+            }) {
+                add(crate::tenancy::storage::encoded_size(entry)?)?;
+            }
+            add(crate::tenancy::storage::encoded_size(&(
+                execution_id,
+                expected,
+                version,
+                RUNTIME_FORMAT_VERSION,
+            ))?)?;
+            if expected == 0 {
+                add(crate::tenancy::storage::encoded_size(&(
+                    execution_id,
+                    0_i64,
+                ))?)?;
+            }
+            Ok(bytes)
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+        let result: anyhow::Result<_> = async {
+            let current = lock_ownership(&transaction, &mut write).await?;
+            match owner {
+                Some(owner)
+                    if current.server_instance_id.as_deref() == Some(&owner.server_instance_id)
+                        && current.generation == i64::try_from(owner.generation)?
+                        && current.stopped_at_ms.is_none()
+                        && owner.stopped_at_ms.is_none() => {}
+                None if current.server_instance_id.is_none()
+                    && current.generation == 0
+                    && current.stopped_at_ms.is_none() => {}
+                _ => anyhow::bail!("execution owner fence changed, stopped or missing"),
+            }
+            if let Some(root) = execution::Entity::find_by_id(execution_id)
+                .one(&transaction)
+                .await?
+            {
+                validate_runtime_format(u32::try_from(root.format_version).unwrap_or(0))
+                    .map_err(anyhow::Error::msg)?;
+                write.row(&root)?;
+            }
+            if expected == 0 {
+                let insert = execution::Entity::insert(execution::ActiveModel {
+                    id: Set(execution_id.into()),
+                    version: Set(version),
+                    format_version: Set(i32::try_from(RUNTIME_FORMAT_VERSION)?),
+                });
+                write.statement(|| insert.build(transaction.get_database_backend()))?;
+                insert
+                    .exec_with_returning(&transaction)
+                    .await
+                    .context("create execution")?;
+                let insert = discovery::Entity::insert(discovery::ActiveModel {
+                    execution_id: Set(execution_id.into()),
+                    ..Default::default()
+                });
+                write.statement(|| insert.build(transaction.get_database_backend()))?;
+                insert
+                    .exec_with_returning(&transaction)
+                    .await
+                    .context("create execution index")?;
+            } else {
+                let update = execution::Entity::update_many()
+                    .col_expr(
+                        execution::Column::Version,
+                        sea_orm::sea_query::Expr::value(version),
+                    )
+                    .col_expr(
+                        execution::Column::FormatVersion,
+                        sea_orm::sea_query::Expr::value(i32::try_from(RUNTIME_FORMAT_VERSION)?),
+                    )
+                    .filter(execution::Column::Id.eq(execution_id))
+                    .filter(execution::Column::Version.eq(expected));
+                write.statement(|| update.build(transaction.get_database_backend()))?;
+                ensure!(
+                    update.exec(&transaction).await?.rows_affected == 1,
+                    "execution commit version conflict"
+                );
+            }
+            for entry in records.iter().filter_map(|record| match record {
+                ExecutionRecord::AcceptedKey { entry } => Some(entry),
+                _ => None,
+            }) {
+                ensure!(
+                    entry.thread_id == execution_id,
+                    "acceptance key belongs to a different Thread"
+                );
+                let insert = acceptance_key::Entity::insert(acceptance_key::ActiveModel {
+                    scope: Set(entry.scope.clone()),
+                    key: Set(entry.key.clone()),
+                    fingerprint: Set(entry.fingerprint.clone()),
+                    thread_id: Set(entry.thread_id.clone()),
+                    turn_id: Set(entry.turn_id.clone()),
+                });
+                write.statement(|| insert.build(transaction.get_database_backend()))?;
+                insert
+                    .exec_with_returning(&transaction)
+                    .await
+                    .context("commit acceptance key")?;
+            }
+            for (offset, payload) in payloads.into_iter().enumerate() {
+                let insert = record::Entity::insert(record::ActiveModel {
+                    execution_id: Set(execution_id.into()),
+                    sequence: Set(expected + i64::try_from(offset)? + 1),
+                    payload: Set(payload),
+                });
+                write.statement(|| insert.build(transaction.get_database_backend()))?;
+                insert.exec_with_returning(&transaction).await?;
+            }
+            Ok(u64::try_from(version)?)
         }
-        if let Some(root) = execution::Entity::find_by_id(execution_id)
-            .one(&transaction)
+        .await;
+        write
+            .finish(transaction, result)
             .await
-            .map_err(|e| e.to_string())?
-        {
-            validate_runtime_format(u32::try_from(root.format_version).unwrap_or(0))?;
-        }
-        if expected == 0 {
-            execution::ActiveModel {
-                id: Set(execution_id.into()),
-                version: Set(version),
-                format_version: Set(
-                    i32::try_from(RUNTIME_FORMAT_VERSION).map_err(|e| e.to_string())?
-                ),
-            }
-            .insert(&transaction)
-            .await
-            .map_err(|error| format!("create execution: {error}"))?;
-            discovery::ActiveModel {
-                execution_id: Set(execution_id.into()),
-                ..Default::default()
-            }
-            .insert(&transaction)
-            .await
-            .map_err(|e| format!("create execution index: {e}"))?;
-        } else {
-            let updated = execution::Entity::update_many()
-                .col_expr(
-                    execution::Column::Version,
-                    sea_orm::sea_query::Expr::value(version),
-                )
-                .col_expr(
-                    execution::Column::FormatVersion,
-                    sea_orm::sea_query::Expr::value(
-                        i32::try_from(RUNTIME_FORMAT_VERSION).map_err(|e| e.to_string())?,
-                    ),
-                )
-                .filter(execution::Column::Id.eq(execution_id))
-                .filter(execution::Column::Version.eq(expected))
-                .exec(&transaction)
-                .await
-                .map_err(|error| error.to_string())?;
-            if updated.rows_affected != 1 {
-                return Err("execution commit version conflict".into());
-            }
-        }
-        for entry in records.iter().filter_map(|record| match record {
-            ExecutionRecord::AcceptedKey { entry } => Some(entry),
-            _ => None,
-        }) {
-            if entry.thread_id != execution_id {
-                return Err("acceptance key belongs to a different Thread".into());
-            }
-            acceptance_key::ActiveModel {
-                scope: Set(entry.scope.clone()),
-                key: Set(entry.key.clone()),
-                fingerprint: Set(entry.fingerprint.clone()),
-                thread_id: Set(entry.thread_id.clone()),
-                turn_id: Set(entry.turn_id.clone()),
-            }
-            .insert(&transaction)
-            .await
-            .map_err(|error| format!("commit acceptance key: {error}"))?;
-        }
-        for (offset, payload) in payloads.into_iter().enumerate() {
-            let offset = i64::try_from(offset).map_err(|error| error.to_string())?;
-            record::ActiveModel {
-                execution_id: Set(execution_id.into()),
-                sequence: Set(expected + offset + 1),
-                payload: Set(payload),
-            }
-            .insert(&transaction)
-            .await
-            .map_err(|error| error.to_string())?;
-        }
-        transaction
-            .commit()
-            .await
-            .map_err(|error| error.to_string())?;
-        u64::try_from(version).map_err(|error| error.to_string())
+            .map_err(|error| format!("{error:#}"))
     }
 }
 
 // Repack old rows only while a new writer owns the store lock. Sequence,
 // version and exact decoded facts are unchanged; rollback covers the whole
 // upgrade. SQLite reuses the freed pages for subsequent execution records.
-async fn compact_legacy_records(tx: &sea_orm::DatabaseTransaction) -> Result<(), String> {
+async fn compact_legacy_records(
+    tx: &sea_orm::DatabaseTransaction,
+    write: &mut physical::Write<'_>,
+) -> anyhow::Result<()> {
     let mut cursor: Option<(String, i64)> = None;
     let mut packed = 0_u64;
     let mut saved = 0_usize;
@@ -744,35 +851,38 @@ async fn compact_legacy_records(tx: &sea_orm::DatabaseTransaction) -> Result<(),
             .order_by_asc(record::Column::ExecutionId)
             .order_by_asc(record::Column::Sequence)
             .one(tx)
-            .await
-            .map_err(|e| e.to_string())?
+            .await?
         else {
             break;
         };
         cursor = Some((row.execution_id.clone(), row.sequence));
         let root = execution::Entity::find_by_id(&row.execution_id)
             .one(tx)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or("execution root missing")?;
+            .await?
+            .context("execution root missing")?;
         if validate_runtime_format(u32::try_from(root.format_version).unwrap_or(0)).is_err() {
             continue;
         }
         let original_bytes = row.payload.len();
         let legacy = row.payload.starts_with(codec::LEGACY_PREFIX);
-        let payload = codec::encode(codec::decode(&row.payload)?.into_owned())?;
+        let payload = codec::encode(
+            codec::decode(&row.payload)
+                .map_err(anyhow::Error::msg)?
+                .into_owned(),
+        )
+        .map_err(anyhow::Error::msg)?;
         if !legacy && payload.len() >= original_bytes {
             continue;
         }
         saved = saved.saturating_add(original_bytes.saturating_sub(payload.len()));
-        record::ActiveModel {
+        write.row(&row)?;
+        let update = record::Entity::update(record::ActiveModel {
             execution_id: Set(row.execution_id),
             sequence: Set(row.sequence),
             payload: Set(payload),
-        }
-        .update(tx)
-        .await
-        .map_err(|e| e.to_string())?;
+        });
+        write.statement(|| update.build(tx.get_database_backend()))?;
+        update.exec(tx).await?;
         packed += 1;
     }
     if packed > 0 {
@@ -788,12 +898,42 @@ async fn compact_legacy_records(tx: &sea_orm::DatabaseTransaction) -> Result<(),
 // Older cooperating writers can add roots after migration backfill but before
 // retirement. Reconcile under the same store owner lock before admitting a new
 // owner; this never infers effect status or modifies execution facts.
-async fn reconcile_execution_index(tx: &sea_orm::DatabaseTransaction) -> Result<(), String> {
+async fn reconcile_execution_index(
+    tx: &sea_orm::DatabaseTransaction,
+    write: &mut physical::Write<'_>,
+) -> anyhow::Result<()> {
     use sea_orm::sea_query::{Expr, Query};
     let existing = Query::select()
         .column(discovery::Column::ExecutionId)
         .from(discovery::Entity)
         .to_owned();
+    if write.enabled() {
+        // No new history collection: measure only missing index values under
+        // the already-held owner write lock, keeping one keyset page resident.
+        let mut after: Option<String> = None;
+        let mut bytes = 0_usize;
+        loop {
+            let mut missing = execution::Entity::find()
+                .filter(Expr::col(execution::Column::Id).not_in_subquery(existing.clone()))
+                .order_by_asc(execution::Column::Id)
+                .limit(128);
+            if let Some(after) = &after {
+                missing = missing.filter(execution::Column::Id.gt(after));
+            }
+            let rows = missing.all(tx).await?;
+            if rows.is_empty() {
+                break;
+            }
+            for row in rows {
+                // Generated index position plus the actual UTF-8 root key.
+                bytes = bytes
+                    .checked_add(crate::tenancy::storage::encoded_size(&(&row.id, 0_i64))?)
+                    .context("execution index write estimate overflow")?;
+                after = Some(row.id);
+            }
+        }
+        write.account(bytes)?;
+    }
     let select = Query::select()
         .column(execution::Column::Id)
         .from(execution::Entity)
@@ -804,10 +944,9 @@ async fn reconcile_execution_index(tx: &sea_orm::DatabaseTransaction) -> Result<
     insert
         .into_table(discovery::Entity)
         .columns([discovery::Column::ExecutionId]);
-    insert.select_from(select).map_err(|e| e.to_string())?;
-    tx.execute(tx.get_database_backend().build(&insert))
-        .await
-        .map_err(|e| e.to_string())?;
+    insert.select_from(select)?;
+    write.statement(|| tx.get_database_backend().build(&insert))?;
+    tx.execute(tx.get_database_backend().build(&insert)).await?;
     Ok(())
 }
 
@@ -819,7 +958,7 @@ impl DatabaseExecutionStore {
             .filter(acceptance_key::Column::Key.eq(key))
             .one(&self.db)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| self.sql_error(error))?;
         Ok(row.map(|row| AcceptedKey {
             scope: row.scope,
             key: row.key,
@@ -879,7 +1018,11 @@ mod tests {
             .await?;
         }
         let tx = db.begin().await?;
-        assert!(compact_legacy_records(&tx).await.is_err());
+        assert!(
+            compact_legacy_records(&tx, &mut physical::Write::unbudgeted())
+                .await
+                .is_err()
+        );
         tx.rollback().await?;
         let first = record::Entity::find_by_id(("thread".to_string(), 1))
             .one(&db)
@@ -897,7 +1040,7 @@ mod tests {
         .update(&db)
         .await?;
         let tx = db.begin().await?;
-        compact_legacy_records(&tx)
+        compact_legacy_records(&tx, &mut physical::Write::unbudgeted())
             .await
             .map_err(anyhow::Error::msg)?;
         tx.commit().await?;
@@ -993,7 +1136,7 @@ mod tests {
         .update(&db)
         .await?;
         let tx = db.begin().await?;
-        compact_legacy_records(&tx)
+        compact_legacy_records(&tx, &mut physical::Write::unbudgeted())
             .await
             .map_err(anyhow::Error::msg)?;
         tx.commit().await?;
@@ -1644,6 +1787,17 @@ mod discovery_tests {
             )
             .await
             .map_err(anyhow::Error::msg)?;
+        // Startup discards clean IDs, so uniqueness belongs to the durable
+        // index itself rather than an unbounded service-side seen set.
+        assert!(
+            discovery::ActiveModel {
+                execution_id: Set("first".into()),
+                ..Default::default()
+            }
+            .insert(&store.db)
+            .await
+            .is_err()
+        );
         store
             .commit("second", 0, &[fact()])
             .await

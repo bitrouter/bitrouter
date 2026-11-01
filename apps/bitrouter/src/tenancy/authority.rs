@@ -1,5 +1,7 @@
 //! Current-grant intersection. No credential carries a cached entitlement.
 
+pub(in crate::tenancy) mod live;
+
 use bitrouter_ai::tenancy::{
     authority::{CredentialState, GrantScope, OwnerKind, Permission, ResourceKey, TenantState},
     identity::{PrincipalId, TenantId},

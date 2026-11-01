@@ -10,6 +10,7 @@ async fn activate(ready: &Ready, revision: &RevisionId, operation: &str) -> Resu
         .fixture
         .service
         .active_revision(&ready.fixture.operator, &ready.fixture.tenant)
+        .await
         .map_err(failure)?;
     ready
         .fixture
@@ -49,7 +50,7 @@ async fn reactivating_r1_and_rotating_the_caller_do_not_refund_its_accepted_job(
         activate(&ready, &ready.revision, "paid-reactivate-r1").await?;
         let before = bodies(&ready.fixture, "owned_judge_budget").await?;
         ensure!(before.len() == 1 && before[0]["accepted"] == 1);
-        let mut input = ready.fixture.issuance("paid-rotate")?;
+        let mut input = ready.fixture.issuance("paid-rotate").await?;
         input.rotate_credential_id = Some(ready.credential.credential_id.clone());
         ready.credential = issued(
             ready

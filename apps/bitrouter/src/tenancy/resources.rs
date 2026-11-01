@@ -25,7 +25,7 @@ pub(in crate::tenancy) mod lifecycle;
 pub(in crate::tenancy) mod management;
 mod manifest;
 mod oauth;
-mod recovery;
+pub(crate) mod recovery;
 mod storage;
 #[cfg(test)]
 mod tests;
@@ -312,15 +312,21 @@ impl Resources {
         // Verify all retained rows even when the import source has been removed.
         // Verify BEFORE importing: a wrong key must not commit new rows and leave
         // a mixed-key catalog behind when startup subsequently fails.
-        for reference in storage::references(db)
-            .await
-            .map_err(|_| anyhow::anyhow!("tenancy catalog unavailable"))?
-        {
-            let artifact = self
-                .load(db, &reference)
+        let mut after = None;
+        loop {
+            let page = storage::reference_page(db, after.as_ref())
                 .await
-                .map_err(|_| anyhow::anyhow!("retained tenancy resource authentication failed"))?;
-            self.authenticate_oauth(db, &artifact).await?;
+                .map_err(|_| anyhow::anyhow!("tenancy catalog unavailable"))?;
+            if page.is_empty() {
+                break;
+            }
+            for reference in &page {
+                let artifact = self.load(db, reference).await.map_err(|_| {
+                    anyhow::anyhow!("retained tenancy resource authentication failed")
+                })?;
+                self.authenticate_oauth(db, &artifact).await?;
+            }
+            after = page.last().cloned();
         }
         Ok(())
     }
@@ -409,17 +415,6 @@ impl Resources {
             );
             resource.validate()?;
         }
-        let mut retained: HashSet<_> = storage::references(db).await?.into_iter().collect();
-        retained.extend(
-            manifest
-                .resources
-                .iter()
-                .map(|resource| resource.reference.clone()),
-        );
-        ensure!(
-            retained.len() <= MAX_CLOSURE,
-            "retained resource capacity exceeded"
-        );
         self.preflight_oauth(db, &manifest.resources).await?;
         // Credentials and policy documents precede routes, independent of input order.
         for resource in manifest

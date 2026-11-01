@@ -31,6 +31,8 @@ mod attempts;
 pub(super) mod audit;
 mod authority;
 mod barrier;
+#[cfg(all(unix, any(feature = "otel-http", feature = "otel-grpc")))]
+mod calibration;
 mod conformance;
 mod fault_campaign;
 mod ingress_overflow;
@@ -40,6 +42,7 @@ pub(in crate::tenancy::tests::execution) mod latency;
 mod lifecycle;
 mod lifetime;
 mod reads;
+mod soft_stop;
 mod wire;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -262,7 +265,6 @@ impl Harness {
             fixture.service = crate::tenancy::Service::start_prepared(
                 fixture.db.clone(),
                 Some(owner),
-                Default::default(),
                 crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
                 Arc::new(crate::tenancy::resources::Resources::with_key(
                     fixture.installation.clone(),
@@ -271,14 +273,14 @@ impl Harness {
             )
             .await?;
             (fixture, route, slot)
-        } else if observer.enabled() {
+        } else if observer.enabled() || owner.is_some() {
             let fixture = if let Some(owner) = &owner {
                 let db = crate::db::connect_tenancy(
                     &format!("sqlite://{}", owner.path.display()),
                     owner,
                 )
                 .await?;
-                Fixture::with_database(db, Default::default(), &mut |_| {}).await?
+                Fixture::with_database(db, &mut |_| {}).await?
             } else {
                 Fixture::new().await?
             };
@@ -309,15 +311,15 @@ impl Harness {
                 fixture.service = crate::tenancy::Service::start_resources_with_continuations(
                     fixture.db.clone(),
                     owner,
-                    Default::default(),
                     crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
                     fixture.service.resources.clone(),
-                    (
-                        None,
-                        &crate::config::ContinuationConfig::default(),
-                        None,
-                        observer,
-                    ),
+                    crate::tenancy::Provisioning {
+                        import: None,
+                        continuations: &crate::config::ContinuationConfig::default(),
+                        claim: None,
+                        receipt_observer: observer,
+                        config: &crate::config::tenancy::TenancyConfig::default(),
+                    },
                     None,
                 )
                 .await?;
@@ -424,6 +426,7 @@ impl Harness {
             .fixture
             .service
             .authenticate(self.credential.secret.as_deref().context("secret")?)
+            .await
             .map_err(failure)?;
         let bytes = self
             .fixture

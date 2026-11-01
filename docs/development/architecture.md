@@ -555,6 +555,17 @@ The daemon `chdir`s into the bitrouter home (the config file's directory, or `~/
 
 In zero-config mode `bitrouter::providers::apply::zero_config()` builds a `Config` with `skip_auth: true`, `listen: 127.0.0.1:4356`, and the compiled-in hosted gateway auto-enabled when its API key is set in the environment. Every other public provider comes from the fetched-or-cached registry merge: an env-keyed registry provider becomes active when its credential is available, and a local-OAuth provider becomes active after `bro providers login <provider>`.
 
+## Local tenant authority
+
+Enabled tenancy uses one exclusive SQLite connection and one authority writer.
+Startup validates retained identities and authority in bounded pages; active
+requests hold indexed fact closures in a bounded live-view registry. Committed
+deltas publish through a common gate shared by final authorization checks.
+`tenancy.capacity` controls process resources independently of directory size,
+with lazy caches and views and no lifetime operation-count quota. See the
+[tenant service guide](tenant-service.md#runtime-budgets-and-indexed-authority)
+and [canonical configuration](../specs/configuration/README.md#process-capacity).
+
 ## HTTP Server Surface
 
 The axum server is application-owned (`apps/bitrouter/src/gateway/http.rs`):
@@ -570,10 +581,13 @@ The axum server is application-owned (`apps/bitrouter/src/gateway/http.rs`):
 | `GET  /metrics`                     | OTLP-migration banner (see below)|
 | `GET  /health`                      | health check                    |
 
-With `http2`, local mode uses axum's HTTP/1 and HTTP/2 serving on the same
-cleartext port. Shared inference and the separate operator listener each detect
-the HTTP/2 prior-knowledge preface on their existing port and otherwise serve
-HTTP/1. Shared/operator HTTP/1 still closes after each request, without upgrades;
+Without tenancy, local mode uses Axum's HTTP/1 and optional HTTP/2 serving on the
+same cleartext port. Enabled tenancy reuses the bounded `gateway::transport`
+server, with connections and header deadlines from `tenancy.capacity.transport`
+and aggregate requests/streams from `tenancy.capacity.ingress.requests`.
+Local HTTP/1 retains keep-alive. This transport, shared inference and the
+separate operator listener detect the HTTP/2 prior-knowledge preface on their
+existing port and otherwise serve HTTP/1. Shared/operator HTTP/1 closes after each request, without upgrades;
 HTTP/2 reuses a connection for concurrent streams. There is no h2c Upgrade
 handshake, TLS termination or new gRPC server.
 
@@ -583,6 +597,8 @@ process-wide transport stream cap of `gateway_state.local_max_in_flight` across
 the inference listener. The operator listener uses
 `min(128, operator.max_connections)` per connection and `operator.max_connections`
 across its connections. Existing connection/task caps remain independent.
+Local tenancy allows `min(128, tenancy.capacity.ingress.requests)` streams per
+HTTP/2 connection and the configured ingress request count across connections.
 Stream futures belong to the connection task, so connection teardown or forced
 shutdown drops all of its handlers and body owners. Each stream has its own
 body-ingress deadline; `write_stall_timeout_ms` also bounds waiting for HTTP/2
@@ -590,7 +606,7 @@ flow-control capacity. Waiting for inference output is not a network write
 stall. See the [shared gateway reference](../../skills/bitrouter/references/shared-gateway.md)
 for configuration bounds and drain behavior.
 
-Shared HTTP/2 also accounts at most 1 MiB of queued response metadata per
+The bounded HTTP/2 transport also accounts at most 1 MiB of queued response metadata per
 connection, including overhead, trailers and overload responses. Reservations
 are released when the corresponding END_HEADERS reaches the socket; cancelled
 metadata discarded before encoding is reclaimed after the encoder flushes.

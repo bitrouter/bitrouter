@@ -13,6 +13,7 @@ async fn owned_learner_006_register_sync_postcommit_short_job_expiry_is_fenced()
             let caller = fixture
                 .service
                 .authenticate(case.credential.secret.as_deref().context("secret")?)
+                .await
                 .map_err(failure)?;
             fixture.service.learner_test.cross_job_deadline();
             let receive = enqueue(
@@ -43,9 +44,10 @@ async fn owned_learner_006_register_sync_postcommit_short_job_expiry_is_fenced()
             ensure!(
                 fixture
                     .service
-                    .snapshot
+                    .authority
                     .read()
-                    .map_err(|_| anyhow::anyhow!("snapshot lock"))?
+                    .map_err(|code| anyhow::anyhow!("authority read: {code:?}"))?
+                    .header()
                     .revision
                     == state.revision
             );
@@ -123,6 +125,7 @@ async fn owned_learner_006_register_expired_active_transaction_rolls_back_live()
             let caller = fixture
                 .service
                 .authenticate(case.credential.secret.as_deref().context("secret")?)
+                .await
                 .map_err(failure)?;
             let held = fixture.service.cleanup.hold(Phase::Active);
             let rollbacks = fixture.service.cleanup.sql_counts_for_test().1;

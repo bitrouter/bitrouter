@@ -5,20 +5,82 @@ use crate::tenancy::{
     actor::Worker,
     execution::session::{Authority, Binding},
     receipts::store,
+    store::directory,
 };
 use anyhow::Context;
-use sea_orm::DatabaseTransaction;
+use bitrouter_ai::tenancy::identity::{InstallationId, TenantId};
+use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseTransaction, Statement};
+
+async fn native_namespace(
+    tx: &DatabaseTransaction,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    check: &(dyn Fn() -> Result<()> + Sync),
+) -> Result<()> {
+    check()?;
+    ensure!(
+        directory::tenant_in(tx, tenant, 16 * 1024).await?.is_some(),
+        "native owner inventory unavailable"
+    );
+    check()?;
+    let capture = tx
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT 1 FROM acp_capture_connections WHERE installation_id=? LIMIT 1",
+            [installation.as_str().into()],
+        ))
+        .await?;
+    check()?;
+    if capture.is_some() {
+        return Err(crate::tenancy::session::Rejected(
+            bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch,
+        )
+        .into());
+    }
+    // A page is not a complete allowlist. Check the durable directory itself,
+    // including NULL tenant metadata, before visiting the bounded peer pages.
+    let foreign = tx
+        .query_one(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT 1 FROM bro_managed_sessions AS s WHERE s.installation_id=? AND NOT EXISTS (SELECT 1 FROM tenancy_tenants AS t WHERE t.id=s.tenant_id) LIMIT 1",
+            [installation.as_str().into()],
+        ))
+        .await?;
+    check()?;
+    ensure!(
+        foreign.is_none(),
+        "native owner has unknown tenant metadata"
+    );
+    Ok(())
+}
+
+async fn native_exclusion(
+    tx: &DatabaseTransaction,
+    authority: &Authority,
+    check: &(dyn Fn() -> Result<()> + Sync),
+) -> Result<()> {
+    let descriptor = authority.descriptor();
+    native_namespace(tx, &descriptor.installation, &descriptor.tenant, check).await?;
+    let page_budget = directory::PageBudget {
+        rows: 32,
+        bytes: 64 * 1024,
+    };
+    let mut after = None;
+    loop {
+        check()?;
+        let page = directory::tenant_page_in(tx, after.as_ref(), page_budget).await?;
+        check()?;
+        if page.is_empty() {
+            break;
+        }
+        let tenants = page.into_iter().map(|tenant| tenant.id).collect::<Vec<_>>();
+        owned::recovery_exclusion(tx, authority, &tenants, check).await?;
+        after = tenants.last().cloned();
+    }
+    Ok(())
+}
 
 impl Worker {
-    fn native_inventory_tenants(&self) -> Result<Vec<bitrouter_ai::tenancy::identity::TenantId>> {
-        let snapshot = self
-            .snapshot
-            .read()
-            .map_err(|_| anyhow::anyhow!("native inventory unavailable"))?;
-        ensure!(snapshot.tenants.len() <= 32, "native inventory bound");
-        Ok(snapshot.tenants.keys().cloned().collect())
-    }
-
     pub(in crate::tenancy) async fn prepare_stopped_native(
         &self,
         tx: &DatabaseTransaction,
@@ -76,14 +138,7 @@ impl Worker {
         self.resources
             .recovery_static_credentials(tx, authority.dependencies(), &budget, check)
             .await?;
-        owned::recovery_exclusion(
-            tx,
-            authority,
-            &self.native_inventory_tenants()?,
-            &budget,
-            check,
-        )
-        .await?;
+        native_exclusion(tx, authority, check).await?;
         let at: bitrouter_ai::tenancy::identity::Timestamp = chrono::Utc::now()
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
             .try_into()?;
@@ -152,6 +207,8 @@ impl Worker {
             committed: std::sync::atomic::AtomicBool::new(false),
             retired: std::sync::atomic::AtomicBool::new(false),
             reservation: Mutex::new(None),
+            publication: Mutex::new(None),
+            obligation_due: std::sync::OnceLock::new(),
         });
         crate::harness::resources::managed::store::recovery::validate_terminal_links(
             &loaded.journal,
@@ -209,18 +266,31 @@ impl Worker {
                 && current.journal == checked.expected.journal,
             "native predecessor changed"
         );
-        owned::recovery_exclusion(
-            tx,
-            binding.authority(),
-            &self.native_inventory_tenants()?,
-            &checked.budget,
-            check,
-        )
-        .await?;
+        native_exclusion(tx, binding.authority(), check).await?;
+        let projection = self
+            .admission
+            .unknown_read(true)
+            .map_err(crate::tenancy::session::Rejected)?;
+        let charge = |rows, bytes| {
+            check()?;
+            checked.budget.charge(rows, bytes)
+        };
+        let mut before = std::collections::BTreeMap::new();
         let mut reserve_bytes = 0u64;
         let mut entries = Vec::new();
         for (seed, (candidate, missing)) in checked.seeds.iter().zip(&checked.receipts) {
             check()?;
+            let key = store::obligations::Key {
+                tenant: seed.tenant.clone(),
+                execution: seed.execution.clone(),
+            };
+            let previous =
+                store::obligations::lookup(tx, &seed.installation, &key, &charge).await?;
+            let covered = previous.is_some();
+            ensure!(
+                before.insert(key, previous).is_none(),
+                "duplicate native repair key"
+            );
             let saved = store::recovery_lookup(
                 tx,
                 &seed.installation,
@@ -233,15 +303,10 @@ impl Worker {
             match (saved, missing) {
                 (None, true) => {
                     reserve_bytes = reserve_bytes
-                        .checked_add(candidate.bytes() + candidate.auxiliary_bytes())
+                        .checked_add(candidate.bytes())
+                        .and_then(|bytes| bytes.checked_add(candidate.auxiliary_bytes()))
                         .context("native repair capacity overflow")?;
-                    entries.push((
-                        seed.execution.clone(),
-                        chrono::DateTime::parse_from_rfc3339(
-                            candidate.receipt.recorded_at.as_str(),
-                        )?
-                        .with_timezone(&chrono::Utc),
-                    ));
+                    entries.push((seed.execution.clone(), covered));
                 }
                 (Some(saved), false) => {
                     seed.validate_receipt(&saved.receipt)?;
@@ -269,11 +334,18 @@ impl Worker {
                 .lock()
                 .map_err(|_| anyhow::anyhow!("recovery reservation unavailable"))?;
             ensure!(reservation.is_none(), "native repair already attempted");
-            *reservation = Some(
-                self.admission
-                    .reserve_repair(&binding.descriptor().tenant, reserve_bytes, entries)
-                    .map_err(crate::tenancy::session::Rejected)?,
-            );
+            if !entries.is_empty() {
+                *reservation = Some(
+                    self.admission
+                        .reserve_repair(
+                            &projection,
+                            &binding.descriptor().tenant,
+                            reserve_bytes,
+                            entries,
+                        )
+                        .map_err(crate::tenancy::session::Rejected)?,
+                );
+            }
         }
         checked.budget.charge(
             0,
@@ -315,7 +387,48 @@ impl Worker {
             crate::tenancy::transaction::receipt_observation::Step::NativeCheckpoint,
             &result,
         );
-        result
+        result?;
+        let mut changes = Vec::new();
+        changes.try_reserve_exact(before.len())?;
+        for (key, previous) in before {
+            let change = store::obligations::reconcile(
+                tx,
+                &binding.descriptor().installation,
+                &key,
+                &charge,
+            )
+            .await?;
+            ensure!(
+                change.before == previous,
+                "native repair projection changed"
+            );
+            changes.push(change);
+        }
+        check()?;
+        checked
+            .obligation_due
+            .set(
+                changes
+                    .iter()
+                    .filter_map(|change| change.after.as_ref())
+                    .filter(|row| !row.escalated)
+                    .map(|row| row.due)
+                    .min(),
+            )
+            .map_err(|_| anyhow::anyhow!("native obligation schedule already prepared"))?;
+        // The existing outer recovery owner retains this prepared publication
+        // across COMMIT/ROLLBACK, cancellation and ambiguous transaction outcomes.
+        let mut publication = checked
+            .publication
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native publication unavailable"))?;
+        ensure!(publication.is_none(), "native publication already prepared");
+        *publication = Some(
+            self.admission
+                .prepare_unknown(&projection, changes, Vec::new(), self.proof.clone())
+                .map_err(crate::tenancy::session::Rejected)?,
+        );
+        Ok(())
     }
 }
 impl CheckedRecovery {
@@ -354,6 +467,19 @@ impl CheckedRecovery {
             self.committed
                 .store(true, std::sync::atomic::Ordering::Release);
         }
+        if let Some(publication) = self
+            .publication
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native publication unavailable"))?
+            .take()
+        {
+            if committed {
+                publication.publish()
+            } else {
+                publication.rollback()
+            }
+            .map_err(|_| anyhow::anyhow!("native projection publication failed"))?;
+        }
         let mut reservation = self
             .reservation
             .lock()
@@ -363,6 +489,76 @@ impl CheckedRecovery {
                 .finish(committed)
                 .map_err(|_| anyhow::anyhow!("recovery accounting failed"))?;
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sea_orm::TransactionTrait;
+
+    #[tokio::test]
+    async fn native_namespace_uses_the_complete_directory_and_preserves_exclusions() -> Result<()> {
+        let db = crate::db::connect("sqlite::memory:").await?;
+        let tx = db.begin().await?;
+        for sql in [
+            "CREATE TABLE tenancy_tenants (id TEXT PRIMARY KEY, revision TEXT, state TEXT, created_at TEXT)",
+            "CREATE TABLE bro_managed_sessions (id TEXT PRIMARY KEY, installation_id TEXT, tenant_id TEXT)",
+            "CREATE TABLE acp_capture_connections (installation_id TEXT)",
+            "WITH RECURSIVE n(i) AS (SELECT 0 UNION ALL SELECT i+1 FROM n WHERE i<1056) INSERT INTO tenancy_tenants SELECT printf('tenant-%04d',i),'r1','active','2026-01-01T00:00:00Z' FROM n",
+            "INSERT INTO bro_managed_sessions SELECT id,'native-inventory',id FROM tenancy_tenants",
+        ] {
+            tx.execute(Statement::from_string(DatabaseBackend::Sqlite, sql))
+                .await?;
+        }
+        let installation = "native-inventory".try_into()?;
+        let tenant = "tenant-1056".try_into()?;
+        let check = || Ok(());
+        native_namespace(&tx, &installation, &tenant, &check).await?;
+        for unknown in [Some("unknown-tenant"), None] {
+            tx.execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE bro_managed_sessions SET tenant_id=? WHERE id='tenant-1056'",
+                [unknown.into()],
+            ))
+            .await?;
+            ensure!(
+                native_namespace(&tx, &installation, &tenant, &check)
+                    .await
+                    .is_err_and(
+                        |error| error.to_string() == "native owner has unknown tenant metadata"
+                    ),
+                "unknown native tenant escaped inventory"
+            );
+        }
+        tx.execute(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "UPDATE bro_managed_sessions SET tenant_id=id",
+        ))
+        .await?;
+        ensure!(
+            native_namespace(&tx, &installation, &"missing".try_into()?, &check)
+                .await
+                .is_err(),
+            "missing source tenant accepted"
+        );
+        tx.execute(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "INSERT INTO acp_capture_connections VALUES (?)",
+            [installation.as_str().into()],
+        ))
+        .await?;
+        ensure!(
+            native_namespace(&tx, &installation, &tenant, &check)
+                .await
+                .is_err_and(|error| error
+                    .downcast_ref::<crate::tenancy::session::Rejected>()
+                    .is_some_and(|error| error.0
+                        == bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch)),
+            "capture history no longer excludes native recovery"
+        );
+        tx.rollback().await?;
         Ok(())
     }
 }

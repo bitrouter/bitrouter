@@ -193,10 +193,17 @@ jobs:
           --lib --no-run --message-format=json > "$RUNNER_TEMP/tenancy-no-core.json"
         fixture_gateway_binary=$(jq -ers '[.[] | select(.reason == "compiler-artifact" and .target.name == "bitrouter" and .profile.test and (.target.kind | index("lib")) and .executable != null) | .executable] | if length == 1 then .[0] else error("expected one gateway libtest") end' "$RUNNER_TEMP/tenancy-no-core.json")
         cp "$fixture_gateway_binary" "$RUNNER_TEMP/tenancy-no-core-test"
+        selector=tenancy::tests::configuration::trajectory_features::producer::guarded_draft_cross_feature_transition
+        # libtest accepts zero matches; require the outer parent as well as its child acknowledgement.
+        "$RUNNER_TEMP/tenancy-core-test" --exact "$selector" --ignored --list \
+          > "$RUNNER_TEMP/tenancy-core-selection.txt"
+        cat "$RUNNER_TEMP/tenancy-core-selection.txt"
+        awk -v expected="$selector: test" '
+          /: test$/ { total++; if ($0 == expected) matched++ }
+          END { exit !(total == 1 && matched == 1) }
+        ' "$RUNNER_TEMP/tenancy-core-selection.txt"
         BITROUTER_TEST_NO_CORE_LIBTEST="$RUNNER_TEMP/tenancy-no-core-test" \
-          "$RUNNER_TEMP/tenancy-core-test" --exact \
-          tenancy::tests::configuration::trajectory_features::producer::guarded_draft_cross_feature_transition \
-          --ignored --nocapture
+          "$RUNNER_TEMP/tenancy-core-test" --exact "$selector" --ignored --nocapture
     - name: verify execution SDK against the headless service
       if: matrix.features == 'core,harness'
       run: cargo test -p bitrouter --no-default-features --features core,harness --test harness_sdk --jobs 2

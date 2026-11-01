@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use std::time::Duration;
 use tokio_util::task::AbortOnDropHandle;
 mod cli;
+mod large;
 mod negative;
 
 const OPERATOR: &str = "offline-eval-test-operator-secret-32-bytes";

@@ -132,7 +132,7 @@ async fn rootless_post_hook_rewrite_cannot_mint_proof_and_does_not_erase_paid_us
         let mut server = Server::start().await?;
         let ready = ready(&server).await?;
         let result: Result<()> = async {
-            let submission = ready.fixture.service.submission(&ready.headers).map_err(failure)?;
+            let submission = ready.fixture.service.submission(&ready.headers).await.map_err(failure)?;
             let execution = ready.fixture.service.admit_execution(submission, MODEL, &ApiProtocol::Responses).await.map_err(failure)?;
             let id = execution.id().clone();
             // This test-only profile adds one real output hook to the retained route,

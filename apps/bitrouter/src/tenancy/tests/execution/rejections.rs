@@ -37,7 +37,7 @@ use crate::{
             types::{PipelineInput, PipelineRequest},
         },
     },
-    tenancy::{Service, actor::OperationLimits, resources::Resources, store},
+    tenancy::{Service, resources::Resources, store},
 };
 
 const CASE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -231,14 +231,8 @@ async fn provision_pair(
         ]
     }))?).await?;
     let snapshot = store::load(&fixture.db, Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     fixture.service.executor = Arc::new(HttpExecutor::new(HttpTimeouts {
         connect: Duration::from_secs(2),
         read: Duration::from_millis(250),
@@ -276,7 +270,11 @@ async fn execute(
         credential.secret.as_deref().context("execution secret")?,
         &revision.revision_id,
     )?;
-    let submission = fixture.service.submission(&headers).map_err(failure)?;
+    let submission = fixture
+        .service
+        .submission(&headers)
+        .await
+        .map_err(failure)?;
     let execution = fixture
         .service
         .admit_execution(submission, MODEL, protocol)

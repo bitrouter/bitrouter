@@ -3,6 +3,7 @@
 use crate::gateway::routing::blocks::control::{BlockDefinition, ControlState, EvolutionMode};
 use crate::gateway::routing::blocks::store::{BlockPolicyStore, CONTROL_KEY, CONTROL_KIND};
 use anyhow::{Result, ensure};
+#[cfg(test)]
 use sea_orm::TransactionTrait;
 pub mod revisions;
 
@@ -19,25 +20,39 @@ impl BlockPolicyStore {
         judge_model: Option<String>,
     ) -> Result<ControlState> {
         self.initialize_control().await?;
-        let tx = self.store.db.begin().await?;
-        let (row, mut state): (_, ControlState) =
-            self.store.lock(&tx, CONTROL_KIND, CONTROL_KEY).await?;
-        state.set_mode(mode, judge_model)?;
-        self.store.save(&tx, row, &state).await?;
-        tx.commit().await?;
-        Ok(state)
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            let (row, mut state): (_, ControlState) = self
+                .store
+                .lock_charged(&mut write, &tx, CONTROL_KIND, CONTROL_KEY)
+                .await?;
+            state.set_mode(mode, judge_model)?;
+            self.store
+                .save_charged(&mut write, &tx, row, &state)
+                .await?;
+            Ok(state)
+        }
+        .await;
+        write.finish(tx, result).await
     }
     /// Changing the evaluator must preserve the mode current at the write,
     /// including an Off selected by another local client.
     pub async fn set_judge_model(&self, model: String) -> Result<ControlState> {
         self.initialize_control().await?;
-        let tx = self.store.db.begin().await?;
-        let (row, mut state): (_, ControlState) =
-            self.store.lock(&tx, CONTROL_KIND, CONTROL_KEY).await?;
-        state.set_mode(state.mode, Some(model))?;
-        self.store.save(&tx, row, &state).await?;
-        tx.commit().await?;
-        Ok(state)
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            let (row, mut state): (_, ControlState) = self
+                .store
+                .lock_charged(&mut write, &tx, CONTROL_KIND, CONTROL_KEY)
+                .await?;
+            state.set_mode(state.mode, Some(model))?;
+            self.store
+                .save_charged(&mut write, &tx, row, &state)
+                .await?;
+            Ok(state)
+        }
+        .await;
+        write.finish(tx, result).await
     }
     /// An operator withdrawal is serialized with admission and publication.
     /// Keep assignments, evaluations, unrelated blocks and mode settings intact.
@@ -46,16 +61,23 @@ impl BlockPolicyStore {
         request: &super::control::restoration::RestoreRequest,
     ) -> Result<crate::gateway::routing::blocks::control::Publication> {
         self.initialize_control().await?;
-        let tx = self.store.db.begin().await?;
-        let (row, mut state): (_, ControlState) =
-            self.store.lock(&tx, CONTROL_KIND, CONTROL_KEY).await?;
-        let previous_generation = state.generation;
-        let publication = state.restore(request)?;
-        if state.generation != previous_generation {
-            self.store.save(&tx, row, &state).await?;
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            let (row, mut state): (_, ControlState) = self
+                .store
+                .lock_charged(&mut write, &tx, CONTROL_KIND, CONTROL_KEY)
+                .await?;
+            let previous_generation = state.generation;
+            let publication = state.restore(request)?;
+            if state.generation != previous_generation {
+                self.store
+                    .save_charged(&mut write, &tx, row, &state)
+                    .await?;
+            }
+            Ok(publication)
         }
-        tx.commit().await?;
-        Ok(publication)
+        .await;
+        write.finish(tx, result).await
     }
     /// The routing adapter supplies a validated, nonsecret dependency digest of
     /// the complete baseline and candidate routes. This primitive never accepts
@@ -83,27 +105,33 @@ impl BlockPolicyStore {
             "routing dependency digest is required"
         );
         self.initialize_control().await?;
-        let tx = self.store.db.begin().await?;
-        let (row, mut state): (_, ControlState) =
-            self.store.lock(&tx, CONTROL_KIND, CONTROL_KEY).await?;
-        if let Some((generation, mode_epoch)) = expected_control {
-            if state
-                .registration(&definition, &routing_config_digest, None)?
-                .is_some()
-            {
-                tx.commit().await?;
-                return Ok(state);
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            let (row, mut state): (_, ControlState) = self
+                .store
+                .lock_charged(&mut write, &tx, CONTROL_KIND, CONTROL_KEY)
+                .await?;
+            if let Some((generation, mode_epoch)) = expected_control {
+                if state
+                    .registration(&definition, &routing_config_digest, None)?
+                    .is_some()
+                {
+                    return Ok(state);
+                }
+                ensure!(
+                    state.generation == generation && state.mode_epoch == mode_epoch,
+                    "evolution settings changed since preview; review the candidate again"
+                );
             }
-            ensure!(
-                state.generation == generation && state.mode_epoch == mode_epoch,
-                "evolution settings changed since preview; review the candidate again"
-            );
+            precondition()?;
+            state.register(definition, routing_config_digest)?;
+            self.store
+                .save_charged(&mut write, &tx, row, &state)
+                .await?;
+            Ok(state)
         }
-        precondition()?;
-        state.register(definition, routing_config_digest)?;
-        self.store.save(&tx, row, &state).await?;
-        tx.commit().await?;
-        Ok(state)
+        .await;
+        write.finish(tx, result).await
     }
 }
 

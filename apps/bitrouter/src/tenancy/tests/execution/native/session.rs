@@ -66,7 +66,7 @@ async fn file_fixture_profile(
     let db = crate::db::connect_tenancy(&url, &owner).await?;
     // Provision the encrypted resources on this leased file from the start.
     // An in-memory connection's VACUUM INTO can retain SQLITE_OPEN_MEMORY.
-    let fixture = Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db, &mut |_| {}).await?;
     let (mut fixture, route, slot) =
         crate::tenancy::tests::execution::provision_protocol_with_fixture(
             fixture,
@@ -127,7 +127,6 @@ async fn file_fixture_profile(
     fixture.service = Service::start_prepared(
         fixture.db.clone(),
         Some(owner),
-        OperationLimits::default(),
         snapshot,
         Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
     )

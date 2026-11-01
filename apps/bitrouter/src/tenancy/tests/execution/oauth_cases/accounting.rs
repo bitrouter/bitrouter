@@ -21,6 +21,7 @@ async fn auxiliary_unknown_does_not_erase_actual_model_usage_or_create_a_model_a
                 .fixture
                 .service
                 .submission(&harness.headers)
+                .await
                 .map_err(failure)?,
             MODEL,
             &ApiProtocol::Messages,
@@ -90,12 +91,7 @@ async fn auxiliary_unknown_does_not_erase_actual_model_usage_or_create_a_model_a
         &harness.fixture.installation,
     )
     .await?;
-    ensure!(
-        before.rows == 1
-            && before.unknown.len() == 1
-            && before.unknown[0].0 == harness.fixture.tenant
-            && before.unknown[0].1 == id
-    );
+    ensure!(before.rows == 1 && before.unknown_count == 1 && unknown_key(&harness, &id).await?);
     drop((pipeline, execution, owner));
     tokio::time::timeout(TIMEOUT, harness.fixture.service.shutdown()).await??;
     tokio::time::timeout(TIMEOUT, harness.fixture.service.admission.wait_drained()).await?;
@@ -106,7 +102,10 @@ async fn auxiliary_unknown_does_not_erase_actual_model_usage_or_create_a_model_a
     )
     .await?;
     ensure!(
-        before.bytes == after.bytes && before.rows == after.rows && before.unknown == after.unknown
+        before.bytes == after.bytes
+            && before.rows == after.rows
+            && before.unknown_count == after.unknown_count
+            && before.unknown_digest == after.unknown_digest
     );
     ensure!(
         harness.provider.refreshes.load(Ordering::SeqCst) == 0
@@ -132,7 +131,29 @@ async fn auxiliary_presence_and_unknown_projection_are_checked_on_lookup_and_res
     )
     .await?;
     let slots = storage::inventory(&harness.fixture.db, &harness.fixture.installation).await?;
-    ensure!(slots >= 512 * 1024 && before.bytes > slots && before.rows == 1);
+    let backing = harness.fixture.db.query_one(sea_orm::Statement::from_sql_and_values(
+        harness.fixture.db.get_database_backend(),
+        "SELECT length(CAST(r.receipt_json AS BLOB))+length(CAST(r.disposition_json AS BLOB))+length(CAST(a.evidence_json AS BLOB))+COALESCE(length(CAST(u.evidence_json AS BLOB)),0) AS encoded_bytes,1+(u.execution_id IS NOT NULL) AS evidence_rows,(SELECT SUM(length(CAST(metadata_json AS BLOB))+length(CAST(payload_json AS BLOB))) FROM tenancy_oauth_slots WHERE installation_id=r.installation_id) AS oauth_encoded_bytes FROM tenancy_execution_receipts r JOIN tenancy_receipt_auxiliary a USING(installation_id,tenant_id,execution_id) LEFT JOIN tenancy_usage_evidence u USING(installation_id,tenant_id,execution_id) WHERE r.installation_id=? AND r.tenant_id=? AND r.execution_id=? AND r.storage_kind=0",
+        [harness.fixture.installation.as_str().into(), harness.fixture.tenant.as_str().into(), id.as_str().into()],
+    )).await?.context("inline receipt and auxiliary backing")?;
+    let encoded = u64::try_from(backing.try_get::<i64>("", "encoded_bytes")?)?;
+    let evidence_rows = u64::try_from(backing.try_get::<i64>("", "evidence_rows")?)?;
+    // Canonical receipt accounting includes each sidecar's fixed allowance;
+    // OAuth's maximum slot envelope is a separate durable-storage estimate.
+    let canonical = encoded + evidence_rows * 16 * 1024;
+    ensure!(before.rows == 1 && before.bytes == canonical);
+    ensure!(
+        before.live_bytes == canonical + crate::tenancy::receipts::capacity::ROW_OVERHEAD
+            && before.history_bytes == 0
+            && before.history_rows == 0
+    );
+    let oauth_encoded = u64::try_from(backing.try_get::<i64>("", "oauth_encoded_bytes")?)?;
+    ensure!(
+        slots >= 512 * 1024
+            && before.oauth_bytes == slots
+            && oauth_encoded > 0
+            && oauth_encoded <= slots
+    );
     for sql in [
         "DELETE FROM tenancy_receipt_auxiliary",
         "UPDATE tenancy_receipt_auxiliary SET unknown_outcome=1",
@@ -208,11 +229,7 @@ async fn durable_started_slot_without_receipt_and_later_unknown_receipt_share_on
         &harness.fixture.installation,
     )
     .await?;
-    ensure!(
-        pending.unknown.len() == 1
-            && pending.unknown[0].0 == harness.fixture.tenant
-            && pending.unknown[0].1 == work.execution
-    );
+    ensure!(pending.unknown_count == 1 && unknown_key(&harness, &work.execution).await?);
     harness.provider.refresh_gate.add_permits(1);
     let response = tokio::time::timeout(TIMEOUT, caller).await???;
     ensure!(!response.status().is_success());
@@ -224,7 +241,7 @@ async fn durable_started_slot_without_receipt_and_later_unknown_receipt_share_on
         &harness.fixture.installation,
     )
     .await?;
-    ensure!(settled.unknown.len() == 1 && settled.rows == 1 && settled.unknown[0].1 == id);
+    ensure!(settled.unknown_count == 1 && settled.rows == 1 && unknown_key(&harness, &id).await?);
     ensure!(
         storage::pending_unknown(&harness.fixture.db, &harness.fixture.installation)
             .await?
@@ -265,7 +282,7 @@ async fn coherent_auxiliary_projection_corruption_cannot_discharge_pending_refre
     let receipt = harness.receipt(&id).await?;
     ensure!(receipt.attempts.is_empty() && receipt.state == ReceiptState::Incomplete);
     let inventory = receipts::inventory(&harness.fixture.db, &harness.fixture.installation).await?;
-    ensure!(inventory.unknown.len() == 1 && inventory.unknown[0].1 == id);
+    ensure!(inventory.unknown_count == 1 && unknown_key(&harness, &id).await?);
     let fields = Query::select()
         .column(Alias::new("evidence_json"))
         .from(Alias::new("tenancy_receipt_auxiliary"))
@@ -370,7 +387,7 @@ async fn coherent_auxiliary_projection_corruption_cannot_discharge_pending_refre
         ensure!(receipts::inventory(&harness.fixture.db, &harness.fixture.installation).await.is_err());
         ensure!(storage::pending_unknown(&harness.fixture.db, &harness.fixture.installation).await.is_err());
         let restarted = tokio::time::timeout(TIMEOUT, Service::start_prepared(
-            harness.fixture.db.clone(), None, Default::default(),
+            harness.fixture.db.clone(), None,
             crate::tenancy::store::load(&harness.fixture.db, chrono::Utc::now()).await?,
             harness.resources.clone(),
         )).await?;
@@ -416,7 +433,11 @@ async fn coherent_auxiliary_projection_corruption_cannot_discharge_pending_refre
         ensure!(serde_json::to_vec(&harness.receipt(&id).await?)? == serde_json::to_vec(&receipt)?);
         let restored =
             receipts::inventory(&harness.fixture.db, &harness.fixture.installation).await?;
-        ensure!(restored.bytes == inventory.bytes && restored.unknown == inventory.unknown);
+        ensure!(
+            restored.bytes == inventory.bytes
+                && restored.unknown_count == inventory.unknown_count
+                && restored.unknown_digest == inventory.unknown_digest
+        );
         ensure!(
             storage::pending_unknown(&harness.fixture.db, &harness.fixture.installation)
                 .await?
@@ -433,4 +454,145 @@ async fn coherent_auxiliary_projection_corruption_cannot_discharge_pending_refre
     outcome?;
     restored?;
     closed
+}
+
+async fn unknown_key(
+    harness: &Harness,
+    id: &bitrouter_ai::tenancy::identity::ExecutionId,
+) -> Result<bool> {
+    use crate::tenancy::receipts::store::obligations;
+    Ok(obligations::lookup(
+        &harness.fixture.db,
+        &harness.fixture.installation,
+        &obligations::Key {
+            tenant: harness.fixture.tenant.clone(),
+            execution: id.clone(),
+        },
+        &|_, _| Ok(()),
+    )
+    .await?
+    .is_some())
+}
+
+#[cfg(all(unix, any(feature = "otel-http", feature = "otel-grpc")))]
+async fn stored_payload_size(h: &Harness) -> Result<u64> {
+    let row = h
+        .fixture
+        .db
+        .query_one(sea_orm::Statement::from_string(
+            h.fixture.db.get_database_backend(),
+            "SELECT length(CAST(payload_json AS BLOB)) AS bytes FROM tenancy_oauth_slots",
+        ))
+        .await?
+        .context("OAuth payload length")?;
+    Ok(u64::try_from(row.try_get::<i64>("", "bytes")?)?)
+}
+
+#[cfg(all(unix, any(feature = "otel-http", feature = "otel-grpc")))]
+#[tokio::test]
+async fn actual_small_and_large_old_oauth_envelopes_cover_sampled_file_growth() -> Result<()> {
+    use crate::storage::write::measurement;
+    use crate::tenancy::transaction::Phase;
+    let encoded = u64::try_from(2 * (crate::tenancy::oauth::profile::PAYLOAD_BYTES + 16 * 1024))?;
+    let expected = crate::tenancy::storage::estimate(encoded)
+        .map_err(|code| anyhow::anyhow!("estimate: {code:?}"))?;
+    for large in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("oauth-calibration.sqlite");
+        let seed = if large {
+            "a".repeat(crate::tenancy::oauth::profile::TOKEN_BYTES)
+        } else {
+            "seed-access".into()
+        };
+        let mut h = Harness::with_seed_access(true, false, Some(&path), None, Some(&seed)).await?;
+        let db = h.fixture.db.clone();
+        let result: Result<()> = async {
+            let budget = h.fixture.service.storage_budget();
+            ensure!(measurement::reservation(&budget)? == 0);
+            let old_bytes = stored_payload_size(&h).await?;
+            let before = measurement::wal_baseline(&db, &path).await?;
+            let start = h.fixture.service.cleanup.hold(Phase::Committing);
+            let request = h.send(&Harness::client(false)?, false);
+            let caller = AbortOnDropHandle::new(tokio::spawn(async move {
+                let response = request.send().await?;
+                ensure!(response.status() == StatusCode::OK);
+                let id = execution_id(&response)?;
+                response.bytes().await?;
+                Ok::<_, anyhow::Error>(id)
+            }));
+            tokio::time::timeout(TIMEOUT, start.entered.notified()).await?;
+            let charged = measurement::reservation(&budget)?;
+            let pending = measurement::files(&path)?;
+            ensure!(charged == expected && h.provider.refreshes.load(Ordering::SeqCst) == 0);
+            h.fixture.service.cleanup.release_gate();
+            tokio::time::timeout(TIMEOUT, h.refresh_seen.recv())
+                .await?
+                .context("actual refresh POST")?;
+            ensure!(measurement::reservation(&budget)? == 0);
+            ensure!(
+                measurement::report(
+                    &db,
+                    &path,
+                    &format!("oauth/start/large={large}"),
+                    &before,
+                    pending,
+                    charged
+                )
+                .await?
+                    == encoded
+            );
+
+            let before = measurement::wal_baseline(&db, &path).await?;
+            let commit = h.fixture.service.cleanup.hold(Phase::Committing);
+            h.provider.refresh_gate.add_permits(1);
+            tokio::time::timeout(TIMEOUT, commit.entered.notified()).await?;
+            let charged = measurement::reservation(&budget)?;
+            let pending = measurement::files(&path)?;
+            ensure!(charged == expected && h.provider.models.load(Ordering::SeqCst) == 0);
+            h.fixture.service.cleanup.release_gate();
+            tokio::time::timeout(TIMEOUT, h.model_seen.recv())
+                .await?
+                .context("model after replacement ACK")?;
+            ensure!(measurement::reservation(&budget)? == 0);
+            ensure!(
+                measurement::report(
+                    &db,
+                    &path,
+                    &format!("oauth/replacement/large={large}"),
+                    &before,
+                    pending,
+                    charged
+                )
+                .await?
+                    == encoded
+            );
+            let saved = h.row().await?;
+            ensure!(
+                saved.metadata.generation == 1
+                    && matches!(saved.metadata.state, storage::State::Ready)
+            );
+            if large {
+                ensure!(stored_payload_size(&h).await? < old_bytes);
+            }
+            eprintln!("caller calibration oauth large={large} old_ciphertext_bytes={old_bytes} new_ciphertext_bytes={}", stored_payload_size(&h).await?);
+            h.provider.model_gate.add_permits(1);
+            let id = tokio::time::timeout(TIMEOUT, caller).await???;
+            ensure!(h.receipt(&id).await?.outcome == Outcome::Completed);
+            Ok(())
+        }
+        .await;
+        h.fixture.service.cleanup.release_gate();
+        h.provider.refresh_gate.add_permits(1);
+        h.provider.model_gate.add_permits(1);
+        let stopped = h.fixture.service.shutdown().await;
+        let servers = h.close().await;
+        let closed = db.close().await;
+        let removed = directory.close();
+        result?;
+        stopped?;
+        servers?;
+        closed?;
+        removed?;
+    }
+    Ok(())
 }

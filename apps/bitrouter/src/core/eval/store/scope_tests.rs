@@ -19,6 +19,7 @@ fn tenant(
         db: db.clone(),
         scope,
         provenance,
+        storage_budget: None,
     })
 }
 

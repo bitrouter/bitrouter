@@ -32,6 +32,76 @@ pub(super) struct Evidence {
     pub fenced: bool,
 }
 
+/// Borrowed, read-only preparation connection. Each awaited statement keeps its
+/// actual owner; cancellation prevents the next SQL statement after it settles.
+pub(super) struct ReadConnection<'a> {
+    transaction: &'a DatabaseTransaction,
+    control: &'a Control,
+}
+
+impl<'a> ReadConnection<'a> {
+    pub fn new(transaction: &'a DatabaseTransaction, control: &'a Control) -> Self {
+        Self {
+            transaction,
+            control,
+        }
+    }
+    fn check(&self) -> std::result::Result<(), DbErr> {
+        self.control
+            .check_read()
+            .map_err(|_| DbErr::Custom("preparation stopped".into()))
+    }
+}
+
+#[async_trait::async_trait]
+impl sea_orm::ConnectionTrait for ReadConnection<'_> {
+    fn get_database_backend(&self) -> sea_orm::DatabaseBackend {
+        self.transaction.get_database_backend()
+    }
+    async fn execute(
+        &self,
+        _statement: sea_orm::Statement,
+    ) -> std::result::Result<sea_orm::ExecResult, DbErr> {
+        Err(DbErr::Custom(
+            "write attempted during read preparation".into(),
+        ))
+    }
+    async fn execute_unprepared(
+        &self,
+        _sql: &str,
+    ) -> std::result::Result<sea_orm::ExecResult, DbErr> {
+        Err(DbErr::Custom(
+            "write attempted during read preparation".into(),
+        ))
+    }
+    async fn query_one(
+        &self,
+        statement: sea_orm::Statement,
+    ) -> std::result::Result<Option<sea_orm::QueryResult>, DbErr> {
+        self.check()?;
+        let result = self.transaction.query_one(statement).await;
+        if result.is_err() {
+            self.control.storage_failed();
+        }
+        let result = result?;
+        self.check()?;
+        Ok(result)
+    }
+    async fn query_all(
+        &self,
+        statement: sea_orm::Statement,
+    ) -> std::result::Result<Vec<sea_orm::QueryResult>, DbErr> {
+        self.check()?;
+        let result = self.transaction.query_all(statement).await;
+        if result.is_err() {
+            self.control.storage_failed();
+        }
+        let result = result?;
+        self.check()?;
+        Ok(result)
+    }
+}
+
 /// Joining the worker is insufficient without its explicit transaction outcome.
 pub(super) struct Proof {
     state: watch::Sender<Evidence>,
@@ -142,6 +212,9 @@ pub(super) struct Control {
     proof: Arc<Proof>,
     progress: watch::Sender<Progress>,
     stopped: AtomicBool,
+    preparing_read: AtomicBool,
+    storage: Option<super::storage::Budget>,
+    write_charge: std::sync::Mutex<Option<super::storage::Charge>>,
 }
 
 #[derive(Debug)]
@@ -166,6 +239,49 @@ impl Control {
             })
             .0,
             stopped: AtomicBool::new(false),
+            preparing_read: AtomicBool::new(false),
+            storage: None,
+            write_charge: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn with_storage(mut self, storage: super::storage::Budget) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
+    /// Called before a mutating BEGIN, after any read-only preparation settles.
+    /// The existing H owner retains this charge through timeout and cancellation.
+    pub fn reserve_write(
+        &self,
+        encoded_bytes: usize,
+        maintenance: bool,
+    ) -> std::result::Result<(), bitrouter_ai::tenancy::operation::ErrorCode> {
+        use bitrouter_ai::tenancy::operation::ErrorCode;
+        let Some(storage) = &self.storage else {
+            return Ok(());
+        };
+        let mut charge = self
+            .write_charge
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        if charge.is_some() {
+            self.proof.quarantine();
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        let mut reserved = storage.reserve(encoded_bytes, maintenance)?;
+        if self.phase() == Phase::Active {
+            // Some startup transactions validate before their optional write.
+            // No mutation may precede this reservation.
+            reserved.start();
+        }
+        *charge = Some(reserved);
+        Ok(())
+    }
+
+    pub fn storage_failed(&self) {
+        if let Some(storage) = &self.storage {
+            storage.fence();
         }
     }
 
@@ -175,6 +291,22 @@ impl Control {
 
     pub fn phase(&self) -> Phase {
         self.progress.borrow().phase
+    }
+
+    /// Management preparation owns read transaction cleanup but no durable write
+    /// intent. Its watchdog may stop reads while retaining actual SQL custody.
+    pub fn prepare_read(&self) {
+        self.preparing_read.store(true, Ordering::Release);
+    }
+
+    pub fn preparing_read(&self) -> bool {
+        self.preparing_read.load(Ordering::Acquire)
+    }
+
+    pub fn finish_preparation(&self) -> Result<()> {
+        self.check_read()?;
+        self.preparing_read.store(false, Ordering::Release);
+        Ok(())
     }
 
     pub fn stop_read(&self) {
@@ -221,6 +353,21 @@ impl Control {
     }
 
     fn complete(&self, disposition: Disposition) {
+        if matches!(
+            disposition,
+            Disposition::NoTransaction | Disposition::RolledBack | Disposition::Committed
+        ) {
+            match self.write_charge.lock() {
+                Ok(mut charge) => {
+                    if let Some(charge) = charge.take()
+                        && charge.complete().is_err()
+                    {
+                        self.proof.quarantine();
+                    }
+                }
+                Err(_) => self.proof.quarantine(),
+            }
+        }
         self.proof.record(disposition);
         self.progress.send_modify(|state| {
             state.phase = Phase::Settled;
@@ -229,7 +376,13 @@ impl Control {
     }
 
     pub async fn begin(&self, db: &DatabaseConnection) -> Result<DatabaseTransaction> {
-        self.begin_configured(db, None).await
+        self.begin_configured(db, None, false).await
+    }
+
+    /// Only a terminal receipt may reconcile a typed failure before BEGIN.
+    /// Existing storage/probe fences remain monotonic; SQL ambiguity still fences.
+    pub async fn begin_receipt(&self, db: &DatabaseConnection) -> Result<DatabaseTransaction> {
+        self.begin_configured(db, None, true).await
     }
 
     pub async fn begin_repeatable_read(
@@ -239,14 +392,26 @@ impl Control {
         use sea_orm::ConnectionTrait;
         let isolation = (db.get_database_backend() != sea_orm::DatabaseBackend::Sqlite)
             .then_some(sea_orm::IsolationLevel::RepeatableRead);
-        self.begin_configured(db, isolation).await
+        self.begin_configured(db, isolation, false).await
     }
 
     async fn begin_configured(
         &self,
         db: &DatabaseConnection,
         isolation: Option<sea_orm::IsolationLevel>,
+        receipt: bool,
     ) -> Result<DatabaseTransaction> {
+        match self.write_charge.lock() {
+            Ok(mut charge) => {
+                if let Some(charge) = charge.as_mut() {
+                    charge.start();
+                }
+            }
+            Err(_) => {
+                self.proof.quarantine();
+                anyhow::bail!("storage estimate ownership unavailable");
+            }
+        }
         self.proof.record(Disposition::Pending);
         self.enter(Phase::Beginning).await;
         // SeaORM constructs an open transaction before configuring isolation.
@@ -264,10 +429,14 @@ impl Control {
                 Ok(transaction)
             }
             Err(error) => {
+                let no_transaction = matches!(&error, DbErr::ConnectionAcquire(_));
+                if !receipt || !no_transaction {
+                    self.storage_failed();
+                }
                 // The typed pool-acquire failure precedes transaction construction.
                 // Other begin failures may drop an already-open transaction.
                 // https://docs.rs/sea-orm/1.1.20/src/sea_orm/driver/sqlx_sqlite.rs.html
-                self.complete(if matches!(&error, DbErr::ConnectionAcquire(_)) {
+                self.complete(if no_transaction {
                     Disposition::NoTransaction
                 } else {
                     Disposition::Ambiguous
@@ -292,6 +461,9 @@ impl Control {
             .map(|o| o.span(crate::telemetry::receipt_latency::Phase::SqlCommit))
             .unwrap_or_default();
         let result = transaction.commit().await;
+        if result.is_err() {
+            self.storage_failed();
+        }
         let observation = span.stop(if result.is_ok() {
             crate::telemetry::receipt_latency::ResultKind::Acknowledged
         } else {
@@ -313,6 +485,9 @@ impl Control {
         self.start_cleanup();
         self.enter(Phase::RollingBack).await;
         let result = transaction.rollback().await;
+        if result.is_err() {
+            self.storage_failed();
+        }
         #[cfg(test)]
         if result.is_ok() {
             self.proof

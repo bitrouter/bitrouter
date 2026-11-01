@@ -11,9 +11,7 @@ use crate::storage::capture::{CaptureEvent, CaptureKind};
 
 use anyhow::{Context, Result, ensure};
 use sea_orm::sea_query::Expr;
-use sea_orm::{
-    ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
-};
+use sea_orm::{ColumnTrait, DatabaseTransaction, EntityTrait, QueryFilter, QueryOrder};
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
@@ -64,9 +62,12 @@ pub struct EvolutionScheduler {
 async fn feedback_epoch(
     store: &EvolutionStore,
     tx: &DatabaseTransaction,
+    write: &mut crate::storage::write::Write,
     expected: &ControlState,
 ) -> Result<()> {
-    let (_, current): (_, ControlState) = store.lock(tx, CONTROL_KIND, CONTROL_KEY).await?;
+    let (_, current): (_, ControlState) = store
+        .lock_charged(write, tx, CONTROL_KIND, CONTROL_KEY)
+        .await?;
     ensure!(
         current.mode != EvolutionMode::Off
             && current.mode == expected.mode
@@ -344,12 +345,13 @@ impl EvolutionScheduler {
             });
         let ready = stopped && open.is_empty();
         if ready {
-            let canonical = CanonicalStore::new(self.runtime.db.clone());
+            let canonical = CanonicalStore::new(self.runtime.db.clone())
+                .with_storage_budget(self.runtime.storage_budget.clone());
             let expected = state.clone();
             let store = service.store.clone();
             let cp = canonical
-                .freeze_checkpoint_checked(&identity, row.head, move |tx| {
-                    Box::pin(async move { feedback_epoch(&store, tx, &expected).await })
+                .freeze_checkpoint_checked(&identity, row.head, move |tx, write| {
+                    Box::pin(async move { feedback_epoch(&store, tx, write, &expected).await })
                 })
                 .await?;
             cursor.checkpoint_id = Some(cp.checkpoint_id.clone());
@@ -370,43 +372,51 @@ impl EvolutionScheduler {
         }
         cursor.scanned_watermark = row.head;
         cursor.updated_at = chrono::Utc::now().to_rfc3339();
-        let tx = self.runtime.db.begin().await?;
-        feedback_epoch(&service.store, &tx, state).await?;
-        sessions::Entity::update_many()
-            .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
-            .col_expr(
-                sessions::Column::Head,
-                Expr::col(sessions::Column::Head).into(),
-            )
-            .filter(sessions::Column::SessionKey.eq(&row.session_key))
-            .exec(&tx)
-            .await?;
-        ensure!(
-            sessions::Entity::find_by_id(&row.session_key)
+        let (mut write, tx) = service.store.begin_write(false).await?;
+        let result = async {
+            feedback_epoch(&service.store, &tx, &mut write, state).await?;
+            write.session(&tx, &row.session_key).await?;
+            sessions::Entity::update_many()
                 .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
-                .one(&tx)
-                .await?
-                .as_ref()
-                == Some(row),
-            "canonical head changed during checkpoint discovery"
-        );
-        service
-            .store
-            .initialize_in(
-                &tx,
-                CURSOR_KIND,
-                &row.session_key,
-                Some(row.session_key.clone()),
-                &cursor,
-            )
-            .await?;
-        let (stored_row, _): (_, SessionSchedule) = service
-            .store
-            .lock(&tx, CURSOR_KIND, &row.session_key)
-            .await?;
-        service.store.save(&tx, stored_row, &cursor).await?;
-        tx.commit().await?;
-        Ok(ready)
+                .col_expr(
+                    sessions::Column::Head,
+                    Expr::col(sessions::Column::Head).into(),
+                )
+                .filter(sessions::Column::SessionKey.eq(&row.session_key))
+                .exec(&tx)
+                .await?;
+            ensure!(
+                sessions::Entity::find_by_id(&row.session_key)
+                    .filter(crate::storage::legacy::scope("acp_canonical_sessions"))
+                    .one(&tx)
+                    .await?
+                    .as_ref()
+                    == Some(row),
+                "canonical head changed during checkpoint discovery"
+            );
+            service
+                .store
+                .initialize_charged(
+                    &mut write,
+                    &tx,
+                    CURSOR_KIND,
+                    &row.session_key,
+                    Some(row.session_key.clone()),
+                    &cursor,
+                )
+                .await?;
+            let (stored_row, _): (_, SessionSchedule) = service
+                .store
+                .lock_charged(&mut write, &tx, CURSOR_KIND, &row.session_key)
+                .await?;
+            service
+                .store
+                .save_charged(&mut write, &tx, stored_row, &cursor)
+                .await?;
+            Ok(ready)
+        }
+        .await;
+        write.finish(tx, result).await
     }
 
     async fn judges(
@@ -416,7 +426,8 @@ impl EvolutionScheduler {
         report: &mut PassReport,
     ) -> Result<()> {
         let jobs = JudgeJobs::new(service.store.clone());
-        let canonical = CanonicalStore::new(self.runtime.db.clone());
+        let canonical = CanonicalStore::new(self.runtime.db.clone())
+            .with_storage_budget(self.runtime.storage_budget.clone());
         for job in jobs.list().await? {
             // Explicit one-shot CLI evaluations are never adopted by this worker.
             let Some(epoch) = job.mode_epoch else {
@@ -473,7 +484,8 @@ impl EvolutionScheduler {
     }
 
     async fn refresh_resources(&self, service: &BlockPolicyStore) -> Result<()> {
-        let canonical = CanonicalStore::new(self.runtime.db.clone());
+        let canonical = CanonicalStore::new(self.runtime.db.clone())
+            .with_storage_budget(self.runtime.storage_budget.clone());
         for (_, _, enrollment) in service
             .store
             .list::<crate::gateway::routing::blocks::store::SessionEnrollment>(

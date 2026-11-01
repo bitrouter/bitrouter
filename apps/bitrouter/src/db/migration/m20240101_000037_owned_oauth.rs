@@ -96,6 +96,31 @@ fn index(spec: &Spec) -> Option<IndexCreateStatement> {
     }
     Some(index.to_owned())
 }
+
+pub(super) fn sqlite_definitions() -> Vec<TableCreateStatement> {
+    SPECS
+        .iter()
+        .map(|spec| definition(spec, DatabaseBackend::Sqlite))
+        .collect()
+}
+
+/// Exact format-1 SQLite layout; never accepts added projection columns.
+pub(super) async fn validate_legacy(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    super::m20240101_000043_unknown_obligations::catalog::validate_legacy(db).await
+}
+
+/// Select one complete SQLite profile, with no fallback on validation failure.
+pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    if db.get_database_backend() != DatabaseBackend::Sqlite {
+        return Err(incompatible());
+    }
+    if super::m20240101_000043_unknown_obligations::catalog::present(db).await? {
+        super::m20240101_000043_unknown_obligations::validate(db).await
+    } else {
+        validate_legacy(db).await
+    }
+}
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {

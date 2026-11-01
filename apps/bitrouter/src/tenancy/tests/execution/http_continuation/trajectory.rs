@@ -57,14 +57,8 @@ pub(super) async fn guarded(provider: &Server, mode: LearningMode) -> Result<Rea
         ]
     }))?).await?;
     let snapshot = crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        Default::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     let mut input = fixture.configuration_input("http-guarded-configuration")?;
     input.document.routes = vec![route.clone()];
     input.document.policy = Some(policy);

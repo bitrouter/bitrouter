@@ -146,7 +146,7 @@ async fn server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict(
                     && tail.next_after.is_none()
             );
             transaction.rollback().await?;
-            let counts = inventory(&db, &first.receipt.installation_id).await?;
+            let counts = canonical_inventory(&db, &first.receipt.installation_id).await?;
             ensure!(counts.rows == 3 && counts.unknown.is_empty());
             let before = lookup(
                 &db,
@@ -209,7 +209,7 @@ async fn server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict(
                 },
             )?;
             ensure!(commit(&reopened, &unknown).await?);
-            let inventory = inventory(&reopened, &first.receipt.installation_id).await?;
+            let inventory = canonical_inventory(&reopened, &first.receipt.installation_id).await?;
             ensure!(
                 inventory.rows == 7
                     && inventory.unknown.len() == 2
@@ -260,4 +260,32 @@ async fn server_receipts_commit_rollback_reconnect_scope_and_immutable_conflict(
     cleanup?;
     closed?;
     result
+}
+
+// Owned capacity/obligation projections are a SQLite service profile. These
+// server-store checks keep testing canonical rows and auxiliary classification.
+struct CanonicalInventory {
+    rows: u64,
+    unknown: Vec<(TenantId, ExecutionId)>,
+}
+async fn canonical_inventory(
+    db: &DatabaseConnection,
+    installation: &InstallationId,
+) -> Result<CanonicalInventory> {
+    let mut result = CanonicalInventory {
+        rows: 0,
+        unknown: Vec::new(),
+    };
+    super::super::inventory::scan(db, installation, |candidate| {
+        result.rows += 1;
+        if candidate.unknown() || candidate.auxiliary_unknown() {
+            result.unknown.push((
+                candidate.receipt.tenant_id.clone(),
+                candidate.receipt.execution_id.clone(),
+            ));
+        }
+        Ok(())
+    })
+    .await?;
+    Ok(result)
 }

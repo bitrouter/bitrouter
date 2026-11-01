@@ -49,6 +49,7 @@ pub mod routing_table;
 pub mod server_tools;
 pub(crate) mod shared_process;
 pub mod skills;
+pub mod startup;
 pub mod tenancy;
 pub(crate) mod yaml;
 
@@ -372,6 +373,8 @@ pub struct AgentApiConfig {
     pub token_env: String,
     /// Exact server-owned workspace paths admitted for task submission.
     pub workspaces: Vec<std::path::PathBuf>,
+    /// Shared native startup budgets, also effective when HTTP is disabled.
+    pub startup: startup::StartupConfig,
 }
 
 impl Default for AgentApiConfig {
@@ -381,6 +384,7 @@ impl Default for AgentApiConfig {
             listen: "127.0.0.1:4359".into(),
             token_env: String::new(),
             workspaces: Vec::new(),
+            startup: startup::StartupConfig::default(),
         }
     }
 }
@@ -1847,6 +1851,11 @@ pub(crate) fn parse_resolved(document: &str) -> Result<Config> {
     config.validate_router_config()?;
     validate_trajectory_config(&config.trajectory)?;
     validate_continuation_config(&config.continuation)?;
+    config
+        .agent_api
+        .startup
+        .validate()
+        .map_err(BitrouterError::bad_request)?;
     // SSRF defence (v0 audit S4): refuse a config that asks bitrouter to
     // route at a loopback / private / metadata URL. A typo or a malicious
     // YAML otherwise has the executor send every upstream request — and

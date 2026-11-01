@@ -53,6 +53,108 @@ fn lease_and_controller_are_send_sync() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn configured_execution_budget_can_cross_the_old_instance_limit() -> Result<()> {
+    let mut config = crate::config::tenancy::capacity::CapacityConfig::default();
+    config.execution.instance_active = 160;
+    config.execution.tenant_active = 40;
+    config.execution.instance_queue = 0;
+    config.execution.tenant_queue = 0;
+    config.validate()?;
+    let admission = Admission::configured(&config);
+    let requested = limits(128, 0);
+    let mut leases = Vec::new();
+    for index in 0..4 {
+        let tenant: TenantId = format!("configured-{index}").try_into()?;
+        for _ in 0..40 {
+            leases.push(
+                admission
+                    .acquire(&tenant, &requested)
+                    .await
+                    .map_err(failure)?,
+            );
+        }
+        ensure!(matches!(
+            admission.acquire(&tenant, &requested).await,
+            Err(ErrorCode::CapacityExceeded)
+        ));
+    }
+    ensure!(totals(&admission) == (160, 0, 4));
+    let extra: TenantId = "extra".try_into()?;
+    ensure!(matches!(
+        admission.acquire(&extra, &requested).await,
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    drop(leases.pop());
+    let replacement = admission
+        .acquire(&extra, &requested)
+        .await
+        .map_err(failure)?;
+    drop((replacement, leases));
+    admission.wait_drained().await;
+    ensure!(totals(&admission) == (0, 0, 0));
+    Ok(())
+}
+
+#[test]
+fn ingress_enforces_configured_count_and_bytes_independently() -> Result<()> {
+    let mut config = crate::config::tenancy::capacity::CapacityConfig::default();
+    config.ingress.requests = 2;
+    config.ingress.bytes = 20;
+    config.validate()?;
+    let admission = Admission::configured(&config);
+    let first = admission.ingress(19).map_err(failure)?;
+    ensure!(matches!(
+        admission.ingress(2),
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    let second = admission.ingress(1).map_err(failure)?;
+    ensure!(matches!(
+        admission.ingress(0),
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    drop(second);
+    let second = admission.ingress(0).map_err(failure)?;
+    ensure!(matches!(
+        admission.ingress(0),
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    drop((first, second));
+    ensure!(admission.ingress_for_test().map_err(failure)? == (0, 0, 0, 0));
+    let ceiling = admission.ingress(16 * 1024 * 1024 + 1);
+    ensure!(matches!(ceiling, Err(ErrorCode::PayloadTooLarge)));
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn queue_uses_operator_wait_budget_and_request_deadline() -> Result<()> {
+    let mut config = crate::config::tenancy::capacity::CapacityConfig::default();
+    config.execution.instance_active = 1;
+    config.execution.tenant_active = 1;
+    config.execution.queue_wait_ms = 20;
+    config.validate()?;
+    let admission = Admission::configured(&config);
+    let tenant: TenantId = "wait-budget".try_into()?;
+    let requested = limits(1, 2);
+    let active = admission
+        .acquire(&tenant, &requested)
+        .await
+        .map_err(failure)?;
+    let mut pending = Box::pin(admission.acquire_until(
+        &tenant,
+        &requested,
+        tokio::time::Instant::now() + Duration::from_secs(30),
+    ));
+    ensure!(matches!(poll!(pending.as_mut()), Poll::Pending));
+    tokio::time::advance(Duration::from_millis(19)).await;
+    ensure!(matches!(poll!(pending.as_mut()), Poll::Pending));
+    tokio::time::advance(Duration::from_millis(1)).await;
+    ensure!(matches!(pending.await, Err(ErrorCode::CapacityExceeded)));
+    drop(active);
+    ensure!(totals(&admission) == (0, 0, 0));
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
 async fn request_deadline_precedes_queue_timeout_and_free_capacity() -> Result<()> {
     let admission = narrow(1, 2, 1, 2);
     let tenant: TenantId = "short-request".try_into()?;

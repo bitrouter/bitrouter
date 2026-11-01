@@ -21,7 +21,11 @@ async fn exercise(with_descendant: bool) -> Result<()> {
     let provider = Provider::start(false).await?;
     let (fixture, route) = file_fixture(&provider, root.path()).await?;
     let (headers, _) = prepared(&fixture, &route, LearningMode::Observe).await?;
-    let authority = fixture.service.host_authority(&headers).map_err(failure)?;
+    let authority = fixture
+        .service
+        .host_authority(&headers)
+        .await
+        .map_err(failure)?;
     let marker = root.path().join("child.json");
     let socket = root.path().join("initialize.sock");
     let initialize = tokio::net::UnixListener::bind(&socket)?;

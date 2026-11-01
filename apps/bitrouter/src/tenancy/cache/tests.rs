@@ -278,3 +278,36 @@ fn poisoned_cache_fails_closed_even_for_misses_and_duplicates() -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+#[test]
+fn observation_preserves_pins_lru_and_reports_lock_contention() -> Result<()> {
+    use crate::telemetry::receipt_latency::capacity::ReadError;
+    let cache = Cache::<u8, u8>::new(2, budget::<u8, u8>(2, 0))?;
+    let empty = cache.observed().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    ensure!(empty.entries == 0 && empty.bytes > 0);
+    let pinned = cache.insert(1, 11, 0, 0)?;
+    drop(cache.insert(2, 22, 0, 0)?);
+    let full = cache.observed().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+    ensure!(full.entries == 2 && full.bytes > empty.bytes);
+    let held = cache
+        .state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("cache lock"))?;
+    ensure!(cache.observed() == Err(ReadError::Unavailable));
+    drop(held);
+    // Observation did not promote the older entry; the real pin protects it.
+    drop(cache.insert(3, 33, 0, 0)?);
+    ensure!(cache.get(&2)?.is_none() && *pinned == 11);
+    ensure!(
+        cache
+            .observed()
+            .map_err(|e| anyhow::anyhow!("{e:?}"))?
+            .bytes
+            == full.bytes
+    );
+    drop(pinned);
+    drop(cache.insert(4, 44, 0, 0)?);
+    ensure!(cache.get(&1)?.is_none());
+    Ok(())
+}

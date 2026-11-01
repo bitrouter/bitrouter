@@ -22,6 +22,7 @@ use crate::session_identity::{NativeSessionIdentity, RequestOrigin};
 use crate::storage::evolution::records;
 
 mod binding;
+mod storage;
 
 /// The tracker consumes an authenticated, normalized scope from earlier hooks.
 /// Full assembly tests exercise the actual auth and session extraction paths.
@@ -104,6 +105,13 @@ struct Fixture {
 }
 
 async fn fixture(failure: Failure) -> Result<Fixture> {
+    fixture_with_storage(failure, None).await
+}
+
+async fn fixture_with_storage(
+    failure: Failure,
+    storage: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
+) -> Result<Fixture> {
     let db = crate::db::connect("sqlite::memory:").await?;
     crate::db::run_migrations(&db).await?;
     let tracker = GatewayRequestTracker::new(db.clone());
@@ -198,6 +206,13 @@ models:
     let routing = Arc::new(ConfigRoutingTable::from_config(config.clone()));
     let policies = PolicyRuntime::new(&config, None, None, Default::default(), None).await?;
     let binding = CanonicalRequestBinding::new(db.clone(), routing.clone(), policies.clone());
+    let (tracker, binding) = match storage {
+        Some(storage) => (
+            tracker.with_storage_budget(storage.clone()),
+            binding.with_storage_budget(storage),
+        ),
+        None => (tracker, binding),
+    };
     let mut builder = PipelineBuilder::new();
     builder
         .routing_table(routing.clone())

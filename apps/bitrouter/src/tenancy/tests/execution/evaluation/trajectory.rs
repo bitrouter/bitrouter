@@ -311,14 +311,8 @@ async fn same_retained_profile_correlates_across_restart_and_creators_without_so
     let resources =
         crate::tenancy::resources::Resources::with_key(fixture.installation.clone(), [29; 32])?;
     let snapshot = crate::tenancy::store::load(&fixture.db, Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        crate::tenancy::actor::OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     let principal: bitrouter_ai::tenancy::identity::PrincipalId = "second-principal".try_into()?;
     result(
         fixture

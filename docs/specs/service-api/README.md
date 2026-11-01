@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **beta, specification revision 1.0.0-beta.2**. This is the single
+Status: **beta, specification revision 1.0.0-beta.4**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -32,6 +32,114 @@ for independently updated management clients, SDKs and receipt consumers. Their
 wire discriminators remain 1; the existing strict tenancy capability and receipt
 schemas are unchanged. Retained resource authority and evidence require the
 migration and rollback rules below, even when an older client uses only receipts.
+
+Revision beta.4 changes the meaning of three existing native runtime startup
+limit fields while retaining their types, defaults and HTTP v2 response shape.
+Unchanged decoding does not establish behavioral compatibility.
+
+### Offline recovery evidence v2
+
+Offline plan writers, provisioning recorders and independent verifiers use the
+explicit v2 formats in the [offline envelope schema](offline-v2.schema.json).
+These are private operator artifacts, not new HTTP endpoints or runtime
+authorization. V1 retains its exact arrays, limits, fingerprints and report
+shape. A v1 reader MUST reject a v2 discriminator; a v2 reader MUST select the
+declared version and MUST NOT reinterpret a truncated v1 artifact as v2. This
+opt-in beta profile does not change HTTP v2 or the native startup fields.
+
+`bitrouter.offline.recovery-plan.v2` retains v1 `source` and `target` fields.
+`retirement` becomes a `{path,sha256}` anchor instead of embedded writer and
+selected-file arrays. The provisioning, static approval, retirement and producer
+anchors MUST be distinct. SHA256 binds every byte, including LF terminators.
+The source producer attestation retains its v1 shape. The schema-sized source
+table dispositions remain in the root; their row/value totals are diagnostics,
+not directory or history ceilings.
+
+Each stream is UTF-8 JSON Lines: one strict object per line, a header first,
+mandatory final LF, no blank lines, duplicate fields, unknown envelope fields,
+extra objects or trailing bytes. Embedded objects retain their existing DTO
+validation and compiler semantics. Counts MUST exactly match complete EOF;
+declaring a smaller count never authorizes partial verification. Each decoded
+record must fit the operator's remaining working allowance. Insufficient working
+memory, scratch or free disk means refusal without a successful report; it does
+not mean retained data is corrupt. Total stream cardinality has no product cap.
+Readers MUST preserve exact integer counts, check arithmetic and offsets for
+overflow, and observe the existing individual identity/path/artifact limits.
+
+| Stream | Header format | Ordered records |
+| --- | --- | --- |
+| Observed provisioning | `bitrouter.offline.fresh-provisioning.v2` | Operations, configurations, active pointers, resources |
+| Independent static approval | `bitrouter.offline.static-approval.v2` | Approved resource definitions |
+| Operational retirement | `bitrouter.offline.retirement-attestation.v2` | Retired writers, then selected files |
+
+Provisioning operation records have `kind: "operation"`, `principal_id` and the
+existing `OperationResult`. Every operation MUST be applied, with exact authority
+revisions 1 through `operation_count` and no duplicate operation ID. Configuration
+records contain `kind: "configuration"` and `revision: ConfigurationRevision`,
+ordered by `(tenant_id,revision_id)`. Active records contain `kind: "active"`,
+`tenant_id`, `revision_id` and `authority_revision`, ordered by tenant. Resource
+records contain `kind: "resource"` and `reference: ResourceRef`.
+
+Both resource sections sort strictly by the SQL BINARY tuple
+`(owner_kind,owner_id,resource_kind,resource_id,revision_id)`, using the serialized
+enum strings rather than enum ordinals. IDs retain their ASCII 128-byte contract.
+Writer labels retain their 256 **UTF-8 byte** contract and reject control
+characters, including NUL. Writer order is exact UTF-8 byte order; selected-file
+order is canonical absolute path order. Every file names a declared retired
+writer. All fence assertions and writer `retired` flags MUST be true; they bind
+operator statements, not independently established exclusion of external writers.
+
+Approval records additionally contain `definition`, using the existing
+[privileged resource import definition](../../../apps/bitrouter/src/tenancy/resources/manifest.rs).
+Fresh recovery accepts static routes without exploration, paid assessment,
+CoreChoice or Block; policies; and API-key credentials with no OAuth profile and
+generation zero. Approval is independent of observed provisioning and MUST cover
+exactly the authenticated static closure. Exact restore is a different proof:
+it preserves retained history, original installation identity, resource envelopes
+and OAuth generations, authenticates them with the explicit original key, and
+does not apply fresh-only restrictions, import, migrate or resume the database.
+Normal feature-specific startup remains a separate check.
+
+The separate Eval authority proof uses the same provisioning stream with zero
+configuration, active and resource counts. It does not require static approval
+or a resource key merely to prove authority/operations; its destination mapping
+and no-work-history rules still apply. The
+[Eval provisioning example](examples/offline-v2-eval-provisioning.jsonl),
+[approval record example](examples/offline-v2-static-approval.jsonl) and
+[retirement example](examples/offline-v2-retirement.jsonl) illustrate separate
+synthetic artifacts. The [root example](examples/offline-v2-recovery-plan.json)
+uses placeholder digests and one illustrative table disposition. None is a
+complete recovery plan or authorization; a real root requires the complete
+source inventory and actual byte anchors.
+
+The corresponding root is `bitrouter.offline.eval-backfill.v2`, specified by
+`EvalBackfillPlan` in the same envelope schema and this
+[synthetic root example](examples/offline-v2-eval-backfill-plan.json). It retains
+v1's source `bundle`, `database_evidence_digest`, `source_kind`,
+`ownership_evidence` and its digest, `manifest` and its digest, plus `target`,
+`target_bundle`, `target_evidence_digest` and `target_installation`. The one shape
+change is replacing `provisioning_operations: OperationId[]` with the required
+`provisioning: {path,sha256}` anchor for complete operation readback. Supplying
+the old field, both fields, an unknown field or an unsupported discriminator
+MUST fail. Changing only the discriminator on a v1 plan is not conversion.
+The provisioning header MUST match `target_installation`, contain nonzero
+operations and declare zero configuration/active/resource counts. V2 does not
+add `static_manifest` or `wrapping_key_env` to this Eval root. Existing source
+kind, explicit owner mapping, graph/individual-object validation, transactional
+transfer and provenance checks remain required; streamed database inventories
+and authority directories do not silently widen a separately bounded Eval
+transfer profile. Neither source ownership evidence nor successful transfer
+proves that external writers have been independently stopped.
+
+Compatibility cases MUST include v1 byte/limit behavior unchanged, explicit
+unknown-version refusal, truncation/trailing-record/count mismatch, duplicate
+IDs, resource string-order disagreement, NUL and multibyte writer labels,
+pre-decode working-budget refusal, historical restore under the original key,
+and refusal before mutating any overlapping input/output/scratch/lock path.
+Successful evidence publication requires confirmed SQL close, input/copy rechecks,
+scratch cleanup and a fresh actual-volume probe. Shared-storage races can still
+cause ENOSPC; a probe is not an absolute disk guarantee. Evidence reports do not
+release ingress, clear unknown upstream effects or establish cutover readiness.
 
 ## Control API
 
@@ -279,11 +387,22 @@ changed command conflicts. Current authorization is rechecked before revealing
 a recorded result. Credential issuance returns a secret only in the initial
 successful response; replay and lookup MUST NOT reveal it. On a lost issuance
 response, recover the ID/status and revoke or rotate as appropriate. Correlation
-IDs are not idempotency keys. Results are retained for 30 days; after expiry the
-operation ID remains reserved as a tombstone. The installation has bounded
-operation capacity and a reserved safety pool. Saturation is a durable fence,
-not permission to recycle IDs. A principal can recover its own operation only
-while current authority covers the operation's saved scope.
+IDs are not idempotency keys. The result lookup/replay window is 30 days; after
+expiry the operation ID remains permanently reserved. The local format-2 store
+retains its indexed operation record and does not impose a lifetime operation
+count quota or recycle IDs. Active work, queues, reads and storage admission
+remain bounded by the startup host budgets. A principal can recover its own
+unexpired operation only while current authority covers its saved scope.
+
+Revision beta.3 clarifies those capacity and retention semantics without
+changing strict-v1 message shapes or per-object limits. Host budgets are defined
+by the [configuration contract](../configuration/README.md#process-capacity).
+The frozen [version-1 capacity profile](../../contracts/resource-tenancy/benchmark-profile.json)
+remains a bounded artifact profile; its legacy catalog and operation counts are
+not format-2 host quotas.
+A persisted legacy saturation latch is not silently cleared by a new binary.
+The verified local upgrade is an operator storage transition, not an HTTP
+resume operation or permission to repeat an uncertain command.
 
 The tenancy error body is a JSON object with `code`, `message`, `dispatch_state`,
 `operation_id` and `execution_id` (the last two may be null). HTTP mappings are:
@@ -309,6 +428,14 @@ set, not just one page. Newly observed executions can require restarting the
 query; clients deduplicate by installation and execution IDs. A missing receipt
 is not proof that provider work never ran. Strict receipt mode and ordinary
 best-effort recording have different durability guarantees.
+
+Archiving an eligible terminal receipt is an internal storage relocation. It
+MUST preserve execution identity, exact receipt/evidence bytes and digests,
+authorization, correlation pagination and original-operation identity rules.
+Inline and archived receipts use the same public read APIs. Archive movement
+MUST NOT discharge an unresolved obligation or authorize redispatch. The local
+store has no history-row lifetime quota or automatic evidence GC; physical
+storage and bounded request/response profiles still apply.
 
 ### Evolution and conformance
 
@@ -943,6 +1070,76 @@ unknown error codes as failures and resynchronize when required. The API's
 request types are not uniformly closed to unknown fields; no blanket unknown
 field rejection or forward-preservation guarantee is implied. Feature-disabled
 operations MUST NOT be inferred from their path alone.
+
+### Native startup discovery
+
+Under beta.4, the three existing
+[`RuntimeLimits`](../../../crates/bitrouter-ai/src/harness/runtime.rs) startup
+fields have the following meanings. The HTTP namespace remains `/agent/v2`;
+this specification revision does not introduce a negotiation field.
+
+| Capability field | Default | Beta.4 meaning | Earlier meaning |
+| --- | --- | --- | --- |
+| `startup_roots` | 1,024 | Retained unresolved execution roots | All discovered roots |
+| `startup_metadata_bytes` | 4,194,304 bytes | Retained unresolved metadata and map allocation allowance | Metadata for all discovered roots |
+| `startup_records` | 1,000,000 | Records per cooperative audit batch | Aggregate records before startup refusal |
+
+Discovery MUST inspect the complete retained index through bounded pages under
+the existing ownership fence. A clean root is discarded from startup retention
+only after its owner proof and complete bounded audit establish that it has no
+unresolved blockers; a terminal flag alone is insufficient. Exhausting a record
+batch yields and resumes the current audit. It MUST NOT impose a replacement
+per-root limit or publish a completed prefix. Clean historical root, metadata
+and record totals have no cardinality quota from these fields.
+
+Without a writer fence, discovery may enumerate headers for visibility but MUST
+NOT classify roots as clean or authorize execution. A complete report with
+`writer_fenced: false` is not evidence of a complete, stable journal audit.
+
+Unresolved roots remain charged independently even when they share a workspace.
+An unresolved count/metadata-budget failure reports `overloaded` with incomplete
+discovery. Cancellation or a failed storage read MUST NOT become a successful
+prefix scan; missing ownership proof or invalid evidence MUST NOT establish a
+clean root or grant execution. `complete` describes scan completion, not proof
+that every workspace is unblocked. A lowered budget does not erase evidence or
+resolve unknown effects. Per-page/object and explicit
+recovery/query limits remain in force; startup acceptance does not promise that
+one unbounded recovery response can be materialized.
+
+`StartupDiscovery.inspected_roots` and `scanned_records` remain checked totals
+over the scan, including clean history, and MAY exceed the startup values.
+Clients MUST NOT treat that fact alone as an invalid response. Old clients
+that assumed those fields bounded totals can reject a newly successful report;
+such clients require an update. New clients MUST still accept older reports
+and handle an older server's total-limit refusal without inferring corruption
+or automatically resubmitting native work. Capability decoding or HTTP v2 alone
+cannot distinguish these policies; deployments requiring the new behavior MUST
+establish server support rather than infer it from the unchanged field names.
+
+Operator defaults and restart behavior are defined by the
+[configuration contract](../configuration/README.md#native-startup-settings).
+This change does not migrate the native journal; an older binary can again
+refuse the same intact history on rollback. Complete paged validation can take
+time proportional to history; no startup latency or maximum tested size is
+implied by removing aggregate ceilings.
+
+#### Native startup compatibility cases
+
+1. New reports whose complete clean-history root/record totals exceed the former
+   limits decode with the existing DTO shape. An old total-checking client is
+   explicitly incompatible; a new client accepts both old and new reports.
+2. A clean root spanning many record batches completes; exhaustion yields and
+   resumes rather than returning `overloaded` or skipping its tail.
+3. A late unresolved root, malformed tail or missing stopped-owner proof after
+   earlier totals exceeded the defaults still blocks or fails as appropriate.
+   No incomplete scan permits native execution.
+4. A full unresolved budget still permits scanning later clean roots. One extra
+   unresolved root fails closed; recovery of one root cannot clear a different
+   unresolved root in the same workspace.
+5. Cancellation, nonprogressing pages and storage failures preserve incomplete
+   discovery. A retry performs complete validation under ownership before
+   publishing readiness; existing recovery/query bounds remain independently
+   enforced.
 
 ### Thread API compatibility cases
 

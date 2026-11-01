@@ -42,10 +42,32 @@ impl Instruments {
             _capacity_bytes: meter
                 .u64_observable_gauge("bitrouter.receipt.capacity.bytes")
                 .with_unit("By")
-                .with_description("Admission policy byte accounting snapshots")
+                .with_description("Storage estimates, observed volume free space and working bytes")
                 .with_callback(move |observer| {
+                    if let Some(snapshot) = byte_capacity.runtime() {
+                        for (field, value) in snapshot.bytes() {
+                            if let Ok(value) = value {
+                                observer.observe(
+                                    value,
+                                    &[
+                                        KeyValue::new("field", field),
+                                        KeyValue::new("checkpoint", "current"),
+                                    ],
+                                );
+                            }
+                        }
+                    }
                     for (checkpoint, value) in byte_capacity.collect().into_iter().flatten() {
                         if let Ok(snapshot) = value {
+                            if let Some(free) = snapshot.observed_free {
+                                observer.observe(
+                                    free,
+                                    &[
+                                        KeyValue::new("field", "observed_free"),
+                                        KeyValue::new("checkpoint", checkpoint),
+                                    ],
+                                );
+                            }
                             for (field, value) in snapshot.bytes() {
                                 observer.observe(
                                     value,
@@ -62,8 +84,21 @@ impl Instruments {
             _capacity_state: meter
                 .u64_observable_gauge("bitrouter.receipt.capacity.state")
                 .with_unit("1")
-                .with_description("Admission and durable Unknown state snapshots")
+                .with_description("Admission, history, Unknown and working-set state snapshots")
                 .with_callback(move |observer| {
+                    if let Some(snapshot) = capacity.runtime() {
+                        for (field, value) in snapshot.state() {
+                            if let Ok(value) = value {
+                                observer.observe(
+                                    value,
+                                    &[
+                                        KeyValue::new("field", field),
+                                        KeyValue::new("checkpoint", "current"),
+                                    ],
+                                );
+                            }
+                        }
+                    }
                     for (checkpoint, value) in capacity.collect().into_iter().flatten() {
                         match value {
                             Ok(snapshot) => {

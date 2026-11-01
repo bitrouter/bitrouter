@@ -8,19 +8,25 @@
 
 #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
 mod observation_tests;
+#[cfg(all(feature = "core", feature = "harness"))]
+mod repair;
 #[cfg(test)]
 mod tests;
+pub(in crate::tenancy) mod unknown;
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
 use bitrouter_ai::tenancy::{configuration::Limits, identity::TenantId, operation::ErrorCode};
 use tokio::{sync::Notify, time::Instant};
 
-const QUEUE_WAIT: Duration = Duration::from_secs(5);
+#[cfg(test)]
 const PROFILE: Profile = Profile {
     tenant_active: 16,
     tenant_queue: 32,
@@ -39,6 +45,9 @@ struct Profile {
 /// One process's bounded tenant execution admission controller.
 pub(super) struct Admission {
     profile: Profile,
+    ingress_limits: crate::config::tenancy::capacity::Ingress,
+    queue_wait: Duration,
+    receipt_fenced: AtomicBool,
     state: Mutex<State>,
     drained: Notify,
 }
@@ -50,7 +59,7 @@ pub(super) struct Admission {
 pub(super) struct Lease {
     admission: Arc<Admission>,
     tenant: TenantId,
-    completion: std::sync::atomic::AtomicBool,
+    completion: Arc<unknown::Completion>,
 }
 
 #[derive(Default)]
@@ -62,12 +71,19 @@ struct State {
     ingress: usize,
     ingress_bytes: usize,
     tenants: BTreeMap<TenantId, Counts>,
+    executions: BTreeMap<super::receipts::store::obligations::Key, unknown::Live>,
+    unknown_generation: u64,
+    publication_pending: Option<Arc<()>>,
     queue: VecDeque<Arc<Waiter>>,
     receipts: super::receipts::capacity::Accounting,
 }
 
 #[derive(Default)]
 struct Counts {
+    unknown: Option<u64>,
+    uncovered: u64,
+    pins: usize,
+    repairs: usize,
     #[cfg(all(feature = "core", feature = "harness"))]
     learning: usize,
     active: usize,
@@ -97,6 +113,14 @@ pub(super) struct Ingress {
     admission: Arc<Admission>,
     bytes: usize,
 }
+#[cfg(all(feature = "core", feature = "harness"))]
+pub(in crate::tenancy) struct Repair {
+    admission: Arc<Admission>,
+    tenant: TenantId,
+    charged: u64,
+    keys: Vec<super::receipts::store::obligations::Key>,
+    finished: bool,
+}
 impl Drop for Ingress {
     fn drop(&mut self) {
         self.admission.update(|state| {
@@ -105,68 +129,90 @@ impl Drop for Ingress {
         });
     }
 }
-#[cfg(all(feature = "core", feature = "harness"))]
-pub(in crate::tenancy) struct Repair {
-    admission: Arc<Admission>,
-    tenant: TenantId,
-    charged: u64,
-    entries: Vec<(
-        bitrouter_ai::tenancy::identity::ExecutionId,
-        chrono::DateTime<chrono::Utc>,
-    )>,
-    finished: bool,
-}
-#[cfg(all(feature = "core", feature = "harness"))]
-impl Repair {
-    pub(in crate::tenancy) fn finish(&mut self, committed: bool) -> Result<(), ErrorCode> {
-        if self.finished {
-            return Err(ErrorCode::AuthorityUnavailable);
-        }
-        self.admission.update(|state| {
-            let result = state.receipts.finish_repair(
-                &self.tenant,
-                self.charged,
-                self.entries.len(),
-                committed.then_some(self.entries.as_slice()),
-            );
-            if result.is_err() {
-                state.receipts.fenced = true;
-            }
-            result
-        })?;
-        self.finished = true;
-        Ok(())
-    }
-}
-// No Drop release: an unacknowledged consuming COMMIT retains its charge in H
-// custody. Only confirmed rollback/commit calls finish; startup inventories a
-// genuinely new exclusive owner's durable rows.
 impl Admission {
-    #[cfg(all(feature = "core", feature = "harness"))]
-    pub(in crate::tenancy) fn reserve_repair(
-        self: &Arc<Self>,
-        tenant: &TenantId,
+    /// Reserve physical writer custody independently of logical history policy.
+    pub(in crate::tenancy) fn reserve_physical_write(
+        &self,
         bytes: u64,
-        entries: Vec<(
-            bitrouter_ai::tenancy::identity::ExecutionId,
-            chrono::DateTime<chrono::Utc>,
-        )>,
-    ) -> Result<Repair, ErrorCode> {
+        maintenance: bool,
+    ) -> Result<(), ErrorCode> {
         self.update(|state| {
-            if state.closed {
+            if state.publication_pending.is_some() {
                 return Err(ErrorCode::AuthorityUnavailable);
             }
-            let charged = state
-                .receipts
-                .reserve_repair(tenant, bytes, entries.len())?;
-            Ok(Repair {
-                admission: self.clone(),
-                tenant: tenant.clone(),
-                charged,
-                entries,
-                finished: false,
-            })
+            state.receipts.reserve_physical_write(bytes, maintenance)
         })
+        .inspect_err(|code| {
+            tracing::debug!(component = "physical_write", maintenance, reason = ?code,
+            "tenant capacity refusal")
+        })
+    }
+
+    /// Release only after confirmed COMMIT or rollback; ambiguous owners retain it.
+    pub(in crate::tenancy) fn finish_physical_write(&self, bytes: u64) -> Result<(), ErrorCode> {
+        self.update(|state| state.receipts.finish_physical_write(bytes))
+    }
+
+    pub(in crate::tenancy) fn fence_storage(&self) {
+        self.fence_receipts();
+    }
+
+    /// Exact inline debit and retained history increment after known COMMIT,
+    /// once per actually relocated row. These are logical estimates, not freed disk.
+    pub(in crate::tenancy) fn archive_receipt(
+        &self,
+        bytes: u64,
+        history_bytes: u64,
+    ) -> Result<(), ErrorCode> {
+        self.update(|state| {
+            let previous = state.receipts.totals;
+            let next = previous
+                .bytes
+                .checked_sub(bytes)
+                .zip(previous.history_bytes.checked_add(history_bytes))
+                .zip(previous.history_rows.checked_add(1));
+            let Some(((remaining, history_bytes), history_rows)) = next else {
+                state.receipts.fenced = true;
+                return Err(ErrorCode::AuthorityUnavailable);
+            };
+            state.receipts.totals.bytes = remaining;
+            state.receipts.totals.history_bytes = history_bytes;
+            state.receipts.totals.history_rows = history_rows;
+            Ok(())
+        })
+    }
+
+    /// Archiving is useful when live bytes prevent the next completion reserve.
+    /// Physical free-space and unknown pressure remain independent admission gates.
+    pub(in crate::tenancy) fn archive_needed(&self) -> Result<bool, ErrorCode> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        if state.publication_pending.is_some() {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        if state.receipts.fenced {
+            return Ok(false);
+        }
+        Ok(state.receipts.archive_needed())
+    }
+
+    /// Includes terminal-body cleanup, pending publication, dropped-but-retained
+    /// owners and repair. Caller serializes archive/repair writers and rechecks
+    /// before relocation; this observation itself acquires no owner.
+    pub(in crate::tenancy) fn has_live_execution(
+        &self,
+        key: &super::receipts::store::obligations::Key,
+    ) -> Result<bool, ErrorCode> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| ErrorCode::AuthorityUnavailable)?;
+        if state.receipts.fenced {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        Ok(state.executions.contains_key(key))
     }
 
     /// Pure observation: neither poison recovery, queue expiry nor waiter wakes.
@@ -184,7 +230,12 @@ impl Admission {
             state.receipts.observed(active).ok_or(ReadError::Invalid)?;
         Snapshot {
             completion_reserved,
+            physical_write_reserved: state.receipts.physical_write_reserved(),
+            observed_free: state.receipts.observed_volume_free(),
             accounted,
+            history_bytes: state.receipts.totals.history_bytes,
+            history_rows: state.receipts.totals.history_rows,
+            oauth_reserved: state.receipts.totals.oauth_bytes,
             potential_unknown,
             live_unknown,
             ingress_reserved: u64::try_from(state.ingress_bytes).map_err(|_| ReadError::Invalid)?,
@@ -210,15 +261,6 @@ impl Admission {
         Ok(collect())
     }
 
-    /// Explicit age input for the real restored accounting; no inventory mutation.
-    #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
-    pub(super) fn escalate_receipts_at_for_test(
-        &self,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> usize {
-        self.update(|state| state.receipts.escalate(now))
-    }
-
     /// Reserve bytes before reading or parsing. A declared length is a hard
     /// per-request ceiling; chunked bodies reserve the entire 16 MiB maximum.
     pub(super) fn ingress(self: &Arc<Self>, bytes: usize) -> Result<Ingress, ErrorCode> {
@@ -233,7 +275,7 @@ impl Admission {
                 .ingress_bytes
                 .checked_add(bytes)
                 .ok_or(ErrorCode::CapacityExceeded)?;
-            if state.ingress >= 128 || total > 64 * 1024 * 1024 {
+            if state.ingress >= self.ingress_limits.requests || total > self.ingress_limits.bytes {
                 return Err(ErrorCode::CapacityExceeded);
             }
             state.ingress += 1;
@@ -243,6 +285,9 @@ impl Admission {
                 bytes,
             })
         })
+        .inspect_err(|code| {
+            tracing::debug!(component = "ingress", reason = ?code, "tenant capacity refusal")
+        })
     }
 
     pub(super) fn initialize_receipts(
@@ -250,22 +295,34 @@ impl Admission {
         inventory: super::receipts::capacity::Inventory,
         free: u64,
     ) -> Result<(), ErrorCode> {
-        self.update(|state| state.receipts.initialize(inventory, free))
-    }
-    pub(super) fn next_receipt_escalation(&self) -> Option<Instant> {
-        self.lock().receipts.next_escalation()
-    }
-    pub(super) fn escalate_receipts(&self) {
-        self.update(|state| state.receipts.escalate(chrono::Utc::now()));
+        self.update(|state| {
+            if state.publication_pending.is_some()
+                || !state.tenants.is_empty()
+                || state.unknown_generation != 0
+            {
+                return Err(ErrorCode::AuthorityUnavailable);
+            }
+            state.receipts.initialize(inventory, free)
+        })
     }
     pub(super) fn receipt_probe(&self, free: u64) {
-        self.update(|state| state.receipts.free = free);
+        self.update(|state| state.receipts.observed_free(free));
     }
     pub(super) fn fence_receipts(&self) {
         self.update(|state| state.receipts.fenced = true);
     }
+    /// Stop new work after a receipt/observer failure without discarding trusted
+    /// accounting for retained owners. This does not establish any SQL outcome.
+    pub(super) fn stop_receipt_admission(&self) {
+        self.update(|state| {
+            state.closed = true;
+            self.receipt_fenced.store(true, Ordering::Release);
+        });
+    }
+    /// Read published receipt health without waiting for accounting's disk probe.
+    /// Contention does not change capabilities; a real fence or poison denies dispatch.
     pub(super) fn receipts_ready(&self) -> bool {
-        !self.lock().receipts.fenced
+        !self.receipt_fenced.load(Ordering::Acquire) && !self.state.is_poisoned()
     }
 
     /// Copies completion reservation bytes, last probed free bytes and fence.
@@ -298,27 +355,51 @@ impl Admission {
         self.lock().queue.len()
     }
 
-    /// Construct the fixed local profile. Request limits can only narrow it.
+    /// Default construction for ownership fixtures.
+    #[cfg(test)]
     pub fn new() -> Arc<Self> {
-        Self::build(PROFILE)
+        Self::configured(&crate::config::tenancy::capacity::CapacityConfig::default())
     }
 
-    fn build(profile: Profile) -> Arc<Self> {
+    /// Request limits only narrow the validated operator budgets.
+    pub(super) fn configured(
+        config: &crate::config::tenancy::capacity::CapacityConfig,
+    ) -> Arc<Self> {
+        let profile = Profile {
+            tenant_active: config.execution.tenant_active,
+            tenant_queue: config.execution.tenant_queue,
+            instance_active: config.execution.instance_active,
+            instance_queue: config.execution.instance_queue,
+        };
+        let state = State {
+            receipts: super::receipts::capacity::Accounting::configured(&config.receipts),
+            ..State::default()
+        };
         Arc::new(Self {
             profile,
-            state: Mutex::new(State::default()),
+            ingress_limits: config.ingress.clone(),
+            queue_wait: Duration::from_millis(config.execution.queue_wait_ms),
+            receipt_fenced: AtomicBool::new(state.receipts.fenced),
+            state: Mutex::new(state),
             drained: Notify::new(),
         })
     }
 
+    pub(super) fn bind_receipt_volume(
+        &self,
+        volume: Option<std::path::PathBuf>,
+    ) -> Result<(), ErrorCode> {
+        self.update(|state| state.receipts.bind_volume(volume))
+    }
+
     #[cfg(test)]
     fn with_profile(profile: Profile) -> Arc<Self> {
-        Self::build(Profile {
-            tenant_active: profile.tenant_active.min(PROFILE.tenant_active),
-            tenant_queue: profile.tenant_queue.min(PROFILE.tenant_queue),
-            instance_active: profile.instance_active.min(PROFILE.instance_active),
-            instance_queue: profile.instance_queue.min(PROFILE.instance_queue),
-        })
+        let mut config = crate::config::tenancy::capacity::CapacityConfig::default();
+        config.execution.tenant_active = profile.tenant_active.min(PROFILE.tenant_active);
+        config.execution.tenant_queue = profile.tenant_queue.min(PROFILE.tenant_queue);
+        config.execution.instance_active = profile.instance_active.min(PROFILE.instance_active);
+        config.execution.instance_queue = profile.instance_queue.min(PROFILE.instance_queue);
+        Self::configured(&config)
     }
 
     #[cfg(test)]
@@ -327,11 +408,11 @@ impl Admission {
         tenant: &TenantId,
         limits: &Limits,
     ) -> Result<Lease, ErrorCode> {
-        self.acquire_until(tenant, limits, Instant::now() + QUEUE_WAIT)
+        self.acquire_until(tenant, limits, Instant::now() + self.queue_wait)
             .await
     }
 
-    /// Acquire capacity before the request deadline, waiting at most five seconds.
+    /// Acquire capacity before both the request and configured queue deadlines.
     ///
     /// # Errors
     /// Returns `CapacityExceeded` for disabled/full capacity or queue expiry, and
@@ -343,71 +424,81 @@ impl Admission {
         limits: &Limits,
         request_deadline: Instant,
     ) -> Result<Lease, ErrorCode> {
-        let deadline = request_deadline.min(Instant::now() + QUEUE_WAIT);
+        let deadline = request_deadline.min(Instant::now() + self.queue_wait);
         let active_limit = usize::from(limits.active_executions).min(self.profile.tenant_active);
         let queue_limit = usize::from(limits.queued_work).min(self.profile.tenant_queue);
-        let registration = self.update(|state| {
-            if state.closed {
-                return Err(ErrorCode::AuthorityUnavailable);
-            }
-            if Instant::now() >= deadline {
-                return Err(ErrorCode::CapacityExceeded);
-            }
-            if !state.receipts.ready(tenant) {
-                return Err(ErrorCode::CapacityExceeded);
-            }
-            if active_limit == 0 || self.profile.instance_active == 0 {
-                return Err(ErrorCode::CapacityExceeded);
-            }
-            let (active, queued) = state
-                .tenants
-                .get(tenant)
-                .map_or((0, 0), |counts| (counts.active, counts.queued));
-            if active < active_limit
-                && state.active < self.profile.instance_active
-                && queued == 0
-                && state.next_eligible(self.profile).is_none()
-            {
-                state.reserve(tenant)?;
-                return Ok(Registration::Active);
-            }
-            if queued >= queue_limit || state.queue.len() >= self.profile.instance_queue {
-                return Err(ErrorCode::CapacityExceeded);
-            }
-            let waiter = Arc::new(Waiter {
-                tenant: tenant.clone(),
-                active_limit,
-                deadline,
-                ready: Notify::new(),
-            });
-            state.tenants.entry(tenant.clone()).or_default().queued += 1;
-            state.queue.push_back(waiter.clone());
-            Ok(Registration::Queued(waiter))
-        })?;
+        let registration = self
+            .update(|state| {
+                if state.closed {
+                    return Err(ErrorCode::AuthorityUnavailable);
+                }
+                if Instant::now() >= deadline {
+                    return Err(ErrorCode::CapacityExceeded);
+                }
+                if !state.receipts_ready(tenant) {
+                    return Err(ErrorCode::CapacityExceeded);
+                }
+                if active_limit == 0 || self.profile.instance_active == 0 {
+                    return Err(ErrorCode::CapacityExceeded);
+                }
+                let (active, queued) = state
+                    .tenants
+                    .get(tenant)
+                    .map_or((0, 0), |counts| (counts.active, counts.queued));
+                if active < active_limit
+                    && state.active < self.profile.instance_active
+                    && queued == 0
+                    && state.next_eligible(self.profile).is_none()
+                {
+                    state.reserve(tenant)?;
+                    return Ok(Registration::Active);
+                }
+                if queued >= queue_limit || state.queue.len() >= self.profile.instance_queue {
+                    return Err(ErrorCode::CapacityExceeded);
+                }
+                let waiter = Arc::new(Waiter {
+                    tenant: tenant.clone(),
+                    active_limit,
+                    deadline,
+                    ready: Notify::new(),
+                });
+                state.tenants.entry(tenant.clone()).or_default().queued += 1;
+                state.queue.push_back(waiter.clone());
+                Ok(Registration::Queued(waiter))
+            })
+            .inspect_err(|code| {
+                tracing::debug!(component = "execution", reason = ?code,
+            "tenant capacity refusal")
+            })?;
         if let Registration::Queued(waiter) = registration {
             let queued = Queued {
                 admission: self.clone(),
                 waiter,
             };
             loop {
-                let acquired = self.update(|state| {
-                    if state.closed {
-                        return Err(ErrorCode::AuthorityUnavailable);
-                    }
-                    if Instant::now() >= queued.waiter.deadline {
-                        return Err(ErrorCode::CapacityExceeded);
-                    }
-                    if state
-                        .next_eligible(self.profile)
-                        .is_some_and(|next| Arc::ptr_eq(next, &queued.waiter))
-                    {
-                        state.remove(&queued.waiter);
-                        state.reserve(tenant)?;
-                        Ok(true)
-                    } else {
-                        Ok(false)
-                    }
-                })?;
+                let acquired = self
+                    .update(|state| {
+                        if state.closed {
+                            return Err(ErrorCode::AuthorityUnavailable);
+                        }
+                        if Instant::now() >= queued.waiter.deadline {
+                            return Err(ErrorCode::CapacityExceeded);
+                        }
+                        if state
+                            .next_eligible(self.profile)
+                            .is_some_and(|next| Arc::ptr_eq(next, &queued.waiter))
+                        {
+                            state.reserve(tenant)?;
+                            state.remove(&queued.waiter);
+                            Ok(true)
+                        } else {
+                            Ok(false)
+                        }
+                    })
+                    .inspect_err(|code| {
+                        tracing::debug!(component = "execution", reason = ?code,
+            "tenant capacity refusal")
+                    })?;
                 if acquired {
                     break;
                 }
@@ -425,7 +516,7 @@ impl Admission {
         Ok(Lease {
             admission: self.clone(),
             tenant: tenant.clone(),
-            completion: std::sync::atomic::AtomicBool::new(true),
+            completion: Arc::new(unknown::Completion::default()),
         })
     }
 
@@ -448,7 +539,7 @@ impl Admission {
                 .get(tenant)
                 .map_or((0, 0), |counts| (counts.active, counts.queued));
             if Instant::now() >= deadline
-                || !state.receipts.ready(tenant)
+                || !state.receipts_ready(tenant)
                 || active >= limit
                 || state.active >= self.profile.instance_active
                 || queued != 0
@@ -460,8 +551,11 @@ impl Admission {
             Ok(Lease {
                 admission: self.clone(),
                 tenant: tenant.clone(),
-                completion: std::sync::atomic::AtomicBool::new(true),
+                completion: Arc::new(unknown::Completion::default()),
             })
+        })
+        .inspect_err(|code| {
+            tracing::debug!(component = "execution", reason = ?code, "tenant capacity refusal")
         })
     }
 
@@ -493,6 +587,7 @@ impl Admission {
             Err(poisoned) => {
                 let mut state = poisoned.into_inner();
                 state.closed = true;
+                state.receipts.fenced = true;
                 state
             }
         }
@@ -503,6 +598,7 @@ impl Admission {
     fn update<T>(&self, change: impl FnOnce(&mut State) -> T) -> T {
         let (result, wake, drained) = {
             let mut state = self.lock();
+            state.receipts.refresh_free();
             let mut wake = state.expire(Instant::now());
             let result = change(&mut state);
             if state.closed {
@@ -514,6 +610,11 @@ impl Admission {
                 wake.push(waiter.clone());
             }
             let drained = state.drained();
+            // Receipt fencing is permanent. Publish even an error result before
+            // releasing accounting or waking a waiter; never publish false again.
+            if state.receipts.fenced {
+                self.receipt_fenced.store(true, Ordering::Release);
+            }
             (result, wake, drained)
         };
         for waiter in wake {
@@ -528,7 +629,20 @@ impl Admission {
 
 impl State {
     fn reserve(&mut self, tenant: &TenantId) -> Result<(), ErrorCode> {
-        self.receipts.reserve(tenant)?;
+        let unknown = self
+            .tenant_unknown(tenant)
+            .ok_or(ErrorCode::AuthorityUnavailable)?;
+        let uncovered = self
+            .tenants
+            .get(tenant)
+            .map_or(0, |counts| counts.uncovered);
+        let next_uncovered = uncovered
+            .checked_add(1)
+            .ok_or(ErrorCode::CapacityExceeded)?;
+        self.receipts.reserve(unknown, uncovered)?;
+        let counts = self.tenants.entry(tenant.clone()).or_default();
+        counts.unknown = Some(unknown);
+        counts.uncovered = next_uncovered;
         self.active += 1;
         self.tenants.entry(tenant.clone()).or_default().active += 1;
         Ok(())
@@ -581,7 +695,7 @@ impl State {
         let mut seen = BTreeSet::new();
         self.queue.iter().find(|waiter| {
             seen.insert(&waiter.tenant)
-                && self.receipts.ready(&waiter.tenant)
+                && self.receipts_ready(&waiter.tenant)
                 && self
                     .tenants
                     .get(&waiter.tenant)
@@ -599,44 +713,28 @@ impl Drop for Queued {
 impl Drop for Lease {
     fn drop(&mut self) {
         self.admission.update(|state| {
-            if self
-                .completion
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-                && state.receipts.release(&self.tenant, None).is_err()
-            {
+            if state.release_lease(&self.tenant, &self.completion).is_err() {
                 state.receipts.fenced = true;
             }
-            if let Some(counts) = state.tenants.get_mut(&self.tenant) {
-                counts.active -= 1;
-                state.active -= 1;
-            }
-            state.idle(&self.tenant);
         });
     }
 }
-
 impl Lease {
+    /// Owner ACK after projection publication; never changes durable counters.
     pub(super) fn confirm_receipt(
         &self,
-        bytes: u64,
-        unknown: Option<(
+        _bytes: u64,
+        _unknown: Option<(
             bitrouter_ai::tenancy::identity::ExecutionId,
             chrono::DateTime<chrono::Utc>,
         )>,
     ) -> Result<(), ErrorCode> {
-        self.admission.update(|state| {
-            if !self
-                .completion
-                .swap(false, std::sync::atomic::Ordering::AcqRel)
-            {
-                return Err(ErrorCode::AuthorityUnavailable);
-            }
-            let result = state.receipts.release(&self.tenant, Some((bytes, unknown)));
-            if result.is_err() {
-                state.receipts.fenced = true;
-            }
-            result
-        })
+        if self.completion.done.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            self.admission.fence_storage();
+            Err(ErrorCode::AuthorityUnavailable)
+        }
     }
 }
 
@@ -693,7 +791,7 @@ impl Counts {
         if self.learning != 0 {
             return false;
         }
-        self.active == 0 && self.queued == 0
+        self.active == 0 && self.queued == 0 && self.pins == 0 && self.repairs == 0
     }
 }
 impl State {
@@ -745,44 +843,6 @@ mod learning_tests {
         drop(leases);
         admission.wait_drained().await;
         assert!(admission.lock().tenants.is_empty());
-        Ok(())
-    }
-}
-
-#[cfg(all(test, feature = "core", feature = "harness"))]
-mod repair_tests {
-    use super::*;
-    use anyhow::{Result, ensure};
-    #[test]
-    fn repair_reservations_share_receipt_limits_without_execution_capacity() -> Result<()> {
-        let admission = Admission::new();
-        let tenant: TenantId = "repair-tenant".try_into()?;
-        let entries = (0..100)
-            .map(|n| Ok((format!("execution-{n}").try_into()?, chrono::Utc::now())))
-            .collect::<Result<Vec<_>>>()?;
-        let mut repair = admission
-            .reserve_repair(&tenant, 1000, entries)
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        {
-            let state = admission.lock();
-            ensure!(state.active == 0 && state.ingress == 0 && state.queue.is_empty());
-            ensure!(!state.receipts.ready(&tenant));
-        }
-        let extra = vec![("extra".try_into()?, chrono::Utc::now())];
-        ensure!(admission.reserve_repair(&tenant, 1, extra).is_err());
-        repair.finish(false).map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        ensure!(admission.lock().receipts.ready(&tenant));
-        let mut repair = admission
-            .reserve_repair(
-                &tenant,
-                25,
-                vec![("durable".try_into()?, chrono::Utc::now())],
-            )
-            .map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        repair.finish(true).map_err(|e| anyhow::anyhow!("{e:?}"))?;
-        ensure!(repair.finish(true).is_err());
-        let state = admission.lock();
-        ensure!(state.receipts.bytes == 25 + 16 * 1024 && state.active == 0);
         Ok(())
     }
 }

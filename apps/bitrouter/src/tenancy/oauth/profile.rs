@@ -6,8 +6,6 @@ use serde::{Deserialize, Serialize};
 pub(in crate::tenancy) const TOKEN_BYTES: usize = 64 * 1024;
 pub(in crate::tenancy) const TOKEN_JSON_BYTES: usize = 256 * 1024;
 pub(in crate::tenancy) const PAYLOAD_BYTES: usize = 512 * 1024;
-pub(in crate::tenancy) const MAX_SLOTS: usize = 256;
-pub(in crate::tenancy) const METADATA_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

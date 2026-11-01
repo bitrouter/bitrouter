@@ -9,6 +9,7 @@ use crate::storage::session_identity::SessionIdentity;
 use anyhow::Context;
 use std::collections::BTreeMap;
 mod revisions;
+mod storage;
 use crate::storage::capture::{CaptureDirection, CaptureEvent, CaptureKind};
 use serde_json::json;
 

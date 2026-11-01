@@ -27,25 +27,44 @@ pub(super) async fn restored_unknown_keeps_evidence(
         .map_err(|_| anyhow::anyhow!("actual restored capacity"))?;
     ensure!(before.accounted == bytes && before.live_unknown == u64::from(unknown));
     ensure!(before.active == 0 && before.potential_unknown == 0 && before.completion_reserved == 0);
-    ensure!(restarted.admission.next_receipt_escalation().is_some() == unknown);
+    ensure!(
+        restarted
+            .next_obligation_for_test()
+            .map_err(failure)?
+            .is_some()
+            == unknown
+    );
     // No row timestamp is rewritten. The explicit age input reaches the same
-    // Accounting::escalate used by actor maintenance under the same real mutex.
+    // indexed, transaction-owned maintenance used by the actor timer.
     let due = chrono::DateTime::parse_from_rfc3339(receipt.recorded_at.as_str())?
         .with_timezone(&chrono::Utc)
         + chrono::Duration::minutes(15);
     ensure!(
         restarted
-            .admission
-            .escalate_receipts_at_for_test(due - chrono::Duration::nanoseconds(1))
+            .escalate_obligations_for_test(due - chrono::Duration::nanoseconds(1))
+            .await
+            .map_err(failure)?
             == 0
     );
     ensure!(restarted.admission.observed_capacity() == Ok(before));
-    ensure!(restarted.admission.escalate_receipts_at_for_test(due) == usize::from(unknown));
-    ensure!(restarted.admission.next_receipt_escalation().is_none());
     ensure!(
         restarted
-            .admission
-            .escalate_receipts_at_for_test(due + chrono::Duration::minutes(1))
+            .escalate_obligations_for_test(due)
+            .await
+            .map_err(failure)?
+            == usize::from(unknown)
+    );
+    ensure!(
+        restarted
+            .next_obligation_for_test()
+            .map_err(failure)?
+            .is_none()
+    );
+    ensure!(
+        restarted
+            .escalate_obligations_for_test(due + chrono::Duration::minutes(1))
+            .await
+            .map_err(failure)?
             == 0,
         "already escalated Unknown must not escalate again"
     );

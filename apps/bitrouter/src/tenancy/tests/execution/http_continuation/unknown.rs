@@ -50,7 +50,7 @@ async fn owned_ready(
 ) -> Result<(Ready, sea_orm::DatabaseConnection)> {
     let owner = crate::tenancy::ownership::acquire_path(path, true)?;
     let db = crate::db::connect_tenancy(&format!("sqlite://{}", path.display()), &owner).await?;
-    let fixture = Fixture::with_database(db.clone(), Default::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db.clone(), &mut |_| {}).await?;
     let (mut fixture, route, _) = super::super::provision_protocol_with_fixture(
         fixture,
         &provider.url,
@@ -63,7 +63,6 @@ async fn owned_ready(
     fixture.service = Service::start_prepared(
         db.clone(),
         Some(owner),
-        Default::default(),
         snapshot,
         Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
     )

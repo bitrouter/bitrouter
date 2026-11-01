@@ -152,8 +152,7 @@ async fn producer() -> Result<()> {
     let mode = std::env::var(MODE)?;
     let database = crate::db::connect_owned_tenancy(&url(&root)).await?;
     let db = database.database().clone();
-    let fixture =
-        Fixture::with_database(db.clone(), OperationLimits::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db.clone(), &mut |_| {}).await?;
     let mut ready = Ready::from_fixture(
         fixture,
         None,

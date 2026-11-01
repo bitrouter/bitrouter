@@ -97,6 +97,10 @@
           "description": "Loopback host and port, distinct from inference and control.",
           "type": "string"
         },
+        "startup": {
+          "$ref": "#/$defs/StartupConfig",
+          "description": "Shared native startup budgets, also effective when HTTP is disabled."
+        },
         "token_env": {
           "default": "",
           "description": "Environment variable containing the dedicated task bearer token.",
@@ -122,6 +126,57 @@
         "decisions"
       ],
       "type": "string"
+    },
+    "AuthorityViews": {
+      "additionalProperties": false,
+      "description": "Live authorization facts only; dormant directory entries consume no view.",
+      "properties": {
+        "bytes": {
+          "default": 67108864,
+          "description": "One third holds live facts; two thirds cover staged replacements and\nconstruction overlap during publication. Allocation is lazy.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entries": {
+          "default": 512,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Caches": {
+      "additionalProperties": false,
+      "description": "Immutable caches charge both metadata and pinned value allocations.",
+      "properties": {
+        "credential_bytes": {
+          "default": 8388608,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "credential_entries": {
+          "default": 256,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "execution_bytes": {
+          "default": 134217728,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "execution_entries": {
+          "default": 64,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "Capability": {
       "description": "An optional inference feature a request may require and a provider may\nadvertise. Capabilities are API-agnostic: the same capability maps to a\ndifferent wire parameter in each protocol (structured outputs is Chat\nCompletions' `response_format`, Messages' `output_config.format`, Generate\nContent's `responseSchema`, Responses' `text.format`). The serde\nrepresentation (e.g. `structured_outputs`) is the stable token used to match\na request's needs against a provider's advertised capabilities.\n\nApplication routing derives a request's required capabilities and can\nrestrict its provider chain to those advertising all of them.",
@@ -182,6 +237,37 @@
           "type": "string"
         }
       ]
+    },
+    "CapacityConfig": {
+      "additionalProperties": false,
+      "description": "Finite process budgets. These values never limit stored tenant or key counts.\nEffective values are traced at startup; the existing receipt-latency telemetry\nopt-in also exports numeric cache/routing usage and cached volume observations.\nThese are accounting estimates, not measured RSS or an allocation guarantee.",
+      "properties": {
+        "authority_views": {
+          "$ref": "#/$defs/AuthorityViews"
+        },
+        "caches": {
+          "$ref": "#/$defs/Caches"
+        },
+        "execution": {
+          "$ref": "#/$defs/Execution"
+        },
+        "ingress": {
+          "$ref": "#/$defs/Ingress"
+        },
+        "management": {
+          "$ref": "#/$defs/Management"
+        },
+        "receipts": {
+          "$ref": "#/$defs/Receipts"
+        },
+        "routing": {
+          "$ref": "#/$defs/Routing"
+        },
+        "transport": {
+          "$ref": "#/$defs/Transport"
+        }
+      },
+      "type": "object"
     },
     "ChatCompletionsCompatibility": {
       "description": "Chat Completions request-shape compatibility settings.",
@@ -625,6 +711,45 @@
       },
       "type": "object"
     },
+    "Execution": {
+      "additionalProperties": false,
+      "description": "Active owners retain their slot through required cleanup, including disconnects.",
+      "properties": {
+        "instance_active": {
+          "default": 128,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "instance_queue": {
+          "default": 256,
+          "description": "Zero disables waiting; it never means an unbounded queue.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "queue_wait_ms": {
+          "default": 5000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tenant_active": {
+          "default": 16,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tenant_queue": {
+          "default": 32,
+          "description": "Request limits and the instance queue can further narrow this value.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "FusionSettings": {
       "description": "The `server_tools.fusion` config section. Its presence enables the Fusion\nserver tool and the `bitrouter/fusion` model alias; its fields supply the\nalias defaults (the panel/judge a bare `bitrouter/fusion` request expands\nto). An explicit `bitrouter:fusion` declaration on a request overrides these.",
       "properties": {
@@ -818,6 +943,25 @@
         }
       ]
     },
+    "Ingress": {
+      "additionalProperties": false,
+      "description": "Aggregate upload ownership, separate from the fixed protocol body ceiling.",
+      "properties": {
+        "bytes": {
+          "default": 67108864,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "requests": {
+          "default": 128,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "InputTokenCounting": {
       "description": "Explicit provider support, never inferred from a compatible generation API.",
       "oneOf": [
@@ -827,6 +971,31 @@
           "type": "string"
         }
       ]
+    },
+    "Management": {
+      "additionalProperties": false,
+      "description": "Bounded management work; safety has a distinct queue from ordinary requests.",
+      "properties": {
+        "queue": {
+          "default": 16,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reads": {
+          "default": 8,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "safety_queue": {
+          "default": 8,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
     },
     "McpAggregateConfig": {
       "description": "`mcp.aggregate` — the virtual aggregate endpoint.",
@@ -1814,6 +1983,43 @@
       ],
       "type": "object"
     },
+    "Receipts": {
+      "additionalProperties": false,
+      "description": "Admission policy does not invalidate retained evidence on restart.",
+      "properties": {
+        "admission_free_bytes": {
+          "default": 805306368,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "high_water_bytes": {
+          "default": 8589934592,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "maintenance_free_bytes": {
+          "default": 268435456,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_instance": {
+          "default": 1000,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unknown_tenant": {
+          "default": 100,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "RegistryConfig": {
       "description": "Runtime public registry integration settings — the top-level `registry:`\nblock in `bitrouter.yaml`.",
       "properties": {
@@ -2045,6 +2251,25 @@
         }
       ]
     },
+    "Routing": {
+      "additionalProperties": false,
+      "description": "Retained routing windows and health state; active send ownership is derived.",
+      "properties": {
+        "bytes": {
+          "default": 67108864,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "entries": {
+          "default": 2048,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "RoutingConfig": {
       "description": "Routing knobs shared by presets and variants.",
       "properties": {
@@ -2225,10 +2450,42 @@
         }
       ]
     },
+    "StartupConfig": {
+      "additionalProperties": false,
+      "description": "Restart-only budgets for the shared native service, including local transports.",
+      "properties": {
+        "records_per_batch": {
+          "default": 1000000,
+          "description": "Records per cooperative audit batch; exhaustion yields and continues.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unresolved_metadata_bytes": {
+          "default": 4194304,
+          "description": "Retained unresolved keys, workspace paths and map allocation allowance.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unresolved_roots": {
+          "default": 1024,
+          "description": "Maximum unresolved execution roots retained to protect their workspaces.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "TenancyConfig": {
       "additionalProperties": false,
       "description": "Local authority is independent of external login and commercial policy.",
       "properties": {
+        "capacity": {
+          "$ref": "#/$defs/CapacityConfig",
+          "description": "Startup-only runtime budgets, independent of the stored directory size."
+        },
         "enabled": {
           "default": false,
           "description": "Opt in to the tenant control service. Existing local startup stays unchanged.",
@@ -2368,6 +2625,25 @@
           "default": 30,
           "description": "Age boundary used by startup retention, in whole days.",
           "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Transport": {
+      "additionalProperties": false,
+      "description": "Connections are owned before parsing; request slots share the ingress budget.",
+      "properties": {
+        "connections": {
+          "default": 256,
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "header_timeout_ms": {
+          "default": 30000,
+          "format": "uint64",
           "minimum": 0,
           "type": "integer"
         }

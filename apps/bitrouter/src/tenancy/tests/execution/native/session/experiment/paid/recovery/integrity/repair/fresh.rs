@@ -1,6 +1,30 @@
 //! Ungated production startup, twice, after actual process containment or known ACK.
 use super::*;
 
+async fn unknown_first(
+    db: &DatabaseConnection,
+    installation: &bitrouter_ai::tenancy::identity::InstallationId,
+) -> Result<
+    std::collections::BTreeMap<
+        crate::tenancy::receipts::store::obligations::Key,
+        chrono::DateTime<chrono::Utc>,
+    >,
+> {
+    use crate::tenancy::receipts::store::obligations;
+    let mut records = std::collections::BTreeMap::new();
+    let mut after = None;
+    loop {
+        let page = obligations::page(db, installation, after.as_ref(), &|_, _| Ok(())).await?;
+        if page.is_empty() {
+            return Ok(records);
+        }
+        for record in page {
+            after = Some(record.key.clone());
+            ensure!(records.insert(record.key, record.first).is_none());
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "internal normal native paid restart; select the bounded fault parent"]
 async fn consumer() -> Result<()> {
@@ -41,6 +65,7 @@ async fn consumer() -> Result<()> {
         }
         let inventory_before =
             crate::tenancy::receipts::store::inventory(&db, &identity.installation).await?;
+        let original_unknown = unknown_first(&db, &identity.installation).await?;
         let service = Service::open_owned_profile(
             database,
             &config(),
@@ -67,36 +92,24 @@ async fn consumer() -> Result<()> {
                     && inventory_after.bytes
                         == inventory_before.bytes + if added == 1 { terminal.bytes() } else { 0 }
             );
-            ensure!(
-                inventory_after.unknown.len()
-                    == inventory_before.unknown.len() + usize::try_from(added)?
-            );
-            let original_unknown: std::collections::BTreeMap<_, _> = inventory_before
-                .unknown
-                .iter()
-                .map(|(t, e, at)| ((t.clone(), e.clone()), *at))
-                .collect();
-            let actual_unknown: std::collections::BTreeMap<_, _> = inventory_after
-                .unknown
-                .iter()
-                .map(|(t, e, at)| ((t.clone(), e.clone()), *at))
-                .collect();
+            ensure!(inventory_after.unknown_count == inventory_before.unknown_count + added);
+            let actual_unknown = unknown_first(&db, &identity.installation).await?;
             ensure!(
                 original_unknown
                     .iter()
                     .all(|(key, at)| actual_unknown.get(key) == Some(at))
-                    && actual_unknown
-                        .contains_key(&(identity.tenant.clone(), identity.execution.clone()))
+                    && actual_unknown.contains_key(
+                        &crate::tenancy::receipts::store::obligations::Key {
+                            tenant: identity.tenant.clone(),
+                            execution: identity.execution.clone(),
+                        }
+                    )
             );
             // Existing production M5 read-only observation, including real repair
             // settlement into accounted bytes; absent in reduced telemetry builds.
             #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
             {
-                let expected = inventory_after
-                    .rows
-                    .checked_mul(16 * 1024)
-                    .and_then(|rows| rows.checked_add(inventory_after.bytes))
-                    .context("native repair accounting overflow")?;
+                let expected = inventory_after.live_bytes;
                 let snapshot = tokio::time::timeout(TIMEOUT, async {
                     loop {
                         match service.admission.observed_capacity() {
@@ -113,7 +126,7 @@ async fn consumer() -> Result<()> {
                 .await??;
                 ensure!(
                     snapshot.accounted == expected
-                        && snapshot.live_unknown == u64::try_from(inventory_after.unknown.len())?
+                        && snapshot.live_unknown == inventory_after.unknown_count
                         && snapshot.completion_reserved == 0
                         && snapshot.potential_unknown == 0
                         && snapshot.active == 0

@@ -10,6 +10,7 @@ use bitrouter_ai::tenancy::{
 };
 use sea_orm::{Database, DatabaseConnection, TransactionTrait};
 use std::time::Duration;
+mod page;
 mod server;
 
 struct Case {
@@ -144,8 +145,22 @@ async fn committed_generation_and_receipt(db: &DatabaseConnection, case: &Case) 
             && receipt.attempts.is_empty()
             && receipt.usage == case.receipt.receipt.usage
     );
+    ensure!(serde_json::to_vec(&receipt)? == serde_json::to_vec(&case.receipt.receipt)?);
     let bytes = receipt_store::inventory(db, installation).await?;
-    ensure!(bytes.rows == 1 && bytes.bytes > inventory(db, installation).await?);
+    let canonical = case.receipt.bytes() + case.receipt.auxiliary_bytes();
+    ensure!(bytes.rows == 1 && bytes.bytes == canonical);
+    ensure!(
+        bytes.live_bytes == canonical + crate::tenancy::receipts::capacity::ROW_OVERHEAD
+            && bytes.history_bytes == 0
+            && bytes.history_rows == 0
+    );
+    // OAuth reserves one maximum slot envelope independently of canonical
+    // receipt bytes; rotation changes its payload without adding another slot.
+    let slot_reserved = inventory(db, installation).await?;
+    ensure!(slot_reserved == INVENTORY_BYTES && bytes.oauth_bytes == slot_reserved);
+    for slot in [&case.initial, &row] {
+        ensure!(u64::try_from(slot.json.len() + slot.payload.len())? <= slot_reserved);
+    }
     Ok(())
 }
 async fn write_and_verify(db: &DatabaseConnection, case: &Case) -> Result<()> {

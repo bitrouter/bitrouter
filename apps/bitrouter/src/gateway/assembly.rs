@@ -200,6 +200,20 @@ impl App {
         }
     }
 
+    pub(super) fn owned_transport_limits(&self) -> Option<super::transport::Limits> {
+        self.tenancy
+            .as_ref()
+            .map(|service| super::transport::Limits::for_tenancy(service.execution_settings()))
+    }
+
+    /// Stop new tenant dispatch independently of HTTP and durable-work drains.
+    pub(crate) fn stop_owned_dispatch(&self) -> anyhow::Result<()> {
+        if let Some(service) = &self.tenancy {
+            service.stop_dispatch()?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn with_tenancy(mut self, service: crate::tenancy::Service) -> Self {
         self.tenancy = Some(service);
         self

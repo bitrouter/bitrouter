@@ -125,10 +125,12 @@ async fn same_correlation_and_logical_names_remain_scoped_in_one_service_and_dat
                     .as_deref()
                     .context("first token")?,
             )
+            .await
             .map_err(failure)?;
         let second_caller = second
             .service
             .authenticate(credential.secret.as_deref().context("second token")?)
+            .await
             .map_err(failure)?;
         let mut targets = Vec::new();
         for (index, (fixture, caller)) in
@@ -229,7 +231,8 @@ async fn tenant_binding_does_not_widen_full_partial_or_disjoint_resource_credent
             }
             let mut input = harness
                 .fixture
-                .issuance(&format!("receipt-{scope}-credential"))?;
+                .issuance(&format!("receipt-{scope}-credential"))
+                .await?;
             input.scope = GrantScope::Resources {
                 resources: if scope == "partial" {
                     vec![route.key()]
@@ -282,6 +285,7 @@ async fn tenant_binding_does_not_widen_full_partial_or_disjoint_resource_credent
                 .fixture
                 .service
                 .authenticate(token)
+                .await
                 .map_err(failure)?;
             for request in [
                 read::Request::One(id.clone()),

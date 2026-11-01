@@ -91,3 +91,13 @@ slow-timeout = { period = "60s", terminate-after = 41 }
 [[profile.default.overrides]]
 filter = 'test(offline::recovery::tests::saturation::)'
 slow-timeout = { period = "60s", terminate-after = 35 }
+
+# Dedicated history qualifications use the existing optimized ci-capacity build.
+# These are test execution envelopes, not product history or operation deadlines.
+[[profile.default.overrides]]
+filter = 'test(=tenancy::tests::capacity_history::large_history_qualification)'
+slow-timeout = { period = "60s", terminate-after = 120 }
+
+[[profile.default.overrides]]
+filter = 'test(=harness::service::tests::startup::scale::real_sqlite_native_history_crosses_old_startup_limits_without_replay)'
+slow-timeout = { period = "60s", terminate-after = 60 }

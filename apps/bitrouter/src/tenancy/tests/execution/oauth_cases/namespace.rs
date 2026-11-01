@@ -82,7 +82,6 @@ async fn missing_slot_never_reconstructs_seed_and_new_authority_revision_cannot_
     let result = Service::start_prepared(
         harness.fixture.db.clone(),
         None,
-        crate::tenancy::actor::OperationLimits::default(),
         crate::tenancy::store::load(&harness.fixture.db, chrono::Utc::now()).await?,
         harness.resources.clone(),
     )
@@ -126,6 +125,7 @@ async fn unsupported_responses_oauth_remains_fenced_before_any_refresh() -> Resu
         .fixture
         .service
         .submission(&harness.headers)
+        .await
         .map_err(failure)?;
     let execution = harness
         .fixture
@@ -267,7 +267,7 @@ async fn explicit_pool_shares_one_refresh_generation_but_equal_tenant_seed_and_u
         let granted = index < 2;
         let tenant = tenant_with_pool(&harness, name, &pool, granted).await?;
         let revision = draft(&tenant, route, &format!("draft-{name}"), 25).await?;
-        let mut input = tenant.issuance(&format!("issue-{name}"))?;
+        let mut input = tenant.issuance(&format!("issue-{name}")).await?;
         if granted {
             input.scope = GrantScope::Tenant {
                 operator_pools: vec![pool.key()],

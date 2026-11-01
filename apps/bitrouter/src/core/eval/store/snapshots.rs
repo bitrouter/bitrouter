@@ -185,19 +185,23 @@ impl EvalStore {
         budget: &mut Budget<'_>,
     ) -> Result<EvalSnapshot> {
         self.verify_manifest(snapshot, owner)?;
+        let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
         let tx = self.transaction(true).await?;
-        // Validate the immutable closure in the stable transaction. Never compare
-        // against today's admissions: frozen evidence survives later disputes.
-        if !self.scope.is_legacy() {
-            self.manifest_records_in(&tx, snapshot, budget, true, None)
+        let result = async {
+            // Validate the immutable closure in the stable transaction. Never compare
+            // against today's admissions: frozen evidence survives later disputes.
+            if !self.scope.is_legacy() {
+                self.manifest_records_in(&tx, snapshot, budget, true, None)
+                    .await?;
+            }
+            let prepared = self.prepare_manifest(snapshot, budget)?;
+            let existing = self
+                .persist_prepared_in(&tx, prepared, owner, budget)
                 .await?;
+            Ok(existing)
         }
-        let prepared = self.prepare_manifest(snapshot, budget)?;
-        let existing = self
-            .persist_prepared_in(&tx, prepared, owner, budget)
-            .await?;
-        tx.commit().await?;
-        Ok(existing)
+        .await;
+        write.finish(tx, result).await
     }
 
     pub(super) fn prepare_manifest<'a>(

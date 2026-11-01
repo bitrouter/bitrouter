@@ -4,6 +4,7 @@ use super::*;
 use crate::{
     storage::operation_budget::{Error as BudgetError, OperationBudget},
     tenancy::{
+        authority::live,
         configuration_store,
         learner::{
             self, Registration, RegistrationInput,
@@ -11,6 +12,7 @@ use crate::{
             queue::{Job as LearnerJob, Reply, Work},
         },
         model::ReadContext,
+        store::directory,
     },
 };
 use anyhow::Context;
@@ -52,66 +54,90 @@ impl Worker {
                         .await
                 }
                 Work::Scan(cursor) => {
-                    use std::ops::Bound::{Excluded, Unbounded};
-                    let state = self.current()?;
-                    let tenant = match (&cursor.tenant, &cursor.after) {
-                        (Some(tenant), Some(_)) if state.tenants.contains_key(tenant) => {
-                            Some(tenant)
-                        }
-                        (Some(tenant), _) => state
-                            .tenants
-                            .range((Excluded(tenant), Unbounded))
-                            .next()
-                            .map(|(key, _)| key),
-                        _ => state.tenants.keys().next(),
-                    };
-                    let Some(tenant) = tenant else {
-                        return Ok(Reply::Scanned(learner::store::Page {
-                            cursor: Default::default(),
-                            registrations: Vec::new(),
-                        }));
-                    };
+                    let installation = self
+                        .authority
+                        .read()
+                        .map_err(Failure::from)?
+                        .header()
+                        .installation
+                        .clone();
                     let tx = control
                         .begin_repeatable_read(&self.db)
                         .await
                         .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                    let rows = learner::store::page(
-                        &tx,
-                        &state.installation,
-                        tenant,
-                        cursor.after.as_deref(),
-                        &budget,
-                    )
+                    let page = async {
+                        // One directory key per scheduling turn. This bounds
+                        // working memory without imposing a tenant ceiling.
+                        let page_budget = directory::PageBudget {
+                            rows: 1,
+                            bytes: self.authority.load_budget().min(16 * 1024),
+                        };
+                        budget.charge(2, page_budget.bytes * 2)?;
+                        let retained = match (&cursor.tenant, &cursor.after) {
+                            (Some(tenant), Some(_)) => {
+                                directory::tenant_in(&tx, tenant, page_budget.bytes).await?
+                            }
+                            _ => None,
+                        };
+                        let continuing = retained.is_some();
+                        let tenant = match retained {
+                            Some(tenant) => Some(tenant),
+                            None => {
+                                directory::tenant_page_in(&tx, cursor.tenant.as_ref(), page_budget)
+                                    .await?
+                                    .into_iter()
+                                    .next()
+                            }
+                        };
+                        let Some(tenant) = tenant else {
+                            return Ok(learner::store::Page {
+                                cursor: Default::default(),
+                                registrations: Vec::new(),
+                            });
+                        };
+                        let rows = learner::store::page(
+                            &tx,
+                            &installation,
+                            &tenant.id,
+                            if continuing {
+                                cursor.after.as_deref()
+                            } else {
+                                None
+                            },
+                            &budget,
+                        )
+                        .await?;
+                        let after = if rows.len() == learner::MAX_DUE {
+                            rows.last()
+                                .map(|value| {
+                                    crate::storage::partition::learner_schedule(
+                                        &installation,
+                                        &tenant.id,
+                                        &value.input.id,
+                                    )
+                                })
+                                .transpose()?
+                        } else {
+                            None
+                        };
+                        Ok::<_, anyhow::Error>(learner::store::Page {
+                            cursor: learner::store::Cursor {
+                                tenant: Some(tenant.id),
+                                after,
+                            },
+                            registrations: rows,
+                        })
+                    }
                     .await;
                     control
                         .rollback(tx)
                         .await
                         .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-                    let rows = rows.map_err(|error| self.learner_error(error))?;
+                    let page = page.map_err(|error| self.learner_error(error))?;
                     budget
                         .check()
                         .map_err(|error| self.learner_error(error.into()))?;
-                    let after = if rows.len() == learner::MAX_DUE {
-                        rows.last()
-                            .map(|value| {
-                                crate::storage::partition::learner_schedule(
-                                    &state.installation,
-                                    tenant,
-                                    &value.input.id,
-                                )
-                            })
-                            .transpose()
-                            .map_err(|error| self.learner_error(error))?
-                    } else {
-                        None
-                    };
-                    Ok(Reply::Scanned(learner::store::Page {
-                        cursor: learner::store::Cursor {
-                            tenant: Some(tenant.clone()),
-                            after,
-                        },
-                        registrations: rows,
-                    }))
+                    Ok(Reply::Scanned(page))
                 }
                 Work::Acquire {
                     registration,
@@ -167,6 +193,9 @@ impl Worker {
     }
 
     fn learner_error(&self, error: anyhow::Error) -> Failure {
+        if error.is::<directory::CapacityExceeded>() {
+            return ErrorCode::CapacityExceeded.into();
+        }
         match error.downcast_ref::<BudgetError>() {
             Some(BudgetError::Rejected(code)) => (*code).into(),
             Some(BudgetError::Capacity) => ErrorCode::CapacityExceeded.into(),
@@ -194,11 +223,37 @@ impl Worker {
         {
             return Err(ErrorCode::InvalidRequest.into());
         }
-        let old = self.current()?;
+        let (header, publication) = {
+            let guard = self.authority.read().map_err(Failure::from)?;
+            (guard.header().clone(), guard.publication())
+        };
+        let bytes = self.authority.load_budget() / 3;
+        let tx = control
+            .begin_repeatable_read(&self.db)
+            .await
+            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+        let loaded =
+            directory::load_tenant_in(&tx, &header, caller, &input.tenant, true, bytes).await;
+        control
+            .rollback(tx)
+            .await
+            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+        let mut old = loaded.map_err(|error| self.learner_error(error))?.snapshot;
+        old.resource_lifecycle.restrict();
         if old.installation != input.installation {
             return Err(ErrorCode::CapabilityMismatch.into());
         }
         let ceiling = Ceiling::capture(&old, caller, &input.tenant).map_err(Failure::from)?;
+        budget
+            .check()
+            .map_err(|error| self.learner_error(error.into()))?;
+        let authority = self
+            .authority
+            .register(
+                live::View::new(old.clone(), Vec::new()).map_err(Failure::from)?,
+                publication,
+            )
+            .map_err(Failure::from)?;
         let digest = hex::encode(Sha256::digest(
             serde_json::to_vec(&("owned-learner-register-v1", ceiling.principal(), input))
                 .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?,
@@ -225,7 +280,7 @@ impl Worker {
                 .map_err(|error| self.learner_error(error.into()))?;
             return Ok(Reply::Registered(previous.result));
         }
-        if old.saturated || old.operation_ids >= self.limits.ordinary {
+        if old.saturated {
             return Err(ErrorCode::CapacityExceeded.into());
         }
         if old.revision != input.expected_authority_revision
@@ -233,6 +288,7 @@ impl Worker {
         {
             return Err(ErrorCode::RevisionConflict.into());
         }
+        control.reserve_write(learner::MAX_BYTES, false)?;
         let tx = control
             .begin_repeatable_read(&self.db)
             .await
@@ -252,6 +308,8 @@ impl Worker {
             )
             .await?
             .ok_or(BudgetError::Rejected(ErrorCode::NotFound))?;
+            directory::extend_dependencies_in(&tx, &mut old, &configured.dependencies, bytes)
+                .await?;
             ceiling
                 .check(&old, &input.tenant, &configured.dependencies)
                 .map_err(BudgetError::Rejected)?;
@@ -328,7 +386,7 @@ impl Worker {
                 budget,
             )
             .await?;
-            let mut next = (*old).clone();
+            let mut next = Snapshot::from_header(&old.header());
             next.revision = next
                 .revision
                 .get()
@@ -338,8 +396,9 @@ impl Worker {
             next.operation_ids = next
                 .operation_ids
                 .checked_add(1)
+                .filter(|value| *value <= i64::MAX as u64)
                 .context("operation count overflow")?;
-            next.saturated |= next.operation_ids >= self.limits.ordinary;
+
             let result = OperationResult {
                 operation_id: input.operation_id.clone(),
                 status: OperationStatus::Applied,
@@ -376,10 +435,14 @@ impl Worker {
                 .check(&old, &input.tenant, &configured.dependencies)
                 .map_err(BudgetError::Rejected)?;
             budget.check()?;
-            Ok::<_, anyhow::Error>((Arc::new(next), result))
+            let publication = self
+                .authority
+                .prepare(next.header(), &[], None)
+                .map_err(BudgetError::Rejected)?;
+            Ok::<_, anyhow::Error>((result, publication))
         }
         .await;
-        let (next, result) = match work {
+        let (result, publication) = match work {
             Ok(value) => value,
             Err(error) => {
                 control
@@ -397,15 +460,16 @@ impl Worker {
             self.proof.quarantine();
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
-        *self
-            .snapshot
-            .write()
-            .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))? = next;
+        if publication.publish().is_err() {
+            self.proof.quarantine();
+            return Err(self.unavailable(ErrorCode::AuthorityUnavailable));
+        }
         #[cfg(all(test, unix))]
         job.test.cross_final_deadline(job.deadline, None)?;
         self.finish_learner(job, budget, || {
-            let state = self.current().map_err(|error| error.0.code)?;
-            ceiling.check(&state, &input.tenant, &[])
+            self.authority.read()?.check(&authority, |view| {
+                ceiling.check(view.facts(), &input.tenant, &[])
+            })
         })?;
         Ok(Reply::Registered(result))
     }

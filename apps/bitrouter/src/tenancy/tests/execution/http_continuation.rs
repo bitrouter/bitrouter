@@ -414,7 +414,7 @@ async fn different_principal_same_tenant_cannot_resume_and_raw_ids_are_rejected(
             )
             .await
             .map_err(failure)?;
-        let mut issuance = ready.fixture.issuance("http-other-credential")?;
+        let mut issuance = ready.fixture.issuance("http-other-credential").await?;
         issuance.principal_id = principal;
         issuance.binding_id = "other-http-binding".try_into()?;
         let other = super::super::issued(

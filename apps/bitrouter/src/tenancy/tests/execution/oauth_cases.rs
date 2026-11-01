@@ -193,6 +193,15 @@ impl Harness {
         path: Option<&std::path::Path>,
         token_endpoint: Option<&str>,
     ) -> Result<Self> {
+        Self::with_seed_access(expired, static_auth, path, token_endpoint, None).await
+    }
+    async fn with_seed_access(
+        expired: bool,
+        static_auth: bool,
+        path: Option<&std::path::Path>,
+        token_endpoint: Option<&str>,
+        seed_access: Option<&str>,
+    ) -> Result<Self> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let upstream = format!("http://{}", listener.local_addr()?);
         let (refresh_seen, refresh_rx) = mpsc::channel(8);
@@ -229,7 +238,7 @@ impl Harness {
             let db =
                 crate::db::connect_tenancy(&format!("sqlite://{}", owner.path.display()), owner)
                     .await?;
-            Fixture::with_database(db, Default::default(), &mut |_| {}).await?
+            Fixture::with_database(db, &mut |_| {}).await?
         } else {
             Fixture::new().await?
         };
@@ -257,7 +266,7 @@ impl Harness {
             .map(str::to_owned)
             .unwrap_or_else(|| format!("{upstream}/oauth/token"));
         let mut manifest = json!({"format":1,"installation_id":fixture.installation,"resources":[
-            {"reference":slot,"definition":{"kind":"credential","credential":{"type":"oauth","data":{"access_token":if expired{"seed-access"}else{"rotated-access"},"refresh_token":"seed-refresh","expires_at":expires}},
+            {"reference":slot,"definition":{"kind":"credential","credential":{"type":"oauth","data":{"access_token":if expired{seed_access.unwrap_or("seed-access")}else{"rotated-access"},"refresh_token":"seed-refresh","expires_at":expires}},
                 "oauth":{"format":1,"mechanism":"claude_code_refresh_v1","provider":"claude-code","account":"default","registration":"anthropic","token_endpoint":token_endpoint,"client_id":registration.auth.client_id}}},
             {"reference":route,"definition":{"kind":"route","selector":"bitrouter/owned","policy":null,"routing":{"providers":{"claude-code":{"api_base":format!("{upstream}/v1"),"api_protocol":[{"*":"messages"}],"models":[{"id":"model-a"}]}},"routers":{"owned":{"selection":{"kind":"model","model":"claude-code:model-a"}}}},"credentials":[{"provider":"claude-code","account":"default","credential":slot}]}}
         ]});
@@ -269,7 +278,6 @@ impl Harness {
         fixture.service = Service::start_prepared(
             fixture.db.clone(),
             owner,
-            crate::tenancy::actor::OperationLimits::default(),
             crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
             resources.clone(),
         )
@@ -350,7 +358,6 @@ impl Harness {
         self.fixture.service = Service::start_prepared(
             self.fixture.db.clone(),
             None,
-            crate::tenancy::actor::OperationLimits::default(),
             crate::tenancy::store::load(&self.fixture.db, chrono::Utc::now()).await?,
             self.resources.clone(),
         )

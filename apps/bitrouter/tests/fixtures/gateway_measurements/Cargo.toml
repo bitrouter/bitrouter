@@ -16,5 +16,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
 tempfile = "3"
-tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "net", "io-util", "process", "signal"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread", "time", "net", "io-util", "process", "signal", "sync"] }
 wiremock = "0.6"

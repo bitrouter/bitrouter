@@ -14,6 +14,7 @@ impl JudgeCosts {
     pub(crate) async fn reserve(
         &self,
         tx: &DatabaseTransaction,
+        write: &mut crate::storage::write::Write,
         job: &JudgeJob,
         request_id: &str,
     ) -> Result<()> {
@@ -38,7 +39,14 @@ impl JudgeCosts {
         };
         let (revision, saved): (_, JudgeAttempt) = self
             .store(&job.identity.owner)?
-            .initialize_in(tx, KIND, request_id, Some(job.identity.key()?), &fresh)
+            .initialize_charged(
+                write,
+                tx,
+                KIND,
+                request_id,
+                Some(job.identity.key()?),
+                &fresh,
+            )
             .await?;
         ensure!(
             revision == 0 && serde_json::to_string(&saved)? == serde_json::to_string(&fresh)?,
@@ -50,7 +58,7 @@ impl JudgeCosts {
         };
         let (_, saved): (_, RequestOwner) = self
             .lookup()?
-            .initialize_in(tx, LOOKUP_KIND, request_id, None, &binding)
+            .initialize_charged(write, tx, LOOKUP_KIND, request_id, None, &binding)
             .await?;
         ensure!(
             saved == binding,

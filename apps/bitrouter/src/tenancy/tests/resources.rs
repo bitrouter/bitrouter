@@ -19,7 +19,6 @@ async fn restart(fixture: &mut Fixture) -> Result<()> {
     fixture.service = Service::start_resources(
         fixture.db.clone(),
         None,
-        Default::default(),
         initial,
         Arc::new(super::super::resources::Resources::with_key(
             fixture.installation.clone(),
@@ -201,6 +200,7 @@ async fn resource_cas_has_one_winner_and_tenant_cannot_mutate_foreign_or_pool_ke
     let caller = fixture
         .service
         .authenticate(issued.secret.as_deref().context("issued secret")?)
+        .await
         .map_err(failure)?;
     for (kind, owner) in [
         (OwnerKind::Tenant, "another-tenant"),
@@ -233,6 +233,7 @@ async fn dynamic_routes_compile_owned_credentials_and_require_operator_approved_
     let caller = fixture
         .service
         .authenticate(issued.secret.as_deref().context("issued secret")?)
+        .await
         .map_err(failure)?;
     let mut route = input;
     route.operation_id = "create-route".try_into()?;
@@ -303,7 +304,7 @@ async fn resource_mutations_and_reads_recheck_narrowed_permissions_and_suspensio
     let input = credential(&fixture, "managed-slot")?;
     let created = put(&fixture, fixture.operator.clone(), input.clone()).await?;
     let slot = reference(&input, &created)?;
-    let mut issuance = fixture.issuance("editor-key")?;
+    let mut issuance = fixture.issuance("editor-key").await?;
     issuance.permissions = TenantRole::Editor.permissions().to_vec();
     let key = issued(
         fixture
@@ -318,6 +319,7 @@ async fn resource_mutations_and_reads_recheck_narrowed_permissions_and_suspensio
     let caller = fixture
         .service
         .authenticate(key.secret.as_deref().context("key secret")?)
+        .await
         .map_err(failure)?;
     let mut rotate = input.clone();
     rotate.operation_id = "editor-cannot-rotate".try_into()?;
@@ -359,8 +361,13 @@ async fn resource_mutations_and_reads_recheck_narrowed_permissions_and_suspensio
     ensure!(
         matches!(fixture.service.resource_status(&caller, &fixture.tenant, &slot).await, Err(error) if error.0.code == ErrorCode::Forbidden)
     );
-    let state = fixture.service.current().map_err(failure)?;
-    let tenant = state.tenants.get(&fixture.tenant).context("tenant state")?;
+    let tenant = crate::tenancy::store::directory::tenant_in(
+        &fixture.db,
+        &fixture.tenant,
+        fixture.service.authority.load_budget(),
+    )
+    .await?
+    .context("tenant state")?;
     fixture
         .service
         .execute(

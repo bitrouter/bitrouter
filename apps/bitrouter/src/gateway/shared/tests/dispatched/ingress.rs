@@ -493,9 +493,9 @@ async fn real_transport(fixture: &Fixture, serving: &Arc<Serving>) -> Result<()>
     let endpoint = format!("http://{}/v1/chat/completions", listener.local_addr()?);
     let (stop, stopped) = tokio::sync::oneshot::channel();
     let router = serving.router();
-    let bounds = crate::gateway::shared::transport::Limits::from(&config()?);
+    let bounds = crate::gateway::transport::Limits::from(&config()?);
     let task = tokio::spawn(async move {
-        crate::gateway::shared::transport::serve(listener, router, bounds, async {
+        crate::gateway::transport::serve(listener, router, bounds, async {
             let _ = stopped.await;
         })
         .await

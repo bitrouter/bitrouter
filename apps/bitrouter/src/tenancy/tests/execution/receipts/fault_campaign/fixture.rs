@@ -182,7 +182,7 @@ impl Harness {
             let db =
                 crate::db::connect_tenancy(&format!("sqlite://{}", owner.path.display()), owner)
                     .await?;
-            Fixture::with_database(db, Default::default(), &mut |_| {}).await?
+            Fixture::with_database(db, &mut |_| {}).await?
         } else {
             Fixture::new().await?
         };
@@ -199,7 +199,6 @@ impl Harness {
             fixture.service = Service::start_prepared(
                 fixture.db.clone(),
                 Some(owner),
-                Default::default(),
                 snapshot,
                 Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?),
             )

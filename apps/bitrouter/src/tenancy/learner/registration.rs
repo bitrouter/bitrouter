@@ -57,10 +57,15 @@ pub(in crate::tenancy) async fn initialize(service: &Service, path: Option<&Path
             .map_err(|_| anyhow::anyhow!("learning registration credential unavailable"))?;
         // Only a real tenant API credential is accepted; operator possession of
         // this file is not a tenant grant, and the secret is not queued/stored.
-        let caller = service
-            .authenticate(&token)
+        let authenticated = service
+            .authenticate_live(&token)
+            .await
             .map_err(|_| anyhow::anyhow!("learning registration authentication failed"))?;
         drop(token);
+        let caller = authenticated.caller;
+        // H reloads this caller for the registration command; ingress need not
+        // retain a second live view while that command waits for custody.
+        drop(authenticated.lease);
         let result = queue::register(service, caller, entry.registration)
             .await
             .map_err(|error| {

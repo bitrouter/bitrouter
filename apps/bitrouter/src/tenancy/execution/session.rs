@@ -66,7 +66,7 @@ impl Service {
         {
             return Err(ErrorCode::InvalidRequest.into());
         }
-        let host = self.host_authority(headers)?;
+        let host = self.host_authority(headers).await?;
         // Authenticate and resolve retained R1 before any harness storage or path I/O.
         let retained = host.retained().await?;
         // The opener has no model input yet. This fixed-R1 profile therefore
@@ -108,6 +108,7 @@ impl Service {
                 }
             }
         }
+        host.extend(&required).await?;
         host.with_authority(&required, |effective| {
             if !effective.permits(Permission::CredentialUse) {
                 return Err(ErrorCode::Forbidden);
@@ -349,43 +350,36 @@ impl Binding {
             .map_err(|code| core_error(code.into()))?
     }
     pub(crate) fn close_new_work(&self) -> Result<(), CoreError> {
-        let _guard = self
-            .authority
-            .service()
-            .snapshot
-            .write()
-            .map_err(|_| core_error(ErrorCode::AuthorityUnavailable.into()))?;
-        self.closing.store(true, Ordering::Release);
-        Ok(())
-    }
-    pub(in crate::tenancy) fn assessment_check(&self) -> Result<(), ErrorCode> {
-        self.check().map_err(|_| ErrorCode::Forbidden)?;
         self.authority
-            .host
-            .with_authority(&self.authority.required, |effective| {
-                if !effective.permits(Permission::EvaluationSubmit)
-                    || !effective.permits(Permission::ResourceRead)
-                    || !effective.covers(&GrantScope::Tenant {
-                        operator_pools: Vec::new(),
-                    })
-                {
-                    return Err(ErrorCode::Forbidden);
-                }
+            .service()
+            .authority
+            .with_write(|| {
+                self.closing.store(true, Ordering::Release);
                 Ok(())
             })
+            .map_err(|code| core_error(code.into()))
     }
-    pub(in crate::tenancy) fn assessment_in(
+    pub(in crate::tenancy) fn assessment_check(&self) -> Result<(), ErrorCode> {
+        self.authority
+            .host
+            .with_guard(|guard| self.assessment_guard(guard))
+    }
+    pub(in crate::tenancy) fn assessment_guard(
         &self,
-        state: &crate::tenancy::model::Snapshot,
+        guard: &mut crate::tenancy::authority::live::ReadGuard<'_>,
     ) -> Result<(), ErrorCode> {
         if self.closing.load(Ordering::Acquire)
             || self.authority.service().host_stop().is_cancelled()
+            || self
+                .recovery
+                .get()
+                .is_some_and(|checked| !checked.retired())
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
         self.authority
             .host
-            .in_snapshot(state, &self.authority.required, |effective| {
+            .in_guard(guard, &self.authority.required, |effective| {
                 if !effective.permits(Permission::EvaluationSubmit)
                     || !effective.permits(Permission::ResourceRead)
                     || !effective.permits(Permission::CredentialUse)

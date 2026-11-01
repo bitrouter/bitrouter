@@ -23,6 +23,7 @@ pub(super) const MAX_BYTES: usize = 32 * 1024 * 1024;
 pub(super) struct Budget<'a> {
     shared: Option<&'a crate::storage::operation_budget::OperationBudget<'a>>,
     tenant: bool,
+    physical_bytes: Option<usize>,
     bytes: usize,
     rows: usize,
     check: Option<&'a (dyn Fn() -> std::result::Result<(), ErrorCode> + Sync)>,
@@ -32,6 +33,8 @@ impl<'a> Budget<'a> {
         Self {
             shared: None,
             tenant: !store.scope.is_legacy(),
+            physical_bytes: (store.scope.is_legacy() && store.storage_budget.is_some())
+                .then_some(0),
             bytes: 0,
             rows: MAX_ROWS,
             check: None,
@@ -44,6 +47,7 @@ impl<'a> Budget<'a> {
         Self {
             shared: None,
             tenant: !store.scope.is_legacy(),
+            physical_bytes: None,
             bytes: 0,
             rows: MAX_OWNED_ROWS,
             check: Some(check),
@@ -56,10 +60,23 @@ impl<'a> Budget<'a> {
         Self {
             shared: Some(shared),
             tenant: !store.scope.is_legacy(),
+            physical_bytes: None,
             bytes: 0,
             rows: MAX_ROWS,
             check: None,
         }
+    }
+    pub(super) fn physical_write(&self) -> bool {
+        self.physical_bytes.is_some()
+    }
+    pub(super) fn statement(&mut self, statement: &sea_orm::Statement) -> Result<()> {
+        if let Some(bytes) = &mut self.physical_bytes {
+            *bytes = bytes
+                .checked_add(crate::storage::write::statement_bytes(statement)?)
+                .filter(|bytes| *bytes <= crate::storage::operation_budget::MAX_BYTES)
+                .ok_or(crate::gateway::error::BitrouterError::RateLimited { retry_after: None })?;
+        }
+        Ok(())
     }
     pub(super) fn check(&self) -> Result<()> {
         if let Some(shared) = self.shared {
@@ -217,7 +234,9 @@ pub(super) async fn insert(
         statement.on_conflict(OnConflict::new().do_nothing().to_owned());
     }
     budget.check()?;
-    let result = db.execute(backend.build(&statement)).await;
+    let statement = backend.build(&statement);
+    budget.statement(&statement)?;
+    let result = db.execute(statement).await;
     budget.check()?;
     match result {
         Ok(result) => {

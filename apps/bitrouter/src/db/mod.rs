@@ -12,6 +12,8 @@
 //!    `sea-orm-migration` code, so the same table definitions apply
 //!    verbatim on whichever backend is configured.
 
+#[cfg(all(test, unix))]
+mod exclusive_migrations;
 pub mod migration;
 #[cfg(test)]
 mod migration_atomicity;
@@ -51,6 +53,42 @@ impl OwnedDatabase {
     pub(crate) fn database(&self) -> &DatabaseConnection {
         &self.db
     }
+    /// Apply schema changes before claiming this database for a running Service.
+    /// A current ledger is read-only and needs no migration headroom.
+    pub(crate) async fn migrate(&self) -> anyhow::Result<()> {
+        self.migrate_with(|encoded| crate::tenancy::storage::exclusive_write(&self.owner, encoded))
+            .await
+    }
+
+    async fn migrate_with(
+        &self,
+        before_write: impl FnOnce(u64) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        use anyhow::{Context, ensure};
+        ensure!(self.owner.exclusive(), "exclusive migration owner required");
+        if !pending_sqlite_migrations(&self.db).await? {
+            return Ok(());
+        }
+        // Allow for newly created schema even on an empty database. This is an
+        // engineering estimate, not a data limit or an allocation guarantee.
+        const NEW_SCHEMA_BYTES: u64 = 1024 * 1024;
+        let row = self.db.query_one(sea_orm::Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT page_count AS pages, page_size AS bytes FROM pragma_page_count(), pragma_page_size()"))
+            .await?.context("SQLite migration page inventory")?;
+        let pages = u64::try_from(row.try_get::<i64>("", "pages")?)?;
+        let size = u64::try_from(row.try_get::<i64>("", "bytes")?)?;
+        ensure!(size > 0, "invalid SQLite page size");
+        // Query the current SQLite image, including pages visible through WAL,
+        // rather than stat'ing the possibly uncheckpointed main-file length.
+        // https://www.sqlite.org/pragma.html#pragma_page_count
+        let encoded = pages
+            .checked_mul(size)
+            .and_then(|n| n.checked_add(NEW_SCHEMA_BYTES))
+            .context("migration write estimate overflow")?;
+        before_write(encoded)?;
+        run_migrations(&self.db).await?;
+        Ok(())
+    }
     pub(crate) fn claim(
         self,
     ) -> anyhow::Result<(
@@ -61,6 +99,56 @@ impl OwnedDatabase {
         let claim = self.owner.claim()?;
         Ok((self.db, self.owner, claim))
     }
+}
+
+async fn pending_sqlite_migrations(db: &DatabaseConnection) -> anyhow::Result<bool> {
+    use anyhow::{Context, ensure};
+    use sea_orm::Statement;
+    ensure!(
+        db.get_database_backend() == DatabaseBackend::Sqlite,
+        "owned migrations require SQLite"
+    );
+    // Migrator::get_pending_migrations calls install(), which can write before
+    // a preflight. Read the bounded ledger directly without creating it.
+    // https://github.com/SeaQL/sea-orm/blob/1.1.20/sea-orm-migration/src/migrator.rs
+    ensure!(
+        db.query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT 1 FROM temp.sqlite_schema WHERE lower(name)='seaql_migrations' LIMIT 1"
+        ))
+        .await?
+        .is_none(),
+        "temporary migration ledger is unsupported"
+    );
+    let Some(table) = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT type FROM main.sqlite_schema WHERE lower(name)='seaql_migrations' LIMIT 1",
+        ))
+        .await?
+    else {
+        return Ok(true);
+    };
+    ensure!(
+        table.try_get::<String>("", "type")? == "table",
+        "invalid migration ledger"
+    );
+    let mut pending: std::collections::BTreeSet<_> = migration::Migrator::migrations()
+        .iter()
+        .map(|migration| migration.name().to_owned())
+        .collect();
+    let rows = db.query_all(Statement::from_string(DatabaseBackend::Sqlite, format!(
+        "SELECT CASE WHEN typeof(version)='text' AND length(CAST(version AS BLOB))<=256 THEN version ELSE NULL END AS version, CASE WHEN typeof(applied_at)='integer' THEN applied_at ELSE NULL END AS applied_at FROM main.seaql_migrations LIMIT {}", pending.len().checked_add(1).context("migration registry size")?
+    ))).await?;
+    for row in rows {
+        let version: String = row.try_get("", "version")?;
+        let _: i64 = row.try_get("", "applied_at")?;
+        ensure!(
+            pending.remove(&version),
+            "unknown or duplicate migration identity"
+        );
+    }
+    Ok(!pending.is_empty())
 }
 pub(crate) async fn connect_owned_tenancy(url: &str) -> anyhow::Result<OwnedDatabase> {
     let owner = crate::tenancy::ownership::acquire(url)?;

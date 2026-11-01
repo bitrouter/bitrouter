@@ -5,6 +5,8 @@ mod listener;
 pub(crate) mod recovery;
 #[cfg(all(test, unix))]
 pub(super) mod tests;
+pub(crate) mod upgrade;
+mod validation;
 
 use super::{
     error::Failure,
@@ -60,7 +62,11 @@ pub(crate) struct Archive {
 /// The caller owns Connections before establishment and remains its sole owner.
 pub(crate) struct Loaded(Snapshot);
 
-pub(crate) async fn load_existing(connections: &mut Connections) -> anyhow::Result<Loaded> {
+pub(crate) async fn load_with_budget(
+    connections: &mut Connections,
+    budget: crate::offline::ValidationBudget,
+) -> anyhow::Result<Loaded> {
+    connections.validation_budget().await?;
     let db = connections
         .copy
         .as_mut()
@@ -71,13 +77,11 @@ pub(crate) async fn load_existing(connections: &mut Connections) -> anyhow::Resu
     connections.uncertain = true;
     sea_orm::sqlx::query("BEGIN").execute(&mut *db).await?;
     let loaded = async {
-        let reader = ReadConnection::new(db);
+        let reader = ReadConnection::new(db).with_row_limit(budget.rows.max(64));
         // A valid ledger/digest does not imply BINARY key comparisons. Validate
         // the exact receipt schema before creating any serving Archive.
-        crate::db::migration::validate_receipt_archive(&reader).await?;
-        let state = super::store::load_existing(&reader, chrono::Utc::now()).await?;
-        super::receipts::store::inventory(&reader, &state.installation).await?;
-        Ok::<_, anyhow::Error>(state)
+        let loaded = validation::load(&reader, budget).await?;
+        Ok::<_, anyhow::Error>(Snapshot::from_header(&loaded.header))
     }
     .await;
     connections.cleanup_budget().await?;

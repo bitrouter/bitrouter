@@ -18,7 +18,7 @@ async fn exercise(root: &Path, mode: &str) -> Result<()> {
     let url = format!("sqlite://{}", database.display());
     let owner = crate::tenancy::ownership::acquire(&url)?;
     let db = crate::db::connect_tenancy(&url, &owner).await?;
-    let fixture = Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db, &mut |_| {}).await?;
     let provider = Provider::start(false).await?;
     let judge = Judge::new(false).await?;
     let ready = Ready::from_fixture(

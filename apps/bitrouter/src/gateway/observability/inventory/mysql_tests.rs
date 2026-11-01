@@ -14,10 +14,12 @@ use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use super::{
-    COVERAGE_KIND, CoverageRegistration, GatewayInventory, coverage_matches_locked, lock_connection,
+    COVERAGE_KIND, CoverageRegistration, GatewayInventory, coverage_matches_locked,
+    lock_charged_connection, lock_connection,
 };
 use crate::storage::capture::connections;
 use crate::storage::evolution::{EvolutionStore, records};
+use crate::storage::write::Write;
 
 // The two ignored tests may start together against an unmigrated database.
 static MIGRATIONS: Mutex<()> = Mutex::const_new(());
@@ -158,15 +160,20 @@ async fn locked_coverage_rejects_stale_absence_and_revision() -> Result<()> {
                 // register_capture owns and commits a separate transaction.
                 inventory.register_capture(&id, &id, &id).await?;
             } else {
-                let writer = db.begin().await?;
-                lock_connection(&writer, &id).await?;
-                ensure!(
-                    inventory
-                        .touch_coverage(&writer, &BTreeMap::from([(id.clone(), 0)]))
-                        .await?,
-                    "registered coverage was unexpectedly invalid"
-                );
-                writer.commit().await?;
+                let (mut write, writer) =
+                    Write::begin(&db, &inventory.storage_budget, false).await?;
+                let result = async {
+                    lock_charged_connection(&writer, &id, &mut write).await?;
+                    ensure!(
+                        inventory
+                            .touch_coverage(&writer, &BTreeMap::from([(id.clone(), 0)]), &mut write)
+                            .await?,
+                        "registered coverage was unexpectedly invalid"
+                    );
+                    Ok(())
+                }
+                .await;
+                write.finish(writer, result).await?;
             }
             let (current, _) = store
                 .get::<CoverageRegistration>(COVERAGE_KIND, &id)

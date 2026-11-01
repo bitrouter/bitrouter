@@ -12,13 +12,17 @@ use bitrouter_ai::tenancy::{
 };
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, QueryResult,
-    sea_query::{Alias, Expr, Func, OnConflict, Query, SelectStatement},
+    sea_query::{Alias, Expr, Func, OnConflict, Order, Query, SelectStatement},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+pub(in crate::tenancy) mod pending;
+
 pub(in crate::tenancy) const TABLE: &str = "tenancy_oauth_slots";
 const META_BYTES: usize = 8192;
+const PAGE_ROWS: usize = 32;
+const INVENTORY_BYTES: u64 = (profile::PAYLOAD_BYTES + META_BYTES + 32 * 1024) as u64;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -160,7 +164,15 @@ fn owner(reference: &ResourceRef) -> Result<String> {
         .context("OAuth owner kind")?
         .to_owned())
 }
-async fn rows(db: &impl ConnectionTrait, mut select: SelectStatement) -> Result<Vec<Row>> {
+async fn rows(
+    db: &impl ConnectionTrait,
+    mut select: SelectStatement,
+    maximum_rows: usize,
+) -> Result<Vec<Row>> {
+    ensure!(maximum_rows > 0, "OAuth batch bound");
+    let maximum_bytes = maximum_rows
+        .checked_mul(META_BYTES + profile::PAYLOAD_BYTES)
+        .context("OAuth batch byte overflow")?;
     let backend = db.get_database_backend();
     for (name, max) in [
         ("installation_id", 128),
@@ -180,33 +192,68 @@ async fn rows(db: &impl ConnectionTrait, mut select: SelectStatement) -> Result<
         } else {
             Func::cust(Alias::new("octet_length")).arg(Expr::col(Alias::new(name)))
         };
+        let mut valid = Expr::expr(length).lte(max);
+        if backend == DatabaseBackend::Sqlite {
+            valid = valid.and(Expr::cust(format!("typeof({name})='text'")));
+        }
         select.expr_as(
-            Expr::case(Expr::expr(length).lte(max), Expr::col(Alias::new(name)))
+            Expr::case(valid, Expr::col(Alias::new(name)))
                 .finally(Expr::val(Option::<String>::None)),
             Alias::new(name),
         );
     }
-    select.column(Alias::new("generation"));
+    if backend == DatabaseBackend::Sqlite {
+        select.expr_as(
+            Expr::cust("CASE WHEN typeof(generation)='integer' THEN generation ELSE NULL END"),
+            Alias::new("generation"),
+        );
+    } else {
+        select.column(Alias::new("generation"));
+    }
+    if backend == DatabaseBackend::Sqlite {
+        for name in ["pending_tenant_id", "pending_execution_id"] {
+            select.expr_as(Expr::cust(format!(
+                "CASE WHEN typeof({name})='text' AND length(CAST({name} AS BLOB)) BETWEEN 1 AND 128 THEN {name} ELSE NULL END"
+            )), Alias::new(name));
+        }
+        select.expr_as(Expr::cust("CASE WHEN (pending_tenant_id IS NULL OR (typeof(pending_tenant_id)='text' AND length(CAST(pending_tenant_id AS BLOB)) BETWEEN 1 AND 128)) AND (pending_execution_id IS NULL OR (typeof(pending_execution_id)='text' AND length(CAST(pending_execution_id AS BLOB)) BETWEEN 1 AND 128)) THEN 1 ELSE 0 END"), Alias::new("pending_valid"));
+    }
     let rows = db.query_all(backend.build(&select)).await?;
-    ensure!(rows.len() <= profile::MAX_SLOTS, "OAuth slot capacity");
+    ensure!(rows.len() <= maximum_rows, "OAuth batch row bound");
     let mut bytes = 0usize;
     rows.into_iter()
         .map(|row| {
-            let value = decode(row)?;
+            let value = decode(row, backend == DatabaseBackend::Sqlite)?;
             bytes = bytes
                 .checked_add(value.json.len())
-                .context("OAuth metadata overflow")?;
-            ensure!(bytes <= profile::METADATA_BYTES, "OAuth metadata capacity");
+                .and_then(|bytes| bytes.checked_add(value.payload.len()))
+                .context("OAuth batch byte overflow")?;
+            ensure!(bytes <= maximum_bytes, "OAuth batch byte bound");
             Ok(value)
         })
         .collect()
 }
-fn decode(row: QueryResult) -> Result<Row> {
+fn decode(row: QueryResult, projected: bool) -> Result<Row> {
     let json: String = row.try_get("", "metadata_json")?;
     let payload: String = row.try_get("", "payload_json")?;
     let stored: String = row.try_get("", "content_digest")?;
     let metadata: Metadata = serde_json::from_str(&json)?;
     metadata.validate()?;
+    if projected {
+        let (tenant, execution) = pending_identity(&metadata);
+        ensure!(
+            row.try_get::<i64>("", "pending_valid")? == 1
+                && row
+                    .try_get::<Option<String>>("", "pending_tenant_id")?
+                    .as_deref()
+                    == tenant
+                && row
+                    .try_get::<Option<String>>("", "pending_execution_id")?
+                    .as_deref()
+                    == execution,
+            "OAuth pending ownership projection mismatch"
+        );
+    }
     ensure!(
         stored == digest(&json, &payload)
             && row.try_get::<String>("", "installation_id")? == metadata.installation.as_str()
@@ -228,7 +275,33 @@ fn decode(row: QueryResult) -> Result<Row> {
         digest: stored,
     })
 }
+
+fn pending_identity(metadata: &Metadata) -> (Option<&str>, Option<&str>) {
+    match &metadata.state {
+        State::Ready => (None, None),
+        State::RefreshStarted(work) | State::Quarantined(work) => {
+            (Some(work.tenant.as_str()), Some(work.execution.as_str()))
+        }
+    }
+}
 pub(in crate::tenancy) async fn load(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    reference: &ResourceRef,
+) -> Result<Option<Row>> {
+    let row = lookup(db, installation, reference).await?;
+    if let Some(row) = &row {
+        ensure!(
+            row.metadata.reference == *reference,
+            "OAuth authority revision conflict"
+        );
+    }
+    Ok(row)
+}
+
+/// Read the stable slot, retaining a different revision as a positive conflict.
+/// An authority view must distinguish that conflict from a proven empty slot.
+pub(in crate::tenancy) async fn lookup(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
     reference: &ResourceRef,
@@ -239,64 +312,92 @@ pub(in crate::tenancy) async fn load(
             .and_where(Expr::col(Alias::new("slot_key")).eq(slot(installation, reference)?))
             .limit(2)
             .to_owned(),
+        2,
     )
     .await?;
     ensure!(rows.len() <= 1, "duplicate OAuth slot");
-    let row = rows.pop();
-    if let Some(row) = &row {
-        ensure!(
-            row.metadata.reference == *reference,
-            "OAuth authority revision conflict"
-        );
-    }
-    Ok(row)
+    Ok(rows.pop())
 }
-pub(in crate::tenancy) async fn all(
+/// One bounded page for the exclusively owned installation, ordered by stable
+/// slot key. Retain the last returned metadata.slot as cursor; an empty page
+/// completes the scan. The caller holds a stable read or the exclusive writer.
+/// A foreign installation is corruption, not a row to silently skip.
+pub(in crate::tenancy) async fn page(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
+    after_slot: Option<&str>,
 ) -> Result<Vec<Row>> {
-    rows(
-        db,
-        query(installation)
-            .limit((profile::MAX_SLOTS + 1) as u64)
-            .to_owned(),
-    )
-    .await
+    let mut selected = Query::select().from(Alias::new(TABLE)).to_owned();
+    if let Some(after) = after_slot {
+        ensure!(
+            !after.is_empty() && after.len() <= 64,
+            "OAuth page cursor bound"
+        );
+        selected.and_where(Expr::col(Alias::new("slot_key")).gt(after));
+    }
+    // Walk the slot primary key. An installation/state index cannot provide
+    // this order without sorting the whole catalog; guard aliases must not
+    // replace the raw indexed ORDER BY expression either.
+    selected
+        .order_by((Alias::new(TABLE), Alias::new("slot_key")), Order::Asc)
+        .limit(PAGE_ROWS as u64);
+    let result = rows(db, selected, PAGE_ROWS).await?;
+    let mut previous = after_slot;
+    for row in &result {
+        ensure!(
+            &row.metadata.installation == installation,
+            "foreign OAuth page installation"
+        );
+        ensure!(
+            previous.is_none_or(|previous| previous < row.metadata.slot.as_str()),
+            "OAuth page key order"
+        );
+        previous = Some(row.metadata.slot.as_str());
+    }
+    Ok(result)
 }
 pub(in crate::tenancy) async fn insert(db: &impl ConnectionTrait, row: &Row) -> Result<()> {
     let backend = db.get_database_backend();
+    row.metadata.validate()?;
     let mut insert = Query::insert();
+    let mut columns = vec![
+        "slot_key",
+        "installation_id",
+        "owner_kind",
+        "owner_id",
+        "credential_resource_id",
+        "authority_revision",
+        "generation",
+        "state",
+        "metadata_json",
+        "payload_json",
+        "content_digest",
+    ];
+    let mut values: Vec<sea_orm::sea_query::SimpleExpr> = vec![
+        row.metadata.slot.clone().into(),
+        row.metadata.installation.as_str().into(),
+        owner(&row.metadata.reference)?.into(),
+        row.metadata.reference.owner_id.as_str().into(),
+        row.metadata.reference.resource_id.as_str().into(),
+        row.metadata.reference.revision_id.as_str().into(),
+        i64::try_from(row.metadata.generation)?.into(),
+        row.metadata.state.name().into(),
+        row.json.clone().into(),
+        row.payload.clone().into(),
+        row.digest.clone().into(),
+    ];
+    if backend == DatabaseBackend::Sqlite {
+        columns.extend(["pending_tenant_id", "pending_execution_id"]);
+        let (tenant, execution) = pending_identity(&row.metadata);
+        values.extend([
+            tenant.map(str::to_owned).into(),
+            execution.map(str::to_owned).into(),
+        ]);
+    }
     insert
         .into_table(Alias::new(TABLE))
-        .columns(
-            [
-                "slot_key",
-                "installation_id",
-                "owner_kind",
-                "owner_id",
-                "credential_resource_id",
-                "authority_revision",
-                "generation",
-                "state",
-                "metadata_json",
-                "payload_json",
-                "content_digest",
-            ]
-            .map(Alias::new),
-        )
-        .values([
-            row.metadata.slot.clone().into(),
-            row.metadata.installation.as_str().into(),
-            owner(&row.metadata.reference)?.into(),
-            row.metadata.reference.owner_id.as_str().into(),
-            row.metadata.reference.resource_id.as_str().into(),
-            row.metadata.reference.revision_id.as_str().into(),
-            i64::try_from(row.metadata.generation)?.into(),
-            row.metadata.state.name().into(),
-            row.json.clone().into(),
-            row.payload.clone().into(),
-            row.digest.clone().into(),
-        ])?;
+        .columns(columns.into_iter().map(Alias::new))
+        .values(values)?;
     if backend != DatabaseBackend::MySql {
         insert.on_conflict(OnConflict::new().do_nothing().to_owned());
     }
@@ -322,9 +423,12 @@ pub(in crate::tenancy) async fn replace(
     new: &Row,
 ) -> Result<()> {
     ensure!(
-        old.metadata.reference == new.metadata.reference && old.metadata.slot == new.metadata.slot,
+        old.metadata.installation == new.metadata.installation
+            && old.metadata.reference == new.metadata.reference
+            && old.metadata.slot == new.metadata.slot,
         "OAuth update identity conflict"
     );
+    new.metadata.validate()?;
     let mut update = Query::update();
     update
         .table(Alias::new(TABLE))
@@ -341,6 +445,19 @@ pub(in crate::tenancy) async fn replace(
         .and_where(Expr::col(Alias::new("slot_key")).eq(&old.metadata.slot))
         .and_where(Expr::col(Alias::new("installation_id")).eq(old.metadata.installation.as_str()))
         .and_where(Expr::col(Alias::new("content_digest")).eq(&old.digest));
+    if db.get_database_backend() == DatabaseBackend::Sqlite {
+        let (tenant, execution) = pending_identity(&new.metadata);
+        update.values([
+            (
+                Alias::new("pending_tenant_id"),
+                tenant.map(str::to_owned).into(),
+            ),
+            (
+                Alias::new("pending_execution_id"),
+                execution.map(str::to_owned).into(),
+            ),
+        ]);
+    }
     ensure!(
         db.execute(db.get_database_backend().build(&update))
             .await?
@@ -386,43 +503,43 @@ pub(in crate::tenancy) async fn inventory(
         .context("OAuth slot inventory")?
         .try_get::<i64>("", "slots")?;
     let count = u64::try_from(count)?;
-    ensure!(count <= profile::MAX_SLOTS as u64, "OAuth slot capacity");
     count
-        .checked_mul((profile::PAYLOAD_BYTES + META_BYTES + 32 * 1024) as u64)
+        .checked_mul(INVENTORY_BYTES)
         .context("OAuth slot inventory overflow")
 }
 
 #[cfg(test)]
 mod tests;
 
-/// A crash can leave a durable start without a terminal auxiliary receipt. It
-/// still consumes the same existing unknown-effect budget on restart. Once an
-/// exact auxiliary receipt exists, its validated disposition is authoritative;
-/// do not count a known rejection as unknown or count the execution twice.
+/// Test witness for legacy OAuth fault assertions. Production streams canonical
+/// obligations and never collects pending work into a whole-directory vector.
+#[cfg(test)]
 pub(in crate::tenancy) async fn pending_unknown(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
 ) -> Result<Vec<(TenantId, ExecutionId, chrono::DateTime<chrono::Utc>)>> {
-    let selected = query(installation)
-        .and_where(Expr::col(Alias::new("state")).ne("ready"))
-        .limit((profile::MAX_SLOTS + 1) as u64)
-        .to_owned();
-    let rows = rows(db, selected).await?;
     let mut pending = Vec::new();
-    for row in rows {
-        let work = match &row.metadata.state {
-            State::RefreshStarted(work) | State::Quarantined(work) => work,
-            State::Ready => anyhow::bail!("OAuth pending projection mismatch"),
-        };
-        if !crate::tenancy::receipts::auxiliary_store::pending_receipted(db, &row.metadata, work)
-            .await?
-        {
-            pending.push((
-                work.tenant.clone(),
-                work.execution.clone(),
-                chrono::DateTime::parse_from_rfc3339(work.started_at.as_str())?
-                    .with_timezone(&chrono::Utc),
-            ));
+    let mut cursor = None::<String>;
+    loop {
+        let metadata = pending::page(db, installation, cursor.as_deref(), &|_, _| Ok(())).await?;
+        if metadata.is_empty() {
+            break;
+        }
+        for metadata in metadata {
+            if let State::RefreshStarted(work) | State::Quarantined(work) = &metadata.state
+                && !crate::tenancy::receipts::auxiliary_store::pending_receipted(
+                    db, &metadata, work,
+                )
+                .await?
+            {
+                pending.push((
+                    work.tenant.clone(),
+                    work.execution.clone(),
+                    chrono::DateTime::parse_from_rfc3339(work.started_at.as_str())?
+                        .with_timezone(&chrono::Utc),
+                ));
+            }
+            cursor = Some(metadata.slot);
         }
     }
     Ok(pending)

@@ -1,7 +1,9 @@
 use super::*;
 use crate::tenancy::{
+    authority::live::View,
     experiment::store::cohort,
     learner::{identity::ReadIdentity, source::Acquired},
+    store::directory,
 };
 
 impl Worker {
@@ -17,17 +19,37 @@ impl Worker {
         if !registration.input.enabled {
             return Ok(Reply::Unchanged);
         }
-        let identity = Arc::new(
-            ReadIdentity::checked(registration.clone(), self, deadline, stopped.clone())
-                .map_err(Failure::from)?,
-        );
-        let state = self.current()?;
+        let (header, publication) = {
+            let guard = self.authority.read().map_err(Failure::from)?;
+            (guard.header().clone(), guard.publication())
+        };
+        let bytes = self.authority.load_budget() / 2;
         let input = &registration.input;
         let tx = control
             .begin_repeatable_read(&self.db)
             .await
             .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-        let result = async {
+        let loaded = async {
+            let mut facts = directory::load_tenant_in(
+                &tx,
+                &header,
+                &registration.ceiling.caller(),
+                &input.tenant,
+                true,
+                bytes,
+            )
+            .await?;
+            facts.snapshot.resource_lifecycle.restrict();
+            if facts.snapshot.installation != input.installation
+                || facts.snapshot.active_configurations.get(&input.tenant)
+                    != Some(&input.expected_active_revision)
+            {
+                return Err(BudgetError::Rejected(ErrorCode::RevisionConflict).into());
+            }
+            registration
+                .ceiling
+                .check(&facts.snapshot, &input.tenant, &[])
+                .map_err(BudgetError::Rejected)?;
             let (_, schedule) =
                 learner::store::read(&tx, &input.installation, &input.tenant, &input.id, budget)
                     .await?
@@ -52,8 +74,11 @@ impl Worker {
             )
             .await?
             .ok_or(BudgetError::Rejected(ErrorCode::NotFound))?;
-            identity
-                .check(&configured.dependencies)
+            directory::load_dependencies_in(&tx, &mut facts, &configured.dependencies, bytes)
+                .await?;
+            registration
+                .ceiling
+                .check(&facts.snapshot, &input.tenant, &configured.dependencies)
                 .map_err(BudgetError::Rejected)?;
             budget.charge(
                 1,
@@ -72,6 +97,44 @@ impl Worker {
             {
                 return Err(BudgetError::Rejected(ErrorCode::RevisionConflict).into());
             }
+            let view = View::new(facts.snapshot, Vec::new()).map_err(BudgetError::Rejected)?;
+            budget.check()?;
+            Ok::<_, anyhow::Error>((configured, runtime, schedule, view))
+        }
+        .await;
+        // Register only after acknowledged cleanup; the following evidence read
+        // starts a separate transaction under the same job permit and deadline.
+        control
+            .rollback(tx)
+            .await
+            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+        let (configured, runtime, schedule, view) =
+            loaded.map_err(|error| self.learner_error(error))?;
+        budget
+            .check()
+            .map_err(|error| self.learner_error(error.into()))?;
+        let authority = self
+            .authority
+            .register(view, publication)
+            .map_err(Failure::from)?;
+        let identity = Arc::new(
+            ReadIdentity::checked(
+                registration.clone(),
+                self,
+                authority,
+                deadline,
+                stopped.clone(),
+            )
+            .map_err(Failure::from)?,
+        );
+        let tx = control
+            .begin_repeatable_read(&self.db)
+            .await
+            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+        let result = async {
+            identity
+                .check(&configured.dependencies)
+                .map_err(BudgetError::Rejected)?;
             let lease = Arc::new(
                 self.admission
                     .learning(
@@ -125,7 +188,7 @@ impl Worker {
                 policy,
                 document: runtime.document().clone(),
                 dependencies: configured.dependencies,
-                authority_revision: state.revision,
+                authority_revision: header.revision,
                 sequence: schedule.next_sequence,
                 charged: budget.usage()?,
                 operation,

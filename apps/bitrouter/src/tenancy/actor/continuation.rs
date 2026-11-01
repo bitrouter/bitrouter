@@ -43,33 +43,73 @@ impl Worker {
             return Ok(Reply::Unit);
         }
         let crypto = self.http_continuation.crypto()?;
+        if let Work::Resolve { access, .. } = &job.work {
+            access
+                .validate(
+                    &mut self.authority.read().map_err(Failure::from)?,
+                    &self.proof,
+                )
+                .map_err(Failure::from)?;
+        }
+        if !job.work.read() {
+            // Maintenance mutates at most one bounded page; replacements may
+            // retain both encrypted payloads until the consuming commit.
+            control.reserve_write(
+                2 * store::BATCH * super::super::continuation::http::codec::CELL_LIMIT,
+                true,
+            )?;
+        }
+        let tx = control
+            .begin_repeatable_read(&self.db)
+            .await
+            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+        // The one owning actor serializes this exact tenant read with all
+        // lifecycle writes. Only one row is retained for this transaction.
+        let tenant = if let Work::Prepare { ticket, .. }
+        | Work::Advance {
+            ticket,
+            step: Step::Delivering | Step::Active,
+        } = &job.work
+        {
+            match crate::tenancy::store::directory::tenant_in(
+                &tx,
+                ticket.owner.tenant(),
+                self.authority.load_budget() / 64,
+            )
+            .await
+            {
+                Ok(tenant) => tenant,
+                Err(error) => {
+                    let failure = self.directory_failure(error);
+                    control
+                        .rollback(tx)
+                        .await
+                        .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+                    return Err(failure);
+                }
+            }
+        } else {
+            None
+        };
         let check = || {
             self.http_origin(job, control)?;
-            if let Work::Resolve {
-                access,
-                public_id: _,
-                _permit: _,
-            } = &job.work
-            {
-                let current = self.current().map_err(|e| e.0.code)?;
-                access.validate(&current, &self.proof)?;
+            let mut authority = self.authority.read()?;
+            if let Work::Resolve { access, .. } = &job.work {
+                access.validate(&mut authority, &self.proof)?;
             }
             // Caller rotation/revocation does not cancel an admitted terminal.
-            // Tenant inactivity separately forbids new publication (M0). The
-            // same actor serializes this check with lifecycle acknowledgement.
+            // Tenant inactivity still forbids publishing a new continuation.
             if let Work::Prepare { ticket, .. }
             | Work::Advance {
                 ticket,
                 step: Step::Delivering | Step::Active,
             } = &job.work
             {
-                let current = self.current().map_err(|error| error.0.code)?;
-                if current.installation != *ticket.owner.installation() {
+                if authority.header().installation != *ticket.owner.installation() {
                     return Err(ErrorCode::AuthorityUnavailable);
                 }
-                if !current
-                    .tenants
-                    .get(ticket.owner.tenant())
+                if !tenant
+                    .as_ref()
                     .is_some_and(|tenant| tenant.state == TenantState::Active)
                 {
                     return Err(ErrorCode::TenantInactive);
@@ -77,12 +117,7 @@ impl Worker {
             }
             Ok(())
         };
-        check()?;
         let budget = OperationBudget::new(&check);
-        let tx = control
-            .begin_repeatable_read(&self.db)
-            .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
         let result = async {
             check()?;
             match &job.work {

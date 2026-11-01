@@ -188,6 +188,7 @@ async fn minimal_build_rejects_activation_and_restore_of_retained_learning() -> 
                 fixture
                     .service
                     .active_revision(&fixture.operator, &fixture.tenant)
+                    .await
                     .map_err(failure)?
                     .revision_id
                     .is_none()
@@ -330,7 +331,6 @@ async fn retained_nonempty_configuration_requires_every_credential_dependency() 
     fixture.service = Service::start_prepared(
         fixture.db.clone(),
         None,
-        super::super::actor::OperationLimits::default(),
         snapshot,
         std::sync::Arc::new(resources),
     )
@@ -339,6 +339,7 @@ async fn retained_nonempty_configuration_requires_every_credential_dependency() 
     let caller = fixture
         .service
         .authenticate(credential.secret.as_deref().context("secret missing")?)
+        .await
         .map_err(failure)?;
     let mut input = fixture.configuration_input("owned-route-draft")?;
     input.document.routes.push(route.clone());
@@ -407,6 +408,7 @@ async fn retained_nonempty_configuration_requires_every_credential_dependency() 
     let caller = fixture
         .service
         .authenticate(credential.secret.as_deref().context("secret missing")?)
+        .await
         .map_err(failure)?;
     ensure!(
         matches!(fixture.service.configuration(&caller, &fixture.tenant, &r1.revision_id).await,
@@ -446,6 +448,7 @@ async fn drafts_are_immutable_and_activation_rollback_is_cas_bound() -> Result<(
         fixture
             .service
             .active_revision(&fixture.operator, &fixture.tenant)
+            .await
             .map_err(failure)?
             .revision_id
             .is_none()
@@ -508,6 +511,7 @@ async fn drafts_are_immutable_and_activation_rollback_is_cas_bound() -> Result<(
         fixture
             .service
             .active_revision(&fixture.operator, &fixture.tenant)
+            .await
             .map_err(failure)?
             .revision_id
             .as_ref()
@@ -555,6 +559,7 @@ async fn drafts_are_immutable_and_activation_rollback_is_cas_bound() -> Result<(
     ensure!(
         restarted
             .active_revision(&fixture.operator, &fixture.tenant)
+            .await
             .map_err(failure)?
             .revision_id
             == Some(r1.revision_id.clone())
@@ -564,7 +569,10 @@ async fn drafts_are_immutable_and_activation_rollback_is_cas_bound() -> Result<(
         .await
         .map_err(failure)?;
     ensure!(recovered.document == input.document && recovered.content_digest == r1.content_digest);
-    let capabilities = restarted.capabilities(&fixture.operator).map_err(failure)?;
+    let capabilities = restarted
+        .capabilities(&fixture.operator)
+        .await
+        .map_err(failure)?;
     ensure!(
         !capabilities.dispatch_enabled
             && !capabilities.strict_receipts
@@ -685,6 +693,7 @@ async fn competing_activations_publish_only_one_observed_authority() -> Result<(
         fixture
             .service
             .active_revision(&fixture.operator, &fixture.tenant)
+            .await
             .map_err(failure)?
             .revision_id
             .as_ref()
@@ -730,6 +739,7 @@ async fn empty_configuration_reads_and_replay_require_current_whole_tenant_scope
     let caller = fixture
         .service
         .authenticate(credential.secret.as_deref().context("missing secret")?)
+        .await
         .map_err(failure)?;
     let input = fixture.configuration_input("tenant-draft")?;
     let configuration = retained(
@@ -778,7 +788,7 @@ async fn empty_configuration_reads_and_replay_require_current_whole_tenant_scope
         matches!(fixture.service.configuration(&caller, &fixture.tenant, &configuration.revision_id).await, Err(error) if error.0.code == ErrorCode::Forbidden)
     );
     ensure!(
-        matches!(fixture.service.active_revision(&caller, &fixture.tenant), Err(error) if error.0.code == ErrorCode::Forbidden)
+        matches!(fixture.service.active_revision(&caller, &fixture.tenant).await, Err(error) if error.0.code == ErrorCode::Forbidden)
     );
     ensure!(
         matches!(fixture.service.execute(caller.clone(), Command::Configuration(fixture.tenant.clone(), input.clone())).await, Err(error) if error.0.code == ErrorCode::Forbidden)

@@ -14,6 +14,9 @@ use bitrouter_ai::harness::runtime::ErrorCode;
 use bitrouter_ai::harness::thread::ThreadStatus;
 use bitrouter_ai::harness::turn::TurnStatus;
 
+mod capacity;
+mod scale;
+
 #[tokio::test]
 async fn startup_discovers_cold_threads_without_replaying_or_loading_hot_context()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -116,7 +119,7 @@ async fn startup_discovers_cold_threads_without_replaying_or_loading_hot_context
     );
     assert!(reader.lock_state().threads.is_empty());
     assert!(reader.lock_state().turns.is_empty());
-    assert_eq!(reader.lock_state().cold_executions.len(), 3);
+    assert!(reader.lock_state().cold_executions.is_empty());
     assert!(!workspace.path().join("not-written.txt").exists());
     // Discovery has consumed no provider request; known-clean workspace can
     // admit fresh work, while the old paused FIFO remains a recorded decision.
@@ -185,6 +188,8 @@ struct DiscoveryFault {
     memory: Arc<MemoryExecutionStore>,
     fail_index: std::sync::atomic::AtomicBool,
     corrupt_result: bool,
+    max_record_limit: Option<usize>,
+    pause: Option<Arc<capacity::ReadPause>>,
 }
 #[async_trait::async_trait]
 impl ExecutionStore for DiscoveryFault {
@@ -268,6 +273,14 @@ impl ExecutionStore for DiscoveryFault {
         limit: usize,
         bytes: usize,
     ) -> Result<Option<crate::harness::storage::ExecutionPage>, String> {
+        if self.max_record_limit.is_some_and(|maximum| limit > maximum) {
+            return Err("startup record batch exceeded".into());
+        }
+        if after > 0
+            && let Some(pause) = &self.pause
+        {
+            pause.wait_once().await;
+        }
         let mut page = self
             .memory
             .read_records(id, after, cutoff, limit, bytes)
@@ -285,7 +298,9 @@ impl ExecutionStore for DiscoveryFault {
 fn corrupt(record: &mut ExecutionRecord) {
     match record {
         ExecutionRecord::TurnRecord { fact, .. } => corrupt(fact),
-        ExecutionRecord::ToolResult { item_id, .. } => *item_id = "wrong-item".into(),
+        ExecutionRecord::ToolResult { effect, .. } => {
+            *effect = bitrouter_ai::harness::runtime::EffectStatus::Unknown;
+        }
         _ => {}
     }
 }
@@ -308,6 +323,14 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
         &[workspace.path().to_path_buf()],
         store.clone(),
     )?;
+    for index in 0..65 {
+        source
+            .create_thread(
+                &source.inner.instance_id,
+                thread_request(&workspace, &format!("clean-{index}")),
+            )
+            .await?;
+    }
     let thread = source
         .create_thread(&source.inner.instance_id, thread_request(&workspace, "old"))
         .await?;
@@ -335,13 +358,20 @@ async fn startup_blocks_unknown_cold_workspace_before_explicit_load_but_allows_u
         memory: store,
         fail_index: std::sync::atomic::AtomicBool::new(false),
         corrupt_result: true,
+        max_record_limit: Some(2),
+        pause: None,
     });
-    let reader = ThreadService::with_store(
+    let reader = ThreadService::with_startup_and_store(
         app(vec![final_turn()])?,
         &[
             workspace.path().to_path_buf(),
             unrelated.path().to_path_buf(),
         ],
+        &crate::config::startup::StartupConfig {
+            unresolved_roots: 1,
+            unresolved_metadata_bytes: 4096,
+            records_per_batch: 2,
+        },
         fault,
     )?;
     // The first request uses the legacy adapter: its pre-initialization
@@ -447,6 +477,8 @@ async fn incomplete_discovery_cannot_be_bypassed_by_a_cached_owner_and_can_retry
         memory: Arc::new(MemoryExecutionStore::default()),
         fail_index: std::sync::atomic::AtomicBool::new(true),
         corrupt_result: false,
+        max_record_limit: None,
+        pause: None,
     });
     let service = ThreadService::with_store(
         app(vec![final_turn()])?,
@@ -504,57 +536,6 @@ async fn incomplete_discovery_cannot_be_bypassed_by_a_cached_owner_and_can_retry
         TurnStatus::Completed
     );
     service.shutdown().await;
-    Ok(())
-}
-
-#[tokio::test]
-async fn startup_record_and_metadata_limits_fail_closed_before_admission()
--> Result<(), Box<dyn std::error::Error>> {
-    for bound in ["roots", "records", "metadata"] {
-        let workspace = TempDir::new()?;
-        let store = Arc::new(MemoryExecutionStore::default());
-        let source = ThreadService::with_store(
-            app(vec![])?,
-            &[workspace.path().to_path_buf()],
-            store.clone(),
-        )?;
-        source
-            .create_thread(&source.inner.instance_id, thread_request(&workspace, "one"))
-            .await?;
-        source
-            .create_thread(&source.inner.instance_id, thread_request(&workspace, "two"))
-            .await?;
-        source.shutdown().await;
-        let mut limits = crate::harness::service::default_runtime_limits();
-        match bound {
-            "roots" => limits.startup_roots = 1,
-            "records" => limits.startup_records = 1,
-            _ => limits.startup_metadata_bytes = 1,
-        }
-        let reader = ThreadService::with_limits_and_store(
-            app(vec![])?,
-            &[workspace.path().to_path_buf()],
-            limits,
-            store,
-        )?;
-        assert_eq!(
-            reader
-                .initialize_execution()
-                .await
-                .err()
-                .ok_or("startup bound bypassed")?
-                .code,
-            ErrorCode::Overloaded
-        );
-        let report = reader
-            .capabilities()
-            .startup_discovery
-            .ok_or("startup missing")?;
-        assert!(!report.complete);
-        assert!(reader.lock_state().threads.is_empty());
-        assert!(reader.lock_state().cold_executions.is_empty());
-        reader.shutdown().await;
-    }
     Ok(())
 }
 

@@ -11,15 +11,18 @@
 //! sidesteps that entirely. The metering windows are bounded (at most one
 //! month) so the row counts stay modest for a local-first deployment.
 
+mod storage;
+
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Datelike, Duration, TimeZone, Utc};
 use sea_orm::sea_query::OnConflict;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbBackend,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
 };
 use serde::{Deserialize, Serialize};
 
@@ -419,13 +422,27 @@ fn summarize(charges: Vec<(i64, String)>) -> SpendSummary {
 #[derive(Clone)]
 pub struct MeteringStore {
     db: DatabaseConnection,
+    storage_budget: Option<Arc<OnceLock<crate::tenancy::storage::Budget>>>,
 }
 
 impl MeteringStore {
     /// Build a store over a database connection. The database must already
     /// carry the `requests` table (`crate::db::run_migrations`).
     pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+        Self {
+            db,
+            storage_budget: None,
+        }
+    }
+
+    /// Attach the owned database's shared budget before cloning the store.
+    /// Writes refuse admission until the tenancy service fills this cell.
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Arc<OnceLock<crate::tenancy::storage::Budget>>,
+    ) -> Self {
+        self.storage_budget = Some(budget);
+        self
     }
 
     /// Total estimated spend (micro-USD) for `api_key_id` within `window`.
@@ -948,12 +965,12 @@ impl MeteringStore {
         }
         let attempts = row.reconciliation_attempts.max(0).saturating_add(1);
         let mut active: requests::ActiveModel = row.into();
+        let previous_bytes = self.stored_bytes(&active)?;
         active.reconciliation_attempts = Set(attempts);
         active.reconciliation_last_attempt_at = Set(Some(Utc::now().to_rfc3339()));
         active.reconciliation_last_error = Set(None);
-        active.update(&self.db).await.map_err(|error| {
-            BitrouterError::internal(format!("persist reconciliation attempt: {error}"))
-        })?;
+        self.update_row(active, previous_bytes, "persist reconciliation attempt")
+            .await?;
         Ok(attempts as u32)
     }
 
@@ -982,11 +999,11 @@ impl MeteringStore {
             return Ok(false);
         }
         let mut active: requests::ActiveModel = row.into();
+        let previous_bytes = self.stored_bytes(&active)?;
         active.reconciliation_status = Set(ReconciliationStatus::Pending.as_str().to_string());
         active.authoritative_settled_at = Set(None);
-        active.update(&self.db).await.map_err(|error| {
-            BitrouterError::internal(format!("reopen unknown reconciliation: {error}"))
-        })?;
+        self.update_row(active, previous_bytes, "reopen unknown reconciliation")
+            .await?;
         Ok(true)
     }
 
@@ -1004,10 +1021,10 @@ impl MeteringStore {
                 ))
             })?;
         let mut active: requests::ActiveModel = row.into();
+        let previous_bytes = self.stored_bytes(&active)?;
         active.reconciliation_last_error = Set(Some(truncate_error(error)));
-        active.update(&self.db).await.map_err(|update_error| {
-            BitrouterError::internal(format!("persist reconciliation error: {update_error}"))
-        })?;
+        self.update_row(active, previous_bytes, "persist reconciliation error")
+            .await?;
         Ok(())
     }
 
@@ -1030,14 +1047,14 @@ impl MeteringStore {
             return Ok(());
         }
         let mut active: requests::ActiveModel = row.into();
+        let previous_bytes = self.stored_bytes(&active)?;
         active.reconciliation_status = Set(ReconciliationStatus::Unknown.as_str().to_string());
         active.charge_status = Set(ChargeStatus::Unknown.as_str().to_string());
         active.estimated_charge_micro_usd = Set(0);
         active.reconciliation_last_error = Set(Some(truncate_error(reason)));
         active.authoritative_settled_at = Set(Some(Utc::now().to_rfc3339()));
-        active.update(&self.db).await.map_err(|error| {
-            BitrouterError::internal(format!("persist exhausted reconciliation: {error}"))
-        })?;
+        self.update_row(active, previous_bytes, "persist exhausted reconciliation")
+            .await?;
         Ok(())
     }
 
@@ -1249,6 +1266,7 @@ impl MeteringStore {
         })?;
         let settled_at = Utc::now().to_rfc3339();
         let mut active: requests::ActiveModel = row.into();
+        let previous_bytes = self.stored_bytes(&active)?;
         active.provider_id = Set(provider_id);
         active.model_id = Set(model_id);
         active.prompt_tokens = Set(usage.prompt_tokens as i64);
@@ -1268,9 +1286,8 @@ impl MeteringStore {
         active.reconciliation_last_error = Set(None);
         active.authoritative_settled_at = Set(Some(settled_at));
         active.authoritative_receipt_json = Set(Some(raw_json));
-        active.update(&self.db).await.map_err(|error| {
-            BitrouterError::internal(format!("persist authoritative receipt: {error}"))
-        })?;
+        self.update_row(active, previous_bytes, "persist authoritative receipt")
+            .await?;
         Ok(status)
     }
 
@@ -1290,6 +1307,7 @@ impl MeteringStore {
             BitrouterError::internal(format!("serialize authoritative receipt: {error}"))
         })?;
         let mut active: requests::ActiveModel = row.into();
+        let previous_bytes = self.stored_bytes(&active)?;
         active.prompt_tokens = Set(usage.prompt_tokens as i64);
         active.completion_tokens = Set(usage.completion_tokens as i64);
         active.reasoning_tokens = Set(usage.reasoning_tokens as i64);
@@ -1306,9 +1324,8 @@ impl MeteringStore {
         active.reconciliation_last_error = Set(Some(reason.to_string()));
         active.authoritative_settled_at = Set(Some(Utc::now().to_rfc3339()));
         active.authoritative_receipt_json = Set(Some(receipt_json));
-        active.update(&self.db).await.map_err(|error| {
-            BitrouterError::internal(format!("persist unknown reconciliation: {error}"))
-        })?;
+        self.update_row(active, previous_bytes, "persist unknown reconciliation")
+            .await?;
         Ok(ReconciliationStatus::Unknown)
     }
 
@@ -1386,49 +1403,56 @@ impl MeteringStore {
         // `ON CONFLICT(request_id) DO UPDATE` so a retried / streamed-then-
         // finalised write doesn't reset `created_at`; only mutable columns
         // refresh.
-        requests::Entity::insert(row)
-            .on_conflict(
-                OnConflict::column(requests::Column::RequestId)
-                    .update_columns([
-                        requests::Column::UserId,
-                        requests::Column::ApiKeyId,
-                        requests::Column::LaunchId,
-                        requests::Column::AgentHarness,
-                        requests::Column::ControllerInstanceId,
-                        requests::Column::AcpSessionId,
-                        requests::Column::NativeRootSessionId,
-                        requests::Column::NativeAgentThreadId,
-                        requests::Column::NativeParentAgentThreadId,
-                        requests::Column::NativeTurnId,
-                        requests::Column::RouteLeaseId,
-                        requests::Column::SessionIdentityJson,
-                        requests::Column::RouterId,
-                        requests::Column::BindingDigest,
-                        requests::Column::OriginalSelector,
-                        requests::Column::ModelId,
-                        requests::Column::ProviderId,
-                        requests::Column::PromptTokens,
-                        requests::Column::CompletionTokens,
-                        requests::Column::ReasoningTokens,
-                        requests::Column::CacheReadTokens,
-                        requests::Column::CacheWriteTokens,
-                        requests::Column::UncachedInputTokens,
-                        requests::Column::OutputTokens,
-                        requests::Column::UsageOrigin,
-                        requests::Column::RawUsageJson,
-                        requests::Column::ChargeStatus,
-                        requests::Column::ChargeEvidenceJson,
-                        requests::Column::EstimatedChargeMicroUsd,
-                        requests::Column::Streamed,
-                        requests::Column::LatencyMs,
-                        requests::Column::GenerationTimeMs,
-                        requests::Column::Error,
-                    ])
-                    .to_owned(),
-            )
+        // This path has no previously loaded row. Charge the prepared insert
+        // payload; the shared budget adds its journal/index/replacement margin.
+        let mut charge = self.reserve_write(&row, 0)?;
+        let insert = requests::Entity::insert(row).on_conflict(
+            OnConflict::column(requests::Column::RequestId)
+                .update_columns([
+                    requests::Column::UserId,
+                    requests::Column::ApiKeyId,
+                    requests::Column::LaunchId,
+                    requests::Column::AgentHarness,
+                    requests::Column::ControllerInstanceId,
+                    requests::Column::AcpSessionId,
+                    requests::Column::NativeRootSessionId,
+                    requests::Column::NativeAgentThreadId,
+                    requests::Column::NativeParentAgentThreadId,
+                    requests::Column::NativeTurnId,
+                    requests::Column::RouteLeaseId,
+                    requests::Column::SessionIdentityJson,
+                    requests::Column::RouterId,
+                    requests::Column::BindingDigest,
+                    requests::Column::OriginalSelector,
+                    requests::Column::ModelId,
+                    requests::Column::ProviderId,
+                    requests::Column::PromptTokens,
+                    requests::Column::CompletionTokens,
+                    requests::Column::ReasoningTokens,
+                    requests::Column::CacheReadTokens,
+                    requests::Column::CacheWriteTokens,
+                    requests::Column::UncachedInputTokens,
+                    requests::Column::OutputTokens,
+                    requests::Column::UsageOrigin,
+                    requests::Column::RawUsageJson,
+                    requests::Column::ChargeStatus,
+                    requests::Column::ChargeEvidenceJson,
+                    requests::Column::EstimatedChargeMicroUsd,
+                    requests::Column::Streamed,
+                    requests::Column::LatencyMs,
+                    requests::Column::GenerationTimeMs,
+                    requests::Column::Error,
+                ])
+                .to_owned(),
+        );
+        if let Some(charge) = &mut charge {
+            charge.start();
+        }
+        insert
             .exec(&self.db)
             .await
-            .map_err(|e| BitrouterError::internal(format!("record_request: {e}")))?;
+            .map_err(|_| BitrouterError::internal("record_request write failed"))?;
+        storage::complete(charge)?;
         Ok(())
     }
 }

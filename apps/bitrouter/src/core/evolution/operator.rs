@@ -297,7 +297,15 @@ impl EvolutionRuntime {
                 action,
             } => {
                 return Ok(EvolutionReport::Checkpoint(Box::new(
-                    checkpoint::operate(&self.db, owner, source, session_id, action).await?,
+                    checkpoint::operate(
+                        &self.db,
+                        self.storage_budget.clone(),
+                        owner,
+                        source,
+                        session_id,
+                        action,
+                    )
+                    .await?,
                 )));
             }
             EvolutionOperation::Status => {}
@@ -335,6 +343,7 @@ impl EvolutionRuntime {
         }
         let recorded_jobs = JudgeJobs::new(service.store.clone()).list().await?;
         let judge_costs = crate::gateway::metering::judge::JudgeCosts::new(self.db.clone())
+            .with_storage_budget(self.storage_budget.clone())
             .report(owner, &recorded_jobs)
             .await?;
         let jobs = recorded_jobs

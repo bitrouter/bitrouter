@@ -122,6 +122,7 @@ async fn register(
     let caller = fixture
         .service
         .authenticate(credential.secret.as_deref().context("secret")?)
+        .await
         .map_err(failure)?;
     queue::register(&fixture.service, caller, input)
         .await
@@ -157,15 +158,15 @@ async fn claimed_fixture(fixture: Fixture, directory: &std::path::Path) -> Resul
     let service = Service::start_resources_with_continuations(
         db.clone(),
         Some(owner),
-        OperationLimits::default(),
         state,
         Arc::new(Resources::with_key(installation.clone(), [29; 32])?),
-        (
-            None,
-            &crate::config::ContinuationConfig::default(),
-            Some(claim),
-            crate::telemetry::receipt_latency::Sink::default(),
-        ),
+        crate::tenancy::Provisioning {
+            import: None,
+            continuations: &crate::config::ContinuationConfig::default(),
+            claim: Some(claim),
+            receipt_observer: crate::telemetry::receipt_latency::Sink::default(),
+            config: &crate::config::tenancy::TenancyConfig::default(),
+        },
         None,
     )
     .await?;
@@ -310,10 +311,11 @@ async fn owned_learner_resumes_after_closed_native_session_and_publishes_retreat
             ensure!(
                 fixture
                     .service
-                    .current()
+                    .active_revision(&fixture.operator, &fixture.tenant)
+                    .await
                     .map_err(failure)?
-                    .active_configurations
-                    .get(&fixture.tenant)
+                    .revision_id
+                    .as_ref()
                     == Some(&r1)
             );
             let stored = crate::tenancy::configuration_store::configuration(
@@ -432,7 +434,7 @@ async fn owned_learner_rotation_after_acquisition_denies_publication_and_future_
             };
             let calculated = learner::source::calculate(&acquired)?;
             let before = fault_fixture::retained_counts(&fixture).await?;
-            let mut rotation = fixture.issuance("learner-rotate")?;
+            let mut rotation = fixture.issuance("learner-rotate").await?;
             rotation.rotate_credential_id = Some(credential.credential_id.clone());
             fixture
                 .service
@@ -468,10 +470,11 @@ async fn owned_learner_rotation_after_acquisition_denies_publication_and_future_
             ensure!(
                 fixture
                     .service
-                    .current()
+                    .active_revision(&fixture.operator, &fixture.tenant)
+                    .await
                     .map_err(failure)?
-                    .active_configurations
-                    .get(&fixture.tenant)
+                    .revision_id
+                    .as_ref()
                     == Some(&r1)
             );
             ensure!(server.received_requests().await.context("requests")?.len() == 1);
@@ -575,10 +578,11 @@ async fn owned_learner_rechecks_actual_journal_before_publication() -> Result<()
             ensure!(
                 fixture
                     .service
-                    .current()
+                    .active_revision(&fixture.operator, &fixture.tenant)
+                    .await
                     .map_err(failure)?
-                    .active_configurations
-                    .get(&fixture.tenant)
+                    .revision_id
+                    .as_ref()
                     == Some(&r1)
             );
             ensure!(records(&fixture, "owned_learner_schedule_v1").await?[0]["next_sequence"] == 1);

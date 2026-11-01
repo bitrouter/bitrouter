@@ -130,6 +130,7 @@ impl Spec {
         let stale = fixture
             .service
             .host_authority(&previous_headers)
+            .await
             .err()
             .context("previous Service binding authorized a fresh host")?;
         ensure!(stale.0.code == bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch);

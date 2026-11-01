@@ -100,7 +100,7 @@ pub async fn submit(
     identity: &SessionIdentity,
     input: RubricSubmission,
 ) -> Result<ScoringReceipt> {
-    submit_checked(store, identity, input, |_| Box::pin(async { Ok(()) })).await
+    submit_checked(store, identity, input, |_, _| Box::pin(async { Ok(()) })).await
 }
 
 pub(crate) async fn submit_checked<F>(
@@ -112,6 +112,7 @@ pub(crate) async fn submit_checked<F>(
 where
     F: for<'a> FnOnce(
             &'a sea_orm::DatabaseTransaction,
+            &'a mut crate::storage::write::Write,
         ) -> futures::future::BoxFuture<'a, Result<()>>
         + Send,
 {

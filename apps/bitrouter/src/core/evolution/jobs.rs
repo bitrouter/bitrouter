@@ -5,7 +5,9 @@ use std::sync::Arc;
 use crate::gateway::pipeline::execution::Pipeline;
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
-use sea_orm::{DatabaseTransaction, TransactionTrait};
+use sea_orm::DatabaseTransaction;
+#[cfg(test)]
+use sea_orm::TransactionTrait;
 use serde::{Deserialize, Serialize};
 
 use super::{judge, scoring};
@@ -20,12 +22,14 @@ const MAX_ATTEMPTS: usize = 3;
 async fn check_mode(
     store: &EvolutionStore,
     tx: &DatabaseTransaction,
+    write: &mut crate::storage::write::Write,
     epoch: Option<u64>,
     model: &str,
 ) -> Result<()> {
     if let Some(epoch) = epoch {
         let (_, state): (_, crate::gateway::routing::blocks::control::ControlState) = store
-            .lock(
+            .lock_charged(
+                write,
                 tx,
                 crate::gateway::routing::blocks::store::CONTROL_KIND,
                 crate::gateway::routing::blocks::store::CONTROL_KEY,
@@ -103,7 +107,8 @@ pub struct JudgeJobs {
 impl JudgeJobs {
     pub fn new(store: EvolutionStore) -> Self {
         Self {
-            canonical: CanonicalStore::new(store.db.clone()),
+            canonical: CanonicalStore::new(store.db.clone())
+                .with_storage_budget(store.storage_budget.clone()),
             store,
         }
     }
@@ -141,18 +146,21 @@ impl JudgeJobs {
             outcome_revision: None,
             error_code: None,
         };
-        let tx = self.store.db.begin().await?;
-        check_mode(&self.store, &tx, mode_epoch, model).await?;
-        let (_, stored): (_, JudgeJob) = self
-            .store
-            .initialize_in(&tx, KIND, &job_id, Some(identity.key()?), &job)
-            .await?;
-        ensure!(
-            stored.input_digest == job.input_digest && stored.identity == *identity,
-            "judge job identity collision"
-        );
-        tx.commit().await?;
-        Ok(stored)
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            check_mode(&self.store, &tx, &mut write, mode_epoch, model).await?;
+            let (_, stored): (_, JudgeJob) = self
+                .store
+                .initialize_charged(&mut write, &tx, KIND, &job_id, Some(identity.key()?), &job)
+                .await?;
+            ensure!(
+                stored.input_digest == job.input_digest && stored.identity == *identity,
+                "judge job identity collision"
+            );
+            Ok(stored)
+        }
+        .await;
+        write.finish(tx, result).await
     }
 
     pub async fn get(&self, id: &str) -> Result<JudgeJob> {
@@ -189,7 +197,7 @@ impl JudgeJobs {
             return Ok(());
         }
         self.store
-            .update(KIND, id, revision, |job: &mut JudgeJob| {
+            .update_with_maintenance(KIND, id, revision, true, |job: &mut JudgeJob| {
                 ensure!(!job.lease_live()?, "judge job became leased");
                 job.status = JobStatus::Superseded;
                 job.error_code = Some(code.into());
@@ -259,7 +267,7 @@ impl JudgeJobs {
             "committed assessment differs from the cached judge response"
         );
         self.store
-            .update(KIND, id, version, |job: &mut JudgeJob| {
+            .update_with_maintenance(KIND, id, version, true, |job: &mut JudgeJob| {
                 ensure!(!job.lease_live()?, "judge job became leased");
                 job.status = JobStatus::Completed;
                 job.outcome_revision = Some(receipt.revision_id);
@@ -285,7 +293,7 @@ impl JudgeJobs {
             .context("judge job was deleted")?;
         let (_, result) = self
             .store
-            .update(KIND, id, revision, |job: &mut JudgeJob| {
+            .update_with_maintenance(KIND, id, revision, true, |job: &mut JudgeJob| {
                 ensure!(
                     job.lease_owner.as_deref() == Some(owner),
                     "judge worker lease was superseded"
@@ -329,36 +337,48 @@ impl JudgeJobs {
         }
         let owner = uuid::Uuid::new_v4().to_string();
         let now = Utc::now();
-        let tx = self.store.db.begin().await?;
-        check_mode(&self.store, &tx, existing.mode_epoch, &existing.model).await?;
-        let (row, mut job): (_, JudgeJob) = self.store.lock(&tx, KIND, id).await?;
-        ensure!(
-            row.revision == revision,
-            "judge job changed before claim; refresh before retrying"
-        );
-        let lease_live = job
-            .lease_until
-            .as_deref()
-            .map(DateTime::parse_from_rfc3339)
-            .transpose()?
-            .is_some_and(|deadline| deadline > now);
-        ensure!(!lease_live, "judge job is already leased by a live worker");
-        ensure!(
-            job.cached_response.is_some() || job.request_ids.len() < MAX_ATTEMPTS,
-            "judge retry limit reached; inspect the job before starting a new evaluation"
-        );
-        job.lease_owner = Some(owner.clone());
-        job.lease_until = Some((now + chrono::Duration::minutes(2)).to_rfc3339());
-        if job.cached_response.is_none() {
-            let request_id = format!("brjudge_{}", uuid::Uuid::new_v4().simple());
-            crate::gateway::metering::judge::JudgeCosts::new(self.store.db.clone())
-                .reserve(&tx, &job, &request_id)
-                .await?;
-            job.request_ids.push(request_id);
-            job.status = JobStatus::Running;
+        let (mut write, tx) = self.store.begin_write(false).await?;
+        let result = async {
+            check_mode(
+                &self.store,
+                &tx,
+                &mut write,
+                existing.mode_epoch,
+                &existing.model,
+            )
+            .await?;
+            let (row, mut job): (_, JudgeJob) =
+                self.store.lock_charged(&mut write, &tx, KIND, id).await?;
+            ensure!(
+                row.revision == revision,
+                "judge job changed before claim; refresh before retrying"
+            );
+            let lease_live = job
+                .lease_until
+                .as_deref()
+                .map(DateTime::parse_from_rfc3339)
+                .transpose()?
+                .is_some_and(|deadline| deadline > now);
+            ensure!(!lease_live, "judge job is already leased by a live worker");
+            ensure!(
+                job.cached_response.is_some() || job.request_ids.len() < MAX_ATTEMPTS,
+                "judge retry limit reached; inspect the job before starting a new evaluation"
+            );
+            job.lease_owner = Some(owner.clone());
+            job.lease_until = Some((now + chrono::Duration::minutes(2)).to_rfc3339());
+            if job.cached_response.is_none() {
+                let request_id = format!("brjudge_{}", uuid::Uuid::new_v4().simple());
+                crate::gateway::metering::judge::JudgeCosts::new(self.store.db.clone())
+                    .reserve(&tx, &mut write, &job, &request_id)
+                    .await?;
+                job.request_ids.push(request_id);
+                job.status = JobStatus::Running;
+            }
+            self.store.save_charged(&mut write, &tx, row, &job).await?;
+            Ok(job)
         }
-        self.store.save(&tx, row, &job).await?;
-        tx.commit().await?;
+        .await;
+        let mut job = write.finish(tx, result).await?;
         let result = self.run_claimed(&mut job, pipeline, &owner).await;
         if result.is_err() {
             // Provider errors can contain response fragments. Persist only an
@@ -457,7 +477,9 @@ impl JudgeJobs {
                 evaluator_version: judge::JUDGE_VERSION.into(),
                 evaluation: response.evaluation.clone(),
             },
-            move |tx| Box::pin(async move { check_mode(&store, tx, epoch, &model).await }),
+            move |tx, write| {
+                Box::pin(async move { check_mode(&store, tx, write, epoch, &model).await })
+            },
         )
         .await?;
         self.owned_update(&job.job_id, owner, |job| {

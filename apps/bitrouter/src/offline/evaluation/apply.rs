@@ -1,4 +1,5 @@
 //! One retained offline owner: validate -> BEGIN -> bounded DML -> verify -> COMMIT.
+mod large;
 use super::*;
 use crate::core::eval::store::migration::{
     Assignment,
@@ -43,6 +44,13 @@ pub(super) struct Report {
     complete: bool,
     cutover_ready: bool,
 }
+struct PendingReport {
+    report: Report,
+    encoded: Option<(Vec<u8>, crate::offline::large::Charge)>,
+    _source: Option<crate::offline::large::Charge>,
+    _graph: Option<crate::offline::large::Charge>,
+}
+
 impl crate::output::CliReport for Report {
     fn render(&self, out: &mut crate::output::human::Human<'_>) -> std::io::Result<()> {
         out.line("Bounded Legacy Eval backfill committed and verified. Retirement/cutover remain incomplete.")?;
@@ -69,11 +77,81 @@ async fn run_inner(
     report: &Path,
     #[cfg(all(test, unix))] test: Option<testing::Schedule>,
 ) -> Result<Report> {
+    run_inner_options(
+        path,
+        anchor,
+        report,
+        None,
+        #[cfg(all(test, unix))]
+        test,
+    )
+    .await
+}
+
+pub(super) async fn run_with_options(
+    path: &Path,
+    anchor: &str,
+    report: &Path,
+    options: crate::offline::large::Options,
+) -> Result<Report> {
+    run_inner_options(
+        path,
+        anchor,
+        report,
+        Some(options),
+        #[cfg(all(test, unix))]
+        None,
+    )
+    .await
+}
+async fn run_inner_options(
+    path: &Path,
+    anchor: &str,
+    report: &Path,
+    options: Option<crate::offline::large::Options>,
+    #[cfg(all(test, unix))] test: Option<testing::Schedule>,
+) -> Result<Report> {
     ensure!(cfg!(unix), "Unix only");
     files::validate_digest(anchor)?;
+    let cancel = CancellationToken::new();
+    let _abandon = cancel.clone().drop_guard();
+    if let Some(options) = &options {
+        let length = usize::try_from(std::fs::symlink_metadata(path)?.len())?;
+        let initial = length
+            .checked_mul(6)
+            .and_then(|n| n.checked_add(8192))
+            .ok_or(crate::offline::large::CapacityExceeded)?;
+        ensure!(
+            initial <= options.working_bytes,
+            crate::offline::large::CapacityExceeded
+        );
+    }
     let bytes = files::read(path, 2 * 1024 * 1024)?;
     ensure!(files::sha(&bytes) == anchor, "plan anchor mismatch");
-    let plan: Plan = serde_json::from_slice(&bytes)?;
+    let shape = options
+        .as_ref()
+        .map(|options| {
+            let shape = crate::offline::recovery::v2::memory::json_required(&bytes)?;
+            let required = bytes
+                .capacity()
+                .checked_mul(2)
+                .and_then(|n| n.checked_add(shape))
+                .and_then(|n| {
+                    n.checked_add(options.scratch_directory.as_os_str().len().checked_mul(8)?)
+                })
+                .and_then(|n| n.checked_add(32768))
+                .ok_or(crate::offline::large::CapacityExceeded)?;
+            ensure!(
+                required <= options.working_bytes,
+                crate::offline::large::CapacityExceeded
+            );
+            Ok::<_, anyhow::Error>(shape)
+        })
+        .transpose()?;
+    let (plan, provisioning) = match &options {
+        Some(_) => large::decode(&bytes)?,
+        None => (serde_json::from_slice::<Plan>(&bytes)?, None),
+    };
     for path in [
         &plan.bundle,
         &plan.manifest,
@@ -84,8 +162,9 @@ async fn run_inner(
         ensure!(path.is_absolute(), "explicit absolute input paths required");
     }
     ensure!(
-        plan.format == "bitrouter.offline.eval-backfill.v1"
-            && plan.provisioning_operations.len() <= 4096,
+        (plan.format == "bitrouter.offline.eval-backfill.v1"
+            && plan.provisioning_operations.len() <= 4096)
+            || (plan.format == large::FORMAT && provisioning.is_some()),
         "plan profile"
     );
     for digest in [
@@ -103,12 +182,37 @@ async fn run_inner(
         ),
         "explicit source namespace required"
     );
-    let cancel = CancellationToken::new();
-    let _abandon = cancel.clone().drop_guard();
+    if let Some(options) = &options {
+        large::qualify(&plan, report, options)?;
+    }
+    let workspace = options
+        .as_ref()
+        .map(|options| {
+            crate::offline::large::Workspace::create(options, cancel.clone()).map(Arc::new)
+        })
+        .transpose()?;
+    let encoded_charge = workspace
+        .as_ref()
+        .map(|workspace| {
+            workspace.reserve(
+                bytes
+                    .capacity()
+                    .checked_mul(2)
+                    .and_then(|n| n.checked_add(8192))
+                    .ok_or(crate::offline::large::CapacityExceeded)?,
+            )
+        })
+        .transpose()?;
+    let plan_charge = workspace
+        .as_ref()
+        .zip(shape)
+        .map(|(workspace, shape)| workspace.reserve(shape))
+        .transpose()?;
     let (send, wait) = tokio::sync::oneshot::channel();
     let report = report.to_path_buf();
     let anchor = anchor.to_owned();
     let task = tokio::spawn(async move {
+        let _inputs = (encoded_charge, plan_charge);
         let owner = match crate::tenancy::ownership::acquire_path(&plan.target, false) {
             Ok(owner) => owner,
             Err(error) => {
@@ -117,15 +221,25 @@ async fn run_inner(
             }
         };
         let mut connections = Connections::new(cancel.clone(), Some(owner));
-        let result = AssertUnwindSafe(work(
-            &mut connections,
-            &plan,
-            &anchor,
-            &bytes,
-            &report,
-            #[cfg(all(test, unix))]
-            test,
-        ))
+        let result = AssertUnwindSafe(async {
+            let large = match (&workspace, &options, &provisioning) {
+                (Some(workspace), Some(options), Some(provisioning)) => Some(
+                    large::Large::prepare(&plan, provisioning, &report, workspace, options)?,
+                ),
+                _ => None,
+            };
+            work(
+                &mut connections,
+                &plan,
+                &anchor,
+                &bytes,
+                &report,
+                large,
+                #[cfg(all(test, unix))]
+                test,
+            )
+            .await
+        })
         .catch_unwind()
         .await;
         let result = match result {
@@ -136,13 +250,42 @@ async fn run_inner(
             }
         };
         let close = AssertUnwindSafe(connections.close()).catch_unwind().await;
+        let cleaned = match workspace {
+            Some(workspace) => Arc::try_unwrap(workspace)
+                .map_err(|_| anyhow::anyhow!("Eval work still owned"))
+                .and_then(|workspace| workspace.finish()),
+            None => Ok(()),
+        };
         let result = if !matches!(close, Ok(Ok(()))) || connections.uncertain {
             Err(anyhow::anyhow!(
                 "backfill outcome/cleanup unconfirmed; destination ownership retained"
             ))
         } else {
             match result {
-                Ok(value) => publish(&report, &value, &cancel).map(|()| value),
+                Ok(value) => (|| {
+                    cleaned?;
+                    if let Some(options) = &options {
+                        crate::offline::large::probe(
+                            report.parent().unwrap_or(Path::new(".")),
+                            options.min_free_bytes,
+                            u64::try_from(
+                                value
+                                    .encoded
+                                    .as_ref()
+                                    .map_or(2 * 1024 * 1024, |(bytes, _)| bytes.len()),
+                            )?
+                            .checked_add(8192)
+                            .ok_or(crate::offline::large::CapacityExceeded)?,
+                        )?;
+                    }
+                    publish(
+                        &report,
+                        &value.report,
+                        value.encoded.as_ref().map(|(bytes, _)| bytes.as_slice()),
+                        &cancel,
+                    )?;
+                    Ok(value.report)
+                })(),
                 Err(error) => Err(error),
             }
         };
@@ -165,23 +308,61 @@ async fn work(
     anchor: &str,
     plan_bytes: &[u8],
     output: &Path,
+    mut large: Option<large::Large<'_>>,
     #[cfg(all(test, unix))] mut test: Option<testing::Schedule>,
-) -> Result<Report> {
+) -> Result<PendingReport> {
+    if large.is_some() {
+        c.validation_budget().await?;
+    }
     c.check()?;
-    let source = super::super::read_bundle_work(
-        &plan.bundle,
-        Some(&plan.database_evidence_digest),
-        "eval-backfill",
-        c,
-    )
-    .await?;
-    let target = super::super::read_bundle_work(
-        &plan.target_bundle,
-        Some(&plan.target_evidence_digest),
-        "eval-target",
-        c,
-    )
-    .await?;
+    let source = match &large {
+        Some(large) => {
+            large
+                .bundle(
+                    &plan.bundle,
+                    &plan.database_evidence_digest,
+                    "eval-backfill",
+                )
+                .await?
+        }
+        None => {
+            super::super::read_bundle_work(
+                &plan.bundle,
+                Some(&plan.database_evidence_digest),
+                "eval-backfill",
+                c,
+            )
+            .await?
+        }
+    };
+    let _source_report = large
+        .as_ref()
+        .map(|large| large.workspace.reserve(source.evidence.retained_bytes()?))
+        .transpose()?;
+    let target = match &large {
+        Some(large) => {
+            large
+                .bundle(
+                    &plan.target_bundle,
+                    &plan.target_evidence_digest,
+                    "eval-target",
+                )
+                .await?
+        }
+        None => {
+            super::super::read_bundle_work(
+                &plan.target_bundle,
+                Some(&plan.target_evidence_digest),
+                "eval-target",
+                c,
+            )
+            .await?
+        }
+    };
+    let _target_report = large
+        .as_ref()
+        .map(|large| large.workspace.reserve(target.evidence.retained_bytes()?))
+        .transpose()?;
     c.check()?;
     ensure!(
         source.evidence.inventory.encoding == "UTF-8"
@@ -205,26 +386,39 @@ async fn work(
     let target_key: [u8; 32] = files::read(&plan.target_bundle.join("inventory.key"), 32)?
         .try_into()
         .map_err(|_| anyhow::anyhow!("target key width"))?;
-    let graph = super::inspect(
+    let (graph, _graph_charge) = super::inspect_inner(
         c,
         &plan.bundle,
         &key,
         &installation,
         &plan.source_kind,
         &source.evidence,
+        large.as_ref().map(|large| large.workspace),
     )
     .await?;
+    let _mapping_input = large
+        .as_ref()
+        .map(|large| large.input_charge(&plan.manifest, super::super::mapping::schema::MAX_INPUT))
+        .transpose()?;
     let mapping_bytes = files::read(&plan.manifest, super::super::mapping::schema::MAX_INPUT)?;
     ensure!(
         files::sha(&mapping_bytes) == plan.manifest_digest,
         "mapping anchor mismatch"
     );
+    let _mapping_decode = large
+        .as_ref()
+        .map(|large| large.decoded_charge(&mapping_bytes))
+        .transpose()?;
     let (manifest, _) = Manifest::decode(&mapping_bytes)?;
     ensure!(
         manifest.source_installation_id == installation
             && manifest.source_snapshot_digest.as_str() == source.evidence.snapshot_digest,
         "mapping source mismatch"
     );
+    let _ownership = large
+        .as_ref()
+        .map(|large| large.input_charge(&plan.ownership_evidence, 2 * 1024 * 1024))
+        .transpose()?;
     let ownership_bytes = files::read(&plan.ownership_evidence, 2 * 1024 * 1024)?;
     ensure!(
         files::sha(&ownership_bytes) == plan.ownership_evidence_digest,
@@ -261,7 +455,11 @@ async fn work(
         digests[i] = hex::encode(digest.finish());
     }
     let report = Report {
-        format: "bitrouter.offline.eval-backfill-report.v1",
+        format: if large.is_some() {
+            "bitrouter.offline.eval-backfill-report.v2"
+        } else {
+            "bitrouter.offline.eval-backfill-report.v1"
+        },
         plan_digest: anchor.into(),
         mapping_digest: plan.manifest_digest.clone(),
         database_evidence_digest: plan.database_evidence_digest.clone(),
@@ -290,10 +488,19 @@ async fn work(
         complete: false,
         cutover_ready: false,
     };
-    ensure!(
-        serde_json::to_vec_pretty(&report)?.len() <= 2 * 1024 * 1024,
-        "planned report bound"
-    );
+    let encoded = match &large {
+        Some(large) => Some(crate::offline::large::encode_json(
+            &report,
+            large.workspace,
+        )?),
+        None => {
+            ensure!(
+                serde_json::to_vec_pretty(&report)?.len() <= 2 * 1024 * 1024,
+                "planned report bound"
+            );
+            None
+        }
+    };
     let path = c
         .owner
         .as_ref()
@@ -320,25 +527,55 @@ async fn work(
     );
     // A new secured packet exists before any DML. Unknown/cancelled/error outcomes
     // leave INCOMPLETE and never acquire RECORDED by observation or retry.
+    if let Some(large) = &large {
+        let required = plan_bytes
+            .len()
+            .checked_add(mapping_bytes.len())
+            .and_then(|n| n.checked_add(ownership_bytes.len()))
+            .and_then(|n| n.checked_add(8192))
+            .ok_or(crate::offline::large::CapacityExceeded)?;
+        large.workspace.probe(parent, u64::try_from(required)?)?;
+    }
     files::create_directory(output)?;
     files::write_new(&output.join("plan.json"), plan_bytes)?;
     files::write_new(&output.join("manifest.json"), &mapping_bytes)?;
     files::write_new(&output.join("ownership-evidence"), &ownership_bytes)?;
     files::sync_directory(output)?;
-    c.open(&path, false).await?;
-    let actual = super::super::inventory::inspect_eval(
-        c.source
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("target missing"))?,
-        &target_key,
-    )
-    .await?;
+    let actual = if let Some(large) = &large {
+        let witness = crate::offline::large::Source::inspect(&path)?;
+        c.open_immutable_source_budgeted(&path, large.workspace)
+            .await?;
+        c.uncertain = true;
+        sea_orm::sqlx::query("BEGIN")
+            .execute(destination(c)?)
+            .await?;
+        let actual = large::inventory_in(destination(c)?, &target_key, Some(large)).await;
+        c.destination_cleanup_budget().await?;
+        sea_orm::sqlx::query("ROLLBACK")
+            .execute(destination(c)?)
+            .await?;
+        c.uncertain = false;
+        c.close().await?;
+        witness.check()?;
+        actual?
+    } else {
+        c.open(&path, false).await?;
+        (
+            super::super::inventory::inspect_eval(destination(c)?, &target_key).await?,
+            None,
+        )
+    };
     ensure!(
-        actual == target.evidence.inventory,
+        actual.0 == target.evidence.inventory,
         "target changed since provisioning evidence"
     );
+    drop(actual);
     c.close().await?;
-    c.open_destination(&path).await?;
+    if let Some(large) = &large {
+        c.open_destination_budgeted(&path, large.workspace).await?;
+    } else {
+        c.open_destination(&path).await?;
+    }
     c.uncertain = true;
     sea_orm::sqlx::query("BEGIN IMMEDIATE")
         .execute(destination(c)?)
@@ -349,31 +586,53 @@ async fn work(
             schedule.entered().await?;
         }
         c.check()?;
-        let actual = super::super::inventory::inspect_eval_in(destination(c)?, &target_key).await?;
+        let (actual, _actual_charge) =
+            large::inventory_in(destination(c)?, &target_key, large.as_ref()).await?;
         ensure!(
             actual == target.evidence.inventory,
             "target changed before writer transaction"
         );
-        let operations = plan
-            .provisioning_operations
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        super::target::validate(
-            destination(c)?,
-            &actual,
-            &plan.target_installation,
-            &assignments,
-            &operations,
-        )
-        .await?;
-        let added_rows =
-            transfer.tables.iter().map(Vec::len).sum::<usize>() + transfer.proofs.len();
-        ensure!(
-            actual.rows + added_rows as u64 <= 4096
-                && actual.value_bytes + transfer.bytes as u64 <= 32 * 1024 * 1024,
-            "combined destination bound"
-        );
+        if let Some(large) = &mut large {
+            large::validate(destination(c)?, &actual, plan, &assignments, large).await?;
+            let retained_bytes = std::fs::metadata(&path)?.len();
+            let writes = u64::try_from(transfer.bytes)?
+                .checked_mul(4)
+                .and_then(|bytes| {
+                    bytes.checked_add(
+                        u64::try_from(transfer.proofs.len())
+                            .ok()?
+                            .checked_mul(16384)?,
+                    )
+                })
+                .and_then(|bytes| bytes.checked_add(retained_bytes))
+                .ok_or(crate::offline::large::CapacityExceeded)?;
+            large.workspace.probe(
+                path.parent()
+                    .ok_or_else(|| anyhow::anyhow!("target parent missing"))?,
+                writes,
+            )?;
+        } else {
+            let operations = plan
+                .provisioning_operations
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            super::target::validate(
+                destination(c)?,
+                &actual,
+                &plan.target_installation,
+                &assignments,
+                &operations,
+            )
+            .await?;
+            let added_rows =
+                transfer.tables.iter().map(Vec::len).sum::<usize>() + transfer.proofs.len();
+            ensure!(
+                actual.rows + added_rows as u64 <= 4096
+                    && actual.value_bytes + transfer.bytes as u64 <= 32 * 1024 * 1024,
+                "combined destination bound"
+            );
+        }
         for (table, values) in rows::TABLES.into_iter().zip(&transfer.tables) {
             for row in values {
                 c.check()?;
@@ -408,7 +667,8 @@ async fn work(
             ),
             None => ensure!(sequences.is_empty(), "unexpected sequence mutation"),
         }
-        let after = super::super::inventory::inspect_eval_in(destination(c)?, &target_key).await?;
+        let (after, _after_charge) =
+            large::inventory_in(destination(c)?, &target_key, large.as_ref()).await?;
         ensure!(
             after.schema_digest == actual.schema_digest
                 && after.ledger == actual.ledger
@@ -467,7 +727,16 @@ async fn work(
     c.check()?;
     // Confirm durable readback on the same actual worker before report publication.
     verify(c, &transfer, &key).await?;
-    Ok(report)
+    if let Some(large) = &mut large {
+        c.close().await?;
+        large.provisioning.recheck(large.workspace)?;
+    }
+    Ok(PendingReport {
+        report,
+        encoded,
+        _source: _source_report,
+        _graph: _graph_charge,
+    })
 }
 fn destination(c: &mut Connections) -> Result<&mut SqliteConnection> {
     c.source
@@ -553,13 +822,24 @@ fn assign(graph: &Graph, manifest: &Manifest, plan: &Plan) -> Result<BTreeMap<St
     }
     Ok(output)
 }
-fn publish(output: &Path, report: &Report, cancel: &CancellationToken) -> Result<()> {
+fn publish(
+    output: &Path,
+    report: &Report,
+    encoded: Option<&[u8]>,
+    cancel: &CancellationToken,
+) -> Result<()> {
     ensure!(
         !cancel.is_cancelled(),
         "caller abandoned committed import; packet remains incomplete"
     );
-    let bytes = serde_json::to_vec_pretty(report)?;
-    ensure!(bytes.len() <= 2 * 1024 * 1024, "report bound");
+    let bytes = match encoded {
+        Some(bytes) => std::borrow::Cow::Borrowed(bytes),
+        None => {
+            let bytes = serde_json::to_vec_pretty(report)?;
+            ensure!(bytes.len() <= 2 * 1024 * 1024, "report bound");
+            std::borrow::Cow::Owned(bytes)
+        }
+    };
     files::write_new(&output.join("report.json"), &bytes)?;
     files::sync_directory(output)?;
     files::write_new(

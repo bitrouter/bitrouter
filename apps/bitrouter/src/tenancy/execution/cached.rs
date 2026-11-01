@@ -24,11 +24,6 @@ use crate::{
     },
 };
 
-const EXECUTION_ENTRIES: usize = 64;
-const EXECUTION_BYTES: usize = 128 * 1024 * 1024;
-const CREDENTIAL_ENTRIES: usize = 256;
-const CREDENTIAL_BYTES: usize = 8 * 1024 * 1024;
-
 pub(in crate::tenancy) struct Caches {
     executions: Cache<ExecutionKey, RetainedExecutionRevision>,
     credentials: Cache<CredentialKey, StaticCredential>,
@@ -36,12 +31,24 @@ pub(in crate::tenancy) struct Caches {
 }
 
 impl Caches {
-    pub(in crate::tenancy) fn new() -> anyhow::Result<Self> {
+    #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
+    pub(in crate::tenancy) fn observed(
+        &self,
+    ) -> [Result<
+        crate::telemetry::receipt_latency::capacity::runtime::CacheUsage,
+        crate::telemetry::receipt_latency::capacity::ReadError,
+    >; 2] {
+        [self.executions.observed(), self.credentials.observed()]
+    }
+
+    pub(in crate::tenancy) fn new(
+        config: &crate::config::tenancy::capacity::Caches,
+    ) -> anyhow::Result<Self> {
         Self::bounded(
-            EXECUTION_ENTRIES,
-            EXECUTION_BYTES,
-            CREDENTIAL_ENTRIES,
-            CREDENTIAL_BYTES,
+            config.execution_entries,
+            config.execution_bytes,
+            config.credential_entries,
+            config.credential_bytes,
         )
     }
 

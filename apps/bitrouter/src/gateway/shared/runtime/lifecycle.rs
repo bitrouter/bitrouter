@@ -11,9 +11,9 @@ use super::super::engine::Engine;
 use super::super::generations::{Attempt, Generations, Report as GenerationReport};
 use super::super::ownership::Generation;
 use super::super::telemetry::Telemetry;
-use super::super::transport::owned::Transport;
 use super::health::Health;
 use super::workers::{Workers, outbox};
+use crate::gateway::transport::owned::Transport;
 
 #[cfg(test)]
 mod tests;

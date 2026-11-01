@@ -536,7 +536,7 @@ async fn sqlite_numeric_affinity_cannot_bypass_bounded_projection() -> Result<()
 #[tokio::test]
 async fn active_pointer_loading_never_silently_truncates() -> Result<()> {
     let db = database().await?;
-    for index in 0..=MAX_ACTIVE {
+    for index in 0..=ACTIVE_PAGE_ROWS {
         let tenant = format!("bounded-tenant-{index}");
         add_tenant(&db, &tenant).await?;
         let record = draft(&tenant, "v1", 1)?;
@@ -549,10 +549,10 @@ async fn active_pointer_loading_never_silently_truncates() -> Result<()> {
             2.try_into()?,
         )
         .await?;
-        if index + 1 == MAX_ACTIVE {
-            ensure!(active_revisions(&db).await?.len() == MAX_ACTIVE);
+        if index + 1 == ACTIVE_PAGE_ROWS {
+            ensure!(active_revisions(&db).await?.len() == ACTIVE_PAGE_ROWS);
         }
     }
-    ensure!(active_revisions(&db).await.is_err());
+    ensure!(active_revisions(&db).await?.len() == ACTIVE_PAGE_ROWS + 1);
     Ok(())
 }

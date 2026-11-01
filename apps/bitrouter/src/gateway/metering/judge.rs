@@ -14,7 +14,9 @@ use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use bitrouter_ai::event::PipelineEvent;
 use bitrouter_ai::types::{StreamPart, ToolChoice, UsageOrigin};
-use sea_orm::{DatabaseConnection, TransactionTrait};
+use sea_orm::DatabaseConnection;
+#[cfg(test)]
+use sea_orm::TransactionTrait;
 use serde::{Deserialize, Serialize};
 
 use super::replay::JudgeAttemptReplayRejected;
@@ -72,11 +74,24 @@ impl PipelineEvent for JudgeAttemptObserved {
 #[derive(Clone)]
 pub struct JudgeCosts {
     pub(crate) db: DatabaseConnection,
+    pub(crate) storage_budget:
+        Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
 }
 
 impl JudgeCosts {
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
+    ) -> Self {
+        self.storage_budget = budget;
+        self
+    }
+
     pub fn new(db: DatabaseConnection) -> Self {
-        Self { db }
+        Self {
+            db,
+            storage_budget: None,
+        }
     }
 
     pub(crate) fn lookup(&self) -> Result<EvolutionStore> {
@@ -84,10 +99,12 @@ impl JudgeCosts {
         // reservation without adding ACP headers or caller-controlled purpose.
         // Report access still validates every reservation's job and owner.
         EvolutionStore::new(self.db.clone(), "internal:checkpoint-judge-costs")
+            .map(|store| store.with_storage_budget(self.storage_budget.clone()))
     }
 
     pub(crate) fn store(&self, owner: &str) -> Result<EvolutionStore> {
         EvolutionStore::new(self.db.clone(), owner)
+            .map(|store| store.with_storage_budget(self.storage_budget.clone()))
     }
 
     async fn admit(&self, ctx: &mut PipelineContext) -> Result<()> {
@@ -122,16 +139,22 @@ impl JudgeCosts {
             ctx.emit(JudgeAttemptReplayRejected);
             anyhow::bail!("judge request does not match its reserved purpose");
         }
-        let tx = self.db.begin().await?;
-        let (row, mut attempt): (_, JudgeAttempt) = store.lock(&tx, KIND, ctx.request_id()).await?;
-        if attempt.started_at.is_some() {
-            ctx.emit(JudgeAttemptReplayRejected);
-            anyhow::bail!("judge request was already dispatched or interrupted");
+        let (mut write, tx) = store.begin_write(false).await?;
+        let result = async {
+            let (row, mut attempt): (_, JudgeAttempt) = store
+                .lock_charged(&mut write, &tx, KIND, ctx.request_id())
+                .await?;
+            if attempt.started_at.is_some() {
+                ctx.emit(JudgeAttemptReplayRejected);
+                anyhow::bail!("judge request was already dispatched or interrupted");
+            }
+            ensure!(attempt.version == VERSION, "unknown judge cost contract");
+            attempt.started_at = Some(chrono::Utc::now().to_rfc3339());
+            store.save_charged(&mut write, &tx, row, &attempt).await?;
+            Ok(attempt)
         }
-        ensure!(attempt.version == VERSION, "unknown judge cost contract");
-        attempt.started_at = Some(chrono::Utc::now().to_rfc3339());
-        store.save(&tx, row, &attempt).await?;
-        tx.commit().await?;
+        .await;
+        let attempt = write.finish(tx, result).await?;
         ctx.emit(JudgeAttemptObserved {
             request_id: attempt.request_id,
             owner: binding.owner,
@@ -147,34 +170,41 @@ impl JudgeCosts {
         outcome: Option<ExecutionOutcome>,
     ) -> Result<()> {
         let store = self.store(&observed.owner)?;
-        let tx = self.db.begin().await?;
-        let (row, mut attempt): (_, JudgeAttempt) =
-            store.lock(&tx, KIND, &observed.request_id).await?;
-        ensure!(
-            attempt.started_at.is_some(),
-            "judge dispatch was not recorded"
-        );
-        if let Some(settlement) = settlement {
+        let (mut write, tx) = store.begin_write(true).await?;
+        let result = async {
+            let (row, mut attempt): (_, JudgeAttempt) = store
+                .lock_charged(&mut write, &tx, KIND, &observed.request_id)
+                .await?;
             ensure!(
-                attempt.settled_at.is_none(),
-                "judge attempt already settled"
+                attempt.started_at.is_some(),
+                "judge dispatch was not recorded"
             );
-            attempt.hops = settlement.hops;
-            attempt.observed_usage_origin = settlement.observed_usage_origin;
-            attempt.settled_at = Some(chrono::Utc::now().to_rfc3339());
+            if let Some(settlement) = settlement {
+                ensure!(
+                    attempt.settled_at.is_none(),
+                    "judge attempt already settled"
+                );
+                attempt.hops = settlement.hops;
+                attempt.observed_usage_origin = settlement.observed_usage_origin;
+                attempt.settled_at = Some(chrono::Utc::now().to_rfc3339());
+            }
+            if let Some(outcome) = outcome {
+                ensure!(attempt.outcome.is_none(), "judge attempt already ended");
+                attempt.outcome = Some(outcome);
+            }
+            store.save_charged(&mut write, &tx, row, &attempt).await?;
+            Ok(())
         }
-        if let Some(outcome) = outcome {
-            ensure!(attempt.outcome.is_none(), "judge attempt already ended");
-            attempt.outcome = Some(outcome);
-        }
-        store.save(&tx, row, &attempt).await?;
-        tx.commit().await?;
-        Ok(())
+        .await;
+        write.finish(tx, result).await
     }
 }
 
 fn internal(error: anyhow::Error) -> crate::gateway::error::BitrouterError {
-    crate::gateway::error::BitrouterError::internal(error.to_string())
+    match error.downcast::<crate::gateway::error::BitrouterError>() {
+        Ok(error) => error,
+        Err(error) => crate::gateway::error::BitrouterError::internal(error.to_string()),
+    }
 }
 
 fn hops(observed: &JudgeAttemptObserved) -> std::sync::MutexGuard<'_, Vec<ExecutionHop>> {
@@ -355,3 +385,6 @@ mod native_admission_tests {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod storage_tests;

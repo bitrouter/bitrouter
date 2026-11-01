@@ -381,7 +381,7 @@ async fn copied_block_nonce_does_not_authorize_a_second_key_or_another_principal
                 .await
                 .map_err(failure)?,
         )?;
-        let mut input = host.fixture.issuance("block-other-key")?;
+        let mut input = host.fixture.issuance("block-other-key").await?;
         input.principal_id = principal;
         input.binding_id = binding;
         let key = crate::tenancy::tests::issued(

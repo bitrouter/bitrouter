@@ -3,7 +3,7 @@ use super::*;
 mod quarantine;
 #[cfg(unix)]
 mod unwind;
-use crate::tenancy::{Service, actor::OperationLimits, resources::Resources, store};
+use crate::tenancy::{Service, resources::Resources, store};
 #[cfg(unix)]
 use crate::tenancy::{
     actor::{Liveness, Worker},
@@ -12,10 +12,7 @@ use crate::tenancy::{
 use anyhow::Context;
 use std::sync::Arc;
 #[cfg(unix)]
-use std::{
-    sync::{RwLock, atomic::AtomicBool},
-    time::Duration,
-};
+use std::{sync::atomic::AtomicBool, time::Duration};
 
 async fn database() -> Result<DatabaseConnection> {
     let db = crate::db::connect("sqlite::memory:").await?;
@@ -29,14 +26,7 @@ async fn pin_survives_empty_catalog_and_rejects_missing_changed_key_and_identity
     let initial = store::load(&db, chrono::Utc::now()).await?;
     let installation = initial.installation.clone();
     let resources = Arc::new(Resources::with_key(installation.clone(), [51; 32])?);
-    let service = Service::start_prepared(
-        db.clone(),
-        None,
-        OperationLimits::default(),
-        initial,
-        resources,
-    )
-    .await?;
+    let service = Service::start_prepared(db.clone(), None, initial, resources).await?;
     service.shutdown().await?;
     ensure!(has_epoch(&db).await?);
     for key in [None, Some([52; 32])] {
@@ -46,22 +36,15 @@ async fn pin_survives_empty_catalog_and_rejects_missing_changed_key_and_identity
             None => Resources::open(&db, &installation, &Default::default()).await?,
         };
         ensure!(
-            Service::start_prepared(
-                db.clone(),
-                None,
-                OperationLimits::default(),
-                initial,
-                Arc::new(resources)
-            )
-            .await
-            .is_err()
+            Service::start_prepared(db.clone(), None, initial, Arc::new(resources))
+                .await
+                .is_err()
         );
     }
     let initial = store::load(&db, chrono::Utc::now()).await?;
     let service = Service::start_prepared(
         db.clone(),
         None,
-        OperationLimits::default(),
         initial,
         Arc::new(Resources::with_key(installation, [51; 32])?),
     )
@@ -98,13 +81,17 @@ async fn abandoned_startup_waiter_keeps_pin_transaction_custody_until_commit() -
         let proof = Proof::new(live.clone());
         let gate = proof.hold(phase);
         let worker = Worker {
+            obligation_due: Arc::new(std::sync::Mutex::new(None)),
             startup: None,
-            oauth: Arc::new(crate::tenancy::oauth::State::default()),
             db: db.clone(),
-            snapshot: Arc::new(RwLock::new(Arc::new(initial))),
+            authority: crate::tenancy::authority::live::Authority::new(
+                initial.header(),
+                &crate::config::tenancy::capacity::AuthorityViews::default(),
+                live.clone(),
+            )
+            .map_err(|code| anyhow::anyhow!("{code:?}"))?,
             live: Liveness(live.clone()),
             owner: Some(owner),
-            limits: OperationLimits::default(),
             resources,
             proof: proof.clone(),
             admission: crate::tenancy::admission::Admission::new(),
@@ -186,14 +173,7 @@ async fn wrong_key_import_cannot_poison_an_empty_pinned_catalog() -> Result<()> 
     let initial = store::load(&db, chrono::Utc::now()).await?;
     let installation = initial.installation.clone();
     let resources = Arc::new(Resources::with_key(installation.clone(), [61; 32])?);
-    let service = Service::start_prepared(
-        db.clone(),
-        None,
-        OperationLimits::default(),
-        initial,
-        resources.clone(),
-    )
-    .await?;
+    let service = Service::start_prepared(db.clone(), None, initial, resources.clone()).await?;
     service.shutdown().await?;
     let epoch = |db: DatabaseConnection| async move {
         let row = db
@@ -222,7 +202,6 @@ async fn wrong_key_import_cannot_poison_an_empty_pinned_catalog() -> Result<()> 
         Service::start_resources(
             db.clone(),
             None,
-            OperationLimits::default(),
             initial,
             Arc::new(Resources::with_key(installation, [62; 32])?),
             Some(import),
@@ -243,8 +222,7 @@ async fn wrong_key_import_cannot_poison_an_empty_pinned_catalog() -> Result<()> 
         "failed K2 startup imported ciphertext before checking K1 pin"
     );
     let initial = store::load(&db, chrono::Utc::now()).await?;
-    let restored =
-        Service::start_prepared(db, None, OperationLimits::default(), initial, resources).await?;
+    let restored = Service::start_prepared(db, None, initial, resources).await?;
     restored.shutdown().await?;
     Ok(())
 }
@@ -254,14 +232,7 @@ async fn oversized_epoch_projection_fails_closed() -> Result<()> {
     let db = database().await?;
     let initial = store::load(&db, chrono::Utc::now()).await?;
     let resources = Arc::new(Resources::with_key(initial.installation.clone(), [54; 32])?);
-    let service = Service::start_prepared(
-        db.clone(),
-        None,
-        OperationLimits::default(),
-        initial,
-        resources.clone(),
-    )
-    .await?;
+    let service = Service::start_prepared(db.clone(), None, initial, resources.clone()).await?;
     service.shutdown().await?;
     db.execute(sea_orm::Statement::from_sql_and_values(
         db.get_database_backend(),
@@ -271,7 +242,7 @@ async fn oversized_epoch_projection_fails_closed() -> Result<()> {
     .await?;
     let initial = store::load(&db, chrono::Utc::now()).await?;
     ensure!(
-        Service::start_prepared(db, None, OperationLimits::default(), initial, resources)
+        Service::start_prepared(db, None, initial, resources)
             .await
             .is_err()
     );

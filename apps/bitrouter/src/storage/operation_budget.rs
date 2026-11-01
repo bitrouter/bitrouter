@@ -3,6 +3,7 @@ use bitrouter_ai::tenancy::operation::ErrorCode;
 use std::sync::Mutex;
 
 pub(crate) type Check<'a> = dyn Fn() -> Result<(), ErrorCode> + Sync + 'a;
+pub(crate) const MAX_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
     #[error("owned operation rejected")]
@@ -24,7 +25,7 @@ impl<'a> OperationBudget<'a> {
     }
     /// A participant may narrow the common operation budget, never widen it.
     pub(crate) fn with_row_limit(check: &'a Check<'a>, rows: usize) -> Self {
-        Self::with_limits(check, rows, 32 * 1024 * 1024)
+        Self::with_limits(check, rows, MAX_BYTES)
     }
     /// Narrow both cumulative limits for a participant such as owned learning.
     /// All its borrowed storage readers must share this one budget.
@@ -33,7 +34,7 @@ impl<'a> OperationBudget<'a> {
             check,
             used: Mutex::new((0, 0)),
             rows: rows.min(4096),
-            bytes: bytes.min(32 * 1024 * 1024),
+            bytes: bytes.min(MAX_BYTES),
         }
     }
     #[cfg(all(feature = "core", feature = "harness"))]

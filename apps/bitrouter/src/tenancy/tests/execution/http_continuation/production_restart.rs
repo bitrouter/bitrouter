@@ -68,7 +68,7 @@ async fn seed(directory: &Path) -> Result<()> {
     let lease = crate::tenancy::ownership::acquire_path(&path, true)?;
     let db = crate::db::connect_tenancy(&format!("sqlite://{}?mode=rwc", path.display()), &lease)
         .await?;
-    let fixture = Fixture::with_database(db.clone(), Default::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db.clone(), &mut |_| {}).await?;
     let (fixture, route, _) = super::super::provision_protocol_with_fixture(
         fixture,
         &provider.url,

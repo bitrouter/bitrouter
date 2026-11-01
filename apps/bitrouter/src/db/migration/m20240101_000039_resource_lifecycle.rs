@@ -10,7 +10,7 @@ pub struct Migration;
 
 const TABLE: &str = "tenancy_resource_lifecycle";
 
-fn definition(backend: DatabaseBackend) -> TableCreateStatement {
+pub(super) fn definition(backend: DatabaseBackend) -> TableCreateStatement {
     let mut table = Table::create();
     table.table(Alias::new(TABLE));
     if backend == DatabaseBackend::MySql {

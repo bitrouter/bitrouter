@@ -1,4 +1,5 @@
 //! Borrowed inspection only. No import, compilation write, epoch pin or authority.
+pub(crate) mod v2;
 use super::{
     manifest::{Definition, Manifest, bounded_bytes},
     *,
@@ -29,15 +30,32 @@ impl Resources {
                 && manifest.resources.len() <= MAX_RESOURCES,
             "approved static manifest identity"
         );
-        let references = storage::references(db).await?;
-        let actual: HashSet<_> = references.iter().collect();
         let supplied: HashSet<_> = manifest.resources.iter().map(|r| &r.reference).collect();
         let expected: HashSet<_> = observed.resources.iter().collect();
         ensure!(
-            actual.len() == references.len()
-                && supplied.len() == manifest.resources.len()
-                && actual == supplied
-                && actual == expected,
+            supplied.len() == manifest.resources.len() && supplied == expected,
+            "approved resource coverage mismatch"
+        );
+        let mut after = None;
+        let mut actual_count = 0usize;
+        loop {
+            let page = storage::reference_page(db, after.as_ref()).await?;
+            if page.is_empty() {
+                break;
+            }
+            for reference in &page {
+                ensure!(
+                    supplied.contains(reference),
+                    "approved resource coverage mismatch"
+                );
+                actual_count = actual_count
+                    .checked_add(1)
+                    .context("resource count overflow")?;
+            }
+            after = page.last().cloned();
+        }
+        ensure!(
+            actual_count == supplied.len(),
             "approved resource coverage mismatch"
         );
         for resource in &manifest.resources {
@@ -80,7 +98,7 @@ impl Resources {
                     .definition
                     .dependencies()
                     .iter()
-                    .all(|r| actual.contains(r)),
+                    .all(|r| supplied.contains(r)),
                 "approved dependency missing"
             );
         }
@@ -132,14 +150,14 @@ impl Resources {
                 .map_err(|_| anyhow::anyhow!("target profile unavailable in this binary"))?;
             for dependency in stored.dependencies {
                 ensure!(
-                    actual.contains(&dependency),
+                    supplied.contains(&dependency),
                     "configuration dependency not retained"
                 );
                 reached.insert(dependency);
             }
         }
         ensure!(
-            reached.len() == actual.len() && reached.iter().all(|r| actual.contains(r)),
+            reached.len() == supplied.len() && reached.iter().all(|r| supplied.contains(r)),
             "unreferenced static resource outside approved closure"
         );
         budget.check()?;

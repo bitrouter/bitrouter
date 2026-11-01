@@ -184,7 +184,7 @@ async fn evidence_preflight_charges_actual_bytes_and_preserves_typed_capacity_re
     let budget = OperationBudget::new(&check);
     let probe = Probe::new(&db);
     bounded(&probe, &mut value, &budget).await?;
-    ensure!(budget.usage()? == (4, 1024 + 3 * (bytes + 128) + 4096));
+    ensure!(budget.usage()? == (5, 1280 + 3 * (bytes + 128) + 4096));
     ensure!(
         probe.payload_queries.load(Ordering::SeqCst) == 1
             && probe.transferred.load(Ordering::SeqCst) == bytes
@@ -246,7 +246,7 @@ async fn oversized_or_misstated_evidence_is_refused_before_payload_transfer() ->
             probe.payload_queries.load(Ordering::SeqCst) == 0
                 && probe.transferred.load(Ordering::SeqCst) == 0
         );
-        ensure!(budget.usage()? == (2, 1024));
+        ensure!(budget.usage()? == (3, 1280));
     }
     db.close().await?;
     Ok(())
@@ -283,7 +283,7 @@ async fn changed_length_cannot_transfer_more_than_preflight_reserved() -> Result
                 && probe.transferred.load(Ordering::SeqCst) == 0,
             "CASE must withhold a changed cell before transfer"
         );
-        ensure!(budget.usage()? == (4, 1024 + 3 * (bytes + 128) + 4096));
+        ensure!(budget.usage()? == (5, 1280 + 3 * (bytes + 128) + 4096));
     }
     db.close().await?;
     Ok(())

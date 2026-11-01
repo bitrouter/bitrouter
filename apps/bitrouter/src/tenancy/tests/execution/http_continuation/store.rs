@@ -184,7 +184,7 @@ async fn restart_uses_acknowledged_pin_and_retained_row_without_import_source() 
     let public = public_id(&bytes, true)?;
     server.wire().await?;
     // Rotation changes the request credential, not the stable owner principal.
-    let mut rotation = ready.fixture.issuance("rotate-http-caller")?;
+    let mut rotation = ready.fixture.issuance("rotate-http-caller").await?;
     rotation.rotate_credential_id = Some(old_credential);
     let response = ready
         .fixture
@@ -212,7 +212,6 @@ async fn restart_uses_acknowledged_pin_and_retained_row_without_import_source() 
     ready.fixture.service = crate::tenancy::Service::start_prepared(
         ready.fixture.db.clone(),
         None,
-        Default::default(),
         initial,
         Arc::new(resources),
     )
@@ -267,7 +266,6 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
         crate::tenancy::Service::start_resources(
             ready.fixture.db.clone(),
             None,
-            Default::default(),
             initial,
             Arc::new(wrong),
             Some(import),
@@ -297,7 +295,6 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
     let restored = crate::tenancy::Service::start_prepared(
         ready.fixture.db.clone(),
         None,
-        Default::default(),
         initial,
         Arc::new(crate::tenancy::resources::Resources::with_key(
             ready.fixture.installation.clone(),
@@ -317,7 +314,6 @@ async fn retained_http_row_rejects_replacement_epoch_before_catalog_import() -> 
         crate::tenancy::Service::start_prepared(
             ready.fixture.db.clone(),
             None,
-            Default::default(),
             initial,
             Arc::new(crate::tenancy::resources::Resources::with_key(
                 ready.fixture.installation.clone(),

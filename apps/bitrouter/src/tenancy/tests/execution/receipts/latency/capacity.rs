@@ -169,18 +169,18 @@ pub(super) async fn durable_unknown_and_incomplete_restart() -> Result<()> {
         let restarted = crate::tenancy::Service::start_resources_with_continuations(
             h.fixture.db.clone(),
             None,
-            Default::default(),
             snapshot,
             Arc::new(crate::tenancy::resources::Resources::with_key(
                 h.fixture.installation.clone(),
                 [29; 32],
             )?),
-            (
-                None,
-                &crate::config::ContinuationConfig::default(),
-                None,
-                sink2.clone(),
-            ),
+            crate::tenancy::Provisioning {
+                import: None,
+                continuations: &crate::config::ContinuationConfig::default(),
+                claim: None,
+                receipt_observer: sink2.clone(),
+                config: &crate::config::tenancy::TenancyConfig::default(),
+            },
             None,
         )
         .await?;

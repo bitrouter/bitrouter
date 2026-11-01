@@ -14,8 +14,6 @@ use sea_orm::{
     sea_query::{Alias, Expr, Func, OnConflict, Query, SelectStatement},
 };
 
-use crate::tenancy::configuration_store;
-
 const TABLE: &str = "tenancy_resource_lifecycle";
 const KEY: [&str; 5] = [
     "owner_kind",
@@ -24,10 +22,8 @@ const KEY: [&str; 5] = [
     "resource_id",
     "revision_id",
 ];
-pub(in crate::tenancy) const MAX_RECORDS: usize = 4096;
-
 /// Nonsecret status for one exact immutable resource revision.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub(in crate::tenancy) struct Record {
     pub reference: ResourceRef,
     pub is_head: bool,
@@ -35,10 +31,12 @@ pub(in crate::tenancy) struct Record {
     pub authority_revision: AuthorityRevision,
 }
 
-/// Lifecycle snapshot; absence means unmanaged and not explicitly revoked.
+/// Scoped lifecycle facts; a restricted view requires explicit proven absence.
 #[derive(Clone, Default)]
 pub(in crate::tenancy) struct State {
     records: HashMap<ResourceRef, Record>,
+    absent: HashSet<ResourceRef>,
+    scoped: bool,
 }
 
 impl State {
@@ -55,29 +53,76 @@ impl State {
     }
 
     pub(in crate::tenancy) fn revoked(&self, reference: &ResourceRef) -> bool {
-        self.record(reference).is_some_and(|record| record.revoked)
+        match self.record(reference) {
+            Some(record) => record.revoked,
+            None => self.scoped && !self.absent.contains(reference),
+        }
     }
 
     pub(in crate::tenancy) fn record(&self, reference: &ResourceRef) -> Option<&Record> {
         self.records.get(reference)
     }
 
-    /// Insert caller-validated metadata after persistence; never evict history.
-    /// Callers check capacity before adding a reference and demote the old head.
+    /// Insert caller-validated metadata into the bounded live fact closure.
+    /// Callers account for the allocation and demote the old head on publication.
     pub(in crate::tenancy) fn insert(&mut self, record: Record) -> Option<Record> {
+        self.absent.remove(&record.reference);
         self.records.insert(record.reference.clone(), record)
     }
 
+    pub(in crate::tenancy) fn restrict(&mut self) {
+        self.scoped = true;
+    }
+
+    pub(in crate::tenancy) fn loaded(&self, reference: &ResourceRef) -> bool {
+        self.records.contains_key(reference) || self.absent.contains(reference)
+    }
+
+    pub(in crate::tenancy) fn absent(&mut self, reference: ResourceRef) {
+        self.records.remove(&reference);
+        self.absent.insert(reference);
+    }
+
+    pub(in crate::tenancy) fn records(&self) -> impl Iterator<Item = &Record> {
+        self.records.values()
+    }
+
+    pub(in crate::tenancy) fn absences(&self) -> impl Iterator<Item = &ResourceRef> {
+        self.absent.iter()
+    }
+
+    #[cfg(test)]
     pub(in crate::tenancy) fn len(&self) -> usize {
         self.records.len()
     }
 }
 
+/// Check one compiler-discovered revision under the caller's fixed read custody.
+/// Missing legacy lifecycle metadata is allowed only after an exact DB read.
+pub(in crate::tenancy) async fn check_in(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    authority: AuthorityRevision,
+    reference: &ResourceRef,
+) -> std::result::Result<(), bitrouter_ai::tenancy::operation::ErrorCode> {
+    use bitrouter_ai::tenancy::operation::ErrorCode;
+    if let Some(record) = exact(db, installation, reference)
+        .await
+        .map_err(|_| ErrorCode::StorageUnavailable)?
+    {
+        if record.authority_revision > authority {
+            return Err(ErrorCode::AuthorityUnavailable);
+        }
+        if record.revoked {
+            return Err(ErrorCode::Forbidden);
+        }
+    }
+    Ok(())
+}
+
 fn select(backend: DatabaseBackend) -> SelectStatement {
     let mut query = Query::select();
-    query
-        .from(Alias::new(TABLE))
-        .limit((MAX_RECORDS + 1) as u64);
+    query.from(Alias::new(TABLE));
     for (name, limit) in [
         ("installation_id", 128_u64),
         ("owner_kind", 32),
@@ -134,69 +179,76 @@ fn text(row: &QueryResult, name: &str) -> Result<String> {
         .context("invalid or oversized resource lifecycle field")
 }
 
-async fn records(db: &impl ConnectionTrait, installation: &InstallationId) -> Result<Vec<Record>> {
-    let backend = db.get_database_backend();
-    let rows = db.query_all(backend.build(&select(backend))).await?;
+fn decode(row: &QueryResult, installation: &InstallationId) -> Result<Record> {
     ensure!(
-        rows.len() <= MAX_RECORDS,
-        "resource lifecycle capacity exceeded"
+        text(row, "installation_id")? == installation.as_str(),
+        "resource lifecycle installation mismatch"
     );
-    rows.into_iter()
-        .map(|row| {
-            ensure!(
-                text(&row, "installation_id")? == installation.as_str(),
-                "resource lifecycle installation mismatch"
-            );
-            Ok(Record {
-                reference: ResourceRef {
-                    owner_kind: serde_json::from_value(text(&row, "owner_kind")?.into())?,
-                    owner_id: text(&row, "owner_id")?.try_into()?,
-                    resource_kind: serde_json::from_value(text(&row, "resource_kind")?.into())?,
-                    resource_id: text(&row, "resource_id")?.try_into()?,
-                    revision_id: text(&row, "revision_id")?.try_into()?,
-                },
-                is_head: row.try_get("", "is_head")?,
-                revoked: row.try_get("", "revoked")?,
-                authority_revision: u64::try_from(row.try_get::<i64>("", "authority_revision")?)?
-                    .try_into()?,
-            })
-        })
-        .collect()
+    Ok(Record {
+        reference: ResourceRef {
+            owner_kind: serde_json::from_value(text(row, "owner_kind")?.into())?,
+            owner_id: text(row, "owner_id")?.try_into()?,
+            resource_kind: serde_json::from_value(text(row, "resource_kind")?.into())?,
+            resource_id: text(row, "resource_id")?.try_into()?,
+            revision_id: text(row, "revision_id")?.try_into()?,
+        },
+        is_head: row.try_get("", "is_head")?,
+        revoked: row.try_get("", "revoked")?,
+        authority_revision: u64::try_from(row.try_get::<i64>("", "authority_revision")?)?
+            .try_into()?,
+    })
 }
 
-/// Load all lifecycle metadata against the caller's installation and snapshot.
-///
-/// # Errors
-/// Rejects corruption, capacity overflow, duplicate heads, future authority and
-/// references without a valid immutable resource revision. No contents are exposed.
-pub(in crate::tenancy) async fn load(
-    db: &impl ConnectionTrait,
-    installation: &InstallationId,
-    authority: AuthorityRevision,
-) -> Result<State> {
-    let mut state = State::default();
-    let mut heads = HashSet::new();
-    for record in records(db, installation).await? {
-        ensure!(
-            record.authority_revision <= authority,
-            "resource lifecycle authority mismatch"
-        );
-        ensure!(
-            !record.is_head || heads.insert(record.reference.key()),
-            "duplicate resource lifecycle head"
-        );
-        ensure!(
-            configuration_store::resource(db, &record.reference)
-                .await?
-                .is_some(),
-            "resource lifecycle revision missing"
-        );
-        ensure!(
-            state.insert(record).is_none(),
-            "duplicate resource lifecycle revision"
+fn select_key(backend: DatabaseBackend, key: &ResourceKey) -> Result<SelectStatement> {
+    let mut query = select(backend);
+    for (name, value) in [
+        ("owner_kind", serde_json::to_value(key.owner_kind)?),
+        ("resource_kind", serde_json::to_value(key.resource_kind)?),
+    ] {
+        query.and_where(
+            Expr::col(Alias::new(name)).eq(value.as_str().context("invalid lifecycle key")?),
         );
     }
-    Ok(state)
+    query
+        .and_where(Expr::col(Alias::new("owner_id")).eq(key.owner_id.as_str()))
+        .and_where(Expr::col(Alias::new("resource_id")).eq(key.resource_id.as_str()));
+    Ok(query)
+}
+
+/// Resolve one exact revision. Only a successful absent lookup means unmanaged.
+pub(in crate::tenancy) async fn exact(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    reference: &ResourceRef,
+) -> Result<Option<Record>> {
+    let mut query = select_key(db.get_database_backend(), &reference.key())?;
+    query
+        .and_where(Expr::col(Alias::new("revision_id")).eq(reference.revision_id.as_str()))
+        .limit(1);
+    db.query_one(db.get_database_backend().build(&query))
+        .await?
+        .as_ref()
+        .map(|row| decode(row, installation))
+        .transpose()
+}
+
+/// Resolve the current head without loading a resource's retained revisions.
+pub(in crate::tenancy) async fn head(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    key: &ResourceKey,
+) -> Result<Option<Record>> {
+    let mut query = select_key(db.get_database_backend(), key)?;
+    query
+        .and_where(Expr::col(Alias::new("is_head")).eq(true))
+        .limit(2);
+    let rows = db
+        .query_all(db.get_database_backend().build(&query))
+        .await?;
+    ensure!(rows.len() <= 1, "duplicate resource lifecycle head");
+    rows.first()
+        .map(|row| decode(row, installation))
+        .transpose()
 }
 
 /// Upsert exactly one revision inside the single writer's caller-owned transaction.
@@ -204,25 +256,24 @@ pub(in crate::tenancy) async fn load(
 /// the exact revision's existing head flag. Immutable contents are never mutated.
 ///
 /// # Errors
-/// Rejects invalid retained metadata, installation mismatch, capacity overflow,
+/// Rejects invalid retained metadata, installation mismatch,
 /// conflicting heads or database errors. The caller must roll back on any error.
 pub(in crate::tenancy) async fn write(
     db: &impl ConnectionTrait,
     installation: &InstallationId,
     record: &Record,
 ) -> Result<()> {
-    let retained = records(db, installation).await?;
+    // Check the exact old owner even when this is not a head update. The table's
+    // primary key predates installation qualification; a foreign row is corrupt,
+    // never an absent local revision that can be overwritten.
+    exact(db, installation, &record.reference).await?;
+    let current_head = if record.is_head {
+        head(db, installation, &record.reference.key()).await?
+    } else {
+        None
+    };
     ensure!(
-        retained.len() < MAX_RECORDS || retained.iter().any(|r| r.reference == record.reference),
-        "resource lifecycle capacity exceeded"
-    );
-    ensure!(
-        !record.is_head
-            || !retained.iter().any(|r| {
-                r.is_head
-                    && r.reference != record.reference
-                    && r.reference.key() == record.reference.key()
-            }),
+        current_head.is_none_or(|head| head.reference == record.reference),
         "duplicate resource lifecycle head"
     );
     let reference = &record.reference;
@@ -269,6 +320,7 @@ pub(in crate::tenancy) async fn write(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tenancy::{configuration_store, store::startup};
     use bitrouter_ai::tenancy::authority::{OwnerKind, ResourceKind};
     use sea_orm::{DatabaseConnection, Statement, TransactionTrait};
     use sea_orm_migration::{MigratorTrait, SchemaManager};
@@ -289,7 +341,24 @@ mod tests {
                 migration.up(&manager).await?;
             }
         }
+        sql(&db, "INSERT INTO tenancy_installation (singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES (1,'installation',2,3,0,0,0,'2026-01-01T00:00:00Z')").await?;
         Ok(db)
+    }
+
+    async fn validate(db: &impl ConnectionTrait) -> Result<()> {
+        // Exercise the complete production validator with several small pages,
+        // retaining only its header rather than rebuilding a directory in tests.
+        let loaded = startup::load_header_in(
+            db,
+            startup::Budget {
+                rows: 3,
+                bytes: crate::config::tenancy::capacity::AuthorityViews::default().bytes,
+            },
+        )
+        .await?
+        .context("missing fixture header")?;
+        ensure!(loaded.header.installation.as_str() == "installation");
+        Ok(())
     }
 
     fn record(revision: &str) -> Result<Record> {
@@ -335,9 +404,9 @@ mod tests {
         let mut old = record("v1")?;
         let mut new = record("v2")?;
         let key = old.reference.key();
-        let empty = load(&db, &installation, 0.try_into()?).await?;
-        ensure!(empty.len() == 0 && empty.head(&key).is_none());
-        ensure!(!empty.revoked(&old.reference) && empty.record(&old.reference).is_none());
+        validate(&db).await?;
+        ensure!(head(&db, &installation, &key).await?.is_none());
+        ensure!(exact(&db, &installation, &old.reference).await?.is_none());
         let transaction = db.begin().await?;
         retain(&transaction, &old).await?;
         write(&transaction, &installation, &old).await?;
@@ -350,9 +419,22 @@ mod tests {
         write(&transaction, &installation, &old).await?;
         write(&transaction, &installation, &new).await?;
         transaction.commit().await?;
-        let rotated = load(&db, &installation, 2.try_into()?).await?;
-        ensure!(rotated.len() == 2 && rotated.head(&key) == Some(&new.reference.revision_id));
-        ensure!(!rotated.revoked(&old.reference) && !rotated.revoked(&new.reference));
+        validate(&db).await?;
+        ensure!(
+            head(&db, &installation, &key)
+                .await?
+                .context("missing head")?
+                .reference
+                == new.reference
+        );
+        for item in [&old, &new] {
+            ensure!(
+                !exact(&db, &installation, &item.reference)
+                    .await?
+                    .context("missing revision")?
+                    .revoked
+            );
+        }
         let current = new.reference.clone();
         for target in [&mut old, &mut new] {
             target.revoked = true;
@@ -360,27 +442,43 @@ mod tests {
             let transaction = db.begin().await?;
             write(&transaction, &installation, target).await?;
             transaction.commit().await?;
-            let loaded = load(&db, &installation, 3.try_into()?).await?;
-            ensure!(loaded.revoked(&target.reference));
-            ensure!(loaded.revoked(&current) == (target.reference == current));
-            ensure!(loaded.head(&key) == Some(&current.revision_id));
+            validate(&db).await?;
+            ensure!(
+                exact(&db, &installation, &target.reference)
+                    .await?
+                    .context("missing revoked revision")?
+                    .revoked
+            );
+            ensure!(
+                exact(&db, &installation, &current)
+                    .await?
+                    .context("missing current revision")?
+                    .revoked
+                    == (target.reference == current)
+            );
+            ensure!(
+                head(&db, &installation, &key)
+                    .await?
+                    .context("missing head")?
+                    .reference
+                    == current
+            );
         }
-        let loaded = load(&db, &installation, 3.try_into()?).await?;
-        ensure!(loaded.len() == 2 && loaded.revoked(&old.reference));
-        ensure!(
-            loaded
-                .record(&old.reference)
-                .context("missing old revision")?
-                .authority_revision
-                == 3.try_into()?
-        );
+        let saved = exact(&db, &installation, &old.reference)
+            .await?
+            .context("missing old revision")?;
+        ensure!(saved.revoked && saved.authority_revision == 3.try_into()?);
         let transaction = db.begin().await?;
         new.is_head = false;
         write(&transaction, &installation, &new).await?;
         transaction.rollback().await?;
+        validate(&db).await?;
         ensure!(
-            load(&db, &installation, 3.try_into()?).await?.head(&key)
-                == Some(&new.reference.revision_id)
+            head(&db, &installation, &key)
+                .await?
+                .context("missing head after rollback")?
+                .reference
+                == new.reference
         );
         let immutable = configuration_store::resource(&db, &old.reference)
             .await?
@@ -418,17 +516,32 @@ mod tests {
             write(&transaction, &installation, item).await?;
         }
         transaction.commit().await?;
-        let state = load(&db, &installation, 1.try_into()?).await?;
-        ensure!(state.len() == 8 && state.revoked(&base.reference));
+        validate(&db).await?;
+        ensure!(
+            exact(&db, &installation, &base.reference)
+                .await?
+                .context("missing base")?
+                .revoked
+        );
         for other in variants {
-            ensure!(!state.revoked(&other.reference));
-            ensure!(state.record(&other.reference).is_some());
+            ensure!(
+                !exact(&db, &installation, &other.reference)
+                    .await?
+                    .context("missing distinct revision")?
+                    .revoked
+            );
             if other.is_head {
-                ensure!(state.head(&other.reference.key()) == Some(&other.reference.revision_id));
+                ensure!(
+                    head(&db, &installation, &other.reference.key())
+                        .await?
+                        .context("missing distinct head")?
+                        .reference
+                        == other.reference
+                );
             }
         }
         ensure!(
-            load(&db, &"Installation".try_into()?, 1.try_into()?)
+            exact(&db, &"Installation".try_into()?, &base.reference)
                 .await
                 .is_err()
         );
@@ -450,23 +563,30 @@ mod tests {
         let mut second = record("v2")?;
         second.is_head = false;
         write(&db, &installation, &second).await?;
-        let error = load(&db, &installation, 1.try_into()?)
+        let error = validate(&db)
             .await
             .err()
             .context("missing revision accepted")?;
         ensure!(error.to_string() == "resource lifecycle revision missing");
         retain(&db, &second).await?;
         write(&db, &installation, &first).await?;
-        ensure!(load(&db, &installation, 0.try_into()?).await.is_err());
-        ensure!(load(&db, &installation, 1.try_into()?).await?.len() == 2);
+        sql(&db, "UPDATE tenancy_installation SET authority_revision=0").await?;
+        ensure!(validate(&db).await.is_err());
+        sql(&db, "UPDATE tenancy_installation SET authority_revision=1").await?;
+        validate(&db).await?;
         second.is_head = true;
         ensure!(write(&db, &installation, &second).await.is_err());
         sql(&db, "UPDATE tenancy_resource_lifecycle SET is_head=1").await?;
-        let error = load(&db, &installation, 1.try_into()?)
+        let error = validate(&db)
             .await
             .err()
             .context("duplicate heads accepted")?;
-        ensure!(error.to_string() == "duplicate resource lifecycle head");
+        ensure!(error.to_string() == "duplicate indexed authority identity");
+        ensure!(
+            head(&db, &installation, &first.reference.key())
+                .await
+                .is_err()
+        );
         Ok(())
     }
 
@@ -503,11 +623,7 @@ mod tests {
                     .await?
                     .context("missing corrupt row")?;
                 ensure!(row.try_get::<Option<String>>("", name)?.is_none());
-                ensure!(
-                    load(&transaction, &installation, 1.try_into()?)
-                        .await
-                        .is_err()
-                );
+                ensure!(validate(&transaction).await.is_err());
                 transaction.rollback().await?;
             }
         }
@@ -528,37 +644,48 @@ mod tests {
                 &format!("UPDATE tenancy_resource_lifecycle SET {assignment}"),
             )
             .await?;
-            ensure!(
-                load(&transaction, &installation, 1.try_into()?)
-                    .await
-                    .is_err()
-            );
+            ensure!(validate(&transaction).await.is_err());
             transaction.rollback().await?;
         }
         Ok(())
     }
 
     #[tokio::test]
-    async fn retained_capacity_allows_exact_updates_but_never_evicts() -> Result<()> {
+    async fn exact_writes_cross_old_history_limit_without_loading_or_evicting_history() -> Result<()>
+    {
         let db = database().await?;
         let installation = "installation".try_into()?;
         let mut item = record("v1")?;
         retain(&db, &item).await?;
         write(&db, &installation, &item).await?;
         sql(&db, "WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i+1 FROM n WHERE i<4096) INSERT INTO tenancy_resource_lifecycle SELECT 'tenant','tenant-a','credential','resource-a','v'||i,'installation',0,0,1 FROM n").await?;
+        sql(&db, "WITH RECURSIVE n(i) AS (SELECT 2 UNION ALL SELECT i+1 FROM n WHERE i<4096) INSERT INTO tenancy_resource_revisions (owner_kind,owner_id,resource_kind,resource_id,revision_id,compiler_version,payload_json,dependency_json,content_digest,created_at) SELECT owner_kind,owner_id,resource_kind,resource_id,'v'||i,compiler_version,payload_json,dependency_json,content_digest,created_at FROM tenancy_resource_revisions CROSS JOIN n WHERE revision_id='v1'").await?;
         item.revoked = true;
         write(&db, &installation, &item).await?;
         let mut added = record("v4097")?;
         added.is_head = false;
-        ensure!(write(&db, &installation, &added).await.is_err());
-        ensure!(records(&db, &installation).await?.len() == MAX_RECORDS);
-        sql(&db, "INSERT INTO tenancy_resource_lifecycle VALUES('tenant','tenant-a','credential','resource-a','v4097','installation',0,0,1)").await?;
-        let error = load(&db, &installation, 1.try_into()?)
-            .await
-            .err()
-            .context("overflow accepted")?;
-        ensure!(error.to_string() == "resource lifecycle capacity exceeded");
-        ensure!(write(&db, &installation, &item).await.is_err());
+        retain(&db, &added).await?;
+        write(&db, &installation, &added).await?;
+        ensure!(exact(&db, &installation, &added.reference).await?.is_some());
+        ensure!(
+            exact(&db, &installation, &item.reference)
+                .await?
+                .is_some_and(|old| old.revoked)
+        );
+        ensure!(
+            head(&db, &installation, &item.reference.key())
+                .await?
+                .is_some_and(|head| head.reference == item.reference)
+        );
+        write(&db, &installation, &item).await?;
+        validate(&db).await?;
+        // Corruption past the first pages must still fail complete validation.
+        sql(
+            &db,
+            "UPDATE tenancy_resource_lifecycle SET authority_revision=4 WHERE revision_id='v4097'",
+        )
+        .await?;
+        ensure!(validate(&db).await.is_err());
         Ok(())
     }
 }

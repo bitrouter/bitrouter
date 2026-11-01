@@ -36,14 +36,8 @@ async fn provision(pool: bool) -> Result<(Fixture, ResourceRef, ResourceRef)> {
         ]
     }))?).await?;
     let snapshot = crate::tenancy::store::load(&fixture.db, Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        crate::tenancy::actor::OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     Ok((fixture, route, slot))
 }
 
@@ -68,10 +62,11 @@ async fn draft(
     }
 }
 
-fn activation(fixture: &Fixture, revision: &RevisionId, id: &str) -> Result<Command> {
+async fn activation(fixture: &Fixture, revision: &RevisionId, id: &str) -> Result<Command> {
     let active = fixture
         .service
         .active_revision(&fixture.operator, &fixture.tenant)
+        .await
         .map_err(failure)?;
     Ok(Command::Activate(
         fixture.tenant.clone(),
@@ -104,7 +99,7 @@ fn allowed(route: &ResourceRef, slot: &ResourceRef) -> GrantScope {
 }
 
 async fn issue_scoped(fixture: &Fixture, scope: GrantScope, id: &str) -> Result<CredentialIssued> {
-    let mut input = fixture.issuance(id)?;
+    let mut input = fixture.issuance(id).await?;
     input.scope = scope;
     issued(
         fixture
@@ -123,6 +118,7 @@ async fn active_is(fixture: &Fixture, revision: &RevisionId) -> Result<()> {
         fixture
             .service
             .active_revision(&fixture.operator, &fixture.tenant)
+            .await
             .map_err(failure)?
             .revision_id
             .as_ref()
@@ -136,7 +132,7 @@ async fn tenant_wide_without_pool_cannot_compile_pool_route() -> Result<()> {
     let (fixture, route, _) = provision(true).await?;
     let checked = async {
         let credential = fixture.issue("ordinary-tenant-scope").await?;
-        let identity = caller(&fixture, &credential)?;
+        let identity = caller(&fixture, &credential).await?;
         let mut input = fixture.configuration_input("ungranted-pool-draft")?;
         input.document.routes.push(route);
         let before = fixture.service.current().map_err(failure)?;
@@ -170,7 +166,7 @@ async fn restricted_scope_cannot_activate_empty_snapshot() -> Result<()> {
                 .service
                 .execute(
                     fixture.operator.clone(),
-                    activation(&fixture, &initial.revision_id, "activate-initial")?,
+                    activation(&fixture, &initial.revision_id, "activate-initial").await?,
                 )
                 .await
                 .map_err(failure)?,
@@ -191,8 +187,8 @@ async fn restricted_scope_cannot_activate_empty_snapshot() -> Result<()> {
         let before = fixture.service.current().map_err(failure)?;
         denied(
             &fixture,
-            caller(&fixture, &credential)?,
-            activation(&fixture, &empty.revision_id, "forbidden-empty")?,
+            caller(&fixture, &credential).await?,
+            activation(&fixture, &empty.revision_id, "forbidden-empty").await?,
             ErrorCode::Forbidden,
         )
         .await?;
@@ -205,7 +201,7 @@ async fn restricted_scope_cannot_activate_empty_snapshot() -> Result<()> {
                 .service
                 .execute(
                     fixture.operator.clone(),
-                    activation(&fixture, &empty.revision_id, "operator-empty")?,
+                    activation(&fixture, &empty.revision_id, "operator-empty").await?,
                 )
                 .await
                 .map_err(failure)?,
@@ -232,7 +228,7 @@ async fn restricted_scope_cannot_activate_changed_tenant_limits() -> Result<()> 
                     .service
                     .execute(
                         fixture.operator.clone(),
-                        activation(&fixture, &initial.revision_id, "limits-active")?,
+                        activation(&fixture, &initial.revision_id, "limits-active").await?,
                     )
                     .await
                     .map_err(failure)?,
@@ -258,8 +254,8 @@ async fn restricted_scope_cannot_activate_changed_tenant_limits() -> Result<()> 
             let before = fixture.service.current().map_err(failure)?;
             denied(
                 &fixture,
-                caller(&fixture, &credential)?,
-                activation(&fixture, &candidate.revision_id, "forbidden-limits")?,
+                caller(&fixture, &credential).await?,
+                activation(&fixture, &candidate.revision_id, "forbidden-limits").await?,
                 ErrorCode::Forbidden,
             )
             .await?;
@@ -273,7 +269,7 @@ async fn restricted_scope_cannot_activate_changed_tenant_limits() -> Result<()> 
                     .service
                     .execute(
                         fixture.operator.clone(),
-                        activation(&fixture, &candidate.revision_id, "operator-limits")?,
+                        activation(&fixture, &candidate.revision_id, "operator-limits").await?,
                     )
                     .await
                     .map_err(failure)?,
@@ -312,8 +308,8 @@ async fn activation_requires_pool_intersection_in_credential_and_binding() -> Re
         let before = fixture.service.current().map_err(failure)?;
         denied(
             &fixture,
-            caller(&fixture, &without)?,
-            activation(&fixture, &retained.revision_id, "missing-credential-pool")?,
+            caller(&fixture, &without).await?,
+            activation(&fixture, &retained.revision_id, "missing-credential-pool").await?,
             ErrorCode::Forbidden,
         )
         .await?;
@@ -329,8 +325,8 @@ async fn activation_requires_pool_intersection_in_credential_and_binding() -> Re
         let before = fixture.service.current().map_err(failure)?;
         denied(
             &fixture,
-            caller(&fixture, &with)?,
-            activation(&fixture, &retained.revision_id, "missing-binding-pool")?,
+            caller(&fixture, &with).await?,
+            activation(&fixture, &retained.revision_id, "missing-binding-pool").await?,
             ErrorCode::Forbidden,
         )
         .await?;
@@ -340,6 +336,7 @@ async fn activation_requires_pool_intersection_in_credential_and_binding() -> Re
             fixture
                 .service
                 .active_revision(&fixture.operator, &fixture.tenant)
+                .await
                 .map_err(failure)?
                 .revision_id
                 .is_none()
@@ -356,8 +353,8 @@ async fn activation_requires_pool_intersection_in_credential_and_binding() -> Re
             fixture
                 .service
                 .execute(
-                    caller(&fixture, &with)?,
-                    activation(&fixture, &retained.revision_id, "both-pool-grants")?,
+                    caller(&fixture, &with).await?,
+                    activation(&fixture, &retained.revision_id, "both-pool-grants").await?,
                 )
                 .await
                 .map_err(failure)?,

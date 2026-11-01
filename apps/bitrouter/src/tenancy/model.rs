@@ -19,7 +19,7 @@ pub(super) enum AuthorityClass {
     Tenant,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(super) struct Tenant {
     pub id: TenantId,
     pub revision: RevisionId,
@@ -27,7 +27,7 @@ pub(super) struct Tenant {
     pub created_at: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(super) struct Principal {
     pub id: PrincipalId,
     pub revision: RevisionId,
@@ -36,7 +36,7 @@ pub(super) struct Principal {
     pub created_at: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(super) struct Deadline {
     pub wire: Timestamp,
     pub instant: DateTime<Utc>,
@@ -49,13 +49,13 @@ impl Deadline {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(super) struct ManagedBy {
     pub principal: PrincipalId,
     pub class: AuthorityClass,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(super) struct Binding {
     pub tenant: TenantId,
     pub id: BindingId,
@@ -67,7 +67,7 @@ pub(super) struct Binding {
     pub managed_by: Option<ManagedBy>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Serialize)]
 pub(super) struct Credential {
     pub id: CredentialId,
     pub tenant: TenantId,
@@ -84,11 +84,21 @@ pub(super) struct Credential {
 }
 
 #[derive(Clone)]
+pub(super) struct AuthorityHeader {
+    pub installation: InstallationId,
+    pub revision: AuthorityRevision,
+    pub operation_ids: u64,
+    pub safety_operation_ids: u64,
+    pub saturated: bool,
+    pub created_at: String,
+}
+
+#[derive(Clone)]
 pub(super) struct Snapshot {
     pub installation: InstallationId,
     pub revision: AuthorityRevision,
-    pub operation_ids: u32,
-    pub safety_operation_ids: u32,
+    pub operation_ids: u64,
+    pub safety_operation_ids: u64,
     pub saturated: bool,
     pub created_at: String,
     pub tenants: BTreeMap<TenantId, Tenant>,
@@ -102,6 +112,37 @@ pub(super) struct Snapshot {
     pub active_configurations: BTreeMap<TenantId, RevisionId>,
     /// Managed heads and exact revocations; checked even for cached executions.
     pub resource_lifecycle: super::resources::lifecycle::State,
+}
+
+impl Snapshot {
+    pub fn header(&self) -> AuthorityHeader {
+        AuthorityHeader {
+            installation: self.installation.clone(),
+            revision: self.revision,
+            operation_ids: self.operation_ids,
+            safety_operation_ids: self.safety_operation_ids,
+            saturated: self.saturated,
+            created_at: self.created_at.clone(),
+        }
+    }
+
+    pub fn from_header(header: &AuthorityHeader) -> Self {
+        Self {
+            installation: header.installation.clone(),
+            revision: header.revision,
+            operation_ids: header.operation_ids,
+            safety_operation_ids: header.safety_operation_ids,
+            saturated: header.saturated,
+            created_at: header.created_at.clone(),
+            tenants: BTreeMap::new(),
+            principals: BTreeMap::new(),
+            bindings: BTreeMap::new(),
+            credentials: BTreeMap::new(),
+            credential_hashes: BTreeMap::new(),
+            active_configurations: BTreeMap::new(),
+            resource_lifecycle: Default::default(),
+        }
+    }
 }
 
 /// Authentication produces this internal identity; requests cannot deserialize it.

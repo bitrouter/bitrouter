@@ -902,13 +902,13 @@
       "instrument": "gauge",
       "value_type": "int",
       "unit": "By",
-      "note": "Opt-in admission policy byte accounting, not heap or physical filesystem usage. Independent callbacks may straddle sealing; require a complete immutable initial/final batch.",
+      "note": "Opt-in accounting: accounted is inline evidence; history_bytes is archive/index accounting; oauth_reserved is the per-slot envelope; physical_write_reserved is in-flight writer custody. Cache/routing bytes are current-only budget accounting, not RSS. observed_free is the last owner-side volume probe, not a write guarantee. Receipt initial/final batches are immutable; independent callbacks can straddle sealing.",
       "dimensions": [
         {
           "key": "field",
           "type": "string",
           "requirement": "required",
-          "note": "Fixed field: completion_reserved, accounted, ingress_reserved."
+          "note": "Fixed field: completion_reserved, physical_write_reserved, accounted, history_bytes, oauth_reserved, ingress_reserved, observed_free, execution_cache_bytes, credential_cache_bytes, routing_bytes. Working-set fields use current only; observed_free is omitted without a volume."
         },
         {
           "key": "checkpoint",
@@ -923,13 +923,13 @@
       "instrument": "gauge",
       "value_type": "int",
       "unit": "1",
-      "note": "Opt-in process-wide admission and durable Unknown state. available=0 omits unreadable values; final values require real producer cleanup and remain immutable.",
+      "note": "Opt-in admission, retained history and Unknown state. available=0 omits unreadable receipt values; volume_available identifies a bound probe. closed stops admission; fenced identifies hard receipt accounting failure. Cache/routing fields are current-only with independent availability. Receipt final values require producer cleanup, including physical writer release, and remain immutable.",
       "dimensions": [
         {
           "key": "field",
           "type": "string",
           "requirement": "required",
-          "note": "Fixed field: potential_unknown, live_unknown, active, queued, ingress, closed, fenced, available."
+          "note": "Fixed field: potential_unknown, live_unknown, history_rows, active, queued, ingress, closed, fenced, available, volume_available, execution_cache_entries, credential_cache_entries, routing_target_entries, routing_provider_entries, routing_active, execution_cache_available, credential_cache_available, routing_available."
         },
         {
           "key": "checkpoint",

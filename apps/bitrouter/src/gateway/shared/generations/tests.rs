@@ -679,7 +679,7 @@ async fn force_harvests_a_completed_unobserved_build() -> Result<()> {
 #[tokio::test]
 #[ignore = "requires PostgreSQL via BITROUTER_TEST_DATABASE_URL"]
 async fn force_requires_actual_transport_join_and_reports_retained_sources() -> Result<()> {
-    use crate::gateway::shared::transport::{Limits, owned::Transport};
+    use crate::gateway::transport::{Limits, owned::Transport};
     let fixture = Fixture::new(1).await?;
     let GatewayStateConfig::Shared(config) = &fixture.config.gateway_state else {
         anyhow::bail!("shared config missing");

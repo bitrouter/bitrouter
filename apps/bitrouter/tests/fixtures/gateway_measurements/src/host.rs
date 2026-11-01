@@ -18,6 +18,14 @@ pub(super) struct Host {
     directory: tempfile::TempDir,
 }
 
+pub(super) fn http_client(timeout: Duration) -> Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()?)
+}
+
 impl Host {
     pub(super) async fn start(binary: &Path, upstream: &str) -> Result<Self> {
         let directory = tempfile::Builder::new()
@@ -91,10 +99,7 @@ providers:
         // The process-test harness uses this ownership record for interruption
         // checks and fallback cleanup. Never discover or stop a resident daemon.
         eprintln!("owned_gateway {} {}", host.child.id(), config.display());
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(2))
-            .build()?;
+        let client = http_client(Duration::from_secs(2))?;
         let deadline = started + Duration::from_secs(30);
         loop {
             ensure!(
@@ -146,24 +151,20 @@ providers:
         .context("control timeout")?
     }
 
-    pub(super) async fn rss_kib(&mut self) -> Result<u64> {
+    pub(super) async fn observe(
+        &mut self,
+        sampler: &super::metrics::Sampler,
+    ) -> Result<super::metrics::Observation> {
         ensure!(
             self.child.try_wait()?.is_none(),
-            "gateway exited before RSS sample"
+            "gateway exited before process observation"
         );
-        let output = tokio::time::timeout(
-            Duration::from_secs(2),
-            tokio::process::Command::new("/bin/ps")
-                .args(["-o", "rss=", "-p"])
-                .arg(self.child.id().to_string())
-                .kill_on_drop(true)
-                .output(),
-        )
-        .await??;
-        ensure!(output.status.success(), "ps failed");
-        let rss = std::str::from_utf8(&output.stdout)?.trim().parse()?;
-        ensure!(rss > 0, "empty RSS sample");
-        Ok(rss)
+        let observation = sampler.observe(self.child.id()).await?;
+        ensure!(
+            self.child.try_wait()?.is_none(),
+            "gateway exited during process observation"
+        );
+        Ok(observation)
     }
 
     pub(super) async fn stop(&mut self) -> Result<()> {

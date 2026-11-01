@@ -184,10 +184,11 @@ async fn real_native_human_head_is_retained_in_a_loaded_learned_checkpoint() -> 
                 ensure!(
                     fixture
                         .service
-                        .current()
+                        .active_revision(&fixture.operator, &fixture.tenant)
+                        .await
                         .map_err(failure)?
-                        .active_configurations
-                        .get(&fixture.tenant)
+                        .revision_id
+                        .as_ref()
                         == Some(&r1),
                     "learning implicitly activated a configuration"
                 );

@@ -176,7 +176,7 @@ async fn fixture_profile(
     let url_db = format!("sqlite://{}", directory.join("experiment.db").display());
     let owner = crate::tenancy::ownership::acquire(&url_db)?;
     let db = crate::db::connect_tenancy(&url_db, &owner).await?;
-    let fixture = Fixture::with_database(db, OperationLimits::default(), &mut |_| {}).await?;
+    let fixture = Fixture::with_database(db, &mut |_| {}).await?;
     let (mut fixture, mut route, slot) =
         crate::tenancy::tests::execution::provision_protocol_with_fixture(
             fixture,
@@ -220,7 +220,6 @@ async fn fixture_profile(
     fixture.service = Service::start_prepared(
         fixture.db.clone(),
         Some(owner),
-        OperationLimits::default(),
         snapshot,
         Arc::new(resources),
     )

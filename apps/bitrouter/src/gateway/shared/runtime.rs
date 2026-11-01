@@ -22,8 +22,8 @@ use super::generations::Generations;
 use super::operator_service::{self, auth::Auth};
 use super::store::{self, Store};
 use super::telemetry::Telemetry;
-use super::transport::owned::Transport;
 use crate::config::shared_process::Process;
+use crate::gateway::transport::owned::Transport;
 use crate::runtime_crypto::DeploymentKey;
 use health::Health;
 use lifecycle::Lifecycle;
@@ -156,7 +156,7 @@ async fn serve_with_pools(
             };
             lifecycle.operator_transport = Some(Transport::start(listener,
                 operator_service::router(authority.clone(), auth, Duration::from_millis(process.shared.request_timeout_ms)),
-                super::transport::Limits::for_operator(&process.shared, config.max_connections))?);
+                crate::gateway::transport::Limits::for_operator(&process.shared, config.max_connections))?);
         }
         let initial = publication::initial(&authority, process, &lifecycle.generations, &lifecycle.health);
         tokio::select! {

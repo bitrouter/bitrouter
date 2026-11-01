@@ -81,6 +81,7 @@ async fn cancelled_human_predecessor_keeps_its_original_deadline_on_the_next_acp
             .admit_execution(
                 service
                     .submission(&host.ready.headers()?)
+                    .await
                     .map_err(failure)?,
                 host.ready.subject.resource_id.as_str(),
                 &ApiProtocol::ChatCompletions,
@@ -144,6 +145,7 @@ async fn queued_manual_edit_rechecks_current_revoke_suspend_and_tenant_scope() -
                 .admit_execution(
                     service
                         .submission(&host.ready.headers()?)
+                        .await
                         .map_err(failure)?,
                     host.ready.subject.resource_id.as_str(),
                     &ApiProtocol::ChatCompletions,

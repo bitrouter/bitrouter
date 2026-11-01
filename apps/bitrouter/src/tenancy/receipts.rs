@@ -13,7 +13,7 @@ pub(crate) mod owner;
 pub(in crate::tenancy) mod read;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod recovery;
-pub(in crate::tenancy) mod store;
+pub(crate) mod store;
 pub(in crate::tenancy) mod usage_evidence;
 
 use bitrouter_ai::tenancy::{execution::Outcome, operation::ErrorCode};

@@ -109,6 +109,7 @@ pub struct EvalStore {
     db: DatabaseConnection,
     scope: Scope,
     provenance: Provenance,
+    storage_budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
 }
 
 impl EvalStore {
@@ -121,6 +122,7 @@ impl EvalStore {
             db: identity.database().clone(),
             scope,
             provenance,
+            storage_budget: None,
         }
     }
     #[cfg(feature = "harness")]
@@ -130,6 +132,7 @@ impl EvalStore {
             db: identity.database().clone(),
             scope,
             provenance,
+            storage_budget: None,
         }
     }
 
@@ -138,7 +141,16 @@ impl EvalStore {
             db,
             scope: Scope::legacy(),
             provenance: Provenance::legacy(),
+            storage_budget: None,
         }
+    }
+
+    pub(crate) fn with_storage_budget(
+        mut self,
+        budget: Option<std::sync::Arc<std::sync::OnceLock<crate::tenancy::storage::Budget>>>,
+    ) -> Self {
+        self.storage_budget = budget;
+        self
     }
 
     pub(crate) fn for_execution(
@@ -150,6 +162,7 @@ impl EvalStore {
             db,
             scope,
             provenance,
+            storage_budget: None,
         }
     }
 
@@ -159,6 +172,7 @@ impl EvalStore {
             db: identity.database().clone(),
             scope,
             provenance,
+            storage_budget: None,
         }
     }
 
@@ -171,6 +185,7 @@ impl EvalStore {
             db: authority.database().clone(),
             scope,
             provenance,
+            storage_budget: None,
         }
     }
 
@@ -217,12 +232,16 @@ impl EvalStore {
 
     pub async fn insert_subject(&self, subject: &EvalSubject) -> Result<SubjectInsertOutcome> {
         let owner = self.owner("local")?;
+        let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
         let tx = self.transaction(true).await?;
-        let outcome = self
-            .insert_subject_in(&tx, subject, &owner, &mut Budget::new(self))
-            .await?;
-        tx.commit().await?;
-        Ok(outcome)
+        let result = async {
+            let outcome = self
+                .insert_subject_in(&tx, subject, &owner, &mut Budget::new(self))
+                .await?;
+            Ok(outcome)
+        }
+        .await;
+        write.finish(tx, result).await
     }
 
     pub async fn insert_subject_owned(
@@ -230,14 +249,37 @@ impl EvalStore {
         subject: &EvalSubject,
         owner_user_id: &str,
     ) -> Result<SubjectInsertOutcome> {
+        self.insert_subject_owned_with_storage(subject, owner_user_id, false)
+            .await
+    }
+
+    pub(super) async fn insert_settlement_subject_owned(
+        &self,
+        subject: &EvalSubject,
+        owner_user_id: &str,
+    ) -> Result<SubjectInsertOutcome> {
+        self.insert_subject_owned_with_storage(subject, owner_user_id, true)
+            .await
+    }
+
+    async fn insert_subject_owned_with_storage(
+        &self,
+        subject: &EvalSubject,
+        owner_user_id: &str,
+        maintenance: bool,
+    ) -> Result<SubjectInsertOutcome> {
         self.legacy_only()?;
         validate_owner(owner_user_id)?;
+        let write = crate::storage::write::Write::start(&self.storage_budget, maintenance)?;
         let tx = self.transaction(true).await?;
-        let outcome = self
-            .insert_subject_in(&tx, subject, owner_user_id, &mut Budget::new(self))
-            .await?;
-        tx.commit().await?;
-        Ok(outcome)
+        let result = async {
+            let outcome = self
+                .insert_subject_in(&tx, subject, owner_user_id, &mut Budget::new(self))
+                .await?;
+            Ok(outcome)
+        }
+        .await;
+        write.finish(tx, result).await
     }
 
     async fn insert_subject_in(
@@ -366,12 +408,16 @@ impl EvalStore {
 
     pub async fn insert_result(&self, result: &EvaluationResult) -> Result<ResultInsertOutcome> {
         let owner = self.owner("local")?;
+        let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
         let tx = self.transaction(true).await?;
-        let outcome = self
-            .insert_result_in(&tx, result, &owner, &mut Budget::new(self))
-            .await?;
-        tx.commit().await?;
-        Ok(outcome)
+        let result = async {
+            let outcome = self
+                .insert_result_in(&tx, result, &owner, &mut Budget::new(self))
+                .await?;
+            Ok(outcome)
+        }
+        .await;
+        write.finish(tx, result).await
     }
 
     pub async fn insert_result_owned(
@@ -381,12 +427,16 @@ impl EvalStore {
     ) -> Result<ResultInsertOutcome> {
         self.legacy_only()?;
         validate_owner(owner_user_id)?;
+        let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
         let tx = self.transaction(true).await?;
-        let outcome = self
-            .insert_result_in(&tx, result, owner_user_id, &mut Budget::new(self))
-            .await?;
-        tx.commit().await?;
-        Ok(outcome)
+        let result = async {
+            let outcome = self
+                .insert_result_in(&tx, result, owner_user_id, &mut Budget::new(self))
+                .await?;
+            Ok(outcome)
+        }
+        .await;
+        write.finish(tx, result).await
     }
 
     async fn insert_result_in(
@@ -553,19 +603,23 @@ impl EvalStore {
         reason: &str,
         authority_id: &str,
     ) -> Result<AdmissionEvent> {
+        let write = crate::storage::write::Write::start(&self.storage_budget, false)?;
         let tx = self.transaction(true).await?;
-        let event = self
-            .append_admission_in(
-                &tx,
-                result_id,
-                status,
-                reason,
-                authority_id,
-                &mut Budget::new(self),
-            )
-            .await?;
-        tx.commit().await?;
-        Ok(event)
+        let result = async {
+            let event = self
+                .append_admission_in(
+                    &tx,
+                    result_id,
+                    status,
+                    reason,
+                    authority_id,
+                    &mut Budget::new(self),
+                )
+                .await?;
+            Ok(event)
+        }
+        .await;
+        write.finish(tx, result).await
     }
 
     async fn append_admission_in(
@@ -603,7 +657,7 @@ impl EvalStore {
         // the whole row without scope on backends without INSERT RETURNING.
         // https://docs.rs/sea-orm/1.1.20/sea_orm/query/struct.Insert.html#method.exec
         budget.check()?;
-        let inserted = admission_entity::Entity::insert(admission_entity::ActiveModel {
+        let statement = admission_entity::Entity::insert(admission_entity::ActiveModel {
             installation_id: Set(metadata.installation),
             tenant_id: Set(metadata.tenant),
             creator_principal_id: Set(metadata.creator),
@@ -613,9 +667,11 @@ impl EvalStore {
             reason: Set(reason.to_owned()),
             authority_id: Set(authority_id.to_owned()),
             created_at: Set(chrono::Utc::now().to_rfc3339()),
-        })
-        .exec(db)
-        .await?;
+        });
+        if budget.physical_write() {
+            budget.statement(&statement.build(db.get_database_backend()))?;
+        }
+        let inserted = statement.exec(db).await?;
         budget.check()?;
         let row = io::one(
             db,
@@ -735,3 +791,7 @@ mod scope_tests;
 #[cfg(test)]
 #[path = "store/legacy_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "store/storage_tests.rs"]
+mod storage_tests;

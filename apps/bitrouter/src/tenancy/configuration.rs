@@ -44,12 +44,9 @@ pub(super) async fn prepare(
     let compiled = resources
         .compile(db, tenant, &revision_id, document)
         .await?;
-    if compiled
-        .dependencies
-        .iter()
-        .any(|reference| state.resource_lifecycle.revoked(reference))
-    {
-        return Err(ErrorCode::Forbidden);
+    for reference in &compiled.dependencies {
+        super::resources::lifecycle::check_in(db, &state.installation, state.revision, reference)
+            .await?;
     }
     authorize(
         state,
@@ -261,26 +258,39 @@ pub(super) fn authorize(
 }
 
 impl Service {
-    pub(super) fn active_revision(
+    pub(super) async fn active_revision(
         &self,
         caller: &Caller,
         tenant: &TenantId,
     ) -> Result<ActiveRevision, Failure> {
-        let state = self.current()?;
-        authorize(
-            &state,
-            caller,
-            tenant,
-            Permission::ResourceRead,
-            &[],
-            Utc::now(),
-        )
-        .map_err(Failure::from)?;
-        Ok(ActiveRevision {
-            tenant_id: tenant.clone(),
-            revision_id: state.active_configurations.get(tenant).cloned(),
-            authority_revision: state.revision,
-        })
+        let identity = self
+            .authority_read(super::actor::AuthoritySubject::Tenant {
+                caller: caller.clone(),
+                tenant: tenant.clone(),
+                active: true,
+                resource: None,
+            })
+            .await?;
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                let state = view.facts();
+                authorize(
+                    state,
+                    caller,
+                    tenant,
+                    Permission::ResourceRead,
+                    &[],
+                    Utc::now(),
+                )?;
+                Ok(ActiveRevision {
+                    tenant_id: tenant.clone(),
+                    revision_id: state.active_configurations.get(tenant).cloned(),
+                    authority_revision: state.revision,
+                })
+            })
+            .map_err(Failure::from)
     }
 
     pub(super) async fn configuration(
@@ -289,18 +299,31 @@ impl Service {
         tenant: &TenantId,
         revision: &RevisionId,
     ) -> Result<ConfigurationRevision, Failure> {
+        let identity = self
+            .authority_read(super::actor::AuthoritySubject::Tenant {
+                caller: caller.clone(),
+                tenant: tenant.clone(),
+                active: false,
+                resource: None,
+            })
+            .await?;
+        // Reject foreign and inactive callers before consulting retained content.
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                if matches!(caller, Caller::Credential(_))
+                    && !view
+                        .facts()
+                        .effective(caller, tenant, Utc::now())?
+                        .permits(Permission::ResourceRead)
+                {
+                    return Err(ErrorCode::Forbidden);
+                }
+                Ok(())
+            })
+            .map_err(Failure::from)?;
         let _read = self.read_permit()?;
-        // Reject a foreign credential before consulting any configuration row.
-        // Scope checks below require the retained dependency closure itself.
-        let before = self.current()?;
-        if matches!(caller, Caller::Credential(_))
-            && !before
-                .effective(caller, tenant, Utc::now())
-                .map_err(Failure::from)?
-                .permits(Permission::ResourceRead)
-        {
-            return Err(ErrorCode::Forbidden.into());
-        }
         let retained = tokio::time::timeout(
             super::MANAGEMENT_TIMEOUT,
             configuration_store::configuration(&self.db, tenant, revision),
@@ -312,19 +335,25 @@ impl Service {
         self.resources
             .validate_compiled(&retained)
             .map_err(|_| self.unavailable())?;
-        let state = self.current()?;
-        authorize(
-            &state,
-            caller,
-            tenant,
-            Permission::ResourceRead,
-            &retained.dependencies,
-            Utc::now(),
-        )
-        .map_err(Failure::from)?;
-        if retained.authority_revision > state.revision {
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
+        self.authority
+            .read()
+            .map_err(Failure::from)?
+            .check(&identity.lease, |view| {
+                let state = view.facts();
+                authorize(
+                    state,
+                    caller,
+                    tenant,
+                    Permission::ResourceRead,
+                    &retained.dependencies,
+                    Utc::now(),
+                )?;
+                if retained.authority_revision > state.revision {
+                    return Err(ErrorCode::AuthorityUnavailable);
+                }
+                Ok(())
+            })
+            .map_err(Failure::from)?;
         Ok(retained.revision)
     }
 }

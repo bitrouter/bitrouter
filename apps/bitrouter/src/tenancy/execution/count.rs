@@ -1,5 +1,5 @@
 //! Selected controlled counting belongs to the original execution, never its callbacks.
-use super::{TenantExecution, authorize_route};
+use super::TenantExecution;
 use crate::gateway::pipeline::types::RoutingTarget;
 use crate::tenancy::receipts::auxiliary::count::{Identity, Permit};
 use bitrouter_ai::{tenancy::operation::ErrorCode, types::Prompt};
@@ -67,32 +67,21 @@ impl TenantExecution {
         permit: &mut Permit,
         request: &reqwest::Request,
     ) -> Result<(), ErrorCode> {
-        self.service
-            .with_dispatch_authority(&self.submission, |state| {
-                authorize_route(state, &self.submission, self.route.dependencies())?;
-                if self
-                    .rejection
-                    .lock()
-                    .map_err(|_| ErrorCode::AuthorityUnavailable)?
-                    .is_some()
-                {
-                    return Err(ErrorCode::Forbidden);
-                }
-                let journal = &self
-                    .receipt
-                    .get()
-                    .ok_or(ErrorCode::AuthorityUnavailable)?
-                    .auxiliary;
-                if !permit.belongs_to(journal) || self.count_identity(target)? != *permit.identity()
-                {
-                    return Err(ErrorCode::Forbidden);
-                }
-                let owner = self.receipt.get().ok_or(ErrorCode::AuthorityUnavailable)?;
-                if owner.cancelled.is_cancelled() || owner.deadline.expired() {
-                    return Err(ErrorCode::CapacityExceeded);
-                }
-                proof.arm(self, permit, request)
-            })
+        self.with_send_authority(|_| {
+            let journal = &self
+                .receipt
+                .get()
+                .ok_or(ErrorCode::AuthorityUnavailable)?
+                .auxiliary;
+            if !permit.belongs_to(journal) || self.count_identity(target)? != *permit.identity() {
+                return Err(ErrorCode::Forbidden);
+            }
+            let owner = self.receipt.get().ok_or(ErrorCode::AuthorityUnavailable)?;
+            if owner.cancelled.is_cancelled() || owner.deadline.expired() {
+                return Err(ErrorCode::CapacityExceeded);
+            }
+            proof.arm(self, permit, request)
+        })
     }
     pub(super) fn verify_count_send(
         &self,

@@ -18,7 +18,7 @@ impl MigrationTrait for Migration {
         manager
             .create_table(definition(manager.get_database_backend()))
             .await?;
-        validate(manager.get_connection()).await
+        validate_legacy(manager.get_connection()).await
     }
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         if manager.has_table(TABLE).await? {
@@ -30,7 +30,7 @@ impl MigrationTrait for Migration {
     }
 }
 
-fn definition(backend: DatabaseBackend) -> TableCreateStatement {
+pub(super) fn definition(backend: DatabaseBackend) -> TableCreateStatement {
     let mut table = Table::create();
     table.table(Alias::new(TABLE));
     if backend == sea_orm::DatabaseBackend::MySql {
@@ -184,7 +184,20 @@ async fn validate_table_on(db: &impl ConnectionTrait) -> Result<(), DbErr> {
 
 /// Read-only schema verification for startup, archives and stopped recovery.
 pub(crate) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
+    if db.get_database_backend() == DatabaseBackend::Sqlite
+        && super::m20240101_000042_receipt_archive::catalog::present(db).await?
+    {
+        return super::m20240101_000042_receipt_archive::validate(db).await;
+    }
+    validate_legacy(db).await
+}
+
+pub(super) async fn validate_legacy(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     validate_table_on(db).await?;
+    validate_indexes(db).await
+}
+
+pub(super) async fn validate_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     catalog::indexes_on(db).await
 }
 

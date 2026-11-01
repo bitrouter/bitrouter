@@ -9,7 +9,6 @@ use bitrouter_ai::{
     },
 };
 use sea_orm::{ConnectionTrait, Statement};
-use std::sync::Arc;
 
 const BOUND: Duration = Duration::from_secs(25);
 const FREEZE: &[u8] = br#"{"frozen_at":"2026-10-25T00:02:00Z"}"#;
@@ -143,11 +142,14 @@ async fn binding(
     scope: GrantScope,
     operation: &str,
 ) -> Result<()> {
-    let current = fixture.service.current().map_err(failure)?;
-    let previous = current
-        .bindings
-        .get(&(fixture.tenant.clone(), fixture.binding.clone()))
-        .context("binding")?;
+    let previous = crate::tenancy::store::directory::binding_in(
+        &fixture.db,
+        &fixture.tenant,
+        &fixture.binding,
+        fixture.service.authority.load_budget(),
+    )
+    .await?
+    .context("binding")?;
     let input = BindingPut {
         operation_id: operation.try_into()?,
         expected_revision: Some(previous.revision.clone()),
@@ -251,7 +253,7 @@ async fn credential_permissions_remain_a_ceiling_under_an_admin_binding() -> Res
                 admin.secret.as_deref().context("admin secret")?,
             )
             .await?;
-            let mut input = fixture.issuance(name)?;
+            let mut input = fixture.issuance(name).await?;
             input.permissions = permissions;
             let limited = issued(
                 fixture
@@ -292,7 +294,7 @@ async fn resource_only_and_disjoint_grants_cannot_be_combined_into_ledger_author
             tenant.secret.as_deref().context("tenant secret")?,
         )
         .await?;
-        let mut limited = fixture.issuance("resource-grant")?;
+        let mut limited = fixture.issuance("resource-grant").await?;
         limited.scope = resource_scope(&fixture, "route-a")?;
         let limited = issued(
             fixture
@@ -613,7 +615,7 @@ async fn rotated_principal_replays_without_new_events_but_foreign_tenant_body_is
         let before = result_provenance(&fixture).await?;
         ensure!(before.len() == 1 && before[0].1 == fixture.principal.as_str());
         let admissions = admission_count(&fixture).await?;
-        let mut replacement = fixture.issuance("rotation-replacement")?;
+        let mut replacement = fixture.issuance("rotation-replacement").await?;
         replacement.rotate_credential_id = Some(original.credential_id.clone());
         let replacement = issued(
             fixture
@@ -863,12 +865,13 @@ async fn sealed_eval_identity_cannot_cross_a_service_restart_with_the_same_datab
         let identity = fixture
             .service
             .eval_identity(ingress.headers(), fixture.tenant.clone(), Action::Read)
+            .await
             .map_err(failure)?;
         let installation = fixture.installation.clone();
         fixture.service.shutdown().await?;
         fixture.service = Service::open(fixture.db.clone(), None).await?;
         ensure!(fixture.service.current().map_err(failure)?.installation == installation);
-        ensure!(fixture.service.authenticate(secret).is_ok());
+        ensure!(fixture.service.authenticate(secret).await.is_ok());
         let gate = fixture.service.cleanup.hold(Phase::Beginning);
         let (reply, receive) = tokio::sync::oneshot::channel();
         let rejected = fixture.service.enqueue_eval(Job {
@@ -925,7 +928,7 @@ async fn held_transaction_rechecks_expiry_and_scope_without_revision_change() ->
             let key = fixture.issue(change).await?;
             let secret = key.secret.as_deref().context("secret")?;
             let before = fixture.service.current().map_err(failure)?.revision;
-            let gate = fixture.service.cleanup.hold(Phase::Active);
+            let mut gate = fixture.service.cleanup.hold(Phase::Active);
             let task = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(
                 router(&fixture)?.oneshot(request(
                     &fixture,
@@ -935,48 +938,54 @@ async fn held_transaction_rechecks_expiry_and_scope_without_revision_change() ->
                     serde_json::to_vec(&subject()?)?,
                 )?),
             ));
-            tokio::time::timeout(Duration::from_secs(3), gate.entered.notified()).await?;
+            tokio::time::timeout(Duration::from_secs(3), async {
+                loop {
+                    gate.entered.notified().await;
+                    if fixture.service.eval.leases.available_permits() == 7 {
+                        break;
+                    }
+                    // Let indexed authentication finish before holding the actual
+                    // Eval owner. Its permit, not a read-count assumption, proves
+                    // that the request reached the transaction under test.
+                    let next = fixture.service.cleanup.hold(Phase::Active);
+                    gate.release.notify_one();
+                    gate = next;
+                }
+            })
+            .await?;
             ensure!(fixture.service.cleanup.disposition() == Disposition::Pending);
-            ensure!(fixture.service.eval.leases.available_permits() == 7);
-            // Existing expiry tests use this private snapshot technique. It moves
-            // the checked grant across a barrier without sleeps or a public clock
-            // API; it does not claim management publishes during a serialized tx.
+            // Move the actual leased grant across a barrier without sleeps or a
+            // public clock API. No management publication runs during this tx.
             let expired = Deadline::parse(
                 (Utc::now() - chrono::Duration::seconds(1))
                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
                     .try_into()?,
             )?;
-            {
-                let mut published = fixture
-                    .service
-                    .snapshot
-                    .write()
-                    .map_err(|_| anyhow::anyhow!("authority snapshot lock"))?;
-                let state = Arc::make_mut(&mut *published);
-                match change {
-                    "credential-expiry" => {
-                        state
-                            .credentials
-                            .get_mut(&key.credential_id)
-                            .context("credential")?
-                            .expires = expired
+            let scope = resource_scope(&fixture, "no-ledger")?;
+            let mut changed = false;
+            fixture
+                .service
+                .authority
+                .mutate_views_for_test(|state| {
+                    if change == "credential-expiry" {
+                        if let Some(credential) = state.credentials.get_mut(&key.credential_id) {
+                            credential.expires = expired.clone();
+                            changed = true;
+                        }
+                    } else if let Some(binding) = state
+                        .bindings
+                        .get_mut(&(fixture.tenant.clone(), fixture.binding.clone()))
+                    {
+                        if change == "binding-expiry" {
+                            binding.expires = expired.clone();
+                        } else {
+                            binding.scope = scope.clone();
+                        }
+                        changed = true;
                     }
-                    "binding-expiry" => {
-                        state
-                            .bindings
-                            .get_mut(&(fixture.tenant.clone(), fixture.binding.clone()))
-                            .context("binding")?
-                            .expires = expired
-                    }
-                    _ => {
-                        state
-                            .bindings
-                            .get_mut(&(fixture.tenant.clone(), fixture.binding.clone()))
-                            .context("binding")?
-                            .scope = resource_scope(&fixture, "no-ledger")?
-                    }
-                }
-            }
+                })
+                .map_err(|code| anyhow::anyhow!("held grant fixture: {code:?}"))?;
+            ensure!(changed, "held Eval owner has no leased grant");
             fixture.service.cleanup.release_gate();
             let code = if change == "credential-expiry" {
                 ErrorCode::Unauthorized

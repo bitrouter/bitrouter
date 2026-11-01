@@ -51,6 +51,7 @@ async fn expired_owned_job_never_polls_begin_and_keeps_authority_live() -> Resul
                 fixture.tenant.clone(),
                 crate::tenancy::eval::Action::Read,
             )
+            .await
             .map_err(failure)?;
         let gate = fixture.service.cleanup.hold(Phase::Beginning);
         let (reply, receive) = tokio::sync::oneshot::channel();

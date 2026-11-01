@@ -23,6 +23,7 @@ async fn fresh_rendered_body_gate_checks_reserved_fields_for_cross_wire_targets(
                 .fixture
                 .service
                 .submission(&ready.headers)
+                .await
                 .map_err(failure)?;
             let execution = ready
                 .fixture
@@ -119,14 +120,9 @@ async fn reserved_router_defaults_are_rejected_without_poisoning_other_execution
     }
     resources.provision_bytes(&ready.fixture.db, &serde_json::to_vec(&json!({"format":1,"installation_id":ready.fixture.installation,"resources":imports}))?).await?;
     let initial = crate::tenancy::store::load(&ready.fixture.db, chrono::Utc::now()).await?;
-    ready.fixture.service = Service::start_prepared(
-        ready.fixture.db.clone(),
-        None,
-        Default::default(),
-        initial,
-        Arc::new(resources),
-    )
-    .await?;
+    ready.fixture.service =
+        Service::start_prepared(ready.fixture.db.clone(), None, initial, Arc::new(resources))
+            .await?;
     ready
         .fixture
         .service
@@ -345,6 +341,7 @@ async fn literal_ingress_binding_allows_prepared_selector_but_rejects_forged_ent
                         .fixture
                         .service
                         .submission(&ready.headers)
+                        .await
                         .map_err(failure)?,
                     MODEL,
                     &ApiProtocol::Responses,

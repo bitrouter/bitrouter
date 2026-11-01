@@ -28,16 +28,21 @@ impl Worker {
         }
         let action = job.request.action();
         let check = || {
-            let state = self.current().map_err(|error| error.0.code)?;
             if Instant::now() >= job.deadline || control.check_read().is_err() {
                 return Err(ErrorCode::CapacityExceeded);
             }
-            job.identity.check(&state, &self.proof, action)
+            job.identity.check(&self.proof, action)
         };
         check().map_err(Failure::from)?;
         job.request.validate(&job.identity)?;
         check().map_err(Failure::from)?;
         let store = EvalStore::for_owned(&job.identity);
+        if matches!(
+            job.request,
+            Request::Put(_) | Request::Submit(_) | Request::Freeze(_)
+        ) {
+            control.reserve_write(crate::storage::operation_budget::MAX_BYTES, false)?;
+        }
         let tx = control
             .begin_repeatable_read(job.identity.database())
             .await
@@ -162,6 +167,7 @@ impl Worker {
         check().map_err(Failure::from)?;
         job.observation.writing(&job.subject)?;
         let store = job.execution.eval_store();
+        control.reserve_write(crate::storage::operation_budget::MAX_BYTES, true)?;
         let tx = control
             .begin_repeatable_read(&self.db)
             .await

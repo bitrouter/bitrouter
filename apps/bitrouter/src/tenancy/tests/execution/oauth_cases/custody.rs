@@ -1,6 +1,7 @@
 //! Actual replacement transaction failures retain the same serving H/file owner.
 use super::*;
 use crate::tenancy::transaction::{Disposition, Phase};
+use bitrouter_ai::tenancy::operation::ErrorCode;
 use futures::FutureExt;
 use sea_orm::{ConnectionTrait, Statement};
 use std::{io::Write, path::Path, process::Stdio};
@@ -98,6 +99,34 @@ async fn exercise(path: &Path, fault: Fault) -> Result<()> {
     ensure!(!status.is_success());
     tokio::time::timeout(WAIT, harness.fixture.service.cleanup.quarantined()).await?;
     ensure!(harness.fixture.service.cleanup.disposition() == Disposition::Ambiguous);
+    // A failed OAuth owner only stops admission. Actual transaction ambiguity
+    // must independently fence accounting, including maintenance callers that
+    // bypass ordinary admission and the separate transaction liveness proof.
+    let admission = &harness.fixture.service.admission;
+    ensure!(
+        admission
+            .receipt_capacity_for_test()
+            .map_err(|code| anyhow::anyhow!("receipt accounting: {code:?}"))?
+            .2,
+        "OAuth ambiguity did not retain the hard accounting fence"
+    );
+    ensure!(admission.unknown_read(true).is_err());
+    // An ambiguous COMMIT retains its publication token, whose refusal takes
+    // precedence over the independently witnessed accounting fence above.
+    let refusal = crate::tenancy::storage::Budget::new(
+        admission.clone(),
+        harness.fixture.service.cleanup.clone(),
+    )
+    .reserve(0, true)
+    .err()
+    .context("ambiguous OAuth owner admitted a maintenance write")?;
+    ensure!(
+        matches!(
+            refusal,
+            ErrorCode::AuthorityUnavailable | ErrorCode::StorageUnavailable
+        ),
+        "unexpected maintenance refusal: {refusal:?}"
+    );
     ensure!(
         harness
             .fixture

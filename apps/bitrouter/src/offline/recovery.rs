@@ -3,16 +3,19 @@ mod catalog;
 mod inputs;
 pub(crate) mod plan;
 #[cfg(all(test, unix))]
-mod tests;
+pub(crate) mod tests;
+pub(super) mod upgrade;
+pub(crate) mod v2;
 
 use super::{engine::Connections, files, format, inventory};
 use anyhow::{Context, Result, ensure};
 use futures::FutureExt;
 use serde::Serialize;
+#[cfg(all(test, unix))]
+use std::time::{Duration, Instant};
 use std::{
     panic::AssertUnwindSafe,
     path::{Path, PathBuf},
-    time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -20,8 +23,8 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct AuthorityFacts {
     pub installation_id: bitrouter_ai::tenancy::identity::InstallationId,
     pub authority_revision: u64,
-    pub ordinary_operations: u32,
-    pub safety_operations: u32,
+    pub ordinary_operations: u64,
+    pub safety_operations: u64,
     pub saturated: bool,
 }
 #[derive(Serialize)]
@@ -82,10 +85,77 @@ async fn run_inner(
     output: &Path,
     #[cfg(all(test, unix))] held: Option<tests::Hold>,
 ) -> Result<Report> {
+    run_configured(
+        path,
+        output,
+        super::ValidationBudget::default(),
+        #[cfg(all(test, unix))]
+        held,
+    )
+    .await
+}
+pub(super) async fn run_with_budget(
+    path: &Path,
+    output: &Path,
+    budget: super::ValidationBudget,
+) -> Result<Report> {
+    run_configured(
+        path,
+        output,
+        budget,
+        #[cfg(all(test, unix))]
+        None,
+    )
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum VersionedReport {
+    V1(Report),
+    V2(v2::run::Report),
+}
+impl crate::output::CliReport for VersionedReport {
+    fn render(&self, output: &mut crate::output::human::Human<'_>) -> std::io::Result<()> {
+        match self {
+            Self::V1(report) => crate::output::CliReport::render(report, output),
+            Self::V2(report) => crate::output::CliReport::render(report, output),
+        }
+    }
+}
+
+pub(crate) async fn run_with_options(
+    path: &Path,
+    output: &Path,
+    validation: super::ValidationBudget,
+    options: super::large::Options,
+) -> Result<impl crate::output::CliReport> {
+    #[derive(serde::Deserialize)]
+    struct Version {
+        format: String,
+    }
+    let (version, bytes, _) =
+        v2::inputs::read_control_before_workspace::<Version>(path, options.working_bytes)?;
+    drop(bytes);
+    match version.format.as_str() {
+        plan::FORMAT => Ok(VersionedReport::V1(
+            run_with_budget(path, output, validation).await?,
+        )),
+        v2::format::PLAN => Ok(VersionedReport::V2(
+            v2::run::run(path, output, validation, options).await?,
+        )),
+        _ => anyhow::bail!("unsupported recovery plan format"),
+    }
+}
+async fn run_configured(
+    path: &Path,
+    output: &Path,
+    validation_budget: super::ValidationBudget,
+    #[cfg(all(test, unix))] held: Option<tests::Hold>,
+) -> Result<Report> {
     ensure!(cfg!(unix), "recovery profile is Unix local SQLite only");
     plan::absolute(path)?;
     plan::absolute(output)?;
-    let started = Instant::now();
     let bytes = files::read(path, format::MAX_EVIDENCE)?;
     let plan: plan::Plan = serde_json::from_slice(&bytes)?;
     plan.validate()?;
@@ -106,10 +176,7 @@ async fn run_inner(
         };
         let mut connections = Connections::new(cancel.clone(), Some(owner));
         let check = || {
-            ensure!(
-                !cancel.is_cancelled() && started.elapsed() < Duration::from_secs(120),
-                "recovery operation ended"
-            );
+            ensure!(!cancel.is_cancelled(), "recovery operation ended");
             Ok(())
         };
         let outcome = AssertUnwindSafe(work(
@@ -118,6 +185,7 @@ async fn run_inner(
             &bytes,
             &output,
             &check,
+            validation_budget,
             #[cfg(all(test, unix))]
             held,
         ))
@@ -185,9 +253,11 @@ async fn work(
     original: &[u8],
     output: &Path,
     check: &(dyn Fn() -> Result<()> + Sync),
+    validation_budget: super::ValidationBudget,
     #[cfg(all(test, unix))] held: Option<tests::Hold>,
 ) -> Result<Work> {
     check()?;
+    c.validation_budget().await?;
     let plan: plan::Plan = serde_json::from_slice(original)?;
     let target = c
         .owner
@@ -261,6 +331,7 @@ async fn work(
             &inputs.provisioning,
             &inputs.manifest,
             &budget,
+            validation_budget,
         )
         .await?;
         check()?;
@@ -283,6 +354,7 @@ async fn work(
             db,
             &inputs.plan.source.installation_id,
             check,
+            validation_budget,
         )
         .await
     }

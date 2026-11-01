@@ -149,7 +149,7 @@ async fn schema_expression_is_refused_before_integrity_evaluates_it() -> Result<
     policy(
         &mut db,
         CancellationToken::new(),
-        Instant::now() + Duration::from_secs(10),
+        Some(Instant::now() + Duration::from_secs(10)),
     )
     .await?;
     ensure!(inventory::inspect(&mut db, &[9; 32]).await.is_err());

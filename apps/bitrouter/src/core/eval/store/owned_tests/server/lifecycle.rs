@@ -35,6 +35,7 @@ async fn reconnect(fixture: &mut Fixture, original: &EvalStore) -> Result<EvalSt
         db: fixture.connect().await?,
         scope: original.scope.clone(),
         provenance: original.provenance.clone(),
+        storage_budget: None,
     })
 }
 
@@ -53,6 +54,7 @@ fn creator(store: &EvalStore, principal: &str) -> Result<EvalStore> {
         db: store.db.clone(),
         scope,
         provenance,
+        storage_budget: None,
     })
 }
 

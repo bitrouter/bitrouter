@@ -38,7 +38,7 @@ impl Registry {
                     .lock()
                     .map_err(|_| anyhow::anyhow!("registry unavailable"))?;
                 ensure!(
-                    state.closed && state.entries.len() <= super::MAX_ACTIVE,
+                    state.closed && state.entries.len() <= self.max_active,
                     "registry coverage bound"
                 );
                 state.entries.values().cloned().collect()

@@ -205,7 +205,7 @@ jobs:
     needs:
     - build-linux
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: ${{ matrix.suite == 'recovery-experiment' && 45 || 25 }}
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -218,8 +218,8 @@ jobs:
           expected-tests: 3
           filter: kind(lib) & (test(=harness::agent::tests::native::native_checkpoint_capacity_failure_reports_the_resource_cause) | test(=harness::agent::tests::native::native_long_tool_loop_completes_beyond_old_checkpoint_capacity) | test(=harness::service::tests::recovery::native_large_checkpoint_keeps_next_turn_admissible_after_cold_recovery))
         - suite: recovery-experiment
-          expected-tests: 2
-          filter: kind(lib) & (test(=offline::recovery::tests::saturation::actual_full_operation_ledger_is_archived_and_fresh_target_keeps_independent_history) | test(=tenancy::tests::execution::native::session::experiment::consumer::native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort))
+          expected-tests: 5
+          filter: kind(lib) & (test(=offline::recovery::tests::saturation::actual_full_operation_ledger_is_archived_and_fresh_target_keeps_independent_history) | test(=tenancy::tests::execution::native::session::experiment::consumer::native_mixed_arm_campaign_reconciles_every_real_unit_in_one_frozen_cohort) | test(=offline::large::tests::dense_inventory_exceeds_all_v1_total_limits_with_fixed_working_budget) | test(=tenancy::audit::recovery::v2::tests::runner::real_v2_runner_proves_closure_and_refuses_changed_approval_and_revoked_source_key) | test(=tenancy::audit::recovery::v2::tests::restore::real_restore_keeps_old_resource_revisions_and_rotated_oauth_and_refuses_corruption))
     steps:
     - uses: actions/checkout@v6
     - uses: ./.github/actions/test-archive
@@ -302,16 +302,31 @@ jobs:
       env:
         BITROUTER_TEST_EXAMPLES_DIR: ${{ github.workspace }}/target/debug/examples
         BITROUTER_OWNED_CAPTURE_FIXTURE: ${{ github.workspace }}/target/debug/examples/owned_capture_fixture
-      run: bash .github/scripts/ci-test.sh 4 --test-threads 1 --run-ignored only -E 'test(=tenancy::tests::execution::native::session::choice::recovery::companion::authority::native_recovery_committed_repair_survives_revocation_expiry_and_lost_waiter)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_reserves_aggregate_unknown_room_before_any_repair_write)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_counts_released_peer_rows_in_one_cumulative_budget)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capture::native_recovery_refuses_actual_capture_history_without_retained_reaper_proof)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::companion::custody::native_recovery_unwind_and_overdue_commit_keep_the_exact_owner)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::companion::profiles::native_recovery_refuses_uncovered_generation_and_auxiliary_but_reopens_released_v1)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::companion::scope::native_recovery_checks_exact_seed_scope_and_real_acquisition_origin)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::companion::startup::native_recovery_cancelled_startup_keeps_actual_pool_and_transaction_owner)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::companion::native_recovery_shared_parent_two_real_choices_are_deduplicated) | test(=tenancy::tests::execution::native::session::choice::recovery::marker::native_stopped_owner_marker_precedes_discovery_and_preserves_released_source)
-        | test(=tenancy::tests::execution::native::session::choice::recovery::native_stopped_owner_actual_receipt_repair_and_no_resend)'
+        FILTER: >-
+          kind(lib) & (test(=tenancy::tests::execution::native::session::choice::recovery::companion::authority::native_recovery_committed_repair_survives_revocation_expiry_and_lost_waiter)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_reserves_aggregate_unknown_room_before_any_repair_write)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_counts_released_peer_rows_in_one_cumulative_budget)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::capture::native_recovery_refuses_actual_capture_history_without_retained_reaper_proof)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::custody::native_recovery_unwind_and_overdue_commit_keep_the_exact_owner)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::profiles::native_recovery_refuses_uncovered_generation_and_auxiliary_but_reopens_released_v1)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::scope::native_recovery_checks_exact_seed_scope_and_real_acquisition_origin)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::startup::native_recovery_cancelled_startup_keeps_actual_pool_and_transaction_owner)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::native_recovery_shared_parent_two_real_choices_are_deduplicated)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::marker::native_stopped_owner_marker_precedes_discovery_and_preserves_released_source)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::native_stopped_owner_actual_receipt_repair_and_no_resend)
+          | test(=tenancy::tests::execution::native::session::choice::recovery::companion::observation::owned_startup_and_native_repair_capacity_consumers))
+      run: |
+        cargo-nextest nextest list \
+          --cargo-metadata "$PWD/target/nextest/cargo-metadata.json" \
+          --binaries-metadata "$PWD/target/nextest/binaries-metadata.json" \
+          --workspace-remap "$PWD" --target-dir-remap "$PWD/target" \
+          --profile ci --run-ignored only -E "$FILTER" --message-format json \
+          > ci-evidence/stopped-native-selection.json
+        jq -e '
+          [."rust-suites"[].testcases[] | select(."filter-match".status == "matches")]
+          | length == 12 and all(.ignored == true)
+        ' ci-evidence/stopped-native-selection.json
+        bash .github/scripts/ci-test.sh 4 --test-threads 1 --run-ignored only -E "$FILTER"
     - name: verify stopped paid recovery
       timeout-minutes: 20
       env:

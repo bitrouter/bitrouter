@@ -1,5 +1,10 @@
 //! Bounded single-writer actor; admitted commands outlive HTTP cancellation.
 
+mod archive;
+mod authority_read;
+mod command;
+mod obligations;
+
 #[cfg(all(feature = "core", feature = "harness"))]
 mod capture;
 mod continuation;
@@ -24,14 +29,16 @@ mod trajectory;
 mod tests;
 
 use std::sync::{
-    Arc, RwLock,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 
-use bitrouter_ai::tenancy::{
-    operation::{ErrorCode, OperationResult, OperationStatus},
-    validation::Validate,
-};
+#[cfg(feature = "core")]
+use super::transaction::Disposition;
+use bitrouter_ai::tenancy::operation::ErrorCode;
+#[cfg(all(feature = "core", feature = "harness"))]
+use bitrouter_ai::tenancy::operation::{OperationResult, OperationStatus};
+#[cfg(feature = "core")]
 use chrono::Utc;
 use sea_orm::DatabaseConnection;
 use tokio::sync::{OwnedSemaphorePermit, oneshot};
@@ -41,9 +48,8 @@ use super::{
     command::Command,
     error::Failure,
     model::{Caller, Snapshot},
-    mutation,
-    store::{self, Operation, StoredResponse},
-    transaction::{Control, Disposition, Proof},
+    store::{self, StoredResponse},
+    transaction::{Control, Proof},
 };
 
 pub(super) struct Message {
@@ -68,6 +74,19 @@ pub(super) enum Job {
     OAuth(Box<super::oauth::exchange::Job>),
     Command(Box<Message>),
     Credential(CredentialRead),
+    AuthorityRead(AuthorityRead),
+    UnknownCount(UnknownCount),
+    #[cfg(test)]
+    Escalate {
+        now: chrono::DateTime<chrono::Utc>,
+        deadline: Option<Instant>,
+        reply: oneshot::Sender<Result<usize, Failure>>,
+    },
+    #[cfg(test)]
+    Archive {
+        deadline: Option<Instant>,
+        reply: oneshot::Sender<Result<bool, Failure>>,
+    },
     Receipt(Arc<super::receipts::owner::Owner>),
     ReceiptRead(super::receipts::read::Read),
     Continuation(Box<super::continuation::http::Job>),
@@ -89,6 +108,7 @@ impl From<Message> for Job {
 
 pub(super) struct CredentialRead {
     pub caller: Caller,
+    pub authority: super::authority::live::Lease,
     pub id: bitrouter_ai::tenancy::identity::CredentialId,
     pub deadline: Instant,
     pub permit: OwnedSemaphorePermit,
@@ -101,6 +121,36 @@ pub(super) struct CredentialRead {
             Failure,
         >,
     >,
+}
+
+pub(super) enum AuthoritySubject {
+    Token(String),
+    Caller(Caller),
+    Tenant {
+        caller: Caller,
+        tenant: bitrouter_ai::tenancy::identity::TenantId,
+        active: bool,
+        resource: Option<bitrouter_ai::tenancy::configuration::ResourceRef>,
+    },
+    Extend {
+        caller: Caller,
+        lease: super::authority::live::Lease,
+        dependencies: Vec<bitrouter_ai::tenancy::configuration::ResourceRef>,
+    },
+}
+
+pub(super) struct AuthorityRead {
+    pub subject: AuthoritySubject,
+    pub deadline: Instant,
+    pub permit: OwnedSemaphorePermit,
+    pub reply: oneshot::Sender<Result<super::authority::live::Authenticated, Failure>>,
+}
+
+pub(super) struct UnknownCount {
+    pub tenant: bitrouter_ai::tenancy::identity::TenantId,
+    pub deadline: Instant,
+    pub permit: OwnedSemaphorePermit,
+    pub reply: oneshot::Sender<Result<super::admission::unknown::CountPin, Failure>>,
 }
 
 /// Any exit (including task cancellation) invalidates the last published view.
@@ -120,15 +170,14 @@ pub(super) struct Initialized {
 
 pub(super) struct Worker {
     pub startup: Option<Arc<super::origin::StartupOwner>>,
-    pub oauth: Arc<super::oauth::State>,
     pub db: DatabaseConnection,
-    pub snapshot: Arc<RwLock<Arc<Snapshot>>>,
+    pub authority: Arc<super::authority::live::Authority>,
     pub live: Liveness,
     pub owner: Option<super::ownership::Lease>,
-    pub limits: OperationLimits,
     pub resources: Arc<super::resources::Resources>,
     pub proof: Arc<Proof>,
     pub admission: Arc<super::admission::Admission>,
+    pub obligation_due: Arc<std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
     #[cfg(any(feature = "otel-http", feature = "otel-grpc"))]
     pub observe_capacity: bool,
     pub http_continuation: Arc<crate::continuation::tenant::state::State>,
@@ -138,215 +187,29 @@ pub(super) struct Worker {
     pub accepting: Arc<std::sync::Mutex<bool>>,
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct OperationLimits {
-    pub ordinary: u32,
-    pub safety: u32,
-}
-
-impl Default for OperationLimits {
-    fn default() -> Self {
-        Self {
-            ordinary: store::ORDINARY_OPERATIONS,
-            safety: store::SAFETY_OPERATIONS,
-        }
-    }
-}
-
 impl Worker {
     fn current(&self) -> Result<Arc<Snapshot>, Failure> {
         if !self.live.0.load(Ordering::Acquire) {
             return Err(ErrorCode::AuthorityUnavailable.into());
         }
-        self.snapshot
+        self.authority
             .read()
-            .map(|state| Arc::clone(&state))
-            .map_err(|_| ErrorCode::AuthorityUnavailable.into())
+            .map(|guard| Arc::new(Snapshot::from_header(guard.header())))
+            .map_err(Failure::from)
     }
 
     fn unavailable(&self, code: ErrorCode) -> Failure {
+        if code == ErrorCode::StorageUnavailable {
+            self.admission.fence_storage();
+        }
         self.live.0.store(false, Ordering::Release);
         code.into()
     }
 
-    async fn execute(
-        &self,
-        caller: &Caller,
-        command: &Command,
-        control: &Control,
-    ) -> Result<StoredResponse, Failure> {
-        let old = self.current()?;
-        let now = Utc::now();
-        if command.installation() != &old.installation {
-            return Err(ErrorCode::CapabilityMismatch.into());
-        }
-        let principal = old.principal(caller, now).map_err(Failure::from)?.clone();
-        let digest = command
-            .digest(&principal)
-            .map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-        // A write-only credential must not leave a public offline guessing hash
-        // in operation storage. Bind resource command digests to the wrapping key.
-        let digest = self
-            .resources
-            .management_digest(command, &digest)
-            .map_err(Failure::from)?;
-        let previous = store::operation(
-            &self.db,
-            &old.installation,
-            &principal,
-            command.operation_id(),
-        )
-        .await
-        .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-        if let Some(previous) = previous {
-            old.authorize_read(caller, &previous.context, Utc::now())
-                .map_err(|_| Failure::from(ErrorCode::Forbidden))?;
-            if previous.created_at + chrono::Duration::days(30) <= now {
-                return Err(Failure::new(
-                    ErrorCode::OperationExpired,
-                    Some(command.operation_id().clone()),
-                ));
-            }
-            if previous.digest != digest {
-                return Err(Failure::new(
-                    ErrorCode::OperationConflict,
-                    Some(command.operation_id().clone()),
-                ));
-            }
-            return Ok(previous.response);
-        }
-        let existing_target = match command {
-            Command::Tenant(id, _) => old.tenants.contains_key(id),
-            _ => true,
-        };
-        let safety = old.saturated
-            && matches!(caller, Caller::Installation(_))
-            && command.safety()
-            && existing_target;
-        if (old.saturated && !safety) || (safety && old.safety_operation_ids >= self.limits.safety)
-        {
-            return Err(Failure::new(
-                ErrorCode::CapacityExceeded,
-                Some(command.operation_id().clone()),
-            ));
-        }
-        let mut candidate = (*old).clone();
-        candidate
-            .credentials
-            .retain(|_, credential| credential.expires.instant > now);
-        candidate
-            .credential_hashes
-            .retain(|_, id| candidate.credentials.contains_key(id));
-        // Management reads may have waited on storage. Expiry and lifecycle are
-        // checked once more at application, under the actor's current authority.
-        let now = Utc::now();
-        let prepared =
-            mutation::prepare(&self.db, &candidate, &self.resources, caller, command, now)
-                .await
-                .map_err(|code| {
-                    if matches!(
-                        code,
-                        ErrorCode::StorageUnavailable | ErrorCode::AuthorityUnavailable
-                    ) {
-                        self.unavailable(code)
-                    } else {
-                        code.into()
-                    }
-                })?;
-        let now = Utc::now();
-        let outcome = mutation::apply(&mut candidate, caller, &principal, command, &prepared, now);
-        let (changes, result, mut response) = match outcome {
-            Ok(applied) => {
-                candidate.revision = old
-                    .revision
-                    .get()
-                    .checked_add(1)
-                    .and_then(|value| value.try_into().ok())
-                    .ok_or_else(|| self.unavailable(ErrorCode::AuthorityUnavailable))?;
-                let result = OperationResult {
-                    operation_id: command.operation_id().clone(),
-                    status: OperationStatus::Applied,
-                    authority_revision: Some(candidate.revision),
-                    resource_revision: Some(applied.revision),
-                    resource_id: Some(applied.resource),
-                    error: None,
-                };
-                let response = applied.issued.map_or_else(
-                    || StoredResponse::Operation(result.clone()),
-                    |mut issued| {
-                        issued.authority_revision = candidate.revision;
-                        StoredResponse::Issued(issued)
-                    },
-                );
-                let response = applied
-                    .configuration
-                    .map_or(response, StoredResponse::Configuration);
-                (applied.changes, result, response)
-            }
-            Err(code) => {
-                candidate = (*old).clone();
-                let failure = Failure::new(code, Some(command.operation_id().clone())).0;
-                let result = OperationResult {
-                    operation_id: command.operation_id().clone(),
-                    status: OperationStatus::Rejected,
-                    authority_revision: Some(old.revision),
-                    resource_revision: None,
-                    resource_id: None,
-                    error: Some(failure.clone()),
-                };
-                (Vec::new(), result, StoredResponse::Failure(failure))
-            }
-        };
-        if safety {
-            candidate.safety_operation_ids += 1;
-        } else {
-            candidate.operation_ids += 1;
-        }
-        candidate.saturated |= candidate.operation_ids >= self.limits.ordinary;
-        result
-            .validate()
-            .map_err(|_| self.unavailable(ErrorCode::AuthorityUnavailable))?;
-        let operation = Operation {
-            principal,
-            id: command.operation_id().clone(),
-            context: prepared.context,
-            digest,
-            result,
-            response: response.without_secret(),
-            created_at: now,
-            safety,
-        };
-        // Allocate the publication before committing. After commit there is no
-        // await between replacing the immutable snapshot and acknowledging it.
-        let next = Arc::new(candidate);
-        if !self.live.0.load(Ordering::Acquire) {
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
-        // The transaction control enters Beginning before its first await.
-        // Durable management intent is retained even after the caller deadline.
-        if store::commit(&self.db, &next, &changes, &operation, control)
-            .await
-            .is_err()
-        {
-            return Err(self.unavailable(ErrorCode::StorageUnavailable));
-        }
-        if self.proof.disposition() != Disposition::Committed {
-            self.proof.quarantine();
-            return Err(ErrorCode::AuthorityUnavailable.into());
-        }
-        match self.snapshot.write() {
-            Ok(mut state) => *state = next,
-            Err(_) => {
-                if let StoredResponse::Issued(issued) = &mut response {
-                    issued.secret = None;
-                }
-                return Err(self.unavailable(ErrorCode::AuthorityUnavailable));
-            }
-        }
-        if self.live.0.load(Ordering::Acquire) {
-            Ok(response)
-        } else {
-            Err(ErrorCode::AuthorityUnavailable.into())
-        }
+    fn control(&self) -> Control {
+        Control::new(self.proof.clone()).with_storage(super::storage::Budget::new(
+            self.admission.clone(),
+            self.proof.clone(),
+        ))
     }
 }

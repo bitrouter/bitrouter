@@ -87,8 +87,8 @@ fn name(token: Option<&Token>) -> bool {
     matches!(token, Some(Token::Word(_) | Token::Name(_)))
 }
 
-/// Accept only a column comparison with bounded literals or IN membership.
-/// This includes all four historical provider_continuations constraints.
+/// Accept only a column comparison, BETWEEN range or IN membership with literals.
+/// This includes continuation constraints and the indexed obligation layout.
 fn check(tokens: &[Token], at: &mut usize) -> Result<()> {
     ensure!(
         tokens.get(*at) == Some(&Token::Symbol(b'(')),
@@ -119,6 +119,12 @@ fn check(tokens: &[Token], at: &mut usize) -> Result<()> {
             "unsupported IN expression"
         );
         *at += 1;
+    } else if word(tokens.get(*at), "between") {
+        *at += 1;
+        literal(tokens, at)?;
+        ensure!(word(tokens.get(*at), "and"), "unsupported BETWEEN range");
+        *at += 1;
+        literal(tokens, at)?;
     } else {
         match tokens.get(*at..*at + 2) {
             Some(
@@ -203,4 +209,28 @@ pub(super) fn validate(kind: &[u8], sql: Option<&[u8]>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn obligation_ranges_allow_literals_but_never_executable_bounds() -> Result<()> {
+        for sql in [
+            "CREATE TABLE t (source_mask INTEGER CHECK (source_mask BETWEEN 1 AND 7))",
+            "CREATE TABLE t (due_nanos INTEGER CHECK (due_nanos BETWEEN 0 AND 999999999))",
+        ] {
+            validate(b"table", Some(sql.as_bytes()))?;
+        }
+        for sql in [
+            "CREATE TABLE t (n INTEGER CHECK (n BETWEEN 0 AND abs(7)))",
+            "CREATE TABLE t (n INTEGER CHECK (n BETWEEN 0 AND 7 OR n=9))",
+            "CREATE TABLE t (n INTEGER CHECK (n BETWEEN 0 AND (SELECT 7)))",
+            "CREATE TABLE t (n INTEGER CHECK (n BETWEEN 0 AND 7+1))",
+        ] {
+            ensure!(validate(b"table", Some(sql.as_bytes())).is_err());
+        }
+        Ok(())
+    }
 }

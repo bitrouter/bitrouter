@@ -194,11 +194,17 @@ async fn positive_after_run_export(endpoint_path: &str) -> Result<()> {
     // observation cohort, never the already granted execution authority.
     let original = h.headers.clone();
     let token = h.credential.secret.as_deref().context("credential")?;
-    let caller = h.fixture.service.authenticate(token).map_err(failure)?;
+    let caller = h
+        .fixture
+        .service
+        .authenticate(token)
+        .await
+        .map_err(failure)?;
     let binding = h
         .fixture
         .service
         .capabilities(&caller)
+        .await
         .map_err(failure)?
         .bind(h.revision.revision_id.clone(), "warmup".try_into()?)?;
     let object = serde_json::to_value(binding)?;
@@ -287,7 +293,8 @@ async fn queued_and_sql_boundaries() -> Result<()> {
     // receipt is allowed to BEGIN, and stops before its consuming COMMIT.
     let commit_gate = h.fixture.service.cleanup.hold(Phase::Committing);
     gate.release.notify_one();
-    let _ = tokio::time::timeout(TIMEOUT, &mut page).await??;
+    // Indexed authentication can leave another read queued behind this receipt.
+    // Join the page after releasing COMMIT, not while holding its writer.
     tokio::time::timeout(TIMEOUT, commit_gate.entered.notified()).await?;
     tokio::time::timeout(TIMEOUT, async {
         loop {
@@ -309,6 +316,7 @@ async fn queued_and_sql_boundaries() -> Result<()> {
     ensure!(!task.is_finished() && h.fixture.service.cleanup.disposition() == Disposition::Pending);
     drop(release);
     let id = tokio::time::timeout(TIMEOUT, task).await???;
+    let _ = tokio::time::timeout(TIMEOUT, &mut page).await??;
     ensure!(
         h.receipt(&Harness::client(false)?, &id)
             .await?
