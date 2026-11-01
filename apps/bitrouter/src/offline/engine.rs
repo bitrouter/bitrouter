@@ -68,7 +68,7 @@ impl Connections {
     }
     /// Open a clean, externally fenced source without creating SQLite sidecars.
     /// The caller retains its metadata witness and checks it after actual close.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) async fn open_immutable_source(&mut self, path: &Path) -> Result<()> {
         self.immutable_source(path)?;
         self.open_options(options(path, true), false, None).await

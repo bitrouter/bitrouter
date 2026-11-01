@@ -165,7 +165,7 @@ impl Workspace {
         probe(output_parent, self.min_free_bytes, next_write)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(super) fn refuse_completed_probe(&self) {
         self.fail_completed_probe.store(true, Ordering::Release);
     }
