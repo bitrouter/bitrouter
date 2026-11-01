@@ -2,7 +2,7 @@
 
 use super::super::{Fixture, failure};
 use super::*;
-use crate::tenancy::{Service, actor::OperationLimits, receipts::read, resources::Resources};
+use crate::tenancy::{Service, receipts::read, resources::Resources};
 use bitrouter_ai::tenancy::{
     authority::{OwnerKind, ResourceKind},
     configuration::ResourceRef,
@@ -16,7 +16,7 @@ async fn provision_chain(
 ) -> Result<(Fixture, ResourceRef)> {
     let mut fixture = Fixture::new().await?;
     fixture.service.shutdown().await?;
-    let resources = Resources::with_key(fixture.installation.clone(), [61; 32])?;
+    let resources = Resources::with_key(fixture.installation.clone(), rand::random())?;
     let reference = |kind, id: &str| -> Result<ResourceRef> {
         Ok(ResourceRef {
             owner_kind: OwnerKind::Tenant,
@@ -48,14 +48,8 @@ async fn provision_chain(
         ]
     }))?).await?;
     let snapshot = crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?;
-    fixture.service = Service::start_prepared(
-        fixture.db.clone(),
-        None,
-        OperationLimits::default(),
-        snapshot,
-        Arc::new(resources),
-    )
-    .await?;
+    fixture.service =
+        Service::start_prepared(fixture.db.clone(), None, snapshot, Arc::new(resources)).await?;
     Ok((fixture, route))
 }
 
@@ -120,7 +114,7 @@ async fn rate_limit_campaign(local: bool, provider_limit: bool, stream: bool) ->
         tokio::time::timeout(TIMEOUT, fixture.service.admission.wait_drained()).await?;
         let expected_sends = if local { 0 } else { 2 };
         ensure!(calls.load(Ordering::SeqCst) == expected_sends, "local refusal must stop; explicit upstream 429 may fall back");
-        let caller = fixture.service.authenticate(token).map_err(failure)?;
+        let caller = fixture.service.authenticate(token).await.map_err(failure)?;
         let bytes = fixture.service.read_receipt(caller, fixture.tenant.clone(), read::Request::One(id)).await.map_err(failure)?;
         let receipt: ExecutionReceipt = serde_json::from_slice(&bytes)?;
         ensure!(receipt.attempts.len() == expected_sends, "only actual sends may be receipt attempts");

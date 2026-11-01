@@ -11,6 +11,7 @@ mod command;
 mod configuration;
 mod configuration_store;
 pub(crate) mod continuation;
+mod directory;
 mod error;
 #[cfg(feature = "core")]
 pub(crate) mod eval;
@@ -27,6 +28,7 @@ pub(crate) mod learning;
 mod model;
 mod mutation;
 pub(crate) mod oauth;
+mod ordered;
 pub(crate) mod origin;
 pub(crate) mod ownership;
 pub(crate) mod receipts;
@@ -103,7 +105,6 @@ type CapacityBindTest =
 
 #[derive(Clone)]
 pub(crate) struct Service {
-    #[cfg(all(feature = "core", feature = "harness"))]
     startup: Option<Arc<origin::StartupOwner>>,
     db: DatabaseConnection,
     authority: Arc<authority::live::Authority>,
@@ -482,7 +483,6 @@ impl Service {
         let mut service = Self {
             #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
             obligation_due,
-            #[cfg(all(feature = "core", feature = "harness"))]
             startup,
             db,
             authority,
@@ -878,12 +878,14 @@ impl Service {
             | Job::Learner(_) => None,
             Job::Command(message) => Some(message.command.operation_id().clone()),
             Job::OAuth(_)
+            | Job::Directory(_)
             | Job::Credential(_)
             | Job::AuthorityRead(_)
             | Job::UnknownCount(_)
             | Job::Continuation(_)
             | Job::Receipt(_)
-            | Job::ReceiptRead(_) => None,
+            | Job::ReceiptRead(_)
+            | Job::OrderedIntent(_) => None,
             #[cfg(test)]
             Job::Escalate { .. } | Job::Archive { .. } => None,
             #[cfg(feature = "core")]

@@ -68,7 +68,7 @@ async fn table(db: &impl ConnectionTrait, definition: TableCreateStatement) -> R
         return Err(incompatible());
     }
     let indexes = db.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-        "SELECT CASE WHEN length(CAST(sql AS BLOB))<=65536 THEN sql ELSE NULL END AS sql FROM sqlite_schema WHERE tbl_name=? AND type='index' AND sql IS NOT NULL LIMIT 2", [name.into()])).await?;
+        "SELECT CASE WHEN length(CAST(sql AS BLOB))<=65536 THEN sql ELSE NULL END AS sql FROM sqlite_schema WHERE tbl_name=? AND type='index' AND sql IS NOT NULL LIMIT 3", [name.into()])).await?;
     if name == "tenancy_credentials" {
         let expected = Index::create()
             .name("idx_tenancy_credentials_state")
@@ -76,9 +76,21 @@ async fn table(db: &impl ConnectionTrait, definition: TableCreateStatement) -> R
             .col(Alias::new("state"))
             .col(Alias::new("tenant_id"))
             .to_string(SqliteQueryBuilder);
-        if indexes.len() != 1
-            || normalized(&indexes[0].try_get::<String>("", "sql")?) != normalized(&expected)
-        {
+        let mut expected = vec![normalized(&expected)];
+        if db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='tenancy_dispatch_intents' LIMIT 1"
+        )).await?.is_some() {
+            let directory = super::m20240101_000045_ordered_receipts::directory_index()
+                .to_string(SqliteQueryBuilder);
+            expected.push(normalized(&directory));
+        }
+        let mut actual = indexes
+            .iter()
+            .map(|row| row.try_get::<String>("", "sql").map(|sql| normalized(&sql)))
+            .collect::<Result<Vec<_>, _>>()?;
+        actual.sort_unstable();
+        expected.sort_unstable();
+        if actual != expected {
             return Err(incompatible());
         }
     } else if !indexes.is_empty() {

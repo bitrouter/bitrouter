@@ -114,7 +114,18 @@ async fn receipt_indexes(db: &impl ConnectionTrait) -> Result<(), DbErr> {
 
 pub(super) async fn validate(db: &impl ConnectionTrait) -> Result<(), DbErr> {
     no_shadows(db).await?;
-    table(db, RECEIPTS, receipt_definition()).await?;
+    let mut receipts = receipt_definition();
+    if db
+        .query_one(sql(
+            "SELECT 1 FROM sqlite_schema WHERE name='tenancy_dispatch_intents' LIMIT 1",
+            [],
+        ))
+        .await?
+        .is_some()
+    {
+        receipts.col(super::super::m20240101_000045_ordered_receipts::format_column());
+    }
+    table(db, RECEIPTS, receipts).await?;
     table(db, USAGE, usage_definition()).await?;
     table(db, TABLE, definition()).await?;
     receipt_indexes(db).await?;

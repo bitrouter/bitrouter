@@ -1,0 +1,584 @@
+//! SQLite durability, restart, format-isolation and bounded-load qualification.
+use super::*;
+use crate::tenancy::{origin::StartupOwner, ownership, transaction::Proof};
+use bitrouter_ai::tenancy::{
+    authority::{OwnerKind, ResourceKind},
+    configuration::ResourceRef,
+    execution_v2::AttemptV2,
+    ordered::GenerationProtocol,
+    usage_evidence::AttemptEvidence,
+};
+use sea_orm::{Statement, TransactionTrait};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+fn acquisition(
+    path: &std::path::Path,
+) -> Result<(ownership::Lease, Arc<Proof>, Arc<StartupOwner>)> {
+    let lease = ownership::acquire_path(path, true)?;
+    let proof = Proof::new(Arc::new(AtomicBool::new(true)));
+    let startup = StartupOwner::new(
+        lease.claim()?,
+        uuid::Uuid::new_v4().to_string().try_into()?,
+        proof.clone(),
+    );
+    Ok((lease, proof, startup))
+}
+fn identity(installation: &InstallationId, id: &str, count: usize) -> Result<Identity> {
+    Ok(Identity {
+        installation: installation.clone(),
+        tenant: "tenant".try_into()?,
+        principal: "principal".try_into()?,
+        execution: id.try_into()?,
+        correlation: "correlation".try_into()?,
+        revision: "revision".try_into()?,
+        ordered: Some((
+            AcceptedSelectionV2 {
+                route: ResourceRef {
+                    owner_kind: OwnerKind::Tenant,
+                    owner_id: "tenant".try_into()?,
+                    resource_kind: ResourceKind::Route,
+                    resource_id: "route".try_into()?,
+                    revision_id: "route-version".try_into()?,
+                },
+                inbound_protocol: GenerationProtocol::Messages,
+                candidate_indices: (0..count)
+                    .rev()
+                    .map(|i| u16::try_from(i * 3))
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
+            },
+            64,
+        )),
+    })
+}
+async fn open(path: &std::path::Path, lease: &ownership::Lease) -> Result<DatabaseConnection> {
+    let db =
+        crate::db::connect_tenancy(&format!("sqlite://{}?mode=rwc", path.display()), lease).await?;
+    crate::db::run_migrations(&db).await?;
+    Ok(db)
+}
+fn terminal(intent: &Intent) -> Result<Terminal> {
+    let Terminal::V2(base) = intent.unknown()? else {
+        anyhow::bail!("wrong fixture format");
+    };
+    let mut r = base.receipt.clone();
+    r.outcome = Outcome::Failed;
+    r.state = ReceiptState::Incomplete;
+    r.attempts = intent
+        .selection
+        .candidate_indices
+        .iter()
+        .enumerate()
+        .map(|(i, &ordinal)| {
+            Ok(AttemptV2 {
+                attempt_id: format!("attempt-{i}").try_into()?,
+                candidate_index: ordinal,
+                target: None,
+                outcome: Outcome::Failed,
+                observed_http_status: Some(503),
+                usage: r.usage.clone(),
+                native_usage: Vec::new(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let mut e = base.evidence.document.clone();
+    e.capture = Capture::Captured;
+    e.attempts = r
+        .attempts
+        .iter()
+        .map(|a| AttemptEvidence {
+            attempt_id: a.attempt_id.clone(),
+            target: a.target.clone(),
+            outcome: a.outcome,
+            terminal_observed: true,
+        })
+        .collect();
+    Ok(Terminal::V2(Arc::new(CandidateV2::new(
+        r,
+        Disposition {
+            dispatch: DispatchState::Started,
+            statuses: vec![Some(503); intent.selection.candidate_indices.len()],
+            auxiliary_digest: None,
+        },
+        e,
+    )?)))
+}
+async fn persist_intent(db: &DatabaseConnection, intent: &Intent) -> Result<()> {
+    let tx = db.begin().await?;
+    insert(&tx, intent).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_1_8_9_64_attempts_preserve_ordinals_and_explicit_format_reads() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("receipts.sqlite");
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
+        .await?
+        .installation;
+    for count in [1, 8, 9, 64] {
+        let identity = identity(&installation, &format!("execution-{count}"), count)?;
+        let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
+        persist_intent(&db, &intent).await?;
+        let candidate = terminal(&intent)?;
+        let tx = db.begin().await?;
+        ensure!(store::insert_terminal(&tx, &candidate).await?);
+        tx.commit().await?;
+        ensure!(
+            load(&db, &installation, &identity.tenant, &identity.execution)
+                .await?
+                .is_none()
+        );
+        let saved =
+            store::lookup_terminal(&db, &installation, &identity.tenant, &identity.execution)
+                .await?
+                .context("terminal")?;
+        ensure!(saved.json() == candidate.json() && saved.digest() == candidate.digest());
+        let Terminal::V2(saved) = saved else {
+            anyhow::bail!("v2 format lost")
+        };
+        ensure!(
+            saved.receipt.attempts.len() == count
+                && saved
+                    .receipt
+                    .attempts
+                    .iter()
+                    .map(|a| a.candidate_index)
+                    .collect::<Vec<_>>()
+                    == intent.selection.candidate_indices
+        );
+        let tx = db.begin().await?;
+        ensure!(!store::insert_terminal(&tx, &candidate).await?);
+        tx.commit().await?;
+        use crate::tenancy::receipts::read::{self, Request};
+        let failure = || {
+            crate::tenancy::error::Failure::from(
+                bitrouter_ai::tenancy::operation::ErrorCode::StorageUnavailable,
+            )
+        };
+        let v2 = read::body(
+            &db,
+            &installation,
+            &identity.tenant,
+            &Request::OneV2(identity.execution.clone()),
+            failure,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("v2 read failed: {:?}", error.0.code))?;
+        ensure!(v2 == candidate.json().as_bytes());
+        for request in [
+            Request::One(identity.execution.clone()),
+            Request::UsageEvidence(identity.execution.clone()),
+        ] {
+            let error = read::body(&db, &installation, &identity.tenant, &request, failure)
+                .await
+                .err()
+                .context("v1 mismatch")?;
+            ensure!(
+                error.0.code == bitrouter_ai::tenancy::operation::ErrorCode::CapabilityMismatch
+            );
+        }
+    }
+    ensure!(
+        Intent::new(
+            &identity(&installation, "too-many", 65)?,
+            startup.bootstrap_stamp(&proof)?
+        )
+        .is_err()
+    );
+    let inventory = store::inventory(&db, &installation).await?;
+    ensure!(inventory.rows == 4 && inventory.unknown.is_empty());
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_terminal_sidecar_and_intent_retirement_rollback_atomically() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("receipts.sqlite");
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
+        .await?
+        .installation;
+    let identity = identity(&installation, "execution", 64)?;
+    let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
+    let tx = db.begin().await?;
+    insert(&tx, &intent).await?;
+    tx.rollback().await?;
+    ensure!(
+        load(&db, &installation, &identity.tenant, &identity.execution)
+            .await?
+            .is_none()
+    );
+    persist_intent(&db, &intent).await?;
+    let before = store::inventory(&db, &installation).await?;
+    ensure!(
+        before.rows == 1 && before.unknown.len() == 1 && before.bytes + 16 * 1024 == MAX_OBLIGATION
+    );
+    let candidate = terminal(&intent)?;
+    for (name, sql) in [
+        (
+            "reject_evidence",
+            "CREATE TRIGGER reject_evidence BEFORE INSERT ON tenancy_usage_evidence BEGIN SELECT RAISE(ABORT,'evidence failure'); END",
+        ),
+        (
+            "reject_retirement",
+            "CREATE TRIGGER reject_retirement BEFORE DELETE ON tenancy_dispatch_intents BEGIN SELECT RAISE(ABORT,'intent retirement failure'); END",
+        ),
+    ] {
+        db.execute_unprepared(sql).await?;
+        let tx = db.begin().await?;
+        ensure!(store::insert_terminal(&tx, &candidate).await.is_err());
+        tx.rollback().await?;
+        db.execute_unprepared(&format!("DROP TRIGGER {name}"))
+            .await?;
+        ensure!(
+            load(&db, &installation, &identity.tenant, &identity.execution)
+                .await?
+                .is_some()
+        );
+        ensure!(
+            store::lookup_terminal(&db, &installation, &identity.tenant, &identity.execution)
+                .await?
+                .is_none()
+        );
+    }
+    let tx = db.begin().await?;
+    store::insert_terminal(&tx, &candidate).await?;
+    tx.rollback().await?;
+    ensure!(
+        load(&db, &installation, &identity.tenant, &identity.execution)
+            .await?
+            .is_some()
+    );
+    ensure!(
+        store::lookup_terminal(&db, &installation, &identity.tenant, &identity.execution)
+            .await?
+            .is_none()
+    );
+    let tx = db.begin().await?;
+    store::insert_terminal(&tx, &candidate).await?;
+    tx.commit().await?;
+    ensure!(
+        load(&db, &installation, &identity.tenant, &identity.execution)
+            .await?
+            .is_none()
+    );
+    let after = store::inventory(&db, &installation).await?;
+    ensure!(
+        after.rows == 1
+            && after.unknown.is_empty()
+            && after.bytes == candidate.bytes() + candidate.auxiliary_bytes()
+    );
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_restart_converts_outstanding_intent_to_unknown_without_replay() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("receipts.sqlite");
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
+        .await?
+        .installation;
+    let identity = identity(&installation, "execution", 64)?;
+    let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
+    persist_intent(&db, &intent).await?;
+    let control = Control::new(proof.clone());
+    ensure!(
+        recover(&db, &installation, Some(&startup), &proof, &control)
+            .await
+            .is_err()
+    );
+    ensure!(
+        load(&db, &installation, &identity.tenant, &identity.execution)
+            .await?
+            .is_some()
+    );
+    db.close().await?;
+    drop((control, startup, proof, lease));
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    recover(
+        &db,
+        &installation,
+        Some(&startup),
+        &proof,
+        &Control::new(proof.clone()),
+    )
+    .await?;
+    let saved = store::lookup_terminal(&db, &installation, &identity.tenant, &identity.execution)
+        .await?
+        .context("recovered receipt")?;
+    ensure!(saved.unknown());
+    let bytes = saved.json().to_owned();
+    let Terminal::V2(candidate) = saved else {
+        anyhow::bail!("recovery format lost")
+    };
+    ensure!(
+        candidate.receipt.attempts.is_empty()
+            && candidate.receipt.accepted_selection == intent.selection
+            && candidate.receipt.usage.input_tokens.is_none()
+    );
+    ensure!(
+        candidate.evidence.document.capture == Capture::Unavailable
+            && candidate.evidence.document.frames.is_empty()
+    );
+    let inventory = store::inventory(&db, &installation).await?;
+    ensure!(inventory.rows == 1 && inventory.unknown.len() == 1);
+    db.close().await?;
+    drop((startup, proof, lease));
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    recover(
+        &db,
+        &installation,
+        Some(&startup),
+        &proof,
+        &Control::new(proof.clone()),
+    )
+    .await?;
+    ensure!(
+        store::lookup_terminal(&db, &installation, &identity.tenant, &identity.execution)
+            .await?
+            .context("second restart")?
+            .json()
+            == bytes
+    );
+    db.close().await?;
+    Ok(())
+}
+
+struct Probe<'a> {
+    db: &'a DatabaseConnection,
+    bodies: AtomicUsize,
+}
+#[async_trait::async_trait]
+impl ConnectionTrait for Probe<'_> {
+    fn get_database_backend(&self) -> DatabaseBackend {
+        self.db.get_database_backend()
+    }
+    async fn execute(
+        &self,
+        s: Statement,
+    ) -> std::result::Result<sea_orm::ExecResult, sea_orm::DbErr> {
+        self.db.execute(s).await
+    }
+    async fn execute_unprepared(
+        &self,
+        s: &str,
+    ) -> std::result::Result<sea_orm::ExecResult, sea_orm::DbErr> {
+        self.db.execute_unprepared(s).await
+    }
+    async fn query_one(
+        &self,
+        s: Statement,
+    ) -> std::result::Result<Option<sea_orm::QueryResult>, sea_orm::DbErr> {
+        if s.sql.contains("THEN intent_json") || s.sql.contains("THEN evidence_json") {
+            self.bodies.fetch_add(1, Ordering::SeqCst);
+        }
+        self.db.query_one(s).await
+    }
+    async fn query_all(
+        &self,
+        s: Statement,
+    ) -> std::result::Result<Vec<sea_orm::QueryResult>, sea_orm::DbErr> {
+        if s.sql.contains("THEN intent_json") || s.sql.contains("THEN evidence_json") {
+            self.bodies.fetch_add(1, Ordering::SeqCst);
+        }
+        self.db.query_all(s).await
+    }
+}
+#[tokio::test]
+async fn ordered_oversized_or_understated_intents_fail_before_body_transfer() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("receipts.sqlite");
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
+        .await?
+        .installation;
+    let identity = identity(&installation, "execution", 1)?;
+    let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
+    persist_intent(&db, &intent).await?;
+    db.execute_unprepared(
+        "UPDATE tenancy_dispatch_intents SET intent_json=printf('%.*c',16385,'x'),byte_count=1",
+    )
+    .await?;
+    let probe = Probe {
+        db: &db,
+        bodies: AtomicUsize::new(0),
+    };
+    ensure!(
+        load(&probe, &installation, &identity.tenant, &identity.execution)
+            .await
+            .is_err()
+    );
+    ensure!(probe.bodies.load(Ordering::SeqCst) == 0);
+    ensure!(inventory(&db, &installation).await.is_err());
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_evidence_proportional_limit_preflights_before_json_transfer() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("receipts.sqlite");
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
+        .await?
+        .installation;
+    let identity = identity(&installation, "execution", 1)?;
+    let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
+    persist_intent(&db, &intent).await?;
+    let candidate = terminal(&intent)?;
+    let tx = db.begin().await?;
+    store::insert_terminal(&tx, &candidate).await?;
+    tx.commit().await?;
+    db.execute_unprepared("UPDATE tenancy_usage_evidence SET evidence_json=printf('%.*c',262145,'x'),byte_count=262145").await?;
+    let probe = Probe {
+        db: &db,
+        bodies: AtomicUsize::new(0),
+    };
+    ensure!(
+        store::lookup_terminal(&probe, &installation, &identity.tenant, &identity.execution)
+            .await
+            .is_err()
+    );
+    ensure!(probe.bodies.load(Ordering::SeqCst) == 0);
+    ensure!(store::inventory(&db, &installation).await.is_err());
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_writer_queue_overload_before_admission_does_not_fence_receipts() -> Result<()> {
+    let db = crate::db::connect("sqlite::memory:").await?;
+    crate::db::run_migrations(&db).await?;
+    let service = crate::tenancy::Service::open(db.clone(), None).await?;
+    service.dispatch_test_ready.store(true, Ordering::Release);
+    let state = service
+        .current()
+        .map_err(|e| anyhow::anyhow!("state: {:?}", e.0.code))?;
+    ensure!(service.dispatch_ready(&state));
+    ensure!(!service.ordered_dispatch_ready(&state));
+    let mut slots = Vec::new();
+    for _ in 0..16 {
+        slots.push(
+            service
+                .reserve_ordered_intent()
+                .map_err(|e| anyhow::anyhow!("slot: {:?}", e.0.code))?,
+        );
+    }
+    let error = service
+        .reserve_ordered_intent()
+        .err()
+        .context("full queue")?;
+    ensure!(error.0.code == bitrouter_ai::tenancy::operation::ErrorCode::CapacityExceeded);
+    ensure!(service.admission.receipts_ready());
+    drop(slots);
+    let slot = service
+        .reserve_ordered_intent()
+        .map_err(|e| anyhow::anyhow!("slot: {:?}", e.0.code))?;
+    drop(slot);
+    ensure!(service.admission.receipts_ready());
+    service.shutdown().await?;
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_terminal_cannot_change_intent_ingress_protocol() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("receipts.sqlite");
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
+        .await?
+        .installation;
+    let identity = identity(&installation, "execution", 9)?;
+    let intent = Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?;
+    persist_intent(&db, &intent).await?;
+    let Terminal::V2(candidate) = terminal(&intent)? else {
+        anyhow::bail!("fixture format")
+    };
+    let mut receipt = candidate.receipt.clone();
+    receipt.accepted_selection.inbound_protocol = GenerationProtocol::Responses;
+    let mut evidence = candidate.evidence.document.clone();
+    evidence.accepted_selection = receipt.accepted_selection.clone();
+    let replacement = Terminal::V2(Arc::new(CandidateV2::new(
+        receipt,
+        Disposition {
+            dispatch: DispatchState::Started,
+            statuses: vec![Some(503); 9],
+            auxiliary_digest: None,
+        },
+        evidence,
+    )?));
+    let tx = db.begin().await?;
+    ensure!(store::insert_terminal(&tx, &replacement).await.is_err());
+    tx.rollback().await?;
+    ensure!(
+        load(&db, &installation, &identity.tenant, &identity.execution)
+            .await?
+            .is_some()
+    );
+    ensure!(
+        store::lookup_terminal(&db, &installation, &identity.tenant, &identity.execution)
+            .await?
+            .is_none()
+    );
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordered_authority_bootstrap_converts_intents_before_service_publication() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("receipts.sqlite");
+    let (lease, proof, startup) = acquisition(&path)?;
+    let db = open(&path, &lease).await?;
+    let installation = crate::tenancy::store::load(&db, chrono::Utc::now())
+        .await?
+        .installation;
+    let identity = identity(&installation, "execution", 64)?;
+    persist_intent(
+        &db,
+        &Intent::new(&identity, startup.bootstrap_stamp(&proof)?)?,
+    )
+    .await?;
+    db.close().await?;
+    drop((startup, proof, lease));
+    let owned =
+        crate::db::connect_owned_tenancy(&format!("sqlite://{}?mode=rw", path.display())).await?;
+    crate::db::run_migrations(owned.database()).await?;
+    let service = crate::tenancy::Service::open_owned_profile(
+        owned,
+        &Default::default(),
+        &Default::default(),
+    )
+    .await?;
+    ensure!(service.current().is_ok());
+    ensure!(inventory(&service.db, &installation).await?.rows == 0);
+    let receipt = store::lookup_terminal(
+        &service.db,
+        &installation,
+        &identity.tenant,
+        &identity.execution,
+    )
+    .await?
+    .context("bootstrap terminal receipt")?;
+    ensure!(receipt.unknown());
+    let inventory = store::inventory(&service.db, &installation).await?;
+    ensure!(
+        inventory.rows == 1 && inventory.unknown.len() == 1 && service.admission.receipts_ready()
+    );
+    service.shutdown().await?;
+    Ok(())
+}

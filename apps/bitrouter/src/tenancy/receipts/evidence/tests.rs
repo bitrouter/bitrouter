@@ -310,6 +310,32 @@ fn total_protocols() -> [(Protocol, Value); 3] {
     ]
 }
 
+#[test]
+fn ordered_totals_include_every_attempt_with_the_admitted_bound() -> Result<()> {
+    let mut evidence = Evidence::default();
+    evidence.observe(Protocol::Responses, &full());
+    let mut attempts = (0..64)
+        .map(|index| attempt(&format!("attempt-{index}"), evidence.project().usage))
+        .collect::<Result<Vec<_>>>()?;
+    for count in [1, 8, 9, 64] {
+        let total = aggregate_bounded(&attempts[..count], count);
+        ensure!(total.complete && total.input_tokens == Some(10 * count as u64));
+        total.validate()?;
+    }
+    ensure!(aggregate(&attempts[..9]).provenance == Provenance::Unknown);
+    for limit in [0, 8, 63, 65] {
+        ensure!(aggregate_bounded(&attempts, limit).provenance == Provenance::Unknown);
+    }
+    attempts[63].usage.input_tokens = None;
+    attempts[63].usage.complete = false;
+    let missing = aggregate_bounded(&attempts, 64);
+    ensure!(missing.input_tokens.is_none() && !missing.complete);
+    attempts[63].usage = Evidence::default().project().usage;
+    let unknown = aggregate_bounded(&attempts, 64);
+    ensure!(unknown.input_tokens.is_none() && unknown.provenance == Provenance::Unknown);
+    Ok(())
+}
+
 fn without_total(mut raw: Value) -> Result<Value> {
     let object = raw
         .as_object_mut()

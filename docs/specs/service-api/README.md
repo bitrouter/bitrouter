@@ -33,6 +33,11 @@ wire discriminators remain 1; the existing strict tenancy capability and receipt
 schemas are unchanged. Retained resource authority and evidence require the
 migration and rollback rules below, even when an older client uses only receipts.
 
+Revision beta.3 adds operator directory readback and explicitly negotiated
+ordered dispatch v2. Strict v1 discovery, receipts and usage-evidence wire
+formats retain their existing meanings and eight-attempt bound. The new store
+format prevents an older binary from opening upgraded authority data.
+
 ### Offline recovery evidence v2
 
 Offline plan writers, provisioning recorders and independent verifiers use the
@@ -278,6 +283,7 @@ semantic negative cases.
 | Method | Path | Result |
 | --- | --- | --- |
 | GET | `/tenancy/capabilities` | Capabilities and installation identity |
+| GET | `/tenancy/directory` | Operator-only, revision-bound directory page |
 | PUT | `/tenants/{tenant_id}`; `/principals/{principal_id}` | Tenant or principal operation result |
 | PUT | `/tenants/{tenant_id}/bindings/{binding_id}` | Binding operation result |
 | DELETE | `/tenants/{tenant_id}/bindings/{binding_id}/management` | Detach managed writer |
@@ -293,6 +299,75 @@ semantic negative cases.
 A dedicated audit reader has receipt-read authority, not general tenant access.
 Configuration activation requires tenant-wide policy activation authority;
 resource-scoped access alone does not authorize whole-tenant activation.
+
+### Operator directory readback
+
+`GET /control/v1/tenancy/directory` requires an installation operator with
+`control:tenancy` and `Bitrouter-Installation-Id` on every page. Tenant
+credentials, including tenant administrators and audit readers, and host
+`control:read` credentials cannot enumerate the directory. All responses,
+including failures, carry `Cache-Control: no-store`.
+
+[Directory DTOs](../../../crates/bitrouter-ai/src/tenancy/directory.rs) and the
+[directory JSON Schema](directory.schema.json) define `DirectoryPageV1` and its
+`kind`-tagged `DirectoryEntryV1` union. Entries expose tenant lifecycle,
+principal issuer/subject, binding grants and management ownership, and durable
+credential metadata. Credential history includes revoked and expired records
+even when they are absent from the live authentication map. `recorded_state`
+preserves the stored value; readers derive expiry from `expires_at` at their
+observation time. Neither a recorded `active` state nor a directory entry grants
+authorization. Existing audit readers have `binding_id: null`, `permissions: []`
+and `audit_reader: true`. Detached bindings have `management_owner: null`.
+Bearer tokens, credential hashes, ciphertext, upstream secrets, resource
+plaintext and operation secrets are never returned. Diagnostics omit contents.
+
+`limit` defaults to 100 and must be an integer in 1–100. Each page contains at
+most that many entries and at most 1 MiB of serialized JSON, including the
+envelope and cursor. The byte bound can produce a shorter page. Empty results
+are successful with `entries: []` and `next_after: null`; a full final page also
+has a null continuation. A record that cannot fit by itself fails with
+`payload_too_large`, without skipping it.
+
+Ordering is ascending ASCII tuple order `(kind, tenant_id, id)`: `binding`,
+`credential`, `principal`, then `tenant`. Bindings and credentials use their
+tenant ID and their own ID. Principals and tenants use an empty tenant ordering
+component and their own ID. IDs retain case and punctuation; no locale or
+case folding applies. `after` is an exclusive cursor, encoded exactly as
+`v1|kind|tenant_id|id`, with those same ordering components. For example,
+`v1|binding|tenant-a|binding-a` and `v1|principal||principal-a` are valid.
+Percent-encode the cursor as an ordinary query parameter. It is a position,
+not a credential or a snapshot lease.
+
+An initial request omits `after` and normally omits `authority_revision`; its
+response establishes the scan revision. Every continuation MUST supply that
+revision with `after`. A cursor without a revision, malformed cursor, unknown
+query field, duplicate field or invalid limit returns 400 `invalid_request`.
+Every requested revision must match current authority or return 409
+`revision_conflict`; the service never returns a mixed-revision scan. On
+conflict discard the incomplete scan and start again explicitly. Installation
+mismatch remains 409 `capability_mismatch`. Reauthentication and live authority
+checks occur independently for every page. There is no automatic retry.
+
+For example, a one-tenant store can return:
+
+```json
+{"schema_version":1,"installation_id":"installation-a","authority_revision":1,"entries":[{"kind":"tenant","tenant_id":"tenant-a","revision_id":"revision-a","state":"active"}],"next_after":null}
+```
+
+The additive SDK method is
+`TenancyClient::directory(installation, authority_revision, after, limit)`.
+It validates installation, requested revision, ordering, continuation and count,
+and caps received bytes at 1 MiB or the client's lower configured response bound.
+The DTO rejects unknown fields and variants; clients must fail visibly on
+unsupported schema versions. Existing clients and other tenancy DTOs are
+unchanged; older servers may return 404 for this additive endpoint.
+
+Compatibility checks cover empty and exact full pages, ASCII pagination without
+duplicates or omissions, intervening mutations, wrong installation and malformed
+cursors, current operator authority on continuation, durable revoked/expired
+credentials after restart, detached ownership, redacted diagnostics, and byte
+truncation without skipping an entry. Existing mutation CAS and managed-owner
+fences continue to govern any repair based on these observations.
 
 ### Roles, scope and version binding
 
@@ -567,6 +642,154 @@ operation ID or inference replay. Clients MUST bound response decoding, bind
 requests to the installation and check returned operation/resource identities
 before accepting success. Capability and status installation IDs MUST match the
 requested installation; an `OperationResult` does not add an installation field.
+
+### Ordered static dispatch v2
+
+Ordered dispatch is an explicit mode on the existing `/v1/chat/completions`,
+`/v1/messages` and `/v1/responses` endpoints. It uses the same protocol bodies,
+JSON/SSE rendering and current-authority send gates. It does not add inference
+idempotency, a retry API, a scheduler callback or a separate dispatcher.
+
+| Method | Path under `/control/v1` | Purpose |
+| --- | --- | --- |
+| GET | `/tenancy/ordered/capabilities` | Authenticated v2 discovery before installation binding |
+| GET | `/tenancy/tenants/{tenant}/configurations/{revision}/candidates` | Operator-only descriptors for an exact retained protocol root |
+| GET | `/tenancy/tenants/{tenant}/executions/{execution}/v2` | Explicit v2 receipt read with current receipt authority |
+| GET | `/tenancy/tenants/{tenant}/executions/{execution}/usage-evidence/v2` | V2 original usage observations with the same authority |
+
+The [ordered dispatch schema](ordered-dispatch.schema.json) and the public
+[selection](../../../crates/bitrouter-ai/src/tenancy/ordered.rs),
+[receipt](../../../crates/bitrouter-ai/src/tenancy/execution_v2.rs) and
+[evidence](../../../crates/bitrouter-ai/src/tenancy/usage_evidence_v2.rs) validators
+define required fields, nullability, versions and semantic constraints. All
+reads other than discovery require `Bitrouter-Installation-Id`; protected
+responses use `Cache-Control: no-store`.
+
+#### Discovery, selection and authority
+
+`OrderedCapabilitiesV2` reports contract version 2, installation/instance IDs,
+capability and authority revisions, the host attempt limit, and the three
+dispatch/receipt eligibility flags. A client MUST explicitly require all three
+flags and respect the reported limit. Discovery does not grant resource access.
+The server rechecks instance, capability, configuration and current grants at
+admission and every actual send. A restart invalidates the prior instance binding.
+
+Manifest queries require exactly `route_owner_kind`, `route_owner_id`, `route_id`,
+`route_revision` and `inbound_protocol`. Ordinals identify positions in the
+persisted protocol root, not positions in a private deduplicated target array.
+The manifest contains at most 256 entries and 1 MiB of JSON, with each ordinal,
+nonsecret configured target IDs and exact credential resource reference.
+It contains no credential bytes, URL, arbitrary metadata or provider body.
+An authority change during read fails rather than mixing revisions. Tenant
+inference credentials cannot enumerate this operator view.
+
+A v2 request sends the existing seven strict binding headers with
+`Bitrouter-Tenancy-Version: 2`, plus exactly one `Bitrouter-Candidate-Selection`.
+The latter is strict JSON encoded as canonical, unpadded RFC 4648 base64url,
+at most 4096 encoded bytes. Its decoded shape is:
+
+```json
+{
+  "schema_version": 1,
+  "route": {
+    "owner_kind": "tenant",
+    "owner_id": "example-tenant",
+    "resource_kind": "route",
+    "resource_id": "example-route",
+    "revision_id": "route-revision"
+  },
+  "candidate_indices": [3, 1]
+}
+```
+
+The route MUST match the exact retained revision and body model. The ordered
+list has 1–64 unique integer ordinals below 256, each present in that root.
+Different ordinals that resolve to the same private candidate cannot both be
+selected. Empty, duplicate, unknown, oversized or unauthorized selections fail
+before sending. V1 requests carrying the selection header are rejected; a
+client MUST NOT retry an unsupported v2 request as v1 or truncate its list.
+The header is removed before provider dispatch.
+
+Selection constructs an immutable request-local view. It narrows candidate
+membership and required credential dependencies without changing the cached
+revision, active configuration or another request. It never grants permission
+to a selected resource. Only policy-free static generation roots without
+learning, experiments, auxiliary counting, native harness, OAuth refresh or
+continuation requirements qualify. Continuation-bearing input fails explicitly.
+Unselected private credentials do not become usable through later hooks.
+
+The selected order bypasses runtime sorting and weighted permutation. Existing
+live rate/health admission and fallback classification still apply. A permitted
+fallback can skip an ineligible candidate; actual attempts form a unique ordered
+subsequence. Unknown transport/body/stream outcome, cancellation or completed
+work MUST stop further attempts. Missing usage dimensions alone do not imply an
+unknown execution outcome. All attempts share the admitted execution deadline;
+fallback does not reset it or the separate stream-idle rules.
+
+#### Receipts, bounds and recovery
+
+V2 receipts explicitly bind the accepted route, server-observed ingress protocol,
+ordered selection and host attempt limit. Every actual attempt records its
+selected ordinal and a required nullable observed HTTP status (200–599).
+Completed attempts cannot claim non-2xx status. An observed 2xx status does not
+prove completion. An actual unknown attempt requires an unknown receipt;
+successful execution with missing usage can still be `incomplete`.
+
+V2 receipt JSON is bounded to 1 MiB. Let A be accepted selection length and
+K = ceil(A / 8). Original usage evidence allows 512K frames, at most 128 per
+actual attempt and 32 quantities per frame. Frame bytes are bounded to 192 KiB K,
+with 64 KiB K reserved for identities and terminal metadata, for at most
+256 KiB K total (2 MiB at A=64). This allocation depends on accepted candidates,
+not eventual sends. Overflow retains a prefix and sticky truncation; it never
+manufactures zero quantities or complete evidence. V2 has no auxiliary children.
+
+Before any effectful provider work, the owning writer commits a bounded dispatch
+intent containing the immutable identity, selection and budgets. An uncertain
+intent acknowledgement cannot authorize a send. Terminal receipt, original
+evidence and intent retirement commit atomically. Startup terminalizes surviving
+intents as unknown with unavailable observations before enabling dispatch; it
+never replays inference. A missing receipt is not proof that no work happened.
+The maximum receipt/evidence/disposition/intent obligation, including three row
+charges, is 3,212,288 bytes and fits the existing 4 MiB execution reservation.
+Ordinary v1 requests retain their original eight-slot allocation and budgets.
+
+V1 and v2 reads are explicit: requesting the wrong format returns
+`capability_mismatch`, with no conversion, flattening or truncation. Existing
+correlation pagination can list both formats and retains multiplicity. Neither
+an execution ID nor a correlation ID expands receipt-read authority.
+
+Fresh stores and explicitly migrated stores use authority format 2. Every
+management write preserves that marker. An older binary MUST refuse the store,
+including after fresh initialization or a later management mutation. Existing
+v1 receipt bytes and integrity digests remain unchanged. Rollback requires the
+stopped-writer, compatible-backup procedure below; deleting v2 records or
+resetting a version marker is not a supported downgrade.
+
+#### Scoped response metadata
+
+The scoped SDK preserves a single `Retry-After` decimal seconds value when it
+contains 1–20 ASCII digits and fits `u64`, including zero. Missing, duplicate,
+HTTP-date or invalid/overflow values remain absent. The sole recognized error
+source is the singleton `X-Bitrouter-Error-Source: upstream`; absence is not
+proof of a local refusal. Invalid optional metadata does not erase a valid
+execution ID or status. These observations do not cause automatic retries.
+
+#### Ordered compatibility cases
+
+1. Old v1 clients retain their wire contracts; new clients reject unsupported
+   v2 servers before any downgrade or alternative model submission.
+2. Different concurrent subsets/orders of the same retained root preserve
+   their own membership, resource authorization and immutable ordinal mapping.
+3. Counts 1, 8, 9 and 64 retain all actual attempts; 65 and a host limit below
+   the submitted count reject before provider work.
+4. Current revocation after queueing or between hops blocks the next send;
+   selection and capability caches never stand in for current grants.
+5. JSON and SSE for all three protocols preserve their terminals and original
+   usage through HTTP/1.1 and HTTP/2; wrong-format reads fail explicitly.
+6. Unknown outcomes, truncated observations, lost intent acknowledgement and
+   crash recovery cannot authorize replay, a second attempt or fabricated usage.
+7. Fresh/migrated format-2 stores, including subsequent management writes,
+   refuse an old binary; historical v1 receipt bytes remain readable unchanged.
 
 ### Execution usage evidence
 

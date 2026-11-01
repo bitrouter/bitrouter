@@ -70,6 +70,7 @@ pub(crate) struct TargetStamp {
     credential: ResourceRef,
     candidate: Arc<[u8]>,
     target: Target,
+    ordinal: Option<u16>,
 }
 
 impl TargetStamp {
@@ -103,6 +104,9 @@ impl TargetStamp {
             credential,
             candidate: candidate.into(),
             target: projected,
+            ordinal: retained
+                .candidate_ordinal(target)
+                .map_err(|_| Error::Binding)?,
         })
     }
 
@@ -117,6 +121,7 @@ impl TargetStamp {
             && self.route == other.route
             && self.credential == other.credential
             && self.candidate == other.candidate
+            && self.ordinal == other.ordinal
     }
 }
 
@@ -209,11 +214,31 @@ struct Entry {
     evidence: Evidence,
     terminal_observed: bool,
     live: bool,
+    ordinal: Option<u16>,
+}
+
+// Ordinary executions retain their inline eight slots. Extended allocation is
+// made only for an explicitly selected execution, proportional to its bound.
+struct Slots {
+    inline: [Option<Entry>; SLOTS],
+    ordered: Option<Box<[Option<Entry>]>>,
+}
+impl std::ops::Deref for Slots {
+    type Target = [Option<Entry>];
+    fn deref(&self) -> &Self::Target {
+        self.ordered.as_deref().unwrap_or(&self.inline)
+    }
+}
+impl std::ops::DerefMut for Slots {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.ordered.as_deref_mut().unwrap_or(&mut self.inline)
+    }
 }
 
 struct State {
-    slots: [Option<Entry>; SLOTS],
+    slots: Slots,
     armed: u8,
+    last_selected: Option<usize>,
     closed: bool,
     usage_evidence: super::usage_evidence::Snapshot,
 }
@@ -221,6 +246,7 @@ struct State {
 /// Contains no Service/transport handle and cannot cause provider work.
 pub(crate) struct Journal {
     owner: Owner,
+    ordered: Option<Box<[u16]>>,
     state: Mutex<State>,
     changed: tokio::sync::Notify,
 }
@@ -234,6 +260,7 @@ pub(crate) struct Frozen {
     pub(crate) dispatch: DispatchState,
     /// Same order as attempts; status is classification evidence, not diagnostic text.
     pub(crate) http_statuses: Vec<Option<u16>>,
+    pub(crate) candidate_ordinals: Vec<Option<u16>>,
     pub(crate) usage_evidence: super::usage_evidence::Snapshot,
 }
 
@@ -256,19 +283,45 @@ impl Frozen {
 impl Journal {
     /// One journal per admission must be retained by the execution's future
     /// receipt owner. Public headers/CallerContext cannot construct this owner.
-    pub(crate) fn new(execution: &TenantExecution) -> Arc<Self> {
-        Self::owned(Owner::execution(execution))
+    pub(crate) fn new(execution: &TenantExecution) -> Result<Arc<Self>, Error> {
+        Self::with_selection(
+            Owner::execution(execution),
+            execution.route().ordered_ordinals(),
+        )
     }
 
+    #[cfg(test)]
     fn owned(owner: Owner) -> Arc<Self> {
+        Self::with_capture(owner, None, super::usage_evidence::Snapshot::default())
+    }
+
+    fn with_selection(owner: Owner, ordered: Option<&[u16]>) -> Result<Arc<Self>, Error> {
+        let capture = match ordered {
+            Some(indices) => super::usage_evidence::Snapshot::ordered(indices.len())
+                .map_err(|_| Error::Capacity)?,
+            None => super::usage_evidence::Snapshot::default(),
+        };
+        Ok(Self::with_capture(owner, ordered, capture))
+    }
+
+    fn with_capture(
+        owner: Owner,
+        ordered: Option<&[u16]>,
+        capture: super::usage_evidence::Snapshot,
+    ) -> Arc<Self> {
         Arc::new(Self {
             owner,
+            ordered: ordered.map(Into::into),
             changed: tokio::sync::Notify::new(),
             state: Mutex::new(State {
-                slots: std::array::from_fn(|_| None),
+                slots: Slots {
+                    inline: std::array::from_fn(|_| None),
+                    ordered: ordered.map(|indices| (0..indices.len()).map(|_| None).collect()),
+                },
                 armed: 0,
+                last_selected: None,
                 closed: false,
-                usage_evidence: super::usage_evidence::Snapshot::default(),
+                usage_evidence: capture,
             }),
         })
     }
@@ -319,6 +372,7 @@ impl Journal {
             evidence: Evidence::default(),
             terminal_observed: false,
             live: true,
+            ordinal: stamp.ordinal,
         });
         Ok(AttemptPermit {
             journal: self.clone(),
@@ -391,6 +445,7 @@ impl Journal {
         entries.sort_by_key(|entry| entry.order);
         let mut attempts = Vec::with_capacity(entries.len());
         let mut statuses = Vec::with_capacity(entries.len());
+        let mut candidate_ordinals = Vec::with_capacity(entries.len());
         let mut dispatch = DispatchState::NotStarted;
         for entry in entries {
             let outcome = outcome(entry.phase)?;
@@ -408,8 +463,12 @@ impl Journal {
                 native_usage: evidence.native_usage,
             });
             statuses.push(entry.status);
+            candidate_ordinals.push(entry.ordinal);
         }
-        let usage = evidence::aggregate(&attempts);
+        let usage = match &self.ordered {
+            Some(selected) => evidence::aggregate_bounded(&attempts, selected.len()),
+            None => evidence::aggregate(&attempts),
+        };
         let mut usage_evidence = state.usage_evidence.clone();
         usage_evidence.terminals = state
             .slots
@@ -424,6 +483,7 @@ impl Journal {
             usage,
             dispatch,
             http_statuses: statuses,
+            candidate_ordinals,
             usage_evidence,
         })
     }
@@ -462,9 +522,31 @@ impl AttemptPermit {
             return Err(Error::Closed);
         }
         let order = state.armed;
-        if usize::from(order) >= SLOTS {
+        if usize::from(order) >= state.slots.len() {
             return Err(Error::Capacity);
         }
+        let selected = match (&self.journal.ordered, self.stamp.ordinal) {
+            (None, None) => None,
+            (Some(ordinals), Some(ordinal)) => {
+                let selected = ordinals
+                    .iter()
+                    .position(|value| *value == ordinal)
+                    .ok_or(Error::Binding)?;
+                if state
+                    .last_selected
+                    .is_some_and(|previous| selected <= previous)
+                    || state.slots.iter().flatten().any(|entry| {
+                        entry.phase == Phase::Unknown
+                            || entry.phase == Phase::Completed
+                            || (entry.phase != Phase::Reserved && entry.live)
+                    })
+                {
+                    return Err(Error::Phase);
+                }
+                Some(selected)
+            }
+            _ => return Err(Error::Binding),
+        };
         let entry = state.slots[self.index].as_mut().ok_or(Error::Phase)?;
         if entry.phase != Phase::Reserved {
             return Err(Error::Phase);
@@ -473,6 +555,7 @@ impl AttemptPermit {
         entry.order = order;
         let id = entry.id.clone();
         state.armed += 1;
+        state.last_selected = selected;
         Ok(id)
     }
 
@@ -633,7 +716,9 @@ impl Journal {
 
     #[cfg(any(test, all(feature = "core", feature = "harness")))]
     fn link_child(&self, child: &Self) -> Result<(), Error> {
-        if self.owner.installation != child.owner.installation
+        if self.ordered.is_some()
+            || child.ordered.is_some()
+            || self.owner.installation != child.owner.installation
             || self.owner.execution == child.owner.execution
         {
             return Err(Error::Binding);

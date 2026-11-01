@@ -179,6 +179,17 @@ bounds a provider read or blocked output handoff and renews with progress.
 Expiration does not authorize inference replay or imply that cleanup, rollback
 or durable completion succeeded.
 
+Revision beta.3 adds startup-only `tenancy.ordered_attempt_limit`, an integer
+from 1 through 64, default 8. It bounds one explicitly negotiated ordered v2
+execution, not the tenant directory or ordinary v1 requests. A submitted
+selection above the limit is rejected before provider work; it is never
+truncated. Raising the limit does not widen any grant, change routing defaults,
+or reserve 64 attempts for ordinary executions. Old configurations retain the
+default. An old reader can reject this new key; omission is the compatible
+configuration for a v1-only binary, whose store compatibility must also be
+checked before rollback. See the
+[ordered dispatch contract](../service-api/README.md#ordered-static-dispatch-v2).
+
 ### Provisioning authority and retained settings
 
 Import, learning-registration and wrapping-key options require tenancy to be

@@ -1,0 +1,521 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DirectoryPageV1",
+  "description": "One revision-consistent operator directory page, at most 100 entries and 1 MiB.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "description": "Wire schema discriminator, exactly 1.",
+      "type": "integer",
+      "format": "uint8",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "installation_id": {
+      "description": "Addressed authority store.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "authority_revision": {
+      "description": "Authority revision shared by every page in a complete scan.",
+      "$ref": "#/$defs/AuthorityRevision"
+    },
+    "entries": {
+      "description": "Strictly increasing entries in ASCII `(kind, tenant_id, id)` order.",
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/DirectoryEntryV1"
+      },
+      "maxItems": 100
+    },
+    "next_after": {
+      "description": "Last returned entry's cursor when more entries remain; otherwise null.",
+      "$ref": "#/$defs/RequiredNullable_DirectoryCursorV1"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "installation_id",
+    "authority_revision",
+    "entries",
+    "next_after"
+  ],
+  "$defs": {
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "AuthorityRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "DirectoryEntryV1": {
+      "description": "Typed, nonsecret durable authority facts. Expiry and effective access must\nbe evaluated separately; a recorded active credential is not an auth claim.",
+      "oneOf": [
+        {
+          "description": "Tenant lifecycle record.",
+          "type": "object",
+          "properties": {
+            "tenant_id": {
+              "description": "Tenant identity.",
+              "$ref": "#/$defs/TenantId"
+            },
+            "revision_id": {
+              "description": "Observed record revision.",
+              "$ref": "#/$defs/RevisionId"
+            },
+            "state": {
+              "description": "Recorded lifecycle.",
+              "$ref": "#/$defs/TenantState"
+            },
+            "kind": {
+              "type": "string",
+              "const": "tenant"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "tenant_id",
+            "revision_id",
+            "state"
+          ]
+        },
+        {
+          "description": "Immutable principal identity.",
+          "type": "object",
+          "properties": {
+            "principal_id": {
+              "description": "Principal identity.",
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "revision_id": {
+              "description": "Observed record revision.",
+              "$ref": "#/$defs/RevisionId"
+            },
+            "issuer": {
+              "description": "External identity namespace.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "subject": {
+              "description": "Subject within the issuer namespace.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "type": "string",
+              "const": "principal"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "principal_id",
+            "revision_id",
+            "issuer",
+            "subject"
+          ]
+        },
+        {
+          "description": "Principal-to-tenant grant and management ownership.",
+          "type": "object",
+          "properties": {
+            "tenant_id": {
+              "description": "Tenant identity.",
+              "$ref": "#/$defs/TenantId"
+            },
+            "binding_id": {
+              "description": "Binding identity.",
+              "$ref": "#/$defs/BindingId"
+            },
+            "revision_id": {
+              "description": "Observed record revision.",
+              "$ref": "#/$defs/RevisionId"
+            },
+            "principal_id": {
+              "description": "Grant recipient.",
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "role": {
+              "description": "Recorded tenant role.",
+              "$ref": "#/$defs/TenantRole"
+            },
+            "scope": {
+              "description": "Explicit grant scope.",
+              "$ref": "#/$defs/GrantScope"
+            },
+            "expires_at": {
+              "description": "Expiry ceiling; not a permanent active assertion.",
+              "$ref": "#/$defs/Timestamp"
+            },
+            "management_owner": {
+              "description": "Current managed writer, or explicit null after detachment.",
+              "$ref": "#/$defs/RequiredNullable_ManagementOwnerV1"
+            },
+            "kind": {
+              "type": "string",
+              "const": "binding"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "tenant_id",
+            "binding_id",
+            "revision_id",
+            "principal_id",
+            "role",
+            "scope",
+            "expires_at",
+            "management_owner"
+          ]
+        },
+        {
+          "description": "Durable credential record, including revoked and expired records.",
+          "type": "object",
+          "properties": {
+            "tenant_id": {
+              "description": "Tenant identity.",
+              "$ref": "#/$defs/TenantId"
+            },
+            "credential_id": {
+              "description": "Nonsecret credential identity.",
+              "$ref": "#/$defs/CredentialId"
+            },
+            "revision_id": {
+              "description": "Observed record revision.",
+              "$ref": "#/$defs/RevisionId"
+            },
+            "principal_id": {
+              "description": "Authenticated principal identity.",
+              "$ref": "#/$defs/PrincipalId"
+            },
+            "binding_id": {
+              "description": "Bound grant, or explicit null for an audit reader.",
+              "$ref": "#/$defs/RequiredNullable_BindingId"
+            },
+            "permissions": {
+              "description": "Recorded permission ceiling.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Permission"
+              },
+              "maxItems": 10
+            },
+            "scope": {
+              "description": "Recorded scope ceiling.",
+              "$ref": "#/$defs/GrantScope"
+            },
+            "expires_at": {
+              "description": "Expiry instant; readers derive expiration at their observation time.",
+              "$ref": "#/$defs/Timestamp"
+            },
+            "recorded_state": {
+              "description": "Persisted lifecycle, without a clock-derived active guarantee.",
+              "$ref": "#/$defs/CredentialState"
+            },
+            "audit_reader": {
+              "description": "Receipt-only audit credential marker.",
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "const": "credential"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "tenant_id",
+            "credential_id",
+            "revision_id",
+            "principal_id",
+            "binding_id",
+            "permissions",
+            "scope",
+            "expires_at",
+            "recorded_state",
+            "audit_reader"
+          ]
+        }
+      ]
+    },
+    "TenantId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "RevisionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "TenantState": {
+      "enum": [
+        "active",
+        "suspended",
+        "deleting"
+      ]
+    },
+    "PrincipalId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "BindingId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "TenantRole": {
+      "enum": [
+        "viewer",
+        "editor",
+        "tenant_operator",
+        "tenant_admin"
+      ]
+    },
+    "GrantScope": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "tenant"
+            },
+            "operator_pools": {
+              "type": "array",
+              "maxItems": 256,
+              "uniqueItems": true,
+              "items": {
+                "allOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "owner_kind": {
+                        "enum": [
+                          "tenant",
+                          "operator_pool"
+                        ]
+                      },
+                      "owner_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      },
+                      "resource_kind": {
+                        "enum": [
+                          "route",
+                          "policy",
+                          "credential",
+                          "checkpoint",
+                          "configuration",
+                          "execution"
+                        ]
+                      },
+                      "resource_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                      }
+                    },
+                    "required": [
+                      "owner_kind",
+                      "owner_id",
+                      "resource_kind",
+                      "resource_id"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "properties": {
+                      "owner_kind": {
+                        "const": "operator_pool"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "resources"
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "owner_kind": {
+                    "enum": [
+                      "tenant",
+                      "operator_pool"
+                    ]
+                  },
+                  "owner_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  },
+                  "resource_kind": {
+                    "enum": [
+                      "route",
+                      "policy",
+                      "credential",
+                      "checkpoint",
+                      "configuration",
+                      "execution"
+                    ]
+                  },
+                  "resource_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+                  }
+                },
+                "required": [
+                  "owner_kind",
+                  "owner_id",
+                  "resource_kind",
+                  "resource_id"
+                ],
+                "additionalProperties": false
+              },
+              "minItems": 1,
+              "maxItems": 256,
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "kind",
+            "resources"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "RequiredNullable_ManagementOwnerV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ManagementOwnerV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ManagementOwnerV1": {
+      "description": "Current management owner; null on the binding means management was detached.",
+      "type": "object",
+      "properties": {
+        "principal_id": {
+          "description": "Principal responsible for managed updates.",
+          "$ref": "#/$defs/PrincipalId"
+        },
+        "authority_class": {
+          "description": "Authority namespace under which the owner manages this binding.",
+          "$ref": "#/$defs/ManagementAuthorityClassV1"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "authority_class"
+      ]
+    },
+    "ManagementAuthorityClassV1": {
+      "description": "Authority namespace of a binding's current management owner.",
+      "oneOf": [
+        {
+          "description": "Installation operator.",
+          "type": "string",
+          "const": "installation"
+        },
+        {
+          "description": "Tenant principal.",
+          "type": "string",
+          "const": "tenant"
+        }
+      ]
+    },
+    "CredentialId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "RequiredNullable_BindingId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BindingId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "Permission": {
+      "enum": [
+        "resource.read",
+        "resource.draft",
+        "execution.submit",
+        "evaluation.submit",
+        "policy.activate",
+        "credential.use",
+        "credential.manage",
+        "binding.manage",
+        "credential.issue",
+        "receipt.read"
+      ]
+    },
+    "CredentialState": {
+      "enum": [
+        "active",
+        "revoked",
+        "expired"
+      ]
+    },
+    "RequiredNullable_DirectoryCursorV1": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DirectoryCursorV1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "DirectoryCursorV1": {
+      "type": "string",
+      "maxLength": 271,
+      "pattern": "^v1\\|(?:(?:binding|credential)\\|[A-Za-z0-9][A-Za-z0-9._:-]{0,127}|(?:principal|tenant)\\|)\\|[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    }
+  }
+}

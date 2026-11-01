@@ -1,6 +1,8 @@
 use super::*;
 use anyhow::{Result, ensure};
 
+mod ordered;
+
 fn headers() -> Result<HeaderMap> {
     let mut headers = HeaderMap::new();
     for (name, value) in [

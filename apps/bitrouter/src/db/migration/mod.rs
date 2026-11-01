@@ -55,6 +55,8 @@ mod m20240101_000042_receipt_archive;
 mod m20240101_000043_unknown_obligations;
 pub(crate) mod m20240101_000044_capacity_upgrade;
 
+pub(crate) mod m20240101_000045_ordered_receipts;
+
 use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
 /// Read-only compatibility gate for the retired SQLite receipt reader.
@@ -128,6 +130,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20240101_000042_receipt_archive::Migration),
             Box::new(m20240101_000043_unknown_obligations::Migration),
             Box::new(m20240101_000044_capacity_upgrade::Migration),
+            Box::new(m20240101_000045_ordered_receipts::Migration),
         ]
     }
 }

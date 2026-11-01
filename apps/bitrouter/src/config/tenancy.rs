@@ -15,6 +15,10 @@ pub struct TenancyConfig {
     pub enabled: bool,
     /// Startup-only runtime budgets, independent of the stored directory size.
     pub capacity: capacity::CapacityConfig,
+    /// Maximum candidates in an explicit ordered v2 submission, from 1 through
+    /// 64. This is a per-execution work budget; ordinary v1 stays bounded at 8.
+    #[schemars(range(min = 1, max = 64))]
+    pub ordered_attempt_limit: u8,
     /// Privileged JSON manifest imported before listeners open. Relative paths
     /// are relative to the server process's working directory, never a tenant.
     pub resource_import: Option<PathBuf>,
@@ -50,6 +54,7 @@ impl Default for TenancyConfig {
         Self {
             enabled: false,
             capacity: capacity::CapacityConfig::default(),
+            ordered_attempt_limit: 8,
             resource_import: None,
             learning_registrations: None,
             wrapping_key_env: None,
@@ -182,6 +187,10 @@ impl TenancyConfig {
     }
 
     pub(crate) fn validate_lifetime(&self) -> Result<()> {
+        ensure!(
+            (1..=64).contains(&self.ordered_attempt_limit),
+            "tenancy.ordered_attempt_limit must be between 1 and 64"
+        );
         for (name, seconds) in [
             (
                 "submission_timeout_secs",
@@ -213,6 +222,34 @@ impl TenancyConfig {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ordered_attempt_budget_defaults_to_eight_and_is_bounded() -> anyhow::Result<()> {
+        let mut config = super::TenancyConfig::default();
+        assert_eq!(config.ordered_attempt_limit, 8);
+        for limit in [1, 8, 9, 64] {
+            config.ordered_attempt_limit = limit;
+            config.validate_lifetime()?;
+        }
+        for limit in [0, 65, u8::MAX] {
+            config.ordered_attempt_limit = limit;
+            assert!(config.validate_lifetime().is_err());
+        }
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(256),
+            serde_json::json!("8"),
+        ] {
+            assert!(
+                serde_json::from_value::<super::TenancyConfig>(
+                    serde_json::json!({"ordered_attempt_limit":value})
+                )
+                .is_err()
+            );
+        }
+        Ok(())
+    }
     #[test]
     fn lifetime_defaults_and_invalid_bounds() -> anyhow::Result<()> {
         let defaults: super::TenancyConfig = serde_saphyr::from_str("{}")?;

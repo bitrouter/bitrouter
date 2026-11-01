@@ -5,7 +5,9 @@
 //! the subsequent submission. The server still checks live authority at dispatch.
 //! Use HTTPS or a tunnel to a loopback control listener for remote administration.
 
+mod directory;
 mod eval;
+mod ordered;
 mod resources;
 mod transport;
 mod usage_evidence;

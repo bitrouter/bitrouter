@@ -58,6 +58,7 @@ Execution lifetime is configured by the host at startup:
 ```yaml
 tenancy:
   enabled: true
+  ordered_attempt_limit: 8
   submission_timeout_secs: 60
   execution_timeout_secs: null
   stream_idle_timeout_secs: 120
@@ -118,6 +119,11 @@ fence-clearing command. Do not delete history or choose new operation IDs to
 work around uncertain outcomes.
 
 Submission bounds upload and admission, not the lifetime of an admitted stream.
+`ordered_attempt_limit` bounds explicit ordered v2 submissions to 1–64 candidates
+(default 8). Hosts serving longer reviewed fallback chains can opt into 64;
+ordinary v1 submissions keep their eight-attempt bound. This work budget does
+not limit the number of tenants or retained routes. An oversized selection is
+rejected before dispatch rather than truncated.
 The optional execution total starts at admission; `null` or omission permits
 ongoing active work. The idle setting bounds each provider read and blocked
 output handoff, preventing silent upstreams or unread response bodies from

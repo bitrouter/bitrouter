@@ -9,6 +9,23 @@ pub(super) async fn candidate(
     charge: Option<&archive::Charge<'_>>,
     fresh_inline: bool,
 ) -> Result<Option<Candidate>> {
+    match terminal(db, installation, tenant, id, charge, fresh_inline).await? {
+        Some(format::Terminal::V1(candidate)) => Ok(Some(
+            std::sync::Arc::into_inner(candidate).context("receipt shared during decode")?,
+        )),
+        Some(format::Terminal::V2(_)) => anyhow::bail!("receipt format mismatch"),
+        None => Ok(None),
+    }
+}
+
+pub(super) async fn terminal(
+    db: &impl ConnectionTrait,
+    installation: &InstallationId,
+    tenant: &TenantId,
+    id: &ExecutionId,
+    charge: Option<&archive::Charge<'_>>,
+    fresh_inline: bool,
+) -> Result<Option<format::Terminal>> {
     let Some(row) = bounded_row(db, point(installation, tenant, id), charge).await? else {
         archive::ensure_inline(db, installation, tenant, id).await?;
         return Ok(None);
@@ -25,6 +42,15 @@ pub(super) async fn candidate(
         !fresh_inline || !archived,
         "fresh terminal receipt must remain inline"
     );
+    if format::Format::decode(row.try_get("", "receipt_format")?)? == format::Format::V2 {
+        ensure!(!archived, "ordered receipt storage kind");
+        archive::ensure_inline(db, installation, tenant, id).await?;
+        account(2, 1024)?;
+        let terminal =
+            super::super::ordered::decode(db, row, installation, tenant, id, charge).await?;
+        account(0, 0)?;
+        return Ok(Some(terminal));
+    }
     let (json, usage) = if archived {
         ensure!(inline.is_empty(), "duplicate inline receipt payload");
         archive::load(db, installation, tenant, id, account).await?
@@ -82,5 +108,5 @@ pub(super) async fn candidate(
         .await?;
     }
     account(0, 0)?;
-    Ok(Some(candidate))
+    Ok(Some(format::Terminal::V1(std::sync::Arc::new(candidate))))
 }

@@ -5,11 +5,15 @@
 
 pub mod authority;
 pub mod configuration;
+pub mod directory;
 pub mod execution;
+pub mod execution_v2;
 pub mod identity;
 pub mod operation;
+pub mod ordered;
 pub mod resources;
 pub mod usage_evidence;
+pub mod usage_evidence_v2;
 pub mod validation;
 
 mod number;

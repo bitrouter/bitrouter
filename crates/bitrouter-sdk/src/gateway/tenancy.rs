@@ -52,6 +52,7 @@ use super::{GatewayClient, execution::media_type};
 use crate::{error::Error as SdkError, stream::Protocol, transport};
 
 mod metadata;
+pub mod ordered;
 
 /// An explicitly recognized service error origin, not dispatch or retry evidence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -186,22 +187,7 @@ impl GatewayClient {
         binding
             .validate()
             .map_err(|_| Error::Request("invalid strict dispatch binding"))?;
-        // RFC 6750 b64token: padding is permitted only at the end.
-        // https://www.rfc-editor.org/rfc/rfc6750#section-2.1
-        let bare = credential.trim_end_matches('=');
-        if !(1..=4096).contains(&credential.len())
-            || bare.is_empty()
-            || !bare
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-._~+/".contains(&b))
-        {
-            return Err(Error::Request("invalid Bearer credential"));
-        }
-        let mut token = HeaderValue::from_str(&format!("Bearer {credential}"))
-            .map_err(|_| Error::Request("invalid Bearer credential"))?;
-        token.set_sensitive(true);
-        let mut headers = HeaderMap::new();
-        headers.insert(header::AUTHORIZATION, token);
+        let mut headers = bearer_headers(credential)?;
         for (name, value) in [
             (
                 "bitrouter-tenancy-version",
@@ -234,6 +220,26 @@ impl GatewayClient {
             headers,
         })
     }
+}
+
+fn bearer_headers(credential: &str) -> Result<HeaderMap, Error> {
+    // RFC 6750 b64token: padding is permitted only at the end.
+    // https://www.rfc-editor.org/rfc/rfc6750#section-2.1
+    let bare = credential.trim_end_matches('=');
+    if !(1..=4096).contains(&credential.len())
+        || bare.is_empty()
+        || !bare
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-._~+/".contains(&b))
+    {
+        return Err(Error::Request("invalid Bearer credential"));
+    }
+    let mut token = HeaderValue::from_str(&format!("Bearer {credential}"))
+        .map_err(|_| Error::Request("invalid Bearer credential"))?;
+    token.set_sensitive(true);
+    let mut headers = HeaderMap::new();
+    headers.insert(header::AUTHORIZATION, token);
+    Ok(headers)
 }
 
 impl TenantGateway<'_> {

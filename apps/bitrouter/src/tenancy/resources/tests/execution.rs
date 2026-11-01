@@ -14,6 +14,7 @@ use crate::{
 use bitrouter_ai::types::{ApiProtocol, Capability, ModelOperation};
 use std::sync::Arc;
 
+mod ordered;
 mod policy;
 mod targets;
 

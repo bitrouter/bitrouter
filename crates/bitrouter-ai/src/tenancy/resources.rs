@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[cfg(feature = "schema")]
-mod schema;
+pub(super) mod schema;
 
 use super::{
     authority::{ResourceKey, ResourceKind},

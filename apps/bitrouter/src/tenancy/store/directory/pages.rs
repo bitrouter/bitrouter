@@ -351,3 +351,31 @@ pub(super) async fn validate_directory_in(
     }
     Ok(totals)
 }
+
+/// Read credential history in the public directory's tenant/credential order.
+pub(in crate::tenancy) async fn credential_directory_page_in(
+    db: &impl ConnectionTrait,
+    after: Option<(&str, &str)>,
+    budget: PageBudget,
+) -> Result<Vec<Credential>> {
+    let table = Table::Credential;
+    let column = |name| (Alias::new(table.name()), Alias::new(name));
+    let mut query = select(db, table, budget.row_bytes()?)?;
+    if let Some((tenant, credential)) = after {
+        query.and_where(
+            Expr::tuple([
+                Expr::col(column("tenant_id")).into(),
+                Expr::col(column("id")).into(),
+            ])
+            .gt(Expr::tuple([
+                Expr::val(tenant).into(),
+                Expr::val(credential).into(),
+            ])),
+        );
+    }
+    query
+        .order_by(column("tenant_id"), Order::Asc)
+        .order_by(column("id"), Order::Asc)
+        .limit(u64::try_from(budget.rows)?);
+    query::read(db, query, records::credential_from).await
+}

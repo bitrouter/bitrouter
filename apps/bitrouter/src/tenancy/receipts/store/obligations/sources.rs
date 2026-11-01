@@ -5,7 +5,6 @@ use crate::tenancy::{
     oauth::storage as oauth,
     receipts::auxiliary::{Outcome, Snapshot},
 };
-use bitrouter_ai::tenancy::execution::Outcome as ExecutionOutcome;
 
 pub(super) struct Sources {
     pub mask: u8,
@@ -64,7 +63,7 @@ pub(super) async fn read_expected(
     expected: Option<&Candidate>,
     charge: &Charge<'_>,
 ) -> Result<Sources> {
-    let candidate = super::super::load::candidate(
+    let candidate = super::super::load::terminal(
         db,
         installation,
         &key.tenant,
@@ -75,7 +74,10 @@ pub(super) async fn read_expected(
     .await?;
     if let Some(expected) = expected {
         super::super::same_completion(
-            candidate.as_ref().context("terminal receipt disappeared")?,
+            match candidate.as_ref() {
+                Some(format::Terminal::V1(c)) => c,
+                _ => anyhow::bail!("legacy terminal receipt disappeared"),
+            },
             expected,
         )?;
     }
@@ -84,16 +86,9 @@ pub(super) async fn read_expected(
         first: None,
     };
     if let Some(candidate) = &candidate {
-        let at = DateTime::parse_from_rfc3339(candidate.receipt.recorded_at.as_str())?
+        let at = DateTime::parse_from_rfc3339(candidate.facts().recorded_at.as_str())?
             .with_timezone(&Utc);
-        if candidate.unknown()
-            || candidate.receipt.outcome == ExecutionOutcome::Unknown
-            || candidate
-                .receipt
-                .attempts
-                .iter()
-                .any(|attempt| attempt.outcome == ExecutionOutcome::Unknown)
-        {
+        if candidate.has_unknown_outcome() {
             sources.add(RECEIPT, at);
         }
         if candidate.auxiliary_unknown() {
@@ -125,7 +120,11 @@ pub(super) async fn read_expected(
                 oauth::State::Ready => anyhow::bail!("Ready OAuth pending source"),
             };
             charge(0, crate::tenancy::receipts::auxiliary::MAX_BYTES * 2)?;
-            if !witnessed(candidate.as_ref(), &metadata, work)? {
+            let legacy = match &candidate {
+                Some(format::Terminal::V1(c)) => Some(c.as_ref()),
+                _ => None,
+            };
+            if !witnessed(legacy, &metadata, work)? {
                 sources.add(
                     PENDING,
                     DateTime::parse_from_rfc3339(work.started_at.as_str())?.with_timezone(&Utc),
