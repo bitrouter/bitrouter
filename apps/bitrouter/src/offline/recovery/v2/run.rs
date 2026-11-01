@@ -23,6 +23,7 @@ use std::{
 use tokio_util::sync::CancellationToken;
 
 #[cfg(all(test, unix))]
+#[path = "run_tests.rs"]
 mod tests;
 
 #[derive(Serialize)]
