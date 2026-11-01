@@ -1,5 +1,9 @@
 # unified agent interfaces — native shortcuts, Code TUI, headless run, and one ACP bridge
 
+> Historical interface design. The first-party `bro code`, `bro tui`, and
+> `bro chat` interfaces described below have been removed. Current commands and
+> execution entry points are documented in the [CLI reference](../CLI.md).
+
 > **Superseded in part (2026-09-14):**
 > [MCP adaptation guide](../development/gateway.md#mcp-adaptation) removes `mcp serve`,
 > `mcp install`, and `/mcp-control` from OSS. The native Skill + CLI, Code,

@@ -1,6 +1,10 @@
 # inline multi-agent control deck for BitRouter Code
 
-Status: **implemented; locally verified** · Revision 3 · Date: 2026-09-20
+> Historical interface design. The first-party `bro code` interface described
+> below has been removed. Current commands and execution entry points are
+> documented in the [CLI reference](../CLI.md).
+
+Status: **historical implementation record** · Revision 3 · Date: 2026-09-20
 
 Current Code presentation: [Codex-style navigation spec](code-tui-codex-navigation.md)
 replaces the default strip/deck navigation with read-only Agents. Existing run

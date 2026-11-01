@@ -1,6 +1,10 @@
 # Code slash-command and hotkey UX
 
-**Status:** implemented locally; all-features tests, Clippy, and formatting passed.
+> Historical interface design. The first-party `bro code` interface described
+> below has been removed. Current commands and execution entry points are
+> documented in the [CLI reference](../CLI.md).
+
+**Status:** historical implementation record.
 
 ## 1. Scope and existing behavior
 

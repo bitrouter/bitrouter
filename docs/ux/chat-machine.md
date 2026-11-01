@@ -1,5 +1,9 @@
 # the chat loop as an explicit machine (steps 2A and 2B)
 
+> Historical interface design. The first-party chat interface and the modules
+> described below have been removed. Current commands and execution entry points
+> are documented in the [CLI reference](../CLI.md).
+
 Status: **accepted; §2.3 and §4.2 re-derived against the shared client** ·
 Author: Claude (with Spikel) · Date: 2026-09-01, revised 2026-09-02
 

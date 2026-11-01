@@ -13,9 +13,9 @@ Status: **proposed** · Author: Claude (with Spikel) · Date: 2026-08-13
 > **Controller boundary update (2026-09-01):**
 > [ACP controller guide](../development/agent-runtime.md#external-acp-controller) supersedes this spec's
 > single-session product boundary, manager-facing use of `providers/*` for
-> BitRouter route selection, and one-`Session` relay architecture. The shipped
-> renderer, inline terminal behavior, permission UI, cost presentation, and
-> `chat` command remain valid as clients of the new controller.
+> BitRouter route selection, and one-`Session` relay architecture. The renderer,
+> inline terminal behavior, permission UI, cost presentation, and `chat` command
+> discussed below were later removed and are retained only as design history.
 
 Supersedes the `launch --tui` interaction in
 [the observability design](observability-tui.md). Leaves

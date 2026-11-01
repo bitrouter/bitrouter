@@ -264,10 +264,11 @@ change does not introduce a legacy-root migration.
 
 ## Implementation scope and documentation
 
-Implement within `bitrouter-orchestrator`; keep SDK provider adapters unchanged.
-Use its static tool registry as the common source for declaration, validation,
-effect/resource metadata, and dispatch. Do not introduce an extensible interpreter
-framework, filesystem abstraction, plugin loader, or new scheduler for this slice.
+The implementation lives in `apps/bitrouter/src/harness/`; keep SDK provider
+adapters unchanged. Its static tool registry is the common source for
+declaration, validation, effect/resource metadata, and dispatch. Do not
+introduce an extensible interpreter framework, filesystem abstraction, plugin
+loader, or new scheduler for this slice.
 
 Change `tools.rs`, native instructions in `agent.rs`, verification wiring in
 `service.rs`, and applicable native process/integration tests. Update runtime
