@@ -39,39 +39,41 @@ impl Worker {
                 .check_read()
                 .map_err(|_| ErrorCode::CapacityExceeded)
         };
-        let budget = OperationBudget::new(&check);
-        let charge = |rows, bytes| budget.charge(rows, bytes).map_err(anyhow::Error::from);
-        let tx = control
-            .begin(&self.db)
-            .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-        let selected = archive::next_candidate(&tx, &installation, after, &charge).await;
-        control
-            .rollback(tx)
-            .await
-            .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
-        let selected = selected.map_err(|error| self.maintenance_failure(error))?;
-        let mut progress = Progress {
-            after: selected.after,
-            done: selected.done,
-            archived: false,
+        let (mut progress, key, prepared) = {
+            let budget = OperationBudget::new(&check);
+            let charge = |rows, bytes| budget.charge(rows, bytes).map_err(anyhow::Error::from);
+            let tx = control
+                .begin(&self.db)
+                .await
+                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            let selected = archive::next_candidate(&tx, &installation, after, &charge).await;
+            control
+                .rollback(tx)
+                .await
+                .map_err(|_| self.unavailable(ErrorCode::StorageUnavailable))?;
+            let selected = selected.map_err(|error| self.maintenance_failure(error))?;
+            let progress = Progress {
+                after: selected.after,
+                done: selected.done,
+                archived: false,
+            };
+            let Some(candidate) = selected.candidate else {
+                return Ok(progress);
+            };
+            let key = obligations::Key {
+                tenant: candidate.receipt.tenant_id.clone(),
+                execution: candidate.receipt.execution_id.clone(),
+            };
+            if self.admission.has_live_execution(&key)? {
+                return Ok(progress);
+            }
+            // Candidate decoding and compression coexist and share one working-set
+            // allowance. Compression holds no authority publication lock.
+            let prepared = archive::Prepared::new(&candidate, &charge)
+                .map_err(|error| self.maintenance_failure(error))?;
+            drop(candidate);
+            (progress, key, prepared)
         };
-        let Some(candidate) = selected.candidate else {
-            return Ok(progress);
-        };
-        let key = obligations::Key {
-            tenant: candidate.receipt.tenant_id.clone(),
-            execution: candidate.receipt.execution_id.clone(),
-        };
-        if self.admission.has_live_execution(&key)? {
-            return Ok(progress);
-        }
-        // Candidate decoding and compression coexist and share one working-set
-        // allowance. Compression holds no authority publication lock.
-        let prepared = archive::Prepared::new(&candidate, &charge)
-            .map_err(|error| self.maintenance_failure(error))?;
-        drop(candidate);
-        drop(budget);
         let encoded = prepared
             .stored_bytes()
             .checked_add(prepared.relocated_bytes())

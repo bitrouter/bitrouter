@@ -132,7 +132,7 @@ pub(crate) struct Service {
     http_registry: crate::continuation::ContinuationRegistry,
     caches: Arc<execution::cached::Caches>,
     admission: Arc<admission::Admission>,
-    #[cfg(test)]
+    #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
     obligation_due: Arc<std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>>,
     executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
     execution_settings: crate::config::tenancy::TenancyConfig,
@@ -480,7 +480,7 @@ impl Service {
             .boxed()
             .shared();
         let mut service = Self {
-            #[cfg(test)]
+            #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
             obligation_due,
             #[cfg(all(feature = "core", feature = "harness"))]
             startup,

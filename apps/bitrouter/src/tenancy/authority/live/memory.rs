@@ -1,5 +1,5 @@
 //! Conservative allocation payload charges for private, normalized live views.
-//! Opaque IDs are rebuilt through Box<str>, as at the execution-cache boundary.
+//! Opaque IDs are rebuilt through `Box<str>`, as at the execution-cache boundary.
 //! Tree allowances cover an internal node per entry; hash allowances cover fresh
 //! insert-only maps. Allocator bookkeeping and caller-owned Lease handles are not
 //! an RSS promise. Reaudit opaque collection allowances with toolchain upgrades.

@@ -617,6 +617,3 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-use sea_orm::TransactionTrait;

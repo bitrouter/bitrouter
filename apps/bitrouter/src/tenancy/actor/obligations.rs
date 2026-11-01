@@ -154,7 +154,7 @@ impl Worker {
 }
 
 impl crate::tenancy::Service {
-    #[cfg(test)]
+    #[cfg(all(test, any(feature = "otel-http", feature = "otel-grpc")))]
     pub(in crate::tenancy) fn next_obligation_for_test(
         &self,
     ) -> Result<Option<chrono::DateTime<chrono::Utc>>, Failure> {

@@ -121,29 +121,30 @@ async fn fixture() -> Result<(sea_orm::DatabaseConnection, Provisioning)> {
 async fn fresh_readback_transfers_only_one_preflighted_operation_at_a_time() -> Result<()> {
     let (db, observed) = fixture().await?;
     let tx = db.begin().await?;
-    let reader = Observed {
-        tx: &tx,
-        reads: Mutex::new(Observation::default()),
-    };
-    let check = || Ok(());
-    let state = fresh_operations(
-        &reader,
-        &observed.installation_id,
-        &observed,
-        &OperationBudget::new(&check),
-        ValidationBudget::default(),
-    )
-    .await?;
-    ensure!(state.operation_ids == 65);
     {
-        let seen = reader
-            .reads
-            .lock()
-            .map_err(|_| anyhow::anyhow!("observation poisoned"))?;
-        ensure!(seen.body_queries >= 65 && seen.body_rows >= 65);
-        ensure!(seen.max_body_rows == 1 && seen.max_body_bytes == 128 * 1024);
+        let reader = Observed {
+            tx: &tx,
+            reads: Mutex::new(Observation::default()),
+        };
+        let check = || Ok(());
+        let state = fresh_operations(
+            &reader,
+            &observed.installation_id,
+            &observed,
+            &OperationBudget::new(&check),
+            ValidationBudget::default(),
+        )
+        .await?;
+        ensure!(state.operation_ids == 65);
+        {
+            let seen = reader
+                .reads
+                .lock()
+                .map_err(|_| anyhow::anyhow!("observation poisoned"))?;
+            ensure!(seen.body_queries >= 65 && seen.body_rows >= 65);
+            ensure!(seen.max_body_rows == 1 && seen.max_body_bytes == 128 * 1024);
+        }
     }
-    drop(reader);
     tx.rollback().await?;
     db.close().await?;
     Ok(())
@@ -154,37 +155,38 @@ async fn fresh_readback_transfers_only_one_preflighted_operation_at_a_time() -> 
 async fn fresh_small_budget_refuses_without_materializing_history_bodies() -> Result<()> {
     let (db, observed) = fixture().await?;
     let tx = db.begin().await?;
-    let reader = Observed {
-        tx: &tx,
-        reads: Mutex::new(Observation::default()),
-    };
-    let check = || Ok(());
-    let limit = ValidationBudget {
-        rows: 32,
-        bytes: 1024 * 1024,
-    };
-    let error = fresh_operations(
-        &reader,
-        &observed.installation_id,
-        &observed,
-        &OperationBudget::new(&check),
-        limit,
-    )
-    .await
-    .err()
-    .context("small budget unexpectedly accepted")?;
-    ensure!(error.is::<store::directory::CapacityExceeded>());
     {
-        let seen = reader
-            .reads
-            .lock()
-            .map_err(|_| anyhow::anyhow!("observation poisoned"))?;
-        // The authority scan can cross every page; the independent fixed
-        // evidence envelope then refuses. Total history is not the budget.
-        ensure!(seen.body_rows >= 65);
-        ensure!(seen.max_body_rows == 1 && seen.max_body_bytes <= limit.bytes);
+        let reader = Observed {
+            tx: &tx,
+            reads: Mutex::new(Observation::default()),
+        };
+        let check = || Ok(());
+        let limit = ValidationBudget {
+            rows: 32,
+            bytes: 1024 * 1024,
+        };
+        let error = fresh_operations(
+            &reader,
+            &observed.installation_id,
+            &observed,
+            &OperationBudget::new(&check),
+            limit,
+        )
+        .await
+        .err()
+        .context("small budget unexpectedly accepted")?;
+        ensure!(error.is::<store::directory::CapacityExceeded>());
+        {
+            let seen = reader
+                .reads
+                .lock()
+                .map_err(|_| anyhow::anyhow!("observation poisoned"))?;
+            // The authority scan can cross every page; the independent fixed
+            // evidence envelope then refuses. Total history is not the budget.
+            ensure!(seen.body_rows >= 65);
+            ensure!(seen.max_body_rows == 1 && seen.max_body_bytes <= limit.bytes);
+        }
     }
-    drop(reader);
     tx.rollback().await?;
     db.close().await?;
     Ok(())

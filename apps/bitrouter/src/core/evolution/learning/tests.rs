@@ -781,7 +781,7 @@ fn active_time_merges_parallel_intervals_and_does_not_invent_missing_ends() -> R
 #[cfg(feature = "db-mysql")]
 mod mysql_tests {
     use super::*;
-    use sea_orm::IsolationLevel;
+    use sea_orm::{IsolationLevel, TransactionTrait};
     use std::time::Duration;
 
     #[tokio::test]
