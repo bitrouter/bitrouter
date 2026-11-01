@@ -125,8 +125,24 @@ jobs:
     timeout-minutes: 60
     env:
       BITROUTER_BUILD_REVISION: ${{ github.sha }}
+      CARGO_BUILD_JOBS: '1'
     steps:
     - uses: actions/checkout@v6
+    - name: Prepare memory for the Linux test build
+      env:
+        RUNNER_KIND: ${{ runner.environment }}
+      run: |
+        set -euo pipefail
+        [[ "$GITHUB_ACTIONS" == true && "$RUNNER_KIND" == github-hosted ]]
+        [[ ! -e /swapfile-bitrouter-ci && ! -L /swapfile-bitrouter-ci ]]
+        free -h
+        df -h "$GITHUB_WORKSPACE"
+        sudo fallocate --length 8G /swapfile-bitrouter-ci
+        sudo chmod 600 /swapfile-bitrouter-ci
+        sudo mkswap /swapfile-bitrouter-ci
+        sudo swapon /swapfile-bitrouter-ci
+        free -h
+        df -h "$GITHUB_WORKSPACE"
     - uses: actions-rust-lang/setup-rust-toolchain@v1
       with:
         toolchain: 1.99.1
@@ -140,11 +156,27 @@ jobs:
         cargo metadata --locked --manifest-path apps/bitrouter/tests/fixtures/sdk_consumer/Cargo.toml --format-version 1 > /dev/null
     - name: Build tests and process fixtures once
       run: |
+        set -euo pipefail
         mkdir -p ci-evidence
-        /usr/bin/time -v -o ci-evidence/build-tests.txt cargo nextest run --locked --workspace --all-features --build-jobs 2 --no-run
-        /usr/bin/time -v -o ci-evidence/build-fixtures.txt cargo build --locked --workspace --all-features --examples --jobs 2
+        command -v vmstat
+        vmstat -w -t 30 120 &
+        sampler_pid=$!
+        finish_build() {
+          result=$?
+          trap - EXIT
+          kill "$sampler_pid" 2>/dev/null || true
+          wait "$sampler_pid" 2>/dev/null || true
+          free -h || true
+          df -h "$GITHUB_WORKSPACE" || true
+          exit "$result"
+        }
+        trap finish_build EXIT
+        trap 'exit 143' TERM
+        trap 'exit 130' INT
+        /usr/bin/time -v -o ci-evidence/build-tests.txt cargo nextest run --locked --workspace --all-features --build-jobs 1 --no-run
+        /usr/bin/time -v -o ci-evidence/build-fixtures.txt cargo build --locked --workspace --all-features --examples --jobs 1
         # Archive without recompiling, including the now-built process fixtures.
-        cargo nextest archive --locked --workspace --all-features --build-jobs 2 --profile ci --archive-file tests.tar.zst
+        cargo nextest archive --locked --workspace --all-features --build-jobs 1 --profile ci --archive-file tests.tar.zst
         cargo nextest list --workspace --all-features --message-format json > ci-evidence/test-inventory.json
         printf '%s\n' "$GITHUB_SHA" > tests.sha
         printf '%s\n' "$GITHUB_WORKSPACE" > tests.workspace
