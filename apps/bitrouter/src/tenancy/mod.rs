@@ -73,6 +73,10 @@ use self::{
     store::StoredResponse,
 };
 
+/// Current authority store format, shared by live and offline target readers.
+/// Historical migrations keep their own fixed version transitions.
+pub(crate) const AUTHORITY_SCHEMA_VERSION: i32 = 2;
+
 const MANAGEMENT_TIMEOUT: Duration = Duration::from_secs(5);
 
 struct Provisioning<'a> {

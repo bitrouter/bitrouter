@@ -207,6 +207,52 @@ async fn target_anchor_counter_and_evidence_mismatches_refuse_before_dml() -> Re
 }
 
 #[tokio::test]
+async fn target_authority_format_must_match_current_writer_before_import() -> Result<()> {
+    use sea_orm::sqlx::Connection;
+
+    tokio::time::timeout(TIMEOUT, async {
+        for version in [1_i64, 3] {
+            let mut fixture = Fixture::new().await?;
+            let owner = crate::tenancy::ownership::acquire_path(&fixture.target, false)?;
+            let mut db = sea_orm::sqlx::SqliteConnection::connect(&format!(
+                "sqlite://{}",
+                fixture.target.display()
+            ))
+            .await?;
+            sea_orm::sqlx::query("UPDATE tenancy_installation SET schema_version=?")
+                .bind(version)
+                .execute(&mut db)
+                .await?;
+            db.close().await?;
+            drop(owner);
+
+            // Re-anchor the actual modified target so the refusal exercises its
+            // format guard, rather than merely detecting a changed file digest.
+            let bundle = fixture
+                .directory
+                .path()
+                .join(format!("format-{version}-bundle"));
+            let evidence = super::super::super::snapshot_inner(&fixture.target, &bundle).await?;
+            fixture.plan["target_bundle"] = json!(bundle);
+            fixture.plan["target_evidence_digest"] = json!(evidence.evidence_digest);
+            let before = std::fs::read(&fixture.target)?;
+            let (plan, anchor, report) = fixture.write_plan(&format!("format-{version}"))?;
+            let result = apply::run(&plan, &anchor, &report).await;
+            ensure!(
+                result.is_err_and(
+                    |error| error.to_string() == "current authority store format required"
+                ),
+                "unsupported target format did not reach its pre-DML guard"
+            );
+            ensure!(!report.join("RECORDED").exists());
+            unchanged_target(&fixture, &before).await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await?
+}
+
+#[tokio::test]
 async fn reanchored_actual_source_orphans_and_partial_metadata_fail_graph_preflight() -> Result<()>
 {
     tokio::time::timeout(TIMEOUT, async {
