@@ -528,11 +528,8 @@ impl OtelExporter {
         // 2. The `tracing` ↔ OTel bridge. **Kept deliberately, and not
         //    dead code**: a host that builds its own ingress span as a
         //    `tracing` span and installs `otel::subscriber` reaches us only
-        //    here. `bitrouter-cloud` is exactly that host — it runs its own
-        //    `TraceLayer` because a public multi-tenant edge must not honour
-        //    caller-supplied trace context, and it would silently export
-        //    orphaned `chat` roots if this arm were removed. See
-        //    `docs/OTEL_TIERING_SPEC.md` D3/D4.
+        //    here. Removing the bridge would silently export orphaned model
+        //    roots for those hosts. See `docs/development/observability.md`.
         // 3. The inbound `traceparent`, for a deployment with no ingress span
         //    of its own.
         let parent_context = {

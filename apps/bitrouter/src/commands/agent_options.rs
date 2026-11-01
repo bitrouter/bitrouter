@@ -1,7 +1,7 @@
 //! Shared agent CLI options and negotiated capability data.
 
 /// Per-invocation routing decision for a spawned sub-agent. Routing is on by
-/// default; `direct` opts out. See `docs/SPAWN_SPEC.md` §5.
+/// default; `direct` opts out. See `docs/development/spawn.md#routing`.
 #[derive(
     clap::Args, Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
 )]

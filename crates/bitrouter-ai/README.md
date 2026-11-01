@@ -93,7 +93,7 @@ The SDK's `chat_reply`, `messages_reply` and `responses_reply` produce compatibl
 streams with validated metadata. Applications explicitly map SDK errors to safe
 public presentation and select any outgoing headers. See the independent
 [Axum gateway example](../bitrouter-sdk/examples/axum_gateway.rs) and
-[ownership/acceptance contract](../../docs/AI_AXUM_ADAPTER.md).
+[gateway interoperability profile](../../docs/development/gateway.md).
 
 The optional adapter does not select routes, authenticate callers, retry requests,
 spawn tasks or own receipt delivery. In the application, all terminal bytes are
@@ -129,6 +129,4 @@ does not move instruction selection or execution into this crate. Local IPC,
 directory/close/recovery commands without HTTP counterparts remain application
 contracts and are not newly supported remote APIs.
 
-See the [service plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md) and
-[implementation progress](../../docs/BITROUTER_SERVICE_REFACTOR_PROGRESS.md) for
-migration status, remaining client work and complete acceptance requirements.
+See the [architecture guide](../../docs/development/architecture.md) for current ownership.

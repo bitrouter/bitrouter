@@ -61,7 +61,7 @@ key on later restarts even after removing the import path. These settings are
 restart-only. Never treat a replacement key as automatic rotation. The importer
 accepts explicit route/policy definitions, static API-key credential slots, and
 explicit Claude Code OAuth seeds pinned to the known Anthropic registration
-under the [owned OAuth profile](../../../docs/RESOURCE_TENANCY_AUXILIARY_PROFILE.md).
+under the [owned OAuth profile](../../../docs/development/tenancy-auxiliary.md).
 Ambient credential backends and native request checks remain unsupported. Definitions
 are retained as authenticated ciphertext, and a changed definition requires a
 new qualified resource revision. Importing resources does not grant tenant access

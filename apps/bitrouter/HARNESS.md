@@ -5,10 +5,8 @@ durable Thread/Turn state, workspace resources and the external-agent ACP stack.
 The host assembles transport and storage. Model routing uses the application's
 gateway pipeline; the SDK contains service clients.
 
-Paths below are relative to `src/harness/` unless stated otherwise. The P0
-[service plan](../../docs/BITROUTER_SERVICE_REFACTOR_PLAN.md) defines the final
-feature matrix. The progress ledger distinguishes isolated runtime/dependency
-evidence from the remaining final candidate and delivery acceptance.
+Paths below are relative to `src/harness/` unless stated otherwise. Feature
+requirements are described in the [architecture guide](../../docs/development/architecture.md).
 
 ## External agents over ACP
 
@@ -38,8 +36,8 @@ EOF affects observation only. The harness owns single-Thread closure and records
 cancelled queued Turns before joining active cleanup; completion retries do not
 cancel newer work. Runtime format 7 retains supported 2/3/4/5/6 reads.
 
-See [the native ACP contract](../../docs/BRO_NATIVE_ACP_SERVER_SPEC.md) and
-[local acceptance](../../docs/BRO_NATIVE_ACP_SERVER_ACCEPTANCE.md). External
+See the [native ACP interoperability profile](../../docs/specs/service-api/README.md#native-acp-extensions).
+External
 client/controller paths remain v1; native v2 is pinned to the SDK's draft schema.
 
 Local native execution requires `core`. Without it, HTTP and local IPC retain

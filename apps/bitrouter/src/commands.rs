@@ -691,8 +691,9 @@ async fn choose_auth_method(
 ///
 /// # Why this names a login command, when the ACP path may not
 ///
-/// `docs/ACP_AUTH_SPEC.md` §6.1 forbids writing a harness's login command in
-/// BitRouter — the harness declares it, or it is not offered. That rule governs
+/// The ACP authentication guide (`docs/development/acp-authentication.md`)
+/// forbids inventing a harness login command. The harness declares it or it is
+/// not offered. That rule governs
 /// the **agent-authentication** axis, and the ACP paths obey it: they read
 /// `authMethods` and run what the harness declared.
 ///
@@ -702,7 +703,8 @@ async fn choose_auth_method(
 /// to avoid naming the command would make provider login depend on an ACP
 /// adapter being installed — `npx`, a download, a controller — to acquire a
 /// credential that has nothing to do with ACP, and would re-conflate the two
-/// axes §6.4 exists to keep apart. So the command is named here deliberately.
+/// axes described in the authentication guide. The command is named here
+/// deliberately.
 /// What can be improved is the *seam*, which is what the framing below does.
 async fn run_claude_code_session()
 -> Result<crate::gateway::providers::auth::credentials::Credential> {

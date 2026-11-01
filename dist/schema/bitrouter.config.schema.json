@@ -1055,7 +1055,7 @@
         },
         {
           "const": "2026-07-28",
-          "description": "Use `server/discover` and the modern `2026-07-28` lifecycle. rmcp falls\nback after its discovery timeout or a correlated JSON-RPC error it\nclassifies as legacy; transport failures, malformed or uncorrelated\nresponses, and modern rejection codes fail the connection. Opting in\nalso lets upstreams answer `tools/call` with MRTR `input_required` or a\nTasks `task` handle; neither is a shape this gateway can carry, so both\nsurface as explicit errors (see `docs/MCP_2026_07_28_SPEC.md` D1).",
+          "description": "Use `server/discover` and the modern `2026-07-28` lifecycle. rmcp falls\nback after its discovery timeout or a correlated JSON-RPC error it\nclassifies as legacy; transport failures, malformed or uncorrelated\nresponses, and modern rejection codes fail the connection. Opting in\nalso lets upstreams answer `tools/call` with MRTR `input_required` or a\nTasks `task` handle; neither is a shape this gateway can carry, so both\nsurface as explicit errors (see `docs/development/gateway.md`).",
           "type": "string"
         }
       ]

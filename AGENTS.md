@@ -2,7 +2,8 @@
 
 ## Documents
 
-See `README.md` and `docs/DEVELOPMENT.md` for full project introduction and architecture.
+See [README](README.md), the [documentation policy](docs/DEVELOPMENT.md)
+and [workspace architecture](docs/development/architecture.md).
 
 ## Guidelines
 
@@ -41,17 +42,26 @@ the listen port (`127.0.0.1:4356`), env var names (`GEMINI_API_KEY`, not
 
 ## Documentation
 
-Product docs live in the **`bitrouter-docs`** repo (`content/docs/`), where they
-are authored, reviewed, translated, and published. The authoring contract,
-English/Chinese lockstep, and `sourceHash` tracking live there now — not here.
-`docs/` in this repo now holds internal **development** docs — the CLI reference
-(`docs/CLI.md`), the workspace architecture guide (`docs/DEVELOPMENT.md`), and
-design specs (`docs/*_SPEC.md`, `docs/*_ACCEPTANCE.md`); see `docs/README.md`.
+All development and audit agents **MUST** follow the
+[documentation policy](docs/DEVELOPMENT.md#documentation-policy).
+`docs/specs/` is reserved for deliberately designed and reviewed,
+compatibility-sensitive configuration, artifact and API formats. Keep one
+canonical specification per object; do not create a spec per feature or
+transport. Update schemas/DTOs, examples and compatibility cases together.
+Beta status does not waive design or review. Implementation, architecture and
+boundary conventions belong in `docs/development/` and evolve with the code.
+Retain useful UX and operator instructions.
 
-`docs/specs/` is reserved for tracked **protocol specifications**, starting with
-Registry v1. Follow `docs/specs/README.md`; keep wire contracts, compatibility
-rules, schemas, examples, and conformance requirements there. Implementation
-plans, progress, and acceptance evidence belong outside this directory.
+**Audit references for necessity and correctness.** Preserve or consolidate
+necessary format and engineering documents, then update their consumers.
+Remove unnecessary references and their process-only surrounding text. Do not
+replace a deleted-document link with a Git-history URL just to keep it resolving,
+or strip link markup while leaving an unsupported citation. Check paths,
+anchors, inline filenames, source comments, generated descriptions, skills and
+build/test dependencies. Historical versions are referenced only for an actual
+compatibility or migration need. Do not add plans, progress ledgers, dated
+evidence or experiment outputs to tracked docs. Product documentation is
+authored in `bitrouter-docs`.
 
 1. **The docs site generates its supported-models table** from its committed
    catalog snapshot. Refreshing that snapshot reads the public `/v1/models`
