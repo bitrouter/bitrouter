@@ -1,6 +1,6 @@
 # BitRouter service API
 
-Status: **beta, specification revision 1.0.0-beta.1**. This is the single
+Status: **beta, specification revision 1.0.0-beta.2**. This is the single
 compatibility contract for BitRouter-owned service messages and API formats.
 The revision is distinct from each existing URL namespace, ACP version, schema
 version and beta-negotiation value. Beta changes can be incompatible, but must
@@ -20,11 +20,18 @@ Changes must review old-client/new-server and new-client/old-server behavior.
 Do not silently change a field's type, units, default, nullability, enum meaning,
 identifier scope, error semantics, terminal event or fingerprint encoding.
 Capability discovery is required where offered; an unknown optional response
-field can be ignored, but unsupported required behavior must fail visibly.
+field can be ignored only where that message's schema permits extensions.
+Unsupported required behavior must fail visibly.
 Request strictness varies by schema; adding a request field is not automatically
 compatible with a reader that rejects unknown fields. Schema/DTO changes,
 examples and compatibility cases must be reviewed together. Feature availability
 and authorization remain distinct from format compatibility.
+
+Revision beta.2 consolidates resource provisioning and execution usage evidence
+for independently updated management clients, SDKs and receipt consumers. Their
+wire discriminators remain 1; the existing strict tenancy capability and receipt
+schemas are unchanged. Retained resource authority and evidence require the
+migration and rollback rules below, even when an older client uses only receipts.
 
 ## Control API
 
@@ -208,6 +215,62 @@ start or wake work; already admitted work can still finalize under its existing
 ownership. A receipt-only audit reader may inspect retained receipts without
 gaining mutation or execution authority.
 
+### Strict tenant dispatch binding
+
+Tenant inference uses the inference listener with a tenant bearer credential,
+separately from management on the control listener. The
+[public `DispatchBinding` DTO and validator](../../../crates/bitrouter-ai/src/tenancy/operation.rs)
+and its definition in the [tenancy schema](../../contracts/resource-tenancy/schema.json)
+are the catalog for the seven required HTTP request headers. Each header MUST
+occur exactly once with a valid value; omitted, duplicate or malformed binding
+headers are rejected. Header names follow HTTP case-insensitivity. Version is
+the literal string `1` and receipt mode is `strict`; there is no implicit
+best-effort fallback. Caller-supplied `Bitrouter-Tenant-Id`,
+`Bitrouter-Principal-Id` and `x-api-key` are rejected. Tenant and principal
+identity come from the authenticated credential and current authority.
+
+A binding uses an explicitly observed tenancy descriptor with
+`revision_bound_dispatch`, `strict_receipts` and `dispatch_enabled` all true.
+It addresses the persistent installation, that process incarnation and the
+observed capability revision, together with an explicitly selected immutable
+execution revision and caller correlation ID. The server rechecks binding,
+lifecycle, scope and storage/admission eligibility, including after waits and
+before attempts. A restart, stale capability revision or disabled dispatch
+returns `capability_mismatch`; malformed binding returns `invalid_request`.
+Other current-authority failures retain the tenancy error mappings below.
+Discovery is no guarantee that a later submission will be admitted. A queued
+submission retains its selected revision when activation changes, without
+extending credential lifetime or gaining new targets.
+
+Each admitted invocation has a fresh execution ID. For this tenant profile,
+the response `x-bitrouter-request-id` contains that execution ID, not the
+submitted correlation ID. It can be absent on preadmission failure and MUST NOT
+be reconstructed from provider output. This differs from the
+[shared gateway identity profile](#shared-request-identity); its separate
+idempotency/202 behavior does not apply here. Repeating a correlation ID or
+reusing a dispatch binding does not deduplicate inference.
+
+The [scoped SDK adapter](../../../crates/bitrouter-sdk/src/gateway/tenancy.rs)
+validates the binding before sending one request, without automatic discovery,
+capability refresh, retry, replay or remote cancellation. Chat Completions,
+Messages and Responses use JSON/SSE; Decisions uses JSON. The adapter requires
+HTTP 200, a single valid execution ID and the expected representation for model
+output; 202 is not model success. On a tenancy error, the error's execution ID
+must agree with response metadata, its operation ID must be null and its code
+must match the HTTP mapping. Invalid metadata, malformed/oversized bodies,
+incomplete streams or a transport failure leave dispatch outcome unknown rather
+than trusting an apparent `not_started` claim. A validated `not_started` refusal
+describes provider-dispatch evidence, not an automatic resend instruction.
+
+Strict connected JSON success and the final successful SSE delivery signal
+wait for durable receipt publication. Earlier output or finish metadata is not
+proof of that commit. Dropping or timing out a client stream stops local
+consumption; it does not prove provider cancellation, receipt completion or safe
+replay. Clients MUST retain observed execution identity and query its receipt
+with current authority after uncertainty. A missing receipt is not proof that
+no provider work ran. No stream failure, lost response or capability refresh
+authorizes automatic resubmission of the uncertain invocation.
+
 ### Identity, replay and failures
 
 An operation ID is bound to installation, authenticated principal and typed
@@ -249,9 +312,355 @@ best-effort recording have different durability guarantees.
 
 ### Evolution and conformance
 
-The schema's own `additionalProperties` rules govern unknown request fields;
-clients SHOULD tolerate additive response fields but MUST reject unsupported
-required semantics. No stable compatibility guarantee is claimed in beta.
+The schema's own `additionalProperties` rules govern requests and responses.
+Strict tenancy capabilities, receipts and the resource/evidence envelopes below
+reject unknown or duplicate fields and unknown enum values. They are not open
+extension points. Required nullable fields MUST be present: omission is not
+equivalent to null. Unsupported versions, inexact integers and out-of-bound
+values fail validation. No stable compatibility guarantee is claimed in beta.
+
+An old client can continue using the unchanged tenancy discovery and receipt
+messages against a new server. A new client MUST discover resource and evidence
+support separately; the original tenancy capability document does not advertise
+them. An older server may lack those endpoints. An absent endpoint or an explicit
+disabled capability means the facility is unavailable, not permission to send
+new fields to an old endpoint. Authentication, authorization, transport and
+malformed-response failures MUST NOT be treated as successful discovery or as
+historical absence of evidence. Clients may continue an explicitly optional
+receipt-only workflow; required provisioning or evidence must fail visibly.
+
+### Resource provisioning
+
+Resource provisioning creates immutable upstream credential, route and policy
+revisions. These are service messages within this specification, not a separate
+feature specification. It defines no login, commercial account, pricing or
+settlement contract. The qualified deployment remains opt-in, exclusively owned
+Unix SQLite in a single process; these guarantees do not establish distributed
+ownership or safety. Assembly and operational boundaries are in the
+[tenant service guide](../../development/tenant-service.md).
+
+All paths below are relative to `/control/v1` and use the tenancy authentication,
+installation binding, current authority, errors and no-store response policy.
+
+| Method | Path | Contract |
+| --- | --- | --- |
+| GET | `/tenancy/resource-capabilities` | [Resource capabilities schema](../resource-provisioning-v1/capabilities.schema.json) |
+| POST | `/tenants/{tenant_id}/resources` | [Put command schema](../resource-provisioning-v1/put.schema.json); existing tenancy `OperationResult` |
+| POST | `/tenants/{tenant_id}/resources/revoke` | [Revoke command schema](../resource-provisioning-v1/revoke.schema.json); existing tenancy `OperationResult` |
+| GET | `/tenants/{tenant_id}/resources` | Exact `ResourceRef` query; [status schema](../resource-provisioning-v1/status.schema.json) |
+
+These schemas remain at their build/test-consumed paths and are the field
+catalog. The [DTOs and validator](../../../crates/bitrouter-ai/src/tenancy/resources.rs)
+also enforce semantic constraints. Discovery requires `Bitrouter-Installation-Id`
+and reports provisioning availability and command bounds; it grants no authority.
+Without a configured wrapping key, `provisioning_enabled` is false. Upstream
+secrets are distinct from the bearer credentials used to call this API.
+
+#### Creation, rotation and authority
+
+For example, this synthetic request creates a managed credential head:
+
+```json
+{
+  "format": 1,
+  "operation_id": "provision-slot-01",
+  "installation_id": "example-installation",
+  "key": {
+    "owner_kind": "tenant",
+    "owner_id": "example-tenant",
+    "resource_kind": "credential",
+    "resource_id": "upstream-slot"
+  },
+  "expected_revision": null,
+  "definition": { "kind": "credential", "secret": "synthetic-example-only" }
+}
+```
+
+The required `expected_revision` is null only for creation of a remotely managed
+head; otherwise it MUST equal that head. The service assigns a new immutable
+revision. Rotation MUST NOT rewrite old definitions or retarget configurations
+that selected them. A manifest-only resource has no managed head; a managed
+create of the same key leaves its existing manifest revisions unchanged.
+Resource identity includes owner kind, owner ID, resource kind and resource ID;
+an exact reference additionally includes revision ID. Authority revision and
+content revision are distinct and MUST NOT be substituted for each other.
+
+Credential writes require `credential.manage`; route and policy writes require
+`resource.draft` on the addressed key. Every dependency in the compiled closure
+requires current `resource.read`; credential dependencies also require
+`credential.use`. A resource kind MUST match its definition. Tenant credentials
+MUST NOT mutate operator-pool resources; operators MUST NOT place another
+tenant's private dependencies into a tenant's configuration. Same-name private
+resources do not share authority.
+
+Commands are bounded to 1 MiB including the envelope; credential secrets are
+1–65,536 UTF-8 bytes. Duplicate provider/account bindings or dependencies, inline
+provider secrets, ambient provider discovery, host configuration and invalid
+closures are rejected. Binding/dependency limits come from the schemas. The
+embedded routing and policy objects are interpreted by the service compiler,
+not arbitrary extension bags: schema-valid objects can still be rejected for
+unknown required behavior, invalid references or unavailable binary features.
+Their applicable configuration semantics are in the
+[configuration specification](../configuration/README.md).
+
+Tenant-authored routes MUST use operator-approved exact HTTP(S) origins.
+They cannot override destination authority through Host, authentication,
+forwarding or hop-by-hop headers; permitted explicit headers are limited to
+`anthropic-version`, `anthropic-beta`, `openai-beta` and `accept`.
+Operator-authored routes retain explicit host upstream authority. Operators own
+the approved origins and their DNS/network destinations. Approval qualifies the
+retained revision: changing the startup origin list does not revoke it.
+Withdrawing approval requires explicit revocation of affected revisions.
+
+#### Revocation, reads and replay
+
+Revocation addresses an exact reference and compares
+`expected_authority_revision` with current authority. It requires
+`credential.manage` for credentials or `policy.activate` for other resources.
+Both old and current revisions can be revoked. Revocation MUST fence subsequent
+use, including cached dispatch and new compilation/activation, without erasing
+immutable evidence. Re-enabling requires a new revision and explicit
+configuration selection. A revoke cannot undo an upstream request already sent.
+
+Status reads use the exact reference as query parameters and recheck current
+`resource.read` authority before storage access and before returning data.
+The required nullable `head_revision` is null for a manifest-only key; it is not
+an instruction to resolve a different revision. Status exposes metadata, never
+definitions or secrets. Secrets MUST be encrypted at rest with installation and
+reference binding, and absent from operation records, diagnostics and errors.
+An unkeyed digest of secret-bearing commands MUST NOT be retained as their
+fingerprint.
+
+Resource bytes, head/revocation metadata and operation outcomes MUST commit
+atomically before acknowledgement and authority publication. Identical
+authorized replay under the same principal and operation ID returns the original
+result; changed content returns `operation_conflict`. CAS failures use
+`revision_conflict`; unavailable provisioning uses `capability_mismatch`.
+Other failures use the existing tenancy error vocabulary and HTTP mappings.
+After a lost reply, query `/tenancy/operations/{operation_id}` using the original
+ID. Handler cancellation MUST NOT lose admitted work or create another writer.
+An unresolved outcome stays unknown; it does not authorize a replacement
+operation ID or inference replay. Clients MUST bound response decoding, bind
+requests to the installation and check returned operation/resource identities
+before accepting success. Capability and status installation IDs MUST match the
+requested installation; an `OperationResult` does not add an installation field.
+
+### Execution usage evidence
+
+Usage evidence contains bounded technical observations, not prices, charges or
+payable quantities. It is a separate message from the unchanged strict v1
+execution receipt, within this canonical service specification.
+
+| Method | Path under `/control/v1` | Contract |
+| --- | --- | --- |
+| GET | `/tenancy/usage-evidence/capabilities` | [Capabilities schema](../../../crates/bitrouter-ai/src/tenancy/usage_evidence/capabilities.schema.json) |
+| GET | `/tenants/{tenant_id}/executions/{execution_id}/usage-evidence` | [Execution evidence schema](../../../crates/bitrouter-ai/src/tenancy/usage_evidence/execution.schema.json) |
+
+The packaged schemas and [DTO validator](../../../crates/bitrouter-ai/src/tenancy/usage_evidence.rs)
+define the field catalog and cross-field constraints. Discovery requires
+authentication and `Bitrouter-Installation-Id`. Clients MUST check the advertised
+bounds, estimator and child-linkage facilities; a DTO or version number alone
+does not imply availability. Generic server-tool capture is not supported in
+version 1 and MUST NOT be advertised. Child linkage depends on the enabled build.
+
+Reads require current receipt-read authority for the tenant and execution and
+return `Cache-Control: no-store`. Installation, tenant and execution identities
+MUST match the addressed resource. Correlation IDs are neither execution
+identities nor inference idempotency keys. A client MUST NOT merge evidence by
+correlation ID or replay inference to recover a missing observation.
+
+#### Capture, absence and recovery
+
+Evidence MUST be bound to its immutable terminal receipt and committed under
+the same durable publication gate. A required document that is missing, corrupt
+or bound to another receipt MUST fail closed. It MUST NOT be presented as a
+historical receipt without capture.
+
+| Capture state | Required interpretation |
+| --- | --- |
+| `captured` | Capture was installed; observations may still be empty, incomplete or truncated. It does not assert successful execution. |
+| `not_captured` | Historical receipt predating this capture contract; no original observations are asserted. |
+| `unavailable` | A version-1 admission seed proves capture was installed, but recovery lost the observations; retain an unknown outcome and durable unavailable evidence. |
+
+Both absence states require empty attempts, frames and child IDs, null parent
+and estimate, `estimation: not_captured`, `truncated: false` and
+`dropped_frames: 0`. Historical seeds retain their original serialization and
+absence semantics; unsupported capture versions fail validation. A new execution
+MUST NOT be downgraded to historical `not_captured` after observation loss.
+HTTP errors or an unsupported evidence endpoint do not assert either capture
+state for a particular execution.
+
+#### Native observations and ordering
+
+Evidence attempts MUST preserve receipt dispatch order, exact attempt IDs,
+targets and outcomes, together with whether a terminal was observed. Targets
+may be null as allowed by the schema; populated targets identify provider,
+model, account and credential revisions without exposing credentials. Some
+observed usage MUST NOT turn an unknown execution outcome into a completed one.
+Frames preserve repeated observations in arrival order with zero-based
+contiguous sequence numbers and references to actual attempts.
+
+Values MUST come from original upstream payloads before protocol conversion or
+zero-filled canonical projections. Arbitrary upstream keys, strings, response
+IDs, prompts, generated content and tool arguments/results MUST NOT be copied.
+Only the closed quantity dimensions are retained, in their native token,
+cache, reasoning, reported search or media units. A missing source quantity has
+no entry; explicit zero remains zero; an invalid known value is null and sets
+`invalid`. Unknown source fields set `unsupported` without retaining names or
+values. Exact nonnegative integers are bounded by 9,007,199,254,740,991; consumers
+MUST NOT round or synthesize quantities from content or default zeroes.
+
+| Original protocol | Eligible source | Extractor version 1 semantics |
+| --- | --- | --- |
+| Chat Completions | JSON, HTTP error usage, accepted usage chunk | Snapshot |
+| Responses | JSON, HTTP error usage, accepted terminal usage | Snapshot |
+| Messages | JSON, HTTP error usage, message start, message delta | Snapshot |
+| Decisions | JSON, HTTP error usage | Unknown |
+
+Snapshots replace the observed dimensions; repeated frames MUST NOT be summed.
+A Messages `message_delta` is cumulative despite its event name. Version 1
+qualifies no additive delta source, even though the semantics enum names delta.
+Unknown semantics MUST NOT be assigned an arithmetic interpretation. Malformed
+or mislabeled streams cannot qualify a source merely by containing usage-like
+fields.
+
+Upstream usage field meanings remain defined by the
+[Chat API reference](https://developers.openai.com/api/reference/resources/chat)
+and [Messages streaming specification](https://platform.claude.com/docs/en/build-with-claude/streaming).
+The extractor's qualified sources and bounded projection above do not extend
+those upstream contracts.
+
+#### Bounds, estimates and children
+
+The original encoded response, including whitespace, is limited to 256 KiB.
+The contract permits at most eight attempts, 512 frames per execution, 128 per
+attempt, 32 quantities per frame and 64 child IDs. Capture retains an ordered
+prefix. Once a frame cannot fit, truncation is sticky; `dropped_frames` counts
+discarded observations with saturation at the exact integer maximum, and
+`truncated` MUST equal `dropped_frames > 0`. Neither truncation, unsupported or
+invalid data nor missing completion evidence establishes complete provider
+totals or zero cost for unseen work.
+
+`estimation` distinguishes unrecorded estimator provenance (`not_captured`), an
+installed finalizer that did not use an estimate (`not_used`), and an estimate
+actually used (`captured`). Only the last permits a nonnull `estimate`.
+Algorithm `stream_character_ceiling`, version 1, rounds each prompt/output
+Unicode scalar count divided by four upward. It retains the numerical inputs,
+text/reasoning coverage and completed/disconnected trigger defined in the
+schema. It excludes media, unseen output and tool execution. An estimate MUST
+NOT replace native observations or be treated as a per-attempt provider amount
+or a total over fallback and children.
+
+Parent/child IDs MUST come from independently owned execution admissions,
+never caller correlation or provider IDs. Parent and child retain separate
+receipts and evidence; child quantities MUST NOT be folded into parent frames.
+The schema rejects self-links, duplicates and a parent also listed as a child.
+Consumers requiring linkage MUST check discovery before relying on it.
+
+### Resource and evidence migration and rollback
+
+Upgrading adds managed-head/revocation metadata and receipt-bound evidence;
+it does not rewrite immutable resource revisions or historical receipt bytes.
+Manifest-only resources are not silently adopted as remotely managed heads.
+Historical receipts remain readable without backfilled or fabricated usage.
+New evidence and resource messages keep their own wire discriminator 1 without
+widening strict tenancy discovery or receipts. An old client can therefore use
+the original API, but an old server is not thereby qualified to read a new store.
+
+The resource lifecycle and usage evidence migrations refuse to adopt existing
+objects at their new table names. Their down migrations refuse to drop existing
+tables and require verified-backup rollback. No in-place downgrade of a store
+that contains new heads, revocations, capture seeds or evidence bindings is
+qualified. Before upgrade, preserve a consistent database backup and its
+installation identity, wrapping key and compatible configuration. Rollback
+requires stopping the sole owning process and restoring a verified compatible
+set; simply deleting new tables/fields or starting an older binary MUST NOT be
+used to bypass authority or evidence integrity checks. A restored snapshot
+does not undo provider effects or prove the outcome of operations after it;
+retain that uncertainty and reconcile it before admitting replacement work.
+The [configuration migration rules](../configuration/README.md#tenancy-and-routing-compatibility)
+also apply when changing binaries or startup settings.
+
+### Resource provisioning compatibility cases
+
+Conformance requires observable behavior from the actual producer and consumer,
+not schema validation alone.
+
+1. Reject missing required nullable CAS/policy fields, duplicate or unknown
+   envelope fields, unsupported formats/enums, mismatched kinds, inexact
+   integers, oversized commands/secrets and duplicate bindings/dependencies.
+   Test compiler rejection separately from envelope schema rejection.
+2. Concurrent creates or rotations have one CAS winner. Exact replay returns
+   the original revision; a changed command under that operation ID conflicts.
+   A lost reply is resolved with the original ID and identity-bound response.
+3. Reads, operation records, errors and diagnostics contain no secret plaintext;
+   wrong-key or wrong-reference retained ciphertext fails authentication.
+4. Same-name resources remain owner-isolated. Tenant credentials cannot mutate
+   pools or compile foreign private dependencies, including indirect closures.
+   Reduced permissions take effect on subsequent checks.
+5. Reject unapproved tenant origins and authority-overriding headers; accept
+   valid approved endpoints. Removing an origin does not revoke a retained
+   revision; explicit revocation fences its subsequent use.
+6. Rotation preserves old immutable bytes and configurations. Revoking either
+   an old or current revision fences cached dispatch and compilation/activation.
+   Restart preserves the managed head and revocations. Creating a head beside
+   manifest-only revisions preserves the old revisions.
+7. Cancellation, shutdown and transaction faults leave one atomic
+   mutation/outcome or an explicitly unknown result. Original-operation replay
+   cannot create another revision; lookup remains subject to current authority.
+8. Bounded HTTP/1.1 and HTTP/2 clients reject oversized or mismatched
+   installation/operation/resource responses. Real service processes accept
+   SDK-created resources and execute authorized JSON/SSE without manifest edits
+   or recompilation.
+9. An old strict discovery/receipt client still decodes the new server's original
+   messages. A new client handles an absent provisioning endpoint or
+   `provisioning_enabled: false` without attempting unsupported mutations.
+   Invalid discovery never becomes a capability grant.
+10. Migration retains old revisions, rejects unexpected preexisting lifecycle
+    objects and refuses destructive downgrade. Verified-backup rollback
+    preserves installation/key identity without claiming distributed safety.
+
+### Usage evidence compatibility cases
+
+1. Strict decoding rejects missing/duplicate/unknown fields, unsupported
+   versions/enums, invalid integers, source/protocol/semantics mismatches,
+   foreign attempt IDs, duplicate dimensions and oversized original bodies,
+   including whitespace and chunked transport.
+2. Repeated native frames preserve order and snapshot semantics. Zero, missing,
+   invalid, unsupported and estimated observations remain distinct; arbitrary
+   field names and strings never leak into evidence.
+3. JSON/SSE preserve reported cache/search/media dimensions before conversion.
+   HTTP failures and authorized credential-refresh attempts preserve separate
+   attempt attribution. Malformed or mislabeled SSE cannot forge eligible usage.
+4. Frame and byte exhaustion retain an ordered prefix and sticky truncation;
+   later frames cannot reset completeness or silently disappear from the drop
+   count. Saturation preserves the truncation flag.
+5. Completed, rejected, partial and disconnected executions retain actual
+   observations without claiming unseen work was free or successful. A missing
+   read, lost response or broken stream never causes inference replay.
+6. Estimates appear only when used, with the exact algorithm revision, numerical
+   inputs and coverage, and never overwrite provider observations.
+7. Receipt and evidence publication is atomic under storage faults, duplicate
+   terminal delivery, shutdown and restart. Missing, orphaned, tampered,
+   oversized or mismatched evidence fails integrity checks. Historical absence
+   cannot mask deletion of a required document.
+8. Recovery with a version-1 capture seed but no observations persists
+   `unavailable` with unknown outcome; a historical seed produces
+   `not_captured`. Preserve historical seed bytes and reject unsupported capture
+   versions. Absence states cannot assert attempts, quantities or estimates.
+9. HTTP/1.1 and HTTP/2 clients enforce the same bounds and exact
+   installation/tenant/execution identities. Reads recheck receipt authority
+   and return no-store responses; discovery alone grants no receipt access.
+10. Advertised child linkage derives from independent admissions; parent and
+    child ledgers remain separate without double counting. Generic server-tool
+    capture stays unavailable.
+11. Old strict receipt/discovery clients keep working. A new client treats an
+    old server's absent evidence endpoint as unavailable functionality, never
+    as `not_captured` for a named execution. Required evidence cannot silently
+    fall back to normalized receipt usage.
+12. Upgrade preserves historical receipts and adds evidence without rewriting
+    them; unexpected existing evidence objects and destructive down migrations
+    fail. Rollback uses a verified compatible backup, not deletion of bindings.
 
 ### Tenancy API compatibility cases
 
@@ -271,6 +680,22 @@ required semantics. No stable compatibility guarantee is claimed in beta.
    an unauthorized lookup does not reveal another principal's operation.
 8. When Eval is enabled, duplicate result replay reports duplicate, conflicting
    immutable content fails and all responses carry `Cache-Control: no-store`.
+9. Strict dispatch rejects each missing, duplicated or malformed binding header,
+   unsupported version/mode and caller tenant/principal overrides. An ineligible
+   discovery descriptor cannot create an SDK binding. Restart/stale capabilities
+   fail rather than silently selecting another instance or receipt mode.
+10. A queued dispatch keeps its exact execution revision across activation;
+    expired or narrowed credentials still fail current checks. Repeated
+    correlation IDs produce distinct executions, with execution identity in
+    the tenant response header.
+11. Scoped SDK calls isolate per-call credentials/bindings over a shared pool.
+    Wrong/missing/duplicate execution metadata, mismatched error identities or
+    status codes, oversized bodies and premature SSE EOF cannot establish safe
+    replay or success. Dropped streams and read timeouts send no replacement
+    inference or remote-cancel request.
+12. Successful terminal delivery follows durable receipt publication. Lost
+    delivery is recovered by reading the original execution, without treating
+    a missing receipt or provisional stream frame as a terminal outcome.
 
 ## Shared operator API
 
@@ -642,6 +1067,10 @@ ignored; unsupported required capabilities MUST fail visibly. See the [native ad
    original receipt; a different payload with the same key conflicts.
 
 ## Shared request identity
+
+This section applies to the shared gateway profile. The exclusively owned local
+[tenant dispatch profile](#strict-tenant-dispatch-binding) has its own execution
+response identity and does not acquire these idempotency semantics.
 
 Client correlation IDs, durable execution IDs, provider-attempt IDs and public
 continuation IDs remain distinct. Shared execution/attempt IDs are generated by

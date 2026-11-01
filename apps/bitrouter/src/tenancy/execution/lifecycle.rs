@@ -28,6 +28,7 @@ enum Completion {
     Failed(BitrouterError),
 }
 type DrainTask = Shared<BoxFuture<'static, Completion>>;
+type PipelineDrain = Shared<BoxFuture<'static, Result<()>>>;
 #[derive(Clone)]
 struct Attached {
     pipeline: Arc<Pipeline>,
@@ -45,6 +46,7 @@ struct Entry {
     attachment: Mutex<Attachment>,
     changed: tokio::sync::Notify,
     task: Mutex<Option<DrainTask>>,
+    pipeline_drain: Mutex<Option<PipelineDrain>>,
     receipt: Option<Arc<Owner>>,
     #[cfg(all(feature = "core", feature = "harness"))]
     effects_stopped: std::sync::atomic::AtomicBool,
@@ -107,6 +109,7 @@ impl Registry {
             attachment: Mutex::new(Attachment::Pending),
             changed: tokio::sync::Notify::new(),
             task: Mutex::new(None),
+            pipeline_drain: Mutex::new(None),
             receipt: Some(receipt),
             #[cfg(all(feature = "core", feature = "harness"))]
             effects_stopped: std::sync::atomic::AtomicBool::new(false),
@@ -172,6 +175,7 @@ impl Registry {
                     attachment: Mutex::new(Attachment::Pending),
                     changed: tokio::sync::Notify::new(),
                     task: Mutex::new(None),
+                    pipeline_drain: Mutex::new(None),
                     receipt: None,
                     #[cfg(all(feature = "core", feature = "harness"))]
                     effects_stopped: std::sync::atomic::AtomicBool::new(false),
@@ -184,7 +188,8 @@ impl Registry {
             .map_err(|_| BitrouterError::internal("execution attachment unavailable"))?;
         if !matches!(*attached, Attachment::Pending)
             || entry.receipt.as_ref().is_some_and(|owner| {
-                owner.deadline <= tokio::time::Instant::now() || owner.cancelled.is_cancelled()
+                owner.attachment_deadline <= tokio::time::Instant::now()
+                    || owner.cancelled.is_cancelled()
             })
         {
             return Err(BitrouterError::internal(
@@ -217,7 +222,20 @@ impl Registry {
         })
     }
     pub(crate) fn close(&self) {
-        self.state().closed = true;
+        let receipts: Vec<_> = {
+            let mut state = self.state();
+            state.closed = true;
+            state
+                .entries
+                .values()
+                .filter_map(|entry| entry.receipt.clone())
+                .collect()
+        };
+        // Cancellation callbacks can drop pipeline custody. Never run them
+        // while holding the registry mutex.
+        for receipt in receipts {
+            receipt.cancel();
+        }
     }
     pub(crate) async fn close_and_drain(&self) -> Result<()> {
         self.close();
@@ -295,6 +313,23 @@ impl Registry {
         Ok((receipt, tasks))
     }
 
+    #[cfg(all(test, unix, feature = "core", feature = "harness"))]
+    pub(crate) async fn join_pipeline_for_test(&self, id: &ExecutionId) -> Result<()> {
+        let entry = self
+            .state()
+            .entries
+            .get(id)
+            .cloned()
+            .ok_or_else(|| BitrouterError::internal("test execution is absent"))?;
+        let task = entry
+            .pipeline_drain
+            .lock()
+            .map_err(|_| BitrouterError::internal("test pipeline drain unavailable"))?
+            .clone()
+            .ok_or_else(|| BitrouterError::internal("test pipeline drain absent"))?;
+        task.await
+    }
+
     fn completed(&self, entry: &Arc<Entry>) {
         let removed = {
             let mut state = self.state();
@@ -312,6 +347,34 @@ impl Registry {
     }
 }
 impl Entry {
+    /// Keep the actual finalizer invocation and its actor reply across timed-out
+    /// registry waits. Reconstructing it after expiry could enqueue a fresh ACK
+    /// on every retry and never observe the already completed cleanup.
+    fn pipeline_drain(&self, pipeline: Arc<Pipeline>) -> Result<PipelineDrain> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| BitrouterError::internal("execution drain requires a runtime"))?;
+        let mut retained = self
+            .pipeline_drain
+            .lock()
+            .map_err(|_| BitrouterError::internal("pipeline drain unavailable"))?;
+        if let Some(task) = retained.as_ref()
+            && !task.peek().is_some_and(Result::is_err)
+        {
+            return Ok(task.clone());
+        }
+        // Only an observed error may retry a finalizer. An unfinished join keeps
+        // its original future; a confirmed clean join is immutable.
+        let task = runtime.spawn(async move { pipeline.drain_owned_execution().await });
+        let task = async move {
+            task.await
+                .map_err(|_| BitrouterError::internal("pipeline drain task failed"))?
+        }
+        .boxed()
+        .shared();
+        *retained = Some(task.clone());
+        Ok(task)
+    }
+
     async fn attached(&self) -> Result<Option<Attached>> {
         loop {
             let notified = self.changed.notified();
@@ -333,7 +396,14 @@ impl Entry {
     }
     async fn drain(self: &Arc<Self>) -> Completion {
         let attached = if let Some(receipt) = &self.receipt {
-            match tokio::time::timeout_at(receipt.deadline, self.attached()).await {
+            let waiting = async {
+                tokio::select! {
+                    biased;
+                    () = receipt.cancelled.cancelled() => Err(()),
+                    result = tokio::time::timeout_at(receipt.attachment_deadline, self.attached()) => result.map_err(|_| ()),
+                }
+            };
+            match waiting.await {
                 Ok(result) => result,
                 Err(_) => {
                     #[cfg(test)]
@@ -366,20 +436,38 @@ impl Entry {
             }
         };
         if let Some(attached) = attached {
-            let draining = attached.pipeline.drain_owned_execution();
+            let draining = match self.pipeline_drain(attached.pipeline.clone()) {
+                Ok(task) => task,
+                Err(error) => {
+                    if let Some(receipt) = &self.receipt {
+                        receipt.fail(ErrorCode::StorageUnavailable);
+                    }
+                    return Completion::Failed(error);
+                }
+            };
             tokio::pin!(draining);
             let result = if let Some(receipt) = &self.receipt {
                 tokio::select! {
-                    result=&mut draining=>result,
-                    ()=tokio::time::sleep_until(receipt.deadline)=>{
-                        #[cfg(test)]
-                    eprintln!("headroom execution deadline: phase=drain");
-                    receipt.cancel();
-                        match tokio::time::timeout_at(receipt.cleanup_deadline(),&mut draining).await {
-                            Ok(result)=>result,
-                            Err(_)=>{receipt.fail(ErrorCode::StorageUnavailable);return Completion::Failed(BitrouterError::internal("execution cleanup deadline elapsed; ownership retained"));}
+                    biased;
+                    () = async {
+                        tokio::select! {
+                            () = receipt.deadline.elapsed() => {},
+                            () = receipt.cancelled.cancelled() => {},
+                        }
+                    } => {
+                        receipt.cancel();
+                        match tokio::time::timeout_at(receipt.cancellation_deadline(), &mut draining).await {
+                            Ok(result) => result,
+                            Err(_) => {
+                                receipt.fail(ErrorCode::StorageUnavailable);
+                                // Keep the same deadline and every join handle.
+                                // A later drain can prove that these producers
+                                // stopped and release a durable receipt's lease.
+                                return Completion::Retryable(BitrouterError::internal("execution cleanup deadline elapsed; ownership retained"));
+                            }
                         }
                     }
+                    result=&mut draining=>result,
                 }
             } else {
                 draining.await
@@ -997,6 +1085,71 @@ mod tests {
         handler.abort();
         ensure!(handler.await.is_err());
         ensure!(recorded.load(Ordering::SeqCst) == 0);
+        Ok(())
+    }
+
+    struct AckDrain {
+        calls: Arc<AtomicUsize>,
+        replies: tokio::sync::mpsc::UnboundedSender<tokio::sync::oneshot::Sender<()>>,
+    }
+    #[async_trait]
+    impl RequiredFinalizer for AckDrain {
+        async fn finalize(&self, _ctx: &RequiredFinalizationContext) -> Result<()> {
+            Ok(())
+        }
+        async fn drain_pending_work(&self) -> Result<()> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let (reply, wait) = tokio::sync::oneshot::channel();
+            self.replies
+                .send(reply)
+                .map_err(|_| BitrouterError::UpstreamUnavailable)?;
+            wait.await.map_err(|_| BitrouterError::UpstreamUnavailable)
+        }
+    }
+
+    #[tokio::test]
+    async fn expired_join_retains_the_original_finalizer_ack_instead_of_reenqueuing()
+    -> anyhow::Result<()> {
+        let registry = Registry::new();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (replies, mut pending) = tokio::sync::mpsc::unbounded_channel();
+        let pipeline = pipeline(|builder| {
+            builder.required_finalizer(AckDrain {
+                calls: calls.clone(),
+                replies,
+            });
+        })?;
+        let id = "retained-ack".try_into()?;
+        let ticket = registry.register(&id, pipeline.clone())?;
+        let entry = registry
+            .state()
+            .entries
+            .get(&id)
+            .cloned()
+            .context("entry")?;
+        drop(ticket);
+        let ack = tokio::time::timeout(Duration::from_secs(3), pending.recv())
+            .await?
+            .context("finalizer awaiting its original ACK")?;
+        let expired = tokio::time::Instant::now();
+        ensure!(
+            tokio::time::timeout_at(expired, entry.pipeline_drain(pipeline.clone())?)
+                .await
+                .is_err()
+        );
+        // An elapsed waiter cannot discard the actor's original reply receiver.
+        ensure!(!ack.is_closed());
+        ack.send(())
+            .map_err(|_| anyhow::anyhow!("original ACK receiver was dropped"))?;
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            entry.pipeline_drain(pipeline.clone())?,
+        )
+        .await??;
+        tokio::time::timeout_at(expired, entry.pipeline_drain(pipeline)?).await??;
+        ensure!(calls.load(Ordering::SeqCst) == 1 && pending.try_recv().is_err());
+        registry.close_and_drain().await?;
+        ensure!(registry.state().entries.is_empty());
         Ok(())
     }
 

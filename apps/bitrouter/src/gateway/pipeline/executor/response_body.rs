@@ -70,7 +70,13 @@ pub(super) async fn read(response: reqwest::Response, ctx: &PipelineContext) -> 
     };
     let successful = response.status().is_success();
     let tenant = super::tenancy::has_execution(ctx);
-    match read_bounded(response, limit).await {
+    let cancellation = super::tenancy::cancellation(ctx)?;
+    let result = tokio::select! {
+        biased;
+        () = cancellation.cancelled() => Err(BitrouterError::UpstreamUnavailable),
+        result = read_bounded(response, limit) => result,
+    };
+    match result {
         // The received rejection is authoritative even when its optional
         // diagnostic body resets or stalls. Losing a 401/403 here must not turn
         // it into a timeout/502 that authorizes another provider fallback.

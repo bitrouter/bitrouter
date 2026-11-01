@@ -519,9 +519,6 @@ in this work.
 
 - The reuse argument is void: `bitrouter-gui` is deprecated and unscheduled, so
   the shared view model has exactly one consumer.
-- [`DEVELOPMENT.md:26`](DEVELOPMENT.md:26) states the workspace rule — *"MCP is
-  a standalone crate while both ACP and the API ride inside the SDK"* — because
-  MCP **owns an external protocol**. A TUI owns none.
 - The precedent is weaker than it looks: `bitrouter-mcp` is a non-optional
   dependency with no `[features]` section (it removes zero crates from the
   binary), was born a crate rather than extracted, and `apps/bitrouter` still

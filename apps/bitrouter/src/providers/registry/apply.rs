@@ -623,6 +623,7 @@ fn build_models(provider: &RegistryProvider) -> Vec<ProviderModel> {
             provider_model_id: Some(m.provider_model_id.clone()),
             api_protocol: Some(m.api_protocol.to_protocol_list()),
             rate_limits: m.rate_limits.as_ref().map(map_rate_limits),
+            routing_weight: None,
             pricing: m.pricing.as_ref().and_then(map_pricing),
             pricing_by_protocol: m
                 .pricing_by_protocol
@@ -1194,6 +1195,7 @@ mod tests {
                 provider_model_id: None,
                 api_protocol: None,
                 rate_limits: None,
+                routing_weight: None,
                 pricing: None,
                 pricing_by_protocol: std::collections::HashMap::new(),
                 token_limits: Default::default(),

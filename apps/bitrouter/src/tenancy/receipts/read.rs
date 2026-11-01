@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 pub(in crate::tenancy) enum Request {
     One(ExecutionId),
+    UsageEvidence(ExecutionId),
     Page {
         correlation: CorrelationId,
         after: Option<ExecutionId>,
@@ -109,6 +110,17 @@ pub(in crate::tenancy) async fn body(
     storage_failure: impl Fn() -> Failure,
 ) -> Result<Vec<u8>, Failure> {
     let encoded = match request {
+        Request::UsageEvidence(id) => {
+            let candidate = super::store::lookup_candidate(db, installation, tenant, id)
+                .await
+                .map_err(|_| storage_failure())?
+                .ok_or_else(|| Failure::from(ErrorCode::NotFound))?;
+            let evidence = match candidate.usage_evidence {
+                Some(evidence) => evidence.document,
+                None => super::usage_evidence::historical(&candidate.receipt),
+            };
+            serde_json::to_vec(&evidence)
+        }
         Request::One(id) => {
             let receipt = super::store::lookup(db, installation, tenant, id)
                 .await

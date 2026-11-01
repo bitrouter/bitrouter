@@ -751,6 +751,9 @@ jobs:
             sentinels=(
               'pub struct bitrouter_ai::axum::response::Reply'
               'pub enum bitrouter_ai::stream::ProtocolEnd'
+              'pub struct bitrouter_ai::tenancy::resources::ResourcePut'
+              'pub struct bitrouter_ai::tenancy::resources::ResourceStatus'
+              'pub struct bitrouter_ai::tenancy::usage_evidence::ExecutionUsageEvidenceV1'
               'pub struct bitrouter_ai::protocol::chat_completions::ChatRequest'
               'pub struct bitrouter_ai::gateway::ModelsResponse'
               'pub mod bitrouter_ai::extension'
@@ -775,6 +778,10 @@ jobs:
             sentinels=(
               'pub struct bitrouter_sdk::gateway::GatewayClient'
               'bitrouter_sdk::gateway::GatewayClient::chat_reply'
+              'bitrouter_sdk::gateway::GatewayClient::tenant'
+              'pub struct bitrouter_sdk::gateway::tenancy::TenantGateway'
+              'bitrouter_sdk::tenancy::TenancyClient::put_resource'
+              'bitrouter_sdk::tenancy::TenancyClient::usage_evidence'
               'bitrouter_sdk::gateway::GatewayClient::chat_completions'
               'bitrouter_sdk::gateway::GatewayClient::stream_responses'
               'pub struct bitrouter_sdk::control::ControlClient'

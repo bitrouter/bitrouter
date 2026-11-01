@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourceStatus",
+  "description": "Nonsecret status of one retained revision.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "description": "Resource provisioning format, exactly one.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "installation_id": {
+      "description": "Addressed persistent store identity.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "reference": {
+      "description": "Exact immutable resource identity.",
+      "$ref": "#/$defs/ResourceRef"
+    },
+    "authority_revision": {
+      "description": "Current authority snapshot, independent of the content revision.",
+      "$ref": "#/$defs/AuthorityRevision"
+    },
+    "head_revision": {
+      "description": "Most recent remotely managed revision; null for manifest-only resources.",
+      "$ref": "#/$defs/RequiredNullable_RevisionId"
+    },
+    "revoked": {
+      "description": "Revocation fences subsequent dispatch and reuse, including cached routes.",
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "installation_id",
+    "reference",
+    "authority_revision",
+    "head_revision",
+    "revoked"
+  ],
+  "$defs": {
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "ResourceRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "revision_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "AuthorityRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "RequiredNullable_RevisionId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RevisionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  }
+}

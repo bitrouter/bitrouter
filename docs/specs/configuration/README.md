@@ -1,6 +1,6 @@
 # BitRouter configuration formats
 
-Status: **beta, specification revision 1.0.0-beta.1**. This is the single
+Status: **beta, specification revision 1.0.0-beta.2**. This is the single
 format contract for `bitrouter.yaml`, its shared-process profile and the
 referenced `policy-lock.yaml`. These are related configuration artifacts; this
 document's revision does not add a version field to existing YAML.
@@ -65,6 +65,114 @@ registry:
 This example only illustrates fields; it does not supply provider credentials
 or guarantee a runnable inference route.
 
+## Tenancy and routing compatibility
+
+Revision beta.2 records the startup tenancy and per-model routing-weight
+semantics below. The `TenancyConfig` and `ProviderModel` definitions in the
+[generated schema](../../../dist/schema/bitrouter.config.schema.json) remain
+their field catalogs; this revision adds no YAML version field. The
+[tenancy validator](../../../apps/bitrouter/src/config/tenancy.rs) also checks
+deployment, bounds and references that the generated schema alone cannot prove.
+
+### Opt-in and startup ownership
+
+Omitting `tenancy` or supplying an empty mapping preserves the disabled default.
+Tenancy requires explicit enablement, authenticated inference, an enabled control
+listener and an explicit `control:tenancy` operator credential. The supported
+profile is one Unix process exclusively owning a file-backed SQLite database
+with `gateway_state.mode: local`. In-memory SQLite, non-SQLite stores, shared
+gateway mode and the host coding-task API are not accepted for this profile.
+These settings do not enable distributed tenant authority or distributed quotas.
+
+The entire `tenancy` object is startup-only. A reload with changed effective
+tenancy settings reports `restart_required` and MUST NOT publish those changes
+into the running service. Editing a manifest or environment secret is not a
+hot-reload protocol. Restart retains durable resources, revocations and execution
+records; it does not erase them merely because a startup option is omitted.
+The [tenant service guide](../../development/tenant-service.md) describes
+assembly, lifetime and storage ownership.
+
+### Absence, nullability and admission limits
+
+The schema's optional import path, learning-registration path, wrapping-key
+environment name and execution timeout accept omission or explicit null as
+absence. Boolean, list and required numeric settings do not accept null in
+place of their defaults. In particular, an omitted origin list is empty, and an
+omitted weight is unknown, not zero. Unknown fields within `tenancy` are rejected.
+
+Submission and stream-idle durations default to 60 and 120 seconds respectively;
+an omitted or null total execution timeout imposes no total deadline. All
+configured durations are integer seconds in 1–31,536,000: zero, negatives,
+fractions, overflow and larger values are rejected, even where schema validation
+alone would admit zero. Submission bounds upload and admission. The total
+execution duration begins at capacity admission; idle duration independently
+bounds a provider read or blocked output handoff and renews with progress.
+Expiration does not authorize inference replay or imply that cleanup, rollback
+or durable completion succeeded.
+
+### Provisioning authority and retained settings
+
+Import, learning-registration and wrapping-key options require tenancy to be
+enabled; nonempty origin lists do as well. Import additionally requires an
+explicit wrapping-key environment name. The name identifies an operator-owned
+environment variable containing a stable base64-encoded 32-byte key, not the
+key itself; no replacement key is generated implicitly. A missing or wrong key
+cannot reopen retained encrypted resources. Setting a different key value is
+not an in-place re-encryption or migration procedure.
+
+Resource import is privileged startup input, read before listeners open. A
+relative import path is resolved against the process working directory, not the
+configuration directory or a tenant-selected directory. Omitting it does not
+delete previously imported revisions. Omitting learning registrations likewise
+preserves durable schedules; that facility requires the `core` and `harness`
+features. Resource mutations and evidence use the
+[canonical tenancy API](../service-api/README.md#resource-provisioning).
+
+Origin approval is a bounded list of at most 256 unique exact HTTP(S) origins,
+compared after origin normalization. It is not a URL-prefix or wildcard list:
+userinfo, non-root paths, queries, fragments and duplicate normalized origins
+are rejected. The empty default permits no tenant-authored route origin;
+installation operators retain their explicit upstream authority. The operator
+owns DNS and network reachability for approved origins. Approval is checked
+when a route revision is provisioned. Removing an origin, including on restart,
+does not invalidate a retained revision; withdrawal requires explicit resource
+revocation. No compatibility fallback may widen this allowlist.
+
+### Technical routing weights
+
+Per-model `routing_weight` is an optional unsigned 64-bit integer used by the
+tenant runtime for `routing.sort: cost`. Lower known weights sort first;
+omission or null sorts after known weights, and equal or jointly missing values
+preserve retained candidate order. Zero is a valid known weight. Writers MUST
+preserve exact integers rather than round through floating-point values.
+The weight has no currency, tariff, discount or payable-usage unit; published
+prices do not provide its default. It orders only the already authorized
+candidate set and cannot add an endpoint or grant credential use.
+
+The compiler's retained target identity and encrypted envelope format are
+unchanged. Existing retained routes without weights keep their missing-weight
+semantics. Changing a configuration file does not rewrite an immutable tenant
+route; publish and explicitly select a new resource/configuration revision for
+new weights. Runtime ordering, rate limits, health and fallback are described in
+the [tenant routing guide](../../development/tenant-routing.md).
+
+### Reader compatibility and rollback
+
+A new reader of old YAML uses the declared defaults and does not rewrite the
+file or opt into tenancy. An older strict reader can reject new tenancy keys;
+an older permissive model reader may accept `routing_weight` while ignoring its
+meaning. Syntactic acceptance is therefore not proof of the requested routing
+behavior. Writers MUST target a reader known to implement required settings;
+they MUST NOT strip origin, lifetime or ownership constraints just to make an
+older binary accept the file.
+
+Binary rollback requires an explicitly reviewed compatible configuration and
+the [service data rollback rules](../service-api/README.md#resource-and-evidence-migration-and-rollback).
+Preserve a verified database/configuration/wrapping-key set before upgrading.
+Removing new YAML keys does not downgrade retained heads, revocations or evidence,
+and an older binary is not qualified to reopen that store merely because its
+configuration parser succeeds.
+
 ## Shared-process profile
 
 `gateway_state.mode: shared` must be selected literally before process-local
@@ -126,3 +234,23 @@ implementation ownership are documented in the
   targets, invalid references and an explicit route without its certificate.
 - Verify exact route, unknown-family fallback and default in order. A candidate
   compilation leaves the active lock unchanged; a changed parent blocks publish.
+- An old document without tenancy settings stays disabled. Omitted and null
+  optional values retain their absence semantics; reject null required values,
+  unknown tenancy keys and invalid timeout bounds, including schema-valid zero.
+- Enabled tenancy rejects anonymous ingress, absent operator authority, shared
+  mode, in-memory/non-SQLite databases, non-Unix ownership and the host task API.
+  Changed effective tenancy settings reject reload before publishing a candidate.
+- Empty origins deny tenant route provisioning. Normalized duplicates, paths
+  and userinfo fail validation; origin comparison never expands wildcards or
+  matches URL prefixes. Removing an approved origin leaves retained revisions
+  intact until explicit revocation.
+- A valid restart preserves imported/managed resources and durable schedules
+  when import/registration paths are omitted. Retained encrypted resources fail
+  closed with a missing or wrong wrapping key; restart does not generate one.
+- Weights 0 and larger exact unsigned integers sort ascending, unknown weights
+  sort last and ties retain order. Omitted/null weights never inherit prices.
+  Test old-reader rejection or ignored-field behavior without treating it as
+  support; new-reader defaults preserve old unweighted routes.
+- Migration leaves immutable route revisions unchanged. Rollback uses a verified
+  compatible configuration and store/key backup, without deleting new evidence
+  or revocation metadata to satisfy an older reader.

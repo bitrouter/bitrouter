@@ -33,7 +33,6 @@ use crate::gateway::providers::auth::{
 };
 use bitrouter_ai::decisions::{DecisionRequest, DecisionResult};
 use bitrouter_ai::types::{ApiProtocol, GenerateResult, Prompt, StreamPart};
-use tokio_util::sync::CancellationToken;
 
 pub(crate) mod input_count;
 mod receipt;
@@ -1521,12 +1520,7 @@ impl HttpExecutor {
             .map(|execution| execution.choice_gate())
             .transpose()?
             .flatten();
-        #[cfg(all(feature = "core", feature = "harness"))]
-        let cancellation = choice_gate
-            .as_ref()
-            .map_or_else(CancellationToken::new, |gate| gate.cancellation());
-        #[cfg(not(all(feature = "core", feature = "harness")))]
-        let cancellation = CancellationToken::new();
+        let cancellation = tenancy::cancellation(ctx)?;
         let url = transport.endpoint_url(&target.model_target(), false);
         let trace_headers = ctx.take_outbound_trace_headers();
         let mut scrubber = UpstreamErrorScrubber::new(None);
@@ -1562,7 +1556,11 @@ impl HttpExecutor {
                 .headers()
                 .get(reqwest::header::AUTHORIZATION)
                 .cloned();
+            let mut routing_guard = None;
             let mut arm = || {
+                if tenancy::has_execution(ctx) {
+                    routing_guard = Some(crate::tenancy::routing::admit(ctx, target)?);
+                }
                 tenancy::admit_send(
                     tenant_binding.as_ref(),
                     &mut tenant_attempt,
@@ -1578,6 +1576,9 @@ impl HttpExecutor {
             };
             #[cfg(not(all(feature = "core", feature = "harness")))]
             let _tenant_attempt = arm()?;
+            if let Some(guard) = routing_guard {
+                guard.sent()?;
+            }
             if let Some(attempts) =
                 ctx.get_event::<crate::metering::tariff::RegistryPhysicalAttempts>()
             {
@@ -1590,6 +1591,15 @@ impl HttpExecutor {
             let status = response.status();
             receipt::status(&mut tenant_attempt, status.as_u16())?;
             if !status.is_success() {
+                crate::tenancy::routing::response_failed(
+                    ctx,
+                    target,
+                    &classify_upstream_error(
+                        status.as_u16(),
+                        "",
+                        parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER)),
+                    ),
+                );
                 attempt.rejected(status.as_u16()).await?;
             }
             let retry_after =
@@ -1606,6 +1616,7 @@ impl HttpExecutor {
                     tenant_attempt,
                 ));
             }
+            receipt::error_json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !refreshed
                 && self
@@ -1616,7 +1627,6 @@ impl HttpExecutor {
                 refreshed = true;
                 continue;
             }
-            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             return Err(classify_upstream_error(
                 status.as_u16(),
                 &scrubber.scrub_body(&text),
@@ -2024,6 +2034,11 @@ impl Executor for HttpExecutor {
                 ctx,
                 NativeProviderWorkKind::HttpDispatch,
                 async {
+                    let routing_guard = if tenancy::has_execution(ctx) {
+                        Some(crate::tenancy::routing::admit(ctx, target)?)
+                    } else {
+                        None
+                    };
                     record_native_dispatch(prompt, target, ctx)?;
                     native_attempt = tenancy::admit_send(
                         tenant_binding.as_ref(),
@@ -2032,8 +2047,11 @@ impl Executor for HttpExecutor {
                         target,
                         ctx,
                     )?;
+                    if let Some(guard) = routing_guard {
+                        guard.sent()?;
+                    }
                     client
-                        .send(request, &CancellationToken::new())
+                        .send(request, &tenancy::cancellation(ctx)?)
                         .await
                         .map_err(|error| error_scrubber.scrub_error(error.into()))
                 },
@@ -2044,6 +2062,15 @@ impl Executor for HttpExecutor {
             let status = response.status();
             receipt::status(&mut tenant_attempt, status.as_u16())?;
             if !status.is_success() {
+                crate::tenancy::routing::response_failed(
+                    ctx,
+                    target,
+                    &classify_upstream_error(
+                        status.as_u16(),
+                        "",
+                        parse_retry_after(response.headers().get(reqwest::header::RETRY_AFTER)),
+                    ),
+                );
                 shared_attempt.rejected(status.as_u16()).await?;
             }
             let retry_after =
@@ -2064,6 +2091,7 @@ impl Executor for HttpExecutor {
                     tenant_attempt,
                 );
             }
+            receipt::error_json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             if status == reqwest::StatusCode::UNAUTHORIZED
                 && !attempted_auth_refresh
                 && self
@@ -2074,7 +2102,6 @@ impl Executor for HttpExecutor {
                 attempted_auth_refresh = true;
                 continue;
             }
-            receipt::json_text(&mut tenant_attempt, &target.api_protocol, &text)?;
             let scrubbed = error_scrubber.scrub_body(&text);
             return Err(classify_upstream_error(
                 status.as_u16(),

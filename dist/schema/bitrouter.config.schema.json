@@ -1695,6 +1695,16 @@
           "default": null,
           "description": "Positively verified qualitative effort levels for this exact route.\nAbsence means unknown, not unsupported."
         },
+        "routing_weight": {
+          "default": null,
+          "description": "Optional technical relative weight for tenant `sort: cost` routing.\nLower values rank first; this is not currency, a tariff or a discount.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "token_limits": {
           "$ref": "#/$defs/ModelTokenLimits",
           "default": {
@@ -2195,7 +2205,7 @@
       "oneOf": [
         {
           "const": "alphabetical",
-          "description": "Sort by provider name, ascending. The Phase-1 default; later replaced by\na recommender (cost / latency / throughput scoring).",
+          "description": "Sort by provider name, ascending; preserve declared order for ties.",
           "type": "string"
         },
         {
@@ -2206,6 +2216,11 @@
         {
           "const": "cost",
           "description": "Sort by lowest cost first.",
+          "type": "string"
+        },
+        {
+          "const": "throughput",
+          "description": "Sort by highest observed output-token throughput first. Runtimes without\nqualified observations retain their deterministic baseline order.",
           "type": "string"
         }
       ]
@@ -2218,6 +2233,16 @@
           "default": false,
           "description": "Opt in to the tenant control service. Existing local startup stays unchanged.",
           "type": "boolean"
+        },
+        "execution_timeout_secs": {
+          "default": null,
+          "description": "Optional total execution lifetime, starting after capacity admission.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "learning_registrations": {
           "default": null,
@@ -2234,6 +2259,28 @@
             "string",
             "null"
           ]
+        },
+        "resource_origins": {
+          "default": [],
+          "description": "Exact HTTP(S) origins allowed for tenant-managed routes. Empty keeps\nroute provisioning operator-only; installation operators remain trusted.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "stream_idle_timeout_secs": {
+          "default": 120,
+          "description": "Maximum idle provider read or blocked output handoff, independently of\ntotal execution lifetime. Progress renews this bound.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "submission_timeout_secs": {
+          "default": 60,
+          "description": "Maximum time for submission body upload and execution admission.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "wrapping_key_env": {
           "default": null,

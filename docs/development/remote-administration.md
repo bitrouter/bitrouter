@@ -37,3 +37,10 @@ operation keys and retry behavior are defined once in the
 [service API](../specs/service-api/README.md#control-api). Shared gateway
 administration has its own actor and credential boundary within that same
 specification; neither host-control nor inference tokens implicitly authorize it.
+
+The separate [tenant service](tenant-service.md) uses the protected control
+listener for generic resource provisioning and evidence reads. Its resource
+mutations use installation-bound, durable operation identities and explicit CAS;
+they do not share reload's boot-local operation retention. The canonical
+[tenancy API](../specs/service-api/README.md#tenancy-api) defines that authority
+and replay boundary.

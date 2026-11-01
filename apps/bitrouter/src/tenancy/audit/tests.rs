@@ -3,7 +3,10 @@ use anyhow::{Context, Result, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
 use std::{
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use tokio::sync::Notify;
 
@@ -19,8 +22,43 @@ pub(super) struct Gate {
     body: Mutex<Option<Result<(), ErrorCode>>>,
 }
 #[derive(Default)]
-pub(super) struct Hooks(Mutex<Option<(Step, Arc<Gate>)>>);
+pub(super) struct Hooks {
+    gate: Mutex<Option<(Step, Arc<Gate>)>>,
+    wrong_digest: AtomicBool,
+    digest_fault_observed: AtomicBool,
+}
 impl Hooks {
+    pub(super) fn receipt_sql(&self, sql: &str) -> String {
+        let Some(rest) = sql.strip_prefix("SELECT * FROM \"tenancy_execution_receipts\" ") else {
+            return sql.to_owned();
+        };
+        if !self.wrong_digest.swap(false, Ordering::SeqCst) {
+            return sql.to_owned();
+        }
+        // Inject one wrong digest at the real SQL/decoder boundary after a
+        // fully validated startup. All other columns and the bounded point
+        // predicate remain original. Never mutate SQLite's immutable file or
+        // synthesize the decoder's error/fatal classification.
+        format!(
+            "SELECT installation_id,tenant_id,execution_id,principal_id,correlation_id,receipt_json,CASE WHEN content_digest='{}' THEN '{}' ELSE '{}' END AS content_digest,content_digest AS fixture_original_digest,disposition_json,byte_count,unknown_outcome,recorded_at FROM \"tenancy_execution_receipts\" {rest}",
+            "0".repeat(64),
+            "1".repeat(64),
+            "0".repeat(64)
+        )
+    }
+    pub(super) fn observe_receipt_row(&self, row: &sea_orm::QueryResult) {
+        if let (Ok(original), Ok(wrong)) = (
+            row.try_get::<String>("", "fixture_original_digest"),
+            row.try_get::<String>("", "content_digest"),
+        ) && original.len() == 64
+            && wrong.len() == 64
+            && original != wrong
+        {
+            // A SQL error cannot satisfy the fault witness: a real changed
+            // digest cell must reach the unchanged receipt decoder.
+            self.digest_fault_observed.store(true, Ordering::SeqCst);
+        }
+    }
     fn hold(&self, step: Step) -> Result<Arc<Gate>> {
         let gate = Arc::new(Gate {
             entered: Notify::new(),
@@ -28,7 +66,7 @@ impl Hooks {
             body: Mutex::new(None),
         });
         let previous = self
-            .0
+            .gate
             .lock()
             .map_err(|_| anyhow::anyhow!("audit hook poisoned"))?
             .replace((step, gate.clone()));
@@ -36,7 +74,10 @@ impl Hooks {
         Ok(gate)
     }
     pub(super) fn observe_rollback_body(&self, body: &Result<Vec<u8>, Failure>) {
-        let slots = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
+        let slots = self
+            .gate
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
         if let Some((Step::Rollback, gate)) = slots.as_ref() {
             *gate
                 .body
@@ -47,7 +88,7 @@ impl Hooks {
     }
     pub(super) async fn hit(&self, step: Step) {
         let gate = {
-            let mut slot = match self.0.lock() {
+            let mut slot = match self.gate.lock() {
                 Ok(slot) => slot,
                 Err(error) => error.into_inner(),
             };
@@ -536,6 +577,9 @@ pub(in crate::tenancy) async fn held_receipt_read(
     let reader =
         crate::offline::audit::open(bundle, &projection, digest, CancellationToken::new()).await?;
     let _stop_on_drop = reader.stop.clone().drop_guard();
+    // Startup has already verified the receipt and bound evidence. Activate
+    // only the point-read digest fault, preserving the original close fence.
+    reader.hooks.wrong_digest.store(fatal, Ordering::SeqCst);
     let rollback = reader.hooks.hold(Step::Rollback)?;
     let _release_rollback = rollback.release.clone().drop_guard();
     let caller = Caller::Installation(
@@ -555,6 +599,10 @@ pub(in crate::tenancy) async fn held_receipt_read(
     };
     let checked = async {
         tokio::time::timeout(WAIT, rollback.entered.notified()).await?;
+        ensure!(
+            reader.hooks.digest_fault_observed.load(Ordering::SeqCst) == fatal,
+            "point read did not exercise the intended digest fault"
+        );
         let observed = (*rollback
             .body
             .lock()

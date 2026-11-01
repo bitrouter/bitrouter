@@ -77,11 +77,16 @@ impl<T> PatternMap<T> {
 
     /// Resolve `name` to the value of its most-specific matching pattern.
     pub fn resolve(&self, name: &str) -> Option<&T> {
+        self.resolve_entry(name).map(|(_, value)| value)
+    }
+
+    /// Return the exact selected pattern and value, for shared pattern buckets.
+    pub(crate) fn resolve_entry(&self, name: &str) -> Option<(&Pattern, &T)> {
         self.entries
             .iter()
             .filter(|(p, _)| p.matches(name))
             .max_by_key(|(p, _)| p.specificity())
-            .map(|(_, v)| v)
+            .map(|(pattern, value)| (pattern, value))
     }
 
     /// Whether the map has no entries.

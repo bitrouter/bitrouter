@@ -9,13 +9,14 @@ pub(crate) struct Access {
     route: Arc<super::RetainedRoute>,
     owner: Owner,
     origin: Weak<Proof>,
+    deadline: tokio::time::Instant,
 }
 impl Access {
     pub(crate) fn owner(&self) -> &Owner {
         &self.owner
     }
     pub(crate) fn deadline(&self) -> tokio::time::Instant {
-        self.submission.deadline
+        self.deadline
     }
     pub(in crate::tenancy) fn validate(
         &self,
@@ -37,7 +38,9 @@ impl Access {
         {
             return Err(ErrorCode::AuthorityUnavailable);
         }
-        if self.deadline() <= tokio::time::Instant::now() {
+        if self.deadline() <= tokio::time::Instant::now()
+            || self.submission.cancelled.is_cancelled()
+        {
             return Err(ErrorCode::CapacityExceeded);
         }
         let effective = state.effective(
@@ -65,31 +68,12 @@ impl TenantExecution {
     }
     pub(crate) fn http_access(&self) -> Result<Access, ErrorCode> {
         self.revalidate()?;
-        let Submission {
-            caller,
-            tenant,
-            principal,
-            credential,
-            binding,
-            deadline,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            session_closed,
-            #[cfg(all(feature = "core", feature = "harness"))]
-            block,
-        } = &self.submission;
         Ok(Access {
-            submission: Submission {
-                caller: caller.clone(),
-                tenant: tenant.clone(),
-                principal: principal.clone(),
-                credential: credential.clone(),
-                binding: binding.clone(),
-                deadline: *deadline,
-                #[cfg(all(feature = "core", feature = "harness"))]
-                session_closed: session_closed.clone(),
-                #[cfg(all(feature = "core", feature = "harness"))]
-                block: block.clone(),
-            },
+            submission: self.submission.clone(),
+            deadline: self
+                .submission
+                .deadline
+                .min(tokio::time::Instant::now() + crate::tenancy::MANAGEMENT_TIMEOUT),
             route: self.route.clone(),
             owner: self.http_owner(),
             origin: Arc::downgrade(&self.service.cleanup),

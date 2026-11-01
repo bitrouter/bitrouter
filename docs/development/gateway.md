@@ -60,6 +60,16 @@ is the [shared operator API](../specs/service-api/README.md#shared-operator-api)
 [shared request identity profile](../specs/service-api/README.md#shared-request-identity) specifies headers,
 canonicalization, recovery and a compatibility vector.
 
+## Owned tenant service
+
+The opt-in [tenant service](tenant-service.md) uses an exclusively owned local
+SQLite database and a protected control listener. It supports immutable resource
+publication, revision-bound SDK dispatch and durable execution receipts with
+separate native usage evidence. Its ownership and recovery model is distinct
+from shared gateway mode; the two profiles cannot be enabled together.
+[Tenant routing](tenant-routing.md) describes the actual-send limits and health
+state inside the authorized retained candidate set.
+
 ## Adapter validation
 
 Authentication, routes and model availability are deployment-specific. Unknown

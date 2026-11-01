@@ -171,3 +171,82 @@ fn protocol_endpoints_preserve_permitted_loopback_and_public_https() -> Result<(
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn retained_runtime_metadata_does_not_change_target_codec() -> Result<()> {
+    use super::super::execution as retained_execution;
+    use crate::gateway::pipeline::routing::RoutingTable;
+    let (db, resources) = fixture().await?;
+    let mut input = route("tenant", "runtime", "model")?;
+    input["definition"]["selector"] = json!("bitrouter/runtime");
+    input["definition"]["routing"]["routers"] = json!({"runtime": {
+        "selection": {"kind": "model", "model": "fixture:model", "routing": {"sort": "throughput"}}
+    }});
+    let provider = &mut input["definition"]["routing"]["providers"]["fixture"];
+    provider["rate_limits"] =
+        json!([{"*": {"requests_per_minute": 30}}, {"mod*": {"requests_per_minute": 10}}]);
+    provider["models"] =
+        json!([{"id": "model", "routing_weight": 7, "rate_limits": {"requests_per_minute": 4}}]);
+    import(&resources, &db, vec![credential("tenant")?, input]).await?;
+    let doc = document(
+        vec![reference("tenant", ResourceKind::Route, "runtime")?],
+        None,
+    )?;
+    let compiled = compile(&resources, &db, &doc).await?;
+    let envelope = decrypt(&resources, &doc, &compiled)?;
+    // Runtime metadata never enters the exact compiler-v1 target format.
+    let bytes = serde_json::to_value(&envelope)?;
+    assert!(!bytes.to_string().contains("\"provider_bucket\""));
+    for chain in &envelope.routes[0].chains {
+        for approved in &chain.targets {
+            assert!(approved.target.get("routing_weight").is_none());
+            assert!(approved.target.get("routing").is_none());
+        }
+    }
+    let validated = retained_execution::validate(envelope)?;
+    let retained = retained_execution::RetainedExecutionRevision::new(
+        "installation".to_owned().try_into()?,
+        "tenant".to_owned().try_into()?,
+        "revision".to_owned().try_into()?,
+        1_u64.try_into()?,
+        validated,
+    )
+    .map_err(|code| anyhow::anyhow!("retained revision failed: {code:?}"))?;
+    let selected = retained
+        .select(
+            "runtime",
+            &bitrouter_ai::types::ApiProtocol::ChatCompletions,
+        )
+        .map_err(|code| anyhow::anyhow!("selection failed: {code:?}"))?;
+    let targets = selected
+        .route_chain(
+            "runtime",
+            &Default::default(),
+            &crate::gateway::caller::CallerContext::anonymous(),
+        )
+        .await?;
+    let target = targets.first().context("missing retained target")?;
+    let metadata = selected
+        .routing_metadata(target)
+        .map_err(|code| anyhow::anyhow!("metadata failed: {code:?}"))?;
+    assert_eq!(metadata.provider_bucket.as_deref(), Some("mod*"));
+    assert_eq!(metadata.provider_rpm, Some(10));
+    assert_eq!(metadata.model_rpm, Some(4));
+    assert_eq!(metadata.relative_weight, Some(7));
+    assert_eq!(
+        selected
+            .routing_sort("bitrouter/runtime")
+            .map_err(|code| anyhow::anyhow!("sort failed: {code:?}"))?,
+        bitrouter_ai::routing::SortOrder::Throughput
+    );
+    let mut unowned = target.clone();
+    unowned.api_base.push('/');
+    assert!(selected.routing_metadata(&unowned).is_err());
+    let mut changed_capabilities = target.clone();
+    changed_capabilities
+        .model_constraints
+        .capabilities
+        .push(bitrouter_ai::types::Capability::Tools);
+    assert!(selected.routing_metadata(&changed_capabilities).is_err());
+    Ok(())
+}

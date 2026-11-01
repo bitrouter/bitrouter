@@ -128,6 +128,20 @@ pub(super) fn has_execution(ctx: &PipelineContext) -> bool {
     execution(ctx).is_some()
 }
 
+/// Stop owned I/O without dropping the enclosing settlement/callback future.
+pub(super) fn cancellation(ctx: &PipelineContext) -> Result<tokio_util::sync::CancellationToken> {
+    let Some(execution) = execution(ctx) else {
+        return Ok(tokio_util::sync::CancellationToken::new());
+    };
+    #[cfg(all(feature = "core", feature = "harness"))]
+    if let Some(gate) = execution.choice_gate()? {
+        // Owner cancellation also cancels this gate; the Choice driver can
+        // independently cancel it while retaining the child's receipt/ACK work.
+        return Ok(gate.cancellation());
+    }
+    Ok(execution.receipt_owner()?.cancelled.clone())
+}
+
 pub(super) fn reserve(
     target: &RoutingTarget,
     ctx: &PipelineContext,
@@ -272,12 +286,13 @@ pub(super) fn admit_send(
             {
                 return Err(execution.reject(ErrorCode::Forbidden));
             }
-            let remaining = execution.remaining();
-            let timeout = request
-                .timeout()
-                .copied()
-                .map_or(remaining, |timeout| timeout.min(remaining));
-            *request.timeout_mut() = Some(timeout);
+            if let Some(remaining) = execution.remaining() {
+                let timeout = request
+                    .timeout()
+                    .copied()
+                    .map_or(remaining, |timeout| timeout.min(remaining));
+                *request.timeout_mut() = Some(timeout);
+            }
             let permit = permit
                 .as_mut()
                 .ok_or_else(|| execution.reject(ErrorCode::Forbidden))?;

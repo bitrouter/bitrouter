@@ -67,6 +67,11 @@ pub(super) enum Change {
     Binding(Binding),
     Credential(Credential),
     Configuration(StoredConfiguration),
+    Resource(configuration_store::StoredResource),
+    ResourceLifecycle {
+        installation: InstallationId,
+        record: super::resources::lifecycle::Record,
+    },
     Activation {
         tenant: bitrouter_ai::tenancy::identity::TenantId,
         expected: Option<bitrouter_ai::tenancy::identity::RevisionId>,
@@ -147,6 +152,11 @@ async fn installation(db: &impl ConnectionTrait, state: &Snapshot) -> Result<()>
 
 async fn write_change(db: &impl ConnectionTrait, change: &Change) -> Result<()> {
     match change {
+        Change::Resource(record) => configuration_store::insert_resource(db, record).await,
+        Change::ResourceLifecycle {
+            installation,
+            record,
+        } => super::resources::lifecycle::write(db, installation, record).await,
         Change::Configuration(value) => configuration_store::insert_configuration(db, value).await,
         Change::Activation {
             tenant,
@@ -508,6 +518,7 @@ pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<
             "tenancy_credentials",
             "tenancy_operations",
             "tenancy_resource_revisions",
+            "tenancy_resource_lifecycle",
             "tenancy_configurations",
             "tenancy_active_configurations",
         ] {
@@ -529,6 +540,7 @@ pub(super) async fn load(db: &DatabaseConnection, now: DateTime<Utc>) -> Result<
             credentials: Default::default(),
             credential_hashes: Default::default(),
             active_configurations: Default::default(),
+            resource_lifecycle: Default::default(),
         };
         installation(db, &state).await?;
         state
@@ -572,6 +584,7 @@ fn existing_identity(row: &QueryResult) -> Result<Snapshot> {
         credentials: Default::default(),
         credential_hashes: Default::default(),
         active_configurations: Default::default(),
+        resource_lifecycle: Default::default(),
     })
 }
 
@@ -580,6 +593,8 @@ async fn load_records(
     mut state: Snapshot,
     now: DateTime<Utc>,
 ) -> Result<Snapshot> {
+    state.resource_lifecycle =
+        super::resources::lifecycle::load(db, &state.installation, state.revision).await?;
     ensure!(
         state.operation_ids < ORDINARY_OPERATIONS || state.saturated,
         "missing saturation latch"

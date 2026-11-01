@@ -88,7 +88,7 @@ impl TenantExecution {
                     return Err(ErrorCode::Forbidden);
                 }
                 let owner = self.receipt.get().ok_or(ErrorCode::AuthorityUnavailable)?;
-                if owner.cancelled.is_cancelled() || tokio::time::Instant::now() >= owner.deadline {
+                if owner.cancelled.is_cancelled() || owner.deadline.expired() {
                     return Err(ErrorCode::CapacityExceeded);
                 }
                 proof.arm(self, permit, request)

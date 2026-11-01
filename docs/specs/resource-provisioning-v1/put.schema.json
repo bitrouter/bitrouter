@@ -1,0 +1,303 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourcePut",
+  "description": "Create or rotate a resource. The server assigns the immutable revision.",
+  "type": "object",
+  "properties": {
+    "format": {
+      "description": "Resource provisioning format, exactly one.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "operation_id": {
+      "description": "Stable identity for replay and unknown-outcome recovery.",
+      "$ref": "#/$defs/OperationId"
+    },
+    "installation_id": {
+      "description": "Addressed persistent store identity.",
+      "$ref": "#/$defs/InstallationId"
+    },
+    "key": {
+      "description": "Explicit owner and resource identity, independent of the route name.",
+      "$ref": "#/$defs/ResourceKey"
+    },
+    "expected_revision": {
+      "description": "Null creates a new managed resource; otherwise compare the managed head.",
+      "$ref": "#/$defs/RequiredNullable_RevisionId"
+    },
+    "definition": {
+      "description": "Write-only immutable content; at most 1 MiB including the command.",
+      "$ref": "#/$defs/Definition"
+    }
+  },
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "operation_id",
+    "installation_id",
+    "key",
+    "expected_revision",
+    "definition"
+  ],
+  "$defs": {
+    "OperationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "InstallationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "ResourceKey": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id"
+      ],
+      "additionalProperties": false
+    },
+    "RequiredNullable_RevisionId": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "RevisionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "Definition": {
+      "description": "Write-only resource definition. Debug output deliberately omits all contents.",
+      "oneOf": [
+        {
+          "description": "Static upstream credential; ingress credentials use the separate issuance API.",
+          "type": "object",
+          "properties": {
+            "secret": {
+              "description": "Nonempty secret, at most 65,536 UTF-8 bytes; never returned by a read.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            },
+            "kind": {
+              "type": "string",
+              "const": "credential"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "secret"
+          ]
+        },
+        {
+          "description": "Explicit routing source, without ambient providers or inline credentials.",
+          "type": "object",
+          "properties": {
+            "routing": {
+              "description": "Service routing document (providers, models, routers and defaults).",
+              "type": "object",
+              "additionalProperties": true
+            },
+            "selector": {
+              "description": "Selector resolved exclusively inside this document.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "policy": {
+              "description": "Exact policy revision if the selector uses a policy.",
+              "$ref": "#/$defs/RequiredNullable_ResourceRef"
+            },
+            "credentials": {
+              "description": "Separately owned credential slots; at most 256 unique accounts.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CredentialBinding"
+              },
+              "minItems": 1,
+              "maxItems": 256
+            },
+            "kind": {
+              "type": "string",
+              "const": "route"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "routing",
+            "selector",
+            "policy",
+            "credentials"
+          ]
+        },
+        {
+          "description": "Policy-as-code, interpreted and validated exclusively by the service.",
+          "type": "object",
+          "properties": {
+            "document": {
+              "description": "Explicit policy document; filesystem paths are not authority.",
+              "type": "object",
+              "additionalProperties": true
+            },
+            "name": {
+              "description": "Selected policy name in this document.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "dependencies": {
+              "description": "Explicit immutable dependencies; at most 256 references.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ResourceRef"
+              },
+              "maxItems": 256
+            },
+            "kind": {
+              "type": "string",
+              "const": "policy"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "document",
+            "name",
+            "dependencies"
+          ]
+        }
+      ]
+    },
+    "RequiredNullable_ResourceRef": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ResourceRef": {
+      "type": "object",
+      "properties": {
+        "owner_kind": {
+          "enum": [
+            "tenant",
+            "operator_pool"
+          ]
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "resource_kind": {
+          "enum": [
+            "route",
+            "policy",
+            "credential",
+            "checkpoint",
+            "configuration",
+            "execution"
+          ]
+        },
+        "resource_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "revision_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "resource_kind",
+        "resource_id",
+        "revision_id"
+      ],
+      "additionalProperties": false
+    },
+    "CredentialBinding": {
+      "description": "One explicit provider/account binding to an immutable upstream credential.",
+      "type": "object",
+      "properties": {
+        "provider": {
+          "description": "Provider name in the route's explicit routing source.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "account": {
+          "description": "Explicit account label, including `default` for a single account.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "credential": {
+          "description": "Authorized credential slot revision; never a secret or an ambient key.",
+          "$ref": "#/$defs/ResourceRef"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "account",
+        "credential"
+      ]
+    }
+  }
+}

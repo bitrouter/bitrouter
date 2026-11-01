@@ -9,14 +9,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SortOrder {
-    /// Sort by provider name, ascending. The Phase-1 default; later replaced by
-    /// a recommender (cost / latency / throughput scoring).
+    /// Sort by provider name, ascending; preserve declared order for ties.
     #[default]
     Alphabetical,
     /// Sort by lowest latency first.
     Latency,
     /// Sort by lowest cost first.
     Cost,
+    /// Sort by highest observed output-token throughput first. Runtimes without
+    /// qualified observations retain their deterministic baseline order.
+    Throughput,
 }
 
 /// Summary of a routable model, for `GET /v1/models`.

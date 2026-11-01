@@ -203,7 +203,11 @@ async fn stalled_callback_deadlines_retain_work_until_the_same_callback_finishes
         };
         for disconnect in [false, true] {
             let provider = Provider::start(false).await?;
-            let (fixture, route, _) = provision_protocol(&provider.url, "chat_completions").await?;
+            let (mut fixture, route, _) =
+                provision_protocol(&provider.url, "chat_completions").await?;
+            // Admission callbacks may own long paid work. Their total is
+            // optional now; this expiry fixture opts into a 60-second ceiling.
+            fixture.service.execution_settings.execution_timeout_secs = Some(60);
             let gate = Arc::new(Gate::default());
             let cleanup = gate.release.clone().drop_guard();
             let checked: Result<()> = async {
@@ -241,19 +245,22 @@ async fn stalled_callback_deadlines_retain_work_until_the_same_callback_finishes
                         .now_or_never(),
                     Some(Err(ErrorCode::CapacityExceeded))
                 ));
-                let paused = Paused::new();
-                tokio::time::advance(Duration::from_secs(
-                    if matches!(hold, Hold::AuthenticationOutcome | Hold::Outcome) {
-                        31
-                    } else {
-                        61
-                    },
-                ))
-                .await;
-                // Only the hung callback uses virtual time. Its cleanup now
-                // commits a real SQLite receipt on the existing writer; paused
-                // auto-advance must not race that external database thread.
-                drop(paused);
+                if !disconnect {
+                    let paused = Paused::new();
+                    tokio::time::advance(Duration::from_secs(
+                        if matches!(hold, Hold::AuthenticationOutcome | Hold::Outcome) {
+                            31
+                        } else {
+                            61
+                        },
+                    ))
+                    .await;
+                    // Resume before the real SQLite receipt writer runs.
+                    drop(paused);
+                }
+                // A disconnected waiter cancels immediately. Keep its callback
+                // held without spending a second, unrelated cleanup window;
+                // genuine cleanup expiry has its own retained-join regression.
                 let outcome = tokio::time::timeout(Duration::from_secs(2), &mut call)
                     .await
                     .with_context(|| {

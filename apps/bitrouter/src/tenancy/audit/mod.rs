@@ -285,8 +285,11 @@ async fn query(
             .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
         #[cfg(all(test, unix))]
         job.hooks.hit(tests::Step::Read).await;
+        let reader = ReadConnection::new(db);
+        #[cfg(all(test, unix))]
+        let reader = reader.with_test_hooks(&job.hooks);
         read::body(
-            &ReadConnection::new(db),
+            &reader,
             &state.installation,
             &job.tenant,
             &job.request,

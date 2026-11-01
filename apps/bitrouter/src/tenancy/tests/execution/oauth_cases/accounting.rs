@@ -283,6 +283,35 @@ async fn coherent_auxiliary_projection_corruption_cannot_discharge_pending_refre
         .context("original auxiliary evidence")?
         .try_get::<String>("", "evidence_json")?;
     let facts: Vec<Fact> = serde_json::from_str(&original)?;
+    let original_candidate = receipts::lookup_candidate(
+        &harness.fixture.db,
+        &harness.fixture.installation,
+        &harness.fixture.tenant,
+        &id,
+    )
+    .await?
+    .context("original receipt with bound usage evidence")?;
+    let usage_fields = Query::select()
+        .columns([Alias::new("evidence_json"), Alias::new("evidence_digest")])
+        .from(Alias::new("tenancy_usage_evidence"))
+        .and_where(
+            Expr::col(Alias::new("installation_id")).eq(harness.fixture.installation.as_str()),
+        )
+        .and_where(Expr::col(Alias::new("tenant_id")).eq(harness.fixture.tenant.as_str()))
+        .and_where(Expr::col(Alias::new("execution_id")).eq(id.as_str()))
+        .to_owned();
+    let original_usage = harness
+        .fixture
+        .db
+        .query_one(
+            harness
+                .fixture
+                .db
+                .get_database_backend()
+                .build(&usage_fields),
+        )
+        .await?
+        .context("original usage sidecar")?;
     let outcome: Result<()> = async {
         // These recomputed, self-consistent records are deliberate storage fault
         // injections. Point integrity alone cannot bind them to another work,
@@ -303,10 +332,10 @@ async fn coherent_auxiliary_projection_corruption_cannot_discharge_pending_refre
             let replacement = receipts::Candidate::new(public, receipts::Disposition {
                 dispatch: bitrouter_ai::tenancy::operation::DispatchState::NotStarted,
                 statuses: Vec::new(), auxiliary_digest: None,
-            })?.with_auxiliary(changed)?;
+            })?.with_auxiliary(changed)?.with_preserved_usage_evidence_for_test(&original_candidate)?;
             let transaction = harness.fixture.db.begin().await?;
             let check: Result<()> = async {
-                for table in ["tenancy_receipt_auxiliary", "tenancy_execution_receipts"] {
+                for table in ["tenancy_receipt_auxiliary", "tenancy_usage_evidence", "tenancy_execution_receipts"] {
                     let deletion = Query::delete().from_table(Alias::new(table))
                         .and_where(Expr::col(Alias::new("installation_id")).eq(harness.fixture.installation.as_str()))
                         .and_where(Expr::col(Alias::new("tenant_id")).eq(harness.fixture.tenant.as_str()))
@@ -316,6 +345,12 @@ async fn coherent_auxiliary_projection_corruption_cannot_discharge_pending_refre
                 ensure!(receipts::insert(&transaction, &replacement).await?);
                 crate::tenancy::receipts::auxiliary_store::insert(&transaction, &replacement).await?;
                 ensure!(receipts::lookup(&transaction, &harness.fixture.installation, &harness.fixture.tenant, &id).await?.is_some());
+                let preserved_usage = transaction.query_one(transaction.get_database_backend().build(&usage_fields))
+                    .await?.context("preserved usage sidecar")?;
+                for field in ["evidence_json", "evidence_digest"] {
+                    ensure!(preserved_usage.try_get::<String>("", field)? == original_usage.try_get::<String>("", field)?,
+                        "{dimension} fault changed unrelated original usage evidence");
+                }
                 ensure!(storage::pending_unknown(&transaction, &harness.fixture.installation).await.is_err(), "unbound {dimension} discharged pending work");
                 ensure!(receipts::inventory(&transaction, &harness.fixture.installation).await.is_err());
                 Ok(())

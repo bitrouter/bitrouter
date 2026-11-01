@@ -8,6 +8,8 @@ pub mod configuration;
 pub mod execution;
 pub mod identity;
 pub mod operation;
+pub mod resources;
+pub mod usage_evidence;
 pub mod validation;
 
 mod number;

@@ -106,6 +106,7 @@ pub(super) fn route_data(value: &mut RouteData) -> Result<()> {
         reference(policy)?;
     }
     for Candidate {
+        routing: _,
         target: _,
         projection: _,
         credential,

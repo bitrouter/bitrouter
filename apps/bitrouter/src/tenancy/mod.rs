@@ -31,6 +31,7 @@ pub(crate) mod origin;
 pub(crate) mod ownership;
 pub(crate) mod receipts;
 pub(crate) mod resources;
+pub(crate) mod routing;
 #[cfg(all(feature = "core", feature = "harness"))]
 pub(crate) mod session;
 mod store;
@@ -124,6 +125,8 @@ pub(crate) struct Service {
     caches: Arc<execution::cached::Caches>,
     admission: Arc<admission::Admission>,
     executor: Arc<crate::gateway::pipeline::executor::HttpExecutor>,
+    execution_settings: crate::config::tenancy::TenancyConfig,
+    routing: Arc<routing::state::Runtime>,
     pipelines: Arc<execution::lifecycle::Registry>,
     #[cfg(test)]
     dispatch_test_ready: Arc<AtomicBool>,
@@ -271,13 +274,20 @@ impl Service {
         #[cfg(test)] startup_test: Option<StartupTest>,
     ) -> anyhow::Result<Self> {
         let (claim, receipt_observer) = origin;
+        config.validate_lifetime()?;
+        let executor = Arc::new(crate::gateway::pipeline::executor::HttpExecutor::new(
+            crate::gateway::model::client::HttpTimeouts {
+                read: Duration::from_secs(config.stream_idle_timeout_secs),
+                ..Default::default()
+            },
+        )?);
         let initial = store::load(&db, Utc::now()).await?;
         let resources = Arc::new(resources::Resources::load_key(
             &initial.installation,
             config,
         )?);
         let import = resources::Resources::read_import(config.resource_import.as_deref()).await?;
-        let service = Self::start_resources_with_continuations(
+        let mut service = Self::start_resources_with_continuations(
             db,
             owner,
             limits,
@@ -288,6 +298,8 @@ impl Service {
             startup_test,
         )
         .await?;
+        service.execution_settings = config.clone();
+        service.executor = executor;
         #[cfg(all(feature = "core", feature = "harness"))]
         if let Err(error) =
             learner::registration::initialize(&service, config.learning_registrations.as_deref())
@@ -490,6 +502,8 @@ impl Service {
             caches,
             admission,
             executor,
+            execution_settings: crate::config::tenancy::TenancyConfig::default(),
+            routing: Arc::new(routing::state::Runtime::default()),
             pipelines: execution::lifecycle::Registry::new(),
             #[cfg(test)]
             dispatch_test_ready: Arc::new(AtomicBool::new(false)),
@@ -577,6 +591,7 @@ impl Service {
             self.caches.close();
         }
         self.admission.close();
+        self.pipelines.close();
         #[cfg(all(feature = "core", feature = "harness"))]
         self.hosts.close();
         let draining = async {

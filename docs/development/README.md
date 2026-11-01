@@ -10,6 +10,8 @@ They do not create independently versioned format specifications. Follow the
 - [Native tools](native-tools.md) and [ACP authentication](acp-authentication.md)
 - [Recording, checkpoints and learning](evidence-learning.md)
 - [Gateway, MCP adaptation and protocol fidelity](gateway.md)
+- [Tenant service, SDK composition and receipt ownership](tenant-service.md)
+- [Tenant routing, rate limits and circuit ownership](tenant-routing.md)
 - [Catalog generation and agent conformance](catalogs.md)
 - [Observation and export](observability.md)
 - [Configuration-state comparison](configuration-state.md)

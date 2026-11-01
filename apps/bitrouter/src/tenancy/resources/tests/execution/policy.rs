@@ -118,3 +118,75 @@ async fn public_resource_name_equal_to_a_policy_tier_stays_distinct_through_pipe
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn resolved_tier_sort_does_not_alias_its_public_resource_name() -> Result<()> {
+    use bitrouter_ai::routing::SortOrder;
+    let (db, resources) = fixture().await?;
+    const PUBLIC: &str = "shared:fast";
+    let mut input = route("tenant", PUBLIC, "base")?;
+    let policy_ref = reference("tenant", ResourceKind::Policy, "policy")?;
+    input["definition"]["selector"] = json!("bitrouter/choice");
+    input["definition"]["policy"] = serde_json::to_value(&policy_ref)?;
+    let routing = &mut input["definition"]["routing"];
+    routing["routers"] = json!({"choice": {
+        "selection": {"kind":"policy", "policy":"selected", "base_model":"fixture:base",
+            "routing":{"sort":"alphabetical"}}
+    }});
+    routing["variants"] = json!({"fast":{"routing":{"sort":"cost"}}});
+    routing["providers"]["fixture"]["models"] = json!([
+        {"id":"base"}, {"id":"expensive", "routing_weight":100},
+        {"id":"cheap", "routing_weight":1}, {"id":"strong"}
+    ]);
+    routing["models"] = json!({"shared":{"strategy":"priority", "endpoints":[
+        {"provider":"fixture", "service_id":"expensive"},
+        {"provider":"fixture", "service_id":"cheap"}
+    ]}});
+    let mut selected_policy = policy("tenant", "policy")?;
+    selected_policy["definition"]["document"]["policies"]["selected"]["tiers"]["economy"]["model"] =
+        json!(PUBLIC);
+    import(
+        &resources,
+        &db,
+        vec![credential("tenant")?, selected_policy, input],
+    )
+    .await?;
+    let row = retained(
+        &resources,
+        &db,
+        "tenant",
+        "sort-collision",
+        document(
+            vec![reference("tenant", ResourceKind::Route, PUBLIC)?],
+            Some(policy_ref),
+        )?,
+    )
+    .await?;
+    let view = checked(resources.open_execution(&row))?;
+    let route = selected(&view, PUBLIC, ApiProtocol::ChatCompletions)?;
+    let ingress = route.resolve_model(PUBLIC).await?;
+    assert_eq!(ingress.clean_model, "bitrouter/choice");
+    assert_eq!(
+        checked(route.routing_sort(&ingress.clean_model))?,
+        SortOrder::Alphabetical
+    );
+    let tier = route
+        .route_resolved(PUBLIC, &RoutingPrefs::default(), &CallerContext::local())
+        .await?;
+    assert_eq!(
+        tier.iter()
+            .map(|target| target.service_id.as_str())
+            .collect::<Vec<_>>(),
+        ["expensive", "cheap"]
+    );
+    assert_eq!(checked(route.routing_sort(PUBLIC))?, SortOrder::Cost);
+    assert_eq!(
+        checked(route.routing_metadata(&tier[0]))?.relative_weight,
+        Some(100)
+    );
+    assert_eq!(
+        checked(route.routing_metadata(&tier[1]))?.relative_weight,
+        Some(1)
+    );
+    Ok(())
+}

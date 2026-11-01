@@ -127,7 +127,12 @@ async fn full_actor_mailbox_rejects_http_lookup_without_leaking_its_read_permit(
 async fn http_lookup_expiring_in_mailbox_never_begins_sql_and_keeps_service_healthy() -> Result<()>
 {
     let mut provider = Server::start().await?;
-    let ready = ready(&provider).await?;
+    let mut ready = ready(&provider).await?;
+    ready
+        .fixture
+        .service
+        .execution_settings
+        .execution_timeout_secs = Some(60);
     let outcome: Result<()> = async {
         let (status, bytes) = send(&ready, ready.headers.clone(), body(false, None)).await?;
         ensure!(status == StatusCode::OK);
@@ -141,6 +146,7 @@ async fn http_lookup_expiring_in_mailbox_never_begins_sql_and_keeps_service_heal
         tokio::time::advance(
             execution
                 .remaining()
+                .context("configured execution total")?
                 .saturating_sub(crate::tenancy::transaction::CLEANUP_TIMEOUT / 2),
         )
         .await;
@@ -161,7 +167,13 @@ async fn http_lookup_expiring_in_mailbox_never_begins_sql_and_keeps_service_heal
             ensure!(ready.fixture.service.commands.capacity() == 15);
             ensure!(ready.fixture.service.reads.available_permits() == 7);
             tokio::time::pause();
-            tokio::time::advance(execution.remaining() + Duration::from_millis(1)).await;
+            tokio::time::advance(
+                execution
+                    .remaining()
+                    .context("configured execution total")?
+                    + Duration::from_millis(1),
+            )
+            .await;
             tokio::time::resume();
             ensure!(matches!(
                 tokio::time::timeout(WAIT, &mut lookup).await?,

@@ -156,7 +156,10 @@ pub(super) async fn accept(owner: Arc<Owner>) -> Result<bool, Failure> {
         }
     }
     let mut guard = EnqueueGuard(Some(owner.clone()));
-    let receive = match enqueue(Work::Accept(owner.clone()), owner.deadline).await {
+    let deadline = owner
+        .deadline
+        .min(Instant::now() + std::time::Duration::from_secs(5));
+    let receive = match enqueue(Work::Accept(owner.clone()), deadline).await {
         Ok(receive) => receive,
         Err(error) => {
             owner.settled(Disposition::NoTransaction);
@@ -164,7 +167,7 @@ pub(super) async fn accept(owner: Arc<Owner>) -> Result<bool, Failure> {
         }
     };
     guard.0 = None;
-    match tokio::time::timeout_at(owner.deadline, receive).await {
+    match tokio::time::timeout_at(deadline, receive).await {
         Ok(Ok(Ok(Reply::Accepted(value)))) => Ok(value),
         Ok(Ok(Err(error))) => Err(error),
         _ => Err(ErrorCode::AuthorityUnavailable.into()),
@@ -198,7 +201,7 @@ pub(super) async fn finish(owner: Arc<Owner>) -> Result<(), ErrorCode> {
         }
     }
     let mut guard = EnqueueGuard(Some(owner.clone()));
-    let deadline = owner.deadline + std::time::Duration::from_secs(30);
+    let deadline = owner.cleanup_deadline()?;
     let receive = enqueue(Work::Finish(owner), deadline)
         .await
         .map_err(|error| error.0.code)?;
@@ -228,7 +231,7 @@ pub(super) async fn observe(
         }
     }
     let mut guard = Guard(Some(owner.clone()));
-    let deadline = owner.deadline + std::time::Duration::from_secs(30);
+    let deadline = owner.cleanup_deadline()?;
     let receive = enqueue(Work::Observe(owner), deadline)
         .await
         .map_err(|error| error.0.code)?;

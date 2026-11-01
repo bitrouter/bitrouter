@@ -28,6 +28,10 @@ pub(super) fn router(archive: Archive, operators: ControlAuth) -> Router {
             get(one),
         )
         .route("/control/v1/tenants/{tenant_id}/executions", get(page))
+        .route(
+            "/control/v1/tenants/{tenant_id}/executions/{execution_id}/usage-evidence",
+            get(usage_evidence),
+        )
         .fallback(|| async { Failure::from(ErrorCode::NotFound) })
         .layer(axum::middleware::from_fn_with_state(
             Auth {
@@ -113,6 +117,19 @@ async fn one(
         archive.read(caller, tenant, read::Request::One(id)).await?,
     ))
 }
+
+async fn usage_evidence(
+    State(archive): State<Archive>,
+    Extension(caller): Extension<Caller>,
+    path: Result<Path<(TenantId, ExecutionId)>, axum::extract::rejection::PathRejection>,
+) -> Result<Response, Failure> {
+    let Path((tenant, id)) = path.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
+    Ok(response(
+        archive
+            .read(caller, tenant, read::Request::UsageEvidence(id))
+            .await?,
+    ))
+}
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Page {
@@ -128,7 +145,7 @@ async fn page(
 ) -> Result<Response, Failure> {
     let Path(tenant) = path.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
     let Query(query) = query.map_err(|_| Failure::from(ErrorCode::InvalidRequest))?;
-    let limit = query.limit.map_or(100, |value| value);
+    let limit = query.limit.unwrap_or(100);
     if !(1..=100).contains(&limit) {
         return Err(ErrorCode::InvalidRequest.into());
     }

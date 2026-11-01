@@ -126,8 +126,13 @@ impl Adapter {
                 captured_at: captured_at.into(),
                 guarded_route: Some(guarded),
             });
-            let deadline =
-                Instant::now() + self.execution.remaining().min(super::super::eval::WORK);
+            let deadline = Instant::now()
+                + self
+                    .execution
+                    .remaining()
+                    .map_or(super::super::eval::WORK, |remaining| {
+                        remaining.min(super::super::eval::WORK)
+                    });
             let permit = tokio::time::timeout_at(
                 deadline,
                 self.execution.trajectory_sender().reserve_owned(),

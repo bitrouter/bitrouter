@@ -198,6 +198,13 @@ providers:
 
 Glob-prefix patterns, same precedence as `api_protocol`. Each `(provider, pattern)` bucket gets an independent window.
 
+The hosted tenant profile enforces provider-pattern and model RPM together at
+actual send. Tenant routing accepts `cost`, `latency`, and `throughput` sorting:
+`cost` uses an optional per-model `routing_weight` (an unsigned technical relative
+weight, not a monetary price); latency and throughput require fresh observations.
+Missing scores and ties preserve the retained candidate order. These controls
+do not enable ambient credentials or retry an unknown execution outcome.
+
 ## Upstream timeouts
 
 Global defaults for the outbound client that calls providers live under the
