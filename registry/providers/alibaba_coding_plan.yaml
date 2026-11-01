@@ -1,8 +1,51 @@
 {
   "api_base": "https://coding-intl.dashscope.aliyuncs.com/v1",
-  "weight": 1,
-  "status": "active",
-  "submitted_at": "2026-06-05T00:00:00Z",
+  "auth": {
+    "env": "ALIBABA_CODING_PLAN_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:23.184121Z",
+          "sequence": 4
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "subscription",
   "display_name": "Alibaba Cloud Coding Plan (International)",
   "metadata": {
@@ -18,51 +61,124 @@
   },
   "models": [
     {
-      "provider_model_id": "qwen3.7-max",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:23.184121Z",
+        "scope": "public",
+        "source_url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "MiniMax-M2.5",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:23.184121Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:23.184121Z",
+        "scope": "public",
+        "source_url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "glm-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:23.184121Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:23.184121Z",
+        "scope": "public",
+        "source_url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "kimi-k2.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:23.184121Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:23.184121Z",
+        "scope": "public",
+        "source_url": "https://coding-intl.dashscope.aliyuncs.com/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "qwen3.5-plus",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:23.184121Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "qwen/qwen3.6-plus",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
+          "protocol": "chat_completions",
           "rate_limits": {
             "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "qwen/qwen3.7-max"
-    },
-    {
       "provider_model_id": "qwen3.6-plus",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          }
-        }
-      ],
-      "canonical_id": "qwen/qwen3.6-plus"
+      "sync": {
+        "field_owners": {}
+      }
     },
     {
-      "provider_model_id": "qwen3.7-plus",
-      "status": "active",
+      "canonical_id": "qwen/qwen3.7-max",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
+          "protocol": "chat_completions",
           "rate_limits": {
             "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "qwen/qwen3.7-plus"
+      "provider_model_id": "qwen3.7-max",
+      "status": "active"
+    },
+    {
+      "canonical_id": "qwen/qwen3.7-plus",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
+      "provider_model_id": "qwen3.7-plus",
+      "status": "active",
+      "sync": {
+        "field_owners": {}
+      }
     }
   ],
   "name": "alibaba_coding_plan",
-  "auth": {
-    "kind": "bearer",
-    "env": "ALIBABA_CODING_PLAN_API_KEY"
-  }
+  "status": "active",
+  "submitted_at": "2026-06-05T00:00:00Z",
+  "weight": 1
 }

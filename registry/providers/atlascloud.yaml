@@ -1,7 +1,54 @@
 {
   "api_base": "https://api.atlascloud.ai/v1",
+  "auth": {
+    "env": "ATLASCLOUD_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:25.117551Z",
+          "sequence": 5
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://api.atlascloud.ai/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/description": "/description",
+            "/id": "/provider_model_id",
+            "/name": "/name"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "weight": 1,
   "display_name": "Atlas Cloud",
   "kind": "aggregator",
   "metadata": {
@@ -16,89 +63,1565 @@
   },
   "models": [
     {
-      "provider_model_id": "qwen/qwen3.7-max",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Haiku 4.5 20251001",
+      "interfaces": [],
+      "name": "Claude Haiku 4.5 20251001",
+      "provider_model_id": "anthropic/claude-haiku-4.5-20251001",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Haiku 4.5 20251001 AWS",
+      "interfaces": [],
+      "name": "Claude Haiku 4.5 20251001 AWS",
+      "provider_model_id": "anthropic/claude-haiku-4.5-20251001-aws",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Haiku 4.5 20251001 Coding",
+      "interfaces": [],
+      "name": "Claude Haiku 4.5 20251001 Coding",
+      "provider_model_id": "anthropic/claude-haiku-4.5-20251001-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Haiku 5.5 CC Max",
+      "interfaces": [],
+      "name": "Claude Haiku 5.5 CC Max",
+      "provider_model_id": "anthropic/claude-haiku-5.5-ccmax",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4 20250514",
+      "interfaces": [],
+      "name": "Claude Opus 4 20250514",
+      "provider_model_id": "anthropic/claude-opus-4-20250514",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4 20250514 Coding",
+      "interfaces": [],
+      "name": "Claude Opus 4 20250514 Coding",
+      "provider_model_id": "anthropic/claude-opus-4-20250514-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.1 20250805",
+      "interfaces": [],
+      "name": "Claude Opus 4.1 20250805",
+      "provider_model_id": "anthropic/claude-opus-4.1-20250805",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.1 20250805 Coding",
+      "interfaces": [],
+      "name": "Claude Opus 4.1 20250805 Coding",
+      "provider_model_id": "anthropic/claude-opus-4.1-20250805-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.5 20251101",
+      "interfaces": [],
+      "name": "Claude Opus 4.5 20251101",
+      "provider_model_id": "anthropic/claude-opus-4.5-20251101",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.5 20251101 Coding",
+      "interfaces": [],
+      "name": "Claude Opus 4.5 20251101 Coding",
+      "provider_model_id": "anthropic/claude-opus-4.5-20251101-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.6",
+      "interfaces": [],
+      "name": "Claude Opus 4.6",
+      "provider_model_id": "anthropic/claude-opus-4.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.6 AWS",
+      "interfaces": [],
+      "name": "Claude Opus 4.6 AWS",
+      "provider_model_id": "anthropic/claude-opus-4.6-aws",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.6 Coding",
+      "interfaces": [],
+      "name": "Claude Opus 4.6 Coding",
+      "provider_model_id": "anthropic/claude-opus-4.6-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.7",
+      "interfaces": [],
+      "name": "Claude Opus 4.7",
+      "provider_model_id": "anthropic/claude-opus-4.7",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.7 AWS",
+      "interfaces": [],
+      "name": "Claude Opus 4.7 AWS",
+      "provider_model_id": "anthropic/claude-opus-4.7-aws",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.7 Coding",
+      "interfaces": [],
+      "name": "Claude Opus 4.7 Coding",
+      "provider_model_id": "anthropic/claude-opus-4.7-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.8",
+      "interfaces": [],
+      "name": "Claude Opus 4.8",
+      "provider_model_id": "anthropic/claude-opus-4.8",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.8 AWS",
+      "interfaces": [],
+      "name": "Claude Opus 4.8 AWS",
+      "provider_model_id": "anthropic/claude-opus-4.8-aws",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 4.8 Coding",
+      "interfaces": [],
+      "name": "Claude Opus 4.8 Coding",
+      "provider_model_id": "anthropic/claude-opus-4.8-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 5",
+      "interfaces": [],
+      "name": "Claude Opus 5",
+      "provider_model_id": "anthropic/claude-opus-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 5 AWS",
+      "interfaces": [],
+      "name": "Claude Opus 5 AWS",
+      "provider_model_id": "anthropic/claude-opus-5-aws",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-opus-5",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.5,
-              "no_cache": 2.5
-            },
-            "output_tokens": {
-              "text": 7.5
+              "no_cache": 5
             },
             "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "qwen/qwen3.7-max"
-    },
-    {
-      "provider_model_id": "qwen/qwen3.7-plus",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "pricing": {
-            "context_tiers": [
-              {
-                "above_input_tokens": 262144,
-                "input_tokens": {
-                  "cache_read": 0.24,
-                  "no_cache": 1.2
-                },
-                "output_tokens": {
-                  "text": 4.8
-                }
-              }
-            ],
-            "input_tokens": {
-              "cache_read": 0.08,
-              "no_cache": 0.4
-            },
             "output_tokens": {
-              "text": 1.6
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+              "text": 25
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "qwen/qwen3.7-plus"
+      "provider_model_id": "anthropic/claude-opus-5-ccmax",
+      "status": "active"
     },
     {
-      "provider_model_id": "moonshotai/kimi-k2.7-code",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Opus 5.5",
+      "interfaces": [],
+      "name": "Claude Opus 5.5",
+      "provider_model_id": "anthropic/claude-opus-5.5",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.16,
-              "no_cache": 0.95
-            },
-            "output_tokens": {
-              "text": 4
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "moonshotai/kimi-k2.7-code"
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
     },
     {
-      "provider_model_id": "minimaxai/minimax-m3",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 4 20250514 Coding",
+      "interfaces": [],
+      "name": "Claude Sonnet 4 20250514 Coding",
+      "provider_model_id": "anthropic/claude-sonnet-4-20250514-coding",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 4.5 20250929",
+      "interfaces": [],
+      "name": "Claude Sonnet 4.5 20250929",
+      "provider_model_id": "anthropic/claude-sonnet-4.5-20250929",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 4.5 20250929 CC Max",
+      "interfaces": [],
+      "name": "Claude Sonnet 4.5 20250929 CC Max",
+      "provider_model_id": "anthropic/claude-sonnet-4.5-20250929-ccmax",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 4.5 20250929 Coding",
+      "interfaces": [],
+      "name": "Claude Sonnet 4.5 20250929 Coding",
+      "provider_model_id": "anthropic/claude-sonnet-4.5-20250929-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 4.6",
+      "interfaces": [],
+      "name": "Claude Sonnet 4.6",
+      "provider_model_id": "anthropic/claude-sonnet-4.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 4.6 AWS",
+      "interfaces": [],
+      "name": "Claude Sonnet 4.6 AWS",
+      "provider_model_id": "anthropic/claude-sonnet-4.6-aws",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 4.6 Coding",
+      "interfaces": [],
+      "name": "Claude Sonnet 4.6 Coding",
+      "provider_model_id": "anthropic/claude-sonnet-4.6-coding",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 5",
+      "interfaces": [],
+      "name": "Claude Sonnet 5",
+      "provider_model_id": "anthropic/claude-sonnet-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 5 AWS",
+      "interfaces": [],
+      "name": "Claude Sonnet 5 AWS",
+      "provider_model_id": "anthropic/claude-sonnet-5-aws",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Claude Sonnet 5.5 CC Max",
+      "interfaces": [],
+      "name": "Claude Sonnet 5.5 CC Max",
+      "provider_model_id": "anthropic/claude-sonnet-5.5-ccmax",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "AutoJev",
+      "interfaces": [],
+      "name": "AutoJev",
+      "provider_model_id": "autojev",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 1.6",
+      "interfaces": [],
+      "name": "Doubao Seed 1.6",
+      "provider_model_id": "bytedance/doubao-seed-1.6-251015",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 1.6 Flash",
+      "interfaces": [],
+      "name": "Doubao Seed 1.6 Flash",
+      "provider_model_id": "bytedance/doubao-seed-1.6-flash-250828",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 1.8",
+      "interfaces": [],
+      "name": "Doubao Seed 1.8",
+      "provider_model_id": "bytedance/doubao-seed-1.8-251228",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 2.0 Code Preview",
+      "interfaces": [],
+      "name": "Doubao Seed 2.0 Code Preview",
+      "provider_model_id": "bytedance/doubao-seed-2.0-code-preview-260215",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 2.0 Lite",
+      "interfaces": [],
+      "name": "Doubao Seed 2.0 Lite",
+      "provider_model_id": "bytedance/doubao-seed-2.0-lite-260428",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 2.0 Mini",
+      "interfaces": [],
+      "name": "Doubao Seed 2.0 Mini",
+      "provider_model_id": "bytedance/doubao-seed-2.0-mini-260428",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 2.0 Pro",
+      "interfaces": [],
+      "name": "Doubao Seed 2.0 Pro",
+      "provider_model_id": "bytedance/doubao-seed-2.0-pro-260215",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 2.1 Pro",
+      "interfaces": [],
+      "name": "Doubao Seed 2.1 Pro",
+      "provider_model_id": "bytedance/doubao-seed-2.1-pro-260628",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed 2.1 Turbo",
+      "interfaces": [],
+      "name": "Doubao Seed 2.1 Turbo",
+      "provider_model_id": "bytedance/doubao-seed-2.1-turbo-260628",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed Character",
+      "interfaces": [],
+      "name": "Doubao Seed Character",
+      "provider_model_id": "bytedance/doubao-seed-character-260628",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Doubao Seed Evolving",
+      "interfaces": [],
+      "name": "Doubao Seed Evolving",
+      "provider_model_id": "bytedance/doubao-seed-evolving",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek V3.2 Exp",
+      "interfaces": [],
+      "name": "DeepSeek V3.2 Exp",
+      "provider_model_id": "deepseek-ai/DeepSeek-V3.2-Exp",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek OCR",
+      "interfaces": [],
+      "name": "DeepSeek OCR",
+      "provider_model_id": "deepseek-ai/deepseek-ocr",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek V3.2",
+      "interfaces": [],
+      "name": "DeepSeek V3.2",
+      "provider_model_id": "deepseek-ai/deepseek-v3.2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek V4 Flash",
+      "interfaces": [],
+      "name": "DeepSeek V4 Flash",
+      "provider_model_id": "deepseek-ai/deepseek-v4-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek V4 Flash 0731",
+      "interfaces": [],
+      "name": "DeepSeek V4 Flash 0731",
+      "provider_model_id": "deepseek-ai/deepseek-v4-flash-0731",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek V4 Pro",
+      "interfaces": [],
+      "name": "DeepSeek V4 Pro",
+      "provider_model_id": "deepseek-ai/deepseek-v4-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek V4 Pro 0813",
+      "interfaces": [],
+      "name": "DeepSeek V4 Pro 0813",
+      "provider_model_id": "deepseek-ai/deepseek-v4-pro-0813",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek V4.1 Flash",
+      "interfaces": [],
+      "name": "DeepSeek V4.1 Flash",
+      "provider_model_id": "deepseek-ai/deepseek-v4.1-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "DeepSeek V4.1 Flash 1017",
+      "interfaces": [],
+      "name": "DeepSeek V4.1 Flash 1017",
+      "provider_model_id": "deepseek-ai/deepseek-v4.1-flash-1017",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Dots 3 Note Preview",
+      "interfaces": [],
+      "name": "Dots 3 Note Preview",
+      "provider_model_id": "dots-studio/dots-3-note-prev-free",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 2.5 Flash",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash",
+      "provider_model_id": "google/gemini-2.5-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 2.5 Flash Image",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash Image",
+      "provider_model_id": "google/gemini-2.5-flash-image",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 2.5 Flash Lite",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash Lite",
+      "provider_model_id": "google/gemini-2.5-flash-lite",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 2.5 Pro",
+      "interfaces": [],
+      "name": "Gemini 2.5 Pro",
+      "provider_model_id": "google/gemini-2.5-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3 Flash Preview",
+      "interfaces": [],
+      "name": "Gemini 3 Flash Preview",
+      "provider_model_id": "google/gemini-3-flash-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3 Flash Preview Developer",
+      "interfaces": [],
+      "name": "Gemini 3 Flash Preview Developer",
+      "provider_model_id": "google/gemini-3-flash-preview-developer",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3 Pro Image",
+      "interfaces": [],
+      "name": "Gemini 3 Pro Image",
+      "provider_model_id": "google/gemini-3-pro-image",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3.1 Flash Image",
+      "interfaces": [],
+      "name": "Gemini 3.1 Flash Image",
+      "provider_model_id": "google/gemini-3.1-flash-image",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3.1 Flash Lite",
+      "interfaces": [],
+      "name": "Gemini 3.1 Flash Lite",
+      "provider_model_id": "google/gemini-3.1-flash-lite",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3.1 Pro Preview",
+      "interfaces": [],
+      "name": "Gemini 3.1 Pro Preview",
+      "provider_model_id": "google/gemini-3.1-pro-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3.5 Flash",
+      "interfaces": [],
+      "name": "Gemini 3.5 Flash",
+      "provider_model_id": "google/gemini-3.5-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3.8 Flash",
+      "interfaces": [],
+      "name": "Gemini 3.8 Flash",
+      "provider_model_id": "google/gemini-3.8-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 3.8 Flash Developer",
+      "interfaces": [],
+      "name": "Gemini 3.8 Flash Developer",
+      "provider_model_id": "google/gemini-3.8-flash-developer",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 4 Argon",
+      "interfaces": [],
+      "name": "Gemini 4 Argon",
+      "provider_model_id": "google/gemini-4-argon",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Gemini 4 Argon Developer",
+      "interfaces": [],
+      "name": "Gemini 4 Argon Developer",
+      "provider_model_id": "google/gemini-4-argon-developer",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "KAT Coder Air V2.5",
+      "interfaces": [],
+      "name": "KAT Coder Air V2.5",
+      "provider_model_id": "kwaipilot/kat-coder-air-v2.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "LongCat 2.0",
+      "interfaces": [],
+      "name": "LongCat 2.0",
+      "provider_model_id": "meituan-longcat/longcat-2.0",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "MiniMax M2.5",
+      "interfaces": [],
+      "name": "MiniMax M2.5",
+      "provider_model_id": "minimaxai/minimax-m2.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "MiniMax M2.7",
+      "interfaces": [],
+      "name": "MiniMax M2.7",
+      "provider_model_id": "minimaxai/minimax-m2.7",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "minimax/minimax-m3",
+      "description": "MiniMax M3",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
           "pricing": {
             "context_tiers": [
@@ -113,48 +1636,892 @@
                 }
               }
             ],
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.06,
               "no_cache": 0.3
             },
+            "kind": "token",
             "output_tokens": {
               "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "minimax/minimax-m3"
+      "name": "MiniMax M3",
+      "provider_model_id": "minimaxai/minimax-m3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "zai-org/glm-5.2",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "MiniMax M3.1 Flash",
+      "interfaces": [],
+      "name": "MiniMax M3.1 Flash",
+      "provider_model_id": "minimaxai/minimax-m3.1-flash",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Kimi K2.5",
+      "interfaces": [],
+      "name": "Kimi K2.5",
+      "provider_model_id": "moonshotai/kimi-k2.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Kimi K2.6",
+      "interfaces": [],
+      "name": "Kimi K2.6",
+      "provider_model_id": "moonshotai/kimi-k2.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k2.7-code",
+      "description": "Kimi K2.7 Code",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.26,
-              "no_cache": 1.4
-            },
-            "output_tokens": {
-              "text": 4.4
+              "cache_read": 0.16,
+              "no_cache": 0.95
             },
             "kind": "token",
-            "currency": "USD"
-          }
+            "output_tokens": {
+              "text": 4
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "z-ai/glm-5.2"
+      "name": "Kimi K2.7 Code",
+      "provider_model_id": "moonshotai/kimi-k2.7-code",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "xai/grok-4.3",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Kimi K3",
+      "interfaces": [],
+      "name": "Kimi K3",
+      "provider_model_id": "moonshotai/kimi-k3",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Kimi K3.1 Pro",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro",
+      "provider_model_id": "moonshotai/kimi-k3.1-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Kimi K3.1 Pro HighSpeed",
+      "interfaces": [],
+      "name": "Kimi K3.1 Pro HighSpeed",
+      "provider_model_id": "moonshotai/kimi-k3.1-pro-highspeed",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 5.5",
+      "interfaces": [],
+      "name": "GPT 5.5",
+      "provider_model_id": "openai/gpt-5.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 5.6 Luna",
+      "interfaces": [],
+      "name": "GPT 5.6 Luna",
+      "provider_model_id": "openai/gpt-5.6-luna",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 5.6 Luna",
+      "interfaces": [],
+      "name": "GPT 5.6 Luna",
+      "provider_model_id": "openai/gpt-5.6-luna-az",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 5.6 Sol",
+      "interfaces": [],
+      "name": "GPT 5.6 Sol",
+      "provider_model_id": "openai/gpt-5.6-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 5.6 Sol",
+      "interfaces": [],
+      "name": "GPT 5.6 Sol",
+      "provider_model_id": "openai/gpt-5.6-sol-az",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 5.6 Sol",
+      "interfaces": [],
+      "name": "GPT 5.6 Sol",
+      "provider_model_id": "openai/gpt-5.6-sol-codex",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 5.6 Terra",
+      "interfaces": [],
+      "name": "GPT 5.6 Terra",
+      "provider_model_id": "openai/gpt-5.6-terra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 5.6 Terra",
+      "interfaces": [],
+      "name": "GPT 5.6 Terra",
+      "provider_model_id": "openai/gpt-5.6-terra-az",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Astra",
+      "interfaces": [],
+      "name": "GPT 6 Astra",
+      "provider_model_id": "openai/gpt-6-astra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Astra Codex",
+      "interfaces": [],
+      "name": "GPT 6 Astra Codex",
+      "provider_model_id": "openai/gpt-6-astra-codex",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Luna",
+      "interfaces": [],
+      "name": "GPT 6 Luna",
+      "provider_model_id": "openai/gpt-6-luna",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Luna Codex",
+      "interfaces": [],
+      "name": "GPT 6 Luna Codex",
+      "provider_model_id": "openai/gpt-6-luna-codex",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Sol",
+      "interfaces": [],
+      "name": "GPT 6 Sol",
+      "provider_model_id": "openai/gpt-6-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6 Sol Codex",
+      "interfaces": [],
+      "name": "GPT 6 Sol Codex",
+      "provider_model_id": "openai/gpt-6-sol-codex",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6.1 Sol",
+      "interfaces": [],
+      "name": "GPT 6.1 Sol",
+      "provider_model_id": "openai/gpt-6.1-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6.1 Sol Codex",
+      "interfaces": [],
+      "name": "GPT 6.1 Sol Codex",
+      "provider_model_id": "openai/gpt-6.1-sol-codex",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT 6.1 Terra Codex",
+      "interfaces": [],
+      "name": "GPT 6.1 Terra Codex",
+      "provider_model_id": "openai/gpt-6.1-terra-codex",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GPT Image 2",
+      "interfaces": [],
+      "name": "GPT Image 2",
+      "provider_model_id": "openai/gpt-image-2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.5 122B A10B",
+      "interfaces": [],
+      "name": "Qwen3.5 122B A10B",
+      "provider_model_id": "qwen/qwen3.5-122b-a10b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.5 27B",
+      "interfaces": [],
+      "name": "Qwen3.5 27B",
+      "provider_model_id": "qwen/qwen3.5-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.5 35B A3B",
+      "interfaces": [],
+      "name": "Qwen3.5 35B A3B",
+      "provider_model_id": "qwen/qwen3.5-35b-a3b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.5 397BA17B",
+      "interfaces": [],
+      "name": "Qwen3.5 397BA17B",
+      "provider_model_id": "qwen/qwen3.5-397b-a17b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.5 Flash",
+      "interfaces": [],
+      "name": "Qwen3.5 Flash",
+      "provider_model_id": "qwen/qwen3.5-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.5 Plus",
+      "interfaces": [],
+      "name": "Qwen3.5 Plus",
+      "provider_model_id": "qwen/qwen3.5-plus",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.6 35B A3B",
+      "interfaces": [],
+      "name": "Qwen3.6 35B A3B",
+      "provider_model_id": "qwen/qwen3.6-35b-a3b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.6 Plus",
+      "interfaces": [],
+      "name": "Qwen3.6 Plus",
+      "provider_model_id": "qwen/qwen3.6-plus",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "qwen/qwen3.7-max",
+      "description": "Qwen3.7 Max",
       "interfaces": [
         {
-          "protocol": "chat_completions",
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.5,
+              "no_cache": 2.5
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 7.5
+            }
+          },
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Qwen3.7 Max",
+      "provider_model_id": "qwen/qwen3.7-max",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "canonical_id": "qwen/qwen3.7-plus",
+      "description": "Qwen3.7 Plus",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "pricing": {
+            "context_tiers": [
+              {
+                "above_input_tokens": 262144,
+                "input_tokens": {
+                  "cache_read": 0.24,
+                  "no_cache": 1.2
+                },
+                "output_tokens": {
+                  "text": 4.8
+                }
+              }
+            ],
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.08,
+              "no_cache": 0.4
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.6
+            }
+          },
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Qwen3.7 Plus",
+      "provider_model_id": "qwen/qwen3.7-plus",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.8 27B",
+      "interfaces": [],
+      "name": "Qwen3.8 27B",
+      "provider_model_id": "qwen/qwen3.8-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Qwen3.8 Max",
+      "interfaces": [],
+      "name": "Qwen3.8 Max",
+      "provider_model_id": "qwen/qwen3.8-max",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Hunyuan 3",
+      "interfaces": [],
+      "name": "Hunyuan 3",
+      "provider_model_id": "tencent/hy3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Hunyuan 4 Preview",
+      "interfaces": [],
+      "name": "Hunyuan 4 Preview",
+      "provider_model_id": "tencent/hy4-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "x-ai/grok-4.3",
+      "description": "Grok 4.3",
+      "interfaces": [
+        {
           "operation": "generation",
           "pricing": {
             "context_tiers": [
@@ -169,48 +2536,293 @@
                 }
               }
             ],
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.2,
               "no_cache": 1.25
             },
+            "kind": "token",
             "output_tokens": {
               "text": 2.5
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "x-ai/grok-4.3"
+      "name": "Grok 4.3",
+      "provider_model_id": "xai/grok-4.3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "anthropic/claude-opus-5-ccmax",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Grok 4.5",
+      "interfaces": [],
+      "name": "Grok 4.5",
+      "provider_model_id": "xai/grok-4.5",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Grok 4.6",
+      "interfaces": [],
+      "name": "Grok 4.6",
+      "provider_model_id": "xai/grok-4.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Grok 4.7",
+      "interfaces": [],
+      "name": "Grok 4.7",
+      "provider_model_id": "xai/grok-4.7",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "Grok Build 0.1",
+      "interfaces": [],
+      "name": "Grok Build 0.1",
+      "provider_model_id": "xai/grok-build-0.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "MiMo V2.5",
+      "interfaces": [],
+      "name": "MiMo V2.5",
+      "provider_model_id": "xiaomi/mimo-v2.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "MiMo V2.5 Pro",
+      "interfaces": [],
+      "name": "MiMo V2.5 Pro",
+      "provider_model_id": "xiaomi/mimo-v2.5-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GLM 5",
+      "interfaces": [],
+      "name": "GLM 5",
+      "provider_model_id": "zai-org/glm-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GLM 5.1",
+      "interfaces": [],
+      "name": "GLM 5.1",
+      "provider_model_id": "zai-org/glm-5.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "z-ai/glm-5.2",
+      "description": "GLM 5.2",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "cache_read": 0.5,
-              "no_cache": 5
-            },
-            "output_tokens": {
-              "text": 25
+              "cache_read": 0.26,
+              "no_cache": 1.4
             },
             "kind": "token",
-            "currency": "USD"
-          }
+            "output_tokens": {
+              "text": 4.4
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "anthropic/claude-opus-5"
+      "name": "GLM 5.2",
+      "provider_model_id": "zai-org/glm-5.2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GLM 5.3",
+      "interfaces": [],
+      "name": "GLM 5.3",
+      "provider_model_id": "zai-org/glm-5.3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GLM 5.3 Flash",
+      "interfaces": [],
+      "name": "GLM 5.3 Flash",
+      "provider_model_id": "zai-org/glm-5.3-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:25.117551Z",
+        "scope": "public",
+        "source_url": "https://api.atlascloud.ai/v1/models"
+      },
+      "description": "GLM 5v Turbo",
+      "interfaces": [],
+      "name": "GLM 5v Turbo",
+      "provider_model_id": "zai-org/glm-5v-turbo",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:25.117551Z",
+        "owner": "catalog"
+      }
     }
   ],
   "name": "atlascloud",
   "status": "active",
   "submitted_at": "2026-07-07T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "ATLASCLOUD_API_KEY"
-  }
+  "weight": 1
 }

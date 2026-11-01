@@ -1,7 +1,54 @@
 {
   "api_base": "https://api.baiduqianfan.ai/v1",
+  "auth": {
+    "env": "QIANFAN_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:58.241396Z",
+          "sequence": 5
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://api.baiduqianfan.ai/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/description": "/description",
+            "/id": "/provider_model_id",
+            "/name": "/name"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "weight": 1,
   "display_name": "Baidu Qianfan (International)",
   "kind": "aggregator",
   "metadata": {
@@ -13,33 +60,395 @@
   },
   "models": [
     {
-      "provider_model_id": "glm-5.2",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "DeepSeek-V3.2 has officially reached stable release. Engineered to strike the perfect balance between reasoning depth and token efficiency, this model is ideal for everyday applications, ranging from standard QA to general-purpose agent workflows.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: DeepSeek-V3.2",
+      "provider_model_id": "deepseek-v3.2-intl",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "DeepSeek-V4-Flash is the lightweight, high-efficiency edition of the V4 series. While maintaining the 1M ultra-long context capability, it utilizes a smaller parameter count and activation scale to provide faster and more cost-effective API services.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: DeepSeek-V4-Flash",
+      "provider_model_id": "deepseek-v4-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "DeepSeek-V4-Flash-0731 is the official release of DeepSeek-V4-Flash, superseding the preview version, with substantially enhanced agentic capabilities. It has the same model structure as DeepSeek-V4-Flash-DSpark, i.e. it comes with a speculative decoding module attached.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: DeepSeek-V4-Flash-0731",
+      "provider_model_id": "deepseek-v4-flash-0731",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "DeepSeek-V4 features an ultra-long context window of one million tokens. It stands as a leader in both the domestic and open-source sectors, delivering top-tier performance in agentic capabilities, world knowledge, and reasoning.DeepSeek-V4-Pro features a total of 1.6T parameters with 49B activated parameters.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: DeepSeek-V4-Pro",
+      "provider_model_id": "deepseek-v4-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "DeepSeek-V4 features an ultra-long context window of one million tokens. It stands as a leader in both the domestic and open-source sectors, delivering top-tier performance in agentic capabilities, world knowledge, and reasoning.DeepSeek-V4-Pro features a total of 1.6T parameters with 49B activated parameters.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: DeepSeek-V4-Pro-0813",
+      "provider_model_id": "deepseek-v4-pro-0813-intl",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "DeepSeek-V4.1-Flash-1017 is a minor update to DeepSeek-V4.1-Flash, delivering substantial improvements across reasoning, coding, agentic tasks, and visual benchmarks.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: DeepSeek-V4.1-Flash-1017",
+      "provider_model_id": "deepseek-v4.1-flash-1017-intl",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "The smallest variant in DeepSeek’s next-generation model architecture series, engineered with native multimodal visual understanding. It achieves a higher capability ceiling, faster inference speed, and superior throughput, with a scalable foundation designed to extend seamlessly to larger parameter models.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: DeepSeek-V4.1-Flash",
+      "provider_model_id": "deepseek-v4.1-flash-intl",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "GLM-5 is Zhipu’s next-generation flagship base model, purpose-built for agentic engineering. It delivers robust performance for complex systems engineering and long-horizon agent workflows.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: GLM-5",
+      "provider_model_id": "glm-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "GLM-5.1 is Z.ai’s next-generation flagship foundation model, featuring a significant leap in long-horizon task performance. It is capable of autonomous operation for up to 8 hours, delivering closed-loop, engineering-grade results. Its overall performance is on par with Claude 4.6 Opus.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: GLM-5.1",
+      "provider_model_id": "glm-5.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "z-ai/glm-5.2",
+      "description": "GLM-5.2 is a flagship model engineered for the era of long-horizon tasks. Supporting a 1M context window, it delivers unparalleled stability in long-horizon task execution and more reliable adherence to engineering standards, further boosting success rates across complex development scenarios. In a single, seamless workflow, GLM-5.2 orchestrates the entire development lifecycle—from requirements gathering to multi-platform, deployment-ready outputs.",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.26,
               "no_cache": 1.4
             },
+            "kind": "token",
             "output_tokens": {
               "text": 4.4
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "z-ai/glm-5.2"
+      "name": "Baidu Qianfan: GLM-5.2",
+      "provider_model_id": "glm-5.2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "GLM-5.2-Fast is the high-speed version of Zhipu AI's flagship model, GLM-5.2, offering significantly faster output speeds.",
+      "interfaces": [],
+      "name": "Baidu Qianfan Fast: GLM-5.2-Fast",
+      "provider_model_id": "glm-5.2-fast-intl",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "GLM-5.3-Flash, the first natively multimodal model in the GLM-5 series. With 320B total parameters and just 18B active parameters, it outperforms GLM-5.2 across benchmarks and real-world workloads at one-tenth the price, while approaching Claude Opus 4.8 on coding and agentic benchmarks.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: GLM-5.3-Flash",
+      "provider_model_id": "glm-5.3-flash-intl",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "GLM-5.3 is Zhipu AI’s latest flagship language model, achieving a major generational leap powered by extreme post-training scaling. Built on the same foundational architecture as GLM-5.2, it leverages a multi-fold expansion in long-horizon environments, richer environment diversity, and significantly extended post-training compute. As a result, its coding performance jumps by 50% over its predecessor, ranking #1 among open-source models on public benchmarks like Terminal Bench 3.0.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: GLM-5.3",
+      "provider_model_id": "glm-5.3-intl",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "Hy3 is a 295B-parameter Mixture-of-Experts (MoE) model with 21B active parameters and 3.8B MTP layer parameters, developed by the Tencent Hy Team.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: Hy3",
+      "provider_model_id": "hy3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "Hy4 preview is a new-generation Mixture-of-Experts (MoE) flagship model developed by the Tencent Hy Team. The model comprises 770B total parameters, of which 49B are activated per token. ",
+      "interfaces": [],
+      "name": "Baidu Qianfan: Hy4-preview",
+      "provider_model_id": "hy4-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "Kimi K2.6 is the latest and most intelligent model in the Kimi portfolio. It delivers comprehensive enhancements across general agentic capabilities, coding, and visual understanding. It achieves industry-leading results on elite benchmarks—including Humanity’s Last Exam (a PhD-level assessment), SWE-Bench Pro (the gold standard for real-world software engineering capabilities), and DeepSearchQA (which evaluates an agent's deep retrieval proficiency).",
+      "interfaces": [],
+      "name": "Baidu Qianfan: Kimi-K2.6",
+      "provider_model_id": "kimi-k2.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "MiMo-V2.5 is a native omni-modal foundation model engineered with powerful agentic capabilities, delivering unified understanding across text, images, video, and audio within a single, cohesive architecture. Built upon the high-efficiency MiMo-V2-Flash backbone and augmented with dedicated vision and audio encoders, MiMo-V2.5 excels in multimodal perception, long-context reasoning, and complex agentic workflows. ",
+      "interfaces": [],
+      "name": "Baidu Qianfan: MiMo-V2.5",
+      "provider_model_id": "mimo-v2.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:58.241396Z",
+        "scope": "public",
+        "source_url": "https://api.baiduqianfan.ai/v1/models"
+      },
+      "description": "Qianfan-OCR-Fast is a domain-specific multimodal large model purpose-built for OCR. By leveraging specialized OCR training data while preserving versatile multimodal intelligence, it provides a powerful performance upgrade over Qianfan-OCR.",
+      "interfaces": [],
+      "name": "Baidu Qianfan: Qianfan-OCR-Fast",
+      "provider_model_id": "qianfan-ocr-fast",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:58.241396Z",
+        "owner": "catalog"
+      }
     }
   ],
   "name": "qianfan",
   "status": "active",
   "submitted_at": "2026-07-07T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "QIANFAN_API_KEY"
-  }
+  "weight": 1
 }

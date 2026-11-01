@@ -1,7 +1,6 @@
 {
   "access": "local_oauth",
   "api_base": "https://api.githubcopilot.com",
-  "weight": 1,
   "auth": {
     "handler": "github-copilot",
     "kind": "oauth",
@@ -12,8 +11,39 @@
       "token_endpoint": "https://github.com/login/oauth/access_token"
     }
   },
-  "status": "active",
-  "name": "github-copilot",
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:44.162712Z",
+          "sequence": 5
+        },
+        "id": "directory",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "models_dev",
+        "pagination": {
+          "kind": "none"
+        },
+        "provider_id": "github-copilot",
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://models.dev/api.json?type=all"
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "subscription",
   "community": false,
   "display_name": "GitHub Copilot",
@@ -29,301 +59,559 @@
   },
   "models": [
     {
-      "provider_model_id": "claude-sonnet-4.5",
-      "status": "active",
+      "canonical_id": "anthropic/claude-fable-5",
+      "description": "Claude model for creative writing, analysis, and controlled agent workflows",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation"
+          "operation": "generation",
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "anthropic/claude-sonnet-4.5"
-    },
-    {
-      "provider_model_id": "claude-haiku-4.5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "anthropic/claude-haiku-4.5"
-    },
-    {
-      "provider_model_id": "claude-opus-4.8",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "anthropic/claude-opus-4.8"
-    },
-    {
+      "name": "Claude Fable 5",
       "provider_model_id": "claude-fable-5",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
         }
-      ],
-      "canonical_id": "anthropic/claude-fable-5"
+      }
     },
     {
-      "provider_model_id": "claude-sonnet-4.6",
-      "status": "active",
+      "canonical_id": "anthropic/claude-fable-5.1",
+      "description": "Claude model for demanding reasoning and long-horizon agentic work",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation"
+          "operation": "generation",
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "anthropic/claude-sonnet-4.6"
-    },
-    {
-      "provider_model_id": "kimi-k2.7-code",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "moonshotai/kimi-k2.7-code"
-    },
-    {
-      "provider_model_id": "claude-sonnet-5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "anthropic/claude-sonnet-5"
-    },
-    {
-      "provider_model_id": "gpt-5.6-luna",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "openai/gpt-5.6-luna"
-    },
-    {
-      "provider_model_id": "gpt-5.6-sol",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "openai/gpt-5.6-sol"
-    },
-    {
-      "provider_model_id": "gpt-5.6-terra",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "openai/gpt-5.6-terra"
-    },
-    {
-      "provider_model_id": "claude-opus-5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "anthropic/claude-opus-5"
-    },
-    {
-      "provider_model_id": "grok-4.5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.5"
-    },
-    {
-      "provider_model_id": "kimi-k3",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "moonshotai/kimi-k3"
-    },
-    {
-      "provider_model_id": "grok-4.6",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.6"
-    },
-    {
+      "name": "Claude Fable 5.1",
       "provider_model_id": "claude-fable-5.1",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
         }
-      ],
-      "canonical_id": "anthropic/claude-fable-5.1"
+      }
     },
     {
-      "provider_model_id": "gemini-3.7-flash",
+      "canonical_id": "anthropic/claude-haiku-4.5",
+      "description": "Fast Claude lane for lightweight agents, office tasks, and responsive chat",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Claude Haiku 4.5 (latest)",
+      "provider_model_id": "claude-haiku-4.5",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
         }
-      ],
-      "canonical_id": "google/gemini-3.7-flash"
+      }
     },
     {
-      "provider_model_id": "gemini-3.8-flash",
-      "status": "active",
+      "canonical_id": "anthropic/claude-haiku-5.5",
+      "description": "Fast Claude model for responsive assistance, classification, and lightweight agents",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation"
+          "operation": "generation",
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "google/gemini-3.8-flash"
-    },
-    {
-      "provider_model_id": "gpt-6-astra",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "openai/gpt-6-astra"
-    },
-    {
-      "provider_model_id": "grok-4.7",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "x-ai/grok-4.7"
-    },
-    {
-      "provider_model_id": "claude-opus-5.5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "anthropic/claude-opus-5.5"
-    },
-    {
-      "provider_model_id": "gpt-6-luna",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "openai/gpt-6-luna"
-    },
-    {
-      "provider_model_id": "gpt-6-sol",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "openai/gpt-6-sol"
-    },
-    {
-      "provider_model_id": "claude-sonnet-5.5",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "anthropic/claude-sonnet-5.5"
-    },
-    {
-      "provider_model_id": "gpt-6.1-sol",
-      "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
-        }
-      ],
-      "canonical_id": "openai/gpt-6.1-sol"
-    },
-    {
+      "name": "Claude Haiku 5.5",
       "provider_model_id": "claude-haiku-5.5",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
         }
-      ],
-      "canonical_id": "anthropic/claude-haiku-5.5"
+      }
     },
     {
+      "canonical_id": "anthropic/claude-opus-4.8",
+      "description": "Top Claude Opus tier for the hardest reasoning, coding, and long-horizon agents",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Claude Opus 4.8",
+      "provider_model_id": "claude-opus-4.8",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-opus-5",
+      "description": "Strongest Claude Opus model for coding, agents, and professional work",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Claude Opus 5",
+      "provider_model_id": "claude-opus-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-opus-5.5",
+      "description": "Claude model for long-running agentic coding and knowledge work",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Claude Opus 5.5",
+      "provider_model_id": "claude-opus-5.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-sonnet-4.5",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "provider_model_id": "claude-sonnet-4.5",
+      "status": "active"
+    },
+    {
+      "canonical_id": "anthropic/claude-sonnet-4.6",
+      "description": "Claude workhorse for coding agents, careful analysis, and production cost control",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Claude Sonnet 4.6",
+      "provider_model_id": "claude-sonnet-4.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-sonnet-5",
+      "description": "Everyday Claude agent model for coding, planning, browsing, and general work",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Claude Sonnet 5",
+      "provider_model_id": "claude-sonnet-5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "anthropic/claude-sonnet-5.5",
+      "description": "Fast Claude model for everyday coding, agents, and knowledge work",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Claude Sonnet 5.5",
+      "provider_model_id": "claude-sonnet-5.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "google/gemini-3.7-flash",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "provider_model_id": "gemini-3.7-flash",
+      "status": "active"
+    },
+    {
+      "canonical_id": "google/gemini-3.8-flash",
+      "description": "Google's most intelligent Flash model, engineered for long-horizon software engineering, autonomous agents, and complex enterprise workflows",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Gemini 3.8 Flash",
+      "provider_model_id": "gemini-3.8-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "google/gemini-4-argon",
+      "description": "Google's flagship reasoning model for complex software engineering, deep math and science, and long-horizon autonomous agents",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Gemini 4 Argon",
       "provider_model_id": "gemini-4-argon",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "chat_completions",
-          "operation": "generation"
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
         }
-      ],
-      "canonical_id": "google/gemini-4-argon"
+      }
     },
     {
-      "provider_model_id": "gpt-6.1-terra",
-      "status": "active",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:44.162712Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Coding-optimized GPT model for repository edits, reviews, and agentic software work",
+      "interfaces": [],
+      "name": "GPT-5.3 Codex",
+      "provider_model_id": "gpt-5.3-codex",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-01T17:14:44.162712Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:44.162712Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Cheapest GPT-5.4 lane for simple routing, extraction, and bulk automation",
+      "interfaces": [],
+      "name": "GPT-5.4 nano",
+      "provider_model_id": "gpt-5.4-nano",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-01T17:14:44.162712Z",
+        "owner": "directory"
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-5.6-luna",
+      "description": "Cost-efficient GPT-5.6 model for fast, high-volume workloads",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation"
+          "operation": "generation",
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "openai/gpt-6.1-terra"
+      "name": "GPT-5.6 Luna",
+      "provider_model_id": "gpt-5.6-luna",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-5.6-sol",
+      "description": "Frontier GPT-5.6 model for complex professional work, coding, and agentic workflows",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "GPT-5.6 Sol",
+      "provider_model_id": "gpt-5.6-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-5.6-terra",
+      "description": "Balanced GPT-5.6 model for capable, cost-efficient everyday work",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "GPT-5.6 Terra",
+      "provider_model_id": "gpt-5.6-terra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-6-astra",
+      "description": "GPT-6 Astra is OpenAI's most capable model for complex reasoning, coding, computer use, research, and document creation.",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "GPT-6 Astra",
+      "provider_model_id": "gpt-6-astra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-6-luna",
+      "description": "OpenAI's most efficient model for focused, high-volume tasks",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "GPT-6 Luna",
+      "provider_model_id": "gpt-6-luna",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-6-sol",
+      "description": "OpenAI model for complex coding and agentic workflows",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "GPT-6 Sol",
+      "provider_model_id": "gpt-6-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-6.1-sol",
+      "description": "Near-Astra performance for complex coding, computer use, and professional work at a lower cost.",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "GPT-6.1 Sol",
+      "provider_model_id": "gpt-6.1-sol",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "openai/gpt-6.1-terra",
+      "description": "Fast, efficient model for visual reasoning, precise computer use, and clear, natural writing.",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "GPT-6.1 Terra",
+      "provider_model_id": "gpt-6.1-terra",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "x-ai/grok-4.5",
+      "description": "xAI's Grok model for chat, coding, agentic tools, and lower hallucination risk",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Grok 4.5",
+      "provider_model_id": "grok-4.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "x-ai/grok-4.6",
+      "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Grok 4.6",
+      "provider_model_id": "grok-4.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "x-ai/grok-4.7",
+      "description": "xAI's frontier model for long-running agents, coding, knowledge work, and visual projects",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Grok 4.7",
+      "provider_model_id": "grok-4.7",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k2.7-code",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "provider_model_id": "kimi-k2.7-code",
+      "status": "active"
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k3",
+      "description": "Multimodal Kimi model with 1M context and toggleable max-effort thinking for long-horizon agent work",
+      "interfaces": [
+        {
+          "operation": "generation",
+          "protocol": "chat_completions"
+        }
+      ],
+      "name": "Kimi K3",
+      "provider_model_id": "kimi-k3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:44.162712Z",
+        "scope": "public",
+        "source_url": "https://models.dev/api.json?type=all"
+      },
+      "description": "Microsoft coding model with native vision support, optimized for fast and efficient software development",
+      "interfaces": [],
+      "name": "MAI-Code-1.1-Flash",
+      "provider_model_id": "mai-code-1.1-flash",
+      "status": "staging",
+      "sync": {
+        "field_owners": {
+          "/description": "directory",
+          "/name": "directory",
+          "/status": "directory"
+        },
+        "last_seen_at": "2026-11-01T17:14:44.162712Z",
+        "owner": "directory"
+      }
     }
-  ]
+  ],
+  "name": "github-copilot",
+  "status": "active",
+  "weight": 1
 }

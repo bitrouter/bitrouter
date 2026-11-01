@@ -1,8 +1,53 @@
 {
   "api_base": "https://api.minimax.io/anthropic/v1",
+  "auth": {
+    "env": "MINIMAX_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:49.148254Z",
+          "sequence": 5
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "account"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "env": "MINIMAX_REGISTRY_API_KEY",
+            "kind": "bearer"
+          },
+          "url": "https://api.minimax.io/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "status": "active",
-  "weight": 1,
   "metadata": {
     "datacenters": [
       "SG"
@@ -16,152 +61,261 @@
   },
   "models": [
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:49.148254Z",
+        "scope": "account",
+        "source_url": "https://api.minimax.io/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "MiniMax-M2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:49.148254Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:49.148254Z",
+        "scope": "account",
+        "source_url": "https://api.minimax.io/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "MiniMax-M2.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:49.148254Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:49.148254Z",
+        "scope": "account",
+        "source_url": "https://api.minimax.io/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "MiniMax-M2.1-highspeed",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:49.148254Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:49.148254Z",
+        "scope": "account",
+        "source_url": "https://api.minimax.io/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "MiniMax-M2.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:49.148254Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:49.148254Z",
+        "scope": "account",
+        "source_url": "https://api.minimax.io/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "MiniMax-M2.5-highspeed",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:49.148254Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "minimax/minimax-m2.7",
+      "interfaces": [
+        {
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        },
+        {
+          "base_url": "https://api.minimax.io/v1",
+          "capabilities": [
+            "reasoning",
+            "tools"
+          ],
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.06,
+              "cache_write": 0.375,
+              "no_cache": 0.3
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 1.2
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          }
+        }
+      ],
       "provider_model_id": "MiniMax-M2.7",
       "status": "active",
+      "sync": {
+        "field_owners": {}
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:49.148254Z",
+        "scope": "account",
+        "source_url": "https://api.minimax.io/v1/models"
+      },
+      "interfaces": [],
+      "provider_model_id": "MiniMax-M2.7-highspeed",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:49.148254Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "minimax/minimax-m3",
       "interfaces": [
         {
-          "protocol": "messages",
           "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.06,
-              "cache_write": 0.375,
               "no_cache": 0.3
             },
+            "kind": "token",
             "output_tokens": {
               "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "capabilities": [
-            "reasoning",
-            "tools"
-          ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://api.minimax.io/v1",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.06,
-              "cache_write": 0.375,
               "no_cache": 0.3
             },
+            "kind": "token",
             "output_tokens": {
               "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "minimax/minimax-m2.7"
-    },
-    {
       "provider_model_id": "MiniMax-M3",
       "status": "active",
-      "interfaces": [
-        {
-          "protocol": "messages",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        },
-        {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "base_url": "https://api.minimax.io/v1",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.06,
-              "no_cache": 0.3
-            },
-            "output_tokens": {
-              "text": 1.2
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
-        }
-      ],
-      "canonical_id": "minimax/minimax-m3"
+      "sync": {
+        "field_owners": {}
+      }
     },
     {
-      "provider_model_id": "MiniMax-M3.1-Flash",
-      "status": "active",
+      "canonical_id": "minimax/minimax-m3.1-flash",
       "interfaces": [
         {
-          "protocol": "messages",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "no_cache": 0.15,
-              "cache_read": 0.015
-            },
-            "output_tokens": {
-              "text": 0.6
+              "cache_read": 0.015,
+              "no_cache": 0.15
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "protocol": "messages",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         },
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://api.minimax.io/v1",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
-              "no_cache": 0.15,
-              "cache_read": 0.015
-            },
-            "output_tokens": {
-              "text": 0.6
+              "cache_read": 0.015,
+              "no_cache": 0.15
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 0.6
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "minimax/minimax-m3.1-flash"
+      "provider_model_id": "MiniMax-M3.1-Flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {}
+      }
     }
   ],
   "name": "minimax",
+  "status": "active",
   "submitted_at": "2026-05-25T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "MINIMAX_API_KEY"
-  }
+  "weight": 1
 }

@@ -517,7 +517,7 @@ fn validate_feeds(provider: &Value) -> Result<()> {
         // Unknown adapters remain source-preserved but fail a scheduled run.
         if matches!(
             feed["kind"].as_str(),
-            Some("v1_models" | "openrouter_models")
+            Some("v1_models" | "openrouter_models" | "models_dev")
         ) {
             for result in [
                 bitrouter_registry::mapping::validate(feed),

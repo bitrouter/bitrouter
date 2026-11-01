@@ -1,11 +1,71 @@
 {
   "api_base": "https://generativelanguage.googleapis.com/v1beta/openai",
-  "billing": "usage",
   "auth": {
     "env": "GEMINI_API_KEY",
     "kind": "bearer"
   },
-  "status": "active",
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:48.191569Z",
+          "sequence": 5
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "account"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "cursor_path": "/nextPageToken",
+          "kind": "cursor",
+          "max_pages": 100,
+          "missing_cursor": "end",
+          "parameter": "pageToken"
+        },
+        "request": {
+          "auth": {
+            "env": "GEMINI_REGISTRY_API_KEY",
+            "header": "x-goog-api-key",
+            "kind": "header"
+          },
+          "query": {
+            "pageSize": "100"
+          },
+          "url": "https://generativelanguage.googleapis.com/v1beta/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/models",
+          "mapping": {
+            "/description": "/description",
+            "/displayName": "/name",
+            "/name": "/provider_model_id"
+          },
+          "transforms": {
+            "/provider_model_id": [
+              {
+                "kind": "strip_prefix",
+                "value": "models/"
+              }
+            ]
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
+  "billing": "usage",
   "display_name": "Google Gemini",
   "doc_url": "https://ai.google.dev/api",
   "kind": "first_party",
@@ -19,82 +79,831 @@
   },
   "models": [
     {
-      "provider_model_id": "gemini-2.5-pro",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Preview release of Antigravity Agent (05-2026)",
+      "interfaces": [],
+      "name": "Antigravity Agent Preview",
+      "provider_model_id": "antigravity-preview-05-2026",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Preview release of Antigravity Agent (09-2026)",
+      "interfaces": [],
+      "name": "Antigravity Agent Preview",
+      "provider_model_id": "antigravity-preview-09-2026",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Latest preview release of Antigravity Agent",
+      "interfaces": [],
+      "name": "Antigravity Agent Preview Latest",
+      "provider_model_id": "antigravity-preview-latest",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Model trained to return answers to questions that are grounded in provided sources, along with estimating answerable probability.",
+      "interfaces": [],
+      "name": "Model that performs Attributed Question Answering.",
+      "provider_model_id": "aqa",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Preview release (April 21st, 2026) of Deep Research Max",
+      "interfaces": [],
+      "name": "Deep Research Max Preview (Apr-21-2026)",
+      "provider_model_id": "deep-research-max-preview-04-2026",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Preview release (April 21th, 2026) of Deep Research",
+      "interfaces": [],
+      "name": "Deep Research Preview (Apr-21-2026)",
+      "provider_model_id": "deep-research-preview-04-2026",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Deprecated preview agent; automatically rerouting traffic to deep-research-preview-04-2026.",
+      "interfaces": [],
+      "name": "Deep Research Pro Preview (Dec-12-2025) [Rerouted]",
+      "provider_model_id": "deep-research-pro-preview-12-2025",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 2.5 Computer Use Preview 10-2025",
+      "interfaces": [],
+      "name": "Gemini 2.5 Computer Use Preview 10-2025",
+      "provider_model_id": "gemini-2.5-computer-use-preview-10-2025",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash",
+      "provider_model_id": "gemini-2.5-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 2.5 Flash Preview Image",
+      "interfaces": [],
+      "name": "Nano Banana",
+      "provider_model_id": "gemini-2.5-flash-image",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Stable version of Gemini 2.5 Flash-Lite, released in July of 2025",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash-Lite",
+      "provider_model_id": "gemini-2.5-flash-lite",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Latest release of Gemini 2.5 Flash Native Audio",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash Native Audio Latest",
+      "provider_model_id": "gemini-2.5-flash-native-audio-latest",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 2.5 Flash Native Audio Preview 09-2025",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash Native Audio Preview 09-2025",
+      "provider_model_id": "gemini-2.5-flash-native-audio-preview-09-2025",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 2.5 Flash Native Audio Preview 12-2025",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash Native Audio Preview 12-2025",
+      "provider_model_id": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 2.5 Flash Preview TTS",
+      "interfaces": [],
+      "name": "Gemini 2.5 Flash Preview TTS",
+      "provider_model_id": "gemini-2.5-flash-preview-tts",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "google/gemini-2.5-pro-preview",
+      "description": "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
           "capabilities": [
             "reasoning",
             "tools"
           ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "compatibility": {
             "google_extensions": true,
             "supports_store": false
           },
-          "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.125,
               "no_cache": 1.25
             },
+            "kind": "token",
             "output_tokens": {
               "text": 10
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "google/gemini-2.5-pro-preview"
+      "name": "Gemini 2.5 Pro",
+      "provider_model_id": "gemini-2.5-pro",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "gemini-3.7-flash",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 2.5 Pro Preview TTS",
+      "interfaces": [],
+      "name": "Gemini 2.5 Pro Preview TTS",
+      "provider_model_id": "gemini-2.5-pro-preview-tts",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3 Flash Preview",
+      "interfaces": [],
+      "name": "Gemini 3 Flash Preview",
+      "provider_model_id": "gemini-3-flash-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3 Pro Image",
+      "interfaces": [],
+      "name": "Nano Banana Pro",
+      "provider_model_id": "gemini-3-pro-image",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3 Pro Image Preview",
+      "interfaces": [],
+      "name": "Nano Banana Pro",
+      "provider_model_id": "gemini-3-pro-image-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Flash Image.",
+      "interfaces": [],
+      "name": "Nano Banana 2",
+      "provider_model_id": "gemini-3.1-flash-image",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Flash Image Preview.",
+      "interfaces": [],
+      "name": "Nano Banana 2",
+      "provider_model_id": "gemini-3.1-flash-image-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Flash Lite",
+      "interfaces": [],
+      "name": "Gemini 3.1 Flash Lite",
+      "provider_model_id": "gemini-3.1-flash-lite",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Flash Lite Image.",
+      "interfaces": [],
+      "name": "Nano Banana 2 Lite",
+      "provider_model_id": "gemini-3.1-flash-lite-image",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Flash Lite Preview",
+      "interfaces": [],
+      "name": "Gemini 3.1 Flash Lite Preview",
+      "provider_model_id": "gemini-3.1-flash-lite-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Flash Live Preview",
+      "interfaces": [],
+      "name": "Gemini 3.1 Flash Live Preview",
+      "provider_model_id": "gemini-3.1-flash-live-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Flash TTS Preview",
+      "interfaces": [],
+      "name": "Gemini 3.1 Flash TTS Preview",
+      "provider_model_id": "gemini-3.1-flash-tts-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Pro Preview",
+      "interfaces": [],
+      "name": "Gemini 3.1 Pro Preview",
+      "provider_model_id": "gemini-3.1-pro-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.1 Pro Preview optimized for custom tool usage",
+      "interfaces": [],
+      "name": "Gemini 3.1 Pro Preview Custom Tools",
+      "provider_model_id": "gemini-3.1-pro-preview-customtools",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.5 Flash",
+      "interfaces": [],
+      "name": "Gemini 3.5 Flash",
+      "provider_model_id": "gemini-3.5-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.5 Flash Lite",
+      "interfaces": [],
+      "name": "Gemini 3.5 Flash Lite",
+      "provider_model_id": "gemini-3.5-flash-lite",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.5 Live Translate Preview",
+      "interfaces": [],
+      "name": "Gemini 3.5 Live Translate Preview",
+      "provider_model_id": "gemini-3.5-live-translate-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.5 Transcribe",
+      "interfaces": [],
+      "name": "Gemini 3.5 Transcribe",
+      "provider_model_id": "gemini-3.5-transcribe",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.5 Transcribe Live",
+      "interfaces": [],
+      "name": "Gemini 3.5 Transcribe Live",
+      "provider_model_id": "gemini-3.5-transcribe-live",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.6 Flash",
+      "interfaces": [],
+      "name": "Gemini 3.6 Flash",
+      "provider_model_id": "gemini-3.6-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "google/gemini-3.7-flash",
+      "description": "Gemini 3.7 Flash",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
+          "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
           "compatibility": {
             "google_extensions": true,
             "supports_store": false
           },
-          "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.075,
               "no_cache": 0.75
             },
+            "kind": "token",
             "output_tokens": {
               "text": 3.75
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "google/gemini-3.7-flash"
+      "name": "Gemini 3.7 Flash",
+      "provider_model_id": "gemini-3.7-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "gemini-3.8-flash",
-      "status": "active",
+      "canonical_id": "google/gemini-3.8-flash",
+      "description": "Gemini 3.8 Flash",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
           "capabilities": [
             "reasoning",
             "tools",
             "image_input",
             "structured_outputs"
           ],
+          "compatibility": {
+            "google_extensions": true,
+            "supports_store": false
+          },
+          "operation": "generation",
+          "pricing": {
+            "currency": "USD",
+            "input_tokens": {
+              "cache_read": 0.075,
+              "no_cache": 0.75
+            },
+            "kind": "token",
+            "output_tokens": {
+              "text": 3.75
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
+          },
           "reasoning_effort": {
             "default": "medium",
             "levels": [
@@ -103,58 +912,518 @@
               "medium",
               "high"
             ]
-          },
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
-          "compatibility": {
-            "google_extensions": true,
-            "supports_store": false
-          },
-          "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-          "pricing": {
-            "input_tokens": {
-              "cache_read": 0.075,
-              "no_cache": 0.75
-            },
-            "output_tokens": {
-              "text": 3.75
-            },
-            "kind": "token",
-            "currency": "USD"
           }
         }
       ],
-      "canonical_id": "google/gemini-3.8-flash"
+      "name": "Gemini 3.8 Flash",
+      "provider_model_id": "gemini-3.8-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "gemini-4-argon",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.8 Flash Lite TTS",
+      "interfaces": [],
+      "name": "Gemini 3.8 Flash Lite TTS",
+      "provider_model_id": "gemini-3.8-flash-lite-tts",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.8 Flash TTS",
+      "interfaces": [],
+      "name": "Gemini 3.8 Flash TTS",
+      "provider_model_id": "gemini-3.8-flash-tts",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.8 Live",
+      "interfaces": [],
+      "name": "Gemini 3.8 Live",
+      "provider_model_id": "gemini-3.8-live",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3.8 Live Extended Thinking",
+      "interfaces": [],
+      "name": "Gemini 3.8 Live Extended Thinking",
+      "provider_model_id": "gemini-3.8-live-extended-thinking",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "google/gemini-4-argon",
+      "description": "Gemini 4 Argon",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.1,
-              "no_cache": 2.0
-            },
-            "output_tokens": {
-              "text": 10.0
+              "no_cache": 2
             },
             "kind": "token",
-            "currency": "USD"
+            "output_tokens": {
+              "text": 10
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "google/gemini-4-argon"
+      "name": "Gemini 4 Argon",
+      "provider_model_id": "gemini-4-argon",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Obtain a distributed representation of a text.",
+      "interfaces": [],
+      "name": "Gemini Embedding 001",
+      "provider_model_id": "gemini-embedding-001",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Obtain a distributed representation of multimodal content.",
+      "interfaces": [],
+      "name": "Gemini Embedding 2",
+      "provider_model_id": "gemini-embedding-2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Obtain a distributed representation of multimodal content.",
+      "interfaces": [],
+      "name": "Gemini Embedding 2 Preview",
+      "provider_model_id": "gemini-embedding-2-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Latest release of Gemini Flash",
+      "interfaces": [],
+      "name": "Gemini Flash Latest",
+      "provider_model_id": "gemini-flash-latest",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Latest release of Gemini Flash-Lite",
+      "interfaces": [],
+      "name": "Gemini Flash-Lite Latest",
+      "provider_model_id": "gemini-flash-lite-latest",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini Nano Banana 2.1.",
+      "interfaces": [],
+      "name": "Nano Banana 2.1",
+      "provider_model_id": "gemini-nano-banana-2.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini Omni 1.1 Flash ",
+      "interfaces": [],
+      "name": "Gemini Omni 1.1 Flash",
+      "provider_model_id": "gemini-omni-1.1-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini Omni Flash Preview",
+      "interfaces": [],
+      "name": "Gemini Omni Flash Preview",
+      "provider_model_id": "gemini-omni-flash-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Latest release of Gemini Pro",
+      "interfaces": [],
+      "name": "Gemini Pro Latest",
+      "provider_model_id": "gemini-pro-latest",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini Robotics-ER 2 Preview",
+      "interfaces": [],
+      "name": "Gemini Robotics-ER 2 Preview",
+      "provider_model_id": "gemini-robotics-er-2-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini Robotics-ER 2 Streaming Preview",
+      "interfaces": [],
+      "name": "Gemini Robotics-ER 2 Streaming Preview",
+      "provider_model_id": "gemini-robotics-er-2-streaming-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemma 4 26B A4B IT",
+      "interfaces": [],
+      "name": "Gemma 4 26B A4B IT",
+      "provider_model_id": "gemma-4-26b-a4b-it",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemma 4 31B IT",
+      "interfaces": [],
+      "name": "Gemma 4 31B IT",
+      "provider_model_id": "gemma-4-31b-it",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Lyria 3 30s model Preview",
+      "interfaces": [],
+      "name": "Lyria 3 Clip Preview",
+      "provider_model_id": "lyria-3-clip-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Lyria 3 Pro Preview",
+      "interfaces": [],
+      "name": "Lyria 3 Pro Preview",
+      "provider_model_id": "lyria-3-pro-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Music Generation model",
+      "interfaces": [],
+      "name": "Lyria 3.5",
+      "provider_model_id": "lyria-3.5",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Lyria Realtime Experimental",
+      "interfaces": [],
+      "name": "Lyria Realtime Experimental",
+      "provider_model_id": "lyria-realtime-exp",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:48.191569Z",
+        "scope": "account",
+        "source_url": "https://generativelanguage.googleapis.com/v1beta/models"
+      },
+      "description": "Gemini 3 Pro Image Preview",
+      "interfaces": [],
+      "name": "Nano Banana Pro",
+      "provider_model_id": "nano-banana-pro-preview",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:48.191569Z",
+        "owner": "catalog"
+      }
     }
   ],
   "name": "google",
+  "status": "active",
   "submitted_at": "2026-05-25T00:00:00Z",
   "weight": 1
 }

@@ -1,7 +1,54 @@
 {
   "api_base": "https://inference.phala.com/v1",
+  "auth": {
+    "env": "PHALA_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:57.306818Z",
+          "sequence": 5
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "public"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "kind": "none"
+          },
+          "url": "https://inference.phala.com/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/description": "/description",
+            "/id": "/provider_model_id",
+            "/name": "/name"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "weight": 1,
   "display_name": "Phala",
   "kind": "aggregator",
   "metadata": {
@@ -14,65 +61,498 @@
   },
   "models": [
     {
-      "provider_model_id": "moonshotai/kimi-k3",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "DeepSeek-V3.2 is a large language model designed to harmonize high computational efficiency with strong reasoning and agentic tool-use performance. It introduces DeepSeek Sparse Attention (DSA), a fine-grained sparse attention mechanism that reduces training and inference cost while preserving quality in long-context scenarios. A scalable reinforcement learning post-training framework further improves reasoning, with reported performance in the GPT-5 class, and the model has demonstrated gold-medal results on the 2025 IMO and IOI. V3.2 also uses a large-scale agentic task synthesis pipeline to better integrate reasoning into tool-use settings, boosting compliance and generalization in interactive environments.",
+      "interfaces": [],
+      "name": "DeepSeek: DeepSeek V3.2",
+      "provider_model_id": "deepseek/deepseek-v3.2",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "DeepSeek V4 Flash 0731 is a sparse mixture-of-experts model from DeepSeek, with 13B active parameters out of 284B total. This re-post-trained revision is suited for coding, reasoning, and agent workflows.",
+      "interfaces": [],
+      "name": "DeepSeek: DeepSeek V4 Flash 0731",
+      "provider_model_id": "deepseek/deepseek-v4-flash-0731",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "DeepSeek V4.1 Flash 1017 is the October 17, 2026 snapshot of DeepSeek V4.1 Flash. It supports text and image input, text output, reasoning, tool calling, JSON object output, and a 1,048,576-token context.",
+      "interfaces": [],
+      "name": "DeepSeek: DeepSeek V4.1 Flash 1017",
+      "provider_model_id": "deepseek/deepseek-v4.1-flash-1017",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Gemma 4 31B Instruct is Google DeepMind's 30.7B dense model. Features a 256K token context window, configurable thinking/reasoning mode, native function calling, and strong multilingual performance. Served as a text-only TEE deployment via NEAR AI.",
+      "interfaces": [],
+      "name": "Google: Gemma 4 31B",
+      "provider_model_id": "google/gemma-4-31b-it",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Kev 4B is an open-weight System One model from Jared Palmer, fine-tuned from Qwen3.5 4B Base. It makes fast, structured decisions for software: given a state and typed questions, it returns calibrated answers instead of text, as a yes/no probability (noul), a pick among options (choice), or a level on a scale (score). Call it through POST /v1/systemone, compatible with the TypeSafe SDK; it does not serve chat. Served on Phala in a TDX-attested enclave with an 8,192-token context.",
+      "interfaces": [],
+      "name": "Jared Palmer: Kev 4B",
+      "provider_model_id": "jaredpalmer/kev-4b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "The Meta Llama 3.3 multilingual large language model (LLM) is a pretrained and instruction tuned generative model in 70B (text in/text out). The Llama 3.3 instruction tuned text only model is optimized for multilingual dialogue use cases and outperforms many of the available open source and closed chat models on common industry benchmarks.",
+      "interfaces": [],
+      "name": "Meta: Llama 3.3 70B Instruct",
+      "provider_model_id": "meta-llama/llama-3.3-70b-instruct",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Kimi K2.6 is Moonshot AI's next-generation multimodal model, designed for long-horizon coding, coding-driven UI/UX generation, and multi-agent orchestration. It handles complex end-to-end coding tasks across Python, Rust, and Go, and demonstrates strong performance in agentic workflows.",
+      "interfaces": [],
+      "name": "MoonshotAI: Kimi K2.6",
+      "provider_model_id": "moonshotai/kimi-k2.6",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "moonshotai/kimi-k3",
+      "description": "Kimi K3 is a 2.8T parameter open-weight multimodal reasoning model from Moonshot AI. It is suited for complex coding, knowledge work, and long-horizon agentic workflows.",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "structured_outputs",
             "tools",
             "image_input"
           ],
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 1.5,
               "no_cache": 3
             },
+            "kind": "token",
             "output_tokens": {
               "text": 15
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "moonshotai/kimi-k3"
+      "name": "MoonshotAI: Kimi K3",
+      "provider_model_id": "moonshotai/kimi-k3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
     },
     {
-      "provider_model_id": "z-ai/glm-5.2",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "gpt-oss-120b is an open-weight, 117B-parameter Mixture-of-Experts (MoE) language model from OpenAI designed for high-reasoning, agentic, and general-purpose production use cases. It activates 5.1B parameters per forward pass and is optimized to run on a single H100 GPU with native MXFP4 quantization. The model supports configurable reasoning depth, full chain-of-thought access, and native tool use, including function calling, browsing, and structured output generation.",
+      "interfaces": [],
+      "name": "OpenAI: GPT OSS 120B",
+      "provider_model_id": "openai/gpt-oss-120b",
       "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Uncensored \"Heretic\" variant of google/gemma-4-26B-A4B-it created using Heretic v1.2.0 with the Arbitrary-Rank Ablation (ARA) method and row-norm preservation. Refusals drop from 100/100 to 11/100 with KL divergence 0.0499 vs the base model. The base Gemma 4 26B A4B is a Mixture-of-Experts model with 25.2B total / 3.8B active parameters (8 active / 128 total experts), 30-layer transformer with hybrid local sliding (1024) + global attention, supporting a 256K context window. Natively multimodal (text + images, variable aspect ratios). Strong on coding, reasoning, function calling, with native system prompt support across 35+ languages. Served on Phala in TDX-attested H200 enclave with end-to-end ECDSA response signing; vLLM-compatible FP8-Static quantization by cloud19 (router excluded from quantization).",
+      "interfaces": [],
+      "name": "Phala: Gemma-4 26B-A4B Uncensored (Heretic)",
+      "provider_model_id": "phala/gemma-4-26b-a4b-uncensored",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "HauhauCS Qwen3.8-27B Uncensored Aggressive, using the pinned Q8_K_P GGUF and BF16 vision projector. Served with SGLang on a Phala TDX-attested H200, with text and image input and a 262144-token context.",
+      "interfaces": [],
+      "name": "Phala: Qwen3.8 27B Uncensored (Aggressive)",
+      "provider_model_id": "phala/qwen3.8-27b-uncensored",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Qwen2.5 7B is the latest series of Qwen large language models. Qwen2.5 brings the following improvements upon Qwen2:\n\n- Significantly more knowledge and has greatly improved capabilities in coding and mathematics, thanks to our specialized expert models in these domains.\n\n- Significant improvements in instruction following, generating long texts (over 8K tokens), understanding structured data (e.g, tables), and generating structured outputs especially JSON. More resilient to the diversity of system prompts, enhancing role-play implementation and condition-setting for chatbots.\n\n- Long-context Support up to 128K tokens and can generate up to 8K tokens.\n\n- Multilingual support for over 29 languages, including Chinese, English, French, Spanish, Portuguese, German, Italian, Russian, Japanese, Korean, Vietnamese, Thai, Arabic, and more.\n\nUsage of this model is subject to [Tongyi Qianwen LICENSE AGREEMENT](https://huggingface.co/Qwen/Qwen1.5-110B-Chat/blob/main/LICENSE).",
+      "interfaces": [],
+      "name": "Qwen2.5 7B Instruct",
+      "provider_model_id": "qwen/qwen-2.5-7b-instruct",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Qwen3-VL-30B-A3B-Instruct is a multimodal model that unifies strong text generation with visual understanding for images and videos. Its Instruct variant optimizes instruction-following for general multimodal tasks. It excels in perception of real-world/synthetic categories, 2D/3D spatial grounding, and long-form visual comprehension, achieving competitive multimodal benchmark results. For agentic use, it handles multi-image multi-turn instructions, video timeline alignments, GUI automation, and visual coding from sketches to debugged UI. Text performance matches flagship Qwen3 models, suiting document AI, OCR, UI assistance, spatial tasks, and agent research.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3 VL 30B A3B Instruct",
+      "provider_model_id": "qwen/qwen3-vl-30b-a3b-instruct",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "The Qwen3.5 27B native vision-language Dense model incorporates a linear attention mechanism, delivering fast response times while balancing inference speed and performance. Its overall capabilities are comparable to those of the Qwen3.5-122B-A10B.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.5-27B",
+      "provider_model_id": "qwen/qwen3.5-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "The Qwen3.5 series 397B-A17B native vision-language model is built on a hybrid architecture that integrates a linear attention mechanism with a sparse mixture-of-experts model, achieving higher inference efficiency. It delivers state-of-the-art performance comparable to leading-edge models across a wide range of tasks, including language understanding, logical reasoning, code generation, agent-based tasks, image understanding, video understanding, and graphical user interface (GUI) interactions. With its robust code-generation and agent capabilities, the model exhibits strong generalization across diverse agent.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.5 397B A17B",
+      "provider_model_id": "qwen/qwen3.5-397b-a17b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Qwen3.6 27B is a dense 27-billion-parameter language model from the Qwen Team at Alibaba, released in April 2026. It features hybrid multimodal capabilities accepting text and image inputs, a configurable thinking/reasoning mode, and a native 262K context window. Served as a TEE deployment via Chutes.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.6 27B",
+      "provider_model_id": "qwen/qwen3.6-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Qwen3.6-35B-A3B is an open-weight model from Alibaba Cloud with 35 billion total parameters and 3 billion active parameters per token. It uses a hybrid sparse mixture-of-experts architecture combining Gated attention. Served as a text-only TEE deployment via NEAR AI.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.6 35B A3B",
+      "provider_model_id": "qwen/qwen3.6-35b-a3b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "Qwen3.8 27B is an open-weight dense vision-language model from Qwen. It is suited for coding, professional workflows, research, multimodal interaction, and long-running agent tasks, with flexible thinking that can be enabled or disabled. Served on Phala in a TDX-attested enclave.",
+      "interfaces": [],
+      "name": "Qwen: Qwen3.8 27B",
+      "provider_model_id": "qwen/qwen3.8-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "GLM-5.1 delivers a major leap in coding capability, with particularly significant gains in handling long-horizon tasks. Unlike previous models built around minute-level interactions, GLM-5.1 can work independently and continuously on...",
+      "interfaces": [],
+      "name": "Z.ai: GLM 5.1",
+      "provider_model_id": "z-ai/glm-5.1",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "canonical_id": "z-ai/glm-5.2",
+      "description": "GLM-5.2 is Z.ai's flagship model for the era of long-horizon tasks. With a truly usable 1M-token context window, it can handle project-level engineering context and execute long-running tasks more reliably. Served as a text-only TEE deployment via Phala.",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "tools"
           ],
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "cache_read": 0.26,
               "no_cache": 1.4
             },
+            "kind": "token",
             "output_tokens": {
               "text": 4.4
-            },
-            "kind": "token",
-            "currency": "USD"
-          }
+            }
+          },
+          "protocol": "chat_completions"
         }
       ],
-      "canonical_id": "z-ai/glm-5.2"
+      "name": "Z.ai: GLM 5.2",
+      "provider_model_id": "z-ai/glm-5.2",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog"
+        }
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "GLM-5.3 is a large-scale reasoning model from Z.ai, built for complex software engineering and long-horizon agent tasks. It supports text input and output with a 1M-token context window. Served as a text-only TEE deployment via Phala.",
+      "interfaces": [],
+      "name": "Z.ai: GLM 5.3",
+      "provider_model_id": "z-ai/glm-5.3",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
+    },
+    {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:57.306818Z",
+        "scope": "public",
+        "source_url": "https://inference.phala.com/v1/models"
+      },
+      "description": "GLM-5.3-Flash is Z.ai's natively multimodal 320B MoE model with 18B active parameters, designed for efficient coding, long-horizon agent tasks, visual understanding, and long-context inference. Served as a TEE deployment via Phala.",
+      "interfaces": [],
+      "name": "Z.ai: GLM 5.3 Flash",
+      "provider_model_id": "z-ai/glm-5.3-flash",
+      "status": "active",
+      "sync": {
+        "field_owners": {
+          "/description": "catalog",
+          "/name": "catalog",
+          "/status": "catalog"
+        },
+        "last_seen_at": "2026-11-01T17:14:57.306818Z",
+        "owner": "catalog"
+      }
     }
   ],
   "name": "phala",
   "status": "active",
   "submitted_at": "2026-07-07T00:00:00Z",
-  "auth": {
-    "kind": "bearer",
-    "env": "PHALA_API_KEY"
-  }
+  "weight": 1
 }

@@ -8,6 +8,11 @@
   "auto_sync": {
     "feeds": [
       {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:38.656526Z",
+          "sequence": 6
+        },
         "id": "catalog",
         "inventory": {
           "allow_empty": false,
@@ -40,12 +45,7 @@
         "writes": [
           "models",
           "metadata"
-        ],
-        "checkpoint": {
-          "sequence": 1,
-          "id": "2026-11-01T14:29:45.339Z",
-          "observed_at": "2026-11-01T14:30:00.146299Z"
-        }
+        ]
       }
     ]
   },
@@ -63,6 +63,11 @@
   },
   "models": [
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-fable-5",
       "interfaces": [
         {
@@ -95,24 +100,24 @@
           }
         }
       ],
+      "name": "Anthropic: Claude Fable 5",
       "provider_model_id": "anthropic/claude-fable-5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Fable 5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-fable-5.1",
       "interfaces": [
         {
@@ -132,24 +137,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Anthropic: Claude Fable 5.1",
       "provider_model_id": "anthropic/claude-fable-5.1",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Fable 5.1",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-haiku-4.5",
       "interfaces": [
         {
@@ -172,24 +177,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Anthropic: Claude Haiku 4.5",
       "provider_model_id": "anthropic/claude-haiku-4.5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Haiku 4.5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-haiku-5.5",
       "interfaces": [
         {
@@ -209,21 +214,16 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Anthropic: Claude Haiku 5.5",
       "provider_model_id": "anthropic/claude-haiku-5.5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Haiku 5.5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
@@ -269,6 +269,11 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-opus-5",
       "interfaces": [
         {
@@ -301,24 +306,24 @@
           }
         }
       ],
+      "name": "Anthropic: Claude Opus 5",
       "provider_model_id": "anthropic/claude-opus-5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Opus 5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-opus-5.5",
       "interfaces": [
         {
@@ -338,24 +343,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Anthropic: Claude Opus 5.5",
       "provider_model_id": "anthropic/claude-opus-5.5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Opus 5.5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-sonnet-4.6",
       "interfaces": [
         {
@@ -387,24 +392,24 @@
           }
         }
       ],
+      "name": "Anthropic: Claude Sonnet 4.6",
       "provider_model_id": "anthropic/claude-sonnet-4.6",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Sonnet 4.6",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-sonnet-5",
       "interfaces": [
         {
@@ -437,24 +442,24 @@
           }
         }
       ],
+      "name": "Anthropic: Claude Sonnet 5",
       "provider_model_id": "anthropic/claude-sonnet-5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Sonnet 5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "anthropic/claude-sonnet-5.5",
       "interfaces": [
         {
@@ -474,24 +479,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Anthropic: Claude Sonnet 5.5",
       "provider_model_id": "anthropic/claude-sonnet-5.5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Anthropic: Claude Sonnet 5.5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "deepseek/deepseek-v4.1-flash",
       "interfaces": [
         {
@@ -510,24 +515,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "DeepSeek: DeepSeek V4.1 Flash",
       "provider_model_id": "deepseek/deepseek-v4.1-flash",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "DeepSeek: DeepSeek V4.1 Flash",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "google/gemini-3.7-flash",
       "interfaces": [
         {
@@ -546,24 +551,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Google: Gemini 3.7 Flash",
       "provider_model_id": "google/gemini-3.7-flash",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Google: Gemini 3.7 Flash",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "google/gemini-3.8-flash",
       "interfaces": [
         {
@@ -582,24 +587,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Google: Gemini 3.8 Flash",
       "provider_model_id": "google/gemini-3.8-flash",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Google: Gemini 3.8 Flash",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "google/gemini-4-argon",
       "interfaces": [
         {
@@ -618,24 +623,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Google: Gemini 4 Argon",
       "provider_model_id": "google/gemini-4-argon",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Google: Gemini 4 Argon",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "minimax/minimax-m2.7",
       "interfaces": [
         {
@@ -655,24 +660,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "MiniMax: M2.7",
       "provider_model_id": "minimax/minimax-m2.7",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "MiniMax: M2.7",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "minimax/minimax-m3",
       "interfaces": [
         {
@@ -691,21 +696,16 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "MiniMax: M3",
       "provider_model_id": "minimax/minimax-m3",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "MiniMax: M3",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
@@ -727,9 +727,9 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "MiniMax: MiniMax M3.1 Flash",
       "provider_model_id": "minimax/minimax-m3.1-flash",
       "status": "active",
-      "name": "MiniMax: MiniMax M3.1 Flash",
       "sync": {
         "field_owners": {
           "/name": "catalog"
@@ -737,6 +737,11 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "moonshotai/kimi-k2.7-code",
       "interfaces": [
         {
@@ -755,24 +760,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Kimi: K2.7 Code",
       "provider_model_id": "moonshotai/kimi-k2.7-code",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Kimi: K2.7 Code",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "moonshotai/kimi-k3",
       "interfaces": [
         {
@@ -791,21 +796,16 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Kimi: K3",
       "provider_model_id": "moonshotai/kimi-k3",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Kimi: K3",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
@@ -828,9 +828,9 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "MoonshotAI: Kimi K3.1 Pro",
       "provider_model_id": "moonshotai/kimi-k3.1-pro",
       "status": "active",
-      "name": "MoonshotAI: Kimi K3.1 Pro",
       "sync": {
         "field_owners": {
           "/name": "catalog"
@@ -838,6 +838,11 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "openai/gpt-5.6-luna",
       "interfaces": [
         {
@@ -871,24 +876,24 @@
           }
         }
       ],
+      "name": "OpenAI: GPT-5.6 Luna",
       "provider_model_id": "openai/gpt-5.6-luna",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "OpenAI: GPT-5.6 Luna",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "openai/gpt-5.6-sol",
       "interfaces": [
         {
@@ -922,24 +927,24 @@
           }
         }
       ],
+      "name": "OpenAI: GPT-5.6 Sol",
       "provider_model_id": "openai/gpt-5.6-sol",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "OpenAI: GPT-5.6 Sol",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "openai/gpt-5.6-terra",
       "interfaces": [
         {
@@ -973,24 +978,24 @@
           }
         }
       ],
+      "name": "OpenAI: GPT-5.6 Terra",
       "provider_model_id": "openai/gpt-5.6-terra",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "OpenAI: GPT-5.6 Terra",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "openai/gpt-6-astra",
       "interfaces": [
         {
@@ -1010,24 +1015,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "OpenAI: GPT-6 Astra",
       "provider_model_id": "openai/gpt-6-astra",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "OpenAI: GPT-6 Astra",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "openai/gpt-6-luna",
       "interfaces": [
         {
@@ -1047,24 +1052,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "OpenAI: GPT-6 Luna",
       "provider_model_id": "openai/gpt-6-luna",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "OpenAI: GPT-6 Luna",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "openai/gpt-6-sol",
       "interfaces": [
         {
@@ -1084,24 +1089,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "OpenAI: GPT-6 Sol",
       "provider_model_id": "openai/gpt-6-sol",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "OpenAI: GPT-6 Sol",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "openai/gpt-6.1-sol",
       "interfaces": [
         {
@@ -1121,43 +1126,43 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "OpenAI: GPT-6.1 Sol",
       "provider_model_id": "openai/gpt-6.1-sol",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "OpenAI: GPT-6.1 Sol",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
-      "provider_model_id": "openai/gpt-6.1-terra",
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "interfaces": [],
+      "name": "OpenAI: GPT-6.1 Terra",
+      "provider_model_id": "openai/gpt-6.1-terra",
+      "status": "active",
       "sync": {
-        "owner": "catalog",
         "field_owners": {
           "/name": "catalog",
           "/status": "catalog"
         },
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "OpenAI: GPT-6.1 Terra",
-      "status": "active",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "qwen/qwen3.7-flash",
       "interfaces": [
         {
@@ -1177,24 +1182,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Qwen: Qwen3.7 Flash",
       "provider_model_id": "qwen/qwen3.7-flash",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Qwen: Qwen3.7 Flash",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "qwen/qwen3.7-max",
       "interfaces": [
         {
@@ -1214,24 +1219,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Qwen: Qwen3.7 Max",
       "provider_model_id": "qwen/qwen3.7-max",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Qwen: Qwen3.7 Max",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "qwen/qwen3.7-plus",
       "interfaces": [
         {
@@ -1249,24 +1254,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Qwen: Qwen3.7 Plus",
       "provider_model_id": "qwen/qwen3.7-plus",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Qwen: Qwen3.7 Plus",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "qwen/qwen3.8-2.4t-a95b",
       "interfaces": [
         {
@@ -1286,24 +1291,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Qwen: Qwen3.8 2.4T-A95B",
       "provider_model_id": "qwen/qwen3.8-2.4t-a95b",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Qwen: Qwen3.8 2.4T-A95B",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "qwen/qwen3.8-27b",
       "interfaces": [
         {
@@ -1323,24 +1328,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Qwen: Qwen3.8 27B",
       "provider_model_id": "qwen/qwen3.8-27b",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Qwen: Qwen3.8 27B",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "qwen/qwen3.8-flash",
       "interfaces": [
         {
@@ -1360,24 +1365,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Qwen: Qwen3.8 Flash",
       "provider_model_id": "qwen/qwen3.8-flash",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Qwen: Qwen3.8 Flash",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "interfaces": [
         {
           "capabilities": [
@@ -1399,24 +1404,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Qwen: Qwen3.8 Max",
       "provider_model_id": "qwen/qwen3.8-max",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Qwen: Qwen3.8 Max",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "qwen/qwen3.8-omni-flash",
       "interfaces": [
         {
@@ -1435,21 +1440,16 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Qwen: Qwen3.8 Omni Flash",
       "provider_model_id": "qwen/qwen3.8-omni-flash",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Qwen: Qwen3.8 Omni Flash",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
@@ -1509,6 +1509,11 @@
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "x-ai/grok-4.3",
       "interfaces": [
         {
@@ -1527,24 +1532,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "xAI: Grok 4.3",
       "provider_model_id": "x-ai/grok-4.3",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "xAI: Grok 4.3",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "x-ai/grok-4.5",
       "interfaces": [
         {
@@ -1563,24 +1568,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "xAI: Grok 4.5",
       "provider_model_id": "x-ai/grok-4.5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "xAI: Grok 4.5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "x-ai/grok-4.6",
       "interfaces": [
         {
@@ -1599,24 +1604,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "xAI: Grok 4.6",
       "provider_model_id": "x-ai/grok-4.6",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "xAI: Grok 4.6",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "x-ai/grok-4.7",
       "interfaces": [
         {
@@ -1635,24 +1640,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "SpaceXAI: Grok 4.7",
       "provider_model_id": "x-ai/grok-4.7",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "SpaceXAI: Grok 4.7",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "x-ai/grok-build-0.1",
       "interfaces": [
         {
@@ -1671,24 +1676,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "xAI: Grok Build 0.1",
       "provider_model_id": "x-ai/grok-build-0.1",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "xAI: Grok Build 0.1",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "xiaomi/mimo-v2.5",
       "interfaces": [
         {
@@ -1707,24 +1712,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Xiaomi: MiMo V2.5",
       "provider_model_id": "xiaomi/mimo-v2.5",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Xiaomi: MiMo V2.5",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "xiaomi/mimo-v2.5-pro",
       "interfaces": [
         {
@@ -1743,24 +1748,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Xiaomi: MiMo V2.5 Pro",
       "provider_model_id": "xiaomi/mimo-v2.5-pro",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Xiaomi: MiMo V2.5 Pro",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "xiaomi/mimo-v2.6-flash",
       "interfaces": [
         {
@@ -1779,24 +1784,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Xiaomi: MiMo-V2.6-Flash",
       "provider_model_id": "xiaomi/mimo-v2.6-flash",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Xiaomi: MiMo-V2.6-Flash",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "xiaomi/mimo-v2.6-pro",
       "interfaces": [
         {
@@ -1815,24 +1820,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Xiaomi: MiMo-V2.6-Pro",
       "provider_model_id": "xiaomi/mimo-v2.6-pro",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Xiaomi: MiMo-V2.6-Pro",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "xiaomi/mimo-v2.6-pro-ultraspeed",
       "interfaces": [
         {
@@ -1851,24 +1856,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Xiaomi: MiMo-V2.6-Pro-UltraSpeed",
       "provider_model_id": "xiaomi/mimo-v2.6-pro-ultraspeed",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Xiaomi: MiMo-V2.6-Pro-UltraSpeed",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "z-ai/glm-5.2",
       "interfaces": [
         {
@@ -1887,24 +1892,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Zhipu: GLM-5.2",
       "provider_model_id": "z-ai/glm-5.2",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Zhipu: GLM-5.2",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "z-ai/glm-5.3",
       "interfaces": [
         {
@@ -1923,24 +1928,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Zhipu: GLM-5.3",
       "provider_model_id": "z-ai/glm-5.3",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Zhipu: GLM-5.3",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "z-ai/glm-5.3-flash",
       "interfaces": [
         {
@@ -1959,24 +1964,24 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Zhipu: GLM-5.3 Flash",
       "provider_model_id": "z-ai/glm-5.3-flash",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Zhipu: GLM-5.3 Flash",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     },
     {
+      "availability": {
+        "checked_at": "2026-11-01T17:14:38.656526Z",
+        "scope": "public",
+        "source_url": "https://api.bitrouter.ai/v1/models"
+      },
       "canonical_id": "z-ai/glm-5.3-flashx",
       "interfaces": [
         {
@@ -1996,21 +2001,16 @@
           "protocol": "chat_completions"
         }
       ],
+      "name": "Z.ai: GLM 5.3 FlashX",
       "provider_model_id": "z-ai/glm-5.3-flashx",
       "status": "active",
       "sync": {
         "field_owners": {
-          "/status": "catalog",
-          "/name": "catalog"
+          "/name": "catalog",
+          "/status": "catalog"
         },
-        "owner": "catalog",
-        "last_seen_at": "2026-11-01T14:30:00.146299Z"
-      },
-      "name": "Z.ai: GLM 5.3 FlashX",
-      "availability": {
-        "source_url": "https://api.bitrouter.ai/v1/models",
-        "checked_at": "2026-11-01T14:30:00.146299Z",
-        "scope": "public"
+        "last_seen_at": "2026-11-01T17:14:38.656526Z",
+        "owner": "catalog"
       }
     }
   ],

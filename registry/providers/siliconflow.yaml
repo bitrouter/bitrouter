@@ -125,5 +125,43 @@
   "auth": {
     "kind": "bearer",
     "env": "SILICONFLOW_API_KEY"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "id": "catalog",
+        "kind": "v1_models",
+        "writes": [
+          "models",
+          "metadata"
+        ],
+        "request": {
+          "url": "https://api.siliconflow.com/v1/models",
+          "auth": {
+            "kind": "bearer",
+            "env": "SILICONFLOW_REGISTRY_API_KEY"
+          }
+        },
+        "pagination": {
+          "kind": "none"
+        },
+        "inventory": {
+          "mode": "merge",
+          "scope": "account",
+          "complete": false,
+          "allow_empty": false
+        },
+        "response": {
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id"
+          },
+          "defaults": {
+            "status": "active",
+            "interfaces": []
+          }
+        }
+      }
+    ]
   }
 }

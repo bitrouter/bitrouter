@@ -1,8 +1,53 @@
 {
   "api_base": "https://api.cerebras.ai/v1",
+  "auth": {
+    "env": "CEREBRAS_API_KEY",
+    "kind": "bearer"
+  },
+  "auto_sync": {
+    "feeds": [
+      {
+        "checkpoint": {
+          "id": "2026-11-01T17:14:20.950Z",
+          "observed_at": "2026-11-01T17:14:39.380472Z",
+          "sequence": 5
+        },
+        "id": "catalog",
+        "inventory": {
+          "allow_empty": false,
+          "complete": false,
+          "mode": "merge",
+          "scope": "account"
+        },
+        "kind": "v1_models",
+        "pagination": {
+          "kind": "none"
+        },
+        "request": {
+          "auth": {
+            "env": "CEREBRAS_REGISTRY_API_KEY",
+            "kind": "bearer"
+          },
+          "url": "https://api.cerebras.ai/v1/models"
+        },
+        "response": {
+          "defaults": {
+            "interfaces": [],
+            "status": "active"
+          },
+          "items_path": "/data",
+          "mapping": {
+            "/id": "/provider_model_id"
+          }
+        },
+        "writes": [
+          "models",
+          "metadata"
+        ]
+      }
+    ]
+  },
   "billing": "usage",
-  "submitted_at": "2026-06-16T00:00:00Z",
-  "status": "active",
   "metadata": {
     "headquarters": "US",
     "name": "Cerebras",
@@ -13,63 +58,67 @@
   },
   "models": [
     {
-      "provider_model_id": "gpt-oss-120b",
-      "status": "active",
+      "canonical_id": "openai/gpt-oss-120b",
       "interfaces": [
         {
-          "protocol": "chat_completions",
-          "operation": "generation",
           "capabilities": [
             "reasoning",
             "structured_outputs",
             "tools"
           ],
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
+          "operation": "generation",
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "no_cache": 0.35
             },
+            "kind": "token",
             "output_tokens": {
               "text": 0.75
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "openai/gpt-oss-120b"
+      "provider_model_id": "gpt-oss-120b",
+      "status": "active",
+      "sync": {
+        "field_owners": {}
+      }
     },
     {
-      "provider_model_id": "qwen-3.8-27b",
-      "status": "active",
+      "canonical_id": "qwen/qwen3.8-27b",
       "interfaces": [
         {
-          "protocol": "chat_completions",
           "operation": "generation",
-          "rate_limits": {
-            "requests_per_minute": 60
-          },
           "pricing": {
+            "currency": "USD",
             "input_tokens": {
               "no_cache": 0.99
             },
+            "kind": "token",
             "output_tokens": {
               "text": 1.49
-            },
-            "kind": "token",
-            "currency": "USD"
+            }
+          },
+          "protocol": "chat_completions",
+          "rate_limits": {
+            "requests_per_minute": 60
           }
         }
       ],
-      "canonical_id": "qwen/qwen3.8-27b"
+      "provider_model_id": "qwen-3.8-27b",
+      "status": "active",
+      "sync": {
+        "field_owners": {}
+      }
     }
   ],
   "name": "cerebras",
-  "weight": 1,
-  "auth": {
-    "kind": "bearer",
-    "env": "CEREBRAS_API_KEY"
-  }
+  "status": "active",
+  "submitted_at": "2026-06-16T00:00:00Z",
+  "weight": 1
 }

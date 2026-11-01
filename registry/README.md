@@ -11,17 +11,25 @@ checks; they do not claim a fresh OpenRouter audit. `registry sync` always fetch
 the complete OpenRouter identity list and gates the complete candidate before
 writing any source. `--report` writes JSON, including required-feed failures.
 
-Own-provider model feeds currently cover OpenAI, Anthropic, OpenRouter, and
-BitRouter. OpenAI and Anthropic listings are account-scoped merge feeds: a
-missing account-visible model cannot prove global withdrawal. BitRouter's
-listing is public and uses merge mode until complete inventory coverage is
-established. New heterogeneous offers have empty interfaces until endpoint support is verified;
-unknown prices stay absent. The remaining providers retain manually maintained
-inventories until a documented own-provider feed is configured. Third-party
-models.dev data is not used as provider membership authority.
+Prefer the provider's own model-list GET feed. Public lists use explicit
+anonymous authentication; credentialed lists use their own named listing key
+and account scope. A missing account-visible model cannot prove global
+withdrawal. Native feeds use merge mode unless provider-authoritative complete
+coverage has been established. New heterogeneous offers have empty interfaces
+until endpoint support is verified; unknown prices stay absent.
+
+The `models_dev` adapter is a merge-only directory fallback where a native
+listing cannot be configured globally or requires interactive subscription
+authentication unsupported by CI. It selects an explicit reviewed provider
+key, excludes deprecated rows, and imports new offers as staging with empty
+interfaces. It cannot establish provider lifecycle, execution, canonical
+bindings or tariff authority. It preserves existing manual data. A missing or
+rejected key for a usable native list is a credential problem, not grounds for
+silently switching sources. Private native feeds awaiting listing credentials
+remain unconfigured until those credentials are validated.
 
 Feed authentication is independent of the provider's inference authentication.
-Configure each listing according to its own endpoint contract:
+Configure each listing according to its own endpoint contract. Examples:
 
 | Feed | Listing authentication | CI secret |
 | --- | --- | --- |
@@ -30,8 +38,13 @@ Configure each listing according to its own endpoint contract:
 | [BitRouter](https://api.bitrouter.ai/v1/models) | Explicit `auth: {kind: none}` | None |
 | [OpenRouter](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) | Explicit `auth: {kind: none}` | None |
 
-Trusted CI binds the two required listing credentials to GitHub repository
-secrets with those exact names; local inference keys are not inherited.
+Trusted CI explicitly binds each configured listing variable to the GitHub
+repository secret of the same name; local inference keys are not inherited.
+When enabling a private feed, validate its complete observation and publication
+admission before configuring that secret and its workflow environment binding.
+Do not put credential values in feed URLs, command arguments, source, or reports.
+Current requests and environment names are declared in `providers/*.yaml` and
+`.github/workflows/registry-sync.yml`.
 The independent OpenRouter identity request also uses `auth: {kind: none}`.
 Its importer excludes `:batch` catalog variants in this release and creates chat
 interfaces only when the upstream model explicitly advertises the chat endpoint.
@@ -57,6 +70,9 @@ Provider feed references:
 - [Anthropic model listing and cursor contract](https://platform.claude.com/docs/en/api/models/list)
 - [OpenRouter complete listing](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties)
 - [BitRouter API](https://docs.bitrouter.ai)
+- [Google native model resources and pagination](https://ai.google.dev/api/models)
+- [SiliconFlow authenticated model listing](https://docs.siliconflow.com/en/api-reference/models/get-model-list)
+- [models.dev public directory API](https://github.com/anomalyco/models.dev#api)
 
 ### Agents and runtimes
 
