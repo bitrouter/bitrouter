@@ -103,6 +103,6 @@ jobs:
         if: always()
         run: |
           if [ '${{ steps.sync.outcome }}' != 'success' ] || [ '${{ steps.gate.outputs.passed }}' != 'true' ] || [ '${{ steps.build.outcome }}' != 'success' ]; then
-            echo '::error::Registry sync failed; inspect its sanitized audit report. Valid independent updates were proposed only after global admission.'
+            echo '::error::Registry sync failed; inspect its sanitized audit report.'
             exit 1
           fi
