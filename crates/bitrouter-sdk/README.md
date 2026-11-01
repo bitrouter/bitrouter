@@ -234,6 +234,39 @@ from an unknown dispatch outcome. Dropping a stream or losing a response never
 authorizes automatic replay. Query the stored execution with current authority
 and retain the execution ID in the consumer's own reconciliation records.
 
+Both `TenantGateway` and `OrderedTenantGateway` accept
+`with_anthropic_beta(&[reqwest::header::HeaderValue])` before their consuming
+dispatch method. This replaces only that call's Beta values, preserving opaque
+bytes, repeated fields and value order. An empty slice removes the header;
+an explicit empty `HeaderValue` remains a field value. Use `from_bytes` when
+copying parsed inbound values so non-UTF-8 bytes are not lost. Invalid HTTP
+field-value bytes fail during `HeaderValue` construction, before dispatch.
+
+```rust,no_run
+use bitrouter_ai::{protocol::messages::MessagesRequest, tenancy::operation::DispatchBinding};
+use bitrouter_sdk::gateway::GatewayClient;
+use reqwest::header::HeaderValue;
+
+async fn messages_with_beta(
+    client: &GatewayClient,
+    binding: &DispatchBinding,
+    request: &MessagesRequest,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let values = [HeaderValue::from_bytes(b"feature-a,  feature-b")?];
+    let reply = client.tenant("scoped-credential", binding)?
+        .with_anthropic_beta(&values)
+        .messages_reply(request).await?;
+    drop(reply);
+    Ok(())
+}
+```
+
+The values can accompany any supported ingress protocol; the service forwards
+them only to Messages upstreams. Provider authentication may merge required
+Beta tokens afterwards. This method changes neither `anthropic-version` nor
+credentials, bindings, ordered selection or client defaults, and adds no retry
+or version negotiation. It is not a general header setter.
+
 `usage_evidence_capabilities` discovers the separate evidence wire format in that
 same service API, and
 `usage_evidence(installation, tenant, execution)` reads its immutable document

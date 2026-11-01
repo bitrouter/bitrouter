@@ -830,6 +830,8 @@ jobs:
               'bitrouter_sdk::gateway::GatewayClient::chat_reply'
               'bitrouter_sdk::gateway::GatewayClient::tenant'
               'pub struct bitrouter_sdk::gateway::tenancy::TenantGateway'
+              "bitrouter_sdk::gateway::tenancy::TenantGateway<'_>::with_anthropic_beta"
+              "bitrouter_sdk::gateway::tenancy::ordered::OrderedTenantGateway<'_>::with_anthropic_beta"
               'bitrouter_sdk::tenancy::TenancyClient::put_resource'
               'bitrouter_sdk::tenancy::TenancyClient::usage_evidence'
               'bitrouter_sdk::gateway::GatewayClient::chat_completions'

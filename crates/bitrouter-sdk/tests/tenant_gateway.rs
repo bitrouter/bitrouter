@@ -31,6 +31,9 @@ mod server;
 #[path = "tenant_gateway/metadata.rs"]
 mod metadata;
 
+#[path = "tenant_gateway/beta.rs"]
+mod beta;
+
 type TestResult<T = ()> = Result<T, Box<dyn StdError + Send + Sync>>;
 const BUDGET: Duration = Duration::from_secs(5);
 

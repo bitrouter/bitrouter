@@ -90,6 +90,17 @@ impl GatewayClient {
 }
 
 impl OrderedTenantGateway<'_> {
+    /// Replace this call's `anthropic-beta` values without changing its selection.
+    ///
+    /// Preserves opaque field-value bytes, duplicates and order. An empty slice
+    /// removes the header. See [`TenantGateway::with_anthropic_beta`] for the
+    /// value validation and upstream forwarding contract.
+    #[must_use]
+    pub fn with_anthropic_beta(mut self, values: &[HeaderValue]) -> Self {
+        self.inner = self.inner.with_anthropic_beta(values);
+        self
+    }
+
     fn validate_request(
         &self,
         model: &str,
