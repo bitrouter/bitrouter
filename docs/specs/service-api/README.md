@@ -766,6 +766,25 @@ v1 receipt bytes and integrity digests remain unchanged. Rollback requires the
 stopped-writer, compatible-backup procedure below; deleting v2 records or
 resetting a version marker is not a supported downgrade.
 
+#### Scoped Beta header preservation
+
+The scoped v1 and ordered v2 SDK helpers provide the consuming
+`with_anthropic_beta(&[reqwest::header::HeaderValue])` method. It replaces only
+the current call's `anthropic-beta` fields. Values retain their bytes, duplicate
+entries and order; comma lists are not split, trimmed, sorted or deduplicated.
+An empty slice removes the header, while an explicitly empty field value stays
+present. Invalid HTTP field-value bytes are rejected by `HeaderValue`
+construction before any request. Shared client defaults and dispatch bindings
+remain unchanged. Preservation applies to parsed field values, not header-name
+casing, HTTP whitespace framing or HTTP/2 frame layout.
+
+The SDK sends these values to the gateway independently of the ingress
+protocol. The existing service policy forwards them only to an actual Messages
+upstream; provider authentication may subsequently merge required Beta tokens.
+The method does not override the fixed Anthropic version or expose arbitrary
+headers. This is an additive SDK operation using existing wire behavior, with
+no dispatch, selection or receipt format change and no automatic retry.
+
 #### Scoped response metadata
 
 The scoped SDK preserves a single `Retry-After` decimal seconds value when it
@@ -791,6 +810,9 @@ execution ID or status. These observations do not cause automatic retries.
    crash recovery cannot authorize replay, a second attempt or fabricated usage.
 7. Fresh/migrated format-2 stores, including subsequent management writes,
    refuse an old binary; historical v1 receipt bytes remain readable unchanged.
+8. Repeated opaque Beta values remain isolated per call over HTTP/1.1 and HTTP/2
+   for JSON and SSE; replacing or clearing them cannot change the binding,
+   request body or another call's headers.
 
 ### Execution usage evidence
 
