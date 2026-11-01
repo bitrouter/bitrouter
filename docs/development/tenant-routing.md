@@ -94,8 +94,11 @@ not add work to the normal admission path.
 
 Receipt custody remains the first fallback gate. The routing profile also denies
 fallback for timeouts, invalid responses, cancellation, and other unknown
-execution outcomes. Known local RPM/circuit refusals may reach the existing
-fallback policy before a receipt is armed. Every subsequent candidate must still
+execution outcomes. A local RPM refusal follows the existing local rate-limit
+terminal policy: HTTP 429, numeric `Retry-After: 61`, no upstream source header
+and no provider attempt. Circuit-open refusals retain their existing fallback
+policy before a receipt is armed. An actual provider 429 keeps its explicit
+upstream provenance and fallback policy. Every subsequent candidate must still
 be in the authorized retained set and pass current authority and receipt fences.
 An executor-internal OAuth continuation must close the prior routing observation
 with its explicit response before another send; the observation callback never

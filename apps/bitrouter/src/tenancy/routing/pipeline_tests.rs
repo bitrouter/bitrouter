@@ -21,6 +21,9 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 #[path = "custody_tests.rs"]
 mod custody_tests;
 
+#[path = "rate_limit_tests.rs"]
+mod rate_limit_tests;
+
 #[derive(Clone, Copy)]
 enum Reply {
     TruncatedJson,
