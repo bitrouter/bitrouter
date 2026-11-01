@@ -28,6 +28,8 @@ pub(super) fn http_client(timeout: Duration) -> Result<reqwest::Client> {
 
 impl Host {
     pub(super) async fn start(binary: &Path, upstream: &str) -> Result<Self> {
+        super::diagnostic_phase(format_args!("provider_setup end"));
+        super::diagnostic_phase(format_args!("host_setup start"));
         let directory = tempfile::Builder::new()
             .prefix("bro-measure-")
             .tempdir_in("/tmp")?;
@@ -71,6 +73,8 @@ providers:
         )?;
         fs::set_permissions(&config, fs::Permissions::from_mode(0o600))?;
         let log = File::create(directory.path().join("daemon.log"))?;
+        super::diagnostic_phase(format_args!("host_setup end"));
+        super::diagnostic_phase(format_args!("gateway_spawn start"));
         let started = Instant::now();
         drop(reservation);
         let child = Command::new(binary)
@@ -99,6 +103,7 @@ providers:
         // The process-test harness uses this ownership record for interruption
         // checks and fallback cleanup. Never discover or stop a resident daemon.
         eprintln!("owned_gateway {} {}", host.child.id(), config.display());
+        super::diagnostic_phase(format_args!("gateway_spawn end"));
         let client = http_client(Duration::from_secs(2))?;
         let deadline = started + Duration::from_secs(30);
         loop {

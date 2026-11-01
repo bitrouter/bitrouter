@@ -222,7 +222,7 @@ jobs:
           cargo test --locked -p bitrouter-ai --all-features --test artifact_contracts
           cargo test --locked -p bitrouter --no-default-features --features multi-instance --test artifact_build_metadata
           cargo nextest run --locked -p bitrouter --no-default-features --features multi-instance --lib --test-threads 2 \
-            -E 'test(update::tests::) | test(upgrade::tests::) | test(output::reports::artifact::tests::)'
+            -E 'test(update::tests::) | test(/^upgrade::tests::/) | test(output::reports::artifact::tests::)'
       - name: Run actual shared PostgreSQL process campaigns against the archive
         shell: bash
         run: |

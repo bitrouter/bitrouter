@@ -28,6 +28,7 @@ async fn run() -> anyhow::Result<()> {
     use anyhow::{Context, ensure};
     use std::path::PathBuf;
 
+    diagnostic_phase(format_args!("run start"));
     let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
     ensure!(
         arguments.len() == 4,
@@ -38,9 +39,11 @@ async fn run() -> anyhow::Result<()> {
         .into_iter()
         .zip(&arguments[..3])
     {
+        diagnostic_phase(format_args!("fingerprint slot={label} start"));
         let path = std::fs::canonicalize(path)?;
         let path = path.to_str().context("artifact path is not UTF-8")?;
         let (bytes, sha256) = fingerprint(std::path::Path::new(path))?;
+        diagnostic_phase(format_args!("fingerprint slot={label} end bytes={bytes}"));
         artifacts.push(serde_json::json!({
             "label":label,"path":path,"bytes":bytes,
             "sha256":sha256
@@ -54,7 +57,10 @@ async fn run() -> anyhow::Result<()> {
             let artifact = &artifacts[index];
             let label = artifact["label"].as_str().context("label missing")?;
             let path = PathBuf::from(artifact["path"].as_str().context("path missing")?);
+            diagnostic_phase(format_args!("verify round={round} slot={label} start"));
             verify_artifact(&path, artifact)?;
+            diagnostic_phase(format_args!("verify round={round} slot={label} end"));
+            diagnostic_phase(format_args!("provider_setup start"));
             let sample = workload::measure(&path, label, round).await?;
             verify_artifact(&path, artifact)?;
             eprintln!("{}", serde_json::to_string(&sample)?);
@@ -76,6 +82,22 @@ async fn run() -> anyhow::Result<()> {
         .open(output)?;
     serde_json::to_writer_pretty(file, &report)?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn diagnostic_phase(phase: std::fmt::Arguments<'_>) {
+    use std::io::Write;
+    use std::sync::OnceLock;
+    use std::time::Instant;
+
+    // Fixed phase boundaries only; diagnostic output never changes the result.
+    static STARTED: OnceLock<Instant> = OnceLock::new();
+    let elapsed = STARTED.get_or_init(Instant::now).elapsed();
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "measurement_phase {phase} elapsed_ms={:.3}",
+        elapsed.as_secs_f64() * 1000.0
+    );
 }
 
 #[cfg(unix)]

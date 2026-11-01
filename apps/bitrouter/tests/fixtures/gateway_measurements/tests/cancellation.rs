@@ -13,6 +13,14 @@ mod unix {
         gateway: Option<(u32, PathBuf)>,
     }
 
+    fn recent_log_tail(logs: &str) -> &str {
+        let mut start = logs.len().saturating_sub(8 * 1024);
+        while !logs.is_char_boundary(start) {
+            start += 1;
+        }
+        &logs[start..]
+    }
+
     fn owned_gateway_alive(pid: u32, config: &std::path::Path) -> Result<bool> {
         let output = Command::new("/bin/ps")
             .args(["-o", "args=", "-p"])
@@ -99,7 +107,8 @@ mod unix {
                 child,
                 gateway: None,
             };
-            let deadline = Instant::now() + Duration::from_secs(20);
+            let started = Instant::now();
+            let deadline = started + Duration::from_secs(20);
             loop {
                 let logs = fs::read_to_string(&log_path)?;
                 if let Some(record) = logs
@@ -110,13 +119,24 @@ mod unix {
                     let (pid, config) =
                         record.split_once(' ').context("invalid ownership record")?;
                     fixture.gateway = Some((pid.parse()?, PathBuf::from(config)));
+                    eprintln!(
+                        "ownership observed signal={signal} elapsed_ms={:.3}; recent fixture log (at most 8192 bytes):\n{}",
+                        started.elapsed().as_secs_f64() * 1000.0,
+                        recent_log_tail(&logs)
+                    );
                     break;
                 }
                 ensure!(
                     fixture.child.try_wait()?.is_none(),
-                    "fixture exited before ownership record: {logs}"
+                    "fixture exited before ownership record signal={signal}; recent fixture log (at most 8192 bytes):\n{}",
+                    recent_log_tail(&logs)
                 );
-                ensure!(Instant::now() < deadline, "ownership record deadline");
+                ensure!(
+                    Instant::now() < deadline,
+                    "ownership record deadline signal={signal} elapsed_ms={:.3}; recent fixture log (at most 8192 bytes):\n{}",
+                    started.elapsed().as_secs_f64() * 1000.0,
+                    recent_log_tail(&logs)
+                );
                 std::thread::sleep(Duration::from_millis(10));
             }
             let (pid, config) = fixture
