@@ -66,6 +66,7 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
         .admit_execution(
             service
                 .submission(&ordered_headers(&h, &binding)?)
+                .await
                 .map_err(failure)?,
             MODEL,
             &ApiProtocol::ChatCompletions,
@@ -90,6 +91,12 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
     .await??;
     drop(warm_owner);
 
+    binding.correlation_id = "independent-caller-timeout".try_into()?;
+    let submission = service
+        .submission(&ordered_headers(&h, &binding)?)
+        .await
+        .map_err(failure)?;
+
     // The unrelated management transaction has a longer deadline than the caller.
     let gate = service.cleanup.hold(Phase::Committing);
     let _release = ReleaseGate(service.cleanup.clone());
@@ -97,7 +104,7 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
     let operator = h.fixture.operator.clone();
     let command = crate::tenancy::command::Command::Issue(
         h.fixture.tenant.clone(),
-        h.fixture.issuance("independent-held-management")?,
+        h.fixture.issuance("independent-held-management").await?,
     );
     let management = AbortOnDropHandle::new(tokio::spawn(async move {
         blocking_service.execute(operator, command).await
@@ -105,12 +112,8 @@ async fn caller_wait_timeout_retains_cancelled_cleanup_without_fencing() -> Resu
     timeout(Duration::from_secs(2), gate.entered.notified()).await?;
     let before = service.cleanup.sql_counts_for_test();
     let before_queue = service.commands.capacity();
-    binding.correlation_id = "independent-caller-timeout".try_into()?;
     let start = Instant::now();
-    let submission = service
-        .submission(&ordered_headers(&h, &binding)?)
-        .map_err(failure)?
-        .narrow_deadline_for_test(start + Duration::from_millis(100));
+    let submission = submission.narrow_deadline_for_test(start + Duration::from_millis(100));
     // This calls finish_admission -> Registry::admit -> actual prepare_ordered_intent.
     let caller = timeout(
         Duration::from_secs(1),

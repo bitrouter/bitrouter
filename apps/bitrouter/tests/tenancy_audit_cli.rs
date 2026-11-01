@@ -2,6 +2,7 @@
 #![cfg(unix)]
 use anyhow::{Context, Result, ensure};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+use sea_orm_migration::MigratorTrait;
 use serde_json::Value;
 use std::{collections::BTreeMap, path::Path, process::Stdio, time::Duration};
 use tokio::{
@@ -43,10 +44,30 @@ async fn fixture(home: &Path) -> Result<String> {
     std::fs::File::create(&source)?;
     std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o600))?;
     let db = bitrouter::db::connect(&format!("sqlite://{}", source.display())).await?;
-    bitrouter::db::run_migrations(&db).await?;
+    // Seed the retired installation before the format transition, then let the
+    // real migration preserve its identity. Inserting version 1 after current
+    // migrations would manufacture an inconsistent archive, not legacy data.
+    let legacy_steps = bitrouter::db::migration::Migrator::migrations()
+        .iter()
+        .position(|migration| migration.name() == "m20240101_000041_ordered_receipts")
+        .context("ordered receipt migration")?;
+    bitrouter::db::migration::Migrator::up(&db, Some(u32::try_from(legacy_steps)?)).await?;
     db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
         "INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,created_at,saturated) VALUES(1,?,1,0,0,0,'2026-10-26T00:00:00Z',1)",
         [INSTALLATION.into()])).await?;
+    bitrouter::db::run_migrations(&db).await?;
+    let installed = db
+        .query_one(Statement::from_string(
+            DatabaseBackend::Sqlite,
+            "SELECT installation_id,schema_version FROM tenancy_installation WHERE singleton=1",
+        ))
+        .await?
+        .context("migrated installation")?;
+    ensure!(
+        installed.try_get::<String>("", "installation_id")? == INSTALLATION
+            && installed.try_get::<i32>("", "schema_version")? == 2,
+        "migration must preserve the retired installation"
+    );
     db.close().await?;
     let output = tokio::time::timeout(
         WAIT,

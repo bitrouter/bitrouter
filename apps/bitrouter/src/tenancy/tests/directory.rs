@@ -191,7 +191,7 @@ async fn directory_retains_revoked_expired_audit_and_detached_owner_facts() -> R
             },
         )
         .await?;
-    let mut input = fixture.issuance("directory-expiring")?;
+    let mut input = fixture.issuance("directory-expiring").await?;
     let deadline = Utc::now() + chrono::Duration::milliseconds(500);
     input.expires_at = deadline
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -318,7 +318,9 @@ async fn directory_pages_are_complete_sorted_and_fenced_by_every_authority_chang
             .client
             .issue_credential(
                 &id.try_into()?,
-                &fixture.issuance(&format!("directory-credential-{id}"))?,
+                &fixture
+                    .issuance(&format!("directory-credential-{id}"))
+                    .await?,
             )
             .await?;
     }

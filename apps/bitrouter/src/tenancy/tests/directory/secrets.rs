@@ -10,7 +10,6 @@ async fn directory_does_not_project_resource_ciphertext_or_operation_payloads() 
     fixture.service = Service::start_resources(
         fixture.db.clone(),
         None,
-        Default::default(),
         state,
         std::sync::Arc::new(crate::tenancy::resources::Resources::with_key(
             fixture.installation.clone(),

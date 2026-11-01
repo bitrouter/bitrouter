@@ -117,7 +117,13 @@ async fn manifest_queries_preserve_owner_and_protocol_roots() -> TestResult {
             ] {
                 let mut route = route()?;
                 route.owner_kind = owner;
-                route.owner_id = "owner:one".try_into()?;
+                // A tenant-owned root must belong to the queried tenant. The
+                // shared pool case independently exercises encoded owner IDs.
+                route.owner_id = match owner {
+                    OwnerKind::Tenant => "tenant",
+                    OwnerKind::OperatorPool => "owner:one",
+                }
+                .try_into()?;
                 route.resource_id = "route:one".try_into()?;
                 let mut value = manifest()?;
                 value["route"] = serde_json::to_value(&route)?;
@@ -155,7 +161,7 @@ async fn manifest_queries_preserve_owner_and_protocol_roots() -> TestResult {
                 query,
                 vec![
                     ("route_owner_kind".into(), owner.into()),
-                    ("route_owner_id".into(), "owner:one".into()),
+                    ("route_owner_id".into(), route.owner_id.as_str().into()),
                     ("route_id".into(), "route:one".into()),
                     ("route_revision".into(), "route-revision".into()),
                     ("inbound_protocol".into(), name.into()),

@@ -189,7 +189,7 @@ async fn ordered_1_8_9_64_attempts_preserve_ordinals_and_explicit_format_reads()
         .is_err()
     );
     let inventory = store::inventory(&db, &installation).await?;
-    ensure!(inventory.rows == 4 && inventory.unknown.is_empty());
+    ensure!(inventory.rows == 4 && inventory.unknown_count == 0);
     db.close().await?;
     Ok(())
 }
@@ -270,7 +270,7 @@ async fn ordered_terminal_sidecar_and_intent_retirement_rollback_atomically() ->
     let after = store::inventory(&db, &installation).await?;
     ensure!(
         after.rows == 1
-            && after.unknown.is_empty()
+            && after.unknown_count == 0
             && after.bytes == candidate.bytes() + candidate.auxiliary_bytes()
     );
     db.close().await?;
@@ -330,7 +330,7 @@ async fn ordered_restart_converts_outstanding_intent_to_unknown_without_replay()
             && candidate.evidence.document.frames.is_empty()
     );
     let inventory = store::inventory(&db, &installation).await?;
-    ensure!(inventory.rows == 1 && inventory.unknown.len() == 1);
+    ensure!(inventory.rows == 1 && inventory.unknown_count == 1);
     db.close().await?;
     drop((startup, proof, lease));
     let (lease, proof, startup) = acquisition(&path)?;
@@ -577,7 +577,7 @@ async fn ordered_authority_bootstrap_converts_intents_before_service_publication
     ensure!(receipt.unknown());
     let inventory = store::inventory(&service.db, &installation).await?;
     ensure!(
-        inventory.rows == 1 && inventory.unknown.len() == 1 && service.admission.receipts_ready()
+        inventory.rows == 1 && inventory.unknown_count == 1 && service.admission.receipts_ready()
     );
     service.shutdown().await?;
     Ok(())
