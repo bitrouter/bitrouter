@@ -288,7 +288,9 @@ pub(super) async fn unknown(root: &Path, mode: &str) -> Result<()> {
             .await??;
             ensure!(observed.accounted > 0 && observed.live_unknown == u64::try_from(count + 2)?);
         }
-        stopped.bound.fixture.service.cleanup.ensure_clean()?;
+        // H still owns maintenance transactions here. Stopped::close verifies
+        // transaction cleanup after that same actor has drained; a snapshot of
+        // its current transaction cannot establish repair completion.
         ensure!(stopped.bound.fixture.service.current().is_ok());
         eprintln!("native-capacity-phase=ordinary_refusal");
         let response = wire.request(&UnknownWire::client()?).await?;
