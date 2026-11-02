@@ -1,0 +1,71 @@
+---
+name: Block fault validation from frozen CI artifacts
+'on':
+  push:
+    branches:
+    - codex/tenant-capacity-diagnostics
+    paths:
+    - ".github/workflows/block-capacity-diagnostic.yml"
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: fc7a40db6c2705d87e34ce04346b71ed98994f54
+        persist-credentials: false
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: nextest@0.9.114
+    - uses: actions/download-artifact@v4
+      with:
+        name: linux-tests-fc7a40db6c2705d87e34ce04346b71ed98994f54
+        path: ".ci-archive"
+        run-id: 41419321397
+        github-token: "${{ github.token }}"
+    - name: Restore the exact failed candidate without a build
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$(git rev-parse HEAD)" = 'fc7a40db6c2705d87e34ce04346b71ed98994f54'
+        test "$(git rev-parse HEAD^{tree})" = 'db35b2bc4408ec1533d3f7ffaa65233fb02543d0'
+        test "$(cat .ci-archive/tests.sha)" = 'fc7a40db6c2705d87e34ce04346b71ed98994f54'
+        test "$(cat .ci-archive/tests.workspace)" = "$GITHUB_WORKSPACE"
+        (cd .ci-archive && sha256sum -c tests.tar.zst.sha256)
+        mkdir -p ci-evidence
+        tar --zstd -xf .ci-archive/tests.tar.zst
+        test -x target/debug/bro
+        test -x target/debug/examples/owned_capture_fixture
+        printf '%s\n' \
+          'BITROUTER_TEST_PREBUILT_ONLY=1' \
+          "BITROUTER_TEST_EXAMPLES_DIR=$GITHUB_WORKSPACE/target/debug/examples" \
+          "BITROUTER_TEST_BRO=$GITHUB_WORKSPACE/target/debug/bro" \
+          "BITROUTER_TEST_GATEWAY_BINARY=$GITHUB_WORKSPACE/target/debug/bro" \
+          "BITROUTER_OWNED_CAPTURE_FIXTURE=$GITHUB_WORKSPACE/target/debug/examples/owned_capture_fixture" >> "$GITHUB_ENV"
+        mkdir -p "$RUNNER_TEMP/ci-no-build"
+        printf '#!/bin/sh\necho "diagnostic must use prebuilt artifacts" >&2\nexit 97\n' > "$RUNNER_TEMP/ci-no-build/cargo"
+        chmod +x "$RUNNER_TEMP/ci-no-build/cargo"
+        printf '%s\n' "$RUNNER_TEMP/ci-no-build" >> "$GITHUB_PATH"
+    - name: Run both corrected public Block parents once
+      timeout-minutes: 10
+      shell: bash
+      run: |
+        set -euo pipefail
+        /usr/bin/time -v -o ci-evidence/block-resources.txt \
+          cargo-nextest nextest run \
+          --cargo-metadata "$PWD/target/nextest/cargo-metadata.json" \
+          --binaries-metadata "$PWD/target/nextest/binaries-metadata.json" \
+          --workspace-remap "$PWD" --target-dir-remap "$PWD/target" \
+          --profile ci --retries 0 --no-fail-fast --no-tests fail \
+          --test-threads 1 --run-ignored only \
+          -E 'kind(lib) & (test(=tenancy::tests::execution::native::capture::block::faults::block_consuming_commit_error_retains_original_owner_and_denies_another_send) | test(=tenancy::tests::execution::native::capture::block::faults::block_lost_deadline_reply_keeps_one_committed_draw_without_provider_send))'
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: block-527-diagnostic-${{ github.run_id }}
+        path: ci-evidence/block-resources.txt
+        retention-days: 7
