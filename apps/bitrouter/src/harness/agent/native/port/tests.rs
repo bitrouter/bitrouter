@@ -41,7 +41,7 @@ fn journal(batch: &CheckpointBatch, limits: &Limits) -> Result<Journal> {
     ))
 }
 
-fn port(journal: Journal, commits: mpsc::Sender<CommitRequest>) -> Port {
+fn port(journal: Journal, commits: mpsc::Sender<CommitRequest>, prior_duration_ms: u64) -> Port {
     let config = AgentConfig {
         model: "fixture/model".into(),
         model_mode: ModelMode::Fixed,
@@ -70,7 +70,7 @@ fn port(journal: Journal, commits: mpsc::Sender<CommitRequest>) -> Port {
         steps: 0,
         estimated_spend_microusd: 0,
         tool_calls: 0,
-        active_duration_ms: 0,
+        active_duration_ms: prior_duration_ms,
         unknown_effect: false,
     };
     let (output, _) = mpsc::channel(1);
@@ -109,7 +109,9 @@ async fn owned_commits_preserve_fixture_bytes_projections_and_exact_replay() -> 
         let batches = checkpoints()?;
         let (first, limits) = batches.first().context("fixture has no checkpoint")?;
         let (sender, mut receiver) = mpsc::channel(1);
-        let port = port(journal(first, limits)?, sender);
+        // The retained fixture has 24 ms at its continuation checkpoint, of
+        // which 18 ms belong to the native run and 6 ms precede that run.
+        let port = port(journal(first, limits)?, sender, 6);
         let mut written = Vec::new();
         for (batch, limits) in batches {
             let payload = batch.decode(&limits)?;
@@ -164,7 +166,7 @@ async fn failed_or_lost_persistence_ack_does_not_apply_or_retry() -> Result<()> 
             .context("fixture has no checkpoint")?;
         for lose_ack in [false, true] {
             let (sender, mut receiver) = mpsc::channel(1);
-            let port = port(journal(&batch, &limits)?, sender);
+            let port = port(journal(&batch, &limits)?, sender, 0);
             let commit = port.commit(batch.clone());
             tokio::pin!(commit);
             let request = tokio::select! {
