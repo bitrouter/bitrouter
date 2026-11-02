@@ -40,7 +40,7 @@ use std::{
     path::Path,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -147,6 +147,11 @@ struct Disk {
     armed: AtomicBool,
     injected: AtomicUsize,
     max_page: AtomicUsize,
+    // Successful wrapper calls and their inputs, not a unique SQL-row census.
+    // The qualification still reads and validates the real persisted inventory.
+    commits: AtomicU64,
+    records: AtomicU64,
+    commit_micros: AtomicU64,
 }
 impl Disk {
     fn new(db: DatabaseConnection) -> Self {
@@ -155,6 +160,9 @@ impl Disk {
             armed: AtomicBool::new(false),
             injected: AtomicUsize::new(0),
             max_page: AtomicUsize::new(0),
+            commits: AtomicU64::new(0),
+            records: AtomicU64::new(0),
+            commit_micros: AtomicU64::new(0),
         }
     }
     fn corrupt(record: &mut ExecutionRecord) -> bool {
@@ -172,6 +180,32 @@ impl Disk {
             return Err("scale read exceeded fixed page envelope".into());
         }
         self.max_page.fetch_max(limit, Ordering::SeqCst);
+        Ok(())
+    }
+    fn committed(&self, records: usize, elapsed: Duration) -> std::result::Result<(), String> {
+        let records = u64::try_from(records).map_err(|error| error.to_string())?;
+        let micros = u64::try_from(elapsed.as_micros()).map_err(|error| error.to_string())?;
+        for (counter, value) in [(&self.records, records), (&self.commit_micros, micros)] {
+            counter
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
+                    old.checked_add(value)
+                })
+                .map_err(|_| "scale diagnostic counter overflow".to_owned())?;
+        }
+        let previous = self
+            .commits
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |old| {
+                old.checked_add(1)
+            })
+            .map_err(|_| "scale diagnostic commit counter overflow".to_owned())?;
+        if previous % 256 == 0 {
+            eprintln!(
+                "native SQLite scale phase=store_ack commits={} record_inputs={} store_micros={}",
+                previous + 1,
+                self.records.load(Ordering::Relaxed),
+                self.commit_micros.load(Ordering::Relaxed),
+            );
+        }
         Ok(())
     }
 }
@@ -206,6 +240,7 @@ impl ExecutionStore for Disk {
         version: u64,
         records: &[ExecutionRecord],
     ) -> std::result::Result<u64, String> {
+        let started = Instant::now();
         if self.armed.load(Ordering::SeqCst) {
             let mut changed = records.to_vec();
             if changed.iter_mut().any(Self::corrupt) && self.armed.swap(false, Ordering::SeqCst) {
@@ -214,10 +249,13 @@ impl ExecutionStore for Disk {
                     .commit_owned(owner, id, version, &changed)
                     .await?;
                 self.injected.fetch_add(1, Ordering::SeqCst);
+                self.committed(changed.len(), started.elapsed())?;
                 return Ok(next);
             }
         }
-        self.inner.commit_owned(owner, id, version, records).await
+        let next = self.inner.commit_owned(owner, id, version, records).await?;
+        self.committed(records.len(), started.elapsed())?;
+        Ok(next)
     }
     async fn commit(
         &self,
@@ -225,7 +263,10 @@ impl ExecutionStore for Disk {
         version: u64,
         records: &[ExecutionRecord],
     ) -> std::result::Result<u64, String> {
-        self.inner.commit(id, version, records).await
+        let started = Instant::now();
+        let next = self.inner.commit(id, version, records).await?;
+        self.committed(records.len(), started.elapsed())?;
+        Ok(next)
     }
     async fn load(&self, _: &str) -> std::result::Result<Option<StoredExecution>, String> {
         Err("scale qualification forbids unpaged history load".into())
@@ -323,9 +364,12 @@ struct Peaks {
     active: usize,
     retained_turns: usize,
     context_bytes: usize,
+    observations: u64,
+    observation_time: Duration,
 }
 impl Peaks {
     fn observe(&mut self, service: &ThreadService) -> Result<()> {
+        let started = Instant::now();
         let mut state = service.lock_state();
         service.prune(&mut state);
         self.threads = self.threads.max(state.threads.len());
@@ -345,6 +389,14 @@ impl Peaks {
         self.context_bytes = self.context_bytes.max(context);
         ensure!(self.threads <= 1 && self.active <= 1 && self.retained_turns <= 2);
         ensure!(context <= service.inner.limits.hot_context_bytes);
+        self.observations = self
+            .observations
+            .checked_add(1)
+            .context("observation count overflow")?;
+        self.observation_time = self
+            .observation_time
+            .checked_add(started.elapsed())
+            .context("observation time overflow")?;
         Ok(())
     }
 }
@@ -354,6 +406,8 @@ async fn completed(
     key: &str,
     peaks: &mut Peaks,
 ) -> Result<()> {
+    let started = Instant::now();
+    eprintln!("native SQLite scale phase=turn_start key={key}");
     let accepted = service
         .start_turn(
             thread,
@@ -361,6 +415,10 @@ async fn completed(
             input("Use the evidence", key),
         )
         .await?;
+    let admission_time = started.elapsed();
+    let mut reported = Instant::now();
+    let mut entered_gate = false;
+    let mut gate_owners = None;
     loop {
         peaks.observe(service)?;
         let (terminal, released) = {
@@ -382,14 +440,34 @@ async fn completed(
                 state.active_workspaces.is_empty() && state.running_turns.is_empty(),
             )
         };
+        if reported.elapsed() >= Duration::from_secs(10) {
+            eprintln!(
+                "native SQLite scale phase=turn_wait key={key} elapsed={:?} admission={admission_time:?} terminal={terminal} released={released} gate_owners={gate_owners:?} peaks={peaks:?}",
+                started.elapsed(),
+            );
+            reported = Instant::now();
+        }
         if terminal && released {
             // Join the particular Thread's last commit before sampling/unloading.
+            if !entered_gate {
+                eprintln!(
+                    "native SQLite scale phase=turn_gate key={key} elapsed={:?}",
+                    started.elapsed()
+                );
+                entered_gate = true;
+            }
             let gate = service.thread_gate(&thread.thread_id)?;
             let guard = gate.lock().await;
-            let released = Arc::strong_count(&gate) == 2;
+            let owners = Arc::strong_count(&gate);
+            gate_owners = Some(owners);
+            let released = owners == 2;
             drop(guard);
             drop(gate);
             if released {
+                eprintln!(
+                    "native SQLite scale phase=turn_complete key={key} elapsed={:?} admission={admission_time:?} peaks={peaks:?}",
+                    started.elapsed()
+                );
                 return Ok(());
             }
         }
@@ -620,6 +698,10 @@ async fn real_sqlite_native_history_crosses_old_startup_limits_without_replay() 
     let mut peaks = Peaks::default();
     let mut samples = Vec::with_capacity(3);
     for root in 0..ROOTS {
+        eprintln!(
+            "native SQLite scale phase=root_create root={root} elapsed={:?}",
+            started.elapsed()
+        );
         let thread = create(&source, &workspace, &format!("root-{root}"), false).await?;
         let target = target(&thread);
         for turn in 0..TURNS {
@@ -631,19 +713,25 @@ async fn real_sqlite_native_history_crosses_old_startup_limits_without_replay() 
         source
             .unload_thread(&target, &CallerContext::local())
             .await?;
-        if root % 32 == 0 {
-            eprintln!(
-                "native SQLite scale generated_roots={} elapsed={:?} peaks={peaks:?}",
-                root + 1,
-                started.elapsed()
-            );
-        }
+        eprintln!(
+            "native SQLite scale generated_roots={} elapsed={:?} peaks={peaks:?}",
+            root + 1,
+            started.elapsed()
+        );
     }
     ensure!(
         script.calls.load(Ordering::SeqCst) == ROOTS * TURNS * 3,
         "fixed native workload did not finish every model/tool step"
     );
+    eprintln!(
+        "native SQLite scale phase=source_shutdown elapsed={:?}",
+        started.elapsed()
+    );
     source.shutdown().await;
+    eprintln!(
+        "native SQLite scale phase=source_counts elapsed={:?}",
+        started.elapsed()
+    );
     let clean = counts(&db, &store).await?;
     ensure!(
         clean.roots == ROOTS as u64 && clean.roots > 1025 && clean.records > 1_000_000,
