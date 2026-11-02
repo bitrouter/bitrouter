@@ -2,6 +2,33 @@ use super::*;
 use crate::tenancy::authority::live::DependencyIntent;
 use std::sync::atomic::AtomicUsize;
 
+#[tokio::test]
+async fn unbound_ingress_keeps_its_probe_fallback_but_cannot_clear_a_fence() -> Result<()> {
+    let ready = Ready::new(false).await?;
+    let service = &ready.fixture.service;
+    ensure!(service.receipt_volume.is_none());
+    service.admission.receipt_probe(0);
+    ensure!(matches!(
+        service.admission.pin_unknown(&ready.fixture.tenant, false),
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    // Exercise actual ingress, which must still perform the unbound test probe.
+    let execution = ready.execution().await?;
+    let owner = execution.receipt_owner()?.clone();
+    tokio::time::timeout(TIMEOUT, owner.finish(Outcome::Failed))
+        .await?
+        .map_err(code)?;
+    ensure!(owner.durable());
+    owner.release_active().map_err(code)?;
+    drop((owner, execution));
+    service.admission.fence_receipts();
+    service.admission.receipt_probe(u64::MAX);
+    ensure!(!service.admission.receipts_ready());
+    ensure!(ready.execution().await.is_err());
+    tokio::time::timeout(TIMEOUT, service.shutdown()).await??;
+    Ok(())
+}
+
 /// Observe actual SQL through the existing driver's callback; count admitted
 /// authority jobs and acknowledged transactions independently. No provider I/O.
 #[tokio::test]

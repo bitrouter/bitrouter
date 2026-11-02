@@ -421,9 +421,13 @@ impl Service {
         #[cfg(feature = "core")]
         let learning = revision.document().learning.clone();
         drop(revision);
-        let free = super::receipts::capacity::free_space(self.receipt_volume.as_deref())
-            .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
-        self.admission.receipt_probe(free);
+        // Bound volumes are refreshed under accounting before count pins/grants.
+        // Preserve the existing refusal/test behavior for an unbound volume.
+        if self.receipt_volume.is_none() {
+            let free = super::receipts::capacity::free_space(self.receipt_volume.as_deref())
+                .map_err(|_| Failure::from(ErrorCode::StorageUnavailable))?;
+            self.admission.receipt_probe(free);
+        }
         let _count = self
             .pin_unknown_count(&submission.tenant, submission.deadline())
             .await?;

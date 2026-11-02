@@ -46,6 +46,8 @@ pub(in crate::tenancy) struct Accounting {
     pub free: u64,
     pub totals: Totals,
     physical_write_reserved: u64,
+    #[cfg(all(test, unix))]
+    volume_probes: (u64, u64),
 }
 impl Default for Accounting {
     fn default() -> Self {
@@ -66,6 +68,8 @@ impl Accounting {
             free: u64::MAX,
             totals: Totals::default(),
             physical_write_reserved: 0,
+            #[cfg(all(test, unix))]
+            volume_probes: (0, 0),
         }
     }
     pub fn bind_volume(&mut self, volume: Option<std::path::PathBuf>) -> Result<(), ErrorCode> {
@@ -83,9 +87,17 @@ impl Accounting {
     /// Fresh observation under the shared mutex, including all writer custody.
     pub fn refresh_free(&mut self) {
         if let Some(volume) = &self.volume {
+            #[cfg(all(test, unix))]
+            {
+                self.volume_probes.0 += 1;
+            }
             match free_space(Some(volume)) {
                 Ok(free) => self.free = free,
                 Err(error) => {
+                    #[cfg(all(test, unix))]
+                    {
+                        self.volume_probes.1 += 1;
+                    }
                     self.fenced = true;
                     tracing::error!(%error, "receipt volume observation failed");
                 }
@@ -278,6 +290,10 @@ impl Accounting {
         // Existing metric means all live potentials, including covered owners;
         // admission uses uncovered alone. Physical writes are separate custody.
         Some((total.reserved, total.bytes, total.live, total.unknown))
+    }
+    #[cfg(all(test, unix))]
+    pub fn volume_probes_for_test(&self) -> (u64, u64) {
+        self.volume_probes
     }
     #[cfg(all(test, unix))]
     pub fn snapshot_for_test(&self) -> (u64, u64, bool) {

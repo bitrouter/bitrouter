@@ -335,6 +335,15 @@ impl Admission {
         Ok(state.receipts.snapshot_for_test())
     }
 
+    /// Observe real bound-volume refresh attempts/errors without issuing a probe.
+    #[cfg(all(test, unix))]
+    pub(super) fn volume_probes_for_test(&self) -> Result<(u64, u64), ErrorCode> {
+        self.state
+            .lock()
+            .map(|state| state.receipts.volume_probes_for_test())
+            .map_err(|_| ErrorCode::AuthorityUnavailable)
+    }
+
     /// Read-only socket-test witness: ingress count/bytes, active and queued work.
     #[cfg(test)]
     pub(super) fn ingress_for_test(&self) -> Result<(usize, usize, usize, usize), ErrorCode> {

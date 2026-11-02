@@ -33,6 +33,8 @@ use std::{
 const MODEL: &str = "authority-ingress";
 const TIMEOUT: Duration = Duration::from_secs(10);
 
+#[cfg(unix)]
+mod measurement;
 mod reuse;
 
 fn code(error: ErrorCode) -> anyhow::Error {
@@ -110,6 +112,15 @@ impl Ready {
                 }
             });
         }
+        Self::with_fixture(fixture, oauth, None).await
+    }
+
+    async fn with_fixture(
+        mut fixture: Fixture,
+        oauth: bool,
+        owner: Option<crate::tenancy::ownership::Lease>,
+    ) -> Result<Self> {
+        fixture.service.shutdown().await?;
         let resources = Arc::new(Resources::with_key(fixture.installation.clone(), [29; 32])?);
         let reference = |resource_kind, id: &str| -> Result<ResourceRef> {
             Ok(ResourceRef {
@@ -145,7 +156,7 @@ impl Ready {
         }))?).await?;
         fixture.service = Service::start_prepared(
             fixture.db.clone(),
-            None,
+            owner,
             crate::tenancy::store::load(&fixture.db, chrono::Utc::now()).await?,
             resources,
         )

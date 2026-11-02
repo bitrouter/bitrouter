@@ -120,6 +120,85 @@ async fn real_volume_admission_does_not_trust_a_stale_free_space_value() -> Resu
     Ok(())
 }
 
+#[tokio::test]
+#[cfg(unix)]
+async fn bound_volume_pin_and_grant_check_space_without_an_external_probe() -> Result<()> {
+    let volume = tempfile::tempdir()?;
+    let mut config = crate::config::tenancy::capacity::CapacityConfig::default();
+    config.receipts.admission_free_bytes = i64::MAX as u64;
+    config.validate()?;
+    let admission = Admission::configured(&config);
+    admission
+        .bind_receipt_volume(Some(volume.path().to_owned()))
+        .map_err(failure)?;
+    let tenant: TenantId = "bound-without-external-probe".try_into()?;
+    ensure!(matches!(
+        admission.pin_unknown(&tenant, false),
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    ensure!(matches!(
+        admission.acquire(&tenant, &limits(1, 0)).await,
+        Err(ErrorCode::CapacityExceeded)
+    ));
+    ensure!(
+        admission.receipts_ready(),
+        "low space is not a storage fence"
+    );
+    ensure!(admission.receipt_capacity_for_test().map_err(failure)?.0 == 0);
+    ensure!(totals(&admission) == (0, 0, 0));
+    Ok(())
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn bound_volume_loss_at_pin_or_grant_permanently_fences_without_external_probe() -> Result<()>
+{
+    for fail_at_pin in [true, false] {
+        let directory = tempfile::tempdir()?;
+        let volume = directory.path().join("bound-volume");
+        std::fs::create_dir(&volume)?;
+        let admission = Admission::new();
+        admission
+            .bind_receipt_volume(Some(volume.clone()))
+            .map_err(failure)?;
+        let tenant: TenantId = "lost-bound-volume".try_into()?;
+        let pin = admission
+            .pin_unknown(&tenant, false)
+            .map_err(failure)?
+            .context("zero unknown count must pin without SQL")?;
+        std::fs::remove_dir(&volume)?;
+        if fail_at_pin {
+            ensure!(matches!(
+                admission.pin_unknown(&tenant, false),
+                Err(ErrorCode::AuthorityUnavailable)
+            ));
+        } else {
+            ensure!(matches!(
+                admission.acquire(&tenant, &limits(1, 0)).await,
+                Err(ErrorCode::CapacityExceeded)
+            ));
+        }
+        ensure!(!admission.receipts_ready());
+        ensure!(admission.receipt_capacity_for_test().map_err(failure)?.0 == 0);
+        std::fs::create_dir(&volume)?;
+        ensure!(matches!(
+            admission.pin_unknown(&tenant, false),
+            Err(ErrorCode::AuthorityUnavailable)
+        ));
+        ensure!(matches!(
+            admission.acquire(&tenant, &limits(1, 0)).await,
+            Err(ErrorCode::CapacityExceeded)
+        ));
+        ensure!(
+            !admission.receipts_ready(),
+            "successful probe cleared fence"
+        );
+        drop(pin);
+        ensure!(totals(&admission) == (0, 0, 0));
+    }
+    Ok(())
+}
+
 #[test]
 fn ingress_byte_and_count_budgets_release_exactly_once_before_any_execution() -> Result<()> {
     let admission = Admission::new();
