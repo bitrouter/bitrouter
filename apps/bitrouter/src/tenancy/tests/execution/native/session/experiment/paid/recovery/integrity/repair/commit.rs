@@ -180,7 +180,7 @@ async fn opener() -> Result<()> {
                         let ready = service.current();
                         let cleanup = service.shutdown().await;
                         drop(service);
-                        ready?;
+                        ensure!(ready.is_ok(), "acknowledged native repair did not publish readiness");
                         cleanup?;
                     }
                     (_, Ok(service)) => {
