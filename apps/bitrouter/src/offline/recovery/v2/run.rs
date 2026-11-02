@@ -64,20 +64,39 @@ pub(crate) async fn run(
     validation: ValidationBudget,
     options: large::Options,
 ) -> Result<Report> {
+    run_with_token(path, output, validation, options, CancellationToken::new()).await
+}
+
+pub(in crate::offline::recovery) async fn run_with_token(
+    path: &Path,
+    output: &Path,
+    validation: ValidationBudget,
+    options: large::Options,
+    cancel: CancellationToken,
+) -> Result<Report> {
     let path = path.to_path_buf();
     let output = output.to_path_buf();
-    let cancel = CancellationToken::new();
     let _abandon = cancel.clone().drop_guard();
     let (send, wait) = tokio::sync::oneshot::channel();
-    let task = tokio::spawn(async move {
+    let owner = async move {
         let result = owned(&path, &output, validation, &options, cancel).await;
         if send.send(result).is_err() {
             tracing::debug!("streamed recovery observer abandoned after owned cleanup");
         }
-    });
-    let result = wait.await.context("streamed recovery owner unavailable")?;
-    task.await
-        .context("streamed recovery owner join unavailable")?;
+    };
+    #[cfg(all(test, unix))]
+    let owner = {
+        use tracing::instrument::WithSubscriber;
+        owner.with_current_subscriber()
+    };
+    let task = tokio::spawn(owner);
+    let reply = wait.await;
+    // Even a closed reply channel must not bypass the actual owner join.
+    let joined = task.await;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_owner_joined", joined = joined.is_ok());
+    let result = reply.context("streamed recovery owner unavailable")?;
+    joined.context("streamed recovery owner join unavailable")?;
     result
 }
 
@@ -136,7 +155,11 @@ async fn owned(
             Err(anyhow::anyhow!("streamed recovery unwound"))
         }
     };
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_owner_close_begin");
     let closed = AssertUnwindSafe(connections.close()).catch_unwind().await;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_owner_close_returned", confirmed = matches!(closed, Ok(Ok(()))) && !connections.uncertain);
     if !matches!(closed, Ok(Ok(()))) {
         connections.uncertain = true;
         // Connections Drop retains the canonical lease on uncertainty. Scratch
@@ -307,6 +330,8 @@ async fn work(
         true,
     )?;
     let target_digest = large::snapshot_digest(&target, &key, workspace)?;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_bundle_verify_begin");
     let (verified, _verified_charge, _ready) = crate::offline::streamed::read_borrowed(
         source,
         Some(&plan.source.evidence_digest),
@@ -329,6 +354,8 @@ async fn work(
             inspected.value().schema_digest == verified.evidence.inventory.schema_digest,
             "fresh target schema differs from source producer schema"
         );
+        #[cfg(all(test, unix))]
+        tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_target_audit_begin");
         let proof = crate::tenancy::audit::recovery::v2::inspect_target_in(
             db,
             inspected.value(),
@@ -342,12 +369,16 @@ async fn work(
         Ok::<_, anyhow::Error>((inspected, proof))
     }
     .await;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_target_cleanup_begin");
     c.destination_cleanup_budget().await?;
     sea_orm::sqlx::query("ROLLBACK")
         .execute(c.source.as_mut().context("target rollback connection")?)
         .await?;
     c.uncertain = false;
     c.close().await?;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_target_close_acked");
     let (target_inventory, mut proof) = target_result?;
     target_witness.check()?;
     ensure!(
@@ -361,6 +392,8 @@ async fn work(
     sea_orm::sqlx::query("BEGIN")
         .execute(c.copy.as_mut().context("source connection")?)
         .await?;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_source_audit_begin");
     let source_result = crate::tenancy::audit::recovery::v2::no_copied_credentials_in(
         c.copy.as_mut().context("source connection")?,
         &plan.source.installation_id,
@@ -369,15 +402,21 @@ async fn work(
         workspace,
     )
     .await;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_source_cleanup_begin");
     c.cleanup_budget().await?;
     sea_orm::sqlx::query("ROLLBACK")
         .execute(c.copy.as_mut().context("source rollback connection")?)
         .await?;
     c.uncertain = false;
     c.close().await?;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_source_close_acked");
     let source_facts = source_result?;
     drop(proof.credentials);
     // Reverify the bundle after all original SQL workers have acknowledged close.
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "recovery_bundle_reverify_begin");
     let (after, _after_charge, _after_ready) = crate::offline::streamed::read_borrowed(
         source,
         Some(&plan.source.evidence_digest),

@@ -88,8 +88,29 @@ pub async fn snapshot_with_options(
     bundle: &Path,
     options: large::Options,
 ) -> Result<impl CliReport> {
-    streamed::run(streamed::Action::Snapshot { database: database.into(), bundle: bundle.into() }, options)
+    snapshot_with_token(database, bundle, options, CancellationToken::new()).await
+}
+
+// Keep the public error mapping and the actual snapshot owner in one path.
+async fn snapshot_with_token(
+    database: &Path,
+    bundle: &Path,
+    options: large::Options,
+    cancel: CancellationToken,
+) -> Result<impl CliReport> {
+    streamed::run_with_token(streamed::Action::Snapshot { database: database.into(), bundle: bundle.into() }, options, cancel)
         .await.map_err(|_| failure("offline v2 snapshot failed: require a cleanly stopped, externally fenced private SQLite source, private scratch and a new bundle; retain INCOMPLETE output"))
+}
+
+/// Link test cancellation without abandoning the real snapshot owner waiter.
+#[cfg(all(test, unix))]
+pub(crate) async fn snapshot_with_options_for_test(
+    database: &Path,
+    bundle: &Path,
+    options: large::Options,
+    parent: &CancellationToken,
+) -> Result<impl CliReport> {
+    snapshot_with_token(database, bundle, options, parent.child_token()).await
 }
 
 /// Recompute complete v1/v2 evidence with a finite working allowance.

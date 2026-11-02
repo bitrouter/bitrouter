@@ -115,10 +115,18 @@ fn qualify_paths(action: &Action, options: &Options) -> Result<()> {
 
 /// Cancellation drops a waiter, never a SQL worker, file copy or owner lease.
 pub(super) async fn run(action: Action, options: Options) -> Result<Report> {
+    run_with_token(action, options, CancellationToken::new()).await
+}
+
+// The waiter owns the drop guard; the same task still owns every cleanup await.
+pub(super) async fn run_with_token(
+    action: Action,
+    options: Options,
+    cancel: CancellationToken,
+) -> Result<Report> {
     ensure!(cfg!(unix), "offline evidence requires Unix");
-    let cancel = CancellationToken::new();
     let _cancel_on_drop = cancel.clone().drop_guard();
-    let task = tokio::spawn(async move {
+    let owner = async move {
         // Check every alias before creating an ownership sidecar or scratch.
         qualify_paths(&action, &options)?;
         let owner = match &action {
@@ -195,7 +203,15 @@ pub(super) async fn run(action: Action, options: Options) -> Result<Report> {
                 Err(anyhow::anyhow!("offline work unwound"))
             }
         };
+        #[cfg(all(test, unix))]
+        tracing::info!(target: "bitrouter::offline::diagnostic", phase = "streamed_owner_close_begin");
         let closed = AssertUnwindSafe(connections.close()).catch_unwind().await;
+        #[cfg(all(test, unix))]
+        tracing::info!(
+            target: "bitrouter::offline::diagnostic",
+            phase = "streamed_owner_close_returned",
+            confirmed = matches!(closed, Ok(Ok(()))) && !connections.uncertain
+        );
         ensure!(
             matches!(closed, Ok(Ok(()))) && !connections.uncertain,
             "offline worker close unconfirmed"
@@ -211,8 +227,17 @@ pub(super) async fn run(action: Action, options: Options) -> Result<Report> {
         // Keep the canonical owner until publication and directory fsync finish.
         drop(custody);
         Ok::<_, anyhow::Error>(pending.report)
-    });
-    task.await.context("offline owner task failed")?
+    };
+    #[cfg(all(test, unix))]
+    let owner = {
+        use tracing::instrument::WithSubscriber;
+        owner.with_current_subscriber()
+    };
+    let task = tokio::spawn(owner);
+    let joined = task.await;
+    #[cfg(all(test, unix))]
+    tracing::info!(target: "bitrouter::offline::diagnostic", phase = "streamed_owner_joined", joined = joined.is_ok());
+    joined.context("offline owner task failed")?
 }
 
 async fn inspect(

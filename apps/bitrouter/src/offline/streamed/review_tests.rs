@@ -333,6 +333,74 @@ fn runtime_shutdown_keeps_source_lease_until_hash_and_copy_jobs_exit() -> Result
 }
 
 #[tokio::test]
+async fn linked_snapshot_cancellation_joins_file_worker_without_cancelling_success_parent()
+-> Result<()> {
+    let home = tempfile::Builder::new()
+        .permissions(std::fs::Permissions::from_mode(0o700))
+        .tempdir()?;
+    let source = home.path().join("source.sqlite");
+    fixture(&source).await?;
+    let original = std::fs::read(&source)?;
+    let destination = home.path().join("cancelled");
+    let (held, entered) = HeldFile::new(&source, 0)?;
+    let parent = CancellationToken::new();
+    let caller = parent.clone();
+    let input = source.clone();
+    let output = destination.clone();
+    let working = options(home.path());
+    let operation = tokio::spawn(async move {
+        crate::offline::snapshot_with_options_for_test(&input, &output, working, &caller)
+            .await
+            .map(|_| ())
+    });
+    let reached = tokio::time::timeout(WAIT, entered).await;
+    parent.cancel();
+    tokio::task::yield_now().await;
+    let observed = (|| -> Result<()> {
+        reached.context("snapshot file worker did not enter")??;
+        ensure!(
+            !operation.is_finished(),
+            "cancel dropped the retained waiter"
+        );
+        let error = ownership::acquire_path(&source, false)
+            .err()
+            .context("snapshot released its source before file worker exit")?;
+        ensure!(matches!(
+            error.downcast_ref::<std::fs::TryLockError>(),
+            Some(std::fs::TryLockError::WouldBlock)
+        ));
+        ensure!(!destination.join("READY").exists());
+        Ok(())
+    })();
+    held.release();
+    // Release the fixture gate, then retain the waiter through its actual join.
+    let completed = operation.await;
+    observed?;
+    ensure!(completed?.is_err(), "cancelled snapshot succeeded");
+    drop(held);
+    drop(ownership::acquire_path(&source, false)?);
+    ensure!(std::fs::read(&source)? == original && !destination.join("READY").exists());
+
+    let healthy_parent = CancellationToken::new();
+    let healthy = home.path().join("healthy");
+    crate::offline::snapshot_with_options_for_test(
+        &source,
+        &healthy,
+        options(home.path()),
+        &healthy_parent,
+    )
+    .await?;
+    ensure!(
+        !healthy_parent.is_cancelled(),
+        "successful child cancelled its parent"
+    );
+    ensure!(healthy.join("READY").is_file() && !healthy.join("INCOMPLETE").exists());
+    ensure!(std::fs::read(&source)? == original);
+    drop(ownership::acquire_path(&source, false)?);
+    Ok(())
+}
+
+#[tokio::test]
 async fn final_volume_probe_refuses_bundle_and_restore_publication_before_any_entry_changes()
 -> Result<()> {
     let home = tempfile::Builder::new()
