@@ -12,6 +12,7 @@ mod telemetry;
 
 mod boundaries;
 mod observation;
+mod shared;
 
 pub(super) fn reference(index: usize) -> Result<ResourceRef> {
     Ok(ResourceRef {

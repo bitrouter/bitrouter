@@ -315,7 +315,7 @@ pub(super) async fn load_command_in(
                 .and_then(|n| n.checked_add(usize::from(policy.is_some()) + 1)),
             Definition::Policy { dependencies, .. } => dependencies.len().checked_add(1),
         },
-        Command::RevokeResource(..) => Some(1),
+        Command::RevokeResource(..) | Command::ResourceV2(..) => Some(1),
         _ => Some(0),
     }
     .ok_or(CapacityExceeded)?;
@@ -428,6 +428,21 @@ pub(super) async fn load_command_in(
                         resource_in(db, &mut facts, reference).await?;
                     }
                 }
+            }
+        }
+        Command::ResourceV2(tenant, input) => {
+            facts.tenant(db, tenant, row_bytes).await?;
+            let record = lifecycle::head(db, &header.installation, &input.key).await?;
+            if let Some(record) = &record {
+                ensure!(
+                    record.authority_revision <= header.revision,
+                    "resource head is outside published authority"
+                );
+            }
+            facts.mark(Lookup::Head(input.key.clone()), record.is_some());
+            if let Some(record) = record {
+                facts.mark(Lookup::Resource(record.reference.clone()), true);
+                facts.snapshot.resource_lifecycle.insert(record);
             }
         }
         Command::RevokeResource(tenant, input) => {

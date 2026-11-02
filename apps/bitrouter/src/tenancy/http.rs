@@ -140,6 +140,10 @@ pub(crate) fn router(service: Service, operators: ControlAuth) -> Router {
             get(resource_capabilities),
         )
         .route(
+            "/control/v1/tenancy/resource-capabilities/v2",
+            get(resource_capabilities_v2),
+        )
+        .route(
             "/control/v1/tenants/{tenant_id}/resources",
             get(resource_status).post(put_resource),
         )
@@ -354,13 +358,22 @@ async fn put_resource(
     State(service): State<Service>,
     Extension(caller): Extension<Caller>,
     tenant: Result<Path<TenantId>, PathRejection>,
-    input: Result<Json<bitrouter_ai::tenancy::resources::ResourcePut>, JsonRejection>,
+    input: Result<Json<bitrouter_ai::tenancy::resources_v2::ResourcePutRequest>, JsonRejection>,
 ) -> Result<Response, Failure> {
-    Ok(response(
-        service
-            .execute(caller, Command::Resource(path(tenant)?, body(input)?))
-            .await?,
-    ))
+    use bitrouter_ai::tenancy::resources_v2::ResourcePutRequest;
+    let tenant = path(tenant)?;
+    let command = match body(input)? {
+        ResourcePutRequest::V1(input) => Command::Resource(tenant, *input),
+        ResourcePutRequest::V2(input) => Command::ResourceV2(tenant, *input),
+    };
+    Ok(response(service.execute(caller, command).await?))
+}
+
+async fn resource_capabilities_v2(
+    State(service): State<Service>,
+    Extension(caller): Extension<Caller>,
+) -> Result<Response, Failure> {
+    Ok(Json(service.resource_capabilities_v2(&caller).await?).into_response())
 }
 
 async fn revoke_resource(

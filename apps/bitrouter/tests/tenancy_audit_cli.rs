@@ -49,7 +49,7 @@ async fn fixture(home: &Path) -> Result<String> {
     // migrations would manufacture an inconsistent archive, not legacy data.
     let legacy_steps = bitrouter::db::migration::Migrator::migrations()
         .iter()
-        .position(|migration| migration.name() == "m20240101_000041_ordered_receipts")
+        .position(|migration| migration.name() == "m20240101_000045_ordered_receipts")
         .context("ordered receipt migration")?;
     bitrouter::db::migration::Migrator::up(&db, Some(u32::try_from(legacy_steps)?)).await?;
     db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,

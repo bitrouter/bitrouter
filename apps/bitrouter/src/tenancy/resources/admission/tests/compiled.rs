@@ -14,6 +14,14 @@ struct CompiledFixture {
 }
 
 async fn compiled_fixture(count: usize, mixed: bool) -> Result<CompiledFixture> {
+    compiled_profile_fixture(count, mixed, false).await
+}
+
+async fn compiled_profile_fixture(
+    count: usize,
+    mixed: bool,
+    shared_health: bool,
+) -> Result<CompiledFixture> {
     let (db, resources) = fixture().await?;
     let mut input = route("profiled", true)?;
     let definition = &mut input["definition"];
@@ -49,7 +57,12 @@ async fn compiled_fixture(count: usize, mixed: bool) -> Result<CompiledFixture> 
             imports.push(ordinary);
         }
     }
-    import(&resources, &db, imports).await?;
+    if shared_health {
+        imports[1] = super::shared::shared("profile", 1000)?;
+        super::shared::import_v2(&resources, &db, imports).await?;
+    } else {
+        import(&resources, &db, imports).await?;
+    }
     let document = serde_json::from_value(json!({"routes":roots,"policy":null,
         "generation_defaults":{"max_output_tokens":25,"temperature":0.0},
         "learning":{"mode":"off","max_evaluations":0},
@@ -89,6 +102,88 @@ async fn compiled_fixture(count: usize, mixed: bool) -> Result<CompiledFixture> 
         wire: envelope,
         binding_bytes,
     })
+}
+
+#[tokio::test]
+async fn shared_profile_256_compiled_shape_retains_exact_closure_and_original_byte_caps()
+-> Result<()> {
+    let fixture = compiled_profile_fixture(256, false, true).await?;
+    ensure!(fixture.wire.format == 5 && fixture.wire.routes.is_empty());
+    ensure!(
+        fixture.row.revision.compiler_version
+            == super::super::super::SHARED_HEALTH_COMPILER_VERSION
+    );
+    let route = reference(ResourceKind::Route, "route", "profiled")?;
+    let profile = reference(ResourceKind::Policy, "profile", "v1")?;
+    let credential = reference(ResourceKind::Credential, "credential", "v1")?;
+    // Credentials stay as exact dependencies, never retained secret definitions.
+    ensure!(fixture.wire.artifacts.len() == 2);
+    for reference in [&route, &profile] {
+        ensure!(
+            fixture
+                .wire
+                .artifacts
+                .iter()
+                .filter(|artifact| &artifact.reference == reference)
+                .count()
+                == 1
+        );
+    }
+    ensure!(fixture.row.dependencies.len() == 3);
+    for reference in [&route, &profile, &credential] {
+        ensure!(
+            fixture
+                .row
+                .dependencies
+                .iter()
+                .filter(|dependency| *dependency == reference)
+                .count()
+                == 1
+        );
+        let mut missing = fixture.row.clone();
+        missing
+            .dependencies
+            .retain(|dependency| dependency != reference);
+        reseal(
+            &fixture.resources,
+            &mut missing,
+            &serde_json::to_value(&fixture.wire)?,
+        )?;
+        ensure!(fixture.resources.open_execution(&missing).is_err());
+    }
+    let bytes = bounded_bytes(&fixture.wire, MAX_ARTIFACT_BYTES)?;
+    let mut expanded: Envelope = serde_json::from_slice(&bytes)?;
+    expanded.routes = crate::tenancy::resources::compiler::configuration_routes(
+        &expanded.document,
+        &expanded.artifacts,
+    )
+    .map_err(|code| anyhow::anyhow!("reconstruction: {code:?}"))?;
+    ensure!(bounded_bytes(&expanded, MAX_ARTIFACT_BYTES).is_err());
+    ensure!(expanded.persisted_bytes()? == bytes);
+    execution::validate(expanded)?;
+    let mut changed = serde_json::to_value(&fixture.wire)?;
+    let profile = changed["artifacts"]
+        .as_array()
+        .context("artifacts")?
+        .iter()
+        .position(|row| row["definition"]["kind"] == "admission_profile_v2")
+        .context("shared profile")?;
+    changed["artifacts"]
+        .as_array_mut()
+        .context("artifacts")?
+        .remove(profile);
+    let mut corrupt = fixture.row.clone();
+    reseal(&fixture.resources, &mut corrupt, &changed)?;
+    ensure!(fixture.resources.open_execution(&corrupt).is_err());
+    let mut oversized: Envelope = serde_json::from_slice(&bytes)?;
+    oversized
+        .artifacts
+        .iter_mut()
+        .find_map(|row| row.envelope.as_mut())
+        .context("projection")?
+        .system_prompt = Some("x".repeat(MAX_ARTIFACT_BYTES));
+    ensure!(oversized.persisted_bytes().is_err());
+    Ok(())
 }
 
 #[tokio::test]

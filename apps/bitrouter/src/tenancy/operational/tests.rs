@@ -20,6 +20,8 @@ use super::{
     state::{Denial, HealthOutcome, Runtime},
 };
 
+mod shared;
+
 fn reference(name: &str) -> Result<ResourceRef> {
     Ok(ResourceRef {
         owner_kind: OwnerKind::OperatorPool,

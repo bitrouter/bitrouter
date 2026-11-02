@@ -12,6 +12,8 @@ use bitrouter_ai::tenancy::{
 use sea_orm_migration::{MigrationTrait, MigratorTrait, SchemaManager};
 use std::sync::{Arc, atomic::AtomicBool};
 
+mod shared;
+
 async fn owned_connection(path: &std::path::Path) -> Result<DatabaseConnection> {
     let lease = crate::tenancy::ownership::acquire_path(path, true)?;
     Ok(
@@ -24,7 +26,7 @@ async fn legacy_database(path: &std::path::Path) -> Result<DatabaseConnection> {
     let count = crate::db::migration::Migrator::migrations()
         .iter()
         .position(|migration| migration.name() == "m20240101_000045_ordered_receipts")
-        .context("ordered migration")?;
+        .context("historical ordered migration")?;
     crate::db::migration::Migrator::up(&db, Some(u32::try_from(count)?)).await?;
     db.execute_unprepared("INSERT INTO tenancy_installation(singleton,installation_id,schema_version,authority_revision,operation_ids,safety_operation_ids,saturated,created_at) VALUES(1,'installation',2,0,0,0,0,'2026-10-25T00:00:00Z')").await?;
     Ok(db)
@@ -211,10 +213,12 @@ async fn ordered_migration_preserves_exact_v1_bytes_digest_and_format_guard() ->
             .await?,
         "main fixture already has ordered format"
     );
+    crate::db::migration::Migrator::up(&db, Some(2)).await?;
+    ensure!(version(&db).await? == 3);
     crate::db::run_migrations(&db).await?;
-    ensure!(version(&db).await? == 3);
+    ensure!(version(&db).await? == 4);
     management_mutation(&db).await?;
-    ensure!(version(&db).await? == 3);
+    ensure!(version(&db).await? == 4);
     let saved = lookup_candidate(
         &db,
         &original.receipt.installation_id,
@@ -247,7 +251,7 @@ async fn ordered_migration_preserves_exact_v1_bytes_digest_and_format_guard() ->
     db.close().await?;
     let db = owned_connection(&path).await?;
     crate::db::run_migrations(&db).await?;
-    ensure!(version(&db).await? == 3);
+    ensure!(version(&db).await? == 4);
     ensure!(
         lookup_candidate(
             &db,
@@ -282,7 +286,7 @@ async fn ordered_migration_failure_rolls_back_schema_and_authority_format_togeth
     db.execute_unprepared("DROP INDEX idx_tenancy_credentials_directory")
         .await?;
     crate::db::run_migrations(&db).await?;
-    ensure!(version(&db).await? == 3);
+    ensure!(version(&db).await? == 4);
     ensure!(
         crate::db::migration::m20240101_000045_ordered_receipts::Migration
             .down(&manager)
@@ -314,7 +318,7 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
         if migrated {
             management_mutation(&db).await?;
         }
-        ensure!(version(&db).await? == 3);
+        ensure!(version(&db).await? == 4);
         db.close().await?;
         let db = owned_connection(&source).await?;
         crate::db::run_migrations(&db).await?;
@@ -324,6 +328,13 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
         for retain_migration_marker in [true, false] {
             let copy = root.join("rollback.sqlite");
             std::fs::copy(&source, &copy)?;
+            // This existing oldest-writer probe isolates its historical migration
+            // and authority guards. Remove only the successor migration ledger
+            // entry on a disposable copy; preserve the actual format-four row.
+            // Separate shared-health probes retain the complete new ledger too.
+            let fixture = owned_connection(&copy).await?;
+            fixture.execute_unprepared("DELETE FROM seaql_migrations WHERE version='m20240101_000047_shared_admission_health'").await?;
+            fixture.close().await?;
             if !retain_migration_marker {
                 // Also qualify the predecessor's own authority guard independently
                 // of its earlier unknown-migration refusal, on another fixture copy.
@@ -364,7 +375,7 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
                 String::from_utf8_lossy(&output.stdout),
                 String::from_utf8_lossy(&output.stderr)
             );
-            ensure!(!output.status.success(), "predecessor accepted format3");
+            ensure!(!output.status.success(), "predecessor accepted format4");
             let authority_refusal = diagnostics.contains("unsupported authority store format")
                 || diagnostics.contains("unsupported authority store identity");
             observed_authority_refusal |= authority_refusal;
@@ -384,7 +395,7 @@ async fn ordered_actual_predecessor_refuses_fresh_and_mutated_migrated_store_bef
             );
             let unchanged = owned_connection(&copy).await?;
             ensure!(
-                version(&unchanged).await? == 3,
+                version(&unchanged).await? == 4,
                 "predecessor rewrote the authority format"
             );
             unchanged.close().await?;
