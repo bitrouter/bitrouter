@@ -210,6 +210,8 @@ pub(super) struct Progress {
 
 pub(super) struct Control {
     proof: Arc<Proof>,
+    #[cfg(all(test, feature = "core"))]
+    test_target: Option<JobTarget>,
     progress: watch::Sender<Progress>,
     stopped: AtomicBool,
     preparing_read: AtomicBool,
@@ -233,6 +235,8 @@ impl Control {
         proof.record(Disposition::NoTransaction);
         Self {
             proof,
+            #[cfg(all(test, feature = "core"))]
+            test_target: None,
             progress: watch::channel(Progress {
                 phase: Phase::Preparing,
                 cleanup_deadline: None,
@@ -247,6 +251,12 @@ impl Control {
 
     pub fn with_storage(mut self, storage: super::storage::Budget) -> Self {
         self.storage = Some(storage);
+        self
+    }
+
+    #[cfg(all(test, feature = "core"))]
+    pub fn with_test_target(mut self, target: Option<JobTarget>) -> Self {
+        self.test_target = target;
         self
     }
 
@@ -340,7 +350,15 @@ impl Control {
                 Ok(gate) => gate.clone(),
                 Err(error) => error.into_inner().clone(),
             };
-            if let Some(gate) = gate.filter(|gate| gate.phase == phase) {
+            if let Some(gate) = gate.filter(|gate| {
+                let matches = gate.phase == phase;
+                #[cfg(feature = "core")]
+                let matches = matches
+                    && gate
+                        .target
+                        .is_none_or(|target| self.test_target == Some(target));
+                matches
+            }) {
                 gate.entered.notify_one();
                 gate.release.notified().await;
                 if gate.unwind.load(Ordering::Acquire) {
@@ -509,9 +527,22 @@ impl Control {
     }
 }
 
+#[cfg(all(test, feature = "core"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum JobTarget {
+    Eval,
+    Settlement,
+    TrajectoryBegin,
+    TrajectoryTerminal,
+    #[cfg(feature = "harness")]
+    NativeLoad,
+}
+
 #[cfg(test)]
 pub(super) struct Gate {
     phase: Phase,
+    #[cfg(feature = "core")]
+    target: Option<JobTarget>,
     unwind: AtomicBool,
     pub entered: tokio::sync::Notify,
     pub release: tokio::sync::Notify,
@@ -528,8 +559,27 @@ impl Proof {
     }
 
     pub fn hold(&self, phase: Phase) -> Arc<Gate> {
+        self.hold_matching(
+            phase,
+            #[cfg(feature = "core")]
+            None,
+        )
+    }
+
+    #[cfg(feature = "core")]
+    pub fn hold_for(&self, phase: Phase, target: JobTarget) -> Arc<Gate> {
+        self.hold_matching(phase, Some(target))
+    }
+
+    fn hold_matching(
+        &self,
+        phase: Phase,
+        #[cfg(feature = "core")] target: Option<JobTarget>,
+    ) -> Arc<Gate> {
         let gate = Arc::new(Gate {
             phase,
+            #[cfg(feature = "core")]
+            target,
             unwind: AtomicBool::new(false),
             entered: tokio::sync::Notify::new(),
             release: tokio::sync::Notify::new(),

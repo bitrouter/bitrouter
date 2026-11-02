@@ -261,6 +261,7 @@ async fn unbound_and_unauthenticated_native_openers_reject_before_workspace_read
 
 #[tokio::test]
 async fn cancelled_open_keeps_host_and_actor_read_custody_until_rollback() -> Result<()> {
+    use crate::tenancy::transaction::{JobTarget, Phase};
     let provider = Provider::start(false).await?;
     let directory = tempfile::tempdir()?;
     let workspace = directory.path().join("workspace");
@@ -272,10 +273,17 @@ async fn cancelled_open_keeps_host_and_actor_read_custody_until_rollback() -> Re
             host_app(&fixture, &provider.url, Arc::new(HostSpies::default()))?
                 .with_tenancy(fixture.service.clone()),
         );
+        // Authenticate the capacity probe before the actor is deliberately held.
+        let authority = fixture
+            .service
+            .host_authority(&headers)
+            .await
+            .map_err(failure)?;
+        let reads = fixture.service.reads.available_permits();
         let gate = fixture
             .service
             .cleanup
-            .hold(crate::tenancy::transaction::Phase::Active);
+            .hold_for(Phase::Active, JobTarget::NativeLoad);
         let next_app = app.clone();
         let next_headers = headers.clone();
         let next_workspace = workspace.clone();
@@ -291,20 +299,16 @@ async fn cancelled_open_keeps_host_and_actor_read_custody_until_rollback() -> Re
             .await
         }));
         tokio::time::timeout(TIMEOUT, gate.entered.notified()).await?;
+        ensure!(fixture.service.reads.available_permits() + 1 == reads);
         opener.abort();
         ensure!(opener.await.is_err());
-        let denied = NativeSession::open_authenticated(
-            app,
-            headers,
-            "another",
-            &workspace,
-            ToolMode::ReadOnly,
-            &HarnessConfig::default(),
-        )
-        .await
-        .err()
-        .context("held host slot was released")?;
-        ensure!(denied.code == bitrouter_ai::core::protocol::ErrorCode::LimitExceeded);
+        let denied = fixture
+            .service
+            .host_slot(&authority)
+            .err()
+            .context("held host slot was released")?;
+        ensure!(denied.0.code == bitrouter_ai::tenancy::operation::ErrorCode::CapacityExceeded);
+        ensure!(fixture.service.reads.available_permits() + 1 == reads);
         let service = fixture.service.clone();
         let shutdown =
             AbortOnDropHandle::new(tokio::spawn(async move { service.shutdown().await }));
@@ -312,6 +316,7 @@ async fn cancelled_open_keeps_host_and_actor_read_custody_until_rollback() -> Re
         ensure!(!shutdown.is_finished());
         fixture.service.cleanup.release_gate();
         tokio::time::timeout(TIMEOUT, shutdown).await???;
+        ensure!(fixture.service.reads.available_permits() == reads);
         ensure!(provider.calls() == 0);
         Ok(())
     }

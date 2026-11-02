@@ -680,6 +680,26 @@ impl Worker {
                 Turn::Queue(None) => break,
             };
             let control = self.control();
+            #[cfg(all(test, feature = "core"))]
+            let control = {
+                use crate::tenancy::transaction::JobTarget;
+                control.with_test_target(match &job {
+                    Job::Eval(_) => Some(JobTarget::Eval),
+                    Job::Settlement(_) => Some(JobTarget::Settlement),
+                    Job::TrajectoryBegin(_) => Some(JobTarget::TrajectoryBegin),
+                    Job::TrajectoryTerminal(_) => Some(JobTarget::TrajectoryTerminal),
+                    #[cfg(feature = "harness")]
+                    Job::Native(message)
+                        if matches!(
+                            &message.request,
+                            crate::tenancy::session::Request::Load(_)
+                        ) =>
+                    {
+                        Some(JobTarget::NativeLoad)
+                    }
+                    _ => None,
+                })
+            };
             match job {
                 #[cfg(test)]
                 Job::Archive { deadline, reply } => {

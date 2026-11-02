@@ -11,16 +11,24 @@ use crate::gateway::{
         native_preparation::{NativePreparationWorkKind, NativePreparationWorkReport},
     },
 };
+use crate::tenancy::transaction::{JobTarget, Phase};
 use async_trait::async_trait;
 use bitrouter_ai::{
     core::evidence::NativeAttemptReport,
     types::{Message, Prompt, Role},
 };
 
+#[derive(Default)]
+struct PlanGate {
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
 struct Reject {
     early: bool,
     entry_outcomes: AtomicUsize,
     plans: AtomicUsize,
+    plan_gate: Option<Arc<PlanGate>>,
 }
 #[async_trait]
 impl NativeExecutionControl for Reject {
@@ -44,6 +52,10 @@ impl NativeExecutionControl for Reject {
     }
     async fn plan(&self, _plan: NativePlan) -> GatewayResult<NativePlanAdmission> {
         self.plans.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.plan_gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
         Err(BitrouterError::Forbidden(
             "fixture rejects completed policy plan".into(),
         ))
@@ -104,6 +116,7 @@ async fn rejected_entry_outcome_can_prove_no_decision_but_rejected_policy_plan_m
                 early,
                 entry_outcomes: AtomicUsize::new(0),
                 plans: AtomicUsize::new(0),
+                plan_gate: None,
             });
             let outcome = app(&fixture)?
                 .execute_native_controlled_with_headers(
@@ -128,19 +141,34 @@ async fn rejected_entry_outcome_can_prove_no_decision_but_rejected_policy_plan_m
 
 #[tokio::test]
 async fn rolled_back_required_observation_is_retained_as_failed_without_retry() -> Result<()> {
+    struct ReleaseGate(Service);
+    impl Drop for ReleaseGate {
+        fn drop(&mut self) {
+            self.0.cleanup.release_gate();
+        }
+    }
     tokio::time::timeout(TIMEOUT, async {
         let (fixture, revision) = policy_fixture("https://example.invalid/v1", LearningMode::Observe).await?;
         let issued = fixture.issue("observation-storage-failure").await?;
         fixture.service.dispatch_test_ready.store(true, Ordering::Release);
         fixture.db.execute_unprepared("CREATE TRIGGER reject_observation BEFORE INSERT ON eval_subjects BEGIN SELECT RAISE(ABORT, 'fixture required observation failure'); END").await?;
         let headers = headers(&fixture, issued.secret.as_deref().context("secret")?, &revision)?;
-        let control = Arc::new(Reject { early: false, entry_outcomes: AtomicUsize::new(0), plans: AtomicUsize::new(0) });
+        let control = Arc::new(Reject { early: false, entry_outcomes: AtomicUsize::new(0), plans: AtomicUsize::new(0), plan_gate: None });
+        let gate = fixture.service.cleanup.hold_for(Phase::RollingBack, JobTarget::Settlement);
+        let _release = ReleaseGate(fixture.service.clone());
+        let app = app(&fixture)?;
+        let request_control = control.clone();
+        let request = AbortOnDropHandle::new(tokio::spawn(async move {
+            app.execute_native_controlled_with_headers(prompt(), CallerContext::local(), headers, request_control).await
+        }));
+        tokio::time::timeout(TIMEOUT, gate.entered.notified()).await.context("required observation did not reach rollback")?;
         let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
-        ensure!(app(&fixture)?.execute_native_controlled_with_headers(prompt(), CallerContext::local(), headers, control.clone()).await.is_err());
+        fixture.service.cleanup.release_gate();
+        ensure!(tokio::time::timeout(TIMEOUT, request).await??.is_err());
         ensure!(control.plans.load(Ordering::SeqCst) == 1);
         ensure!(fixture.service.pipelines.close_and_drain().await.is_err());
-        // This isolated invocation has one failing observation transaction;
-        // its following receipt commits on H and replaces last-job disposition.
+        // The baseline excludes prerequisite directory reads. Only the original
+        // failing observation may acknowledge rollback before its receipt commits.
         ensure!(fixture.service.cleanup.sql_counts_for_test().1 == rollback_count + 1);
         fixture.service.cleanup.ensure_clean()?;
         let receipt = only_receipt(&fixture).await?;
@@ -158,6 +186,12 @@ async fn rolled_back_required_observation_is_retained_as_failed_without_retry() 
 }
 
 async fn full_observation_lane(expire: bool) -> Result<()> {
+    struct ReleasePlan(Arc<PlanGate>);
+    impl Drop for ReleasePlan {
+        fn drop(&mut self) {
+            self.0.release.notify_one();
+        }
+    }
     let (fixture, revision) =
         policy_fixture("https://example.invalid/v1", LearningMode::Observe).await?;
     let issued = fixture.issue("observation-queue").await?;
@@ -171,7 +205,29 @@ async fn full_observation_lane(expire: bool) -> Result<()> {
         &revision,
     )?;
     let store = scoped_eval_store(&fixture, &headers).await?;
-    // Occupy the actual bounded ordinary lane without inventing management jobs.
+    let plan_gate = Arc::new(PlanGate::default());
+    let _release_plan = ReleasePlan(plan_gate.clone());
+    let control = Arc::new(Reject {
+        early: false,
+        entry_outcomes: AtomicUsize::new(0),
+        plans: AtomicUsize::new(0),
+        plan_gate: Some(plan_gate.clone()),
+    });
+    let app = app(&fixture)?;
+    let task = AbortOnDropHandle::new(tokio::spawn(async move {
+        app.execute_native_controlled_with_headers(
+            prompt(),
+            CallerContext::local(),
+            headers,
+            control,
+        )
+        .await
+    }));
+    tokio::time::timeout(TIMEOUT, plan_gate.entered.notified())
+        .await
+        .context("request did not reach the policy plan after admission")?;
+    // Authentication and admission have finished. Occupy the actual ordinary
+    // lane before plan rejection creates its required observation.
     let mut reservations = Vec::new();
     for _ in 0..16 {
         reservations.push(
@@ -184,21 +240,7 @@ async fn full_observation_lane(expire: bool) -> Result<()> {
         );
     }
     ensure!(fixture.service.commands.capacity() == 0);
-    let control = Arc::new(Reject {
-        early: false,
-        entry_outcomes: AtomicUsize::new(0),
-        plans: AtomicUsize::new(0),
-    });
-    let app = app(&fixture)?;
-    let task = AbortOnDropHandle::new(tokio::spawn(async move {
-        app.execute_native_controlled_with_headers(
-            prompt(),
-            CallerContext::local(),
-            headers,
-            control,
-        )
-        .await
-    }));
+    plan_gate.release.notify_one();
     tokio::time::timeout(TIMEOUT, fixture.service.eval.producer_waiting.notified())
         .await
         .context("required observation never reached the full ordinary lane")?;

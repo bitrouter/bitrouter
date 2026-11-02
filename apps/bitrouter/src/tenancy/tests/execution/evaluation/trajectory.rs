@@ -1,5 +1,6 @@
 //! Real retained policy consumer, atomic terminal closure and custody failures.
 use super::*;
+use crate::tenancy::transaction::{JobTarget, Phase};
 use crate::trajectory::guard::{IncompleteHistoryAction, ProgressGuardPolicy};
 use bitrouter_ai::eval::{AdmissionStatus, EvalScope, EvalVerdict};
 use wiremock::{
@@ -13,6 +14,13 @@ mod replay;
 #[cfg(any(feature = "db-postgres", feature = "db-mysql"))]
 mod server;
 mod sockets;
+
+struct ReleaseGate(Service);
+impl Drop for ReleaseGate {
+    fn drop(&mut self) {
+        self.0.cleanup.release_gate();
+    }
+}
 
 const PRIVATE_PROMPT: &str = "trajectory-private-fixture-sentinel";
 fn document() -> crate::policy_lock::PolicyLock {
@@ -216,18 +224,32 @@ async fn failed_atomic_publication_rolls_back_every_terminal_stage_and_retains_c
             fixture(&format!("{}/v1", server.uri()), LearningMode::Observe).await?;
         let headers = credential(&fixture, &revision).await?;
         fixture.db.execute_unprepared(&format!("CREATE TRIGGER trajectory_atomic_failure_{index} {trigger} BEGIN SELECT RAISE(ABORT, 'fixture terminal failure'); END")).await?;
-        let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
+        let gate = fixture
+            .service
+            .cleanup
+            .hold_for(Phase::RollingBack, JobTarget::TrajectoryTerminal);
+        let _release = ReleaseGate(fixture.service.clone());
+        let rollback = async {
+            let entered = tokio::time::timeout(TIMEOUT, gate.entered.notified()).await;
+            let rollback_count = fixture.service.cleanup.sql_counts_for_test().1;
+            fixture.service.cleanup.release_gate();
+            entered.context("trajectory terminal did not reach rollback")?;
+            Ok::<_, anyhow::Error>(rollback_count)
+        };
         // Transport may already have produced output. Required custody, not an
         // HTTP status or provider receipt, determines whether drain can succeed.
-        let _response = send(
-            &fixture,
-            &headers,
-            json!({"model":MODEL,"messages":[{"role":"user","content":PRIVATE_PROMPT}]}),
-        )
-        .await;
+        let (_response, rollback_count) = tokio::join!(
+            send(
+                &fixture,
+                &headers,
+                json!({"model":MODEL,"messages":[{"role":"user","content":PRIVATE_PROMPT}]}),
+            ),
+            rollback,
+        );
+        let rollback_count = rollback_count?;
         ensure!(fixture.service.pipelines.close_and_drain().await.is_err());
-        // Only the injected terminal transaction rolls back in this isolated
-        // fixture. The independent receipt COMMIT must not erase that witness.
+        // Sampled after prerequisite reads, this witnesses the original terminal
+        // rollback ACK even when the independent receipt COMMIT finishes later.
         ensure!(fixture.service.cleanup.sql_counts_for_test().1 == rollback_count + 1);
         fixture.service.cleanup.ensure_clean()?;
         let receipt = only_receipt(&fixture).await?;
