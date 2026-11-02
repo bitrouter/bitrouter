@@ -1,0 +1,113 @@
+name: Native capacity diagnostic from frozen CI artifacts
+'on':
+  push:
+    branches: [codex/tenant-capacity-diagnostics]
+    paths: [.github/workflows/native-capacity-diagnostic.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fc7a40db6c2705d87e34ce04346b71ed98994f54
+          persist-credentials: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest@0.9.114
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-tests-fc7a40db6c2705d87e34ce04346b71ed98994f54
+          path: .ci-archive
+          run-id: 41419321397
+          github-token: ${{ github.token }}
+      - name: Restore the exact failed candidate without a build
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 'fc7a40db6c2705d87e34ce04346b71ed98994f54'
+          test "$(git rev-parse HEAD^{tree})" = 'db35b2bc4408ec1533d3f7ffaa65233fb02543d0'
+          test "$(cat .ci-archive/tests.sha)" = 'fc7a40db6c2705d87e34ce04346b71ed98994f54'
+          test "$(cat .ci-archive/tests.workspace)" = "$GITHUB_WORKSPACE"
+          (cd .ci-archive && sha256sum -c tests.tar.zst.sha256)
+          mkdir -p ci-evidence
+          tar --zstd -xf .ci-archive/tests.tar.zst
+          test -x target/debug/bro
+          test -x target/debug/examples/owned_capture_fixture
+          private_dir="$RUNNER_TEMP/native-capacity-private-stderr"
+          mkdir -m 700 "$private_dir"
+          printf '%s\n' \
+            'BITROUTER_TEST_PREBUILT_ONLY=1' \
+            "BITROUTER_TEST_EXAMPLES_DIR=$GITHUB_WORKSPACE/target/debug/examples" \
+            "BITROUTER_TEST_BRO=$GITHUB_WORKSPACE/target/debug/bro" \
+            "BITROUTER_TEST_GATEWAY_BINARY=$GITHUB_WORKSPACE/target/debug/bro" \
+            "BITROUTER_OWNED_CAPTURE_FIXTURE=$GITHUB_WORKSPACE/target/debug/examples/owned_capture_fixture" \
+            "BITROUTER_TEST_STOPPED_NATIVE_DIAGNOSTICS=$private_dir" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/ci-no-build"
+          printf '#!/bin/sh\necho "diagnostic must use prebuilt artifacts" >&2\nexit 97\n' > "$RUNNER_TEMP/ci-no-build/cargo"
+          chmod +x "$RUNNER_TEMP/ci-no-build/cargo"
+          printf '%s\n' "$RUNNER_TEMP/ci-no-build" >> "$GITHUB_PATH"
+      - name: Run one exact public parent once
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          /usr/bin/time -v -o ci-evidence/native-resources.txt \
+            cargo-nextest nextest run \
+            --cargo-metadata "$PWD/target/nextest/cargo-metadata.json" \
+            --binaries-metadata "$PWD/target/nextest/binaries-metadata.json" \
+            --workspace-remap "$PWD" --target-dir-remap "$PWD/target" \
+            --profile ci --retries 0 --no-fail-fast --no-tests fail \
+            --test-threads 1 --run-ignored only \
+            -E 'kind(lib) & test(=tenancy::tests::execution::native::session::choice::recovery::companion::capacity::native_recovery_repairs_above_unknown_policy_without_reopening_admission)'
+      - name: Classify private diagnostics without publishing contents
+        if: always()
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const crypto = require('node:crypto');
+          const dir = path.join(process.env.RUNNER_TEMP, 'native-capacity-private-stderr');
+          const known = [
+            ['receipt_reservation_assertion', 'Condition failed: `accounting.0 == 0 && !accounting.2`'],
+            ['observed_totals_assertion', 'Condition failed: `observed.accounted > 0 && observed.live_unknown == u64::try_from(count + 2)?`'],
+            ['transaction_cleanup_unconfirmed', 'tenant transaction cleanup is not confirmed'],
+            ['authority_current_assertion', 'Condition failed: `stopped.bound.fixture.service.current().is_ok()`'],
+            ['ordinary_refusal_assertion', 'Condition failed: `response.status() == StatusCode::TOO_MANY_REQUESTS`'],
+            ['observation_invalid', 'invalid settled repair accounting: Invalid'],
+            ['deadline_elapsed', 'deadline has elapsed'],
+            ['ordinary_refusal_fenced', 'ordinary refusal fenced authority'],
+          ];
+          const phases = ['producer','wire_setup','populate','repair_open','settled_receipts','session_close','settled_accounting','ordinary_refusal','shutdown'];
+          const report = {source:'fc7a40db6c2705d87e34ce04346b71ed98994f54',pr_head:'527bc255aa0886f0fbd7fc3eaedf7bd1697fdf45',source_tree:'db35b2bc4408ec1533d3f7ffaa65233fb02543d0',artifact_run:41419321397,diagnostic_only:true,raw_contents_published:false,files:[],scanner_error:false};
+          try {
+            if (fs.existsSync(dir)) {
+              const names = fs.readdirSync(dir);
+              if (names.length > 32) throw new Error();
+              for (const name of names) {
+                if (!/^[0-9a-f-]+\.stderr$/.test(name)) throw new Error();
+                const file = path.join(dir,name);
+                const stat = fs.lstatSync(file);
+                if (!stat.isFile() || stat.size > 8193) throw new Error();
+                const bytes = fs.readFileSync(file);
+                const body = bytes.toString('utf8');
+                report.files.push({bytes:bytes.length,sha256:crypto.createHash('sha256').update(bytes).digest('hex'),classes:known.filter(([,value])=>body.includes(value)).map(([tag])=>tag),phases:phases.filter(phase=>body.split('\n').includes('native-capacity-phase='+phase))});
+              }
+            }
+          } catch { report.scanner_error = true; process.exitCode = 1; }
+          fs.mkdirSync('ci-evidence',{recursive:true});
+          fs.writeFileSync('ci-evidence/native-diagnostic.json',JSON.stringify(report,null,2)+'\n',{flag:'wx'});
+          console.log(JSON.stringify(report));
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-527-diagnostic-${{ github.run_id }}
+          path: |
+            ci-evidence/native-diagnostic.json
+            ci-evidence/native-resources.txt
+          retention-days: 7
