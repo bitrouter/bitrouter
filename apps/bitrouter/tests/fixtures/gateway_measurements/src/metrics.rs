@@ -313,15 +313,32 @@ fn ps_cpu_time(text: &str) -> Result<CpuTime> {
 fn mac_threads(text: &str, pid: u32) -> Result<u64> {
     let mut lines = text.lines();
     let header = lines.next().context("missing ps thread header")?;
-    let pid_column = header
-        .split_whitespace()
-        .position(|word| word == "PID")
+    // macOS leaves USER and TT blank on continuation thread rows. Preserve
+    // the fixed-width PID field instead of shifting columns with whitespace.
+    let pid_end = header
+        .match_indices("PID")
+        .find_map(|(start, word)| {
+            let end = start + word.len();
+            let before = header[..start].chars().next_back();
+            let after = header[end..].chars().next();
+            (before.is_none_or(char::is_whitespace) && after.is_none_or(char::is_whitespace))
+                .then_some(end)
+        })
         .context("missing PID column")?;
     let mut count = 0;
     for line in lines {
-        let actual = line
+        let prefix = line.get(..pid_end).context("missing thread PID")?;
+        ensure!(
+            prefix.as_bytes().last().is_some_and(u8::is_ascii_digit)
+                && line
+                    .as_bytes()
+                    .get(pid_end)
+                    .is_none_or(u8::is_ascii_whitespace),
+            "incomplete thread PID field"
+        );
+        let actual = prefix
             .split_whitespace()
-            .nth(pid_column)
+            .next_back()
             .context("missing thread PID")?;
         ensure!(actual.parse::<u32>()? == pid, "thread PID mismatch");
         count += 1;
@@ -414,7 +431,7 @@ mod tests {
             assert!(ps_cpu_time(bad).is_err(), "{bad}");
         }
         assert_eq!(
-            mac_threads("USER PID TT %CPU\nuser 42 ?? 0.0\nuser 42 ?? 0.0\n", 42)?,
+            mac_threads("USER PID TT %CPU\nuser  42 ?? 0.0\nuser  42 ?? 0.0\n", 42)?,
             2
         );
         assert!(mac_threads("USER PID\n", 42).is_err());
@@ -432,6 +449,35 @@ mod tests {
         ] {
             assert!(lsof_fds(bad, 42).is_err(), "{bad}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn mac_thread_rows_preserve_blank_continuation_columns() -> Result<()> {
+        let header = "USER     PID   TT   %CPU STAT PRI     STIME     UTIME COMMAND\n";
+        let first = "archer 59644   ??    7.5 R    31T   0:00.01   0:00.02 node\n";
+        let second = "       59644         0.0 S    31T   0:00.00   0:00.00 \n";
+        let observed = format!("{header}{first}{second}");
+        assert_eq!(mac_threads(&observed, 59644)?, 2);
+        for invalid in [
+            "       59645         0.0 S    31T   0:00.00   0:00.00 \n",
+            "       596440        0.0 S    31T   0:00.00   0:00.00 \n",
+            "                    0.0 S    31T   0:00.00   0:00.00 \n",
+            "59644               0.0 S    31T   0:00.00   0:00.00 \n",
+            "       59\n",
+        ] {
+            assert!(mac_threads(&format!("{header}{first}{invalid}"), 59644).is_err());
+        }
+        assert!(mac_threads(" PPID\n   42\n", 42).is_err());
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn mac_thread_inventory_observes_the_owned_runtime() -> Result<()> {
+        let pid = std::process::id();
+        let output = command("/bin/ps", &["-M", "-p", &pid.to_string()]).await?;
+        ensure!(mac_threads(&output, pid)? >= 3, "runtime threads missing");
         Ok(())
     }
 
