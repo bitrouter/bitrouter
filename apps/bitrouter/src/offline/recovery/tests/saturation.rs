@@ -1,26 +1,16 @@
-//! Opt-in full production ledger, created exclusively through the normal SDK.
+//! Opt-in history crossing the old ledger limits through the normal SDK.
 use super::*;
 use bitrouter_ai::tenancy::{
     authority::{TenantPut, TenantState},
     identity::TenantId,
-    operation::{ErrorCode, OperationResult, OperationStatus},
+    operation::{ErrorCode, OperationStatus},
 };
 use bitrouter_sdk::{error::Error as SdkError, tenancy::TenancyClient};
 
-const ORDINARY: u32 = 99_488;
-const SAFETY: u32 = 512;
-
-fn refused(result: std::result::Result<OperationResult, SdkError>) -> Result<()> {
-    let error = result
-        .err()
-        .context("exhausted production ledger admitted another operation")?;
-    let SdkError::Tenancy(failure) = error else {
-        anyhow::bail!("capacity was not a definite tenancy rejection: {error}");
-    };
-    ensure!(failure.status == 429 && failure.body_error.is_none());
-    ensure!(failure.body.context("typed capacity body")?.code == ErrorCode::CapacityExceeded);
-    Ok(())
-}
+// Historical checkpoints only: format 2 has no operation-count ceiling.
+const LEGACY_ORDINARY: u32 = 99_488;
+const LEGACY_SAFETY: u32 = 512;
+const OPERATIONS: u32 = LEGACY_ORDINARY + LEGACY_SAFETY + 2;
 
 pub(super) async fn fill(live: &fixture::Live, provision: &fixture::Provision) -> Result<()> {
     let client = live.operator()?;
@@ -33,7 +23,7 @@ pub(super) async fn fill(live: &fixture::Live, provision: &fixture::Provision) -
         .context("actual tenant revision")?;
     // Normal provisioning already accepted exactly four ordinary commands.
     ensure!(provision.operations.len() == 4);
-    for ordinal in 4..ORDINARY {
+    for ordinal in 4..LEGACY_ORDINARY {
         let result = client
             .put_tenant(
                 &tenant,
@@ -52,52 +42,77 @@ pub(super) async fn fill(live: &fixture::Live, provision: &fixture::Provision) -
             .resource_revision
             .context("actual next tenant revision")?;
     }
-    refused(
-        client
-            .put_tenant(
-                &tenant,
-                &TenantPut {
-                    operation_id: "saturation-ordinary-refused".try_into()?,
-                    expected_revision: Some(expected.clone()),
-                    state: TenantState::Active,
-                    installation_id: provision.installation.clone(),
-                },
-            )
-            .await,
-    )?;
-    // Only the existing operator stop lane may use the final 512 operations.
-    for ordinal in 0..SAFETY {
+    let crossing = client
+        .put_tenant(
+            &tenant,
+            &TenantPut {
+                operation_id: "history-ordinary-crossing".try_into()?,
+                expected_revision: Some(expected),
+                state: TenantState::Active,
+                installation_id: provision.installation.clone(),
+            },
+        )
+        .await?;
+    ensure!(crossing.status == OperationStatus::Applied);
+    expected = crossing
+        .resource_revision
+        .clone()
+        .context("ordinary crossing revision")?;
+    let mut crossings = vec![crossing];
+    // Stop commands remain usable past the old ordinary boundary. Without a
+    // legacy saturation fence, they are retained as ordinary operation history.
+    for ordinal in 0..LEGACY_SAFETY {
         let result = client
             .put_tenant(
                 &tenant,
                 &TenantPut {
                     operation_id: format!("saturation-safety-{ordinal}").as_str().try_into()?,
                     expected_revision: Some(expected),
-                    state: TenantState::Suspended,
+                    state: if ordinal + 1 == LEGACY_SAFETY {
+                        // The 100,001st write must admit ordinary Active work,
+                        // not merely permit another stop command after a fence.
+                        TenantState::Active
+                    } else {
+                        TenantState::Suspended
+                    },
                     installation_id: provision.installation.clone(),
                 },
             )
             .await?;
         ensure!(result.status == OperationStatus::Applied);
-        expected = result.resource_revision.context("actual safety revision")?;
+        expected = result
+            .resource_revision
+            .clone()
+            .context("actual safety revision")?;
+        if ordinal + 1 == LEGACY_SAFETY {
+            crossings.push(result);
+        }
     }
-    refused(
-        client
-            .put_tenant(
-                &tenant,
-                &TenantPut {
-                    operation_id: "saturation-safety-refused".try_into()?,
-                    expected_revision: Some(expected),
-                    state: TenantState::Deleting,
-                    installation_id: provision.installation.clone(),
-                },
-            )
-            .await,
-    )?;
+    let crossing = client
+        .put_tenant(
+            &tenant,
+            &TenantPut {
+                operation_id: "history-total-crossing".try_into()?,
+                expected_revision: Some(expected),
+                state: TenantState::Deleting,
+                installation_id: provision.installation.clone(),
+            },
+        )
+        .await?;
+    ensure!(crossing.status == OperationStatus::Applied);
+    crossings.push(crossing);
+    for expected in crossings {
+        let actual = client
+            .operation(&provision.installation, &expected.operation_id)
+            .await?;
+        ensure!(serde_json::to_value(actual)? == serde_json::to_value(expected)?);
+    }
     for name in [
         "tenant",
         "saturation-ordinary-99487",
+        "history-ordinary-crossing",
         "saturation-safety-511",
+        "history-total-crossing",
     ] {
         let row = client
             .operation(&provision.installation, &name.try_into()?)
@@ -133,12 +148,12 @@ fn digest(path: &Path) -> Result<(u64, String)> {
 }
 
 #[tokio::test]
-#[ignore = "100,000 actual SDK operations and bro recovery; explicit binary/key required"]
-async fn actual_full_operation_ledger_is_archived_and_fresh_target_keeps_independent_history()
+#[ignore = "100,002 actual SDK operations and bro recovery; explicit binary/key required"]
+async fn actual_history_crosses_legacy_limits_and_fresh_target_keeps_independent_history()
 -> Result<()> {
     let binary = binary()?;
     tokio::time::timeout(Duration::from_secs(30 * 60), Box::pin(async {
-        let fixture = Fixture::with_saturated_source(true).await?;
+        let fixture = Fixture::with_large_history_source(true).await?;
         let source = digest(&fixture.source)?;
         let target = digest(&fixture.target)?;
         let archive = digest(&fixture.bundle.join("snapshot.sqlite"))?;
@@ -157,9 +172,9 @@ async fn actual_full_operation_ledger_is_archived_and_fresh_target_keeps_indepen
         let output: Value = serde_json::from_slice(&result.stdout)?;
         ensure!(output["fresh_provisioning_verified"] == true
             && output["static_closure_authenticated"] == true
-            && output["source"]["ordinary_operations"] == ORDINARY
-            && output["source"]["safety_operations"] == SAFETY
-            && output["source"]["saturated"] == true
+            && output["source"]["ordinary_operations"] == OPERATIONS
+            && output["source"]["safety_operations"] == 0
+            && output["source"]["saturated"] == false
             && output["target"]["ordinary_operations"] == 6
             && output["target"]["safety_operations"] == 0
             && output["target"]["saturated"] == false
@@ -187,8 +202,8 @@ async fn actual_full_operation_ledger_is_archived_and_fresh_target_keeps_indepen
                 && failure.body.as_ref().is_some_and(|body| body.code == ErrorCode::NotFound)));
             let old_key = TenancyClient::new(&live.base, &fixture.source_provision.secret)?;
             ensure!(matches!(old_key.capabilities().await, Err(SdkError::Tenancy(failure)) if failure.status == 401));
-            // New work belongs to the fresh target. It does not clear source
-            // saturation and deliberately invalidates its fresh-state report.
+            // New work belongs to the fresh target. It leaves the source history
+            // intact and deliberately invalidates its fresh-state report.
             let principal: bitrouter_ai::tenancy::identity::PrincipalId = "new-target-principal".try_into()?;
             let created = operator.put_principal(&principal, &bitrouter_ai::tenancy::authority::PrincipalPut {
                 operation_id: "target-after-full-source-recovery".try_into()?, expected_revision: None,
