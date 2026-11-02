@@ -12,6 +12,7 @@ use super::{
 use crate::types::ReasoningEffort;
 
 mod envelope;
+mod envelope_v2;
 
 /// Reserved ordered request member, removed before protocol conversion.
 pub const BODY_MEMBER: &str = "bitrouter_generation_defaults";
@@ -54,6 +55,59 @@ pub struct GenerationDefaultsEnvelopeV1 {
 impl std::fmt::Debug for GenerationDefaultsEnvelopeV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GenerationDefaultsEnvelopeV1")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Selection of the configuration generation-default layer for one ordered call.
+/// Neither choice changes execution budgets, capability checks or policy locks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ConfigurationDefaults {
+    /// Fill missing temperature and output tokens from retained configuration.
+    Apply,
+    /// Leave missing values absent until an existing later rule or renderer fills them.
+    PreserveAbsence,
+}
+
+/// Request-local defaults applied after caller protocol parsing.
+///
+/// Caller-owned extras suppress same-name defaults on every outbound protocol.
+/// Supplemental parameters use the existing store, parallel-tool-call and Chat
+/// stream-options promotion rules; all other values remain opaque provider JSON.
+/// This object grants no routing, credential or continuation authority.
+/// Version two additionally chooses whether absent generation values receive
+/// configuration defaults. It never deletes caller or canonical values.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct GenerationDefaultsEnvelopeV2 {
+    /// Format, exactly two.
+    #[serde(deserialize_with = "super::number::integer")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 2, max = 2)))]
+    pub schema_version: u8,
+    /// The unchanged canonical defaults contract; present null is invalid.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "CanonicalGenerationDefaultsV1"))]
+    pub canonical: Option<CanonicalGenerationDefaultsV1>,
+    /// Protocol-independent defaults, including null and malformed special values.
+    /// Protected request controls, canonical names and the two transport member
+    /// names are reserved. Nested names are unrestricted opaque data.
+    #[serde(deserialize_with = "envelope::supplemental")]
+    #[cfg_attr(feature = "schema", schemars(extend("propertyNames" = serde_json::json!({"not":{"enum":["model","messages","stream","temperature","top_p","max_tokens","reasoning_effort","top_k","seed","stop","presence_penalty","frequency_penalty",BODY_MEMBER,ENVELOPE_BODY_MEMBER]}}))))]
+    pub supplemental: std::collections::BTreeMap<String, serde_json::Value>,
+    /// Required selection of the retained configuration default layer.
+    pub configuration_defaults: ConfigurationDefaults,
+}
+
+impl std::fmt::Debug for GenerationDefaultsEnvelopeV2 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenerationDefaultsEnvelopeV2")
             .finish_non_exhaustive()
     }
 }
