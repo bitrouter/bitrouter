@@ -11,8 +11,11 @@ use tokio_util::sync::CancellationToken;
 // Reuse the original Service/SDK producer; no shadow authority or SQL-created
 // positive directory/configuration rows and no second provisioning harness.
 use crate::offline::recovery::tests::fixture as producer;
+mod cli_scale;
+mod credentials;
 mod restore;
 mod runner;
+mod scale;
 
 // Private file primitives for this suite's JSON-lines and hash helpers.
 // Offline's production files module stays private; tests do not widen its API.

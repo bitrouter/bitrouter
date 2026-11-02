@@ -3,19 +3,26 @@ name: Capacity campaigns
   workflow_dispatch:
     inputs:
       qualification:
-        description: Run the dedicated history and native startup qualifications
+        description: Run the selected dedicated capacity qualification group
         type: boolean
         default: false
       expected_candidate_sha:
         description: Full candidate commit SHA, required for qualification mode
         type: string
         default: ''
+      qualification_group:
+        description: Qualification group; both groups must pass on the same candidate
+        type: choice
+        options:
+        - history-native
+        - offline
+        default: history-native
   schedule:
   - cron: 40 2 * * 6
 permissions:
   contents: read
 concurrency:
-  group: capacity-${{ github.ref }}
+  group: capacity-${{ github.ref }}-${{ inputs.qualification && (inputs.qualification_group || 'history-native') || 'standard' }}
   cancel-in-progress: false
 env:
   CARGO_TERM_COLOR: always
@@ -34,6 +41,7 @@ jobs:
     env:
       QUALIFICATION: ${{ inputs.qualification || false }}
       EXPECTED_CANDIDATE_SHA: ${{ inputs.expected_candidate_sha }}
+      QUALIFICATION_GROUP: ${{ inputs.qualification_group || 'history-native' }}
     steps:
     - uses: actions/checkout@v6
     - name: Prepare memory for the capacity build
@@ -68,6 +76,7 @@ jobs:
         [[ "$EXPECTED_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
         [[ "$EXPECTED_CANDIDATE_SHA" == "$GITHUB_SHA" ]]
         [[ "$(git rev-parse HEAD)" == "$EXPECTED_CANDIDATE_SHA" ]]
+        case "$QUALIFICATION_GROUP" in history-native|offline) ;; *) exit 1 ;; esac
         mkdir -p ci-evidence
         umask 077
         scratch="$(mktemp -d "$RUNNER_TEMP/bitrouter-capacity.XXXXXX")"
@@ -75,6 +84,7 @@ jobs:
         printf 'candidate=%s\nref=%s\nprofile=ci-capacity\nfeatures=all\nRUSTFLAGS=%s\nrunner_image=%s/%s\n' \
           "$GITHUB_SHA" "$GITHUB_REF" "$RUSTFLAGS" "${ImageOS:-unknown}" "${ImageVersion:-unknown}" \
           > ci-evidence/qualification.txt
+        printf 'qualification_group=%s\n' "$QUALIFICATION_GROUP" >> ci-evidence/qualification.txt
         sha256sum Cargo.toml Cargo.lock .config/nextest.toml .github/workflows/capacity.yml \
           > ci-evidence/qualification-source.sha256
         df -Pk "$PWD" "$RUNNER_TEMP" "$scratch" | tee ci-evidence/disk-before-cache.txt
@@ -181,7 +191,7 @@ jobs:
         fi
         # The fixture additionally requires 2 * actual source size + 4 GiB before copying.
         # Keep that runtime check; this runner preflight cannot replace it.
-    - name: Qualify complete history and native startup serially
+    - name: Run the selected qualification group serially
       if: inputs.qualification
       timeout-minutes: 190
       env:
@@ -195,10 +205,23 @@ jobs:
         metadata=(--cargo-metadata "$PWD/ci-evidence/cargo-metadata.json"
           --binaries-metadata "$PWD/ci-evidence/binaries-metadata.json"
           --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
-        for suite in history native; do
+        case "$QUALIFICATION_GROUP" in
+          history-native) suites=(history native) ;;
+          offline)
+            suites=(fresh credentials evaluation cli)
+            export BITROUTER_TEST_RECOVERY_KEY="$(openssl rand -base64 32)"
+            ;;
+          *) exit 1 ;;
+        esac
+        for suite in "${suites[@]}"; do
           case "$suite" in
             history) selector=tenancy::tests::capacity_history::large_history_qualification ;;
             native) selector=harness::service::tests::startup::scale::real_sqlite_native_history_crosses_old_startup_limits_without_replay ;;
+            fresh) selector=tenancy::audit::recovery::v2::tests::scale::large_fresh_target_streams_complete_sections_and_rejects_late_mismatch ;;
+            credentials) selector=tenancy::audit::recovery::v2::tests::credentials::million_row_source_checks_every_fresh_hash_and_late_historical_match ;;
+            evaluation) selector=offline::evaluation::tests::scale::bounded_selected_graph_imports_into_large_fresh_authority_and_refuses_replay ;;
+            cli) selector=tenancy::audit::recovery::v2::tests::cli_scale::real_cli_dense_and_sparse_snapshot_verify_audit_restore ;;
+            *) exit 1 ;;
           esac
           filter="kind(lib) & test(=$selector)"
           cargo-nextest nextest list "${metadata[@]}" --profile ci --run-ignored only \
@@ -249,6 +272,6 @@ jobs:
       timeout-minutes: 5
       uses: actions/upload-artifact@v4
       with:
-        name: capacity-qualification-${{ github.sha }}-attempt-${{ github.run_attempt }}
+        name: capacity-qualification-${{ env.QUALIFICATION_GROUP }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
         path: ci-evidence/
         retention-days: 7

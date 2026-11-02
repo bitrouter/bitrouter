@@ -19,6 +19,7 @@ use tokio_util::task::AbortOnDropHandle;
 mod cli;
 mod large;
 mod negative;
+mod scale;
 
 const OPERATOR: &str = "offline-eval-test-operator-secret-32-bytes";
 pub(super) const TIMEOUT: Duration = Duration::from_secs(110);

@@ -11,6 +11,8 @@ use bitrouter_sdk::tenancy::TenancyClient;
 use std::os::unix::fs::PermissionsExt;
 use tokio_util::task::AbortOnDropHandle;
 
+pub(crate) mod scale;
+
 pub(super) const OPERATOR: &str = "recovery-cli-operator-0123456789abcdef";
 pub(crate) const KEY_ENV: &str = "BITROUTER_TEST_RECOVERY_KEY";
 pub(super) const OPERATOR_ID: &str = "recovery-operator";
